@@ -1,12 +1,14 @@
+use datafusion::arrow::datatypes::DataType;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchema, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::{BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator, lit};
+use datafusion_expr::{BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator, ScalarUDF, lit};
 use sail_common_datafusion::simplify_expressions::SimplifyExpressions as BaseSimplifyExpressions;
+use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 
-/// Extend the existing simplification pass with exact numeric widening comparisons.
+/// Extend simplification with exact numeric widening and signed-zero membership keys.
 #[derive(Debug, Default)]
 pub struct SimplifyExpressions(BaseSimplifyExpressions);
 
@@ -29,6 +31,9 @@ impl OptimizerRule for SimplifyExpressions {
             let mut candidate = false;
             plan.apply_expressions(|expr| {
                 candidate = expr.exists(|expr| {
+                    if matches!(expr, Expr::InList(_)) {
+                        return Ok(true);
+                    }
                     let Expr::BinaryExpr(binary) = expr else {
                         return Ok(false);
                     };
@@ -60,8 +65,11 @@ impl OptimizerRule for SimplifyExpressions {
             let names = NamePreserver::new(&plan);
             let rewrite = |expr: Expr| {
                 let name = names.save(&expr);
-                expr.transform_up(|expr| unwrap_comparison(expr, &schema))
-                    .map(|result| result.update_data(|expr| name.restore(expr)))
+                expr.transform_up(|expr| {
+                    unwrap_comparison(expr, &schema)?
+                        .transform_data(|expr| normalize_float_in_list(expr, &schema))
+                })
+                .map(|result| result.update_data(|expr| name.restore(expr)))
             };
             plan.map_expressions(|expr| {
                 if matches!(expr, Expr::GroupingSet(_)) {
@@ -72,6 +80,58 @@ impl OptimizerRule for SimplifyExpressions {
             })
         })
     }
+}
+
+fn normalize_float_in_list(expr: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
+    let Expr::InList(mut in_list) = expr else {
+        return Ok(Transformed::no(expr));
+    };
+    let data_type = in_list.expr.get_type(schema)?;
+    let is_zero = |expr: &Expr| {
+        matches!(expr, Expr::Literal(ScalarValue::Float32(Some(x)), _) if *x == 0.0)
+            || matches!(expr, Expr::Literal(ScalarValue::Float64(Some(x)), _) if *x == 0.0)
+    };
+    if !matches!(data_type, DataType::Float32 | DataType::Float64)
+        || !in_list.list.iter().all(|expr| {
+            matches!(expr, Expr::Literal(value, _) if value.data_type() == data_type || value.data_type().is_null())
+        })
+        || !in_list.list.iter().any(is_zero)
+    {
+        return Ok(Transformed::no(Expr::InList(in_list)));
+    }
+
+    // Static membership compares float bits in both branchless and hash paths.
+    // Normalize only private keys, retaining NaN payloads, NULLs and one evaluation
+    // of the tested expression (including volatile expressions).
+    let mut changed = false;
+    if !matches!(in_list.expr.as_ref(), Expr::ScalarFunction(function) if function.func.inner().is::<NormalizeFloatKeys>())
+    {
+        in_list.expr =
+            Box::new(ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![*in_list.expr]));
+        changed = true;
+    }
+    for value in &mut in_list.list {
+        match value {
+            Expr::Literal(ScalarValue::Float32(Some(x)), _)
+                if *x == 0.0 && x.is_sign_negative() =>
+            {
+                *x = 0.0;
+                changed = true;
+            }
+            Expr::Literal(ScalarValue::Float64(Some(x)), _)
+                if *x == 0.0 && x.is_sign_negative() =>
+            {
+                *x = 0.0;
+                changed = true;
+            }
+            _ => {}
+        }
+    }
+    Ok(Transformed::new(
+        Expr::InList(in_list),
+        changed,
+        TreeNodeRecursion::Continue,
+    ))
 }
 
 fn unwrap_comparison(expr: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
@@ -217,6 +277,167 @@ mod tests {
 
     fn schema(data_type: DataType) -> Result<DFSchema> {
         DFSchema::try_from(Schema::new(vec![Field::new("x", data_type, true)]))
+    }
+
+    #[test]
+    fn float_membership_keys_stay_bounded_and_idempotent() -> Result<()> {
+        use datafusion::optimizer::{Optimizer, OptimizerContext};
+        use datafusion_expr::LogicalPlanBuilder;
+        use datafusion_expr::logical_plan::table_scan;
+
+        for data_type in [DataType::Float32, DataType::Float64] {
+            let schema = schema(data_type.clone())?;
+            for length in [4, 15, 16, 17, 31, 32, 33, 1024] {
+                for negated in [false, true] {
+                    let list = (0..length)
+                        .map(|i| {
+                            ScalarValue::Float64(Some(if i == 0 { -0.0 } else { f64::from(i) }))
+                                .cast_to(&data_type)
+                                .map(lit)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let scan = table_scan(Some("t"), schema.as_arrow(), None)?.build()?;
+                    let plan = LogicalPlanBuilder::from(scan)
+                        .project(vec![
+                            col("x"),
+                            col("x").in_list(list, negated).alias("matched"),
+                        ])?
+                        .build()?;
+                    let optimizer = Optimizer::with_rules(crate::default_optimizer_rules());
+                    let config = OptimizerContext::new().with_skip_failing_rules(false);
+                    let optimized = optimizer.optimize(plan, &config, |_, _| {})?;
+                    assert_eq!(
+                        optimizer.optimize(optimized.clone(), &config, |_, _| {})?,
+                        optimized
+                    );
+                    let LogicalPlan::Projection(projection) = optimized else {
+                        return datafusion_common::internal_err!("expected projection");
+                    };
+                    assert!(matches!(projection.expr[0], Expr::Column(_)));
+                    let Expr::InList(in_list) = projection.expr[1].clone().unalias() else {
+                        return datafusion_common::internal_err!("expected bounded membership");
+                    };
+                    assert_eq!(in_list.list.len(), length as usize);
+                    assert_eq!(in_list.negated, negated);
+                    let Expr::ScalarFunction(function) = in_list.expr.as_ref() else {
+                        return datafusion_common::internal_err!("expected private key");
+                    };
+                    assert!(function.func.inner().is::<NormalizeFloatKeys>());
+                    assert!(matches!(function.args.as_slice(), [Expr::Column(_)]));
+                    assert!(
+                        in_list
+                            .list
+                            .iter()
+                            .all(|value| matches!(value, Expr::Literal(_, _)))
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn float_membership_preserves_nan_payloads_and_literal_metadata() -> Result<()> {
+        use datafusion::arrow::array::{AsArray, Float64Array};
+        use datafusion_common::metadata::FieldMetadata;
+
+        let schema = schema(DataType::Float64)?;
+        let bits = [0x7ff0_0000_0000_0001, 0xfff8_0000_0000_0042];
+        let metadata = Some(FieldMetadata::default());
+        let list = vec![
+            Expr::Literal(ScalarValue::Float64(Some(-0.0)), metadata.clone()),
+            lit(f64::from_bits(bits[0])),
+            lit(ScalarValue::Float64(None)),
+            lit(5.0_f64),
+        ];
+        let original = col("x").in_list(list.clone(), false);
+        let normalized = normalize_float_in_list(original, &schema)?;
+        assert!(normalized.transformed);
+        assert!(!normalize_float_in_list(normalized.data.clone(), &schema)?.transformed);
+        let Expr::InList(in_list) = &normalized.data else {
+            return datafusion_common::internal_err!("expected membership");
+        };
+        assert_eq!(
+            in_list.list[0],
+            Expr::Literal(ScalarValue::Float64(Some(0.0)), metadata)
+        );
+        assert_eq!(&in_list.list[1..], &list[1..]);
+        let raw: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(-0.0),
+            Some(0.0),
+            Some(f64::from_bits(bits[0])),
+            Some(f64::from_bits(bits[1])),
+            None,
+        ]));
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.as_arrow().clone()), vec![Arc::clone(&raw)])?;
+        let result = create_physical_expr(
+            &normalized.data,
+            &schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?
+        .evaluate(&batch)?
+        .into_array(batch.num_rows())?;
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true), Some(true), None, None]
+        );
+        let raw = raw.as_primitive::<arrow::datatypes::Float64Type>();
+        assert_eq!(raw.value(0).to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(raw.value(2).to_bits(), bits[0]);
+        assert_eq!(raw.value(3).to_bits(), bits[1]);
+        Ok(())
+    }
+
+    #[test]
+    fn float_membership_evaluates_volatile_operands_once_and_leaves_dynamic_lists() -> Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use datafusion::arrow::array::Float64Array;
+        use datafusion_expr::{Volatility, create_udf};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let function = create_udf(
+            "counted",
+            vec![DataType::Float64],
+            DataType::Float64,
+            Volatility::Volatile,
+            Arc::new(move |args| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(args[0].clone())
+            }),
+        );
+        let schema = schema(DataType::Float64)?;
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.as_arrow().clone()),
+            vec![Arc::new(Float64Array::from(vec![100.0, 101.0]))],
+        )?;
+        for length in [2, 4, 33] {
+            for dynamic in [false, true] {
+                let mut list = (0..length).map(|i| lit(f64::from(i))).collect::<Vec<_>>();
+                if dynamic {
+                    list[1] = function.call(vec![lit(1.0_f64)]);
+                }
+                let original = function.call(vec![col("x")]).in_list(list, false);
+                let normalized = normalize_float_in_list(original.clone(), &schema)?;
+                assert_eq!(normalized.transformed, !dynamic);
+                if dynamic {
+                    assert_eq!(normalized.data, original);
+                }
+                calls.store(0, Ordering::SeqCst);
+                create_physical_expr(
+                    &normalized.data,
+                    &schema,
+                    &ExecutionProps::new(),
+                    &PhysicalPlanningContext::default(),
+                )?
+                .evaluate(&batch)?;
+                assert_eq!(calls.load(Ordering::SeqCst), if dynamic { 2 } else { 1 });
+            }
+        }
+        Ok(())
     }
 
     #[test]

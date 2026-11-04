@@ -682,13 +682,25 @@ impl ConstEvaluator {
     }
 
     /// Internal helper to evaluates an Expr
-    pub(crate) fn evaluate_to_scalar(&mut self, expr: Expr) -> ConstSimplifyResult {
+    pub(crate) fn evaluate_to_scalar(&mut self, mut expr: Expr) -> ConstSimplifyResult {
         if let Expr::Literal(s, m) = expr {
             return ConstSimplifyResult::NotSimplified(s, m);
         }
 
         if !should_evaluate_const_expr(&expr) {
             return ConstSimplifyResult::Deferred(expr);
+        }
+
+        // Constant IN is evaluated before the runtime membership-key rewrite.
+        // Normalize its private float literals, preserving NULLs and NaN bits.
+        if let Expr::InList(in_list) = &mut expr {
+            for operand in std::iter::once(in_list.expr.as_mut()).chain(&mut in_list.list) {
+                if let Expr::Literal(value, _) = operand
+                    && value.data_type().is_floating()
+                {
+                    *value = value.clone().normalize();
+                }
+            }
         }
 
         let phys_expr = match create_physical_expr(
@@ -4839,7 +4851,6 @@ mod tests {
             };
             let left_list = literals(&[0.0, 1.0, 2.0, 3.0])?;
             let right_list = literals(&[-0.0, 4.0, 5.0, 6.0])?;
-            let retains_short_lists = matches!(data_type, DataType::Float32 | DataType::Float64);
             let schema = Arc::new(Schema::new(vec![Field::new("x", data_type, false)]));
             let batch = RecordBatch::try_new(schema, vec![values])?;
             let schema = batch.schema().to_dfschema_ref()?;
@@ -4849,6 +4860,30 @@ mod tests {
                     .build(),
             )
             .with_canonicalize(false);
+            for list_len in [2, 4, 16, 17, 32, 33] {
+                for negated in [false, true] {
+                    for zero in [0.0, -0.0] {
+                        let zero = ScalarValue::Float64(Some(zero))
+                            .cast_to(schema.field(0).data_type())?;
+                        let mut list = vec![lit(zero)];
+                        list.extend(
+                            (1..list_len)
+                                .map(|i| {
+                                    ScalarValue::Float64(Some(f64::from(i)))
+                                        .cast_to(schema.field(0).data_type())
+                                        .map(lit)
+                                })
+                                .collect::<Result<Vec<_>>>()?,
+                        );
+                        for value in [0.0, -0.0] {
+                            let value = ScalarValue::Float64(Some(value))
+                                .cast_to(schema.field(0).data_type())?;
+                            let constant = in_list(lit(value), list.clone(), negated);
+                            assert_eq!(simplifier.simplify(constant)?, lit(!negated));
+                        }
+                    }
+                }
+            }
             // Cover both inlined comparisons and lists that reach the set rewrites.
             assert!(left_list.len() > THRESHOLD_INLINE_INLIST);
             assert!(right_list.len() > THRESHOLD_INLINE_INLIST);
@@ -4862,7 +4897,7 @@ mod tests {
                     (left(true).or(right(true)), vec![false, false]),
                 ] {
                     let simplified = simplifier.simplify(expr.clone())?;
-                    if list_len > THRESHOLD_INLINE_INLIST || retains_short_lists {
+                    if list_len > THRESHOLD_INLINE_INLIST {
                         // Floating-point literals must bypass structural set rewrites.
                         assert_eq!(simplified, expr);
                     } else {
@@ -4937,8 +4972,8 @@ mod tests {
             (DataType::Int32, true),
             (DataType::Int64, true),
             (DataType::UInt64, true),
-            (DataType::Float32, true),
-            (DataType::Float64, true),
+            (DataType::Float32, false),
+            (DataType::Float64, false),
             (DataType::FixedSizeBinary(1), true),
             (DataType::FixedSizeBinary(2), true),
             (DataType::FixedSizeBinary(4), true),
@@ -4974,6 +5009,8 @@ mod tests {
                 for negated in [false, true] {
                     let expr = in_list(col("value"), values[..list_len].to_vec(), negated);
                     let simplified = simplifier.simplify(expr.clone()).unwrap();
+                    // OR/AND-to-IN rewrites must not undo the final short-list policy.
+                    assert_eq!(simplifier.simplify(simplified.clone()).unwrap(), simplified);
                     if retain_short {
                         assert_eq!(simplified, expr, "{data_type:?}");
                     } else {

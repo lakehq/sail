@@ -44,6 +44,15 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                 let Expr::ScalarSubquery(mut query) = expr else {
                     return Ok(Transformed::no(expr));
                 };
+                if let Some(rewritten) = singleton_window(&query.subquery, &input)? {
+                    query.outer_ref_columns = rewritten.all_out_ref_exprs();
+                    query.subquery = Arc::new(rewritten);
+                    return Ok(Transformed::yes(Expr::ScalarSubquery(query)));
+                }
+                if let Some(rewritten) = window_domain(&query.subquery, &input, config)? {
+                    query.subquery = Arc::new(rewritten);
+                    return Ok(Transformed::yes(Expr::ScalarSubquery(query)));
+                }
                 if let Some(rewritten) = grouped_domain(&query.subquery, &input, config)? {
                     query.subquery = Arc::new(rewritten);
                     return Ok(Transformed::yes(Expr::ScalarSubquery(query)));
@@ -239,18 +248,414 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
     }
 }
 
+/// Exact literal rows, not statistics or a cardinality estimate. Only renaming
+/// projections may intervene, so reading this input again cannot repeat effects.
+fn literal_outer_rows(plan: &LogicalPlan, limit: usize) -> Result<Option<Vec<Vec<Expr>>>> {
+    let rows = match plan {
+        LogicalPlan::Values(values) if values.values.len() <= limit => {
+            if !values
+                .values
+                .iter()
+                .flatten()
+                .all(|expr| matches!(expr.clone().unalias(), Expr::Literal(..)))
+            {
+                return Ok(None);
+            }
+            values
+                .values
+                .iter()
+                .map(|row| row.iter().cloned().map(Expr::unalias).collect())
+                .collect()
+        }
+        LogicalPlan::EmptyRelation(empty)
+            if empty.produce_one_row && empty.schema.fields().is_empty() =>
+        {
+            vec![vec![]]
+        }
+        LogicalPlan::SubqueryAlias(alias) => return literal_outer_rows(&alias.input, limit),
+        LogicalPlan::Projection(projection) => {
+            let Some(input) = literal_outer_rows(&projection.input, limit)? else {
+                return Ok(None);
+            };
+            let mut rows = Vec::with_capacity(input.len());
+            for row in input {
+                let mut output = Vec::with_capacity(projection.expr.len());
+                for expr in &projection.expr {
+                    output.push(match expr.clone().unalias() {
+                        Expr::Column(column) => {
+                            row[projection.input.schema().index_of_column(&column)?].clone()
+                        }
+                        literal @ Expr::Literal(..) => literal,
+                        _ => return Ok(None),
+                    });
+                }
+                rows.push(output);
+            }
+            rows
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(rows))
+}
+
+/// A single known binding needs no domain join or source duplication. Keep the
+/// original completed values and ordering pipeline, including extension nodes.
+fn singleton_window(plan: &LogicalPlan, outer: &LogicalPlan) -> Result<Option<LogicalPlan>> {
+    let references = plan.all_out_ref_exprs();
+    if references.is_empty() {
+        return Ok(None);
+    }
+    let mut window = false;
+    let mut volatile = false;
+    let unsupported = plan.exists(|node| {
+        window |= matches!(node, LogicalPlan::Window(_));
+        volatile |= node.expressions().iter().any(Expr::is_volatile);
+        if matches!(node, LogicalPlan::Subquery(_)) {
+            return Ok(true);
+        }
+        for expr in node.expressions() {
+            if expr.exists(|expr| {
+                Ok(matches!(
+                    expr,
+                    Expr::ScalarSubquery(_)
+                        | Expr::Exists(_)
+                        | Expr::InSubquery(_)
+                        | Expr::SetComparison(_)
+                ) || (expr.contains_outer()
+                    && !matches!(expr, Expr::OuterReferenceColumn(..))
+                    && !expr.any_column_refs()
+                    && !expr.is_volatile()))
+            })? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })?;
+    // Substituting into an outer-only immutable expression can expose a
+    // fallible operand to constant folding even in an inactive CASE branch.
+    // Leave such predicates to the column-bound domain path instead.
+    if unsupported || !window || !volatile {
+        return Ok(None);
+    }
+    let Some(rows) = literal_outer_rows(outer, 1)? else {
+        return Ok(None);
+    };
+    let [row] = rows.as_slice() else {
+        return Ok(None);
+    };
+    let mut bindings = Vec::new();
+    for reference in references {
+        let Expr::OuterReferenceColumn(field, column) = &reference else {
+            return Ok(None);
+        };
+        let Ok(index) = outer.schema().index_of_column(column) else {
+            return Ok(None);
+        };
+        if row[index].get_type(outer.schema())? != *field.data_type() {
+            return Ok(None);
+        }
+        bindings.push((reference, row[index].clone()));
+    }
+    // This pass must still see correlation to normalize scoped user keys.
+    let normalized = super::scalar_subquery_keys::normalize_user_window_keys(plan.clone())?.data;
+    let rewritten = normalized.transform_up(|node| {
+        let names = NamePreserver::new(&node);
+        node.map_expressions(|expr| {
+            let name = names.save(&expr);
+            expr.transform_up(|expr| {
+                if let Some((_, value)) = bindings.iter().find(|(reference, _)| reference == &expr)
+                {
+                    Ok(Transformed::yes(value.clone()))
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            })
+            .map(|result| result.update_data(|expr| name.restore(expr)))
+        })
+    })?;
+    Ok(Some(rewritten.data))
+}
+
+fn null_preserving(expr: &Expr) -> bool {
+    match expr {
+        Expr::Column(_) => true,
+        Expr::Alias(alias) => null_preserving(&alias.expr),
+        Expr::Cast(cast) => null_preserving(&cast.expr),
+        _ => false,
+    }
+}
+
+/// Only the correlated predicate may be volatile. Its completed Boolean is
+/// evaluated per candidate inner/binding row, never as an outer join key.
+fn window_pipeline(plan: &LogicalPlan) -> Result<bool> {
+    let (mut terminal, mut window, mut correlated) = (false, false, false);
+    let mut eligible = true;
+    plan.apply(|node| {
+        for expr in node.expressions() {
+            eligible &= !expr.exists(|expr| {
+                Ok(matches!(
+                    expr,
+                    Expr::ScalarSubquery(_)
+                        | Expr::InSubquery(_)
+                        | Expr::Exists(_)
+                        | Expr::SetComparison(_)
+                ))
+            })?;
+            if expr.contains_outer() {
+                eligible &= matches!(node, LogicalPlan::Filter(_))
+                    && window
+                    && !correlated
+                    && expr.is_volatile();
+                correlated = true;
+            } else {
+                eligible &= !expr.is_volatile();
+            }
+        }
+        match node {
+            LogicalPlan::Projection(projection) => {
+                eligible &= terminal || projection.expr.iter().all(null_preserving);
+            }
+            LogicalPlan::SubqueryAlias(_) => {}
+            LogicalPlan::Aggregate(aggregate) => {
+                eligible &= !terminal
+                    && aggregate.group_expr.is_empty()
+                    && !aggregate.aggr_expr.is_empty()
+                    && aggregate
+                        .aggr_expr
+                        .iter()
+                        .all(|expr| supported_aggregate(expr, true));
+                terminal = true;
+            }
+            LogicalPlan::Window(_) => {
+                eligible &= terminal && !correlated;
+                window = true;
+            }
+            LogicalPlan::Filter(_) => eligible &= terminal,
+            LogicalPlan::TableScan(scan) => eligible &= correlated && scan.fetch.is_none(),
+            LogicalPlan::Values(_) | LogicalPlan::EmptyRelation(_) => eligible &= correlated,
+            _ => eligible = false,
+        }
+        Ok(if eligible {
+            TreeNodeRecursion::Continue
+        } else {
+            TreeNodeRecursion::Stop
+        })
+    })?;
+    Ok(eligible && terminal && window && correlated)
+}
+
+fn window_domain(
+    plan: &LogicalPlan,
+    outer: &Arc<LogicalPlan>,
+    config: &dyn OptimizerConfig,
+) -> Result<Option<LogicalPlan>> {
+    if !window_pipeline(plan)? {
+        return Ok(None);
+    }
+    let references = plan.all_out_ref_exprs();
+    if references.is_empty() || grouped_work(plan, outer, references.len())?.is_none() {
+        return Ok(None);
+    }
+    let Some(rows) = literal_outer_rows(outer, 64)? else {
+        return Ok(None);
+    };
+    let mut indexes = Vec::new();
+    for reference in &references {
+        let Expr::OuterReferenceColumn(field, column) = reference else {
+            return Ok(None);
+        };
+        let Ok(index) = outer.schema().index_of_column(column) else {
+            return Ok(None);
+        };
+        if !(field.data_type().is_integer() || matches!(field.data_type(), DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View))
+            || rows.iter().any(|row| !matches!(&row[index], Expr::Literal(value, _) if value.data_type() == *field.data_type())) {
+            return Ok(None);
+        }
+        indexes.push(index);
+    }
+    let mut distinct = HashSet::new();
+    if rows.is_empty()
+        || rows
+            .iter()
+            .any(|row| !distinct.insert(indexes.iter().map(|&i| &row[i]).collect::<Vec<_>>()))
+    {
+        // Repeated bindings need independent evaluations and a shared row
+        // identity. DISTINCT or cloning a volatile outer would not supply it.
+        return Ok(None);
+    }
+    let mut reserved = HashSet::new();
+    for root in [plan, outer.as_ref()] {
+        root.apply(|node| {
+            reserved.extend(
+                node.schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().clone()),
+            );
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+    let mut private = |prefix| loop {
+        let name = config.alias_generator().next(prefix);
+        if reserved.insert(name.clone()) {
+            break Column::new_unqualified(name);
+        }
+    };
+    let bindings = references
+        .into_iter()
+        .map(|reference| {
+            let Expr::OuterReferenceColumn(_, outer) = &reference else {
+                unreachable!()
+            };
+            DomainBinding {
+                outer: outer.clone(),
+                reference,
+                key: private("__sail_window_domain"),
+            }
+        })
+        .collect::<Vec<_>>();
+    let predicate_key = private("__sail_window_predicate");
+    // The exact literal proof establishes both uniqueness and repeatability;
+    // there is deliberately no DISTINCT and no precomputed volatile RHS.
+    let domain = LogicalPlanBuilder::from(Arc::clone(outer))
+        .project(
+            bindings
+                .iter()
+                .map(|b| Expr::Column(b.outer.clone()).alias(&b.key.name)),
+        )?
+        .build()?;
+    let normalized = super::scalar_subquery_keys::normalize_user_window_keys(plan.clone())?.data;
+    let bound = bind_window_plan(&normalized, &domain, &bindings, &predicate_key)?;
+    Ok(Some(
+        LogicalPlanBuilder::from(bound)
+            .project(plan.schema().columns().into_iter().map(Expr::Column))?
+            .build()?,
+    ))
+}
+
+fn bind_window_plan(
+    plan: &LogicalPlan,
+    domain: &LogicalPlan,
+    bindings: &[DomainBinding],
+    predicate_key: &Column,
+) -> Result<LogicalPlan> {
+    if let LogicalPlan::Filter(filter) = plan
+        && filter.predicate.contains_outer()
+    {
+        let input = LogicalPlanBuilder::from(Arc::clone(&filter.input))
+            .cross_join(domain.clone())?
+            .build()?;
+        let columns = input
+            .schema()
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect::<Vec<_>>();
+        let predicate = filter
+            .predicate
+            .clone()
+            .transform_up(|expr| {
+                if let Some(binding) = bindings.iter().find(|binding| binding.reference == expr) {
+                    Ok(Transformed::yes(Expr::Column(binding.key.clone())))
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            })?
+            .data;
+        let mut staged = columns.clone();
+        staged.push(predicate.alias(&predicate_key.name));
+        // Preserve the entire predicate (including CASE masks) after inner × D.
+        // Volatile projection lineage prevents later equijoin extraction from
+        // evaluating just the RHS once per binding. Drop the Boolean after use.
+        return LogicalPlanBuilder::from(input)
+            .project(staged)?
+            .filter(Expr::Column(predicate_key.clone()))?
+            .project(columns)?
+            .build();
+    }
+    let inputs = plan.inputs();
+    let [input] = inputs.as_slice() else {
+        return datafusion_common::internal_err!("ineligible window domain input");
+    };
+    let input = bind_window_plan(input, domain, bindings, predicate_key)?;
+    let keys = || binding_exprs(bindings);
+    match plan {
+        LogicalPlan::Projection(projection) => {
+            let mut exprs = projection.expr.clone();
+            exprs.extend(keys());
+            LogicalPlanBuilder::from(input).project(exprs)?.build()
+        }
+        LogicalPlan::Filter(filter) => LogicalPlanBuilder::from(input)
+            .filter(filter.predicate.clone())?
+            .build(),
+        LogicalPlan::SubqueryAlias(alias) => {
+            let bound = LogicalPlanBuilder::from(input)
+                .alias(alias.alias.clone())?
+                .build()?;
+            restore_bound_output(bound, plan.schema(), bindings)
+        }
+        LogicalPlan::Window(window) => {
+            let names = NamePreserver::new(plan);
+            let exprs = window
+                .window_expr
+                .iter()
+                .map(|expr| {
+                    let name = names.save(expr);
+                    expr.clone()
+                        .transform_up(|expr| {
+                            let Expr::WindowFunction(mut function) = expr else {
+                                return Ok(Transformed::no(expr));
+                            };
+                            function.params.partition_by.extend(keys());
+                            Ok(Transformed::yes(Expr::WindowFunction(function)))
+                        })
+                        .map(|result| name.restore(result.data))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut output = plan
+                .schema()
+                .columns()
+                .into_iter()
+                .map(Expr::Column)
+                .collect::<Vec<_>>();
+            output.extend(keys());
+            LogicalPlanBuilder::from(input)
+                .window(exprs)?
+                .project(output)?
+                .build()
+        }
+        LogicalPlan::Aggregate(aggregate) => {
+            let correlation = conjunction(bindings.iter().map(|binding| {
+                datafusion_expr::binary_expr(
+                    Expr::Column(binding.key.clone()),
+                    Operator::IsNotDistinctFrom,
+                    binding.reference.clone(),
+                )
+            }))
+            .ok_or_else(|| datafusion_common::internal_datafusion_err!("empty window domain"))?;
+            let bound = LogicalPlanBuilder::from(input)
+                .aggregate(keys(), aggregate.aggr_expr.clone())?
+                .filter(correlation)?
+                .build()?;
+            let mut output = name_original_outputs(
+                bound.schema().columns()[bindings.len()..]
+                    .iter()
+                    .cloned()
+                    .map(Expr::Column)
+                    .collect(),
+                &aggregate.schema,
+            );
+            output.extend(keys());
+            LogicalPlanBuilder::from(bound).project(output)?.build()
+        }
+        _ => datafusion_common::internal_err!("ineligible window domain node"),
+    }
+}
+
 /// A bounded unary pipeline. Classify the entire plan before changing any node.
 /// The terminal SUM/MAX and its column/cast suffix are NULL on missing input;
 /// intermediate empty grouping sets, in contrast, must be completed in place.
 fn grouped_pipeline(plan: &LogicalPlan) -> Result<bool> {
-    fn null_preserving(expr: &Expr) -> bool {
-        match expr {
-            Expr::Column(_) => true,
-            Expr::Alias(alias) => null_preserving(&alias.expr),
-            Expr::Cast(cast) => null_preserving(&cast.expr),
-            _ => false,
-        }
-    }
     let mut terminal = false;
     let mut grouped = false;
     let mut correlated = false;
@@ -990,6 +1395,343 @@ mod tests {
     use datafusion_expr::{col, lit, out_ref_col, scalar_subquery};
 
     use super::*;
+
+    #[derive(Debug)]
+    struct CountedBinding {
+        signature: datafusion_expr::Signature,
+        rows: Arc<std::sync::Mutex<Vec<Option<i64>>>>,
+    }
+
+    impl PartialEq for CountedBinding {
+        fn eq(&self, other: &Self) -> bool {
+            Arc::ptr_eq(&self.rows, &other.rows)
+        }
+    }
+
+    impl Eq for CountedBinding {}
+
+    impl std::hash::Hash for CountedBinding {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            std::ptr::hash(Arc::as_ptr(&self.rows), state);
+        }
+    }
+
+    impl datafusion_expr::ScalarUDFImpl for CountedBinding {
+        fn name(&self) -> &str {
+            "counted_binding"
+        }
+
+        fn signature(&self) -> &datafusion_expr::Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn invoke_with_args(
+            &self,
+            args: datafusion_expr::ScalarFunctionArgs,
+        ) -> Result<datafusion_expr::ColumnarValue> {
+            let array = args.args[0].clone().into_array(args.number_rows)?;
+            let values = as_int64_array(array.as_ref())?;
+            let mut rows = self
+                .rows
+                .lock()
+                .map_err(|_| internal_datafusion_err!("ledger poisoned"))?;
+            let output = values
+                .iter()
+                .map(|value| {
+                    let prior = rows.iter().filter(|&&row| row == value).count();
+                    rows.push(value);
+                    value.map(|value| value + (prior % 2) as i64)
+                })
+                .collect::<arrow::array::Int64Array>();
+            Ok(datafusion_expr::ColumnarValue::Array(Arc::new(output)))
+        }
+    }
+
+    #[tokio::test]
+    async fn singleton_window_keeps_per_candidate_volatile_evaluation() -> Result<()> {
+        use datafusion::functions_aggregate::count::count_udaf;
+        use datafusion::prelude::SessionConfig;
+        use datafusion_expr::expr::WindowFunction;
+        use datafusion_expr::{ScalarUDF, Signature, Volatility, when};
+
+        for conditional in [false, true] {
+            for value in [Some(1), Some(3), None] {
+                let rows = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let state = SessionStateBuilder::new()
+                    .with_default_features()
+                    .with_config(SessionConfig::new().with_target_partitions(1))
+                    .with_optimizer_rules(crate::default_optimizer_rules())
+                    .build();
+                let function = ScalarUDF::from(CountedBinding {
+                    signature: Signature::exact(vec![DataType::Int64], Volatility::Volatile),
+                    rows: Arc::clone(&rows),
+                });
+                // The input's g values alternate. A per-outer evaluation, or
+                // partitioning by raw g, cannot give the four-row window.
+                let input = LogicalPlanBuilder::values(
+                    (1..=5i64)
+                        .map(|seq| vec![lit(seq), lit(2 - seq % 2)])
+                        .collect(),
+                )?
+                .project(vec![col("column1").alias("seq"), col("column2").alias("g")])?
+                .filter(col("seq").lt(lit(5i64)))?
+                .build()?;
+                let expected_count = if conditional { 2 } else { 4 };
+                for correlated in [false, true] {
+                    rows.lock()
+                        .map_err(|_| internal_datafusion_err!("ledger poisoned"))?
+                        .clear();
+                    let reference = if correlated {
+                        out_ref_col(DataType::Int64, "o.x")
+                    } else {
+                        lit(ScalarValue::Int64(value))
+                    };
+                    let predicate = col("g").eq(function.call(vec![reference]));
+                    let predicate = if conditional {
+                        when(col("seq").lt_eq(lit(2i64)), lit(false)).otherwise(predicate)?
+                    } else {
+                        predicate
+                    };
+                    let window = WindowFunction::new(count_udaf(), vec![lit(1i64)]);
+                    let inner = LogicalPlanBuilder::from(input.clone())
+                        .filter(predicate)?
+                        .window(vec![Expr::WindowFunction(Box::new(window)).alias("c")])?
+                        .aggregate(Vec::<Expr>::new(), vec![max(col("c")).alias("n")])?
+                        .build()?;
+                    let plan = if correlated {
+                        LogicalPlanBuilder::values(vec![vec![lit(ScalarValue::Int64(value))]])?
+                            .project(vec![col("column1").alias("x")])?
+                            .alias("o")?
+                            .project(vec![
+                                col("o.x"),
+                                scalar_subquery(Arc::new(inner)).alias("n"),
+                            ])?
+                            .build()?
+                    } else {
+                        LogicalPlanBuilder::from(inner)
+                            .project(vec![lit(ScalarValue::Int64(value)).alias("x"), col("n")])?
+                            .build()?
+                    };
+                    let batches = DataFrame::new(state.clone(), plan).collect().await?;
+                    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+                    let result = as_int64_array(batches[0].column(1).as_ref())?;
+                    if value == Some(1) {
+                        assert_eq!(
+                            result.iter().collect::<Vec<_>>(),
+                            vec![Some(expected_count)]
+                        );
+                    } else {
+                        assert!(result.is_null(0));
+                    }
+                    let actual = rows
+                        .lock()
+                        .map_err(|_| internal_datafusion_err!("ledger poisoned"))?
+                        .clone();
+                    println!(
+                        "binding={value:?} conditional={conditional} correlated={correlated}: {actual:?}"
+                    );
+                    // The full optimizer merges the local seq filter with
+                    // this filter in both forms; CASE alone masks UDF rows.
+                    assert_eq!(actual, vec![value; if conditional { 3 } else { 5 }]);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_domain_stages_full_predicate_per_candidate() -> Result<()> {
+        use datafusion::functions_aggregate::count::count_udaf;
+        use datafusion::prelude::SessionConfig;
+        use datafusion_expr::expr::WindowFunction;
+        use datafusion_expr::{ScalarUDF, Signature, Volatility, when};
+
+        for conditional in [false, true] {
+            let rows = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let function = ScalarUDF::from(CountedBinding {
+                signature: Signature::exact(vec![DataType::Int64], Volatility::Volatile),
+                rows: Arc::clone(&rows),
+            });
+            let input = LogicalPlanBuilder::values(
+                (1..=4i64)
+                    .map(|seq| vec![lit(seq), lit(2 - seq % 2)])
+                    .collect(),
+            )?
+            .project(vec![col("column1").alias("seq"), col("column2").alias("g")])?
+            .build()?;
+            let inner = |reference| -> Result<LogicalPlan> {
+                let predicate = col("g").eq(function.call(vec![reference]));
+                let predicate = if conditional {
+                    when(col("seq").lt_eq(lit(2i64)), lit(false)).otherwise(predicate)?
+                } else {
+                    predicate
+                };
+                LogicalPlanBuilder::from(input.clone())
+                    .filter(predicate)?
+                    .window(vec![
+                        Expr::WindowFunction(Box::new(WindowFunction::new(
+                            count_udaf(),
+                            vec![lit(1i64)],
+                        )))
+                        .alias("c"),
+                    ])?
+                    .aggregate(Vec::<Expr>::new(), vec![max(col("c")).alias("n")])?
+                    .build()
+            };
+            let state = SessionStateBuilder::new()
+                .with_default_features()
+                .with_config(SessionConfig::new().with_target_partitions(1))
+                .with_optimizer_rules(crate::default_optimizer_rules())
+                .build();
+            let mut expected_ledger = Vec::new();
+            let mut expected_results = Vec::new();
+            for value in [Some(1), Some(2), Some(3), None] {
+                let batches = DataFrame::new(state.clone(), inner(lit(ScalarValue::Int64(value)))?)
+                    .collect()
+                    .await?;
+                let result = as_int64_array(batches[0].column(0).as_ref())?;
+                expected_results.push((value, (!result.is_null(0)).then(|| result.value(0))));
+                expected_ledger.extend(vec![value; if conditional { 2 } else { 4 }]);
+            }
+            assert_eq!(
+                expected_results,
+                vec![
+                    (Some(1), Some(if conditional { 2 } else { 4 })),
+                    (Some(2), None),
+                    (Some(3), None),
+                    (None, None)
+                ]
+            );
+            let mut literal_ledger = rows
+                .lock()
+                .map_err(|_| internal_datafusion_err!("ledger poisoned"))?
+                .clone();
+            literal_ledger.sort();
+            expected_ledger.sort();
+            assert_eq!(literal_ledger, expected_ledger);
+            rows.lock()
+                .map_err(|_| internal_datafusion_err!("ledger poisoned"))?
+                .clear();
+            let outer = LogicalPlanBuilder::values(vec![
+                vec![lit(1i64)],
+                vec![lit(2i64)],
+                vec![lit(3i64)],
+                vec![lit(ScalarValue::Int64(None))],
+            ])?
+            .project(vec![col("column1").alias("x")])?
+            .alias("o")?
+            .build()?;
+            let prototype = |outer| -> Result<LogicalPlan> {
+                LogicalPlanBuilder::from(outer)
+                    .project(vec![
+                        col("o.x"),
+                        scalar_subquery(Arc::new(inner(out_ref_col(DataType::Int64, "o.x"))?))
+                            .alias("n"),
+                    ])?
+                    .build()
+            };
+            let original = prototype(outer)?;
+            let context = OptimizerContext::new();
+            let rewritten = NormalizeScalarSubqueryDomain.rewrite(original.clone(), &context)?;
+            assert!(rewritten.transformed);
+            assert_eq!(rewritten.data.schema(), original.schema());
+            assert!(
+                !NormalizeScalarSubqueryDomain
+                    .rewrite(rewritten.data.clone(), &context)?
+                    .transformed
+            );
+            let mut staged = 0;
+            rewritten.data.apply_with_subqueries(|node| {
+                if let LogicalPlan::Projection(projection) = node {
+                    for expr in &projection.expr {
+                        if expr.is_volatile() {
+                            assert_eq!(
+                                expr.get_type(projection.input.schema())?,
+                                DataType::Boolean
+                            );
+                            assert!(!expr.contains_outer());
+                            staged += 1;
+                        }
+                    }
+                }
+                if let LogicalPlan::Window(window) = node {
+                    assert!(window.input.all_out_ref_exprs().is_empty());
+                    for expr in &window.window_expr {
+                        let Expr::WindowFunction(function) = expr.clone().unalias() else {
+                            return datafusion_common::internal_err!("expected window expression");
+                        };
+                        assert_eq!(function.params.partition_by.len(), 1);
+                    }
+                }
+                assert!(!matches!(node, LogicalPlan::Distinct(_)));
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            assert_eq!(staged, 1);
+            let frame = DataFrame::new(state.clone(), original);
+            println!(
+                "conditional={conditional} optimized: {}",
+                frame.clone().into_optimized_plan()?.display_indent()
+            );
+            let mut actual = Vec::new();
+            for batch in frame.collect().await? {
+                let bindings = as_int64_array(batch.column(0).as_ref())?;
+                let values = as_int64_array(batch.column(1).as_ref())?;
+                actual.extend(bindings.iter().zip(values.iter()));
+            }
+            actual.sort();
+            expected_results.sort();
+            assert_eq!(actual, expected_results);
+            let mut actual_ledger = rows
+                .lock()
+                .map_err(|_| internal_datafusion_err!("ledger poisoned"))?
+                .clone();
+            actual_ledger.sort();
+            println!("conditional={conditional} domain ledger: {actual_ledger:?}");
+            assert_eq!(actual_ledger, expected_ledger);
+            for outer in [
+                LogicalPlanBuilder::values(vec![vec![lit(1i64)], vec![lit(1i64)]])?
+                    .project(vec![col("column1").alias("x")])?
+                    .alias("o")?
+                    .build()?,
+                LogicalPlanBuilder::values(vec![vec![lit(1i64)], vec![lit(2i64)]])?
+                    .project(vec![function.call(vec![col("column1")]).alias("x")])?
+                    .alias("o")?
+                    .build()?,
+            ] {
+                let original = prototype(outer)?;
+                let rejected = NormalizeScalarSubqueryDomain.rewrite(original.clone(), &context)?;
+                assert!(!rejected.transformed);
+                assert_eq!(rejected.data, original);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn literal_outer_proof_rejects_duplicates_unknowns_and_effects() -> Result<()> {
+        let one = LogicalPlanBuilder::values(vec![vec![lit(1i64)]])?
+            .project(vec![col("column1").alias("x")])?
+            .alias("o")?
+            .build()?;
+        assert_eq!(literal_outer_rows(&one, 1)?, Some(vec![vec![lit(1i64)]]));
+        for unknown in [
+            input("o")?,
+            LogicalPlanBuilder::from(one.clone())
+                .filter(lit(false))?
+                .build()?,
+            LogicalPlanBuilder::from(one.clone())
+                .project(vec![datafusion::functions::expr_fn::random()])?
+                .build()?,
+            LogicalPlanBuilder::values(vec![vec![lit(1i64)], vec![lit(1i64)]])?.build()?,
+        ] {
+            assert!(literal_outer_rows(&unknown, 1)?.is_none());
+        }
+        Ok(())
+    }
 
     fn input(name: &str) -> Result<LogicalPlan> {
         LogicalPlanBuilder::values(vec![

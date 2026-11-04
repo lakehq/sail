@@ -1,15 +1,15 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion::functions::expr_fn::nanvl;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
-use datafusion_expr::expr::{BinaryExpr, Cast, GroupingSet};
+use datafusion_expr::expr::{BinaryExpr, Cast, GroupingSet, TryCast};
 use datafusion_expr::expr_rewriter::{NamePreserver, strip_outer_reference};
-use datafusion_expr::logical_plan::{Aggregate, Filter, Projection};
+use datafusion_expr::logical_plan::{Aggregate, Filter, Projection, Subquery};
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, enumerate_grouping_sets, grouping_set_to_exprlist,
     split_conjunction,
@@ -89,6 +89,7 @@ fn native_equality(expression: &Expr) -> Option<(&Expr, &Expr)> {
     let inner_key = |expression: &Expr| {
         matches!(expression, Expr::Column(_))
             || matches!(expression, Expr::Cast(cast) if matches!(cast.expr.as_ref(), Expr::Column(_)))
+            || matches!(expression, Expr::TryCast(cast) if matches!(cast.expr.as_ref(), Expr::Column(_)))
     };
     let (left, right) = (
         strip_identity_cast(&binary.left),
@@ -109,6 +110,9 @@ fn strip_identity_cast(expression: &Expr) -> &Expr {
     match expression {
         Expr::Cast(cast) => match cast.expr.as_ref() {
             input @ Expr::Cast(inner) if inner.field.data_type() == cast.field.data_type() => input,
+            input @ Expr::TryCast(inner) if inner.field.data_type() == cast.field.data_type() => {
+                input
+            }
             _ => expression,
         },
         _ => expression,
@@ -127,6 +131,58 @@ fn expressions_exist(plan: &LogicalPlan, mut matches: impl FnMut(&Expr) -> bool)
         })
     })?;
     Ok(found)
+}
+
+/// A nested scalar stays a physical scalar, not a join or an eagerly extracted
+/// CASE operand. Validate its entire scope: Expr::is_volatile ignores subquery plans.
+fn immutable_uncorrelated_scalar(query: &Subquery) -> bool {
+    query.outer_ref_columns.is_empty()
+        && query
+            .subquery
+            .exists(|node| {
+                // Unknown extensions and non-query nodes do not establish repeatability.
+                if !matches!(
+                    node,
+                    LogicalPlan::Projection(_)
+                        | LogicalPlan::Filter(_)
+                        | LogicalPlan::Window(_)
+                        | LogicalPlan::Aggregate(_)
+                        | LogicalPlan::Sort(_)
+                        | LogicalPlan::Join(_)
+                        | LogicalPlan::Repartition(_)
+                        | LogicalPlan::Union(_)
+                        | LogicalPlan::TableScan(_)
+                        | LogicalPlan::EmptyRelation(_)
+                        | LogicalPlan::Limit(_)
+                        | LogicalPlan::Values(_)
+                        | LogicalPlan::SubqueryAlias(_)
+                        | LogicalPlan::Distinct(_)
+                        | LogicalPlan::Unnest(_)
+                ) {
+                    return Ok(true);
+                }
+                expressions_exist(node, |part| match part {
+                    Expr::ScalarSubquery(query) => !immutable_uncorrelated_scalar(query),
+                    Expr::OuterReferenceColumn(..)
+                    | Expr::Exists(_)
+                    | Expr::InSubquery(_)
+                    | Expr::SetComparison(_) => true,
+                    Expr::ScalarFunction(function) => {
+                        function.func.signature().volatility != Volatility::Immutable
+                    }
+                    Expr::HigherOrderFunction(function) => {
+                        function.func.signature().volatility != Volatility::Immutable
+                    }
+                    Expr::AggregateFunction(function) => {
+                        function.func.signature().volatility != Volatility::Immutable
+                    }
+                    Expr::WindowFunction(function) => {
+                        function.fun.signature().volatility != Volatility::Immutable
+                    }
+                    _ => false,
+                })
+            })
+            .is_ok_and(|unsupported| !unsupported)
 }
 
 /// Reserve the field names that a generated key name could collide with.
@@ -262,6 +318,87 @@ fn normalize_keys(
     aliases: &AliasGenerator,
     reserved: &mut BTreeSet<String>,
 ) -> Result<Transformed<LogicalPlan>> {
+    normalize_user_window_keys(plan.clone())?
+        .transform_data(|plan| lift_keys(&plan, aliases, reserved))
+}
+
+/// Normalize user keys in the correlated input of a scalar aggregate without
+/// moving expressions or filters. Key lifting may independently decline this plan.
+pub(super) fn normalize_user_window_keys(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    fn visit(plan: LogicalPlan, aggregated: bool) -> Result<(Transformed<LogicalPlan>, bool)> {
+        // Expression subqueries are not children of this traversal. An explicit
+        // subquery node also starts a separate correlation scope.
+        if matches!(plan, LogicalPlan::Subquery(_)) {
+            return Ok((Transformed::no(plan), false));
+        }
+        let below = aggregated || matches!(plan, LogicalPlan::Aggregate(_));
+        let mut correlated = false;
+        let result = plan.map_children(|input| {
+            let (result, input_correlated) = visit(input, below)?;
+            correlated |= input_correlated;
+            Ok(result)
+        })?;
+        let result = result.transform_data(|plan| {
+            let LogicalPlan::Window(window) = &plan else {
+                return Ok(Transformed::no(plan));
+            };
+            if !aggregated || !correlated {
+                return Ok(Transformed::no(plan));
+            }
+            let input = Arc::clone(&window.input);
+            let schema = Arc::clone(input.schema());
+            let names = NamePreserver::new(&plan);
+            let result = plan.map_expressions(|expression| {
+                let name = names.save(&expression);
+                expression
+                    .transform_up(|expression| {
+                        let Expr::WindowFunction(mut function) = expression else {
+                            return Ok(Transformed::no(expression));
+                        };
+                        let mut changed = false;
+                        for key in function.params.partition_by.iter_mut().chain(
+                            function
+                                .params
+                                .order_by
+                                .iter_mut()
+                                .map(|sort| &mut sort.expr),
+                        ) {
+                            if !normalized_float_column(key, &input) {
+                                changed |= normalize_window_key(key, &schema)?;
+                            }
+                        }
+                        Ok(Transformed::new_transformed(
+                            Expr::WindowFunction(function),
+                            changed,
+                        ))
+                    })
+                    .map(|result| result.update_data(|expression| name.restore(expression)))
+            })?;
+            if result.transformed {
+                result.map_data(LogicalPlan::recompute_schema)
+            } else {
+                Ok(result)
+            }
+        })?;
+        // Only filters below this window's first aggregate reach its input.
+        // In particular, a filter above an ordinary window must not normalize it.
+        correlated |= matches!(&result.data, LogicalPlan::Filter(_))
+            && expressions_exist(&result.data, |expr| {
+                matches!(expr, Expr::OuterReferenceColumn(..))
+            })?;
+        if matches!(result.data, LogicalPlan::Aggregate(_)) {
+            correlated = false;
+        }
+        Ok((result, correlated))
+    }
+    visit(plan, false).map(|(result, _)| result)
+}
+
+fn lift_keys(
+    plan: &LogicalPlan,
+    aliases: &AliasGenerator,
+    reserved: &mut BTreeSet<String>,
+) -> Result<Transformed<LogicalPlan>> {
     let mut has_aggregate = false;
     let mut has_cast = false;
     let mut has_window = false;
@@ -338,10 +475,8 @@ fn normalize_keys(
                     ));
         }
         eligible &= !expressions_exist(node, |part| match part {
-            Expr::ScalarSubquery(_)
-            | Expr::Exists(_)
-            | Expr::InSubquery(_)
-            | Expr::SetComparison(_) => true,
+            Expr::ScalarSubquery(query) => !immutable_uncorrelated_scalar(query),
+            Expr::Exists(_) | Expr::InSubquery(_) | Expr::SetComparison(_) => true,
             Expr::ScalarFunction(function) => {
                 function.func.signature().volatility == Volatility::Volatile
             }
@@ -428,12 +563,9 @@ fn normalize_keys(
     ) {
         return Ok(Transformed::no(plan.clone()));
     }
-    // Without a cast, carry correlations only to windows over non-floating keys: Sail's
-    // equality keeps NaN payloads apart, so floating partitions or peers would split them.
-    if !has_cast
-        && regrouped.is_empty()
-        && (!windowed_correlation || !domains.is_empty() || has_floating_window_key(plan)?)
-    {
+    // Floating domains are materialized before the window, so its partitions,
+    // aggregate groups and join comparisons all use the completed equality key.
+    if !has_cast && regrouped.is_empty() && !windowed_correlation {
         return Ok(Transformed::no(plan.clone()));
     }
     for aggregate in keyed {
@@ -485,14 +617,43 @@ fn normalize_keys(
     }))
 }
 
-/// The optional cast, inner column and outer comparison value.
-type KeyEquality<'a> = (Option<&'a Cast>, &'a Column, &'a Expr);
+/// Preserve the conversion's failure behavior and complete target field.
+#[derive(Clone)]
+enum KeyCast {
+    Cast(FieldRef),
+    TryCast(FieldRef),
+}
+
+impl KeyCast {
+    fn field(&self) -> &FieldRef {
+        match self {
+            Self::Cast(field) | Self::TryCast(field) => field,
+        }
+    }
+
+    fn apply(&self, expression: Expr) -> Expr {
+        match self {
+            Self::Cast(field) => Expr::Cast(Cast::new_from_field(
+                Box::new(expression),
+                Arc::clone(field),
+            )),
+            Self::TryCast(field) => Expr::TryCast(TryCast::new_from_field(
+                Box::new(expression),
+                Arc::clone(field),
+            )),
+        }
+    }
+}
+
+/// The optional conversion, inner column and outer comparison value.
+type KeyEquality<'a> = (Option<KeyCast>, &'a Column, &'a Expr);
 
 /// Return the cast equality that a filter below an aggregate hands to that aggregate.
 fn lifted_key<'a>(
     expression: &'a Expr,
     pinned: &HashSet<String>,
     domains: &BTreeSet<Column>,
+    input: &LogicalPlan,
 ) -> Option<KeyEquality<'a>> {
     let (inner, outer) = native_equality(expression)?;
     match inner {
@@ -501,7 +662,27 @@ fn lifted_key<'a>(
             let Expr::Column(column) = cast.expr.as_ref() else {
                 return None;
             };
-            (!pinned.contains(&column.name)).then_some((Some(cast), column, outer))
+            // A repeated pass may see the same-type comparison of a completed key.
+            // Prove normalization from its producer, never from its private-looking name.
+            let completed = cast.expr.get_type(input.schema()).ok().as_ref()
+                == Some(cast.field.data_type())
+                && (!NormalizeFloatKeys::has_float(cast.field.data_type())
+                    || normalized_float_column(&cast.expr, input));
+            (!pinned.contains(&column.name) && !completed).then_some((
+                Some(KeyCast::Cast(Arc::clone(&cast.field))),
+                column,
+                outer,
+            ))
+        }
+        Expr::TryCast(cast) => {
+            let Expr::Column(column) = cast.expr.as_ref() else {
+                return None;
+            };
+            Some((
+                Some(KeyCast::TryCast(Arc::clone(&cast.field))),
+                column,
+                outer,
+            ))
         }
         _ => None,
     }
@@ -514,10 +695,11 @@ fn split_lifted<'a>(
     aggregated: bool,
     pinned: &HashSet<String>,
     domains: &BTreeSet<Column>,
+    input: &LogicalPlan,
 ) -> (Vec<KeyEquality<'a>>, Vec<&'a Expr>, Vec<Expr>) {
     let (mut lifted, mut retained) = (Vec::new(), Vec::new());
     for expression in split_conjunction(predicate) {
-        match lifted_key(expression, pinned, domains).filter(|_| aggregated) {
+        match lifted_key(expression, pinned, domains, input).filter(|_| aggregated) {
             Some(equality) => lifted.push(equality),
             None => retained.push(expression),
         }
@@ -531,13 +713,14 @@ fn split_lifted<'a>(
 }
 
 /// Merge -0.0 and 0.0 in a floating window key, including floating leaves of arrays and structs.
-fn normalize_window_key(key: &mut Expr, schema: &DFSchema) -> Result<()> {
+fn normalize_window_key(key: &mut Expr, schema: &DFSchema) -> Result<bool> {
     if NormalizeFloatKeys::has_float(&key.get_type(schema)?)
         && !matches!(key, Expr::ScalarFunction(function) if function.func.inner().is::<NormalizeFloatKeys>())
     {
         *key = ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![key.clone()]);
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 /// Find the floating domains whose filters reach a window before an aggregate.
@@ -573,35 +756,38 @@ fn collect_window_domains(
     found
 }
 
-/// Whether a window partitions or orders by a floating value.
-fn has_floating_window_key(plan: &LogicalPlan) -> Result<bool> {
-    plan.exists(|node| {
-        let LogicalPlan::Window(window) = node else {
-            return Ok(false);
-        };
-        let schema = window.input.schema();
-        window
-            .window_expr
-            .iter()
-            .try_fold(false, |found, expression| {
-                Ok(found
-                    || expression.exists(|part| {
-                        let Expr::WindowFunction(function) = part else {
-                            return Ok(false);
-                        };
-                        Ok(function
-                            .params
-                            .partition_by
-                            .iter()
-                            .chain(function.params.order_by.iter().map(|sort| &sort.expr))
-                            .any(|key| {
-                                key.get_type(schema).map_or(true, |data_type| {
-                                    NormalizeFloatKeys::has_float(&data_type)
-                                })
-                            }))
-                    })?)
-            })
-    })
+/// Trace a completed normalized value through only identity-preserving nodes.
+/// Unrecognized lineage is not evidence that a floating column is canonical.
+fn normalized_float_column(expression: &Expr, input: &LogicalPlan) -> bool {
+    let Expr::Column(column) = expression else {
+        return false;
+    };
+    match input {
+        LogicalPlan::Projection(projection) => {
+            let Ok(index) = projection.schema.index_of_column(column) else {
+                return false;
+            };
+            let mut expression = &projection.expr[index];
+            while let Expr::Alias(alias) = expression {
+                expression = &alias.expr;
+            }
+            matches!(expression, Expr::ScalarFunction(function) if function.func.inner().is::<NormalizeFloatKeys>())
+                || normalized_float_column(expression, &projection.input)
+        }
+        LogicalPlan::Filter(filter) => normalized_float_column(expression, &filter.input),
+        LogicalPlan::Window(window) => normalized_float_column(expression, &window.input),
+        LogicalPlan::SubqueryAlias(alias) => {
+            let Ok(index) = alias.schema.index_of_column(column) else {
+                return false;
+            };
+            let (qualifier, field) = alias.input.schema().qualified_field(index);
+            normalized_float_column(
+                &Expr::Column(Column::new(qualifier.cloned(), field.name())),
+                &alias.input,
+            )
+        }
+        _ => false,
+    }
 }
 
 /// Collect the correlations that stay in their filters after cast equalities are
@@ -620,8 +806,13 @@ fn lifted_scope<'a>(
         let nearest = ancestors
             .iter()
             .rposition(|node| matches!(node, LogicalPlan::Aggregate(_)));
-        let (lifted, _, retained) =
-            split_lifted(&filter.predicate, nearest.is_some(), pinned, domains);
+        let (lifted, _, retained) = split_lifted(
+            &filter.predicate,
+            nearest.is_some(),
+            pinned,
+            domains,
+            &filter.input,
+        );
         correlations.extend(retained);
         if let Some(nearest) = nearest.filter(|_| !lifted.is_empty()) {
             // Native pull-up adds the key to the nearest aggregate, but above
@@ -660,7 +851,7 @@ fn lifted_scope<'a>(
 
 /// A cast equality lifted from its filter to the first window or aggregate above it.
 struct Pending {
-    cast: Option<Cast>,
+    cast: Option<KeyCast>,
     column: Column,
     outer: Expr,
 }
@@ -733,14 +924,19 @@ impl Lift<'_> {
             LogicalPlan::Filter(filter) => {
                 // Only an aggregate above can consume a lifted equality; filters
                 // above every aggregate keep their predicates for native pull-up.
-                let (lifted, retained, correlations) =
-                    split_lifted(&filter.predicate, aggregated, self.pinned, self.domains);
+                let (lifted, retained, correlations) = split_lifted(
+                    &filter.predicate,
+                    aggregated,
+                    self.pinned,
+                    self.domains,
+                    &filter.input,
+                );
                 keys.extend(collect_subquery_cols(&correlations, filter.input.schema())?);
                 if lifted.is_empty() {
                     LogicalPlan::Filter(filter)
                 } else {
                     pending.extend(lifted.into_iter().map(|(cast, column, outer)| Pending {
-                        cast: cast.cloned(),
+                        cast,
                         column: column.clone(),
                         outer: outer.clone(),
                     }));
@@ -794,7 +990,9 @@ impl Lift<'_> {
                                             .iter_mut()
                                             .map(|sort| &mut sort.expr),
                                     ) {
-                                        normalize_window_key(key, &schema)?;
+                                        if !normalized_float_column(key, &window.input) {
+                                            normalize_window_key(key, &schema)?;
+                                        }
                                     }
                                 }
                                 for key in &keys {
@@ -937,7 +1135,7 @@ impl Lift<'_> {
         } in pending.drain(..)
         {
             let data_type = match &cast {
-                Some(cast) => cast.field.data_type().clone(),
+                Some(cast) => cast.field().data_type().clone(),
                 None => input
                     .schema()
                     .qualified_field_from_column(&column)?
@@ -954,29 +1152,31 @@ impl Lift<'_> {
             } else {
                 outer
             };
-            let float_string_nan = if cast.is_some() && data_type.is_string() {
-                input
-                    .schema()
-                    .qualified_field_from_column(&column)
-                    .ok()
-                    .and_then(|(_, field)| match field.data_type() {
-                        DataType::Float32 => {
-                            Some(ScalarValue::Float32(Some(f32::from_bits(0x7fc0_0000))))
-                        }
-                        DataType::Float64 => Some(ScalarValue::Float64(Some(f64::from_bits(
-                            0x7ff8_0000_0000_0000,
-                        )))),
-                        _ => None,
-                    })
-            } else {
-                None
-            };
+            let float_string_nan =
+                if matches!(cast, Some(KeyCast::Cast(_))) && data_type.is_string() {
+                    input
+                        .schema()
+                        .qualified_field_from_column(&column)
+                        .ok()
+                        .and_then(|(_, field)| match field.data_type() {
+                            DataType::Float32 => {
+                                Some(ScalarValue::Float32(Some(f32::from_bits(0x7fc0_0000))))
+                            }
+                            DataType::Float64 => Some(ScalarValue::Float64(Some(f64::from_bits(
+                                0x7ff8_0000_0000_0000,
+                            )))),
+                            _ => None,
+                        })
+                } else {
+                    None
+                };
             // Match Spark's float-to-string shortcut, including its signed-zero
             // collapse. Only this private key merges NaN payloads; raw values stay intact.
             let key = if let Some(nan) = float_string_nan {
                 ScalarUDF::from(NormalizeFloatKeys::new())
                     .call(vec![nanvl(Expr::Column(column), lit(nan))])
             } else if !canonical
+                && !matches!(cast, Some(KeyCast::TryCast(_)))
                 && input
                     .schema()
                     .qualified_field_from_column(&column)
@@ -985,11 +1185,8 @@ impl Lift<'_> {
                 // Group injective casts by their input; the comparison casts each group.
                 Expr::Column(column)
             } else {
-                let value = match cast {
-                    Some(cast) => Expr::Cast(Cast {
-                        expr: Box::new(Expr::Column(column)),
-                        ..cast
-                    }),
+                let value = match &cast {
+                    Some(cast) => cast.apply(Expr::Column(column)),
                     None => Expr::Column(column),
                 };
                 if canonical {
@@ -1016,7 +1213,13 @@ impl Lift<'_> {
             // Compare through a same-type cast, or restore the cast above a raw input key.
             // A column pair would let filter pushdown infer outer predicates onto
             // the key and evaluate the cast on rows that local predicates exclude.
-            let compared = Expr::Cast(Cast::new(Box::new(Expr::Column(column.clone())), data_type));
+            let compared = Expr::Cast(match &cast {
+                Some(cast) => Cast::new_from_field(
+                    Box::new(Expr::Column(column.clone())),
+                    Arc::clone(cast.field()),
+                ),
+                None => Cast::new(Box::new(Expr::Column(column.clone())), data_type),
+            });
             predicates.push(compared.eq(outer));
             keys.insert(column);
         }
@@ -1175,6 +1378,749 @@ mod tests {
     use super::*;
 
     #[test]
+    fn scalar_key_eligibility_checks_nested_scopes_and_volatility() -> Result<()> {
+        use datafusion::functions::expr_fn::random;
+        use datafusion_expr::{LogicalPlanBuilder, create_udf, out_ref_col, scalar_subquery};
+
+        let scalar = |expression: Expr| -> Result<Subquery> {
+            let plan = LogicalPlanBuilder::empty(true)
+                .project(vec![expression])?
+                .build()?;
+            let Expr::ScalarSubquery(query) = scalar_subquery(Arc::new(plan)) else {
+                panic!("scalar");
+            };
+            Ok(query)
+        };
+        let stable = create_udf(
+            "stable_key",
+            vec![],
+            DataType::Int64,
+            Volatility::Stable,
+            Arc::new(|_| Ok(ScalarValue::Int64(Some(0)).into())),
+        );
+        for expression in [
+            random(),
+            stable.call(vec![]),
+            out_ref_col(DataType::Int64, "outer"),
+        ] {
+            let query = scalar(expression)?;
+            assert!(!immutable_uncorrelated_scalar(&query));
+            // The outer scalar has no references/volatile calls in its own expressions.
+            let nested = scalar(Expr::ScalarSubquery(query))?;
+            assert!(!immutable_uncorrelated_scalar(&nested));
+        }
+        let mut hidden_reference = scalar(out_ref_col(DataType::Int64, "outer"))?;
+        hidden_reference.outer_ref_columns.clear();
+        assert!(!immutable_uncorrelated_scalar(&hidden_reference));
+        let mut spurious_reference = scalar(lit(0_i64))?;
+        spurious_reference
+            .outer_ref_columns
+            .push(out_ref_col(DataType::Int64, "outer"));
+        assert!(!immutable_uncorrelated_scalar(&spurious_reference));
+        let nested = scalar(Expr::ScalarSubquery(scalar(lit(0_i64))?))?;
+        assert!(immutable_uncorrelated_scalar(&nested));
+        // Cardinality is the physical scalar's responsibility, not a reason to
+        // replace it with a join that could drop or multiply the outer rows.
+        for plan in [
+            LogicalPlanBuilder::empty(false)
+                .project(vec![lit(0_i64)])?
+                .build()?,
+            LogicalPlanBuilder::values(vec![vec![lit(0_i64)], vec![lit(1_i64)]])?.build()?,
+        ] {
+            let Expr::ScalarSubquery(query) = scalar_subquery(Arc::new(plan)) else {
+                panic!("scalar")
+            };
+            assert!(immutable_uncorrelated_scalar(&query));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_window_keys_keep_scalar_and_case_operands_intact() -> Result<()> {
+        use datafusion::functions::expr_fn::random;
+        use datafusion::functions_aggregate::count::count_udaf;
+        use datafusion::functions_aggregate::expr_fn::max;
+        use datafusion_expr::expr::WindowFunction;
+        use datafusion_expr::{LogicalPlanBuilder, col, out_ref_col, scalar_subquery, when};
+        use sail_common_datafusion::decorrelate::PullUpCorrelatedExpr;
+
+        let scalar_plan = Arc::new(
+            LogicalPlanBuilder::empty(true)
+                .project(vec![lit(0_i64)])?
+                .build()?,
+        );
+        let outer = out_ref_col(DataType::Int64, "x");
+        let rhs = when(
+            outer.clone().eq(lit(2_i64)),
+            Expr::Cast(Cast::new(
+                Box::new(out_ref_col(DataType::Utf8, "raw")),
+                DataType::Int64,
+            )),
+        )
+        .otherwise(outer.clone() + scalar_subquery(Arc::clone(&scalar_plan)))?;
+        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::try_from(Schema::new(vec![Field::new(
+                "g",
+                DataType::Utf8,
+                false,
+            )]))?),
+        });
+        let plan = |rhs: Expr| -> Result<LogicalPlan> {
+            LogicalPlanBuilder::from(input.clone())
+                .filter(Expr::Cast(Cast::new(Box::new(col("g")), DataType::Int64)).eq(rhs))?
+                .window(vec![
+                    Expr::WindowFunction(Box::new(WindowFunction::new(count_udaf(), vec![lit(1)])))
+                        .alias("w"),
+                ])?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("w"))])?
+                .build()
+        };
+        let original = plan(rhs.clone())?;
+        let mut guard = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
+        original.clone().rewrite(&mut guard)?;
+        assert!(!guard.can_pull_up);
+        let aliases = AliasGenerator::new();
+        let mut reserved = BTreeSet::new();
+        let result = normalize_keys(&original, &aliases, &mut reserved)?;
+        assert!(result.transformed);
+        assert_eq!(result.data.schema(), original.schema());
+        let mut predicates = Vec::new();
+        let mut scalars = 0;
+        result.data.apply(|node| {
+            if let LogicalPlan::Filter(filter) = node {
+                if let Some((_, outer)) = native_equality(&filter.predicate) {
+                    predicates.push(outer.clone());
+                }
+                filter.predicate.apply(|expr| {
+                    if let Expr::ScalarSubquery(query) = expr {
+                        assert!(Arc::ptr_eq(&query.subquery, &scalar_plan));
+                        scalars += 1;
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(predicates, vec![rhs]);
+        assert_eq!(scalars, 1);
+        let mut guard = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
+        result.data.clone().rewrite(&mut guard)?;
+        assert!(guard.can_pull_up);
+        assert!(!normalize_keys(&result.data, &aliases, &mut reserved)?.transformed);
+        let volatile_plan = Arc::new(
+            LogicalPlanBuilder::empty(true)
+                .project(vec![random()])?
+                .build()?,
+        );
+        let rejected = plan(outer + scalar_subquery(volatile_plan))?;
+        assert!(!normalize_keys(&rejected, &aliases, &mut reserved)?.transformed);
+        Ok(())
+    }
+
+    #[test]
+    fn user_window_keys_normalize_without_lifted_keys() -> Result<()> {
+        use datafusion::functions_aggregate::count::count_udaf;
+        use datafusion::functions_aggregate::expr_fn::max;
+        use datafusion::optimizer::OptimizerContext;
+        use datafusion_expr::expr::WindowFunction;
+        use datafusion_expr::{LogicalPlanBuilder, col, scalar_subquery};
+
+        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::try_from(Schema::new(vec![
+                Field::new("k", DataType::Float64, true),
+                Field::new("g", DataType::Int32, true),
+            ]))?),
+        });
+        let outer = Expr::OuterReferenceColumn(
+            Arc::new(Field::new("x", DataType::Int32, true)),
+            Column::from_name("x"),
+        );
+        let mut function = WindowFunction::new(count_udaf(), vec![lit(1)]);
+        function.params.partition_by = vec![col("k")];
+        let inner = LogicalPlanBuilder::from(input)
+            .filter(col("g").eq(outer))?
+            .window(vec![Expr::WindowFunction(Box::new(function)).alias("w")])?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("w"))])?
+            .build()?;
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(vec![scalar_subquery(Arc::new(inner)).alias("n")])?
+            .build()?;
+        let result = NormalizeScalarSubqueryKeys.rewrite(plan.clone(), &OptimizerContext::new())?;
+        assert!(result.transformed, "user window key was not normalized");
+        assert_eq!(result.data.schema(), plan.schema());
+        let LogicalPlan::Projection(projection) = &result.data else {
+            panic!("expected projection");
+        };
+        let Expr::ScalarSubquery(query) = projection.expr[0].clone().unalias() else {
+            panic!("expected scalar");
+        };
+        assert!(query.subquery.exists(|node| expressions_exist(node, |expr| {
+            matches!(expr, Expr::ScalarFunction(f) if f.func.inner().is::<NormalizeFloatKeys>())
+        }))?);
+        assert!(
+            !NormalizeScalarSubqueryKeys
+                .rewrite(result.data, &OptimizerContext::new())?
+                .transformed
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn user_window_normalization_keeps_scope_schema_and_completed_values() -> Result<()> {
+        use datafusion::functions::expr_fn::random;
+        use datafusion::functions_aggregate::count::count_udaf;
+        use datafusion::functions_aggregate::expr_fn::max;
+        use datafusion_common::metadata::FieldMetadata;
+        use datafusion_expr::expr::{Alias, WindowFunction};
+        use datafusion_expr::{LogicalPlanBuilder, WindowFrame, col, scalar_subquery};
+
+        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::try_from(Schema::new(vec![
+                Field::new("k", DataType::Float64, true)
+                    .with_metadata(HashMap::from([("raw".into(), "kept".into())])),
+                Field::new("g", DataType::Int32, true),
+            ]))?),
+        });
+        let outer = Expr::OuterReferenceColumn(
+            Arc::new(Field::new("x", DataType::Int32, true)),
+            Column::from_name("x"),
+        );
+        let mut function = WindowFunction::new(count_udaf(), vec![col("k")]);
+        function.params.partition_by = vec![col("k"), col("p")];
+        function.params.order_by = vec![random().sort(false, true), col("g").sort(true, false)];
+        function.params.window_frame = WindowFrame::new(Some(false));
+        function.params.filter = Some(Box::new(col("k").gt(lit(0.0))));
+        let expression = Expr::WindowFunction(Box::new(function.clone()));
+        let aliased = Expr::Alias(
+            Alias::new(expression.clone(), Some("user"), "w")
+                .with_metadata(Some(FieldMetadata::default())),
+        );
+        let completed = LogicalPlanBuilder::from(input.clone())
+            .project(vec![col("k"), col("g"), random().alias("p")])?
+            .filter(col("g").eq(outer.clone()).and(random().lt(lit(0.5))))?
+            .build()?;
+        let window = LogicalPlanBuilder::from(completed.clone())
+            .window(vec![aliased.clone(), expression.clone()])?
+            .build()?;
+        let inner = LogicalPlanBuilder::from(window.clone())
+            .aggregate(Vec::<Expr>::new(), vec![max(col("user.w"))])?
+            .build()?;
+        let result = normalize_user_window_keys(inner.clone())?;
+        assert!(result.transformed);
+        assert_eq!(result.data.schema(), inner.schema());
+        let LogicalPlan::Aggregate(aggregate) = &result.data else {
+            panic!("aggregate")
+        };
+        let LogicalPlan::Window(actual) = aggregate.input.as_ref() else {
+            panic!("window")
+        };
+        let LogicalPlan::Window(original) = window else {
+            panic!("window")
+        };
+        assert_eq!(actual.schema, original.schema);
+        assert_eq!(actual.input.as_ref(), &completed);
+        // Strip only the added private wrappers; every other typed field, alias,
+        // occurrence, filter and completed-value reference must be identical.
+        let restored = actual
+            .window_expr
+            .iter()
+            .cloned()
+            .map(|expr| {
+                expr.transform_up(|expr| match expr {
+                    Expr::ScalarFunction(mut f) if f.func.inner().is::<NormalizeFloatKeys>() => {
+                        Ok(Transformed::yes(f.args.remove(0)))
+                    }
+                    expr => Ok(Transformed::no(expr)),
+                })
+                .map(|result| result.data)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // The bare function receives an alias to retain its original schema name.
+        assert_eq!(restored[0], aliased);
+        assert_eq!(restored[1].clone().unalias(), expression);
+        let again = normalize_user_window_keys(result.data.clone())?;
+        assert!(!again.transformed);
+        assert_eq!(again.data, result.data);
+
+        let ordinary = LogicalPlanBuilder::from(input)
+            .project(vec![col("k"), col("g"), random().alias("p")])?
+            .window(vec![Expr::WindowFunction(Box::new(function)).alias("w")])?
+            .build()?;
+        assert!(!normalize_user_window_keys(ordinary.clone())?.transformed);
+        // An above-window correlation does not make its input correlated.
+        let above = LogicalPlanBuilder::from(ordinary.clone())
+            .filter(col("g").eq(outer))?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("w"))])?
+            .build()?;
+        assert_eq!(normalize_user_window_keys(above.clone())?.data, above);
+        // Independent nested scalars are leaves, even above a correlated input.
+        let nested = LogicalPlanBuilder::from(ordinary)
+            .aggregate(Vec::<Expr>::new(), vec![max(col("w"))])?
+            .build()?;
+        let nested_expr = scalar_subquery(Arc::new(nested));
+        let nested_expr = scalar_subquery(Arc::new(
+            LogicalPlanBuilder::empty(true)
+                .project(vec![nested_expr])?
+                .build()?,
+        ));
+        let scoped = LogicalPlanBuilder::from(inner)
+            .project(vec![nested_expr])?
+            .build()?;
+        let normalized = normalize_user_window_keys(scoped.clone())?;
+        let LogicalPlan::Projection(actual) = normalized.data else {
+            panic!("projection")
+        };
+        let LogicalPlan::Projection(original) = scoped else {
+            panic!("projection")
+        };
+        assert_eq!(actual.expr, original.expr);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn user_window_normalization_preserves_volatile_filter_and_order_evaluations()
+    -> Result<()> {
+        use std::sync::Mutex;
+
+        use arrow::array::Int64Array;
+        use arrow::datatypes::Int64Type;
+        use datafusion::dataframe::DataFrame;
+        use datafusion::execution::session_state::SessionStateBuilder;
+        use datafusion::functions_aggregate::count::count_udaf;
+        use datafusion::functions_aggregate::expr_fn::max;
+        use datafusion::prelude::{SessionConfig, SessionContext};
+        use datafusion_expr::expr::WindowFunction;
+        use datafusion_expr::{
+            ColumnarValue, LogicalPlanBuilder, WindowFrame, col, create_udf, out_ref_col,
+            scalar_subquery,
+        };
+
+        for normalize in [false, true] {
+            let rules = crate::default_optimizer_rules()
+                .into_iter()
+                .filter(|rule| normalize || rule.name() != NormalizeScalarSubqueryKeys.name())
+                .collect();
+            let state = SessionStateBuilder::new()
+                .with_default_features()
+                .with_config(SessionConfig::new().with_target_partitions(1))
+                .with_optimizer_rules(rules)
+                .build();
+            let context = SessionContext::new_with_state(state);
+            let filter_rows = Arc::new(Mutex::new(Vec::new()));
+            let order_rows = Arc::new(Mutex::new(Vec::new()));
+            let mut functions = Vec::new();
+            for (name, rows, floating) in [
+                ("counted_filter", &filter_rows, false),
+                ("counted_order", &order_rows, true),
+            ] {
+                let rows = Arc::clone(rows);
+                functions.push(create_udf(
+                    name,
+                    vec![DataType::Int64],
+                    if floating {
+                        DataType::Float64
+                    } else {
+                        DataType::Int64
+                    },
+                    Volatility::Volatile,
+                    Arc::new(move |args| {
+                        let values = args[0].clone().into_array(1)?;
+                        rows.lock()
+                            .map_err(|_| {
+                                datafusion_common::internal_datafusion_err!("ledger poisoned")
+                            })?
+                            .extend(values.as_primitive::<Int64Type>().values().iter().copied());
+                        if floating {
+                            Ok(ColumnarValue::Array(arrow::compute::cast(
+                                &values,
+                                &DataType::Float64,
+                            )?))
+                        } else {
+                            Ok(args[0].clone())
+                        }
+                    }),
+                ));
+            }
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("k", DataType::Float64, false),
+                Field::new("g", DataType::Int64, false),
+                Field::new("v", DataType::Int64, false),
+            ]));
+            let input = context
+                .read_batch(RecordBatch::try_new(
+                    schema,
+                    vec![
+                        Arc::new(Float64Array::from(vec![-0.0, 0.0, 0.0, 1.5, 1.5, 1.5])),
+                        Arc::new(Int64Array::from(vec![1, 1, 1, 2, 2, 2])),
+                        Arc::new(Int64Array::from(vec![1, 2, -3, 4, 5, -6])),
+                    ],
+                )?)?
+                .into_unoptimized_plan();
+            let mut function = WindowFunction::new(count_udaf(), vec![lit(1_i64)]);
+            function.params.partition_by = vec![col("k")];
+            function.params.order_by = vec![functions[1].call(vec![col("v")]).sort(true, true)];
+            function.params.window_frame = WindowFrame::new(None);
+            let inner = LogicalPlanBuilder::from(input)
+                .filter(
+                    col("g")
+                        .eq(out_ref_col(DataType::Int64, "x"))
+                        .and(functions[0].call(vec![col("v")]).gt(lit(0_i64))),
+                )?
+                .window(vec![Expr::WindowFunction(Box::new(function)).alias("c")])?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("c"))])?
+                .build()?;
+            let outer_schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, false)]));
+            let outer = context
+                .read_batch(RecordBatch::try_new(
+                    outer_schema,
+                    vec![Arc::new(Int64Array::from(vec![1, 2]))],
+                )?)?
+                .into_unoptimized_plan();
+            let plan = LogicalPlanBuilder::from(outer)
+                .project(vec![col("x"), scalar_subquery(Arc::new(inner)).alias("n")])?
+                .sort(vec![col("x").sort(true, true)])?
+                .build()?;
+            let batches = DataFrame::new(context.state(), plan).collect().await?;
+            let actual = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(1)
+                        .as_primitive::<Int64Type>()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual, if normalize { vec![2, 2] } else { vec![1, 2] });
+            for (name, rows, expected) in [
+                ("filter", &filter_rows, vec![-6, -3, 1, 2, 4, 5]),
+                ("order", &order_rows, vec![1, 2, 4, 5]),
+            ] {
+                let mut actual = rows
+                    .lock()
+                    .map_err(|_| datafusion_common::internal_datafusion_err!("ledger poisoned"))?
+                    .clone();
+                actual.sort();
+                println!("normalization={normalize} {name} evaluated rows: {actual:?}");
+                assert_eq!(actual, expected, "normalization={normalize}");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn user_window_key_wrapping_evaluates_each_volatile_occurrence_once() -> Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use datafusion_expr::{col, create_udf};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let counted = create_udf(
+            "counted",
+            vec![DataType::Float64],
+            DataType::Float64,
+            Volatility::Volatile,
+            Arc::new(move |args| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(args[0].clone())
+            }),
+        );
+        let schema =
+            DFSchema::try_from(Schema::new(vec![Field::new("k", DataType::Float64, true)]))?;
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.as_arrow().clone()),
+            vec![Arc::new(Float64Array::from(vec![
+                Some(-0.0),
+                Some(0.0),
+                None,
+            ]))],
+        )?;
+        let original = counted.call(vec![col("k")]);
+        for _ in 0..2 {
+            let mut key = original.clone();
+            assert!(normalize_window_key(&mut key, &schema)?);
+            assert!(!normalize_window_key(&mut key, &schema)?);
+            let Expr::ScalarFunction(wrapper) = &key else {
+                panic!("wrapper")
+            };
+            assert_eq!(wrapper.args, vec![original.clone()]);
+            let physical = create_physical_expr(
+                &key,
+                &schema,
+                &ExecutionProps::new(),
+                &PhysicalPlanningContext::default(),
+            )?;
+            let values = physical.evaluate(&batch)?.into_array(3)?;
+            assert_eq!(values.as_primitive::<Float64Type>().value(0).to_bits(), 0);
+            assert!(values.is_null(2));
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            batch
+                .column(0)
+                .as_primitive::<Float64Type>()
+                .value(0)
+                .to_bits(),
+            (-0.0_f64).to_bits()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn completed_window_comparison_keys_preserve_fields_and_are_idempotent() -> Result<()> {
+        use datafusion::functions_aggregate::count::count_udaf;
+        use datafusion::functions_aggregate::expr_fn::max;
+        use datafusion_expr::expr::WindowFunction;
+        use datafusion_expr::{LogicalPlanBuilder, col, out_ref_col};
+        use sail_common_datafusion::decorrelate::PullUpCorrelatedExpr;
+
+        for (source, target, try_cast) in [
+            (DataType::Float32, DataType::Float32, false),
+            (DataType::Float64, DataType::Float64, false),
+            (DataType::Float32, DataType::Float64, false),
+            (DataType::Float64, DataType::Decimal128(3, 2), true),
+        ] {
+            // A user field that looks private must still be normalized, and must
+            // not collide with the actual generated field.
+            let raw = format!("{OPTIMIZER_CORRELATION_KEY_PREFIX}_1");
+            let schema = Schema::new(vec![
+                Field::new(&raw, source.clone(), true)
+                    .with_metadata(HashMap::from([("raw".into(), "kept".into())])),
+                Field::new("v", DataType::Int32, false),
+            ]);
+            let input = LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: Arc::new(DFSchema::try_from(schema)?),
+            });
+            assert!(!normalized_float_column(&col(&raw), &input));
+            let field = Arc::new(
+                Field::new("target", target.clone(), true)
+                    .with_metadata(HashMap::from([("target".into(), "kept".into())])),
+            );
+            let conversion = if try_cast {
+                Some(KeyCast::TryCast(Arc::clone(&field)))
+            } else if source != target {
+                Some(KeyCast::Cast(Arc::clone(&field)))
+            } else {
+                None
+            };
+            let key = conversion
+                .as_ref()
+                .map_or_else(|| col(&raw), |cast| cast.apply(col(&raw)));
+            let mut function = WindowFunction::new(count_udaf(), vec![lit(1)]);
+            function.params.partition_by = vec![col("v")];
+            let plan = LogicalPlanBuilder::from(input.clone())
+                .filter(col("v").gt(lit(0)))?
+                .filter(key.eq(out_ref_col(target.clone(), "outer")))?
+                .window(vec![
+                    Expr::WindowFunction(Box::new(function.clone())).alias("w"),
+                ])?
+                .project(vec![col(&raw), col("v"), col("w")])?
+                .window(vec![Expr::WindowFunction(Box::new(function)).alias("w2")])?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("w2"))])?
+                .build()?;
+            let mut native = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
+            plan.clone().rewrite(&mut native)?;
+            assert!(!native.can_pull_up, "raw keys must still hit the DF guard");
+            let aliases = AliasGenerator::new();
+            let mut reserved = BTreeSet::new();
+            let result = normalize_keys(&plan, &aliases, &mut reserved)?;
+            assert!(result.transformed);
+            assert_eq!(result.data.schema(), plan.schema());
+            let again = normalize_keys(&result.data, &aliases, &mut reserved)?;
+            assert!(!again.transformed);
+            assert_eq!(again.data, result.data);
+            let mut keys = Vec::new();
+            let mut windows = Vec::new();
+            result.data.apply(|node| {
+                if let LogicalPlan::Projection(projection) = node {
+                    for expr in &projection.expr {
+                        if let Expr::Alias(alias) = expr
+                            && alias.name.starts_with(OPTIMIZER_CORRELATION_KEY_PREFIX)
+                            && alias.name != raw
+                        {
+                            keys.push((alias.name.clone(), alias.expr.as_ref().clone()));
+                            assert_eq!(
+                                projection
+                                    .input
+                                    .schema()
+                                    .field_with_unqualified_name(&raw)?,
+                                input.schema().field_with_unqualified_name(&raw)?
+                            );
+                        }
+                    }
+                }
+                if let LogicalPlan::Window(window) = node {
+                    let Expr::WindowFunction(function) = window.window_expr[0].clone().unalias()
+                    else {
+                        panic!("window function")
+                    };
+                    windows.push(function.params.partition_by);
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            assert_eq!(keys.len(), 1);
+            assert_eq!(windows.len(), 2);
+            for window in windows {
+                assert_eq!(window, vec![col("v"), col(&keys[0].0)]);
+            }
+            if try_cast {
+                let Expr::TryCast(cast) = &keys[0].1 else {
+                    panic!("TryCast key")
+                };
+                assert_eq!(cast.field, field);
+            } else {
+                let Expr::ScalarFunction(normalized) = &keys[0].1 else {
+                    panic!("normalized key")
+                };
+                assert!(normalized.func.inner().is::<NormalizeFloatKeys>());
+                assert_eq!(
+                    normalized.args,
+                    vec![
+                        conversion
+                            .as_ref()
+                            .map_or_else(|| col(&raw), |cast| cast.apply(col(&raw)))
+                    ]
+                );
+            }
+            let mut native = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
+            result.data.rewrite(&mut native)?;
+            assert!(
+                native.can_pull_up,
+                "completed partitions prove the safe domain"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn materialized_try_cast_preserves_nulls_and_completed_float_casts() -> Result<()> {
+        use arrow::datatypes::Decimal128Type;
+        use datafusion_expr::col;
+
+        for decimal in [false, true] {
+            let (raw, source, target): (ArrayRef, _, _) = if decimal {
+                (
+                    Arc::new(Float64Array::from(vec![
+                        Some(1.0),
+                        Some(1.00390625),
+                        Some(1.0078125),
+                        Some(100.0),
+                        Some(f64::NAN),
+                        Some(f64::INFINITY),
+                        None,
+                    ])),
+                    DataType::Float64,
+                    DataType::Decimal128(3, 2),
+                )
+            } else {
+                (
+                    Arc::new(Float32Array::from(vec![
+                        Some(-0.0),
+                        Some(0.0),
+                        Some(f32::from_bits(0x7f80_0001)),
+                        Some(f32::from_bits(0x7fc0_0001)),
+                        None,
+                    ])),
+                    DataType::Float32,
+                    DataType::Float64,
+                )
+            };
+            let schema = Arc::new(DFSchema::try_from(Schema::new(vec![Field::new(
+                "raw", source, true,
+            )]))?);
+            let input = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: Arc::clone(&schema),
+            }));
+            let field = Arc::new(
+                Field::new("target", target.clone(), true)
+                    .with_metadata(HashMap::from([("key".into(), "metadata".into())])),
+            );
+            let cast = if decimal {
+                KeyCast::TryCast(Arc::clone(&field))
+            } else {
+                KeyCast::Cast(Arc::clone(&field))
+            };
+            let mut pending = vec![Pending {
+                cast: Some(cast),
+                column: Column::from_name("raw"),
+                outer: Expr::OuterReferenceColumn(Arc::clone(&field), Column::from_name("outer")),
+            }];
+            let aliases = AliasGenerator::new();
+            let mut reserved = BTreeSet::new();
+            let pinned = HashSet::new();
+            let domains = BTreeSet::new();
+            let mut lift = Lift {
+                aliases: &aliases,
+                reserved: &mut reserved,
+                pinned: &pinned,
+                domains: &domains,
+                hidden: HashSet::new(),
+                reads_grouping_id: false,
+                grouping_ids_fit: true,
+                open_mask: None,
+                masked: false,
+                grouping_set_ancestors: 0,
+            };
+            let plan = lift.materialize(input, &mut pending, &mut BTreeSet::new(), true)?;
+            let LogicalPlan::Filter(filter) = plan.as_ref() else {
+                panic!("filter")
+            };
+            let Expr::BinaryExpr(predicate) = &filter.predicate else {
+                panic!("equality")
+            };
+            let Expr::Cast(compared) = predicate.left.as_ref() else {
+                panic!("completed comparison")
+            };
+            assert_eq!(compared.field, field);
+            let LogicalPlan::Projection(projection) = filter.input.as_ref() else {
+                panic!("projection")
+            };
+            assert_eq!(projection.expr[0], col("raw"));
+            let key = projection.expr[1].clone().unalias();
+            let physical = create_physical_expr(
+                &key,
+                &schema,
+                &ExecutionProps::new(),
+                &PhysicalPlanningContext::default(),
+            )?;
+            let batch =
+                RecordBatch::try_new(Arc::new(schema.as_arrow().clone()), vec![Arc::clone(&raw)])?;
+            let values = physical.evaluate(&batch)?.into_array(raw.len())?;
+            if decimal {
+                assert_eq!(
+                    values
+                        .as_primitive::<Decimal128Type>()
+                        .iter()
+                        .collect::<Vec<_>>(),
+                    vec![Some(100), Some(100), Some(101), None, None, None, None]
+                );
+                let Expr::TryCast(actual) = key else {
+                    panic!("TryCast must survive")
+                };
+                assert_eq!(actual.field, field);
+            } else {
+                let values = values.as_primitive::<Float64Type>();
+                assert_eq!(values.value(0).to_bits(), 0);
+                assert_eq!(values.value(1).to_bits(), 0);
+                assert_eq!(values.value(2).to_bits(), values.value(3).to_bits());
+                assert!(values.is_null(4));
+                assert_eq!(
+                    raw.as_primitive::<Float32Type>().value(2).to_bits(),
+                    0x7f80_0001
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn float_string_shortcut_uses_private_numeric_keys_and_keeps_string_comparison() -> Result<()> {
         for from in [DataType::Float32, DataType::Float64] {
             for to in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
@@ -1209,10 +2155,7 @@ mod tests {
                         Column::from_name("outer"),
                     );
                     let mut pending = vec![Pending {
-                        cast: Some(Cast::new(
-                            Box::new(Expr::Column(column.clone())),
-                            to.clone(),
-                        )),
+                        cast: Some(KeyCast::Cast(Arc::new(Field::new("", to.clone(), true)))),
                         column: column.clone(),
                         outer: outer.clone(),
                     }];

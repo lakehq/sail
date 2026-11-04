@@ -3,7 +3,6 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from pyspark.errors import SparkRuntimeException
 from pyspark.sql.types import FloatType, IntegerType, StructField, StructType
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
@@ -135,7 +134,7 @@ def test_mixed_join_preserves_rounded_bigint_classes_and_unmatched_rows(spark, a
 @pytest.mark.parametrize("ansi", [False, True])
 @pytest.mark.parametrize("source", ["float", "double"])
 @pytest.mark.parametrize("windowed", [False, True])
-def test_float_decimal_correlation_groups_by_rounded_value(spark, ansi, source, windowed, request):
+def test_float_decimal_correlation_groups_by_rounded_value(spark, ansi, source, windowed):
     inner = [(0, 1.0, 10), (1, 1.00390625, 20), (2, 1.0078125, 40), (3, None, 99)]
     outer = [(0, Decimal("1.00")), (1, Decimal("1.01")), (2, None)]
     if windowed:
@@ -153,19 +152,49 @@ def test_float_decimal_correlation_groups_by_rounded_value(spark, ansi, source, 
         _view(spark, "followup_decimal_inner", inner, f"seq int,k {source},v int"),
         _view(spark, "followup_decimal_outer", outer, "seq int,k decimal(12,2)"),
     ):
-        if not is_jvm_spark() and windowed and not ansi:
-            request.node.add_marker(
-                pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(
-                        SparkRuntimeException,
-                        match=r'^Schema contains qualified field name "\?table\?"\.k and unqualified field name k '
-                        r"which would be ambiguous$",
-                    ),
-                    reason="Non-ANSI decimal windows already failed before #2843; the current qualifier error is unchanged",
-                )
-            )
         assert [tuple(row) for row in spark.sql(query).collect()] == expected
+
+
+@pytest.mark.parametrize("ansi", [False, True])
+@pytest.mark.parametrize("source", ["float", "double"])
+@pytest.mark.parametrize("explicit_try", [False, True])
+@pytest.mark.parametrize("keep_bad_rows", [False, True])
+def test_decimal_window_keys_preserve_nulls_and_error_timing(spark, ansi, source, explicit_try, keep_bad_rows):
+    # Spark CastWithAnsiOffSuite / TryCastSuite: decimal overflow, NaN and infinity become NULL.
+    inner = list(enumerate([1.0, 1.00390625, 1.0078125, None, 10.0, float("nan"), float("inf"), -float("inf")]))
+    outer = [(0, Decimal("1.00")), (1, Decimal("1.01")), (2, None), (3, Decimal("9.99")), (4, Decimal("1.00"))]
+    cast = "TRY_CAST" if explicit_try else "CAST"
+    predicate = "true" if keep_bad_rows else "seq < 4"
+    query = f"""SELECT o.seq,(SELECT max(rn) FROM (
+        SELECT row_number() OVER(ORDER BY seq) AS rn FROM decimal_window_inner i
+        WHERE {predicate} AND {cast}(i.k AS DECIMAL(3,2))=o.k)) AS result
+        FROM decimal_window_outer o ORDER BY o.seq"""  # noqa: S608
+    with (
+        _configuration(spark, **{"spark.sql.ansi.enabled": str(ansi).lower()}),
+        _view(spark, "decimal_window_inner", inner, f"seq int,k {source}"),
+        _view(spark, "decimal_window_outer", outer, "seq int,k decimal(3,2)"),
+    ):
+        if ansi and not explicit_try and keep_bad_rows:
+            with pytest.raises(Exception, match=r"(?i)(overflow|represent|cast|decimal|nan|infinite)"):
+                spark.sql(query).collect()
+            # Removing the invalid rows must also work after an earlier failed query.
+            query = query.replace("WHERE true AND", "WHERE seq < 4 AND")
+        frame = spark.sql(query)
+        assert [tuple(row) for row in frame.collect()] == [(0, 2), (1, 1), (2, None), (3, None), (4, 2)]
+        assert frame.schema["result"].nullable
+        assert frame.schema["result"].dataType.simpleString() == "int"
+        if not ansi or explicit_try:
+            direct = spark.sql(f"SELECT {cast}(k AS DECIMAL(3,2)) FROM decimal_window_inner ORDER BY seq")  # noqa: S608
+            assert [row[0] for row in direct.collect()] == [
+                Decimal("1.00"),
+                Decimal("1.00"),
+                Decimal("1.01"),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ]
 
 
 @pytest.mark.parametrize("ansi", [False, True])

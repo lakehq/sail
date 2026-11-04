@@ -42,13 +42,12 @@ impl<'a> ShortenInListSimplifier<'a> {
         let Ok(data_type) = expr.get_type(self.schema) else {
             return false;
         };
+        // Float membership compares bits; comparison chains preserve +0.0 = -0.0.
         matches!(
             data_type,
             DataType::Int32
                 | DataType::Int64
                 | DataType::UInt64
-                | DataType::Float32
-                | DataType::Float64
                 | DataType::FixedSizeBinary(1 | 2 | 4 | 8 | 16)
         ) && list.iter().all(|expr| expr.as_literal().is_some())
     }
