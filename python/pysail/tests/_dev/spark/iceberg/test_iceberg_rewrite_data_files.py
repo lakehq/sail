@@ -202,8 +202,9 @@ def test_rewrite_preserves_omitted_identity_partition_values(spark, sql_catalog,
         sql_catalog.drop_table(f"default.{name}")
 
 
+@pytest.mark.parametrize("min_input_files", [1, 2])
 @pytest.mark.parametrize("files_per_group", [1, 2])
-def test_rewrite_thresholds_apply_after_group_size_limit(spark, tmp_path, files_per_group):
+def test_rewrite_thresholds_apply_after_group_size_limit(spark, tmp_path, files_per_group, min_input_files):
     name = "rewrite_group_thresholds"
     location = (tmp_path / name).as_uri()
     spark.sql(f"CREATE TABLE {name} (id BIGINT) USING iceberg LOCATION '{location}'")
@@ -216,7 +217,7 @@ def test_rewrite_thresholds_apply_after_group_size_limit(spark, tmp_path, files_
         statement = (
             f"CALL system.rewrite_data_files('{name}', options => map("
             f"'max-file-group-size-bytes', '{group_size}', "
-            "'target-file-size-bytes', '1048576', 'min-input-files', '2'))"
+            f"'target-file-size-bytes', '1048576', 'min-input-files', '{min_input_files}'))"
         )
         result = spark.sql(statement).first()
         if files_per_group == 1:
@@ -423,10 +424,11 @@ def test_rewrite_selected_files_preserves_shared_puffin_siblings(spark, tmp_path
         sizes_by_puffin = {}
         for file, _, _, target in blobs:
             sizes_by_puffin.setdefault(file, set()).add(old_files[target].data_file.file_size_in_bytes)
-        shared_sizes = next(sizes for sizes in sizes_by_puffin.values() if len(sizes) > 1)
+        # A singleton small-file group is a no-op, even with min-input-files=1.
+        shared_sizes = max((sizes for sizes in sizes_by_puffin.values() if len(sizes) > 1), key=max)
         cutoff = max(shared_sizes)
         selected = {name for name, entry in old_files.items() if entry.data_file.file_size_in_bytes < cutoff}
-        assert selected
+        assert len(selected) > 1
         assert selected < old_files.keys()
         selected_puffins = {file for file, _, _, target in blobs if target in selected}
         untouched_puffins = {file for file, _, _, target in blobs if target not in selected}
