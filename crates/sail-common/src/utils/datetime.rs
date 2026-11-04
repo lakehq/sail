@@ -1,3 +1,6 @@
+use std::str::FromStr;
+
+use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use iana_time_zone::get_timezone;
 
@@ -14,9 +17,32 @@ pub const MICROS_PER_DAY: i64 = 24 * 3_600 * 1_000_000;
 // The largest absolute offset that `SET TIME ZONE INTERVAL ...` accepts.
 pub const MAX_TIME_ZONE_OFFSET_MICROS: u64 = (18 * MICROS_PER_HOUR) as u64;
 
+const TIME_ZONE_ENV_VAR: &str = "TZ";
+
+// The zone named by `TZ`, or `None` when `TZ` does not name a zone that can be resolved.
+//
+// `iana_time_zone` ignores `TZ` on Linux and reads `/etc/localtime` instead, while the JVM, and
+// therefore Spark, prefers `TZ` and only falls back to the system configuration. A `TZ` holding a
+// POSIX rule such as `MSK-3` rather than a zone name is ignored, as the JVM does.
+fn timezone_from_env_var(value: &str) -> Option<&str> {
+    // The JVM and the C library both skip a single leading colon in `TZ`.
+    let value = value.strip_prefix(':').unwrap_or(value);
+    (is_fixed_zero_offset_timezone(value) || Tz::from_str(value).is_ok()).then_some(value)
+}
+
 pub fn get_system_timezone() -> CommonResult<String> {
+    if let Ok(value) = std::env::var(TIME_ZONE_ENV_VAR)
+        && let Some(timezone) = timezone_from_env_var(&value)
+    {
+        return Ok(timezone.to_string());
+    }
     // TODO: This does not work in some Amazon Linux environments.
-    get_timezone().map_err(|e| CommonError::invalid(format!("failed to get system time zone: {e}")))
+    get_timezone().map_err(|e| {
+        CommonError::invalid(format!(
+            "failed to get system time zone: {e}; \
+             set the `{TIME_ZONE_ENV_VAR}` environment variable to a time zone name such as `UTC`"
+        ))
+    })
 }
 
 pub const fn time_unit_to_multiplier(time_unit: &TimeUnit) -> i64 {
@@ -86,5 +112,35 @@ pub fn timezone_alias_to_timezone(value: &str) -> &str {
         "MST" => "-07:00",
         "HST" => "-10:00",
         _ => value,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::timezone_from_env_var;
+
+    #[test]
+    fn timezone_from_env_var_accepts_zone_names_and_rejects_posix_rules() {
+        for (value, expected) in [
+            ("UTC", Some("UTC")),
+            ("Etc/UTC", Some("Etc/UTC")),
+            ("Z", Some("Z")),
+            ("America/New_York", Some("America/New_York")),
+            ("EST5EDT", Some("EST5EDT")),
+            ("+05:30", Some("+05:30")),
+            (":UTC", Some("UTC")),
+            (":Europe/Moscow", Some("Europe/Moscow")),
+            ("", None),
+            (":", None),
+            ("MSK-3", None),
+            ("Nonsense/Zone", None),
+            ("/usr/share/zoneinfo/UTC", None),
+        ] {
+            assert_eq!(
+                timezone_from_env_var(value),
+                expected,
+                "unexpected time zone for TZ={value:?}"
+            );
+        }
     }
 }
