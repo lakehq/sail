@@ -88,7 +88,7 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
                 ValueOrLambda::Lambda(_),
             ] => {
                 let (left_key, left_value, _) = map_fields(self.name(), left)?;
-                let (right_key, _, _) = map_fields(self.name(), right)?;
+                let (right_key, right_value, _) = map_fields(self.name(), right)?;
                 let key_type = common_map_key_type(
                     self.name(),
                     &left_key,
@@ -105,13 +105,7 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
                             .with_nullable(false),
                     ),
                     Arc::new(left_value.as_ref().clone().with_nullable(true)),
-                    Arc::new(
-                        map_fields(self.name(), right)?
-                            .1
-                            .as_ref()
-                            .clone()
-                            .with_nullable(true),
-                    ),
+                    Arc::new(right_value.as_ref().clone().with_nullable(true)),
                 ]]))
             }
             [
@@ -160,7 +154,7 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        let (left, right, lambda) = lazy_map_zip_args(self.name(), args.arg_fields)?;
+        let (left, right, lambda) = map_zip_return_args(self.name(), args.arg_fields)?;
         let (left_key, _, _) = map_fields(self.name(), left)?;
         let (right_key, _, _) = map_fields(self.name(), right)?;
         let key_type = common_map_key_type(
@@ -193,7 +187,7 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
-        let (left, right, lambda) = lazy_map_zip_args(self.name(), &args.args)?;
+        let (left, right, lambda) = map_zip_args(self.name(), &args.args)?;
         let left_array = left.to_array(args.number_rows)?;
         let left_map = as_map_array(&left_array)?;
         let active_rows = (0..left_map.len())
@@ -206,8 +200,13 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
                 args.number_rows,
             )));
         }
-        let right_active = evaluate_lambda_rows(right, &active_rows)?;
-        let right_array = scatter_active_rows(right_active, &active_rows, left_array.len())?;
+        let right_array = match right {
+            MapZipRight::Value(right) => right.to_array(args.number_rows)?,
+            MapZipRight::Lambda(right) => {
+                let right_active = evaluate_lambda_rows(right, &active_rows)?;
+                scatter_active_rows(right_active, &active_rows, left_array.len())?
+            }
+        };
         let right_map = as_map_array(&right_array)?;
         let inputs = build_lambda_inputs(
             self.name(),
@@ -275,19 +274,47 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
     }
 }
 
-fn lazy_map_zip_args<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
+enum MapZipRight<'a, V, L> {
+    Value(&'a V),
+    Lambda(&'a L),
+}
+
+fn map_zip_args<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
     name: &str,
     args: &'a [ValueOrLambda<V, L>],
-) -> Result<(&'a V, &'a L, &'a L)> {
-    let [
-        ValueOrLambda::Value(left),
-        ValueOrLambda::Lambda(right),
-        ValueOrLambda::Lambda(lambda),
-    ] = args
-    else {
-        return plan_err!("{name} expects a map followed by two lambdas");
-    };
-    Ok((left, right, lambda))
+) -> Result<(&'a V, MapZipRight<'a, V, L>, &'a L)> {
+    match args {
+        [
+            ValueOrLambda::Value(left),
+            ValueOrLambda::Value(right),
+            ValueOrLambda::Lambda(lambda),
+        ] => Ok((left, MapZipRight::Value(right), lambda)),
+        [
+            ValueOrLambda::Value(left),
+            ValueOrLambda::Lambda(right),
+            ValueOrLambda::Lambda(lambda),
+        ] => Ok((left, MapZipRight::Lambda(right), lambda)),
+        _ => plan_err!("{name} expects two maps followed by a lambda"),
+    }
+}
+
+fn map_zip_return_args<'a>(
+    name: &str,
+    args: &'a [ValueOrLambda<FieldRef, FieldRef>],
+) -> Result<(&'a FieldRef, &'a FieldRef, &'a FieldRef)> {
+    match args {
+        [
+            ValueOrLambda::Value(left),
+            ValueOrLambda::Value(right),
+            ValueOrLambda::Lambda(lambda),
+        ]
+        | [
+            ValueOrLambda::Value(left),
+            ValueOrLambda::Lambda(right),
+            ValueOrLambda::Lambda(lambda),
+        ] => Ok((left, right, lambda)),
+        _ => plan_err!("{name} expects two maps followed by a lambda"),
+    }
 }
 
 fn map_fields(name: &str, field: &FieldRef) -> Result<(FieldRef, FieldRef, bool)> {

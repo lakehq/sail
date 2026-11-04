@@ -112,7 +112,7 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        let (left, right, lambda) = lazy_zip_args(self.name(), args.arg_fields)?;
+        let (left, right, lambda) = zip_return_args(self.name(), args.arg_fields)?;
         list_element(self.name(), left, "first")?;
         list_element(self.name(), right, "second")?;
         let large_offsets =
@@ -135,7 +135,7 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
-        let (left, right, lambda) = lazy_zip_args(self.name(), &args.args)?;
+        let (left, right, lambda) = zip_args(self.name(), &args.args)?;
         let left_array = left.to_array(args.number_rows)?;
         let (DataType::List(element_field) | DataType::LargeList(element_field)) =
             args.return_field.data_type()
@@ -159,8 +159,13 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
                 args.number_rows,
             )));
         }
-        let right_active = evaluate_lambda_rows(right, &active_rows)?;
-        let right_array = scatter_active_rows(right_active, &active_rows, left_rows)?;
+        let right_array = match right {
+            ZipRight::Value(right) => right.to_array(args.number_rows)?,
+            ZipRight::Lambda(right) => {
+                let right_active = evaluate_lambda_rows(right, &active_rows)?;
+                scatter_active_rows(right_active, &active_rows, left_rows)?
+            }
+        };
         let right_rows = right_array.len();
         if left_rows != right_rows {
             return exec_err!(
@@ -232,19 +237,47 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
     }
 }
 
-fn lazy_zip_args<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
+enum ZipRight<'a, V, L> {
+    Value(&'a V),
+    Lambda(&'a L),
+}
+
+fn zip_args<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
     name: &str,
     args: &'a [ValueOrLambda<V, L>],
-) -> Result<(&'a V, &'a L, &'a L)> {
-    let [
-        ValueOrLambda::Value(left),
-        ValueOrLambda::Lambda(right),
-        ValueOrLambda::Lambda(lambda),
-    ] = args
-    else {
-        return plan_err!("{name} expects an array followed by two lambdas");
-    };
-    Ok((left, right, lambda))
+) -> Result<(&'a V, ZipRight<'a, V, L>, &'a L)> {
+    match args {
+        [
+            ValueOrLambda::Value(left),
+            ValueOrLambda::Value(right),
+            ValueOrLambda::Lambda(lambda),
+        ] => Ok((left, ZipRight::Value(right), lambda)),
+        [
+            ValueOrLambda::Value(left),
+            ValueOrLambda::Lambda(right),
+            ValueOrLambda::Lambda(lambda),
+        ] => Ok((left, ZipRight::Lambda(right), lambda)),
+        _ => plan_err!("{name} expects two arrays followed by a lambda"),
+    }
+}
+
+fn zip_return_args<'a>(
+    name: &str,
+    args: &'a [ValueOrLambda<FieldRef, FieldRef>],
+) -> Result<(&'a FieldRef, &'a FieldRef, &'a FieldRef)> {
+    match args {
+        [
+            ValueOrLambda::Value(left),
+            ValueOrLambda::Value(right),
+            ValueOrLambda::Lambda(lambda),
+        ]
+        | [
+            ValueOrLambda::Value(left),
+            ValueOrLambda::Lambda(right),
+            ValueOrLambda::Lambda(lambda),
+        ] => Ok((left, right, lambda)),
+        _ => plan_err!("{name} expects two arrays followed by a lambda"),
+    }
 }
 
 fn list_element(name: &str, field: &FieldRef, position: &str) -> Result<FieldRef> {
