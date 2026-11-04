@@ -23,6 +23,26 @@ def test_text_read_write_basic(spark, sample_df, tmp_path):
     assert sorted(joined_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
+def test_text_hive_null_partitions(spark, tmp_path):
+    sentinel = "__HIVE_DEFAULT_PARTITION__"
+    path = tmp_path / "partitions"
+    schema = "value STRING, p STRING"
+    rows = [("null-key", None), ("empty-key", ""), ("literal-null", "null")]
+    spark.createDataFrame(rows, schema).write.partitionBy("p").text(str(path))
+    spark.createDataFrame([("sentinel-key", sentinel)], schema).write.mode("append").partitionBy("p").text(str(path))
+    read = spark.read.text(str(path))
+    assert read.schema.simpleString() == "struct<value:string,p:string>"
+    assert read.schema["p"].nullable
+    assert [tuple(row) for row in read.orderBy("value").collect()] == [
+        ("empty-key", None),
+        ("literal-null", "null"),
+        ("null-key", None),
+        ("sentinel-key", None),
+    ]
+    assert [row.value for row in read.where("p IS NOT NULL").collect()] == ["literal-null"]
+    assert {file.parent.name for file in path.rglob("*.txt")} == {f"p={sentinel}", "p=null"}
+
+
 def test_text_path_glob_filter(spark, tmp_path):
     path = tmp_path / "text_path_glob_filter"
     path.mkdir()

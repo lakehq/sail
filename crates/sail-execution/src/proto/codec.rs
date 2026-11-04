@@ -6,7 +6,7 @@ use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use datafusion::common::config::{CsvOptions, TableParquetOptions};
+use datafusion::common::config::{ArrowOptions, CsvOptions, TableParquetOptions};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{
     Constraint, Constraints, JoinSide, Result, ScalarValue, Statistics, plan_datafusion_err,
@@ -120,6 +120,7 @@ use sail_common_datafusion::schema_evolution::{
     StructFieldMatching,
 };
 use sail_common_datafusion::udf::StreamUDF;
+use sail_data_source::formats::arrow::ArrowSink;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
 use sail_data_source::formats::csv::CsvSource;
@@ -133,6 +134,7 @@ use sail_data_source::formats::socket::{SocketReadOptions, SocketSourceExec};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::listing::delete::FileDeleteExec;
+use sail_data_source::listing::partition::HivePartitionKey;
 use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
@@ -1491,6 +1493,52 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                     projection,
                 )?))
+            }
+            NodeKind::ArrowSink(r#gen::ArrowSinkExecNode {
+                base_config,
+                compression,
+                compression_level,
+                alignment,
+                sort_order,
+            }) => {
+                let [input] = inputs else {
+                    return plan_err!("Arrow sink expects exactly one input, got {}", inputs.len());
+                };
+                let config: datafusion_proto::protobuf::FileSinkConfig =
+                    try_decode_message(&base_config)?;
+                let config = FileSinkConfig::try_from(&config)?;
+                if config.output_schema != input.schema() {
+                    return plan_err!("Arrow sink schema does not match its input");
+                }
+                let options = ArrowOptions {
+                    compression: compression.parse()?,
+                    compression_level,
+                    alignment: usize::try_from(alignment)
+                        .map_err(|_| plan_datafusion_err!("invalid Arrow sink alignment"))?,
+                };
+                let sink = ArrowSink::try_new(config, options)?;
+                let sort_order = sort_order
+                    .map(|order| {
+                        let nodes = order
+                            .physical_sort_expr_nodes
+                            .iter()
+                            .map(|node| try_decode_message(node))
+                            .collect::<Result<Vec<PhysicalSortExprNode>>>()?;
+                        parse_physical_sort_exprs(
+                            &nodes,
+                            &PhysicalPlanDecodeContext::new(ctx, self),
+                            &input.schema(),
+                            proto_converter,
+                        )
+                        .map(|exprs| LexRequirement::new(exprs.into_iter().map(Into::into)))
+                    })
+                    .transpose()?
+                    .flatten();
+                Ok(Arc::new(DataSinkExec::new(
+                    Arc::clone(input),
+                    Arc::new(sink),
+                    sort_order,
+                )))
             }
             NodeKind::TextSink(r#gen::TextSinkExecNode {
                 input,
@@ -3026,11 +3074,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 projection,
             })
         } else if let Some(data_sink) = node.downcast_ref::<DataSinkExec>() {
-            let input = try_encode_physical_plan_with_converter(
-                self,
-                proto_converter,
-                data_sink.input().clone(),
-            )?;
             let sort_order = match data_sink.sort_order() {
                 Some(requirements) => {
                     let expr = requirements
@@ -3067,7 +3110,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             } else {
                 None
             };
-            if let Some(sink) = data_sink.sink().downcast_ref::<TextSink>() {
+            if let Some(sink) = data_sink.sink().downcast_ref::<ArrowSink>() {
+                NodeKind::ArrowSink(r#gen::ArrowSinkExecNode {
+                    base_config: try_encode_message(
+                        datafusion_proto::protobuf::FileSinkConfig::try_from(sink.config())?,
+                    )?,
+                    compression: sink.options().compression.to_string(),
+                    compression_level: sink.options().compression_level,
+                    alignment: u64::try_from(sink.options().alignment)
+                        .map_err(|_| plan_datafusion_err!("invalid Arrow sink alignment"))?,
+                    sort_order,
+                })
+            } else if let Some(sink) = data_sink.sink().downcast_ref::<TextSink>() {
+                let input = try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    Arc::clone(data_sink.input()),
+                )?;
                 let base_config = try_encode_message(
                     datafusion_proto::protobuf::FileSinkConfig::try_from(sink.config())
                         .map_err(|e| plan_datafusion_err!("failed to encode text sink: {e}"))?,
@@ -4169,6 +4228,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
             "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
             "delta_decode_path" => Ok(Arc::new(ScalarUDF::from(DeltaDecodePath::default()))),
+            "sail_hive_partition_key" => Ok(Arc::new(ScalarUDF::from(HivePartitionKey::default()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -4180,6 +4240,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             && sail_function::scalar::jev::JevKind::from_name(node.name()).is_some())
             || node_inner.is::<ArrayElement>()
             || node_inner.is::<DeltaDecodePath>()
+            || node_inner.is::<HivePartitionKey>()
             || node_inner.is::<MapExtract>()
             || node_inner.is::<ArrayItemWithPosition>()
             || node_inner.is::<ArrayStructField>()
@@ -7189,6 +7250,290 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udf(&udf, &mut buf)?;
         codec.try_decode_udf(&name, &buf)
+    }
+
+    #[tokio::test]
+    #[expect(clippy::unwrap_used)]
+    async fn arrow_sink_round_trip_preserves_config_and_partition_keys() -> Result<()> {
+        use datafusion::arrow::array::{Float64Array, Int32Array, StringArray};
+        use datafusion::common::config::ArrowIpcCompression;
+        use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
+        use datafusion::datasource::object_store::ObjectStoreUrl;
+        use datafusion::datasource::physical_plan::{FileGroup, FileOutputMode};
+        use datafusion::logical_expr::dml::InsertOp;
+        use datafusion::physical_expr::ScalarFunctionExpr;
+        use datafusion::physical_plan::collect;
+
+        let ctx = Arc::new(TaskContext::default());
+        let schema = Arc::new(
+            Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("payload", DataType::Utf8, true).with_metadata(HashMap::from([(
+                    "meaning".into(),
+                    "unchanged payload".into(),
+                )])),
+                Field::new("p", DataType::Float64, true),
+            ])
+            .with_metadata(HashMap::from([("source".into(), "arrow-codec".into())])),
+        );
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec![
+                    None,
+                    Some(""),
+                    Some("__HIVE_DEFAULT_PARTITION__"),
+                ])),
+                Arc::new(Float64Array::from(vec![None, Some(3.0), Some(-0.0)])),
+            ],
+        )?;
+        for partitioned in [false, true] {
+            let input =
+                MemorySourceConfig::try_new_exec(&[vec![batch.clone()]], schema.clone(), None)?;
+            let input = if partitioned {
+                Arc::new(ProjectionExec::try_new(
+                    vec![
+                        (
+                            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+                            "id".into(),
+                        ),
+                        (Arc::new(Column::new("payload", 1)), "payload".into()),
+                        (
+                            Arc::new(ScalarFunctionExpr::try_new(
+                                Arc::new(ScalarUDF::from(HivePartitionKey::default())),
+                                vec![Arc::new(Column::new("p", 2))],
+                                &schema,
+                                Arc::new(Default::default()),
+                            )?),
+                            "p".into(),
+                        ),
+                    ],
+                    input,
+                )?) as Arc<dyn ExecutionPlan>
+            } else {
+                input
+            };
+            for (compression, compression_level, alignment) in [
+                (ArrowIpcCompression::Uncompressed, None, 8),
+                (ArrowIpcCompression::Lz4Frame, None, 64),
+                (ArrowIpcCompression::Zstd, Some(3), 32),
+            ] {
+                let config = FileSinkConfig {
+                    original_url: "file:///arrow-codec/".into(),
+                    object_store_url: ObjectStoreUrl::local_filesystem(),
+                    file_group: FileGroup::new(vec![PartitionedFile::new(
+                        "arrow-codec/existing.arrow",
+                        42,
+                    )]),
+                    table_paths: vec![ListingTableUrl::parse("file:///arrow-codec/")?],
+                    output_schema: input.schema(),
+                    table_partition_cols: if partitioned {
+                        vec![("p".into(), DataType::Null)]
+                    } else {
+                        vec![]
+                    },
+                    insert_op: InsertOp::Append,
+                    keep_partition_by_columns: !partitioned,
+                    file_extension: "arrow".into(),
+                    file_output_mode: if partitioned {
+                        FileOutputMode::Directory
+                    } else {
+                        FileOutputMode::SingleFile
+                    },
+                };
+                // Index 1 must be resolved against the input, not the count-result schema.
+                let sort_order = LexRequirement::new([PhysicalSortExpr::new(
+                    Arc::new(Column::new("payload", 1)),
+                    SortOptions {
+                        descending: true,
+                        nulls_first: false,
+                    },
+                )
+                .into()]);
+                let original: Arc<dyn ExecutionPlan> = Arc::new(DataSinkExec::new(
+                    input.clone(),
+                    Arc::new(ArrowSink::try_new(
+                        config.clone(),
+                        ArrowOptions {
+                            compression,
+                            compression_level,
+                            alignment,
+                        },
+                    )?),
+                    sort_order.clone(),
+                ));
+                let bytes = try_encode_physical_plan(&RemoteExecutionCodec, original.clone())?;
+                let decoded = try_decode_physical_plan(&ctx, &RemoteExecutionCodec, &bytes)?;
+                assert_eq!(decoded.schema(), original.schema());
+                let exec = decoded.downcast_ref::<DataSinkExec>().unwrap();
+                let sink = exec.sink().downcast_ref::<ArrowSink>().unwrap();
+                assert_eq!(
+                    datafusion_proto::protobuf::FileSinkConfig::try_from(sink.config())?,
+                    datafusion_proto::protobuf::FileSinkConfig::try_from(&config)?,
+                );
+                assert_eq!(sink.options().compression, compression);
+                assert_eq!(sink.options().compression_level, compression_level);
+                assert_eq!(sink.options().alignment, alignment);
+                assert_eq!(exec.sort_order(), &sort_order);
+                assert_eq!(exec.input().schema(), input.schema());
+                let actual = collect(exec.input().clone(), ctx.clone()).await?;
+                if partitioned {
+                    assert_eq!(
+                        actual[0]
+                            .column(2)
+                            .as_any()
+                            .downcast_ref::<StringArray>()
+                            .unwrap(),
+                        &StringArray::from(vec!["__HIVE_DEFAULT_PARTITION__", "3", "-0"])
+                    );
+                    assert!(!actual[0].schema().field(2).is_nullable());
+                } else {
+                    assert_eq!(actual, vec![batch.clone()]);
+                }
+                assert_eq!(actual[0].column(1), batch.column(1));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn arrow_sink_rejects_invalid_envelopes() -> Result<()> {
+        use datafusion::datasource::listing::ListingTableUrl;
+        use datafusion::datasource::object_store::ObjectStoreUrl;
+        use datafusion::datasource::physical_plan::{FileGroup, FileOutputMode};
+        use datafusion::logical_expr::dml::InsertOp;
+
+        use crate::proto::converter::RemotePhysicalProtoConverter;
+
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new(
+                "payload",
+                DataType::Utf8,
+                true,
+            )]))));
+        let config = FileSinkConfig {
+            original_url: "file:///arrow-codec/".into(),
+            object_store_url: ObjectStoreUrl::local_filesystem(),
+            file_group: FileGroup::new(vec![]),
+            table_paths: vec![ListingTableUrl::parse("file:///arrow-codec/")?],
+            output_schema: input.schema(),
+            table_partition_cols: vec![],
+            insert_op: InsertOp::Append,
+            keep_partition_by_columns: false,
+            file_extension: "arrow".into(),
+            file_output_mode: FileOutputMode::Directory,
+        };
+        let node = r#gen::ArrowSinkExecNode {
+            base_config: try_encode_message(datafusion_proto::protobuf::FileSinkConfig::try_from(
+                &config,
+            )?)?,
+            compression: "lz4_frame".into(),
+            compression_level: None,
+            alignment: 64,
+            sort_order: None,
+        };
+        let decode = |node: r#gen::ArrowSinkExecNode, inputs: &[Arc<dyn ExecutionPlan>]| {
+            RemoteExecutionCodec.try_decode(
+                &ExtendedPhysicalPlanNode {
+                    node_kind: Some(NodeKind::ArrowSink(node)),
+                }
+                .encode_to_vec(),
+                inputs,
+                &TaskContext::default(),
+                &RemotePhysicalProtoConverter::default(),
+            )
+        };
+        assert!(decode(node.clone(), std::slice::from_ref(&input)).is_ok());
+        for inputs in [vec![], vec![input.clone(), input.clone()]] {
+            assert!(
+                decode(node.clone(), &inputs)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("exactly one input")
+            );
+        }
+        let wrong_input =
+            Arc::new(EmptyExec::new(Arc::new(Schema::empty()))) as Arc<dyn ExecutionPlan>;
+        assert!(
+            decode(node.clone(), &[wrong_input])
+                .unwrap_err()
+                .to_string()
+                .contains("schema does not match")
+        );
+        let mut invalid = node.clone();
+        invalid.compression = "gzip".into();
+        assert!(decode(invalid, std::slice::from_ref(&input)).is_err());
+        for alignment in [0, 7, u64::MAX] {
+            let mut invalid = node.clone();
+            invalid.alignment = alignment;
+            assert!(decode(invalid, std::slice::from_ref(&input)).is_err());
+        }
+        let mut invalid = node.clone();
+        invalid.compression_level = Some(3);
+        assert!(decode(invalid, std::slice::from_ref(&input)).is_err());
+        for base_config in [vec![], vec![0xff]] {
+            let mut invalid = node.clone();
+            invalid.base_config = base_config;
+            assert!(decode(invalid, std::slice::from_ref(&input)).is_err());
+        }
+        let mut invalid = node.clone();
+        let mut config = config;
+        config.insert_op = InsertOp::Overwrite;
+        invalid.base_config = try_encode_message(
+            datafusion_proto::protobuf::FileSinkConfig::try_from(&config)?,
+        )?;
+        assert!(
+            decode(invalid, std::slice::from_ref(&input))
+                .unwrap_err()
+                .to_string()
+                .contains("Overwrites")
+        );
+        let mut invalid = node;
+        invalid.sort_order = Some(r#gen::PhysicalSortExprNodeCollection {
+            physical_sort_expr_nodes: vec![vec![0xff]],
+        });
+        assert!(decode(invalid, &[input]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_hive_partition_key() -> Result<()> {
+        use datafusion::logical_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
+        use sail_data_source::listing::partition::HIVE_DEFAULT_PARTITION;
+
+        let decoded = round_trip_udf(ScalarUDF::from(HivePartitionKey::default()))?;
+        assert!(decoded.inner().is::<HivePartitionKey>());
+        for (value, expected) in [
+            (ScalarValue::Float64(None), HIVE_DEFAULT_PARTITION),
+            (ScalarValue::Float64(Some(3.0)), "3"),
+            (
+                ScalarValue::Utf8(Some(String::new())),
+                HIVE_DEFAULT_PARTITION,
+            ),
+            (ScalarValue::Utf8(Some("null".into())), "null"),
+        ] {
+            let fields = vec![Arc::new(Field::new("p", value.data_type(), true))];
+            let field = decoded.return_field_from_args(ReturnFieldArgs {
+                arg_fields: &fields,
+                scalar_arguments: &[None],
+            })?;
+            assert_eq!(field.data_type(), &DataType::Utf8);
+            assert!(!field.is_nullable());
+            let actual = decoded.invoke_with_args(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Scalar(value)],
+                arg_fields: fields,
+                number_rows: 1,
+                return_field: field,
+                config_options: Arc::new(Default::default()),
+            })?;
+            assert_eq!(
+                ScalarValue::try_from_array(&actual.into_array(1)?, 0)?,
+                ScalarValue::Utf8(Some(expected.to_string()))
+            );
+        }
+        Ok(())
     }
 
     fn round_trip_udaf(udaf: AggregateUDF) -> Result<Arc<AggregateUDF>> {

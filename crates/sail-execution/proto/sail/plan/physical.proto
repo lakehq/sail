@@ -80,6 +80,7 @@ message ExtendedPhysicalPlanNode {
     DeltaMaintenanceExecNode delta_maintenance = 65;
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
     EmptyGroupingSetsExecNode empty_grouping_sets = 67;
+    ArrowSinkExecNode arrow_sink = 68;
   }
 }
 
@@ -981,6 +982,15 @@ message TextSinkExecNode {
   bytes line_sep = 4;
   CompressionTypeVariant compression_type_variant = 5;
   optional PhysicalSortExprNodeCollection sort_order = 6;
+}
+
+// The input is carried by the enclosing extension node.
+message ArrowSinkExecNode {
+  bytes base_config = 1;
+  string compression = 2;
+  optional int32 compression_level = 3;
+  uint64 alignment = 4;
+  optional PhysicalSortExprNodeCollection sort_order = 5;
 }
 
 message FileDeleteExecNode {

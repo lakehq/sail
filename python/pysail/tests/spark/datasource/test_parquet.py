@@ -1,6 +1,6 @@
 import base64
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -129,6 +129,149 @@ def test_parquet_write_modes(spark, tmp_path):
 
     spark.createDataFrame([(5, "new")], schema="id INT, value STRING").write.mode("overwrite").parquet(path)
     assert spark.read.parquet(path).orderBy("id").collect() == [Row(id=5, value="new")]
+
+
+@pytest.mark.parametrize("file_format", ["parquet", "json", "csv", "arrow"])
+def test_listing_hive_null_partitions_append_overwrite_and_pruning(spark, tmp_path, file_format):
+    # Spark 4.2 ParquetPartitionDiscoverySuite: typed NULL partition values.
+    # Literal Hive sentinel shares NULL's directory; append it separately because
+    # Spark's same-task writer can otherwise collide on the output filename.
+    sentinel = "__HIVE_DEFAULT_PARTITION__"
+    schema = "id INT, payload STRING, p STRING, q INT"
+    path = tmp_path / "hive_partitions"
+    original = [(1, "null", None, None), (2, "empty", "", 0), (3, "literal-null", "null", None), (4, "keep", "keep", 0)]
+    spark.createDataFrame(original, schema).repartition(2).write.format(file_format).partitionBy("p", "q").save(
+        str(path)
+    )
+
+    def read():
+        return spark.read.schema(schema).format(file_format).load(str(path))
+
+    expected = [
+        (1, "null", None, None),
+        (2, "empty", None, 0),
+        (3, "literal-null", "null", None),
+        (4, "keep", "keep", 0),
+    ]
+    assert [tuple(row) for row in read().orderBy("id").collect()] == expected
+    assert read().schema.simpleString() == "struct<id:int,payload:string,p:string,q:int>"
+    assert all(field.nullable for field in read().schema.fields)
+    assert {
+        str(file.parent.relative_to(path))
+        for file in path.rglob("*")
+        if file.is_file() and not file.name.startswith((".", "_"))
+    } == {f"p={sentinel}/q={sentinel}", f"p={sentinel}/q=0", f"p=null/q={sentinel}", "p=keep/q=0"}
+
+    appended = [(5, "sentinel", sentinel, None), (6, "append", None, 1)]
+    spark.createDataFrame(appended, schema).write.mode("append").format(file_format).partitionBy("p", "q").save(
+        str(path)
+    )
+    expected += [(5, "sentinel", None, None), (6, "append", None, 1)]
+    assert [tuple(row) for row in read().orderBy("id").collect()] == expected
+    for predicate, ids in [
+        ("p IS NULL", [1, 2, 5, 6]),
+        ("p IS NOT NULL", [3, 4]),
+        ("p IS NULL AND q IS NULL", [1, 5]),
+        ("q = 0", [2, 4]),
+        ("q != 0", [6]),
+        ("p = 'null'", [3]),
+        ("p = ''", []),
+        (f"p = '{sentinel}'", []),
+    ]:
+        assert [row.id for row in read().where(predicate).orderBy("id").collect()] == ids
+
+    spark.createDataFrame([(7, "overwrite", None, None)], schema).write.mode("overwrite").format(
+        file_format
+    ).partitionBy("p", "q").save(str(path))
+    assert [tuple(row) for row in read().collect()] == [(7, "overwrite", None, None)]
+    assert {
+        str(file.parent.relative_to(path))
+        for file in path.rglob("*")
+        if file.is_file() and not file.name.startswith((".", "_"))
+    } == {f"p={sentinel}/q={sentinel}"}
+
+
+@pytest.mark.parametrize("partitioned", [False, True], ids=["unpartitioned", "partitioned"])
+def test_arrow_write_schema_payload_and_partition_keys(spark, tmp_path, partitioned):
+    path = tmp_path / "arrow_payload"
+    sentinel = "__HIVE_DEFAULT_PARTITION__"
+    schema = "id INT, payload STRING, p DOUBLE"
+    rows = [(1, None, None), (2, "", 0.0), (3, sentinel, 3.0)]
+    writer = spark.createDataFrame(rows, schema).repartition(2).write.format("arrow")
+    if partitioned:
+        writer = writer.partitionBy("p")
+    writer.save(str(path))
+    read = spark.read.schema(schema).format("arrow").load(str(path))
+    assert read.schema.simpleString() == "struct<id:int,payload:string,p:double>"
+    assert all(field.nullable for field in read.schema.fields)
+    assert [tuple(row) for row in read.orderBy("id").collect()] == rows
+    assert [row.id for row in read.where("p IS NULL").collect()] == [1]
+    assert [row.id for row in read.where("p != 0").collect()] == [3]
+    files = [file for file in path.rglob("*") if file.is_file() and not file.name.startswith((".", "_"))]
+    assert files
+    assert all(file.suffix == ".arrow" for file in files)
+    assert {file.parent.name for file in files} == ({f"p={sentinel}", "p=0", "p=3"} if partitioned else {path.name})
+    payload = []
+    expected_schema = pa.schema([("id", pa.int32()), ("payload", pa.string())])
+    if not partitioned:
+        expected_schema = expected_schema.append(pa.field("p", pa.float64()))
+    for file in files:
+        with pa.ipc.open_file(file) as reader:
+            assert reader.schema == expected_schema
+            payload.extend(reader.read_all().to_pylist())
+    assert sorted(payload, key=lambda row: row["id"]) == [
+        {"id": row[0], "payload": row[1], **({} if partitioned else {"p": row[2]})} for row in rows
+    ]
+
+
+def test_parquet_hive_null_partition_schema_and_payload(spark, tmp_path):
+    sentinel = "__HIVE_DEFAULT_PARTITION__"
+    path = tmp_path / "payload"
+    rows = [(1, None, None), (2, "", ""), (3, sentinel, "null"), (4, "a/b", "a/b")]
+    spark.createDataFrame(rows, "id INT, payload STRING, p STRING").write.partitionBy("p").parquet(str(path))
+    files = list(path.rglob("*.parquet"))
+    assert files
+    payload = []
+    for file in files:
+        data = pq.ParquetFile(file)
+        assert data.schema_arrow.names == ["id", "payload"]
+        assert data.schema_arrow.field("id").type == pa.int32()
+        assert data.schema_arrow.field("payload").type == pa.string()
+        payload.extend(data.read().to_pylist())
+    assert sorted(payload, key=lambda row: row["id"]) == [{"id": row[0], "payload": row[1]} for row in rows]
+    assert {file.parent.name for file in files} == {f"p={sentinel}", "p=null", "p=a%2Fb"}
+    inferred = spark.read.parquet(str(path))
+    assert inferred.schema.simpleString() == "struct<id:int,payload:string,p:string>"
+    assert inferred.schema["p"].nullable
+    assert [tuple(row) for row in inferred.orderBy("id").collect()] == [
+        (1, None, None),
+        (2, "", None),
+        (3, sentinel, "null"),
+        (4, "a/b", "a/b"),
+    ]
+    assert [row.id for row in inferred.where("p IS NULL").orderBy("id").collect()] == [1, 2]
+    assert [row.id for row in inferred.where("p IS NOT NULL").orderBy("id").collect()] == [3, 4]
+    assert [row.id for row in inferred.where("p = 'a/b'").collect()] == [4]
+
+
+def test_parquet_typed_null_partition_keys_keep_non_null_spelling(spark, tmp_path):
+    sentinel = "__HIVE_DEFAULT_PARTITION__"
+    path = tmp_path / "typed_keys"
+    schema = "id INT, f DOUBLE, d DATE, b BOOLEAN"
+    rows = [(1, None, None, None), (2, 0.0, date(2024, 1, 2), False), (3, 3.0, date(2024, 1, 3), True)]
+    spark.createDataFrame(rows, schema).write.partitionBy("f", "d", "b").parquet(str(path))
+    read = spark.read.schema(schema).parquet(str(path))
+    assert read.schema.simpleString() == "struct<id:int,f:double,d:date,b:boolean>"
+    assert all(field.nullable for field in read.schema.fields)
+    assert [tuple(row) for row in read.orderBy("id").collect()] == rows
+    assert {str(file.parent.relative_to(path)) for file in path.rglob("*.parquet")} == {
+        f"f={sentinel}/d={sentinel}/b={sentinel}",
+        "f=0/d=2024-01-02/b=false",
+        "f=3/d=2024-01-03/b=true",
+    }
+    assert [row.id for row in read.where("f IS NULL AND d IS NULL AND b IS NULL").collect()] == [1]
+    assert [row.id for row in read.where("f = 0 AND b = false").collect()] == [2]
+    assert [row.id for row in read.where("f != 0").collect()] == [3]
 
 
 def test_parquet_write_modes_with_empty_existing_path(spark, tmp_path):

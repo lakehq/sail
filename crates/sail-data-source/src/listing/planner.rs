@@ -7,7 +7,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::Session;
-use datafusion::datasource::listing::helpers::pruned_partition_list;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::execution::cache::cache_manager::CachedFileMetadata;
 use datafusion::execution::cache::{SchemaFingerprint, TableScopedPath};
@@ -15,10 +14,12 @@ use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalNode};
-use datafusion::physical_expr::create_lex_ordering;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr, create_lex_ordering};
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
 use datafusion_common::{SplitPoint, Statistics, internal_err, plan_err, project_schema};
@@ -35,6 +36,7 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
 
 use crate::listing::delete::FileDeleteExec;
+use crate::listing::partition::{HivePartitionKey, list_partitioned_files};
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
@@ -231,6 +233,33 @@ async fn plan_file_write(
         .iter()
         .map(|field| (field.column.clone(), DataType::Null))
         .collect::<Vec<_>>();
+    let physical_input = if partition_by.is_empty() {
+        physical_input
+    } else {
+        let schema = physical_input.schema();
+        let encoder = Arc::new(datafusion_expr::ScalarUDF::from(HivePartitionKey::default()));
+        let config = Arc::new(session.config_options().clone());
+        let expressions = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new(field.name(), index));
+                let expression = if partition_by.iter().any(|key| &key.column == field.name()) {
+                    Arc::new(ScalarFunctionExpr::try_new(
+                        Arc::clone(&encoder),
+                        vec![column],
+                        &schema,
+                        Arc::clone(&config),
+                    )?) as Arc<dyn PhysicalExpr>
+                } else {
+                    column
+                };
+                Ok((expression, field.name().clone()))
+            })
+            .collect::<datafusion_common::Result<Vec<_>>>()?;
+        Arc::new(ProjectionExec::try_new(expressions, physical_input)?)
+    };
     let conf = FileSinkConfig {
         original_url: url.to_string(),
         object_store_url: object_store_url.clone(),
@@ -371,7 +400,7 @@ async fn list_files_for_scan<'a>(
     let file_list = future::try_join_all(source.config().table_paths.iter().map(
         |table_path| async move {
             let files =
-                pruned_partition_list(ctx, store_ref, table_path, filters, "", partition_cols_ref)
+                list_partitioned_files(ctx, store_ref, table_path, filters, partition_cols_ref)
                     .await?;
             // Apply listing-level file-name filters so scans agree with `inputFiles` and sampling.
             let files = files.try_filter(move |file| {

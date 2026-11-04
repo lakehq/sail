@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{FieldRef, Schema};
 use datafusion::common::{Result, plan_datafusion_err, plan_err};
+use datafusion::datasource::sink::DataSinkExec;
 use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion::logical_expr::{LambdaParametersProgress, ValueOrLambda};
 use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
@@ -22,6 +23,7 @@ use datafusion_proto::protobuf::{
     physical_expr_node, physical_plan_node,
 };
 use prost::Message;
+use sail_data_source::formats::arrow::ArrowSink;
 
 use crate::plan::r#gen::extended_physical_expr_node::ExprKind;
 use crate::plan::r#gen::extended_physical_plan_node::NodeKind;
@@ -68,9 +70,12 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         plan: &Arc<dyn ExecutionPlan>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<PhysicalPlanNode> {
-        if plan.is::<PartitionedTopKExec>() {
+        let arrow_sink = plan
+            .downcast_ref::<DataSinkExec>()
+            .is_some_and(|exec| exec.sink().is::<ArrowSink>());
+        if plan.is::<PartitionedTopKExec>() || arrow_sink {
             // DataFusion's fallback extension encoder bypasses the converter for
-            // extension inputs. TopK consumes those inputs instead of embedded plans.
+            // extension inputs. These nodes consume inputs instead of embedded plans.
             let mut node = vec![];
             codec.try_encode(Arc::clone(plan), &mut node, self)?;
             let inputs = plan
