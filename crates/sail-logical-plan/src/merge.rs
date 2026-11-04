@@ -1294,7 +1294,7 @@ fn apply_generation_projection(
             let name = f.name();
             if let Some(gen_expr) = gen_map.get(name.as_str()) {
                 let gen_expr = (*gen_expr).clone();
-                let current_value = col(name.clone());
+                let current_value = Expr::Column(Column::from_name(name));
                 // For INSERT rows, enforce Delta protocol: if the user explicitly provided a
                 // non-NULL value for the generated column that doesn't match the expression,
                 // raise an error instead of silently overwriting.
@@ -1346,7 +1346,7 @@ fn apply_generation_projection(
                     Ok(insert_value)
                 }
             } else {
-                Ok(col(name.clone()))
+                Ok(Expr::Column(Column::from_name(name)))
             }
         })
         .collect::<Result<Vec<Expr>>>()?;
@@ -2411,7 +2411,7 @@ fn change_data_columns(
         .filter(|field| {
             !is_merge_metadata_column(field.name(), path_column, row_index_column, metadata)
         })
-        .map(|field| col(field.name()))
+        .map(|field| Expr::Column(Column::from_name(field.name())))
         .collect()
 }
 

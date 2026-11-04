@@ -1,0 +1,1396 @@
+import base64
+from collections.abc import Mapping
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+from pandas.testing import assert_frame_equal
+from pyspark.sql import Row
+from pyspark.sql import functions as F  # noqa: N812
+from pyspark.sql.types import (
+    ArrayType,
+    LongType,
+    MapType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampNTZType,
+    TimestampType,
+)
+
+from pysail.testing._dev.spark.utils.files import get_data_directory_size
+from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
+
+
+def safe_sort_key(row):
+    if isinstance(row, Mapping):
+        return tuple((v is not None, v) for _, v in sorted(row.items()))
+    return tuple((v is not None, v) for v in row)
+
+
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+def test_parquet_merges_mixed_timestamp_units_with_different_arrow_timezones(spark, tmp_path, session_timezone):
+    _ = session_timezone
+    path = tmp_path / "mixed_timestamp_units_and_timezones"
+    path.mkdir()
+    files = [
+        ("a_us_new_york.parquet", "us", "America/New_York", datetime(2024, 1, 2, 3, 4, 6, 123456, tzinfo=UTC)),
+        ("b_ms_utc.parquet", "ms", "UTC", datetime(2024, 1, 2, 3, 4, 5, 123000, tzinfo=UTC)),
+    ]
+    for name, unit, timezone, value in files:
+        pq.write_table(
+            pa.table({"ts": pa.array([value], type=pa.timestamp(unit, tz=timezone))}),
+            path / name,
+        )
+
+    df = spark.read.parquet(str(path))
+    rows = df.selectExpr("CAST(ts AS STRING) AS value").orderBy("value").collect()
+
+    assert df.schema.simpleString() == "struct<ts:timestamp>"
+    assert rows == [
+        Row(value="2024-01-01 19:04:05.123"),
+        Row(value="2024-01-01 19:04:06.123456"),
+    ]
+
+
+def test_parquet_nanosecond_timestamp_is_reported_not_truncated(spark, tmp_path):
+    # The counterpart of `test_csv_infer_schema_timestamp_fractional_digits`: a nanosecond
+    # timestamp is widened for CSV, where Spark's reader truncates, but not for Parquet, where
+    # Spark rejects `NANOS` rather than losing precision silently (SPARK-40819). Pinned here so
+    # the two formats stay deliberately different rather than accidentally so.
+    path = str(tmp_path / "parquet_nanosecond_timestamp.parquet")
+    value = datetime(2018, 5, 1, 0, 0, 5, 123456, tzinfo=UTC)
+    pq.write_table(
+        pa.table({"t": pa.array([value], type=pa.timestamp("ns", tz="UTC"))}),
+        path,
+        version="2.6",
+    )
+
+    with pytest.raises(Exception, match="Nanosecond"):
+        _ = spark.read.parquet(path).schema
+
+
+def test_parquet_binary_column_collects_as_binary(spark, tmp_path):
+    # collect() is the honest probe (unlike toArrow(), which casts view types away): a binary
+    # column read as BinaryView must still reach the client as Spark binary.
+    path = str(tmp_path / "parquet_binary_collect.parquet")
+    pq.write_table(pa.table({"b": pa.array([b"\x00\x01", None], type=pa.binary())}), path)
+    df = spark.read.parquet(path)
+    assert df.schema.simpleString() == "struct<b:binary>"
+    assert {bytes(r.b) if r.b is not None else None for r in df.collect()} == {b"\x00\x01", None}
+
+
+@pytest.mark.parametrize("file_uri", [False, True], ids=["native-path", "file-uri"])
+def test_parquet_read_write_basic(spark, sample_df, tmp_path, file_uri):
+    path = tmp_path / "parquet % # space"
+    sample_df.write.parquet(str(path), mode="overwrite")
+    # Path.as_uri() has no trailing slash even though the path is a directory.
+    read_df = spark.read.parquet(path.as_uri() if file_uri else str(path))
+    assert sample_df.count() == read_df.count()
+    assert sample_df.schema == read_df.schema
+    assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+
+def test_parquet_path_glob_filter(spark, tmp_path):
+    keep_source = tmp_path / "parquet_keep_source"
+    drop_source = tmp_path / "parquet_drop_source"
+    spark.createDataFrame([(1,)], "id INT").coalesce(1).write.parquet(str(keep_source))
+    spark.createDataFrame([(2,)], "id INT").coalesce(1).write.parquet(str(drop_source))
+
+    path = tmp_path / "parquet_path_glob_filter"
+    path.mkdir()
+    next(keep_source.glob("*.parquet")).rename(path / "keep.parquet")
+    next(drop_source.glob("*.parquet")).rename(path / "drop.parquet")
+
+    df = spark.read.option("pathGlobFilter", "keep.*").parquet(str(path))
+
+    assert df.collect() == [Row(id=1)]
+
+
+def test_parquet_write_modes(spark, tmp_path):
+    path = str(tmp_path / "parquet_write_modes")
+
+    spark.createDataFrame([(1, "old")], schema="id INT, value STRING").write.parquet(path)
+
+    with pytest.raises(Exception, match="already exists"):
+        spark.createDataFrame([(2, "error")], schema="id INT, value STRING").write.parquet(path)
+
+    spark.createDataFrame([(3, "ignored")], schema="id INT, value STRING").write.mode("ignore").parquet(path)
+    assert spark.read.parquet(path).orderBy("id").collect() == [Row(id=1, value="old")]
+
+    spark.createDataFrame([(4, "appended")], schema="id INT, value STRING").write.mode("append").parquet(path)
+    assert spark.read.parquet(path).orderBy("id").collect() == [
+        Row(id=1, value="old"),
+        Row(id=4, value="appended"),
+    ]
+
+    spark.createDataFrame([(5, "new")], schema="id INT, value STRING").write.mode("overwrite").parquet(path)
+    assert spark.read.parquet(path).orderBy("id").collect() == [Row(id=5, value="new")]
+
+
+@pytest.mark.parametrize("file_format", ["parquet", "json", "csv", "arrow"])
+def test_listing_hive_null_partitions_append_overwrite_and_pruning(spark, tmp_path, file_format):
+    # Spark 4.2 ParquetPartitionDiscoverySuite: typed NULL partition values.
+    # Literal Hive sentinel shares NULL's directory; append it separately because
+    # Spark's same-task writer can otherwise collide on the output filename.
+    sentinel = "__HIVE_DEFAULT_PARTITION__"
+    schema = "id INT, payload STRING, p STRING, q INT"
+    path = tmp_path / "hive_partitions"
+    original = [(1, "null", None, None), (2, "empty", "", 0), (3, "literal-null", "null", None), (4, "keep", "keep", 0)]
+    spark.createDataFrame(original, schema).repartition(2).write.format(file_format).partitionBy("p", "q").save(
+        str(path)
+    )
+
+    def read():
+        return spark.read.schema(schema).format(file_format).load(str(path))
+
+    expected = [
+        (1, "null", None, None),
+        (2, "empty", None, 0),
+        (3, "literal-null", "null", None),
+        (4, "keep", "keep", 0),
+    ]
+    assert [tuple(row) for row in read().orderBy("id").collect()] == expected
+    assert read().schema.simpleString() == "struct<id:int,payload:string,p:string,q:int>"
+    assert all(field.nullable for field in read().schema.fields)
+    assert {
+        str(file.parent.relative_to(path))
+        for file in path.rglob("*")
+        if file.is_file() and not file.name.startswith((".", "_"))
+    } == {f"p={sentinel}/q={sentinel}", f"p={sentinel}/q=0", f"p=null/q={sentinel}", "p=keep/q=0"}
+
+    appended = [(5, "sentinel", sentinel, None), (6, "append", None, 1)]
+    spark.createDataFrame(appended, schema).write.mode("append").format(file_format).partitionBy("p", "q").save(
+        str(path)
+    )
+    expected += [(5, "sentinel", None, None), (6, "append", None, 1)]
+    assert [tuple(row) for row in read().orderBy("id").collect()] == expected
+    for predicate, ids in [
+        ("p IS NULL", [1, 2, 5, 6]),
+        ("p IS NOT NULL", [3, 4]),
+        ("p IS NULL AND q IS NULL", [1, 5]),
+        ("q = 0", [2, 4]),
+        ("q != 0", [6]),
+        ("p = 'null'", [3]),
+        ("p = ''", []),
+        (f"p = '{sentinel}'", []),
+    ]:
+        assert [row.id for row in read().where(predicate).orderBy("id").collect()] == ids
+
+    spark.createDataFrame([(7, "overwrite", None, None)], schema).write.mode("overwrite").format(
+        file_format
+    ).partitionBy("p", "q").save(str(path))
+    assert [tuple(row) for row in read().collect()] == [(7, "overwrite", None, None)]
+    assert {
+        str(file.parent.relative_to(path))
+        for file in path.rglob("*")
+        if file.is_file() and not file.name.startswith((".", "_"))
+    } == {f"p={sentinel}/q={sentinel}"}
+
+
+@pytest.mark.parametrize("partitioned", [False, True], ids=["unpartitioned", "partitioned"])
+def test_arrow_write_schema_payload_and_partition_keys(spark, tmp_path, partitioned):
+    path = tmp_path / "arrow_payload"
+    sentinel = "__HIVE_DEFAULT_PARTITION__"
+    schema = "id INT, payload STRING, p DOUBLE"
+    rows = [(1, None, None), (2, "", 0.0), (3, sentinel, 3.0)]
+    writer = spark.createDataFrame(rows, schema).repartition(2).write.format("arrow")
+    if partitioned:
+        writer = writer.partitionBy("p")
+    writer.save(str(path))
+    read = spark.read.schema(schema).format("arrow").load(str(path))
+    assert read.schema.simpleString() == "struct<id:int,payload:string,p:double>"
+    assert all(field.nullable for field in read.schema.fields)
+    assert [tuple(row) for row in read.orderBy("id").collect()] == rows
+    assert [row.id for row in read.where("p IS NULL").collect()] == [1]
+    assert [row.id for row in read.where("p != 0").collect()] == [3]
+    files = [file for file in path.rglob("*") if file.is_file() and not file.name.startswith((".", "_"))]
+    assert files
+    assert all(file.suffix == ".arrow" for file in files)
+    assert {file.parent.name for file in files} == ({f"p={sentinel}", "p=0", "p=3"} if partitioned else {path.name})
+    payload = []
+    expected_schema = pa.schema([("id", pa.int32()), ("payload", pa.string())])
+    if not partitioned:
+        expected_schema = expected_schema.append(pa.field("p", pa.float64()))
+    for file in files:
+        with pa.ipc.open_file(file) as reader:
+            assert reader.schema == expected_schema
+            payload.extend(reader.read_all().to_pylist())
+    assert sorted(payload, key=lambda row: row["id"]) == [
+        {"id": row[0], "payload": row[1], **({} if partitioned else {"p": row[2]})} for row in rows
+    ]
+
+
+def test_parquet_hive_null_partition_schema_and_payload(spark, tmp_path):
+    sentinel = "__HIVE_DEFAULT_PARTITION__"
+    path = tmp_path / "payload"
+    rows = [(1, None, None), (2, "", ""), (3, sentinel, "null"), (4, "a/b", "a/b")]
+    spark.createDataFrame(rows, "id INT, payload STRING, p STRING").write.partitionBy("p").parquet(str(path))
+    files = list(path.rglob("*.parquet"))
+    assert files
+    payload = []
+    for file in files:
+        data = pq.ParquetFile(file)
+        assert data.schema_arrow.names == ["id", "payload"]
+        assert data.schema_arrow.field("id").type == pa.int32()
+        assert data.schema_arrow.field("payload").type == pa.string()
+        payload.extend(data.read().to_pylist())
+    assert sorted(payload, key=lambda row: row["id"]) == [{"id": row[0], "payload": row[1]} for row in rows]
+    assert {file.parent.name for file in files} == {f"p={sentinel}", "p=null", "p=a%2Fb"}
+    inferred = spark.read.parquet(str(path))
+    assert inferred.schema.simpleString() == "struct<id:int,payload:string,p:string>"
+    assert inferred.schema["p"].nullable
+    assert [tuple(row) for row in inferred.orderBy("id").collect()] == [
+        (1, None, None),
+        (2, "", None),
+        (3, sentinel, "null"),
+        (4, "a/b", "a/b"),
+    ]
+    assert [row.id for row in inferred.where("p IS NULL").orderBy("id").collect()] == [1, 2]
+    assert [row.id for row in inferred.where("p IS NOT NULL").orderBy("id").collect()] == [3, 4]
+    assert [row.id for row in inferred.where("p = 'a/b'").collect()] == [4]
+
+
+def test_parquet_typed_null_partition_keys_keep_non_null_spelling(spark, tmp_path):
+    sentinel = "__HIVE_DEFAULT_PARTITION__"
+    path = tmp_path / "typed_keys"
+    schema = "id INT, f DOUBLE, d DATE, b BOOLEAN"
+    rows = [(1, None, None, None), (2, 0.0, date(2024, 1, 2), False), (3, 3.0, date(2024, 1, 3), True)]
+    spark.createDataFrame(rows, schema).write.partitionBy("f", "d", "b").parquet(str(path))
+    read = spark.read.schema(schema).parquet(str(path))
+    assert read.schema.simpleString() == "struct<id:int,f:double,d:date,b:boolean>"
+    assert all(field.nullable for field in read.schema.fields)
+    assert [tuple(row) for row in read.orderBy("id").collect()] == rows
+    assert {str(file.parent.relative_to(path)) for file in path.rglob("*.parquet")} == {
+        f"f={sentinel}/d={sentinel}/b={sentinel}",
+        "f=0/d=2024-01-02/b=false",
+        "f=3/d=2024-01-03/b=true",
+    }
+    assert [row.id for row in read.where("f IS NULL AND d IS NULL AND b IS NULL").collect()] == [1]
+    assert [row.id for row in read.where("f = 0 AND b = false").collect()] == [2]
+    assert [row.id for row in read.where("f != 0").collect()] == [3]
+
+
+def test_parquet_write_modes_with_empty_existing_path(spark, tmp_path):
+    path = tmp_path / "parquet_write_modes_empty_existing_path"
+    path.mkdir()
+
+    with pytest.raises(Exception, match="already exists"):
+        spark.createDataFrame([(1, "error")], schema="id INT, value STRING").write.parquet(str(path))
+    assert list(path.iterdir()) == []
+
+    spark.createDataFrame([(2, "ignored")], schema="id INT, value STRING").write.mode("ignore").parquet(str(path))
+    assert list(path.iterdir()) == []
+
+
+def test_parquet_read_write_compressed(spark, sample_df, sample_pandas_df, tmp_path):
+    # Test reading a compressed Parquet file written by Sail
+    path = str(tmp_path / "parquet_compressed_zstd")
+    sample_df.write.option("compression", "zstd(4)").parquet(path, mode="overwrite")
+    read_df = spark.read.parquet(path)
+    assert sample_df.count() == read_df.count()
+    assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+    assert len(list((tmp_path / "parquet_compressed_zstd").glob("*.zst.parquet"))) > 0
+
+    # Test reading a compressed Parquet file written by Pandas.
+    path = tmp_path / "parquet_compressed_gzip_pandas_1"
+    path.mkdir()
+    path = str(path)
+    sample_pandas_df.to_parquet(f"{path}/sample_pandas_df.parquet", compression="gzip")
+    read_df = spark.read.parquet(path)
+    assert len(sample_pandas_df) == read_df.count()
+    assert sorted(sample_pandas_df.to_dict(orient="records"), key=safe_sort_key) == sorted(
+        read_df.toPandas().to_dict(orient="records"), key=safe_sort_key
+    )
+    assert len(list((tmp_path / "parquet_compressed_gzip_pandas_1").glob("*.parquet"))) > 0
+
+    # Test reading a compressed Parquet file written by Pandas with `.gz` in the filename.
+    path = tmp_path / "parquet_compressed_gzip_pandas_2"
+    path.mkdir()
+    path = str(path)
+    sample_pandas_df.to_parquet(f"{path}/sample_pandas_df.gz.parquet", compression="gzip")
+    read_df = spark.read.parquet(path)
+    assert len(sample_pandas_df) == read_df.count()
+    assert sorted(sample_pandas_df.to_dict(orient="records"), key=safe_sort_key) == sorted(
+        read_df.toPandas().to_dict(orient="records"), key=safe_sort_key
+    )
+    assert len(list((tmp_path / "parquet_compressed_gzip_pandas_2").glob("*.gz.parquet"))) > 0
+
+
+def test_parquet_write_options(spark, sample_df, tmp_path):
+    path = str(tmp_path / "parquet_write_options")
+    sample_df.write.option("writerVersion", "1.0").parquet(path, mode="overwrite", compression="gzip(4)")
+    read_df = spark.read.parquet(path)
+    assert sample_df.count() == read_df.count()
+    assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+    assert len(list((tmp_path / "parquet_write_options").glob("*.gz.parquet"))) > 0
+
+    path = str(tmp_path / "parquet_write_options_1")
+    sample_df.write.option("writerVersion", "1.0").parquet(path, mode="overwrite", compression="snappy")
+    read_df = spark.read.parquet(path)
+    assert sample_df.count() == read_df.count()
+    assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+    assert len(list((tmp_path / "parquet_write_options_1").glob("*.snappy.parquet"))) > 0
+
+
+def test_parquet_read_options(spark, sample_df, tmp_path):
+    path = str(tmp_path / "parquet_read_options")
+    sample_df.write.parquet(path, mode="overwrite")
+    read_df = spark.read.option("binaryAsString", "false").option("pruning", "true").parquet(path)
+    assert sample_df.count() == read_df.count()
+    assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+
+@pytest.mark.parametrize(
+    ("physical_schema", "requested_schema", "value"),
+    [
+        ("value DOUBLE", "value INT", 1.5),
+        ("value INT", "value BOOLEAN", 1),
+        ("value STRUCT<nested: DOUBLE>", "value STRUCT<nested: INT>", Row(nested=1.5)),
+        ("value ARRAY<DOUBLE>", "value ARRAY<INT>", [1.5]),
+        ("value MAP<STRING, DOUBLE>", "value MAP<STRING, INT>", {"key": 1.5}),
+        ("value BIGINT", "value INT", 1),
+        ("value BIGINT", "value DOUBLE", 2**53 + 1),
+        ("value DOUBLE", "value FLOAT", 1.5),
+        ("value STRUCT<nested: BIGINT>", "value STRUCT<nested: INT>", Row(nested=2**40)),
+        ("value ARRAY<BIGINT>", "value ARRAY<INT>", [2**40]),
+        ("value MAP<BIGINT, STRING>", "value MAP<INT, STRING>", {2**40: "key"}),
+        ("value MAP<STRING, BIGINT>", "value MAP<STRING, INT>", {"key": 2**40}),
+    ],
+)
+def test_parquet_explicit_schema_rejects_incompatible_types(spark, tmp_path, physical_schema, requested_schema, value):
+    path = str(tmp_path / "incompatible_explicit_schema")
+    spark.createDataFrame([(value,)], physical_schema).write.parquet(path)
+
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        spark.read.schema(requested_schema).parquet(path).collect()
+
+
+def test_parquet_explicit_schema_allows_supported_widening(spark, tmp_path):
+    path = str(tmp_path / "supported_explicit_schema_widening")
+    spark.createDataFrame([(1, 1.5), (None, None)], "id INT, value FLOAT").write.parquet(path)
+
+    rows = spark.read.schema("id BIGINT, value DOUBLE").parquet(path).orderBy("id").collect()
+
+    assert rows == [Row(id=None, value=None), Row(id=1, value=1.5)]
+
+
+def test_parquet_explicit_schema_allows_missing_fields(spark, tmp_path):
+    path = str(tmp_path / "missing_explicit_schema_field")
+    spark.createDataFrame([(1,)], "id INT").write.parquet(path)
+
+    rows = spark.read.schema("id INT, missing STRING").parquet(path).collect()
+
+    assert rows == [Row(id=1, missing=None)]
+
+
+@pytest.mark.parametrize(
+    ("predicate", "expected_ids"),
+    [
+        ("id >= 1 AND (payload.n >= 2 OR payload IS NULL)", [1, 2, 3, 4, 5]),
+        ("id >= 1 AND label IS NULL AND missing IS NULL AND payload.extra IS NULL", [1, 2, 4, 5]),
+    ],
+)
+@pytest.mark.parametrize("mixed_width", [False, True], ids=["same-width", "mixed-width"])
+@pytest.mark.parametrize("pushdown_filters", [False, True], ids=["residual-filter", "pushed-filter"])
+def test_parquet_evolved_nested_schema_filter_and_projection(
+    spark, tmp_path, predicate, expected_ids, mixed_width, pushdown_filters
+):
+    # Spark ParquetQuerySuite SPARK-10301: reordered/overlapping requested schemas,
+    # extended with numeric widening, nested nulls, and pushed predicates.
+    path = tmp_path / "evolved_nested"
+    path.mkdir()
+    old_struct = pa.struct([("n", pa.int32())])
+    new_type = pa.int64() if mixed_width else pa.int32()
+    new_struct = pa.struct([("n", new_type), ("extra", pa.string())])
+    old = pa.table(
+        {
+            "id": pa.array([0, 1, 2], type=pa.int32()),
+            "payload": pa.array([{"n": 0}, {"n": 2}, None], type=old_struct),
+            "items": pa.array([[{"n": 0}], [None, {"n": 2}], None], type=pa.list_(old_struct)),
+        }
+    )
+    new = pa.table(
+        {
+            "items": pa.array([[{"n": 3, "extra": "x"}], [], [None]], type=pa.list_(new_struct)),
+            "payload": pa.array([{"n": 3, "extra": "x"}, {"n": 4}, None], type=new_struct),
+            "label": pa.array(["new", None, None], type=pa.string()),
+            "id": pa.array([3, 4, 5], type=new_type),
+        }
+    )
+    for index, table in enumerate([old, new]):
+        pq.write_table(table, path / f"part-{index}.parquet", write_statistics=False, row_group_size=1)
+    nested_schema = StructType(
+        [StructField("extra", StringType()), StructField("n", LongType(), metadata={"comment": "nested value"})]
+    )
+    schema = StructType(
+        [
+            StructField("id", LongType(), metadata={"comment": "identifier"}),
+            StructField("payload", nested_schema),
+            StructField("items", ArrayType(nested_schema)),
+            StructField("label", StringType()),
+            StructField("missing", StringType()),
+        ]
+    )
+    query = (
+        spark.read.schema(schema)
+        .option("pushdown_filters", str(pushdown_filters).lower())
+        .parquet(str(path))
+        .where(predicate)
+        .select("id", "payload", "items", "label", "missing")
+        .orderBy("id")
+    )
+    expected = {
+        1: Row(id=1, payload=Row(extra=None, n=2), items=[None, Row(extra=None, n=2)], label=None, missing=None),
+        2: Row(id=2, payload=None, items=None, label=None, missing=None),
+        3: Row(id=3, payload=Row(extra="x", n=3), items=[Row(extra="x", n=3)], label="new", missing=None),
+        4: Row(id=4, payload=Row(extra=None, n=4), items=[], label=None, missing=None),
+        5: Row(id=5, payload=None, items=[None], label=None, missing=None),
+    }
+    assert query.schema == schema
+    assert query.collect() == [expected[index] for index in expected_ids]
+
+
+def test_parquet_explicit_schema_evolves_map_keys_and_nested_values(spark, tmp_path):
+    path = tmp_path / "evolved_maps"
+    path.mkdir()
+    old_value = pa.struct([("n", pa.int32())])
+    new_value = pa.struct([("n", pa.int64()), ("extra", pa.string())])
+    for index, (key_type, value_type, values) in enumerate(
+        [
+            (pa.int32(), old_value, [[(-2147483648, {"n": 2147483647}), (1, None)], None]),
+            (pa.int64(), new_value, [[(2**40, {"n": -(2**40), "extra": "large"})], []]),
+        ]
+    ):
+        table = pa.table(
+            {
+                "attributes": pa.array(values, type=pa.map_(key_type, value_type)),
+                "id": pa.array([index * 2, index * 2 + 1], type=key_type),
+            }
+        )
+        pq.write_table(table, path / f"part-{index}.parquet", row_group_size=1)
+    value_schema = StructType([StructField("extra", StringType()), StructField("n", LongType())])
+    schema = StructType([StructField("id", LongType()), StructField("attributes", MapType(LongType(), value_schema))])
+    frame = spark.read.schema(schema).parquet(str(path))
+    query = frame.where("id >= 0").orderBy("id")
+    assert query.schema == schema
+    assert query.collect() == [
+        Row(id=0, attributes={-2147483648: Row(extra=None, n=2147483647), 1: None}),
+        Row(id=1, attributes=None),
+        Row(id=2, attributes={2**40: Row(extra="large", n=-(2**40))}),
+        Row(id=3, attributes={}),
+    ]
+    assert frame.where("attributes[CAST(1099511627776 AS BIGINT)].n < 0").select("id").collect() == [Row(id=2)]
+
+
+@pytest.mark.parametrize("merge_schema", [False, True], ids=["default", "merge-option"])
+def test_parquet_mixed_widths_without_explicit_schema_fail(spark, tmp_path, merge_schema):
+    # Spark cannot merge INT/BIGINT, and a sampled INT schema cannot read an INT64 file.
+    # Sail's unsupported mergeSchema option must not introduce numeric promotion either.
+    path = tmp_path / "mixed_inferred"
+    path.mkdir()
+    for name, data_type in [("a", pa.int32()), ("z", pa.int64())]:
+        pq.write_table(pa.table({"n": pa.array([1], type=data_type)}), path / f"{name}.parquet")
+    reader = spark.read.option("mergeSchema", "true") if merge_schema else spark.read
+    with pytest.raises(Exception, match=r"(?i)merge|PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        reader.parquet(str(path)).collect()
+
+
+@pytest.mark.parametrize("bad_file", ["narrowing", "incompatible", "corrupt"])
+def test_parquet_explicit_schema_validates_beyond_inference_sample(spark, tmp_path, bad_file):
+    path = tmp_path / "all_files_validated"
+    path.mkdir()
+    for index in range(10):
+        pq.write_table(pa.table({"n": pa.array([index], type=pa.int32())}), path / f"part-{index:02}.parquet")
+    last = path / "part-10.parquet"
+    if bad_file == "corrupt":
+        last.write_bytes(b"not a parquet file")
+        error = "(?i)parquet|footer|magic"
+    else:
+        values = pa.array([2**40], type=pa.int64()) if bad_file == "narrowing" else pa.array(["12"])
+        pq.write_table(pa.table({"n": values}), last)
+        error = "PARQUET_COLUMN_DATA_TYPE_MISMATCH"
+    with pytest.raises(Exception, match=error):
+        spark.read.schema("n INT").parquet(str(path)).collect()
+
+
+def test_parquet_multiple_extrema_without_file_statistics(spark, tmp_path):
+    path = tmp_path / "extrema_without_statistics"
+    path.mkdir()
+    table = pa.table({"a": pa.array([1, 8, 2, 3], type=pa.int32()), "b": pa.array([None, None, 5, 7], type=pa.int32())})
+    for index in range(2):
+        pq.write_table(table, path / f"part-{index}.parquet", write_statistics=False, row_group_size=2)
+    query = spark.read.parquet(str(path)).agg(F.min("a"), F.max("a"), F.min("b"), F.max("b"))
+    assert [tuple(row) for row in query.collect()] == [(1, 8, 5, 7)]
+
+
+def test_parquet_arrow_second_timestamp_is_bigint(spark, tmp_path):
+    # Parquet has no seconds timestamp logical type: an Arrow `timestamp[s]` is written as a
+    # physical INT64 with the Arrow type kept only in `ARROW:schema`. Spark ignores that hint
+    # and reads the column as long, so Sail must too.
+    path = tmp_path / "arrow_second_timestamp.parquet"
+    encoded_arrow_schema = base64.b64encode(
+        pa.schema([pa.field("ts", pa.timestamp("s"))]).serialize().to_pybytes()
+    ).decode()
+    table = pa.table({"ts": pa.array([1704164645, -1], type=pa.int64())})
+    with pq.ParquetWriter(path, table.schema, store_schema=False) as writer:
+        writer.add_key_value_metadata({"ARROW:schema": encoded_arrow_schema})
+        writer.write_table(table)
+
+    df = spark.read.parquet(str(path))
+
+    assert df.schema.simpleString() == "struct<ts:bigint>"
+    assert df.orderBy("ts").collect() == [
+        Row(ts=-1),
+        Row(ts=1704164645),
+    ]
+
+
+@pytest.mark.parametrize("requested_type", ["TIMESTAMP", "TIMESTAMP_NTZ"])
+def test_parquet_explicit_schema_determines_int96_timestamp_family(spark, tmp_path, requested_type):
+    path = tmp_path / "int96_explicit_timestamp_schema.parquet"
+    table = pa.table(
+        {
+            "value": pa.array(
+                [datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)],
+                type=pa.timestamp("us"),
+            )
+        }
+    )
+    pq.write_table(table, path, use_deprecated_int96_timestamps=True)
+
+    rows = (
+        spark.read.schema(f"value {requested_type}")
+        .parquet(str(path))
+        .selectExpr("CAST(value AS STRING) AS value")
+        .collect()
+    )
+
+    assert rows == [Row(value="2024-01-02 03:04:05")]
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["Asia/Shanghai"], indirect=True)
+def test_parquet_int96_with_arrow_schema_hint_reads_as_timestamp(spark, tmp_path):
+    # pyarrow stores an `ARROW:schema` hint with the unit of the values, which Spark ignores.
+    path = tmp_path / "int96_with_arrow_schema_hint.parquet"
+    values = [datetime(2020, 6, 14), datetime(2020, 6, 14, 8), datetime(2020, 6, 13, 16)]  # noqa: DTZ001
+    table = pa.table({"id": [1, 3, 4], "value": pa.array(values, type=pa.timestamp("us"))})
+    pq.write_table(table, path, use_deprecated_int96_timestamps=True)
+
+    spark.read.parquet(str(path)).createOrReplaceTempView("int96_with_arrow_schema_hint")
+    rows = spark.sql(
+        """
+        SELECT id, typeof(value) AS type, CAST(value AS STRING) AS value,
+          value >= TIMESTAMP '2020-06-14 05:30:00' AS ge
+        FROM int96_with_arrow_schema_hint
+        ORDER BY id
+        """
+    ).collect()
+
+    assert rows == [
+        Row(id=1, type="timestamp", value="2020-06-14 08:00:00", ge=True),
+        Row(id=3, type="timestamp", value="2020-06-14 16:00:00", ge=True),
+        Row(id=4, type="timestamp", value="2020-06-14 00:00:00", ge=False),
+    ]
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+def test_parquet_int96_with_arrow_schema_hint_before_1677(spark, tmp_path):
+    path = tmp_path / "int96_before_1677.parquet"
+    values = [datetime(1582, 10, 15), datetime(1, 1, 1), datetime(2020, 6, 14)]  # noqa: DTZ001
+    table = pa.table({"id": [0, 1, 2], "value": pa.array(values, type=pa.timestamp("us"))})
+    pq.write_table(table, path, use_deprecated_int96_timestamps=True)
+
+    spark.read.parquet(str(path)).createOrReplaceTempView("int96_before_1677")
+    rows = spark.sql(
+        """
+        SELECT id, weekofyear(value) AS week, dayname(value) AS day, monthname(value) AS month,
+          CAST(date_trunc('MONTH', value) AS STRING) AS month_start
+        FROM int96_before_1677
+        ORDER BY id
+        """
+    ).collect()
+
+    assert rows == [
+        Row(id=0, week=41, day="Fri", month="Oct", month_start="1582-10-01 00:00:00"),
+        Row(id=1, week=1, day="Mon", month="Jan", month_start="0001-01-01 00:00:00"),
+        Row(id=2, week=24, day="Sun", month="Jun", month_start="2020-06-01 00:00:00"),
+    ]
+
+
+def test_parquet_write_with_bloom_filter(spark, tmpdir):
+    def size(p):
+        return get_data_directory_size(p, extension=".parquet")
+
+    path = str(tmpdir / "default")
+    spark.sql("SELECT 1").write.parquet(path)
+    # The Parquet file without bloom filter is small (less than 1 kB).
+    base_size = size(path)
+    assert base_size < 1024  # noqa: PLR2004
+
+    path = str(tmpdir / "bloom_filter_off_explicit")
+    (
+        spark.sql("SELECT 1")
+        .write.option("bloom_filter_on_write", "false")
+        .option("bloom_filter_fpp", "0.05")
+        .option("bloom_filter_ndv", "10000")
+        .parquet(path)
+    )
+    assert size(path) < 1024  # noqa: PLR2004
+
+    path = str(tmpdir / "bloom_filter_off_implicit")
+    (
+        spark.sql("SELECT 1")
+        # The default configuration does not enable bloom filters on write.
+        .write.option("bloom_filter_fpp", "0.05")
+        .option("bloom_filter_ndv", "10000")
+        .parquet(path)
+    )
+    assert size(path) < 1024  # noqa: PLR2004
+
+    path = str(tmpdir / "bloom_filter_on")
+    (
+        spark.sql("SELECT 1")
+        .write.option("bloom_filter_on_write", "true")
+        .option("bloom_filter_fpp", "0.05")
+        .option("bloom_filter_ndv", "10000")
+        .parquet(path)
+    )
+    # Bloom filter adds overhead; file must be larger than the base (no bloom filter) size.
+    assert size(path) > base_size
+
+    path = str(tmpdir / "bloom_filter_on_with_multiple_columns")
+    (
+        spark.sql("SELECT 1, 2")
+        .write.option("bloom_filter_on_write", "true")
+        .option("bloom_filter_fpp", "0.05")
+        .option("bloom_filter_ndv", "10000")
+        .parquet(path)
+    )
+    # Two columns produce a larger bloom filter than one column.
+    assert size(path) > size(str(tmpdir / "bloom_filter_on"))
+
+
+def test_parquet_write_with_path_option(spark, tmpdir):
+    """Test that df.write.format("parquet").option("path", path).save() works (issue #811)."""
+    data = [(1, "Alice"), (2, "Bob")]
+    df = spark.createDataFrame(data, schema="id INT, name STRING")
+
+    path = str(tmpdir / "output")
+    df.write.format("parquet").option("path", path).save()
+
+    actual = spark.read.parquet(path).orderBy("id").toPandas()
+    expected = pd.DataFrame({"id": [1, 2], "name": ["Alice", "Bob"]}).astype({"id": "int32"})
+    assert_frame_equal(actual, expected)
+
+
+def test_parquet_format_path(spark, sample_df, tmp_path):
+    path = str(tmp_path / "data.parquet")
+    sample_df.write.parquet(path, mode="overwrite")
+    df = spark.sql(f"SELECT * FROM parquet.`{escape_sql_identifier(path)}`")  # noqa: S608
+    assert df.count() == sample_df.count()
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+def test_parquet_read_with_custom_extension(spark, sample_pandas_df, tmp_path):
+    """`pathGlobFilter` selects Parquet files with a custom suffix."""
+    directory = tmp_path / "parquet_custom_extension"
+    directory.mkdir()
+    file_path = directory / "data.hive"
+    sample_pandas_df.to_parquet(str(file_path))
+    sample_pandas_df.to_parquet(str(directory / "ignored.parquet"))
+
+    expected_count = len(sample_pandas_df)
+    expected_rows = sorted(sample_pandas_df.to_dict(orient="records"), key=safe_sort_key)
+
+    def actual_rows(df):
+        return sorted(df.toPandas().to_dict(orient="records"), key=safe_sort_key)
+
+    read_df = spark.read.option("pathGlobFilter", "*.hive").parquet(str(directory))
+    assert read_df.count() == expected_count
+    assert actual_rows(read_df) == expected_rows
+
+    # SQL CREATE TABLE with OPTIONS (pathGlobFilter '*.hive').
+    table_name = "parquet_custom_extension_table"
+    try:
+        spark.sql(
+            f"CREATE TABLE {table_name} USING parquet "
+            f"OPTIONS (pathGlobFilter '*.hive') "
+            f"LOCATION '{escape_sql_string_literal(str(directory))}'"
+        )
+        read_df = spark.sql(f"SELECT * FROM {table_name}")  # noqa: S608
+        assert read_df.count() == expected_count
+        assert actual_rows(read_df) == expected_rows
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_parquet_read_uppercase_extension(spark, sample_df, tmp_path):
+    # Extensions are matched case-insensitively, so renaming the parquet
+    # file's extension to `.PARQUET` must still allow it to be read.
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    for i, f in enumerate(src.glob("*.parquet")):
+        f.rename(dst / f"part-{i}.PARQUET")
+    df = spark.read.parquet(str(dst))
+    assert df.count() == sample_df.count()
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+# -----------------------------------------------------------------------------
+# Case-insensitive extension matching for Parquet, plus partition-aware reads.
+# Sail reads every non-hidden file in a directory regardless of extension case
+# (matching Spark). The tests below cover that across single files,
+# directories, partitioned trees, mixed case, schema-shape variations, and
+# user-supplied globs.
+# -----------------------------------------------------------------------------
+
+
+def _rename_part_files(src, dst, ext):
+    """Move every `*.parquet` file from `src` into `dst` with the given extension."""
+    dst.mkdir()
+    for i, f in enumerate(src.glob("*.parquet")):
+        f.rename(dst / f"part-{i}.{ext}")
+
+
+@pytest.mark.parametrize("ext", ["PARQUET", "Parquet", "ParQuet", "parqueT"])
+def test_parquet_read_uppercase_extension_file(spark, sample_df, tmp_path, ext):
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    dst = tmp_path / "dst"
+    _rename_part_files(src, dst, ext)
+    files = list(dst.glob(f"*.{ext}"))
+    assert files, "expected renamed parquet files"
+    df = spark.read.parquet(str(files[0]))
+    assert df.count() > 0
+
+
+@pytest.mark.parametrize("ext", ["PARQUET", "Parquet"])
+def test_parquet_read_uppercase_extension_with_schema_struct_file(spark, sample_df, tmp_path, ext):
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    dst = tmp_path / "dst"
+    _rename_part_files(src, dst, ext)
+    files = list(dst.glob(f"*.{ext}"))
+    # `sample_df` is tiny (4 rows) so a single output file is expected.
+    assert len(files) == 1
+    df = spark.read.schema(sample_df.schema).parquet(str(files[0]))
+    assert df.count() == sample_df.count()
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+@pytest.mark.parametrize("ext", ["PARQUET", "Parquet"])
+def test_parquet_read_uppercase_extension_with_schema_directory(spark, sample_df, tmp_path, ext):
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    dst = tmp_path / "dst"
+    _rename_part_files(src, dst, ext)
+    df = spark.read.schema(sample_df.schema).parquet(str(dst))
+    assert df.count() == sample_df.count()
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+def test_parquet_read_lowercase_extension_with_schema_regression(spark, sample_df, tmp_path):
+    # Regression: lowercase `.parquet` with schema must keep working.
+    path = str(tmp_path / "lower")
+    sample_df.write.parquet(path, mode="overwrite")
+    df = spark.read.schema(sample_df.schema).parquet(path)
+    assert df.count() == sample_df.count()
+
+
+def test_parquet_read_uppercase_extension_with_schema_subset_columns(spark, sample_df, tmp_path):
+    # Parquet column projection is by name: schema with one field should
+    # only return that column.
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    dst = tmp_path / "dst"
+    _rename_part_files(src, dst, "PARQUET")
+    df = spark.read.schema("col1 STRING").parquet(str(dst))
+    assert df.columns == ["col1"]
+    assert df.count() == sample_df.count()
+
+
+def test_parquet_read_mixed_case_directory_with_schema(spark, sample_df, tmp_path):
+    # Spark parity: directory with both `.parquet` and `.PARQUET` reads
+    # every non-hidden file regardless of extension case.
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    mixed = tmp_path / "mixed"
+    mixed.mkdir()
+    for i, f in enumerate(src.glob("*.parquet")):
+        if i % 2 == 0:
+            f.rename(mixed / f"part-{i}.parquet")
+        else:
+            f.rename(mixed / f"part-{i}.PARQUET")
+    df = spark.read.schema(sample_df.schema).parquet(str(mixed))
+    assert df.count() == sample_df.count()
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+def test_parquet_read_uppercase_extension_partitioned_directory(spark, tmp_path):
+    # Partitioned write produces a partitioned tree under a directory.
+    # Renaming every leaf `.parquet` to `.PARQUET` must still let the table
+    # be read. Relies on partition discovery (no `.schema()`) since
+    # `part` lives only in the directory name, not in the file.
+    df_in = spark.createDataFrame(
+        [(1, "a", "x"), (2, "b", "x"), (3, "c", "y")],
+        "id INT, val STRING, part STRING",
+    )
+    src = tmp_path / "src"
+    df_in.write.partitionBy("part").parquet(str(src), mode="overwrite")
+    for f in src.rglob("*.parquet"):
+        f.rename(f.with_suffix(".PARQUET"))
+    df = spark.read.parquet(str(src))
+    rows = sorted(df.collect(), key=lambda r: r.id)
+    assert rows == [
+        Row(id=1, val="a", part="x"),
+        Row(id=2, val="b", part="x"),
+        Row(id=3, val="c", part="y"),
+    ]
+
+
+def test_parquet_read_uppercase_extension_partitioned_directory_with_schema(spark, tmp_path):
+    # Same as the previous test but with an explicit schema that includes
+    # the partition column. Spark recognizes `part` as a partition column
+    # from the directory structure even when a schema is supplied; Sail
+    # should match that so users migrating from Spark don't see a regression.
+    df_in = spark.createDataFrame(
+        [(1, "a", "x"), (2, "b", "x"), (3, "c", "y")],
+        "id INT, val STRING, part STRING",
+    )
+    src = tmp_path / "src"
+    df_in.write.partitionBy("part").parquet(str(src), mode="overwrite")
+    for f in src.rglob("*.parquet"):
+        f.rename(f.with_suffix(".PARQUET"))
+    df = spark.read.schema("id INT, val STRING, part STRING").parquet(str(src))
+    rows = sorted(df.collect(), key=lambda r: r.id)
+    assert rows == [
+        Row(id=1, val="a", part="x"),
+        Row(id=2, val="b", part="x"),
+        Row(id=3, val="c", part="y"),
+    ]
+
+
+def test_parquet_hidden_files_are_excluded(spark, sample_df, tmp_path):
+    # `_SUCCESS`, `_committed_*`, and `.crc` files commonly land alongside
+    # parquet output. The default URL glob (`[!._]*`) must skip them so the
+    # parquet reader doesn't try to parse them as parquet.
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    # Drop in a few hidden marker files of the kinds Spark / Hadoop tools
+    # write next to data files.
+    (src / "_SUCCESS").write_text("")
+    (src / "_committed_xyz").write_text("garbage")
+    (src / ".crc").write_text("garbage")
+    df = spark.read.parquet(str(src))
+    assert df.count() == sample_df.count()
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+@pytest.mark.skip(
+    reason=(
+        "FIXME: Sail's partition-column type inference returns every "
+        "discovered column as STRING; Spark infers Int/Double/String from "
+        "the observed `key=value` strings (see FIXME above "
+        "`rewrite_listing_partitions` in `crates/sail-data-source/src/listing.rs`)."
+    )
+)
+@pytest.mark.parametrize("provide_schema", [True, False])
+def test_parquet_read_partitioned_directory_type_inference(spark, tmp_path, provide_schema):
+    # Verify partition-column type inference against Spark behavior across
+    # int / double / string. The original DataFrame columns are
+    # `int_part INT, float_part DOUBLE, string_part STRING`.
+    #
+    # No-schema (Spark `partitionColumnTypeInference.enabled=true`, default):
+    #   - int_part      → integer (all values parse as int)
+    #   - float_part    → double  (all values parse as float)
+    #   - string_part   → string  (alpha/beta don't parse numerically)
+    #
+    # With-schema: declared types are honored.
+    df_in = spark.createDataFrame(
+        [
+            (1, "a", 2024, 1.5, "alpha"),
+            (2, "b", 2024, 2.5, "beta"),
+            (3, "c", 2025, 3.0, "alpha"),
+        ],
+        "id INT, val STRING, int_part INT, float_part DOUBLE, string_part STRING",
+    )
+    src = tmp_path / "src"
+    df_in.write.partitionBy("int_part", "float_part", "string_part").parquet(str(src), mode="overwrite")
+
+    if provide_schema:
+        df = (
+            spark.read.schema("id INT, val STRING, int_part INT, float_part DOUBLE, string_part STRING")
+            .parquet(str(src))
+            .orderBy("id")
+        )
+        type_by_name = {f.name: f.dataType.simpleString() for f in df.schema.fields}
+        assert type_by_name["int_part"] == "int"
+        assert type_by_name["float_part"] == "double"
+        assert type_by_name["string_part"] == "string"
+        rows = df.collect()
+        assert rows == [
+            Row(
+                id=1,
+                val="a",
+                int_part=2024,
+                float_part=1.5,
+                string_part="alpha",
+            ),
+            Row(
+                id=2,
+                val="b",
+                int_part=2024,
+                float_part=2.5,
+                string_part="beta",
+            ),
+            Row(
+                id=3,
+                val="c",
+                int_part=2025,
+                float_part=3.0,
+                string_part="alpha",
+            ),
+        ]
+    else:
+        df = spark.read.parquet(str(src)).orderBy("id")
+        type_by_name = {f.name: f.dataType.simpleString() for f in df.schema.fields}
+        assert type_by_name["int_part"] == "int"
+        assert type_by_name["float_part"] == "double"
+        assert type_by_name["string_part"] == "string"
+        rows = df.collect()
+        assert rows == [
+            Row(id=1, val="a", int_part=2024, float_part=1.5, string_part="alpha"),
+            Row(id=2, val="b", int_part=2024, float_part=2.5, string_part="beta"),
+            Row(id=3, val="c", int_part=2025, float_part=3.0, string_part="alpha"),
+        ]
+
+
+# TODO: remove this test once the FIXME above `rewrite_listing_partitions`
+# in `crates/sail-data-source/src/listing.rs` is addressed and the
+# Spark-parity test above starts passing.
+@pytest.mark.parametrize("provide_schema", [True, False])
+def test_parquet_read_partitioned_directory_type_inference_string_only(spark, tmp_path, provide_schema):
+    # Pins Sail's current behavior: every partition column comes back as
+    # STRING regardless of the underlying values. Once partition type
+    # inference matches Spark, this test should be deleted in favor of the
+    # `test_parquet_read_partitioned_directory_type_inference` above.
+    df_in = spark.createDataFrame(
+        [
+            (1, "a", 2024, 1.5, "alpha"),
+            (2, "b", 2024, 2.5, "beta"),
+            (3, "c", 2025, 3.0, "alpha"),
+        ],
+        "id INT, val STRING, int_part INT, float_part DOUBLE, string_part STRING",
+    )
+    src = tmp_path / "src"
+    df_in.write.partitionBy("int_part", "float_part", "string_part").parquet(str(src), mode="overwrite")
+
+    if provide_schema:
+        df = (
+            spark.read.schema("id INT, val STRING, int_part STRING, float_part STRING, string_part STRING")
+            .parquet(str(src))
+            .orderBy("id")
+        )
+    else:
+        df = spark.read.parquet(str(src)).orderBy("id")
+
+    type_by_name = {f.name: f.dataType.simpleString() for f in df.schema.fields}
+    assert type_by_name["int_part"] == "string"
+    assert type_by_name["float_part"] == "string"
+    assert type_by_name["string_part"] == "string"
+    rows = df.collect()
+    # Note: Sail's writer drops trailing zeros when stringifying a DOUBLE
+    # partition value (`3.0` → `"3"`). Spark would write `"3.0"`. Pinned
+    # against Sail's current behavior.
+    assert rows == [
+        Row(id=1, val="a", int_part="2024", float_part="1.5", string_part="alpha"),
+        Row(id=2, val="b", int_part="2024", float_part="2.5", string_part="beta"),
+        Row(id=3, val="c", int_part="2025", float_part="3", string_part="alpha"),
+    ]
+
+
+@pytest.mark.skip(
+    reason=(
+        "FIXME: Sail's partition-column type inference returns every "
+        "discovered column as STRING; Spark infers Int/Double/String from "
+        "the observed `key=value` strings (see FIXME above "
+        "`rewrite_listing_partitions` in `crates/sail-data-source/src/listing.rs`)."
+    )
+)
+@pytest.mark.parametrize("provide_schema", [True, False])
+def test_parquet_read_multi_level_partitioned_directory(spark, tmp_path, provide_schema):
+    # Two-level partition tree: `year=2024/month=11/...`. Partition discovery
+    # must walk both segments and surface both columns. Tested both with
+    # auto-discovery (no schema) and with an explicit schema that includes
+    # the partition columns.
+    df_in = spark.createDataFrame(
+        [
+            (1, "a", 2024, 10),
+            (2, "b", 2024, 11),
+            (3, "c", 2025, 1),
+        ],
+        "id INT, val STRING, year INT, month INT",
+    )
+    src = tmp_path / "src"
+    df_in.write.partitionBy("year", "month").parquet(str(src), mode="overwrite")
+    for f in src.rglob("*.parquet"):
+        f.rename(f.with_suffix(".PARQUET"))
+    if provide_schema:
+        df = spark.read.schema("id INT, val STRING, year INT, month INT").parquet(str(src))
+    else:
+        df = spark.read.parquet(str(src))
+    rows = sorted(df.collect(), key=lambda r: r.id)
+    assert rows == [
+        Row(id=1, val="a", year=2024, month=10),
+        Row(id=2, val="b", year=2024, month=11),
+        Row(id=3, val="c", year=2025, month=1),
+    ]
+
+
+# TODO: remove this test once the FIXME above `rewrite_listing_partitions`
+# in `crates/sail-data-source/src/listing.rs` is addressed and the
+# Spark-parity test above starts passing.
+@pytest.mark.parametrize("provide_schema", [True, False])
+def test_parquet_read_multi_level_partitioned_directory_string_only(spark, tmp_path, provide_schema):
+    # Pins Sail's current behavior: every partition column comes back as
+    # STRING regardless of the underlying values. Once partition type
+    # inference matches Spark, this test should be deleted in favor of the
+    # `test_parquet_read_multi_level_partitioned_directory` above.
+    df_in = spark.createDataFrame(
+        [
+            (1, "a", 2024, 10),
+            (2, "b", 2024, 11),
+            (3, "c", 2025, 1),
+        ],
+        "id INT, val STRING, year INT, month INT",
+    )
+    src = tmp_path / "src"
+    df_in.write.partitionBy("year", "month").parquet(str(src), mode="overwrite")
+    for f in src.rglob("*.parquet"):
+        f.rename(f.with_suffix(".PARQUET"))
+    if provide_schema:
+        df = spark.read.schema("id INT, val STRING, year STRING, month STRING").parquet(str(src))
+    else:
+        df = spark.read.parquet(str(src))
+    rows = sorted(df.collect(), key=lambda r: r.id)
+    assert rows == [
+        Row(id=1, val="a", year="2024", month="10"),
+        Row(id=2, val="b", year="2024", month="11"),
+        Row(id=3, val="c", year="2025", month="1"),
+    ]
+
+
+@pytest.mark.parametrize("ext", ["parquet", "PARQUET"])
+def test_parquet_read_with_schema_column_projection(spark, sample_df, tmp_path, ext):
+    # Parquet natively supports column projection. Supplying a schema with a
+    # subset of the file's columns must return only those columns (without
+    # erroring like CSV does). Verified for both the lowercase and uppercase
+    # extension paths.
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    if ext != "parquet":
+        for f in src.glob("*.parquet"):
+            f.rename(f.with_suffix(f".{ext}"))
+    df = spark.read.schema("col1 STRING").parquet(str(src))
+    assert df.columns == ["col1"]
+    assert df.count() == sample_df.count()
+    actual = sorted([r.col1 for r in df.collect()], key=lambda v: (v is not None, v))
+    expected = sorted([r.col1 for r in sample_df.collect()], key=lambda v: (v is not None, v))
+    assert actual == expected
+
+
+def test_parquet_read_with_user_supplied_glob(spark, sample_df, tmp_path):
+    # When the caller passes their own glob in the URL (e.g. `*.PARQUET`),
+    # our default hidden-file glob must not interfere. The user's pattern
+    # takes precedence, and the read should match exactly the files the
+    # user asked for — including dropping a co-located `.parquet` file.
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    # Half the files become uppercase, half stay lowercase.
+    files = sorted(src.glob("*.parquet"))
+    for i, f in enumerate(files):
+        if i % 2 == 0:
+            f.rename(f.with_suffix(".PARQUET"))
+    upper_glob = str(src / "*.PARQUET")
+    df = spark.read.parquet(upper_glob)
+    # Expected = rows from only the renamed (uppercase) files.
+    expected_count = sum(spark.read.parquet(str(f)).count() for f in src.glob("*.PARQUET"))
+    assert df.count() == expected_count
+
+
+def test_parquet_read_uppercase_single_file_with_schema(spark, sample_df, tmp_path):
+    # A single uppercase-extension parquet file plus an explicit schema.
+    # Pinned in addition to the directory variant to make sure single-file
+    # URL handling (which goes through `head` instead of `list`) behaves
+    # the same way.
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    files = list(src.glob("*.parquet"))
+    assert len(files) == 1
+    upper = files[0].with_suffix(".PARQUET")
+    files[0].rename(upper)
+    df = spark.read.schema(sample_df.schema).parquet(str(upper))
+    assert df.count() == sample_df.count()
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+def test_parquet_int96_timestamp_is_instant(spark, tmp_path, session_timezone):
+    # Spark reads INT96 as TIMESTAMP, which compares with other TIMESTAMP values as instants.
+    _ = session_timezone
+    path = tmp_path / "int96.parquet"
+    value = datetime(2020, 6, 14, 4, tzinfo=UTC)
+    pq.write_table(
+        pa.table({"ts": pa.array([value], type=pa.timestamp("us", tz="UTC"))}),
+        path,
+        use_deprecated_int96_timestamps=True,
+        store_schema=False,
+    )
+    df = spark.read.parquet(str(path))
+    assert isinstance(df.schema["ts"].dataType, TimestampType)
+    assert df.selectExpr("unix_micros(ts)").collect() == [(1592107200000000,)]
+    assert df.filter("ts = TIMESTAMP '2020-06-13 21:00:00'").count() == 1
+
+
+@pytest.mark.parametrize(
+    ("session_timezone", "expected"),
+    [("Asia/Shanghai", "2020-06-14 12:00:00"), ("America/Los_Angeles", "2020-06-13 21:00:00")],
+    indirect=["session_timezone"],
+)
+def test_parquet_timestamp_show_uses_session_timezone(spark, tmp_path, session_timezone, expected):
+    _ = session_timezone
+    path = tmp_path / "instants.parquet"
+    pq.write_table(
+        pa.table({"ts": pa.array([datetime(2020, 6, 14, 4, tzinfo=UTC)], type=pa.timestamp("us", tz="UTC"))}),
+        path,
+        store_schema=False,
+    )
+    shown = spark.read.parquet(str(path))._show_string()  # noqa: SLF001
+    assert expected in shown
+
+
+_INT96_DISPLAY_INSTANTS = [
+    datetime(2020, 6, 14, 6, 59, 59, tzinfo=UTC),
+    datetime(2020, 6, 14, 7, 0, tzinfo=UTC),
+    datetime(2020, 6, 13, 16, 0, tzinfo=UTC),
+    datetime(2020, 3, 8, 10, 0, tzinfo=UTC),
+    datetime(2020, 11, 1, 8, 30, tzinfo=UTC),
+    datetime(2020, 11, 1, 9, 30, tzinfo=UTC),
+    None,
+]
+
+
+@pytest.mark.parametrize(
+    ("session_timezone", "expected"),
+    [
+        (
+            "America/Los_Angeles",
+            [
+                (0, "2020-06-13 23:59:59", "2020-06-13", "2020-06-13"),
+                (1, "2020-06-14 00:00:00", "2020-06-14", "2020-06-14"),
+                (2, "2020-06-13 09:00:00", "2020-06-13", "2020-06-13"),
+                (3, "2020-03-08 03:00:00", "2020-03-08", "2020-03-08"),
+                (4, "2020-11-01 01:30:00", "2020-11-01", "2020-11-01"),
+                (5, "2020-11-01 01:30:00", "2020-11-01", "2020-11-01"),
+                (6, None, None, None),
+            ],
+        ),
+        (
+            "Asia/Shanghai",
+            [
+                (0, "2020-06-14 14:59:59", "2020-06-14", "2020-06-14"),
+                (1, "2020-06-14 15:00:00", "2020-06-14", "2020-06-14"),
+                (2, "2020-06-14 00:00:00", "2020-06-14", "2020-06-14"),
+                (3, "2020-03-08 18:00:00", "2020-03-08", "2020-03-08"),
+                (4, "2020-11-01 16:30:00", "2020-11-01", "2020-11-01"),
+                (5, "2020-11-01 17:30:00", "2020-11-01", "2020-11-01"),
+                (6, None, None, None),
+            ],
+        ),
+        (
+            "+05:30",
+            [
+                (0, "2020-06-14 12:29:59", "2020-06-14", "2020-06-14"),
+                (1, "2020-06-14 12:30:00", "2020-06-14", "2020-06-14"),
+                (2, "2020-06-13 21:30:00", "2020-06-13", "2020-06-13"),
+                (3, "2020-03-08 15:30:00", "2020-03-08", "2020-03-08"),
+                (4, "2020-11-01 14:00:00", "2020-11-01", "2020-11-01"),
+                (5, "2020-11-01 15:00:00", "2020-11-01", "2020-11-01"),
+                (6, None, None, None),
+            ],
+        ),
+    ],
+    indirect=["session_timezone"],
+)
+def test_parquet_int96_timestamp_display_uses_session_timezone(spark, tmp_path, session_timezone, expected):
+    _ = session_timezone
+    path = tmp_path / "int96_display.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "id": list(range(len(_INT96_DISPLAY_INSTANTS))),
+                "ts": pa.array(_INT96_DISPLAY_INSTANTS, type=pa.timestamp("us", tz="UTC")),
+            }
+        ),
+        path,
+        use_deprecated_int96_timestamps=True,
+        store_schema=False,
+    )
+    df = spark.read.parquet(str(path))
+    actual = (
+        df.selectExpr(
+            "id",
+            "CAST(ts AS STRING)",
+            "CAST(CAST(ts AS DATE) AS STRING)",
+            "CAST(to_date(ts) AS STRING)",
+        )
+        .orderBy("id")
+        .collect()
+    )
+    assert [tuple(r) for r in actual] == expected
+    shown = df.orderBy("id")._show_string(n=100, truncate=False)  # noqa: SLF001
+    assert expected[0][1] in shown
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["Asia/Shanghai", "America/Los_Angeles"], indirect=True)
+@pytest.mark.parametrize("adjusted_to_utc", [False, True])
+def test_external_parquet_timestamp_logical_type_roundtrip(spark, tmp_path, adjusted_to_utc):
+    session_timezone = spark.conf.get("spark.sql.session.timeZone")
+    values = [datetime(2020, 6, 14, 12) + timedelta(minutes=30 * i) for i in range(24)]  # noqa: DTZ001
+    if adjusted_to_utc:
+        values = [value.replace(tzinfo=ZoneInfo(session_timezone)) for value in values]
+    data_type = pa.timestamp("us", tz=session_timezone if adjusted_to_utc else None)
+    path = tmp_path / "external.parquet"
+    # Exercise the Parquet logical type without an Arrow schema metadata override.
+    pq.write_table(pa.table({"ts": pa.array(values, type=data_type)}), path, store_schema=False)
+    logical_type = str(pq.ParquetFile(path).schema.column(0).logical_type)
+    assert f"isAdjustedToUTC={str(adjusted_to_utc).lower()}" in logical_type
+
+    source = spark.read.parquet(str(path))
+    destination = tmp_path / "rewritten"
+    source.write.parquet(str(destination))
+    expected_type = TimestampType if adjusted_to_utc else TimestampNTZType
+    for frame in (source, spark.read.parquet(str(destination))):
+        assert isinstance(frame.schema["ts"].dataType, expected_type)
+        row = (
+            frame.filter("ts >= TIMESTAMP '2020-06-14 00:00:00' AND ts < TIMESTAMP '2020-06-15 00:00:00'")
+            .selectExpr("count(*) AS n", "CAST(min(ts) AS STRING) AS lo", "CAST(max(ts) AS STRING) AS hi")
+            .collect()[0]
+        )
+        assert (row.n, row.lo, row.hi) == (24, "2020-06-14 12:00:00", "2020-06-14 23:30:00")
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["Asia/Shanghai", "America/Los_Angeles"], indirect=True)
+def test_external_parquet_timestamp_instant_roundtrip(spark, tmp_path):
+    # Check stored instants separately from the logical-type test's string rendering.
+    session_timezone = spark.conf.get("spark.sql.session.timeZone")
+    first = datetime(2020, 6, 14, 12, tzinfo=ZoneInfo(session_timezone))
+    values = [first + timedelta(minutes=30 * i) for i in range(24)]
+    path = tmp_path / "external_instants.parquet"
+    pq.write_table(
+        pa.table({"ts": pa.array(values, type=pa.timestamp("us", tz=session_timezone))}),
+        path,
+        store_schema=False,
+    )
+
+    source = spark.read.parquet(str(path))
+    destination = tmp_path / "rewritten_instants"
+    source.write.parquet(str(destination))
+    for frame in (source, spark.read.parquet(str(destination))):
+        assert isinstance(frame.schema["ts"].dataType, TimestampType)
+        row = (
+            frame.filter("ts >= TIMESTAMP '2020-06-14 00:00:00' AND ts < TIMESTAMP '2020-06-15 00:00:00'")
+            .selectExpr("count(*) AS n", "unix_micros(min(ts)) AS lo", "unix_micros(max(ts)) AS hi")
+            .collect()[0]
+        )
+        assert (row.n, row.lo, row.hi) == (
+            24,
+            int(values[0].timestamp() * 1_000_000),
+            int(values[-1].timestamp() * 1_000_000),
+        )
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["Asia/Shanghai", "America/Los_Angeles"], indirect=True)
+@pytest.mark.parametrize("adjusted_to_utc", [False, True])
+@pytest.mark.parametrize(
+    ("lower", "upper"), [("2020-06-14", "2020-06-15"), ("2020-06-14 00:00:00", "2020-06-15 00:00:00")]
+)
+def test_external_parquet_timestamp_string_window(spark, tmp_path, adjusted_to_utc, lower, upper):
+    # String bounds cast to the column type, so the window is the day in the session time zone.
+    session_timezone = spark.conf.get("spark.sql.session.timeZone")
+    values = [datetime(2020, 6, 14, 12) + timedelta(minutes=30 * i) for i in range(24)]  # noqa: DTZ001
+    if adjusted_to_utc:
+        values = [value.replace(tzinfo=ZoneInfo(session_timezone)) for value in values]
+    data_type = pa.timestamp("us", tz=session_timezone if adjusted_to_utc else None)
+    path = tmp_path / "external.parquet"
+    pq.write_table(pa.table({"ts": pa.array(values, type=data_type)}), path, store_schema=False)
+
+    row = (
+        spark.read.parquet(str(path))
+        .filter(f"ts >= '{lower}' AND ts < '{upper}'")
+        .selectExpr("count(*) AS n", "CAST(min(ts) AS STRING) AS lo", "CAST(max(ts) AS STRING) AS hi")
+        .collect()[0]
+    )
+    assert (row.n, row.lo, row.hi) == (24, "2020-06-14 12:00:00", "2020-06-14 23:30:00")
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("unit", ["ms", "us"])
+@pytest.mark.parametrize("producer_timezone", [None, "UTC", "America/New_York"])
+@pytest.mark.parametrize(
+    ("session_timezone", "first_instant"),
+    [("UTC", 24), ("Asia/Shanghai", 8), ("America/Los_Angeles", 38), ("+05:30", 13)],
+    indirect=["session_timezone"],
+)
+def test_parquet_timestamp_window(spark, tmp_path, first_instant, producer_timezone, unit):
+    # External Parquet preserves the distinction between wall times and instants.
+    values = [datetime(2020, 6, 13, 12) + timedelta(minutes=30 * i) for i in range(120)]  # noqa: DTZ001
+    values.append(None)
+    path = tmp_path / "timestamps.parquet"
+    pq.write_table(
+        pa.table({"id": range(len(values)), "ts": pa.array(values, type=pa.timestamp(unit, tz=producer_timezone))}),
+        path,
+    )
+    df = spark.read.parquet(str(path))
+    expected_type = TimestampNTZType if producer_timezone is None else TimestampType
+    assert isinstance(df.schema["ts"].dataType, expected_type)
+    assert df.count() == len(values)
+
+    rows = (
+        df.filter(
+            (F.col("ts") >= F.expr("TIMESTAMP '2020-06-14 00:00:00'"))
+            & (F.col("ts") < F.expr("TIMESTAMP '2020-06-15 00:00:00'"))
+        )
+        .select("id")
+        .orderBy("id")
+        .collect()
+    )
+    first = 24 if producer_timezone is None else first_instant
+    assert [row.id for row in rows] == list(range(first, first + 48))
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+def test_parquet_int96_timestamp_window_precision(spark, tmp_path):
+    path = tmp_path / "int96.parquet"
+    pq.write_table(
+        pa.table({"id": range(3), "ts": pa.array([-1000, -1, 0], type=pa.timestamp("ns"))}),
+        path,
+        use_deprecated_int96_timestamps=True,
+    )
+    # Spark reads the pre-epoch nanosecond as -1 microsecond. Sail can retain
+    # nanoseconds; neither representation may compare equal to the epoch.
+    frame = spark.read.option("coerce_int96", "ns").parquet(str(path))
+    assert frame.filter("id = 1 AND ts = TIMESTAMP '1970-01-01 00:00:00'").select("id").collect() == []
+    assert frame.filter("ts = TIMESTAMP '1970-01-01 00:00:00'").select("id").collect() == [(2,)]

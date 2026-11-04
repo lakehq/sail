@@ -780,7 +780,7 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#724@0 as channel, #725@1 as i_brand_id, #726@2 as i_class_id, #727@3 as i_category_id, #728@4 as sum(sales), #729@5 as sum(number_sales)]
-      ScalarSubqueryExec: subqueries=3
+      ScalarSubqueryExec: subqueries=1
         SortPreservingMergeExec: [#724@0 ASC, #725@1 ASC, #726@2 ASC, #727@3 ASC], fetch=100
           SortExec: TopK(fetch=100), expr=[#724@0 ASC, #725@1 ASC, #726@2 ASC, #727@3 ASC], preserve_partitioning=[true]
             ProjectionExec: expr=[#530@0 as #724, #531@1 as #725, #532@2 as #726, #533@3 as #727, sum(y.#534)@5 as #728, sum(y.#535)@6 as #729]
@@ -1025,71 +1025,13 @@ data:
                         FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[avg(x.#324 * x.#325)@0 as #623]
-          AggregateExec: mode=Final, gby=[], aggr=[avg(x.#324 * x.#325)]
-            CoalescePartitionsExec
-              AggregateExec: mode=Partial, gby=[], aggr=[avg(x.#324 * x.#325)]
-                UnionExec
-                  ProjectionExec: expr=[#283@0 as #324, #285@1 as #325]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#273@0, CAST(date_dim.#296 AS Float64)@1)], projection=[#283@1, #285@2]
-                      ProjectionExec: expr=[_0@0 as #273, _10@1 as #283, _12@2 as #285]
-                        DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #296, CAST(_0@0 AS Float64) as CAST(date_dim.#296 AS Float64)]
-                        FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[#344@0 as #324, #346@1 as #325]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#326@0, CAST(date_dim.#360 AS Float64)@1)], projection=[#344@1, #346@2]
-                      ProjectionExec: expr=[_0@0 as #326, _18@1 as #344, _20@2 as #346]
-                        DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #360, CAST(_0@0 AS Float64) as CAST(date_dim.#360 AS Float64)]
-                        FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[#408@0 as #324, #410@1 as #325]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#390@0, CAST(date_dim.#424 AS Float64)@1)], projection=[#408@1, #410@2]
-                      ProjectionExec: expr=[_0@0 as #390, _18@1 as #408, _20@2 as #410]
-                        DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #424, CAST(_0@0 AS Float64) as CAST(date_dim.#424 AS Float64)]
-                        FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[avg(x.#324 * x.#325)@0 as #717]
-          AggregateExec: mode=Final, gby=[], aggr=[avg(x.#324 * x.#325)]
-            CoalescePartitionsExec
-              AggregateExec: mode=Partial, gby=[], aggr=[avg(x.#324 * x.#325)]
-                UnionExec
-                  ProjectionExec: expr=[#283@0 as #324, #285@1 as #325]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#273@0, CAST(date_dim.#296 AS Float64)@1)], projection=[#283@1, #285@2]
-                      ProjectionExec: expr=[_0@0 as #273, _10@1 as #283, _12@2 as #285]
-                        DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #296, CAST(_0@0 AS Float64) as CAST(date_dim.#296 AS Float64)]
-                        FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[#344@0 as #324, #346@1 as #325]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#326@0, CAST(date_dim.#360 AS Float64)@1)], projection=[#344@1, #346@2]
-                      ProjectionExec: expr=[_0@0 as #326, _18@1 as #344, _20@2 as #346]
-                        DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #360, CAST(_0@0 AS Float64) as CAST(date_dim.#360 AS Float64)]
-                        FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[#408@0 as #324, #410@1 as #325]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#390@0, CAST(date_dim.#424 AS Float64)@1)], projection=[#408@1, #410@2]
-                      ProjectionExec: expr=[_0@0 as #390, _18@1 as #408, _20@2 as #410]
-                        DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #424, CAST(_0@0 AS Float64) as CAST(date_dim.#424 AS Float64)]
-                        FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpcds_query_plan[14].1"
 data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#677@0 as ty_channel, #678@1 as ty_brand, #679@2 as ty_class, #680@3 as ty_category, #681@4 as ty_sales, #682@5 as ty_number_sales, #683@6 as ly_channel, #684@7 as ly_brand, #685@8 as ly_class, #686@9 as ly_category, #687@10 as ly_sales, #688@11 as ly_number_sales]
-      ScalarSubqueryExec: subqueries=4
+      ScalarSubqueryExec: subqueries=3
         ProjectionExec: expr=[#677@0 as #677, #678@1 as #678, #679@2 as #679, #680@3 as #680, #681@4 as #681, #682@5 as #682, #683@6 as #683, #684@7 as #684, #685@8 as #685, #686@9 as #686, #687@10 as #687, #688@11 as #688]
           SortPreservingMergeExec: [#559@12 ASC, #560@13 ASC, #561@14 ASC, #562@15 ASC], fetch=100
             ProjectionExec: expr=[#559@0 as #677, #560@1 as #678, #561@2 as #679, #562@3 as #680, #563@4 as #681, #564@5 as #682, #671@6 as #683, #672@7 as #684, #673@8 as #685, #674@9 as #686, #675@10 as #687, #676@11 as #688, #559@0 as #559, #560@1 as #560, #561@2 as #561, #562@3 as #562]
@@ -1269,35 +1211,6 @@ data:
           FilterExec: _6@1 = 2000 AND _8@2 = 12 AND _9@3 = 14, projection=[_4@0]
             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
               DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[avg(x.#324 * x.#325)@0 as #670]
-          AggregateExec: mode=Final, gby=[], aggr=[avg(x.#324 * x.#325)]
-            CoalescePartitionsExec
-              AggregateExec: mode=Partial, gby=[], aggr=[avg(x.#324 * x.#325)]
-                UnionExec
-                  ProjectionExec: expr=[#283@0 as #324, #285@1 as #325]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#273@0, CAST(date_dim.#296 AS Float64)@1)], projection=[#283@1, #285@2]
-                      ProjectionExec: expr=[_0@0 as #273, _10@1 as #283, _12@2 as #285]
-                        DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #296, CAST(_0@0 AS Float64) as CAST(date_dim.#296 AS Float64)]
-                        FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[#344@0 as #324, #346@1 as #325]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#326@0, CAST(date_dim.#360 AS Float64)@1)], projection=[#344@1, #346@2]
-                      ProjectionExec: expr=[_0@0 as #326, _18@1 as #344, _20@2 as #346]
-                        DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #360, CAST(_0@0 AS Float64) as CAST(date_dim.#360 AS Float64)]
-                        FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[#408@0 as #324, #410@1 as #325]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#390@0, CAST(date_dim.#424 AS Float64)@1)], projection=[#408@1, #410@2]
-                      ProjectionExec: expr=[_0@0 as #390, _18@1 as #408, _20@2 as #410]
-                        DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as #424, CAST(_0@0 AS Float64) as CAST(date_dim.#424 AS Float64)]
-                        FilterExec: _6@1 >= 1999 AND _6@1 <= 2001, projection=[_0@0]
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: partitions=1, partition_sizes=[1]
         ProjectionExec: expr=[_4@0 as #668]
           FilterExec: _6@1 = 1999 AND _8@2 = 12 AND _9@3 = 14, projection=[_4@0]
             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -2981,7 +2894,7 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#152@0 as rnk, #153@1 as best_performing, #154@2 as worst_performing]
-      ScalarSubqueryExec: subqueries=2
+      ScalarSubqueryExec: subqueries=1
         SortExec: TopK(fetch=100), expr=[#152@0 ASC], preserve_partitioning=[false]
           ProjectionExec: expr=[#53@0 as #152, #129@1 as #153, #151@2 as #154]
             HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#106@1, #130@0)], projection=[#53@0, #129@2, #151@4]
@@ -3030,14 +2943,6 @@ data:
             RepartitionExec: partitioning=Hash([#30@0], 4), input_partitions=4
               AggregateExec: mode=Partial, gby=[#30@0 as #30], aggr=[avg(store_sales.#45)]
                 ProjectionExec: expr=[_7@0 as #30, _22@1 as #45]
-                  FilterExec: _7@1 = 6 AND _5@0 IS NULL, projection=[_7@1, _22@2]
-                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                      DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[avg(store_sales.#99)@1 as #100]
-          AggregateExec: mode=FinalPartitioned, gby=[#84@0 as #84], aggr=[avg(store_sales.#99)]
-            RepartitionExec: partitioning=Hash([#84@0], 4), input_partitions=4
-              AggregateExec: mode=Partial, gby=[#84@0 as #84], aggr=[avg(store_sales.#99)]
-                ProjectionExec: expr=[_7@0 as #84, _22@1 as #99]
                   FilterExec: _7@1 = 6 AND _5@0 IS NULL, projection=[_7@1, _22@2]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1]
@@ -3487,15 +3392,15 @@ name: "test_derived_tpcds_query_plan[54]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#298@0 as segment, #299@1 as num_customers, #300@2 as segment_base]
+    ProjectionExec: expr=[#300@0 as segment, #301@1 as num_customers, #302@2 as segment_base]
       ScalarSubqueryExec: subqueries=2
-        SortPreservingMergeExec: [#298@0 ASC], fetch=100
-          SortExec: TopK(fetch=100), expr=[#298@0 ASC], preserve_partitioning=[true]
-            ProjectionExec: expr=[#297@0 as #298, count(Int64(1))@1 as #299, #297@0 * 50 as #300]
-              AggregateExec: mode=FinalPartitioned, gby=[#297@0 as #297], aggr=[count(Int64(1))]
-                RepartitionExec: partitioning=Hash([#297@0], 4), input_partitions=4
-                  AggregateExec: mode=Partial, gby=[#297@0 as #297], aggr=[count(Int64(1))]
-                    ProjectionExec: expr=[CAST(sum(store_sales.#159)@1 / 50 AS Int32) as #297]
+        SortPreservingMergeExec: [#300@0 ASC], fetch=100
+          SortExec: TopK(fetch=100), expr=[#300@0 ASC], preserve_partitioning=[true]
+            ProjectionExec: expr=[#299@0 as #300, count(Int64(1))@1 as #301, #299@0 * 50 as #302]
+              AggregateExec: mode=FinalPartitioned, gby=[#299@0 as #299], aggr=[count(Int64(1))]
+                RepartitionExec: partitioning=Hash([#299@0], 4), input_partitions=4
+                  AggregateExec: mode=Partial, gby=[#299@0 as #299], aggr=[count(Int64(1))]
+                    ProjectionExec: expr=[CAST(sum(store_sales.#159)@1 / 50 AS Int32) as #299]
                       AggregateExec: mode=FinalPartitioned, gby=[#142@0 as #142], aggr=[sum(store_sales.#159)]
                         RepartitionExec: partitioning=Hash([#142@0], 4), input_partitions=4
                           AggregateExec: mode=Partial, gby=[#142@0 as #142], aggr=[sum(store_sales.#159)]
@@ -3764,7 +3669,7 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#421@0 as item_id, #422@1 as ss_item_rev, #423@2 as ss_dev, #424@3 as cs_item_rev, #425@4 as cs_dev, #426@5 as ws_item_rev, #427@6 as ws_dev, #428@7 as average]
-      ScalarSubqueryExec: subqueries=3
+      ScalarSubqueryExec: subqueries=1
         SortPreservingMergeExec: [#421@0 ASC], fetch=100
           SortExec: TopK(fetch=100), expr=[#421@0 ASC], preserve_partitioning=[true]
             ProjectionExec: expr=[#131@2 as #421, #132@3 as #422, #132@3 / __common_expr_4@0 * 100 as #423, #276@4 as #424, #276@4 / __common_expr_4@0 * 100 as #425, #420@5 as #426, #420@5 / __common_expr_4@0 * 100 as #427, __common_expr_5@1 as #428]
@@ -3839,14 +3744,6 @@ data:
                                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                     DataSourceExec: partitions=1, partition_sizes=[1]
         ProjectionExec: expr=[_4@0 as #129]
-          FilterExec: _2@0 = 2000-02-12, projection=[_4@1]
-            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-              DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[_4@0 as #273]
-          FilterExec: _2@0 = 2000-02-12, projection=[_4@1]
-            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-              DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[_4@0 as #417]
           FilterExec: _2@0 = 2000-02-12, projection=[_4@1]
             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
               DataSourceExec: partitions=1, partition_sizes=[1]

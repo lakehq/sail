@@ -2,6 +2,7 @@ pub mod error;
 pub mod formats;
 pub mod listing;
 pub mod options;
+pub mod reuse;
 mod url;
 mod utils;
 

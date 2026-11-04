@@ -59,6 +59,9 @@ impl IcebergBaseWriteContext {
 pub struct IcebergWriteContext {
     /// Serialized with the write context, including for empty worker inputs.
     pub operation: Option<crate::operation_metrics::IcebergOperation>,
+    /// Internal compaction mode: preserve hidden lineage without row-level DML semantics.
+    #[serde(default)]
+    pub rewrite_lineage: bool,
     pub base_table: Option<IcebergBaseWriteContext>,
     pub writer_schema: IcebergSchema,
     pub writer_partition_spec: Option<PartitionSpec>,
@@ -296,6 +299,7 @@ pub fn prepare_iceberg_write_context(
 
     Ok(IcebergWriteContext {
         operation: None,
+        rewrite_lineage: false,
         base_table: base_metadata.map(IcebergBaseWriteContext::from_metadata),
         writer_schema,
         writer_partition_spec,

@@ -191,13 +191,16 @@ impl TryFrom<RelType> for RelationNode {
                             unparsed_identifier,
                             options,
                         } = x;
+                        // The options come from a map, so sort them for a deterministic order.
+                        let mut options = options.into_iter().collect::<Vec<_>>();
+                        options.sort();
                         spec::ReadType::NamedTable(Box::new(spec::ReadNamedTable {
                             name: from_ast_object_name(parse_object_name(
                                 unparsed_identifier.as_str(),
                             )?)?,
                             temporal: None,
                             sample: None,
-                            options: options.into_iter().collect(),
+                            options,
                         }))
                     }
                     ReadType::DataSource(x) => {
@@ -2163,6 +2166,43 @@ mod tests {
             |sql: String| Ok(from_ast_statement(parse_one_statement(&sql)?)?),
             SparkError::internal,
         )
+    }
+
+    #[test]
+    fn test_named_table_read_options_are_sorted() -> SparkResult<()> {
+        use sc::read::{NamedTable, ReadType};
+        use sc::relation;
+
+        let pairs = |items: &[(&str, &str)]| {
+            items
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<Vec<_>>()
+        };
+        let relation = sc::Relation {
+            common: None,
+            rel_type: Some(relation::RelType::Read(sc::Read {
+                is_streaming: false,
+                read_type: Some(ReadType::NamedTable(NamedTable {
+                    unparsed_identifier: "t".to_string(),
+                    options: pairs(&[("c", "3"), ("a", "1"), ("b", "2")])
+                        .into_iter()
+                        .collect(),
+                })),
+            })),
+        };
+
+        let plan: spec::QueryPlan = relation.try_into()?;
+        let spec::QueryNode::Read {
+            read_type: spec::ReadType::NamedTable(table),
+            ..
+        } = plan.node
+        else {
+            return Err(SparkError::internal("expected a named table read"));
+        };
+        // The options come from a map, so their order must not depend on its iteration order.
+        assert_eq!(table.options, pairs(&[("a", "1"), ("b", "2"), ("c", "3")]));
+        Ok(())
     }
 
     #[test]
