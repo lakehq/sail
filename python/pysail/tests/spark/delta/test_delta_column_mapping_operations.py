@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -358,7 +359,13 @@ def test_column_mapped_query_matches_reference(
     if name in _KNOWN_QUERY_FAILURES:
         reason, partitioned_only = _KNOWN_QUERY_FAILURES[name]
         if column_mapped_views["partitioned"] or not partitioned_only:
-            request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
+            request.applymarker(
+                pytest.mark.xfail(
+                    name != "intersect" or os.environ.get("SAIL_MODE", "local") != "local-cluster",
+                    reason=reason,
+                    strict=True,
+                )
+            )
     actual = spark.sql(query.format(t=column_mapped_views[access])).collect()
     expected = spark.sql(query.format(t=column_mapped_views["reference"])).collect()
     assert actual == expected
