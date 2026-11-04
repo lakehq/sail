@@ -505,7 +505,10 @@ impl PlanResolver<'_> {
         if let Some(having) = having.as_ref() {
             aggregate_candidates.push(having.clone());
         }
-        let aggregate_exprs = find_aggregate_exprs(&aggregate_candidates);
+        let aggregate_exprs = Self::disambiguate_aggregate_expressions(
+            find_aggregate_exprs(&aggregate_candidates),
+            state,
+        );
         let plan = LogicalPlanBuilder::from(input)
             .aggregate(group_exprs, aggregate_exprs.clone())?
             .build()?;
@@ -1437,6 +1440,26 @@ impl PlanResolver<'_> {
             .data()?)
     }
 
+    /// Casts are invisible in DataFusion schema names, so distinct aggregate expressions
+    /// can claim the same output name: `min(x)` and `min(to_date(x))` are both `min(x)`.
+    /// Such expressions get an internal alias, which keeps the aggregate schema unique.
+    fn disambiguate_aggregate_expressions(
+        expressions: Vec<Expr>,
+        state: &mut PlanResolverState,
+    ) -> Vec<Expr> {
+        let mut names = std::collections::HashSet::new();
+        expressions
+            .into_iter()
+            .map(|expr| {
+                if names.insert(expr.schema_name().to_string()) {
+                    expr
+                } else {
+                    expr.alias(state.register_field_name(""))
+                }
+            })
+            .collect()
+    }
+
     /// Reference: [datafusion_sql::utils::rebase_expr]
     pub(super) fn rebase_expression(
         expr: Expr,
@@ -1445,9 +1468,9 @@ impl PlanResolver<'_> {
     ) -> PlanResult<Expr> {
         Ok(expr
             .transform_down(|e| {
-                if base.contains(&e) {
+                if let Some(base) = base.iter().find(|base| Self::is_rebase_target(base, &e)) {
                     Ok(Transformed::yes(
-                        Self::expr_as_column_expr(&e, plan)
+                        Self::expr_as_column_expr(base, plan)
                             .map_err(|e| DataFusionError::External(Box::new(e)))?,
                     ))
                 } else {
@@ -1455,6 +1478,10 @@ impl PlanResolver<'_> {
                 }
             })
             .data()?)
+    }
+
+    fn is_rebase_target(base: &Expr, expr: &Expr) -> bool {
+        base == expr || matches!(base, Expr::Alias(alias) if alias.expr.as_ref() == expr)
     }
 
     // Modification of DataFusion's `expr_as_column_expr`
