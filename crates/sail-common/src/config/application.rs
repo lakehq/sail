@@ -892,17 +892,17 @@ pub enum CatalogType {
         bearer_access_token_file: Option<String>,
         /// User name for HTTP Basic authentication, which some REST catalog
         /// servers accept instead of a token. Must be set together with
-        /// `basic_password` and cannot be combined with the token options.
+        /// `password` and cannot be combined with the token options.
         /// The user name is not a secret, so it is kept as a plain string.
         #[serde(skip_serializing_if = "Option::is_none")]
-        basic_username: Option<String>,
+        username: Option<String>,
         /// Password for HTTP Basic authentication. Must be set together with
-        /// `basic_username`.
+        /// `username`.
         #[serde(
             skip_serializing_if = "Option::is_none",
             serialize_with = "serialize_optional_secret"
         )]
-        basic_password: Option<SecretString>,
+        password: Option<SecretString>,
         #[serde(flatten)]
         cache: CatalogCacheConfig,
     },

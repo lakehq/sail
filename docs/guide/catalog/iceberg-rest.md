@@ -20,8 +20,8 @@ An Iceberg REST catalog can be configured using the following options.
 - `oauth_access_token` (optional): The OAuth 2.0 access token.
 - `bearer_access_token` (optional): The bearer token for authentication. This option takes precedence over `oauth_access_token`.
 - `bearer_access_token_file` (optional): The path to a file that holds the bearer token. This option takes precedence over `bearer_access_token` and `oauth_access_token`. Sail reads the token from this file for every request, so it picks up a rotated token, such as a kubelet-projected service account token, without restarting the server. If a request is rejected with `401 Unauthorized`, Sail reloads the file and retries the request once. The file must contain the raw token without the `Bearer ` prefix for the HTTP `Authorization` header. Surrounding whitespace in the file is trimmed. Empty or unreadable files produce an error rather than falling back to other options.
-- `basic_username` (optional): The user name for HTTP Basic authentication, which some REST catalog servers, such as Apache Gravitino, accept instead of a token. Must be set together with `basic_password`.
-- `basic_password` (optional): The password for HTTP Basic authentication. Sail sends `Authorization: Basic <base64(username:password)>`. Basic authentication cannot be combined with `oauth_access_token`, `bearer_access_token`, or `bearer_access_token_file`.
+- `username` (optional): The user name for HTTP Basic authentication, which some REST catalog servers, such as Apache Gravitino, accept instead of a token. Must be set together with `password`.
+- `password` (optional): The password for HTTP Basic authentication. Sail sends `Authorization: Basic <base64(username:password)>`. Basic authentication cannot be combined with `oauth_access_token`, `bearer_access_token`, or `bearer_access_token_file`.
 
 See [Common Options](./index.md#common-options) for caching configuration.
 
@@ -64,7 +64,7 @@ export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://cata
 This example uses HTTP Basic authentication.
 
 ```bash
-export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://catalog.example.com", warehouse="s3://data/warehouse", basic_username="...", basic_password="..."}]'
+export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://catalog.example.com", warehouse="s3://data/warehouse", username="...", password="..."}]'
 ```
 
 This example configures a client-side namespace separator fallback.

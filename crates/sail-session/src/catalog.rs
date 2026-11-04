@@ -55,8 +55,8 @@ pub fn create_catalog_manager(
                     oauth_access_token,
                     bearer_access_token,
                     bearer_access_token_file,
-                    basic_username,
-                    basic_password,
+                    username,
+                    password,
                     cache,
                 } => {
                     let mut properties = HashMap::new();
@@ -77,8 +77,8 @@ pub fn create_catalog_manager(
                         bearer_access_token_file.as_ref(),
                         bearer_access_token.as_ref(),
                         oauth_access_token.as_ref(),
-                        basic_username.as_ref(),
-                        basic_password.as_ref(),
+                        username.as_ref(),
+                        password.as_ref(),
                     )?;
 
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
@@ -328,17 +328,17 @@ fn iceberg_rest_credentials(
     bearer_access_token_file: Option<&String>,
     bearer_access_token: Option<&SecretString>,
     oauth_access_token: Option<&SecretString>,
-    basic_username: Option<&String>,
-    basic_password: Option<&SecretString>,
+    username: Option<&String>,
+    password: Option<&SecretString>,
 ) -> CatalogResult<Arc<dyn CatalogCredentials>> {
-    match (basic_username, basic_password) {
+    match (username, password) {
         (Some(username), Some(password)) => {
             if bearer_access_token_file.is_some()
                 || bearer_access_token.is_some()
                 || oauth_access_token.is_some()
             {
                 return Err(CatalogError::InvalidArgument(
-                    "Iceberg REST catalog options 'basic_username' and 'basic_password' cannot be \
+                    "Iceberg REST catalog options 'username' and 'password' cannot be \
                      combined with a token option"
                         .to_string(),
                 ));
@@ -351,7 +351,7 @@ fn iceberg_rest_credentials(
         (None, None) => {}
         _ => {
             return Err(CatalogError::InvalidArgument(
-                "Iceberg REST catalog options 'basic_username' and 'basic_password' must be set together"
+                "Iceberg REST catalog options 'username' and 'password' must be set together"
                     .to_string(),
             ));
         }
