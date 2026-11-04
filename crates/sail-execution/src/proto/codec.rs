@@ -41,7 +41,9 @@ use datafusion::logical_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
 };
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
-use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
+use datafusion::physical_expr::expressions::{
+    DynamicFilterPhysicalExpr, LambdaExpr, LambdaVariable,
+};
 use datafusion::physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion::physical_expr::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
@@ -49,7 +51,14 @@ use datafusion::physical_expr::{
 };
 use datafusion::physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion::physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
+use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::execution_plan::{
+    Boundedness, ChildrenPropertiesMode, EmissionType, ReplaceChildrenOptions,
+};
+use datafusion::physical_plan::filter_pushdown::{
+    ChildPushdownResult, FilterPushdownPhase, PushedDownPredicate,
+};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -342,6 +351,7 @@ use crate::plan::r#gen::{
     LambdaExprNode, LambdaVariableExprNode,
 };
 use crate::plan::{StageInputExec, r#gen};
+use crate::proto::converter::MAX_EMPTY_GROUPING_SETS;
 use crate::proto::decode::{
     try_decode_field_ref, try_decode_message, try_decode_physical_expr_with_converter,
     try_decode_physical_plan_with_converter, try_decode_schema,
@@ -380,6 +390,111 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             None => return plan_err!("no physical plan node found"),
         };
         match node_kind {
+            NodeKind::EmptyGroupingSets(r#gen::EmptyGroupingSetsExecNode {
+                aggregate_plan,
+                group_count,
+            }) => {
+                if group_count > MAX_EMPTY_GROUPING_SETS as u64 {
+                    return plan_err!(
+                        "empty grouping set count {group_count} exceeds supported maximum {MAX_EMPTY_GROUPING_SETS}"
+                    );
+                }
+                let count = usize::try_from(group_count)
+                    .map_err(|_| plan_datafusion_err!("group count does not fit in usize"))?;
+                let plan = try_decode_physical_plan_with_converter(
+                    ctx,
+                    self,
+                    proto_converter,
+                    &aggregate_plan,
+                )?;
+                let aggregate = plan.downcast_ref::<AggregateExec>().ok_or_else(|| {
+                    plan_datafusion_err!("expected an empty grouping sets aggregate")
+                })?;
+                let groups = aggregate.group_expr();
+                if !groups.is_empty()
+                    || !groups.has_grouping_set()
+                    || !groups.null_expr().is_empty()
+                {
+                    return plan_err!("expected zero-column grouping sets");
+                }
+                let mut masks = Vec::new();
+                masks.try_reserve_exact(count).map_err(|error| {
+                    plan_datafusion_err!("cannot allocate empty grouping sets: {error}")
+                })?;
+                masks.resize_with(count, Vec::new);
+                let restored = AggregateExec::try_new(
+                    *aggregate.mode(),
+                    PhysicalGroupBy::new(vec![], vec![], masks, true),
+                    aggregate.aggr_expr().to_vec(),
+                    aggregate.filter_expr().to_vec(),
+                    Arc::clone(aggregate.input()),
+                    aggregate.input_schema(),
+                )?;
+                #[expect(deprecated)]
+                let restored = restored.with_limit_options(aggregate.limit_options());
+                if restored.limit_options() != aggregate.limit_options()
+                    || restored.schema() != aggregate.schema()
+                {
+                    return plan_err!("cannot preserve empty grouping sets aggregate properties");
+                }
+                match aggregate.dynamic_expressions_produced().as_slice() {
+                    [filter] => {
+                        let filter = (Arc::clone(filter) as Arc<dyn Any + Send + Sync>)
+                            .downcast::<DynamicFilterPhysicalExpr>()
+                            .map_err(|_| {
+                                plan_datafusion_err!("expected aggregate dynamic filter")
+                            })?;
+                        // Keep the native decoded expression's ID and shared consumer state.
+                        #[expect(deprecated)]
+                        let restored = restored.with_dynamic_filter_expr(filter)?;
+                        Ok(Arc::new(restored))
+                    }
+                    [] => {
+                        let generated = restored.dynamic_expressions_produced();
+                        if generated.is_empty() {
+                            return Ok(Arc::new(restored));
+                        }
+                        // try_new may recreate a MIN/MAX filter removed by the optimizer.
+                        // The native post-pushdown hook clears it. Isolate the new filter
+                        // first: process-local IDs can collide with unrelated wire IDs.
+                        // Child replacement with Keep retains all other native properties.
+                        let input = Arc::clone(restored.input());
+                        let isolated = Arc::new(restored).replace_children(
+                            vec![Arc::new(EmptyExec::new(input.schema()))],
+                            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+                        )?;
+                        let result = isolated.handle_child_pushdown_result(
+                            FilterPushdownPhase::Post,
+                            ChildPushdownResult {
+                                parent_filters: vec![],
+                                self_filters: vec![
+                                    generated
+                                        .into_iter()
+                                        .map(PushedDownPredicate::unsupported)
+                                        .collect(),
+                                ],
+                            },
+                            ctx.session_config().options(),
+                        )?;
+                        let restored = result
+                            .updated_node
+                            .ok_or_else(|| {
+                                plan_datafusion_err!(
+                                    "cannot preserve absent aggregate dynamic filter"
+                                )
+                            })?
+                            .replace_children(
+                                vec![input],
+                                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+                            )?;
+                        if !restored.dynamic_expressions_produced().is_empty() {
+                            return plan_err!("cannot preserve absent aggregate dynamic filter");
+                        }
+                        Ok(restored)
+                    }
+                    _ => plan_err!("unexpected aggregate dynamic expressions"),
+                }
+            }
             NodeKind::Range(r#gen::RangeExecNode {
                 start,
                 end,
@@ -6231,6 +6346,465 @@ impl RemoteExecutionCodec {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn empty_grouping_sets_round_trip() -> Result<()> {
+        use datafusion::arrow::array::{Int64Array, UInt8Array, UInt16Array};
+        use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
+        use datafusion::functions_aggregate::count::count_udaf;
+        use datafusion::physical_expr::aggregate::AggregateExprBuilder;
+        use datafusion::physical_expr::expressions::lit;
+        use datafusion::physical_plan::aggregates::AggregateMode;
+        use datafusion::physical_plan::collect;
+
+        use crate::proto::{decode_remote_physical_plan, encode_remote_physical_plan};
+
+        let ctx = Arc::new(TaskContext::default());
+        let schema = Arc::new(Schema::empty().with_metadata(HashMap::from([(
+            "source".to_string(),
+            "zero-width".to_string(),
+        )])));
+        for rows in [0, 3] {
+            for occurrences in [1, 2, 257] {
+                for with_count in [false, true] {
+                    let batch = RecordBatch::try_new_with_options(
+                        schema.clone(),
+                        vec![],
+                        &RecordBatchOptions::new().with_row_count(Some(rows)),
+                    )?;
+                    let input =
+                        MemorySourceConfig::try_new_exec(&[vec![batch]], schema.clone(), None)?;
+                    let aggregates = if with_count {
+                        vec![Arc::new(
+                            AggregateExprBuilder::new(count_udaf(), vec![lit(1i64)])
+                                .schema(schema.clone())
+                                .alias("n")
+                                .build()?,
+                        )]
+                    } else {
+                        vec![]
+                    };
+                    let original = Arc::new(AggregateExec::try_new(
+                        AggregateMode::Partial,
+                        PhysicalGroupBy::new(vec![], vec![], vec![vec![]; occurrences], true),
+                        aggregates,
+                        vec![None; usize::from(with_count)],
+                        input,
+                        schema.clone(),
+                    )?) as Arc<dyn ExecutionPlan>;
+                    let bytes =
+                        encode_remote_physical_plan(&RemoteExecutionCodec, original.clone())?;
+                    let decoded = decode_remote_physical_plan(&ctx, &RemoteExecutionCodec, &bytes)?;
+                    let aggregate = decoded.downcast_ref::<AggregateExec>().expect("aggregate");
+                    assert_eq!(
+                        aggregate.group_expr(),
+                        original
+                            .downcast_ref::<AggregateExec>()
+                            .unwrap()
+                            .group_expr()
+                    );
+                    assert_eq!(decoded.schema(), original.schema());
+                    assert_eq!(aggregate.input_schema(), schema);
+                    let input_batches = collect(aggregate.input().clone(), ctx.clone()).await?;
+                    assert_eq!(
+                        input_batches
+                            .iter()
+                            .map(RecordBatch::num_rows)
+                            .sum::<usize>(),
+                        rows
+                    );
+                    assert!(input_batches.iter().all(|batch| batch.num_columns() == 0));
+                    let expected = collect(original, ctx.clone()).await?;
+                    let actual = collect(decoded, ctx.clone()).await?;
+                    assert_eq!(actual, expected);
+                    assert_eq!(
+                        actual.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                        occurrences
+                    );
+                    let mut ids = vec![];
+                    for batch in &actual {
+                        if occurrences <= 256 {
+                            ids.extend(
+                                batch
+                                    .column(0)
+                                    .as_any()
+                                    .downcast_ref::<UInt8Array>()
+                                    .unwrap()
+                                    .values()
+                                    .iter()
+                                    .map(|x| usize::from(*x)),
+                            );
+                        } else {
+                            ids.extend(
+                                batch
+                                    .column(0)
+                                    .as_any()
+                                    .downcast_ref::<UInt16Array>()
+                                    .unwrap()
+                                    .values()
+                                    .iter()
+                                    .map(|x| usize::from(*x)),
+                            );
+                        }
+                        if with_count {
+                            assert!(
+                                batch
+                                    .column(1)
+                                    .as_any()
+                                    .downcast_ref::<Int64Array>()
+                                    .unwrap()
+                                    .values()
+                                    .iter()
+                                    .all(|value| *value == rows as i64)
+                            );
+                        }
+                    }
+                    ids.sort_unstable();
+                    assert_eq!(ids, (0..occurrences).collect::<Vec<_>>());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn empty_grouping_count_plan(
+        mode: datafusion::physical_plan::aggregates::AggregateMode,
+        occurrences: usize,
+        rows: usize,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion::arrow::record_batch::RecordBatchOptions;
+        use datafusion::functions_aggregate::count::count_udaf;
+        use datafusion::physical_expr::aggregate::AggregateExprBuilder;
+        use datafusion::physical_expr::expressions::lit;
+
+        let schema = Arc::new(Schema::empty());
+        let batch = RecordBatch::try_new_with_options(
+            schema.clone(),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(rows)),
+        )?;
+        let input = MemorySourceConfig::try_new_exec(&[vec![batch]], schema.clone(), None)?;
+        Ok(Arc::new(AggregateExec::try_new(
+            mode,
+            PhysicalGroupBy::new(vec![], vec![], vec![vec![]; occurrences], true),
+            vec![Arc::new(
+                AggregateExprBuilder::new(count_udaf(), vec![lit(1i64)])
+                    .schema(schema.clone())
+                    .alias("n")
+                    .build()?,
+            )],
+            vec![None],
+            input,
+            schema,
+        )?))
+    }
+
+    #[test]
+    fn empty_grouping_sets_count_is_bounded() -> Result<()> {
+        use datafusion::physical_plan::aggregates::AggregateMode;
+        use datafusion_proto::protobuf::PhysicalPlanNode;
+        use datafusion_proto::protobuf::physical_plan_node::PhysicalPlanType;
+
+        use crate::proto::converter::RemotePhysicalProtoConverter;
+
+        let ctx = TaskContext::default();
+        let converter = RemotePhysicalProtoConverter::default();
+        for count in [0, 1, 2, 257, MAX_EMPTY_GROUPING_SETS] {
+            let original = empty_grouping_count_plan(AggregateMode::Single, count, 0)?;
+            let bytes = try_encode_physical_plan(&RemoteExecutionCodec, original.clone())?;
+            let decoded = try_decode_physical_plan(&ctx, &RemoteExecutionCodec, &bytes)?;
+            assert_eq!(decoded.schema(), original.schema());
+            assert_eq!(
+                decoded
+                    .downcast_ref::<AggregateExec>()
+                    .unwrap()
+                    .group_expr()
+                    .groups()
+                    .len(),
+                count
+            );
+        }
+        let original = empty_grouping_count_plan(AggregateMode::Single, 2, 0)?;
+        let bytes = try_encode_physical_plan(&RemoteExecutionCodec, original)?;
+        let proto = PhysicalPlanNode::decode(bytes.as_slice()).unwrap();
+        let Some(PhysicalPlanType::Extension(extension)) = proto.physical_plan_type else {
+            panic!("expected empty grouping sets envelope");
+        };
+        let mut envelope = ExtendedPhysicalPlanNode::decode(extension.node.as_slice()).unwrap();
+        for count in [
+            MAX_EMPTY_GROUPING_SETS as u64 + 1,
+            u32::MAX as u64,
+            u64::MAX,
+        ] {
+            let Some(NodeKind::EmptyGroupingSets(node)) = &mut envelope.node_kind else {
+                panic!("expected empty grouping sets envelope");
+            };
+            node.group_count = count;
+            // A panic (including capacity overflow) fails the test, not a plan error.
+            let error = RemoteExecutionCodec
+                .try_decode(&envelope.encode_to_vec(), &[], &ctx, &converter)
+                .unwrap_err();
+            assert!(error.to_string().contains("exceeds supported maximum"));
+        }
+        let oversized =
+            empty_grouping_count_plan(AggregateMode::Single, MAX_EMPTY_GROUPING_SETS + 1, 0)?;
+        assert!(try_encode_physical_plan(&RemoteExecutionCodec, oversized).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn empty_grouping_sets_under_recursive_top_k_round_trip() -> Result<()> {
+        use datafusion::arrow::array::Int64Array;
+        use datafusion::physical_plan::aggregates::AggregateMode;
+        use datafusion::physical_plan::collect;
+
+        use crate::proto::{decode_remote_physical_plan, encode_remote_physical_plan};
+
+        let ctx = Arc::new(TaskContext::default());
+        for rows in [0, 3] {
+            for depth in [1, 3] {
+                let mut original = empty_grouping_count_plan(AggregateMode::Single, 2, rows)?;
+                for _ in 0..depth {
+                    let ordering = LexOrdering::new(vec![
+                        PhysicalSortExpr::new_default(Arc::new(Column::new("__grouping_id", 0))),
+                        PhysicalSortExpr::new_default(Arc::new(Column::new("n", 1))),
+                    ])
+                    .unwrap();
+                    original = Arc::new(PartitionedTopKExec::try_new(
+                        original,
+                        ordering,
+                        1,
+                        1,
+                        WindowFnKind::RowNumber,
+                    )?);
+                }
+                let bytes = encode_remote_physical_plan(&RemoteExecutionCodec, original.clone())?;
+                let decoded = decode_remote_physical_plan(&ctx, &RemoteExecutionCodec, &bytes)?;
+                let mut child = &decoded;
+                for _ in 0..depth {
+                    child = child.downcast_ref::<PartitionedTopKExec>().unwrap().input();
+                }
+                let aggregate = child.downcast_ref::<AggregateExec>().unwrap();
+                assert_eq!(*aggregate.mode(), AggregateMode::Single);
+                assert_eq!(
+                    aggregate.group_expr().groups(),
+                    &[Vec::<bool>::new(), vec![]]
+                );
+                assert_eq!(decoded.schema(), original.schema());
+                let expected = collect(original, ctx.clone()).await?;
+                let actual = collect(decoded, ctx.clone()).await?;
+                assert_eq!(actual, expected);
+                assert_eq!(actual.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+                for batch in actual {
+                    assert!(
+                        batch
+                            .column(1)
+                            .as_any()
+                            .downcast_ref::<Int64Array>()
+                            .unwrap()
+                            .values()
+                            .iter()
+                            .all(|value| *value == rows as i64)
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn empty_grouping_sets_partial_final_round_trip() -> Result<()> {
+        use datafusion::physical_plan::aggregates::AggregateMode;
+        use datafusion::physical_plan::collect;
+
+        use crate::proto::{decode_remote_physical_plan, encode_remote_physical_plan};
+
+        let ctx = Arc::new(TaskContext::default());
+        for rows in [0, 3] {
+            let partial = empty_grouping_count_plan(AggregateMode::Partial, 2, rows)?;
+            let aggregate = partial.downcast_ref::<AggregateExec>().unwrap();
+            let original = Arc::new(AggregateExec::try_new(
+                AggregateMode::Final,
+                aggregate.group_expr().as_final(),
+                aggregate.aggr_expr().to_vec(),
+                aggregate.filter_expr().to_vec(),
+                partial.clone(),
+                aggregate.input_schema(),
+            )?) as Arc<dyn ExecutionPlan>;
+            let bytes = encode_remote_physical_plan(&RemoteExecutionCodec, original.clone())?;
+            let decoded = decode_remote_physical_plan(&ctx, &RemoteExecutionCodec, &bytes)?;
+            let final_aggregate = decoded.downcast_ref::<AggregateExec>().unwrap();
+            assert_eq!(*final_aggregate.mode(), AggregateMode::Final);
+            assert!(!final_aggregate.group_expr().is_empty());
+            let partial = final_aggregate
+                .input()
+                .downcast_ref::<AggregateExec>()
+                .unwrap();
+            assert_eq!(partial.group_expr().groups().len(), 2);
+            let actual = collect(decoded, ctx.clone()).await?;
+            assert_eq!(actual, collect(original, ctx.clone()).await?);
+            assert_eq!(actual.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn empty_grouping_sets_preserve_min_max_dynamic_filter_state() -> Result<()> {
+        use datafusion::arrow::array::Int64Array;
+        use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
+        use datafusion::physical_expr::aggregate::AggregateExprBuilder;
+        use datafusion::physical_expr::expressions::lit;
+        use datafusion::physical_plan::aggregates::AggregateMode;
+        use datafusion::physical_plan::collect;
+        use datafusion::physical_plan::execution_plan::{
+            ChildrenPropertiesMode, ReplaceChildrenOptions,
+        };
+        use datafusion::physical_plan::filter::FilterExec;
+
+        use crate::proto::{decode_remote_physical_plan, encode_remote_physical_plan};
+
+        let ctx = Arc::new(TaskContext::default());
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            true,
+        )]));
+        for (retained, unrelated_consumer) in [(false, false), (false, true), (true, false)] {
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(Int64Array::from(vec![
+                    Some(3),
+                    None,
+                    Some(1),
+                    Some(9),
+                    Some(-2),
+                ]))],
+            )?;
+            let input = MemorySourceConfig::try_new_exec(&[vec![batch]], schema.clone(), None)?;
+            let input = if unrelated_consumer {
+                Arc::new(FilterExec::try_new(
+                    Arc::new(DynamicFilterPhysicalExpr::new(
+                        vec![Arc::new(Column::new("value", 0))],
+                        lit(true),
+                    )),
+                    input,
+                )?) as Arc<dyn ExecutionPlan>
+            } else {
+                input
+            };
+            let aggregates = [min_udaf(), max_udaf()]
+                .into_iter()
+                .map(|udaf| {
+                    let name = udaf.name().to_owned();
+                    AggregateExprBuilder::new(udaf, vec![Arc::new(Column::new("value", 0))])
+                        .schema(schema.clone())
+                        .alias(name)
+                        .build()
+                        .map(Arc::new)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let original = Arc::new(AggregateExec::try_new(
+                AggregateMode::Partial,
+                PhysicalGroupBy::new(vec![], vec![], vec![vec![], vec![]], true),
+                aggregates,
+                vec![None, None],
+                input.clone(),
+                schema.clone(),
+            )?) as Arc<dyn ExecutionPlan>;
+            let filters = original.dynamic_expressions_produced();
+            assert_eq!(filters.len(), 1);
+            let original = if retained {
+                original.replace_children(
+                    vec![Arc::new(FilterExec::try_new(filters[0].clone(), input)?)],
+                    ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                )?
+            } else {
+                original
+                    .handle_child_pushdown_result(
+                        FilterPushdownPhase::Post,
+                        ChildPushdownResult {
+                            parent_filters: vec![],
+                            self_filters: vec![vec![PushedDownPredicate::unsupported(
+                                filters[0].clone(),
+                            )]],
+                        },
+                        ctx.session_config().options(),
+                    )?
+                    .updated_node
+                    .expect("native optimizer clears unconsumed filter")
+            };
+            assert_eq!(
+                original.dynamic_expressions_produced().len(),
+                usize::from(retained)
+            );
+            let bytes = encode_remote_physical_plan(&RemoteExecutionCodec, original.clone())?;
+            let decoded = decode_remote_physical_plan(&ctx, &RemoteExecutionCodec, &bytes)?;
+            assert_eq!(decoded.schema(), original.schema());
+            let actual = collect(decoded.clone(), ctx.clone()).await?;
+            assert_eq!(actual, collect(original.clone(), ctx.clone()).await?);
+            assert_eq!(actual.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+            for batch in actual {
+                for (column, expected) in [(1, -2), (2, 9)] {
+                    assert!(
+                        batch
+                            .column(column)
+                            .as_any()
+                            .downcast_ref::<Int64Array>()
+                            .unwrap()
+                            .values()
+                            .iter()
+                            .all(|value| *value == expected)
+                    );
+                }
+            }
+            let produced = decoded.dynamic_expressions_produced();
+            assert_eq!(produced.len(), usize::from(retained));
+            if unrelated_consumer {
+                let aggregate = decoded.downcast_ref::<AggregateExec>().unwrap();
+                let filter = aggregate.input().downcast_ref::<FilterExec>().unwrap();
+                assert!(
+                    filter
+                        .predicate()
+                        .downcast_ref::<DynamicFilterPhysicalExpr>()
+                        .unwrap()
+                        .current()?
+                        .eq(&lit(true))
+                );
+            }
+            if retained {
+                assert_eq!(
+                    produced[0].expression_id(),
+                    original.dynamic_expressions_produced()[0].expression_id()
+                );
+                let producer = produced[0]
+                    .downcast_ref::<DynamicFilterPhysicalExpr>()
+                    .unwrap();
+                let aggregate = decoded.downcast_ref::<AggregateExec>().unwrap();
+                let consumer = aggregate
+                    .input()
+                    .downcast_ref::<FilterExec>()
+                    .unwrap()
+                    .predicate()
+                    .downcast_ref::<DynamicFilterPhysicalExpr>()
+                    .unwrap();
+                assert_eq!(producer.expression_id(), consumer.expression_id());
+                let generation = consumer.snapshot_generation();
+                producer.update(lit(false))?;
+                assert_eq!(consumer.snapshot_generation(), generation + 1);
+                assert!(consumer.current()?.eq(&lit(false)));
+                // Decodes for separate tasks must not share mutable filter state.
+                let second = decode_remote_physical_plan(&ctx, &RemoteExecutionCodec, &bytes)?;
+                assert!(
+                    second.dynamic_expressions_produced()[0]
+                        .downcast_ref::<DynamicFilterPhysicalExpr>()
+                        .unwrap()
+                        .current()?
+                        .eq(&lit(true))
+                );
+            }
+        }
+        Ok(())
+    }
+
     mod scan_adapter {
         use datafusion::arrow::array::{Array, ArrayRef, Int32Array, Int64Array, StructArray};
         use datafusion::arrow::datatypes::SchemaRef;

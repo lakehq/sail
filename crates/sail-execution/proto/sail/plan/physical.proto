@@ -79,7 +79,14 @@ message ExtendedPhysicalPlanNode {
     InputFileMetadataExecNode input_file_metadata = 64;
     DeltaMaintenanceExecNode delta_maintenance = 65;
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
+    EmptyGroupingSetsExecNode empty_grouping_sets = 67;
   }
+}
+
+// DataFusion's flattened group masks cannot represent zero-column groups.
+message EmptyGroupingSetsExecNode {
+  bytes aggregate_plan = 1;
+  uint64 group_count = 2;
 }
 
 message InputFileMetadataExecNode {

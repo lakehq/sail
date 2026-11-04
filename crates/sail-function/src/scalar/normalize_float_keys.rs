@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, MapArray, StructArray, make_array};
 use arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::utils::normalize_float_zero;
+use datafusion_common::float_semantics::normalize_floats;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -95,7 +95,7 @@ fn normalize(array: &ArrayRef) -> Result<ArrayRef> {
         return Ok(Arc::clone(array));
     }
     if array.data_type().is_floating() {
-        return Ok(normalize_float_zero(array));
+        return Ok(normalize_floats(array));
     }
     if let DataType::Map(field, sorted) = array.data_type() {
         // Spark's recursive normalization preserves map keys and normalizes values.

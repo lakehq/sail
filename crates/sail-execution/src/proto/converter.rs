@@ -10,22 +10,30 @@ use datafusion::logical_expr::{LambdaParametersProgress, ValueOrLambda};
 use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::aggregates::AggregateExec;
+use datafusion::physical_plan::sorts::partitioned_topk::PartitionedTopKExec;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
     PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalPlanNodeExt,
     PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{
-    PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode, physical_expr_node,
+    PhysicalExprNode, PhysicalExtensionExprNode, PhysicalExtensionNode, PhysicalPlanNode,
+    physical_expr_node, physical_plan_node,
 };
 use prost::Message;
 
 use crate::plan::r#gen::extended_physical_expr_node::ExprKind;
+use crate::plan::r#gen::extended_physical_plan_node::NodeKind;
 use crate::plan::r#gen::{
-    ExtendedPhysicalExprNode, HigherOrderUdfExprNode, LambdaExprNode, LambdaVariableExprNode,
+    EmptyGroupingSetsExecNode, ExtendedPhysicalExprNode, ExtendedPhysicalPlanNode,
+    HigherOrderUdfExprNode, LambdaExprNode, LambdaVariableExprNode,
 };
 use crate::proto::decode::{try_decode_field_ref, try_decode_higher_order_udf};
 use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
+
+// Bound the scalar-to-allocation expansion of the empty grouping-sets envelope.
+pub(super) const MAX_EMPTY_GROUPING_SETS: usize = 65_536;
 
 #[derive(Default)]
 pub(super) struct RemotePhysicalProtoConverter {
@@ -60,7 +68,55 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         plan: &Arc<dyn ExecutionPlan>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<PhysicalPlanNode> {
-        PhysicalPlanNode::try_from_physical_plan_with_converter(Arc::clone(plan), codec, self)
+        if plan.is::<PartitionedTopKExec>() {
+            // DataFusion's fallback extension encoder bypasses the converter for
+            // extension inputs. TopK consumes those inputs instead of embedded plans.
+            let mut node = vec![];
+            codec.try_encode(Arc::clone(plan), &mut node, self)?;
+            let inputs = plan
+                .children()
+                .into_iter()
+                .map(|child| self.execution_plan_to_proto(child, codec))
+                .collect::<Result<_>>()?;
+            return Ok(PhysicalPlanNode {
+                physical_plan_type: Some(physical_plan_node::PhysicalPlanType::Extension(
+                    PhysicalExtensionNode {
+                        node,
+                        inputs,
+                        plan_name: None,
+                    },
+                )),
+            });
+        }
+        let proto =
+            PhysicalPlanNode::try_from_physical_plan_with_converter(Arc::clone(plan), codec, self)?;
+        if let Some(aggregate) = plan.downcast_ref::<AggregateExec>() {
+            let groups = aggregate.group_expr();
+            if groups.is_empty() && groups.has_grouping_set() {
+                if groups.groups().len() > MAX_EMPTY_GROUPING_SETS {
+                    return plan_err!(
+                        "empty grouping set count exceeds supported maximum {MAX_EMPTY_GROUPING_SETS}"
+                    );
+                }
+                // Flattening [[], ...] loses the number of grouping-set occurrences.
+                let node = ExtendedPhysicalPlanNode {
+                    node_kind: Some(NodeKind::EmptyGroupingSets(EmptyGroupingSetsExecNode {
+                        aggregate_plan: proto.encode_to_vec(),
+                        group_count: groups.groups().len() as u64,
+                    })),
+                };
+                return Ok(PhysicalPlanNode {
+                    physical_plan_type: Some(physical_plan_node::PhysicalPlanType::Extension(
+                        PhysicalExtensionNode {
+                            node: node.encode_to_vec(),
+                            inputs: vec![],
+                            plan_name: None,
+                        },
+                    )),
+                });
+            }
+        }
+        Ok(proto)
     }
 
     fn proto_to_physical_expr(

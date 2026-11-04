@@ -142,9 +142,7 @@ def test_configured_ntz_literals_preserve_endpoints_in_a_projection(spark, sessi
         spark.conf.set("spark.sql.timestampType", previous)
 
 
-@pytest.mark.parametrize(
-    ("value", "days"), [("0000-02-29", -719469), ("-0001-12-31", -719529), ("1970-01-01", 0)]
-)
+@pytest.mark.parametrize(("value", "days"), [("0000-02-29", -719469), ("-0001-12-31", -719529), ("1970-01-01", 0)])
 def test_date_literals_remain_day_values(spark, value, days):
     result = spark.sql(f"SELECT DATE '{value}' AS value")
     assert result.schema == T.StructType([T.StructField("value", T.DateType(), False)])

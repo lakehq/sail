@@ -20,15 +20,16 @@
     reason = "Retain the upstream implementation and tests"
 )]
 
-mod decorrelate;
 mod decorrelate_lateral_join;
 mod decorrelate_predicate_subquery;
+#[path = "decorrelate.rs"]
+mod rewrite;
 mod scalar_subquery_to_join;
 mod utils;
 
-pub use decorrelate::*;
 pub use decorrelate_lateral_join::DecorrelateLateralJoin;
 pub use decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
+pub use rewrite::*;
 pub use scalar_subquery_to_join::ScalarSubqueryToJoin;
 
 #[cfg(test)]

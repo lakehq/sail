@@ -748,7 +748,7 @@ const STRUCT_FIELD_ID_METADATA_KEYS: [&str; 3] = [
 fn struct_field_id(field: &Field) -> Option<&str> {
     STRUCT_FIELD_ID_METADATA_KEYS
         .iter()
-        .find_map(|key| field.metadata().get(*key).map(String::as_str))
+        .find_map(|key| field.metadata().get(key).map(String::as_str))
 }
 
 fn find_matching_struct_field<'a>(

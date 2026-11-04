@@ -19,9 +19,9 @@
 #![expect(
     clippy::unwrap_used,
     clippy::expect_used,
-    clippy::panic,
     reason = "Retain the upstream implementation and tests"
 )]
+#![cfg_attr(test, expect(clippy::panic, reason = "Retain the upstream tests"))]
 
 mod cast_preimage;
 pub mod expr_simplifier;

@@ -377,9 +377,7 @@ def test_parquet_explicit_schema_validates_beyond_inference_sample(spark, tmp_pa
 def test_parquet_multiple_extrema_without_file_statistics(spark, tmp_path):
     path = tmp_path / "extrema_without_statistics"
     path.mkdir()
-    table = pa.table(
-        {"a": pa.array([1, 8, 2, 3], type=pa.int32()), "b": pa.array([None, None, 5, 7], type=pa.int32())}
-    )
+    table = pa.table({"a": pa.array([1, 8, 2, 3], type=pa.int32()), "b": pa.array([None, None, 5, 7], type=pa.int32())})
     for index in range(2):
         pq.write_table(table, path / f"part-{index}.parquet", write_statistics=False, row_group_size=2)
     query = spark.read.parquet(str(path)).agg(F.min("a"), F.max("a"), F.min("b"), F.max("b"))

@@ -8,9 +8,7 @@ use datafusion::physical_expr::{HigherOrderFunctionExpr, Partitioning, PhysicalE
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::to_proto::serialize_partitioning;
-use datafusion_proto::physical_plan::{
-    PhysicalExtensionCodec, PhysicalPlanNodeExt, PhysicalProtoConverterExtension,
-};
+use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalProtoConverterExtension};
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
@@ -117,7 +115,7 @@ pub(super) fn physical_plan_to_proto_with_converter(
     proto_converter: &dyn PhysicalProtoConverterExtension,
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<PhysicalPlanNode> {
-    PhysicalPlanNode::try_from_physical_plan_with_converter(plan, codec, proto_converter)
+    proto_converter.execution_plan_to_proto(&plan, codec)
 }
 
 pub(super) fn try_encode_physical_expr(
