@@ -1,5 +1,7 @@
 import pysail
 
+pytest_plugins = ["pysail.testing.fixtures"]
+
 
 def test_version():
     from pysail import _native

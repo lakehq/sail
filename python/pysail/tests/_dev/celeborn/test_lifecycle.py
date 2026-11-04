@@ -8,18 +8,17 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from pysail import _native
 from pysail.testing._dev.containers.celeborn import CelebornFrame, CelebornMessageType
 from pysail.testing._dev.utils.proxy import FrameReceived
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+    from pysail import _native
     from pysail.testing._dev.containers.celeborn import MasterService, WorkerService
     from pysail.testing._dev.utils.proxy import EndpointProxy
 
 
-LifecycleManager = _native._celeborn.LifecycleManager  # noqa: SLF001
 _HEARTBEAT_FROM_APPLICATION_MESSAGE_TYPE = 20
 _HEARTBEAT_REQUEST_COUNT = 2
 _NATIVE_TRANSPORT_MARKER = 0xFF
@@ -56,9 +55,11 @@ def lifecycle_manager(
     celeborn_master: MasterService,
     celeborn_workers: dict[str, WorkerService],
     celeborn_endpoint_resolver: object,
-) -> Generator[LifecycleManager, None, None]:
+) -> Generator[_native._celeborn.LifecycleManager, None, None]:
+    from pysail import _native
+
     assert celeborn_workers["celeborn-worker-1"].rpc_port > 0
-    with LifecycleManager(
+    with _native._celeborn.LifecycleManager(  # noqa: SLF001
         [f"{celeborn_master.host}:{celeborn_master.port}"],
         "sail-celeborn-integration",
         endpoint_resolver=celeborn_endpoint_resolver,
@@ -67,7 +68,7 @@ def lifecycle_manager(
 
 
 def test_lifecycle_manager_registers_shuffles_and_unregisters(
-    lifecycle_manager: LifecycleManager,
+    lifecycle_manager: _native._celeborn.LifecycleManager,
 ) -> None:
     assert lifecycle_manager.running
     workers = lifecycle_manager.register_shuffle(1, [0, 1], False, 1)
@@ -79,8 +80,10 @@ def test_lifecycle_manager_registers_shuffles_and_unregisters(
 
 
 def test_lifecycle_manager_returns_registration_failure() -> None:
+    from pysail import _native
+
     with (
-        LifecycleManager(["127.0.0.1:0"], "sail-celeborn-unavailable") as manager,
+        _native._celeborn.LifecycleManager(["127.0.0.1:0"], "sail-celeborn-unavailable") as manager,  # noqa: SLF001
         pytest.raises(RuntimeError, match="application error: registration failed: I/O error"),
     ):
         manager.register_shuffle(1, [0], False, 1)
@@ -91,8 +94,10 @@ def test_lifecycle_manager_fails_over_master_endpoints(
     celeborn_workers: dict[str, WorkerService],
     celeborn_endpoint_resolver: object,
 ) -> None:
+    from pysail import _native
+
     assert celeborn_workers["celeborn-worker-1"].rpc_port > 0
-    with LifecycleManager(
+    with _native._celeborn.LifecycleManager(  # noqa: SLF001
         ["127.0.0.1:1", f"{celeborn_master.host}:{celeborn_master.port}"],
         "sail-celeborn-failover",
         endpoint_resolver=celeborn_endpoint_resolver,
@@ -108,7 +113,9 @@ def test_lifecycle_manager_fails_over_master_endpoints(
 def test_lifecycle_manager_sends_periodic_heartbeats(
     celeborn_master_proxy: EndpointProxy,
 ) -> None:
-    with LifecycleManager(
+    from pysail import _native
+
+    with _native._celeborn.LifecycleManager(  # noqa: SLF001
         [f"{celeborn_master_proxy.host}:{celeborn_master_proxy.port}"],
         "sail-celeborn-heartbeat",
         heartbeat_interval_secs=1,
