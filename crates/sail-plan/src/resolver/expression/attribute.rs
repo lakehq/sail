@@ -59,15 +59,9 @@ impl PlanResolver<'_> {
             }
             return Ok(NamedExpr::new(vec![display], expr));
         }
-        if let Some((name, expr)) = self.resolve_aggregate_field(
-            &name,
-            &state
-                .get_grouping_for_having()
-                .iter()
-                .filter(|e| !matches!(e.expr, expr::Expr::GroupingSet(_)))
-                .cloned()
-                .collect::<Vec<_>>(),
-        )? {
+        if let Some((name, expr)) =
+            self.resolve_grouping_field(&name, state.get_grouping_for_having())?
+        {
             return Ok(NamedExpr::new(vec![name], expr));
         }
         if let Some((name, expr)) =
@@ -413,6 +407,28 @@ impl PlanResolver<'_> {
             };
         }
         Ok(FieldResolution::Missing)
+    }
+
+    /// A cast keeps the name of its column, so `GROUP BY k, cast(k AS bigint)` has two grouping
+    /// expressions named `k`. As in Spark, the name refers to the column itself.
+    fn resolve_grouping_field(
+        &self,
+        name: &spec::ObjectName,
+        grouping: &[NamedExpr],
+    ) -> PlanResult<Option<(String, expr::Expr)>> {
+        let select = |keep: fn(&expr::Expr) -> bool| {
+            grouping
+                .iter()
+                .filter(|x| keep(&x.expr))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let columns = select(|x| matches!(x, expr::Expr::Column(_)));
+        if let Some(field) = self.resolve_aggregate_field(name, &columns)? {
+            return Ok(Some(field));
+        }
+        let keys = select(|x| !matches!(x, expr::Expr::GroupingSet(_)));
+        self.resolve_aggregate_field(name, &keys)
     }
 
     fn resolve_aggregate_field(
