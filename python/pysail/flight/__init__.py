@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pysail import _native
-
 __all__ = [
     "FlightSqlServer",
 ]
@@ -17,6 +15,8 @@ class FlightSqlServer:
         :param ip: The IP address to bind the server to.
         :param port: The port to bind the server to.
         """
+        from pysail import _native  # noqa: PLC0415
+
         self._inner = _native.flight.FlightSqlServer(ip, port)
 
     def start(self, *, background=True) -> None:
