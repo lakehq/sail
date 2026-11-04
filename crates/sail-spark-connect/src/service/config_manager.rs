@@ -216,15 +216,21 @@ pub(crate) fn handle_config_set(
         let key = SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string();
         kv.iter().any(|pair| pair.key == key)
     };
-    let sets_parquet_binary_as_string = {
-        let key = SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING.to_string();
-        kv.iter().any(|pair| pair.key == key)
-    };
-    let result = spark.set_config(kv);
     // A request that fails on one pair keeps the pairs applied before it, as Spark does, so the
     // mirror follows what the session holds on the error path as well. Returning the error without
-    // mirroring would leave `conf.get` reporting a value that Parquet reads ignore. The error of
-    // the request is the one the caller needs, so it takes precedence over a mirroring error.
+    // mirroring would leave `conf.get` reporting a value that Parquet reads ignore. The pairs are
+    // applied one at a time to tell whether the request reached the key: a rejected value, or a
+    // failure before the key, leaves the DataFusion option alone, including one set directly with
+    // `SET datafusion.execution.parquet.binary_as_string`. The error of the request is the one the
+    // caller needs, so it takes precedence over a mirroring error.
+    let parquet_binary_as_string_key = SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING;
+    let mut sets_parquet_binary_as_string = false;
+    let result = kv.into_iter().try_for_each(|pair| {
+        let is_parquet_binary_as_string = pair.key == parquet_binary_as_string_key;
+        spark.set_config(vec![pair])?;
+        sets_parquet_binary_as_string |= is_parquet_binary_as_string;
+        Ok(())
+    });
     let mirrored = if sets_parquet_binary_as_string {
         sync_parquet_binary_as_string(ctx, &spark)
     } else {
@@ -424,6 +430,18 @@ mod tests {
             .binary_as_string
     }
 
+    /// Sets the DataFusion option directly, as `SET datafusion.execution.parquet.binary_as_string`
+    /// does, which leaves the Spark key as it was.
+    fn set_native_value(ctx: &SessionContext, value: bool) {
+        ctx.state_ref()
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .binary_as_string = value;
+    }
+
     #[test]
     fn test_set_and_unset_mirror_the_session_value() -> SparkResult<()> {
         let ctx = test_context(true)?;
@@ -468,6 +486,7 @@ mod tests {
     #[test]
     fn test_a_failed_batch_does_not_mirror_a_pair_it_did_not_apply() -> SparkResult<()> {
         let ctx = test_context(false)?;
+        set_native_value(&ctx, true);
         let kv = vec![
             KeyValue {
                 key: SparkConfigKey::SPARK_SQL_SHUFFLE_PARTITIONS.to_string(),
@@ -480,17 +499,17 @@ mod tests {
         ];
         assert!(handle_config_set(&ctx, kv).is_err());
         assert_eq!(session_value(&ctx)?, None);
-        assert!(!mirrored_value(&ctx));
+        assert!(mirrored_value(&ctx));
         Ok(())
     }
 
     #[test]
     fn test_non_boolean_value_of_an_unset_key_changes_neither_configuration() -> SparkResult<()> {
-        let ctx = test_context(true)?;
-        let mirrored = mirrored_value(&ctx);
+        let ctx = test_context(false)?;
+        set_native_value(&ctx, true);
         assert!(set(&ctx, "yes").is_err());
         assert_eq!(session_value(&ctx)?, None);
-        assert_eq!(mirrored_value(&ctx), mirrored);
+        assert!(mirrored_value(&ctx));
         Ok(())
     }
 }
