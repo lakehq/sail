@@ -62,15 +62,15 @@ data:
     ProjectionExec: expr=[#2@0 as p]
       AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
         RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=3
-          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[], ordering_mode=Sorted
+          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[]
             ProjectionExec: expr=[p@0 as #2]
               IcebergMetadataScanExec
                 UnionExec
                   ProjectionExec: expr=[NULL as p]
                     RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
-                  ProjectionExec: expr=[CAST(a AS Utf8) as p]
+                  ProjectionExec: expr=[CAST(a AS Utf8;N) as p]
                     RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
-                  ProjectionExec: expr=[CAST(b AS Utf8) as p]
+                  ProjectionExec: expr=[CAST(b AS Utf8;N) as p]
                     RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
   grouped: |-
     == Physical Plan ==
@@ -78,15 +78,15 @@ data:
       ProjectionExec: expr=[#1@0 as #2, count(Int64(1))@1 as #3]
         AggregateExec: mode=FinalPartitioned, gby=[#1@0 as #1], aggr=[count(Int64(1))]
           RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=3
-            AggregateExec: mode=Partial, gby=[#1@0 as #1], aggr=[count(Int64(1))], ordering_mode=Sorted
+            AggregateExec: mode=Partial, gby=[#1@0 as #1], aggr=[count(Int64(1))]
               ProjectionExec: expr=[p@0 as #1]
                 IcebergMetadataScanExec
                   UnionExec
                     ProjectionExec: expr=[NULL as p]
                       RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
-                    ProjectionExec: expr=[CAST(a AS Utf8) as p]
+                    ProjectionExec: expr=[CAST(a AS Utf8;N) as p]
                       RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
-                    ProjectionExec: expr=[CAST(b AS Utf8) as p]
+                    ProjectionExec: expr=[CAST(b AS Utf8;N) as p]
                       RangeExec: start=0, end=2, step=1, num_partitions=1, projection=[]
 ---
 name: "test_lazy_limit_does_not_open_later_manifests"
