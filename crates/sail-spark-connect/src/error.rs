@@ -494,6 +494,7 @@ mod tests {
         assert!(truncated.ends_with("[UDTF_ARROW_TYPE_CONVERSION_ERROR]\n"));
     }
 
+    #[expect(clippy::unwrap_used)]
     fn assert_status_class(status: Status, class: &str, message: &str) {
         assert_eq!(status.code(), Code::Internal);
         assert_eq!(status.message(), message);
@@ -521,13 +522,14 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_map_keys_preserve_runtime_class_through_error_wrappers() {
+    fn duplicate_map_keys_preserve_runtime_class_through_error_wrappers() -> serde_json::Result<()>
+    {
         use sail_common_datafusion::error::RemoteError;
 
         let message = "[DUPLICATED_MAP_KEY] Duplicate map key a was found. To allow duplicate keys, set `spark.sql.mapKeyDedupPolicy` to `LAST_WIN`.";
         let execution = || DataFusionError::Execution(message.to_owned());
         let cause = CommonErrorCause::new::<PyErrExtractor>(&execution());
-        let cause = serde_json::from_str(&serde_json::to_string(&cause).unwrap()).unwrap();
+        let cause = serde_json::from_str(&serde_json::to_string(&cause)?)?;
         for (error, expected_message) in [
             (execution(), message.to_owned()),
             (
@@ -545,6 +547,7 @@ mod tests {
                 &expected_message,
             );
         }
+        Ok(())
     }
 
     #[test]
@@ -569,7 +572,8 @@ mod tests {
     }
 
     #[test]
-    fn nonretryable_execution_preserves_local_and_remote_client_message() {
+    fn nonretryable_execution_preserves_local_and_remote_client_message() -> serde_json::Result<()>
+    {
         use sail_common_datafusion::error::{NonRetryableExecutionError, RemoteError};
 
         let expected = "SCALAR_SUBQUERY_TOO_MANY_ROWS: scalar subquery returned more than one row";
@@ -577,7 +581,7 @@ mod tests {
             DataFusionError::External(Box::new(NonRetryableExecutionError(expected.into())));
         let cause = CommonErrorCause::new::<PyErrExtractor>(&error);
         let remote = RemoteError {
-            cause: serde_json::from_str(&serde_json::to_string(&cause).unwrap()).unwrap(),
+            cause: serde_json::from_str(&serde_json::to_string(&cause)?)?,
         };
         for cause in [cause, CommonErrorCause::new::<PyErrExtractor>(&remote)] {
             assert!(!cause.is_retryable());
@@ -586,6 +590,7 @@ mod tests {
                 SparkThrowable::AnalysisException(message) if message == expected
             ));
         }
+        Ok(())
     }
 
     #[test]

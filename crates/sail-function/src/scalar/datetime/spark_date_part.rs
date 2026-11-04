@@ -374,6 +374,7 @@ mod tests {
         })
     }
 
+    #[expect(clippy::panic, reason = "Assert scalar representation in test helper")]
     fn scalar(part: &str, source: ScalarValue) -> Result<ScalarValue> {
         let ColumnarValue::Scalar(value) = invoke(part, ColumnarValue::Scalar(source))? else {
             panic!("scalar input must remain scalar")
@@ -418,6 +419,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::unwrap_used)]
     fn gregorian_cycle_matches_independent_calendar() {
         // A full cycle across year zero exercises BCE leap years and every ISO week boundary.
         let start = Date32Type::from_naive_date(NaiveDate::from_ymd_opt(-200, 1, 1).unwrap());

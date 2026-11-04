@@ -36,7 +36,6 @@ use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use datafusion_datasource::file_scan_config::output_partitioning_from_partition_fields;
 use object_store::ObjectMeta;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
@@ -1413,12 +1412,8 @@ impl IcebergScan {
                 file_column_name.as_str(),
                 Arc::clone(&reader_factory),
             );
-            let output_partitioning = output_partitioning_from_partition_fields(
-                parquet_source.table_schema().table_schema(),
-                parquet_source.table_schema().table_partition_cols(),
-                file_groups.len(),
-            )
-            .unwrap_or_else(|| Partitioning::UnknownPartitioning(file_groups.len()));
+            // One group per file is neither hash routing nor sorted range routing.
+            let output_partitioning = Partitioning::UnknownPartitioning(file_groups.len());
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)

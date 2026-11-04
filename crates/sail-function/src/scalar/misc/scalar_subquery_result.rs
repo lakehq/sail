@@ -92,6 +92,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::panic,
+        reason = "Assert the typed cardinality error before inspecting its cause"
+    )]
     fn multiple_matching_rows_return_typed_nonretryable_error() -> Result<()> {
         for count in [1, 2] {
             let value = Arc::new(Int32Array::from(vec![10])) as ArrayRef;

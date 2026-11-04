@@ -411,6 +411,7 @@ mod tests {
             .with_plan(plan)
             .with_baseline_metrics()
             .with_expected_metrics(expected_build_probe_join_metrics)
+            .with_expected_metrics(|registry| vec![registry.execution_output_rows_skew.name()])
             .run()
             .await
     }

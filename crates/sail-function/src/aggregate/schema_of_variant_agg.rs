@@ -152,7 +152,7 @@ mod tests {
         let mut direct = SchemaOfVariantAggAccumulator {
             merged_schema: None,
         };
-        direct.update_batch(&[input.clone()])?;
+        direct.update_batch(std::slice::from_ref(&input))?;
         assert_eq!(direct.evaluate()?, expected);
 
         // Exercise serialized partial states, multi-row merge batches, an empty

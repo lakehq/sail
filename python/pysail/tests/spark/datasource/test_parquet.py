@@ -352,7 +352,7 @@ def test_parquet_mixed_widths_without_explicit_schema_fail(spark, tmp_path, merg
     for name, data_type in [("a", pa.int32()), ("z", pa.int64())]:
         pq.write_table(pa.table({"n": pa.array([1], type=data_type)}), path / f"{name}.parquet")
     reader = spark.read.option("mergeSchema", "true") if merge_schema else spark.read
-    with pytest.raises(Exception, match="(?i)merge|PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+    with pytest.raises(Exception, match=r"(?i)merge|PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
         reader.parquet(str(path)).collect()
 
 

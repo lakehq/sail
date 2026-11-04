@@ -413,10 +413,12 @@ mod tests {
             assert_eq!(result.range, range);
             assert_eq!(result.attributes, attributes);
             assert_eq!(result.extensions.len(), 2);
-            assert!(Arc::ptr_eq(
-                result.extensions.get::<Arc<AtomicUsize>>().expect("marker"),
-                &marker,
-            ));
+            assert!(
+                result
+                    .extensions
+                    .get::<Arc<AtomicUsize>>()
+                    .is_some_and(|actual| Arc::ptr_eq(actual, &marker))
+            );
             assert_eq!(
                 result.extensions.get::<String>().map(String::as_str),
                 Some("response context"),

@@ -855,12 +855,10 @@ mod tests {
         for token in invalid {
             assert!(!try_append_json(&mut builder, token), "{token}");
             builder.append_null();
-            assert!(
-                append_json_strict(&mut VariantArrayBuilder::new(1), token)
-                    .expect_err("strict parsing must fail")
-                    .to_string()
-                    .contains("MALFORMED_RECORD_IN_PARSING")
-            );
+            assert!(matches!(
+                append_json_strict(&mut VariantArrayBuilder::new(1), token),
+                Err(error) if error.to_string().contains("MALFORMED_RECORD_IN_PARSING")
+            ));
         }
         append_json_strict(&mut builder, r#"{"n":[-0,-0.0,-0e0],"s":"-0e0"} trailing"#)?;
         let array = builder.build();

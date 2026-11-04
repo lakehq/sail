@@ -32,6 +32,7 @@ use crate::spark::connect::{
 #[cfg(test)]
 mod tests {
     #![expect(clippy::unwrap_used)]
+    #![expect(clippy::panic, reason = "Assert typed response shapes in tests")]
 
     use datafusion::arrow::array::{
         Array, ArrayRef, FixedSizeListArray, Int32Array, LargeListArray, ListArray, MapArray,

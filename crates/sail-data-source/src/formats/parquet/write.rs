@@ -45,7 +45,7 @@ impl ParquetWriteFormat {
             .clone()
             .into_table_options()
             .map_err(DataFusionError::from)?;
-        let compression = options.global.compression.clone();
+        let compression = options.global.compression;
         let format = ParquetFormat::default().with_options(options);
         if let Some(file_compression_type) = format.compression_type() {
             return match format.get_ext_with_compression(&file_compression_type) {

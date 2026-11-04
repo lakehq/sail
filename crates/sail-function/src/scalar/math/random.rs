@@ -184,6 +184,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::panic, reason = "Assert array representation in test result")]
     fn successful_arrays_have_no_nulls() -> Result<()> {
         for seed in [
             None,
@@ -218,6 +219,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::panic, reason = "Assert array representation in test result")]
     fn seeded_values_match_spark() -> Result<()> {
         // Spark 4.2 RandomSuite: "random" and SPARK-9127; seed zero from random.sql.
         for (seed, expected) in [

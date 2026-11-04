@@ -21,11 +21,11 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
-use datafusion_common::{Statistics, internal_err, plan_err, project_schema};
+use datafusion_common::{SplitPoint, Statistics, internal_err, plan_err, project_schema};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{
-    FileScanConfig, output_partitioning_from_partition_fields,
+    FileScanConfig, output_range_partitioning_from_split_points,
 };
 use datafusion_datasource::source::DataSourceExec;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
@@ -48,6 +48,7 @@ struct ListFilesResult {
     file_groups: Vec<FileGroup>,
     statistics: Statistics,
     grouped_by_partition: bool,
+    partition_split_points: Vec<SplitPoint>,
 }
 
 /// Physical planner for logical listing table scans.
@@ -115,6 +116,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             mut file_groups,
             statistics,
             grouped_by_partition: partitioned_by_file_group,
+            partition_split_points,
         } = list_files_for_scan(source, session, &partition_filters, statistic_file_limit).await?;
 
         let table_schema = source.config().schema.table_schema();
@@ -126,6 +128,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
         let output_ordering =
             try_create_output_ordering(source, session.execution_props(), &file_groups)?;
 
+        let mut regrouped_by_statistics = false;
         match session
             .config_options()
             .execution
@@ -146,6 +149,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             Some(Ok(new_groups)) => {
                 if new_groups.len() <= source.config().target_partitions {
                     file_groups = new_groups;
+                    regrouped_by_statistics = true;
                 } else {
                     log::debug!(
                         "attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered"
@@ -168,12 +172,12 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             )))));
         };
 
-        let output_partitioning = if partitioned_by_file_group {
-            output_partitioning_from_partition_fields(
+        let output_partitioning = if partitioned_by_file_group && !regrouped_by_statistics {
+            output_range_partitioning_from_split_points(
                 table_schema,
                 source.config().schema.table_partition_cols(),
-                file_groups.len(),
-            )
+                partition_split_points,
+            )?
         } else {
             None
         };
@@ -349,6 +353,7 @@ async fn list_files_for_scan<'a>(
             file_groups: vec![],
             statistics: Statistics::new_unknown(source.config().schema.file_schema()),
             grouped_by_partition: false,
+            partition_split_points: vec![],
         });
     };
 
@@ -410,23 +415,27 @@ async fn list_files_for_scan<'a>(
 
     let threshold = ctx.config_options().optimizer.preserve_file_partitions;
 
-    let (file_groups, grouped_by_partition) = if threshold > 0 && !partition_cols.is_empty() {
-        let grouped = file_group.group_by_partition_values(source.config().target_partitions);
-        if grouped.len() >= threshold {
-            (grouped, true)
+    let (file_groups, grouped_by_partition, partition_split_points) =
+        if threshold > 0 && !partition_cols.is_empty() {
+            let (grouped, split_points) = file_group
+                .group_by_partition_values_with_split_points(source.config().target_partitions);
+            if grouped.len() >= threshold {
+                (grouped, true, split_points)
+            } else {
+                let all_files: Vec<_> = grouped.into_iter().flat_map(|g| g.into_inner()).collect();
+                (
+                    FileGroup::new(all_files).split_files(source.config().target_partitions),
+                    false,
+                    vec![],
+                )
+            }
         } else {
-            let all_files: Vec<_> = grouped.into_iter().flat_map(|g| g.into_inner()).collect();
             (
-                FileGroup::new(all_files).split_files(source.config().target_partitions),
+                file_group.split_files(source.config().target_partitions),
                 false,
+                vec![],
             )
-        }
-    } else {
-        (
-            file_group.split_files(source.config().target_partitions),
-            false,
-        )
-    };
+        };
 
     let (file_groups, stats) = datafusion_datasource::compute_all_files_statistics(
         file_groups,
@@ -439,6 +448,7 @@ async fn list_files_for_scan<'a>(
         file_groups,
         statistics: stats,
         grouped_by_partition,
+        partition_split_points,
     })
 }
 

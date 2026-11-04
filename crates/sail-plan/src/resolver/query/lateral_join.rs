@@ -202,56 +202,6 @@ fn has_volatile_expressions(plan: &LogicalPlan) -> datafusion_common::Result<boo
     Ok(volatile)
 }
 
-#[cfg(test)]
-mod tests {
-    use datafusion_common::{Column, Result};
-    use datafusion_expr::{Expr, LogicalPlanBuilder, col, lit};
-
-    use super::{collapse_projections, lateral_max_rows};
-
-    #[test]
-    fn lateral_cardinality_accepts_uncoerced_limit() -> Result<()> {
-        let input = LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?.build()?;
-        let limited = datafusion_expr::LogicalPlan::Limit(datafusion_expr::Limit {
-            skip: None,
-            fetch: Some(Box::new(lit(1_i32))),
-            input: std::sync::Arc::new(input.clone()),
-        });
-        assert_eq!(lateral_max_rows(&limited)?, Some(1));
-        assert_eq!(lateral_max_rows(&input)?, Some(2));
-        Ok(())
-    }
-
-    #[test]
-    fn rename_projections_preserve_alias_boundary() -> Result<()> {
-        let source = LogicalPlanBuilder::values(vec![vec![lit(1_i64)]])?
-            .project(vec![col("column1").alias("id")])?
-            .alias("?table?")?
-            .project(vec![
-                Expr::Column(Column::new(Some("?table?"), "id")).alias("id"),
-            ])?
-            .alias("i")?
-            .project(vec![col("i.id").alias("field")])?
-            .build()?;
-        assert_eq!(collapse_projections(source.clone())?, source);
-        Ok(())
-    }
-
-    #[test]
-    fn adjacent_rename_projections_still_collapse() -> Result<()> {
-        let source = LogicalPlanBuilder::values(vec![vec![lit(1_i64)]])?.build()?;
-        let plan = LogicalPlanBuilder::from(source.clone())
-            .project(vec![col("column1").alias("id")])?
-            .project(vec![col("id").alias("field")])?
-            .build()?;
-        let expected = LogicalPlanBuilder::from(source)
-            .project(vec![col("column1").alias("field")])?
-            .build()?;
-        assert_eq!(collapse_projections(plan)?, expected);
-        Ok(())
-    }
-}
-
 fn is_rename_projection(proj: &Projection) -> bool {
     proj.expr.iter().all(|e| {
         matches!(e, Expr::Alias(Alias { expr, .. }) if matches!(expr.as_ref(), Expr::Column(_)))
@@ -382,4 +332,54 @@ fn is_identity_projection(exprs: &[Expr], input_schema: &DFSchemaRef) -> bool {
             Expr::Column(col) => col == input_col,
             _ => false,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_common::{Column, Result};
+    use datafusion_expr::{Expr, LogicalPlanBuilder, col, lit};
+
+    use super::{collapse_projections, lateral_max_rows};
+
+    #[test]
+    fn lateral_cardinality_accepts_uncoerced_limit() -> Result<()> {
+        let input = LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?.build()?;
+        let limited = datafusion_expr::LogicalPlan::Limit(datafusion_expr::Limit {
+            skip: None,
+            fetch: Some(Box::new(lit(1_i32))),
+            input: std::sync::Arc::new(input.clone()),
+        });
+        assert_eq!(lateral_max_rows(&limited)?, Some(1));
+        assert_eq!(lateral_max_rows(&input)?, Some(2));
+        Ok(())
+    }
+
+    #[test]
+    fn rename_projections_preserve_alias_boundary() -> Result<()> {
+        let source = LogicalPlanBuilder::values(vec![vec![lit(1_i64)]])?
+            .project(vec![col("column1").alias("id")])?
+            .alias("?table?")?
+            .project(vec![
+                Expr::Column(Column::new(Some("?table?"), "id")).alias("id"),
+            ])?
+            .alias("i")?
+            .project(vec![col("i.id").alias("field")])?
+            .build()?;
+        assert_eq!(collapse_projections(source.clone())?, source);
+        Ok(())
+    }
+
+    #[test]
+    fn adjacent_rename_projections_still_collapse() -> Result<()> {
+        let source = LogicalPlanBuilder::values(vec![vec![lit(1_i64)]])?.build()?;
+        let plan = LogicalPlanBuilder::from(source.clone())
+            .project(vec![col("column1").alias("id")])?
+            .project(vec![col("id").alias("field")])?
+            .build()?;
+        let expected = LogicalPlanBuilder::from(source)
+            .project(vec![col("column1").alias("field")])?
+            .build()?;
+        assert_eq!(collapse_projections(plan)?, expected);
+        Ok(())
+    }
 }

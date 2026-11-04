@@ -87,6 +87,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::panic,
+        reason = "Assert scalar/array representation is preserved"
+    )]
     fn nullable_identity_preserves_scalar_array_slice_and_empty_values() -> Result<()> {
         let udf = InSubqueryNullable::new();
         assert_eq!(

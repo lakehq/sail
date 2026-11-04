@@ -93,7 +93,8 @@ def test_named_struct_rejects_invalid_names_and_arity(spark, expression):
 )
 def test_named_struct_invalid_sql_fails_during_analysis(spark, expression, condition):
     with pytest.raises(AnalysisException, match=re.escape(f"[{condition}]")):
-        _ = spark.sql(f"SELECT {expression} FROM range(2)").schema
+        # The expression is a fixed SQL fragment from the parametrization above.
+        _ = spark.sql(f"SELECT {expression} FROM range(2)").schema  # noqa: S608
 
 
 def test_struct_preserves_lambda_field_name(spark):
@@ -133,11 +134,11 @@ def test_struct_comparison_uses_configured_resolver(spark, case_sensitive, opera
         right = "named_struct('X', id, 'x', cast(id + 1 AS int))"
         expression = f"{left} {operator} ({right}) AS matched"
         if case_sensitive:
-            with pytest.raises(PySparkException, match="(?i)(struct|data type)"):
+            with pytest.raises(PySparkException, match=r"(?i)(struct|data type)"):
                 _ = spark.range(3).selectExpr(expression).schema
         else:
             assert spark.range(3).selectExpr(expression).collect() == [Row(matched=True)] * 3
-        with pytest.raises(PySparkException, match="(?i)(struct|data type)"):
+        with pytest.raises(PySparkException, match=r"(?i)(struct|data type)"):
             _ = (
                 spark.range(3)
                 .selectExpr(
@@ -180,10 +181,10 @@ def test_struct_comparison_names_do_not_relax_conditional_types(spark, case_sens
         right = "named_struct('b', CASE WHEN id != 1 THEN cast(id AS int) END)"
         result = spark.range(3).selectExpr(f"{left} = {right} AS eq", f"{left} IN ({right}) AS matched")
         assert result.collect() == [Row(eq=value, matched=value) for value in (True, False, True)]
-        with pytest.raises(AnalysisException, match="(?i)(struct|data type)"):
+        with pytest.raises(AnalysisException, match=r"(?i)(struct|data type)"):
             _ = spark.range(3).selectExpr(conditional.format(left=left, right=right)).schema
         # Different primitive types require name-sensitive common-type inference too.
-        with pytest.raises(AnalysisException, match="(?i)(struct|data type)"):
+        with pytest.raises(AnalysisException, match=r"(?i)(struct|data type)"):
             _ = spark.range(3).selectExpr(f"{left} = named_struct('b', id)").schema
     finally:
         spark.conf.set("spark.sql.caseSensitive", previous)
@@ -333,11 +334,13 @@ def test_duplicate_struct_result_containers(spark, container):
     frame = (
         spark.range(4, numPartitions=2).selectExpr("id", f"CASE WHEN id != 3 THEN {expression} END AS s").orderBy("id")
     )
+    null_field_id = 2
+    null_container_id = 3
     expected = []
     for i in range(4):
-        value = Row("x", "x")(i, f"v{i}" if i != 2 else None)
+        value = Row("x", "x")(i, f"v{i}" if i != null_field_id else None)
         result = {value: i + 10} if container == "map-key" else wrap(value if i != 1 else None)
-        expected.append(Row(id=i, s=result if i != 3 else None))
+        expected.append(Row(id=i, s=result if i != null_container_id else None))
     schema = T.StructType([T.StructField("id", T.LongType(), False), T.StructField("s", data_type, True)])
     assert frame.schema == schema
     _assert_nested_row_names(frame.collect(), expected)

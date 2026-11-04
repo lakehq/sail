@@ -261,6 +261,7 @@ mod tests {
     use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
     use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion_common::Result;
+    use datafusion_common::cast::as_int32_array;
     use datafusion_expr::ColumnarValue;
 
     use super::{ListValuesResult, extract_list_values, index_array, offsets_to_indices};
@@ -316,7 +317,7 @@ mod tests {
             (new_null_array(list.data_type(), 2), vec![]),
         ] {
             let result = index_array("transform", &input)?;
-            let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+            let result = as_int32_array(result.as_ref())?;
             assert_eq!(result, &Int32Array::from(expected));
         }
         Ok(())
@@ -330,7 +331,7 @@ mod tests {
         let offsets = OffsetBuffer::new(vec![start, start, start + 2].into());
         let result = offsets_to_indices("transform", &offsets)?;
         assert_eq!(
-            result.as_any().downcast_ref::<Int32Array>().unwrap(),
+            as_int32_array(result.as_ref())?,
             &Int32Array::from(vec![0, 1]),
         );
         Ok(())

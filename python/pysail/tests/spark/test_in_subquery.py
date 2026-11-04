@@ -4,6 +4,9 @@ Fixed rows/schemas were checked on Spark 4.2.0 (32f7299601), UTC, ANSI=true,
 legacy.inSubqueryNullability=false. Single struct keys differ from tuple keys.
 """
 
+# SQL fragments come only from the fixed parametrizations and helpers in this test module.
+# ruff: noqa: S608
+
 import pytest
 from pyspark.sql.types import BooleanType, IntegerType, LongType, StructField, StructType
 
@@ -115,7 +118,7 @@ def test_in_subquery_schema_and_values(spark, membership_views, left_nullable, r
     if edge == "reuse":
         fields.append(("reused", BooleanType(), nullable))
     if edge == "schema":
-        rows = [row + (row[1], row[2], not row[1], not row[2], row[1], row[2]) for row in rows]
+        rows = [(*row, row[1], row[2], not row[1], not row[2], row[1], row[2]) for row in rows]
         fields += [
             (name, BooleanType(), nullable)
             for name in ["reused_in", "reused_not_in", "negated_in", "negated_not_in", "nested_in", "nested_not_in"]
@@ -172,7 +175,8 @@ def test_projected_membership_reference_queries(spark, original_membership_views
                         (3, 1, 10), (4, 1, 20), (5, 2, 10), (6, 2, 20),
                         (7, 3, 30), (8, 1, 10) o(id, k, v)
         """
-        rows = [(i, i in (3, 8), i == 7, i in (3, 8), i not in (3, 8)) for i in range(9)]
+        excluded_id = 7
+        rows = [(i, i in (3, 8), i == excluded_id, i in (3, 8), i not in (3, 8)) for i in range(9)]
         fields = None
     else:
         lhs, rhs = ("k", "k") if case == "empty-scalar" else ("(k, v)", "k, v")

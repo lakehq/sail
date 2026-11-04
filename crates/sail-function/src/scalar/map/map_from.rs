@@ -68,6 +68,7 @@ mod tests {
         ))
     }
 
+    #[expect(clippy::panic, reason = "Assert map entry field types in test helper")]
     fn map_fields(data_type: &DataType) -> &Fields {
         let DataType::Map(entries, _) = data_type else {
             panic!("expected map")
@@ -262,7 +263,7 @@ mod tests {
         for nullable in [None, Some(false), Some(true)] {
             let udf = SparkMapFromArrays::new(false).with_nullable(nullable);
             for nulls in [None, Some(NullBuffer::from(vec![true, false]))] {
-                let args = vec![
+                let args = [
                     list(keys.clone(), &[0, 1, 2], false, nulls.clone()),
                     list(values.clone(), &[0, 1, 2], true, None),
                 ];
@@ -321,6 +322,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::panic,
+        reason = "Assert map representation before testing schema changes"
+    )]
     fn retype_rejects_null_values_and_any_other_schema_change() -> Result<()> {
         let keys: ArrayRef = Arc::new(Int32Array::from(vec![1]));
         for values in [

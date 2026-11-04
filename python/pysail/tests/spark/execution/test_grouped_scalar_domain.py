@@ -8,6 +8,9 @@ and literal-bound paths before changing the expectations below (for example,
 unmatched mixed-set generators currently return 1 rather than Spark's NULL).
 """
 
+# SQL fragments come only from the fixed parametrizations and helpers in this test module.
+# ruff: noqa: S608
+
 import pytest
 from pyspark.errors import UnsupportedOperationException
 from pyspark.sql.types import DoubleType, LongType
@@ -207,9 +210,8 @@ def test_duplicate_grouping_widths(spark, grouped_tables, width):
     ("consumer", "matched", "missing", "result_type"),
     [("min(z)", 1, None, LongType()), ("avg(z)", 1.5, None, DoubleType()), ("count(z)", 4, 0, LongType())],
 )
-def test_masked_grouping_having_keeps_native_terminals(
-    spark, grouped_tables, data_type, consumer, matched, missing, result_type
-):
+@pytest.mark.usefixtures("grouped_tables")
+def test_masked_grouping_having_keeps_native_terminals(spark, data_type, consumer, matched, missing, result_type):
     inner = f"""SELECT {consumer} FROM (
         SELECT k AS z FROM VALUES (1L), (2L) AS i(k)
         GROUP BY GROUPING SETS ((k), (k)) HAVING grouping_id(k) = o.g
@@ -239,7 +241,7 @@ def test_masked_grouping_having_keeps_native_terminals(
         )
 
 
-def grouping_chain(depth, empty=False):
+def grouping_chain(depth, *, empty=False):
     body = "SELECT k FROM (SELECT v AS k FROM grouped_domain_inner WHERE k = '0' AND v = 1) i WHERE i.k = o.id"
     sets = "((k), ())" if empty else "((k), (k))"
     for _ in range(depth):
@@ -249,24 +251,29 @@ def grouping_chain(depth, empty=False):
 
 @pytest.mark.timeout(60)
 @pytest.mark.parametrize("depth", [2, 4, 8, 12])
-def test_native_safe_grouping_chain(spark, grouped_tables, depth):
+@pytest.mark.usefixtures("grouped_tables")
+def test_native_safe_grouping_chain(spark, depth):
     inner = grouping_chain(depth)
     result = spark.sql(f"SELECT ({inner}) AS n FROM grouped_domain_outer o WHERE row_id = 2")
-    assert result.collect()[0].n == 4
-    assert spark.sql(inner.replace("o.id", "CAST(1 AS BIGINT)")).collect()[0][0] == 4
+    expected_count = 4
+    assert result.collect()[0].n == expected_count
+    assert spark.sql(inner.replace("o.id", "CAST(1 AS BIGINT)")).collect()[0][0] == expected_count
 
 
 @pytest.mark.timeout(60)
-def test_grouped_expansion_budget_declines_without_changing_native_path(spark, grouped_tables):
+@pytest.mark.usefixtures("grouped_tables")
+def test_grouped_expansion_budget_declines_without_changing_native_path(spark):
     inner = grouping_chain(12, empty=True)
+    expected_empty_count = 6
+    expected_nonempty_count = 4
     # The original compact plan is valid with a literal binding, but domain
     # expansion would repeatedly duplicate both scans and empty-set completion.
-    assert spark.sql(inner.replace("o.id", "CAST(1 AS BIGINT)")).collect()[0][0] == 6
+    assert spark.sql(inner.replace("o.id", "CAST(1 AS BIGINT)")).collect()[0][0] == expected_empty_count
     with pytest.raises(UnsupportedOperationException, match="ScalarSubquery"):
         spark.sql(f"SELECT ({inner}) AS n FROM grouped_domain_outer o WHERE row_id = 2").collect()
     assert (
         spark.sql(f"SELECT ({grouping_chain(12)}) AS n FROM grouped_domain_outer o WHERE row_id = 2").collect()[0].n
-        == 4
+        == expected_nonempty_count
     )
 
 

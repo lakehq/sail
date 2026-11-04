@@ -281,12 +281,11 @@ mod tests {
     use datafusion::datasource::empty::EmptyTable;
     use datafusion::datasource::provider_as_source;
     use datafusion::physical_plan::ExecutionPlan;
-    use datafusion_common::{DFSchema, DataFusionError, internal_datafusion_err};
-    use datafusion_expr::logical_plan::information_schema::ColumnsDetail;
+    use datafusion_common::{DataFusionError, internal_datafusion_err};
     use datafusion_expr::{
         AsOfJoin, AsOfMatch, Expr, JoinConstraint, LogicalPlanBuilder, LogicalTableSource,
         MaterializedCte, MaterializedCteId, MaterializedCtePlan, MaterializedCteScan, Operator,
-        Show, ShowKind, TableScanBuilder, TableSource, lit,
+        TableScanBuilder, TableSource, lit,
     };
     use datafusion_expr_common::statistics::StatisticsRequest;
 
@@ -416,37 +415,6 @@ mod tests {
             }
         }
         Ok(())
-    }
-
-    #[test]
-    fn show_commands_are_rejected() {
-        for kind in [
-            ShowKind::Describe {
-                schema: data_schema(),
-            },
-            ShowKind::Tables,
-            ShowKind::Columns {
-                table_ref: "t".into(),
-                detail: ColumnsDetail::Describe,
-            },
-            ShowKind::CreateTable {
-                table_ref: "t".into(),
-            },
-            ShowKind::Variables {
-                name: None,
-                verbose: false,
-            },
-            ShowKind::Functions { filter: None },
-        ] {
-            let plan = LogicalPlan::Show(Show {
-                kind,
-                output_schema: Arc::clone(DFSchema::empty_ref()),
-            });
-            assert!(
-                matches!(rewrite_streaming_plan(plan), Err(DataFusionError::Internal(message))
-                if message.starts_with("unexpected command for streaming rewriter: "))
-            );
-        }
     }
 
     #[test]

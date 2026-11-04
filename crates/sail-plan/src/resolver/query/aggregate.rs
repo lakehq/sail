@@ -162,6 +162,7 @@ mod grouping_tests {
     use crate::config::PlanConfig;
 
     #[test]
+    #[expect(clippy::unwrap_used)]
     fn correlated_mask_is_materialized_at_having_stage() -> PlanResult<()> {
         let context = SessionContext::new();
         let resolver = PlanResolver::new(&context, Arc::new(PlanConfig::new()?));

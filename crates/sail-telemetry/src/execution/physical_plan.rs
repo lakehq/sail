@@ -15,7 +15,7 @@ use datafusion::physical_expr::{
     Distribution, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_plan::execution_plan::{
-    CardinalityEffect, InvariantLevel, check_default_invariants,
+    CardinalityEffect, InvariantLevel, LimitBehavior, check_default_invariants,
 };
 use datafusion::physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase, FilterPushdownPropagation,
@@ -274,6 +274,10 @@ impl ExecutionPlan for TracingExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         false
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::Stops
     }
 
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

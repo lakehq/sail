@@ -979,12 +979,14 @@ fn native_equality(expr: &Expr) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, Int64Array};
+    use arrow::array::Array;
     use datafusion::dataframe::DataFrame;
     use datafusion::execution::session_state::SessionStateBuilder;
     use datafusion::functions_aggregate::expr_fn::{count, max, sum};
     use datafusion::functions_nested::expr_fn::make_array;
     use datafusion::optimizer::OptimizerContext;
+    use datafusion_common::cast::as_int64_array;
+    use datafusion_common::internal_datafusion_err;
     use datafusion_expr::{col, lit, out_ref_col, scalar_subquery};
 
     use super::*;
@@ -1097,16 +1099,8 @@ mod tests {
             let batches = DataFrame::new(state, original).collect().await?;
             let mut values = Vec::new();
             for batch in batches {
-                let keys = batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .unwrap();
-                let results = batch
-                    .column(1)
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .unwrap();
+                let keys = as_int64_array(batch.column(0).as_ref())?;
+                let results = as_int64_array(batch.column(1).as_ref())?;
                 for row in 0..batch.num_rows() {
                     assert!(!results.is_null(row));
                     values.push((
@@ -1181,11 +1175,7 @@ mod tests {
             assert_eq!(groups, depth);
             assert!(nodes <= 4 * depth + 16, "depth={depth}, nodes={nodes}");
             for batch in frame.collect().await? {
-                let values = batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .unwrap();
+                let values = as_int64_array(batch.column(0).as_ref())?;
                 for row in 0..batch.num_rows() {
                     if !values.is_null(row) {
                         assert_eq!(values.value(row), 4);
@@ -1267,7 +1257,8 @@ mod tests {
                 usize::from(width == 64)
             );
             if width == 64 {
-                let branches = branches.unwrap();
+                let branches = branches
+                    .ok_or_else(|| internal_datafusion_err!("64-key rollup must be supported"))?;
                 assert_eq!(branches.len(), 65);
                 assert!(branches[0].active.is_empty());
                 assert_eq!(branches[0].id, Some(ScalarValue::UInt64(Some(u64::MAX))));
@@ -1342,7 +1333,8 @@ mod tests {
             (0..65).map(|i| col(format!("i.c{i}"))).collect(),
             aggregate.aggr_expr,
         )?;
-        let branches = grouping_branches(&aggregate)?.unwrap();
+        let branches = grouping_branches(&aggregate)?
+            .ok_or_else(|| internal_datafusion_err!("ordinary GROUP BY must be supported"))?;
         assert_eq!(branches.len(), 1);
         assert_eq!(branches[0].active.len(), 65);
         assert!(branches[0].id.is_none());
@@ -1350,7 +1342,7 @@ mod tests {
     }
 
     #[test]
-    fn grouping_id_widths_and_ordinals() {
+    fn grouping_id_widths_and_ordinals() -> Result<()> {
         for (width, data_type) in [
             (8, DataType::UInt8),
             (16, DataType::UInt16),
@@ -1358,7 +1350,8 @@ mod tests {
             (64, DataType::UInt64),
         ] {
             let active = vec![false; width];
-            let value = grouping_id(&active, 0, &data_type).unwrap();
+            let value = grouping_id(&active, 0, &data_type)
+                .ok_or_else(|| internal_datafusion_err!("grouping ID must fit {data_type}"))?;
             assert_eq!(value.data_type(), data_type);
             assert_eq!(
                 value,
@@ -1367,22 +1360,20 @@ mod tests {
                 } else {
                     (1u64 << width) - 1
                 }))
-                .cast_to(&data_type)
-                .unwrap()
+                .cast_to(&data_type)?
             );
             assert!(grouping_id(&active, 1, &data_type).is_none());
             let active = vec![true; width - 1];
             assert_eq!(
-                grouping_id(&active, 1, &data_type).unwrap(),
-                ScalarValue::UInt64(Some(1u64 << (width - 1)))
-                    .cast_to(&data_type)
-                    .unwrap()
+                grouping_id(&active, 1, &data_type),
+                Some(ScalarValue::UInt64(Some(1u64 << (width - 1))).cast_to(&data_type)?)
             );
         }
         assert_eq!(
             grouping_id(&[true, false, true], 2, &DataType::UInt8),
             Some(ScalarValue::UInt8(Some(18)))
         );
+        Ok(())
     }
 
     #[test]

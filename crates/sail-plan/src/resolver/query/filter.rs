@@ -153,6 +153,7 @@ fn remove_tuple_in_annotation(expr: Expr) -> Result<Expr> {
 }
 
 #[cfg(test)]
+#[expect(clippy::panic, reason = "Assert typed plan shapes in tests")]
 mod tests {
     use datafusion_common::DFSchema;
     use datafusion_common::arrow::datatypes::{DataType, Field, Schema};

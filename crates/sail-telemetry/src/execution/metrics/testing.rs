@@ -5,13 +5,43 @@ use std::time::Duration;
 use datafusion::common::{DataFusionError, Result, plan_err};
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::metrics::MetricsSet;
 use futures::TryStreamExt;
 use opentelemetry::metrics::MeterProvider;
+use opentelemetry_sdk::metrics::data::{Metric, ResourceMetrics};
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};
+use sail_common::telemetry::KeyValue;
 
 use crate::TracingExecOptions;
+use crate::execution::metrics::MetricEmitter;
 use crate::execution::physical_plan::TracingExec;
 use crate::metrics::{MetricManager, MetricRegistry};
+
+pub fn export_metrics(
+    emitter: &dyn MetricEmitter,
+    metrics: &MetricsSet,
+    attributes: &[KeyValue],
+) -> Result<Vec<ResourceMetrics>> {
+    let tester = MetricEmitterTester::new();
+    for metric in metrics.iter() {
+        emitter.try_emit(metric, attributes, &tester.registry);
+    }
+    tester
+        .provider
+        .force_flush()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    tester
+        .exporter
+        .get_finished_metrics()
+        .map_err(|e| DataFusionError::External(Box::new(e)))
+}
+
+pub fn exported_metrics(metrics: &[ResourceMetrics]) -> impl Iterator<Item = &Metric> {
+    metrics
+        .iter()
+        .flat_map(|m| m.scope_metrics())
+        .flat_map(|m| m.metrics())
+}
 
 fn format_raw_metrics(plan: &dyn ExecutionPlan) -> String {
     let Some(metrics) = plan.metrics() else {

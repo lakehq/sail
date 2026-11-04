@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::ArrowError;
-use datafusion::arrow::ipc::convert::fb_to_schema;
+use datafusion::arrow::ipc::convert::try_fb_to_schema;
 use datafusion::arrow::ipc::reader::{FileReader, StreamReader};
 use datafusion::arrow::ipc::root_as_message;
 use datafusion::catalog::Session;
@@ -187,7 +187,7 @@ async fn infer_stream_schema(
     let fb_schema = message
         .header_as_schema()
         .ok_or_else(|| ArrowError::IpcError("Unable to read IPC message schema".to_string()))?;
-    Ok(Arc::new(fb_to_schema(fb_schema)))
+    Ok(Arc::new(try_fb_to_schema(fb_schema)?))
 }
 
 async fn extend_bytes_to_n_length_from_stream(

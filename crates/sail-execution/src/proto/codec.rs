@@ -6347,6 +6347,7 @@ impl RemoteExecutionCodec {
 #[cfg(test)]
 mod tests {
     #[tokio::test]
+    #[expect(clippy::unwrap_used, clippy::expect_used)]
     async fn empty_grouping_sets_round_trip() -> Result<()> {
         use datafusion::arrow::array::{Int64Array, UInt8Array, UInt16Array};
         use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
@@ -6499,6 +6500,8 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::panic, reason = "Assert test envelope shape and rejection")]
     fn empty_grouping_sets_count_is_bounded() -> Result<()> {
         use datafusion::physical_plan::aggregates::AggregateMode;
         use datafusion_proto::protobuf::PhysicalPlanNode;
@@ -6552,6 +6555,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(clippy::unwrap_used)]
     async fn empty_grouping_sets_under_recursive_top_k_round_trip() -> Result<()> {
         use datafusion::arrow::array::Int64Array;
         use datafusion::physical_plan::aggregates::AggregateMode;
@@ -6612,6 +6616,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(clippy::unwrap_used)]
     async fn empty_grouping_sets_partial_final_round_trip() -> Result<()> {
         use datafusion::physical_plan::aggregates::AggregateMode;
         use datafusion::physical_plan::collect;
@@ -6648,6 +6653,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(clippy::unwrap_used, clippy::expect_used)]
     async fn empty_grouping_sets_preserve_min_max_dynamic_filter_state() -> Result<()> {
         use datafusion::arrow::array::Int64Array;
         use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
@@ -7057,6 +7063,7 @@ mod tests {
         }
 
         #[test]
+        #[expect(clippy::expect_used)]
         fn rejects_unregistered_factories_without_probing_or_dropping_them() {
             for factory in [
                 Arc::new(UnknownFactory) as Arc<dyn PhysicalExprAdapterFactory>,
@@ -7074,6 +7081,7 @@ mod tests {
         }
 
         #[test]
+        #[expect(clippy::expect_used)]
         fn parquet_adapter_kind_absence_defaults_and_invalid_values() -> Result<()> {
             assert!(round_trip(scan(None))?.expr_adapter_factory.is_none());
             let codec = RemoteExecutionCodec;
@@ -7192,6 +7200,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::panic, reason = "Assert scalar representation in test result")]
     fn test_round_trip_in_subquery_nullable() -> Result<()> {
         use datafusion::logical_expr::{
             ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, Volatility,

@@ -14,7 +14,6 @@ use datafusion::physical_optimizer::limit_pushdown_past_window::LimitPushPastWin
 use datafusion::physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion::physical_optimizer::output_requirements::OutputRequirements;
 use datafusion::physical_optimizer::pushdown_sort::PushdownSort;
-use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::physical_optimizer::topk_aggregation::TopKAggregation;
 use datafusion::physical_optimizer::topk_repartition::TopKRepartition;
 use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
@@ -93,7 +92,6 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));
-    rules.push(Arc::new(SanityCheckPlan::new()));
 
     rules
 }
@@ -438,6 +436,7 @@ mod tests {
         use datafusion::physical_optimizer::output_requirements::{
             OutputRequirementExec, OutputRequirements,
         };
+        use datafusion::physical_optimizer::sanity_checker::check_plan_tree_sanity;
         use datafusion::physical_plan::aggregates::{
             AggregateExec, AggregateMode, PhysicalGroupBy,
         };
@@ -610,22 +609,21 @@ mod tests {
             for sail in [false, true] {
                 for enabled in [false, true] {
                     let context = context(sail, enabled);
-                    context
-                        .register_parquet(
-                            "late_bounds",
+                    let frame = context
+                        .read_parquet(
                             directory.path().to_str().unwrap(),
                             ParquetReadOptions::default(),
                         )
-                        .await?;
-                    let frame = context.table("late_bounds").await?.aggregate(
-                        vec![],
-                        vec![
-                            min(column("a")),
-                            max(column("a")),
-                            min(column("b")),
-                            max(column("b")),
-                        ],
-                    )?;
+                        .await?
+                        .aggregate(
+                            vec![],
+                            vec![
+                                min(column("a")),
+                                max(column("a")),
+                                min(column("b")),
+                                max(column("b")),
+                            ],
+                        )?;
                     let physical = plan(&context, frame).await?;
                     let mut dynamic_aggregates = 0;
                     physical.apply(|node| {
@@ -896,6 +894,7 @@ mod tests {
                             {
                                 optimized = rule.optimize(optimized, &config)?;
                             }
+                            check_plan_tree_sanity(&optimized, &config.optimizer)?;
                         } else {
                             optimized = EnsureRequirements::new().optimize(optimized, &config)?;
                             optimized = OutputRequirements::new_remove_mode()

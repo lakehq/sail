@@ -354,6 +354,7 @@ impl ExistsRewriter<'_> {
 }
 
 #[cfg(test)]
+#[expect(clippy::panic, reason = "Assert typed plan shapes in tests")]
 mod tests {
     use datafusion_common::DFSchema;
     use datafusion_common::arrow::datatypes::{DataType, Field, Schema};

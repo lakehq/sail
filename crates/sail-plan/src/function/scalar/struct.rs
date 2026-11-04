@@ -71,6 +71,15 @@ fn named_struct(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(ScalarUDF::from(StructFunction::new(field_names)).call(values))
 }
 
+pub(super) fn list_built_in_struct_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
+
+    vec![
+        ("named_struct", F::custom(named_struct)),
+        ("struct", F::custom(r#struct)),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -95,7 +104,7 @@ mod tests {
         let (_, function) = functions
             .iter()
             .find(|(name, _)| *name == "named_struct")
-            .unwrap();
+            .ok_or_else(|| PlanError::internal("named_struct must be registered"))?;
         function(ScalarFunctionInput {
             arguments,
             function_context: FunctionContextInput {
@@ -153,13 +162,4 @@ mod tests {
         }
         Ok(())
     }
-}
-
-pub(super) fn list_built_in_struct_functions() -> Vec<(&'static str, ScalarFunction)> {
-    use crate::function::common::ScalarFunctionBuilder as F;
-
-    vec![
-        ("named_struct", F::custom(named_struct)),
-        ("struct", F::custom(r#struct)),
-    ]
 }

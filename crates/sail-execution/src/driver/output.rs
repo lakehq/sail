@@ -410,6 +410,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(clippy::expect_used)]
     async fn semantic_failure_preserves_cause_after_another_partition_emits() -> Result<()> {
         use sail_python_udf::error::PyErrExtractor;
 
@@ -421,13 +422,15 @@ mod tests {
         for control_plane in [false, true] {
             let (sender, receiver) = mpsc::channel(2);
             let mut stream = JobOutputStream::new(receiver);
-            sender
-                .try_send(JobOutputItem::Stream {
-                    key: stream_key(),
-                    stream: Box::pin(futures::stream::iter([Ok(batch.clone())])),
-                })
-                .ok()
-                .expect("output channel has capacity");
+            assert!(
+                sender
+                    .try_send(JobOutputItem::Stream {
+                        key: stream_key(),
+                        stream: Box::pin(futures::stream::iter([Ok(batch.clone())])),
+                    })
+                    .is_ok(),
+                "output channel has capacity"
+            );
             assert_eq!(stream.next().await.transpose()?, Some(batch.clone()));
 
             let cause = CommonErrorCause::NonRetryableExecution(expected.into());
@@ -442,10 +445,10 @@ mod tests {
                     stream: Box::pin(futures::stream::iter([Err(TaskStreamError::from(cause))])),
                 }
             };
-            sender
-                .try_send(failure)
-                .ok()
-                .expect("output channel has capacity");
+            assert!(
+                sender.try_send(failure).is_ok(),
+                "output channel has capacity"
+            );
             let (tx, mut rx) = mpsc::channel(2);
             assert_eq!(
                 forward_job_output(stream, &tx).await,

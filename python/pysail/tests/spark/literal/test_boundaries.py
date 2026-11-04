@@ -45,7 +45,7 @@ def test_signed_bigint_literals(spark, expression, expected):
     ],
 )
 def test_bigint_literal_overflow_is_not_runtime_negation(spark, expression):
-    with pytest.raises(PySparkException, match="(?i)bigint|INVALID_NUMERIC_LITERAL_RANGE"):
+    with pytest.raises(PySparkException, match=r"(?i)bigint|INVALID_NUMERIC_LITERAL_RANGE"):
         spark.sql(f"SELECT {expression}").collect()
 
 
@@ -61,7 +61,7 @@ def test_bigint_literal_overflow_is_not_runtime_negation(spark, expression):
 )
 def test_outer_negation_of_minimum_integer_honors_ansi(spark, ansi_mode, expression, data_type, expected):
     if ansi_mode:
-        with pytest.raises(PySparkException, match="(?i)overflow"):
+        with pytest.raises(PySparkException, match=r"(?i)overflow"):
             spark.sql(f"SELECT {expression}").collect()
     else:
         result = spark.sql(f"SELECT {expression} AS value")
@@ -100,7 +100,8 @@ def test_negative_integer_literals_keep_their_narrowest_type(spark, expression, 
         ("-290308-12-21 19:59:05.224192+05:30", -(2**63)),
     ],
 )
-def test_ntz_literal_microseconds_are_timezone_independent(spark, session_timezone, value, micros):
+@pytest.mark.usefixtures("session_timezone")
+def test_ntz_literal_microseconds_are_timezone_independent(spark, value, micros):
     result = spark.sql(f"SELECT TIMESTAMP_NTZ '{value}' AS value")
     assert result.schema == T.StructType([T.StructField("value", T.TimestampNTZType(), False)])
     # Inspect Arrow's physical value; Python datetime cannot represent these years.
@@ -122,12 +123,13 @@ def test_ntz_literal_microseconds_are_timezone_independent(spark, session_timezo
     ],
 )
 def test_ntz_literals_reject_overflow_and_invalid_calendar_values(spark, value):
-    with pytest.raises(PySparkException, match="(?i)invalid|outside the microsecond range"):
+    with pytest.raises(PySparkException, match=r"(?i)invalid|outside the microsecond range"):
         spark.sql(f"SELECT TIMESTAMP_NTZ '{value}'").collect()
 
 
 @pytest.mark.parametrize("session_timezone", ["UTC", "+05:30", "America/Los_Angeles"], indirect=True)
-def test_configured_ntz_literals_preserve_endpoints_in_a_projection(spark, session_timezone):
+@pytest.mark.usefixtures("session_timezone")
+def test_configured_ntz_literals_preserve_endpoints_in_a_projection(spark):
     previous = spark.conf.get("spark.sql.timestampType")
     spark.conf.set("spark.sql.timestampType", "TIMESTAMP_NTZ")
     try:
@@ -150,12 +152,13 @@ def test_date_literals_remain_day_values(spark, value, days):
 
 
 def test_date_literal_calendar_validation(spark):
-    with pytest.raises(PySparkException, match="(?i)invalid"):
+    with pytest.raises(PySparkException, match=r"(?i)invalid"):
         spark.sql("SELECT DATE '1900-02-29'").collect()
 
 
 @pytest.mark.parametrize("session_timezone", ["+05:30"], indirect=True)
-def test_ntz_and_ltz_literals_remain_distinct(spark, session_timezone):
+@pytest.mark.usefixtures("session_timezone")
+def test_ntz_and_ltz_literals_remain_distinct(spark):
     result = spark.sql("""
         SELECT TIMESTAMP_NTZ '1970-01-01 00:00:00' AS ntz,
                TIMESTAMP_LTZ '1970-01-01 00:00:00' AS ltz

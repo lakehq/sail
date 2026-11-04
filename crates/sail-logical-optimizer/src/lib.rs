@@ -361,7 +361,9 @@ mod tests {
                 )?;
                 assert_eq!(optimized, plan);
                 let LogicalPlan::Filter(filter) = optimized else {
-                    panic!("expected the unsupported predicate to remain a filter");
+                    return datafusion_common::internal_err!(
+                        "expected the unsupported predicate to remain a filter"
+                    );
                 };
                 assert!(matches!(filter.predicate, Expr::InSubquery(_)));
             }
