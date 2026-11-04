@@ -169,6 +169,27 @@ impl SparkRuntimeConfig {
         Ok(())
     }
 
+    /// Returns the value set for each key, ignoring defaults, fallbacks and alternatives,
+    /// so that [`Self::restore`] can put the keys back exactly as they were.
+    pub(crate) fn snapshot(&self, keys: &[String]) -> Vec<ConfigKeyValue> {
+        keys.iter()
+            .map(|key| ConfigKeyValue {
+                key: key.clone(),
+                value: self.config.get(key).cloned(),
+            })
+            .collect()
+    }
+
+    /// Restores the keys of a [`Self::snapshot`], unsetting those that were not set.
+    pub(crate) fn restore(&mut self, snapshot: Vec<ConfigKeyValue>) {
+        for ConfigKeyValue { key, value } in snapshot {
+            match value {
+                Some(value) => self.config.insert(key, value),
+                None => self.config.remove(&key),
+            };
+        }
+    }
+
     pub(crate) fn get_all(&self, prefix: Option<&str>) -> SparkResult<Vec<ConfigKeyValue>> {
         let iter: Box<dyn Iterator<Item = _>> = match prefix {
             None => Box::new(self.config.iter()),

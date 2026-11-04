@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Debug;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use datafusion::common::{Result, internal_datafusion_err};
@@ -33,6 +33,7 @@ pub(crate) struct SparkSession {
     user_id: String,
     options: SparkSessionOptions,
     state: Mutex<SparkSessionState>,
+    config_changes: Mutex<()>,
 }
 
 impl Debug for SparkSession {
@@ -75,6 +76,7 @@ impl SparkSession {
             user_id,
             options,
             state: Mutex::new(SparkSessionState::try_new()?),
+            config_changes: Mutex::new(()),
         };
         extension.set_config(vec![ConfigKeyValue {
             key: SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string(),
@@ -153,6 +155,21 @@ impl SparkSession {
                 )));
             }
         }
+        Ok(())
+    }
+
+    /// Serializes the configuration changes of the session, so that a change, the session
+    /// catalogs it syncs, and its rollback apply as one step.
+    pub(crate) fn lock_config_changes(&self) -> SparkResult<MutexGuard<'_, ()>> {
+        Ok(self.config_changes.lock()?)
+    }
+
+    pub(crate) fn snapshot_config(&self, keys: &[String]) -> SparkResult<Vec<ConfigKeyValue>> {
+        Ok(self.state.lock()?.config.snapshot(keys))
+    }
+
+    pub(crate) fn restore_config(&self, snapshot: Vec<ConfigKeyValue>) -> SparkResult<()> {
+        self.state.lock()?.config.restore(snapshot);
         Ok(())
     }
 

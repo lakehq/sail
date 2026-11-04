@@ -30,6 +30,7 @@ const DATAFUSION_TIME_ZONE_KEY: &str = "datafusion.execution.time_zone";
 /// `spark.sql.catalog.<name>.<option>` an option of the catalog.
 const CATALOG_KEY_PREFIX: &str = "spark.sql.catalog.";
 const REDACTED_VALUE: &str = "*********(redacted)";
+const REDACTION_REGEX_KEY: &str = "spark.redaction.regex";
 
 pub(crate) async fn handle_sql_config(
     ctx: &SessionContext,
@@ -79,7 +80,7 @@ pub(crate) async fn handle_sql_config(
                 }],
             )?;
             let spark = ctx.extension::<SparkSession>()?;
-            let echoed = redact_config_value(&spark, variable, &value)?;
+            let echoed = ConfigRedaction::try_new(&spark)?.value(variable, &value);
             let schema = Arc::new(Schema::new(vec![
                 Field::new("key", DataType::Utf8, false),
                 Field::new("value", DataType::Utf8, false),
@@ -176,34 +177,27 @@ async fn reset_native_config(
 }
 
 /// Applies a change of the configuration, and then registers or drops the session catalogs that
-/// the changed keys define. When a catalog cannot be built, the configuration keeps its previous
-/// values, so the configuration and the catalogs of the session never disagree.
+/// the changed keys define. When the change or a catalog fails, every changed key gets back its
+/// previous value, so the configuration and the catalogs of the session never disagree.
+/// The caller holds [`SparkSession::lock_config_changes`].
 fn change_session_catalogs(
     ctx: &SessionContext,
     spark: &SparkSession,
     keys: &[String],
     change: impl FnOnce() -> SparkResult<()>,
 ) -> SparkResult<()> {
+    let previous = spark.snapshot_config(keys)?;
+    if let Err(error) = change() {
+        spark.restore_config(previous)?;
+        return Err(error);
+    }
     let catalog_keys = keys
         .iter()
         .filter(|key| key.starts_with(CATALOG_KEY_PREFIX))
         .cloned()
         .collect::<Vec<_>>();
-    if catalog_keys.is_empty() {
-        return change();
-    }
-    let previous = spark.get_config_option(catalog_keys.clone())?;
-    change()?;
     if let Err(error) = sync_session_catalogs(ctx, spark, &catalog_keys) {
-        for ConfigKeyValue { key, value } in previous {
-            match value {
-                Some(value) => spark.set_config(vec![ConfigKeyValue {
-                    key,
-                    value: Some(value),
-                }])?,
-                None => spark.unset_config(vec![key])?,
-            }
-        }
+        spark.restore_config(previous)?;
         // The previous configuration built its catalogs before, so this does not fail again.
         if let Err(restore) = sync_session_catalogs(ctx, spark, &catalog_keys) {
             warn!("failed to restore the session catalogs: {restore}");
@@ -254,30 +248,55 @@ fn sync_session_catalogs(
     Ok(())
 }
 
-/// Hides the value of a sensitive key, as Spark does when it lists the configuration.
-/// The keys are those that match `spark.redaction.regex`. A pattern that cannot be
-/// compiled hides every value.
-fn redact_config_value(spark: &SparkSession, key: &str, value: &str) -> SparkResult<String> {
-    let pattern = spark.plan_config()?.redaction_regex.clone();
-    let sensitive = Regex::new(&pattern)
-        .map(|pattern| pattern.is_match(key))
-        .unwrap_or(true);
-    Ok(if sensitive {
-        REDACTED_VALUE.to_string()
-    } else {
-        value.to_string()
-    })
+/// Hides the values of sensitive keys, as Spark does when it lists the configuration.
+/// The keys are those that match the `spark.redaction.regex` of the session. A pattern
+/// that cannot be compiled hides every value.
+pub(crate) struct ConfigRedaction {
+    pattern: Option<Regex>,
 }
 
-/// Hides the sensitive values of a configuration request or response in the debug log,
-/// by the default `spark.redaction.regex`, since the log has no session to read it from.
-pub(crate) fn redact_config_pairs(pairs: &mut [KeyValue]) {
-    let Ok(pattern) = Regex::new(&PlanConfig::default().redaction_regex) else {
-        return;
-    };
-    for pair in pairs {
-        if pattern.is_match(&pair.key) && pair.value.is_some() {
-            pair.value = Some(REDACTED_VALUE.to_string());
+impl ConfigRedaction {
+    pub(crate) fn try_new(spark: &SparkSession) -> SparkResult<Self> {
+        // Only this key is read: parsing the whole planning configuration would fail on an
+        // unrelated invalid value.
+        let pattern = spark
+            .get_config_option(vec![REDACTION_REGEX_KEY.to_string()])?
+            .pop()
+            .and_then(|pair| pair.value)
+            .unwrap_or_else(|| PlanConfig::default().redaction_regex);
+        Ok(Self::new(&pattern))
+    }
+
+    pub(crate) fn new(pattern: &str) -> Self {
+        Self {
+            pattern: Regex::new(pattern).ok(),
+        }
+    }
+
+    pub(crate) fn for_context(ctx: &SessionContext) -> SparkResult<Self> {
+        let spark = ctx.extension::<SparkSession>()?;
+        Self::try_new(&spark)
+    }
+
+    fn is_sensitive(&self, key: &str) -> bool {
+        self.pattern
+            .as_ref()
+            .is_none_or(|pattern| pattern.is_match(key))
+    }
+
+    pub(crate) fn value(&self, key: &str, value: &str) -> String {
+        if self.is_sensitive(key) {
+            REDACTED_VALUE.to_string()
+        } else {
+            value.to_string()
+        }
+    }
+
+    pub(crate) fn pairs(&self, pairs: &mut [KeyValue]) {
+        for pair in pairs {
+            if pair.value.is_some() && self.is_sensitive(&pair.key) {
+                pair.value = Some(REDACTED_VALUE.to_string());
+            }
         }
     }
 }
@@ -303,6 +322,7 @@ pub(crate) fn handle_config_set(
     kv: Vec<KeyValue>,
 ) -> SparkResult<ConfigResponse> {
     let spark = ctx.extension::<SparkSession>()?;
+    let _changes = spark.lock_config_changes()?;
     let kv: Vec<ConfigKeyValue> = kv.into_iter().map(Into::into).collect();
     let warnings = spark.get_config_warnings(&kv)?;
     let sets_session_timezone = {
@@ -373,15 +393,8 @@ pub(crate) fn handle_config_get_all(
     let spark = ctx.extension::<SparkSession>()?;
     let kv = spark.get_all_config(prefix.as_deref())?;
     let warnings = spark.get_config_warnings(&kv)?;
-    let pairs = kv
-        .into_iter()
-        .map(|mut pair| -> SparkResult<_> {
-            if let Some(value) = &pair.value {
-                pair.value = Some(redact_config_value(&spark, &pair.key, value)?);
-            }
-            Ok(pair.into())
-        })
-        .collect::<SparkResult<Vec<_>>>()?;
+    let mut pairs = kv.into_iter().map(Into::into).collect::<Vec<_>>();
+    ConfigRedaction::try_new(&spark)?.pairs(&mut pairs);
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
         server_side_session_id: spark.session_id().to_string(),
@@ -395,6 +408,7 @@ pub(crate) fn handle_config_unset(
     keys: Vec<String>,
 ) -> SparkResult<ConfigResponse> {
     let spark = ctx.extension::<SparkSession>()?;
+    let _changes = spark.lock_config_changes()?;
     let warnings = spark.get_config_warnings_by_keys(&keys)?;
     let unsets_session_timezone = {
         let key = SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string();
@@ -673,20 +687,106 @@ mod tests {
         assert!(!echoed.contains("secret-token"));
     }
 
+    fn pairs(entries: &[(&str, &str)]) -> Vec<KeyValue> {
+        entries
+            .iter()
+            .map(|(key, value)| KeyValue {
+                key: key.to_string(),
+                value: Some(value.to_string()),
+            })
+            .collect()
+    }
+
+    fn values(ctx: &SessionContext, keys: &[&str]) -> Vec<Option<String>> {
+        let spark = ctx.extension::<SparkSession>().unwrap();
+        spark
+            .get_config_option(keys.iter().map(|key| key.to_string()).collect())
+            .unwrap()
+            .into_iter()
+            .map(|pair| pair.value)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn debug_log_hides_the_token() {
+        let ctx = session();
+        let mut logged = pairs(&[
+            (
+                "spark.sql.catalog.org_1.bearer_access_token",
+                "secret-token",
+            ),
+            ("spark.sql.catalog.org_1.uri", "http://catalog.invalid"),
+        ]);
+        ConfigRedaction::for_context(&ctx)
+            .unwrap()
+            .pairs(&mut logged);
+        assert_eq!(logged[0].value.as_deref(), Some(REDACTED_VALUE));
+        assert_eq!(logged[1].value.as_deref(), Some("http://catalog.invalid"));
+    }
+
+    #[tokio::test]
+    async fn debug_log_follows_the_session_redaction_pattern() {
+        let ctx = session();
+        set(&ctx, REDACTION_REGEX_KEY, "(?i)token|uri").unwrap();
+        let mut logged = pairs(&[("spark.sql.catalog.org_1.uri", "http://user:pass@catalog")]);
+        ConfigRedaction::for_context(&ctx)
+            .unwrap()
+            .pairs(&mut logged);
+        assert_eq!(logged[0].value.as_deref(), Some(REDACTED_VALUE));
+    }
+
     #[test]
-    fn debug_log_hides_the_token() {
-        let mut pairs = vec![
-            KeyValue {
-                key: "spark.sql.catalog.org_1.bearer_access_token".to_string(),
-                value: Some("secret-token".to_string()),
-            },
-            KeyValue {
-                key: "spark.sql.catalog.org_1.uri".to_string(),
-                value: Some("http://catalog.invalid".to_string()),
-            },
-        ];
-        redact_config_pairs(&mut pairs);
-        assert_eq!(pairs[0].value.as_deref(), Some(REDACTED_VALUE));
-        assert_eq!(pairs[1].value.as_deref(), Some("http://catalog.invalid"));
+    fn a_pattern_that_cannot_be_compiled_hides_every_value() {
+        let mut logged = pairs(&[("spark.sql.session.timeZone", "UTC")]);
+        ConfigRedaction::new("(").pairs(&mut logged);
+        assert_eq!(logged[0].value.as_deref(), Some(REDACTED_VALUE));
+    }
+
+    #[tokio::test]
+    async fn get_all_ignores_an_invalid_planning_option() {
+        let ctx = session();
+        register(&ctx, "org_1");
+        set(&ctx, "spark.sql.ansi.enabled", "invalid").unwrap();
+        handle_config_get_all(&ctx, None).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_failed_change_restores_every_key_of_the_request() {
+        let ctx = session();
+        register(&ctx, "org_1");
+        handle_config_set(
+            &ctx,
+            pairs(&[
+                (
+                    "spark.sql.catalog.org_1.uri",
+                    "http://other.invalid/catalog",
+                ),
+                ("spark.sql.shuffle.partitions", "-1"),
+            ]),
+        )
+        .unwrap_err();
+        assert_eq!(
+            values(&ctx, &["spark.sql.catalog.org_1.uri"]),
+            vec![Some("http://catalog.invalid:8181/catalog".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_catalog_restores_the_other_keys_of_the_request() {
+        let ctx = session();
+        set(&ctx, SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE, "UTC").unwrap();
+        handle_config_set(
+            &ctx,
+            pairs(&[
+                (SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE, "Asia/Tokyo"),
+                ("spark.sql.catalog.sail", "iceberg-rest"),
+            ]),
+        )
+        .unwrap_err();
+        assert_eq!(
+            values(&ctx, &[SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE]),
+            vec![Some("UTC".to_string())]
+        );
+        assert_eq!(catalogs(&ctx), vec!["sail"]);
     }
 }

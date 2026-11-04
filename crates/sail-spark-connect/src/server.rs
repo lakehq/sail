@@ -117,16 +117,23 @@ async fn handle_command(
 // TODO: make sure that `server_side_session_id` is set properly
 
 /// Hides the sensitive values of a configuration request before it is logged.
-fn redact_config_request(request: &ConfigRequest) -> ConfigRequest {
+fn redact_config_request(
+    request: &ConfigRequest,
+    redaction: &service::ConfigRedaction,
+) -> ConfigRequest {
     use crate::spark::connect::config_request::operation::OpType;
 
     let mut request = request.clone();
-    if let Some(OpType::Set(set)) = request
+    match request
         .operation
         .as_mut()
         .and_then(|operation| operation.op_type.as_mut())
     {
-        service::redact_config_pairs(&mut set.pairs);
+        Some(OpType::Set(config_request::Set { pairs, .. }))
+        | Some(OpType::GetWithDefault(config_request::GetWithDefault { pairs })) => {
+            redaction.pairs(pairs);
+        }
+        _ => {}
     }
     request
 }
@@ -264,16 +271,26 @@ impl SparkConnectService for SparkConnectServer {
         use crate::spark::connect::config_request::operation::OpType;
 
         let request = request.into_inner();
-        if log_enabled!(Level::Debug) {
-            debug!("{:?}", redact_config_request(&request));
-        }
         let session_id = request.session_id.clone();
-        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
+        let user_id = request
+            .user_context
+            .as_ref()
+            .map(|u| u.user_id.clone())
+            .unwrap_or_default();
         let ctx = self
             .session_manager
             .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
+        // The log hides what the session's `spark.redaction.regex` matches, as it was before
+        // the request.
+        let redaction = if log_enabled!(Level::Debug) {
+            let redaction = service::ConfigRedaction::for_context(&ctx)?;
+            debug!("{:?}", redact_config_request(&request, &redaction));
+            Some(redaction)
+        } else {
+            None
+        };
         let config_request::Operation { op_type: op } = request.operation.required("operation")?;
         let op = op.required("operation type")?;
         let response = match op {
@@ -298,9 +315,9 @@ impl SparkConnectService for SparkConnectServer {
                 service::handle_config_is_modifiable(&ctx, keys)?
             }
         };
-        if log_enabled!(Level::Debug) {
+        if let Some(redaction) = redaction {
             let mut logged = response.clone();
-            service::redact_config_pairs(&mut logged.pairs);
+            redaction.pairs(&mut logged.pairs);
             debug!("{logged:?}");
         }
         Ok(Response::new(response))
@@ -513,5 +530,30 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<GetStatusResponse>, Status> {
         debug!("{:?}", request.into_inner());
         Err(Status::unimplemented("get status"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spark::connect::KeyValue;
+    use crate::spark::connect::config_request::operation::OpType;
+
+    #[test]
+    fn debug_log_hides_the_default_of_get_with_default() {
+        let request = ConfigRequest {
+            operation: Some(config_request::Operation {
+                op_type: Some(OpType::GetWithDefault(config_request::GetWithDefault {
+                    pairs: vec![KeyValue {
+                        key: "spark.sql.catalog.org_1.bearer_access_token".to_string(),
+                        value: Some("secret-token".to_string()),
+                    }],
+                })),
+            }),
+            ..Default::default()
+        };
+        let redaction = service::ConfigRedaction::new("(?i)token");
+        let logged = format!("{:?}", redact_config_request(&request, &redaction));
+        assert!(!logged.contains("secret-token"));
     }
 }
