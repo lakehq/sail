@@ -5,6 +5,7 @@ import re
 import pytest
 from pytest_bdd import scenarios
 
+from pysail.testing.spark.session import spark_session_factory
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail only")
@@ -15,11 +16,23 @@ COLLECTED_KEY_LIMIT = 60_000
 scenarios("features")
 
 
+@pytest.fixture
+def key_byte_threshold_spark(remote):
+    with spark_session_factory(remote) as sessions:
+        spark = sessions.create()
+        # Exercise the 1 MiB boundary independently of the native default.
+        spark.sql("SET datafusion.optimizer.hash_join_single_partition_threshold = 1048576")
+        yield spark
+
+
 @pytest.mark.parametrize(
     ("limit", "expected_n", "expected_total"),
     [(COLLECTED_KEY_LIMIT, 150, 8_700), (65_536, 164, 9_512), (70_000, 175, 10_150)],
 )
-def test_early_filters_respect_key_byte_threshold(spark, tmp_path, limit, expected_n, expected_total):
+def test_early_filters_respect_key_byte_threshold(
+    key_byte_threshold_spark, tmp_path, limit, expected_n, expected_total
+):
+    spark = key_byte_threshold_spark
     facts = str(tmp_path / "facts")
     dimension = str(tmp_path / "dimension")
     spark.range(400_000).selectExpr("(id % 1000) * 400 AS k1", "id % 7 AS k2").write.parquet(facts)

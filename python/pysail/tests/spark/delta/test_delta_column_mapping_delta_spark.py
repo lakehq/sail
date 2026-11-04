@@ -12,6 +12,7 @@ from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import BooleanType, IntegerType, StructField, StructType
 
+from pysail.testing.spark.utils.common import pyspark_version
 from pysail.testing.spark.utils.sql import escape_sql_identifier
 
 if TYPE_CHECKING:
@@ -20,6 +21,34 @@ if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
 pytestmark = pytest.mark.integration
+
+# Delta 4.4 (Spark 4.2) materializes partition columns by default. Earlier
+# Delta versions omit them and reject this property.
+UNMATERIALIZED_PARTITION_PROPERTY = (
+    "'delta.writePartitionColumnsToParquet' = 'false'," if pyspark_version() >= (4, 2) else ""
+)
+
+
+def _assert_unmaterialized_partition_fixture(table_path: Path) -> None:
+    configuration = _latest_metadata(table_path)["configuration"]
+    assert configuration.get("delta.writePartitionColumnsToParquet") == (
+        "false" if UNMATERIALIZED_PARTITION_PROPERTY else None
+    )
+    assert not any(
+        value == "true"
+        for key, value in configuration.items()
+        if key.startswith("delta.enableIcebergCompat") or key == "delta.enableMaterializePartitionColumnsFeature"
+    )
+    actions = (
+        json.loads(line)
+        for log_file in sorted((table_path / "_delta_log").glob("*.json"), reverse=True)
+        for line in log_file.read_text(encoding="utf-8").splitlines()
+    )
+    protocol = next(action["protocol"] for action in actions if "protocol" in action)
+    assert not any(
+        feature == "materializePartitionColumns" or feature.startswith("icebergCompat")
+        for feature in protocol.get("writerFeatures", [])
+    )
 
 
 def _latest_metadata(table_path: Path) -> dict:
@@ -147,10 +176,14 @@ def test_sail_replay_preserves_present_null_mapped_partition_value(
         )
         USING DELTA
         PARTITIONED BY (source_partition, target_partition)
-        TBLPROPERTIES ('delta.columnMapping.mode' = 'name')
+        TBLPROPERTIES (
+            {UNMATERIALIZED_PARTITION_PROPERTY}
+            'delta.columnMapping.mode' = 'name'
+        )
         """
     )
     metadata = _latest_metadata(table_path)
+    _assert_unmaterialized_partition_fixture(table_path)
     source_physical_name = _physical_name(metadata, "source_partition")
     target_physical_name = _physical_name(metadata, "target_partition")
     assert source_physical_name != target_physical_name
@@ -211,6 +244,7 @@ def test_sail_preserves_file_values_when_physical_name_matches_partition_logical
         USING DELTA
         PARTITIONED BY (target_partition)
         TBLPROPERTIES (
+            {UNMATERIALIZED_PARTITION_PROPERTY}
             'delta.columnMapping.mode' = 'name',
             'delta.dataSkippingStatsColumns' = 'source_value'
         )
@@ -218,6 +252,7 @@ def test_sail_preserves_file_values_when_physical_name_matches_partition_logical
     )
     metadata = _latest_metadata(table_path)
     source_physical_name = _physical_name(metadata, "source_value")
+    _assert_unmaterialized_partition_fixture(table_path)
     partition_physical_name = _physical_name(metadata, "target_partition")
     assert source_physical_name != partition_physical_name
 
