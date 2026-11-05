@@ -134,13 +134,14 @@ Feature: System catalog queries
 
   @sail-only
   Scenario: Options table queries
-    When query
+    Given the configured execution mode
+    When query template
       """
-      SELECT value FROM system.session.options WHERE key = 'mode'
+      SELECT value = '{{ configured_mode }}' AS matches_mode FROM system.session.options WHERE key = 'mode'
       """
     Then query result
-      | value |
-      | local |
+      | matches_mode |
+      | true         |
 
     When query
       """

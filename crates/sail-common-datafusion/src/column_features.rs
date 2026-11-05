@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 
-use datafusion::arrow::datatypes::Field;
+use datafusion::arrow::datatypes::{Field, Metadata};
 
 use crate::catalog::CatalogTableColumnIdentity;
 
@@ -86,11 +86,11 @@ impl AsRef<str> for ColumnFeatureKey {
 /// without touching raw string keys.
 #[derive(Debug, Clone, Copy)]
 pub struct ColumnFeatures<'a> {
-    metadata: &'a HashMap<String, String>,
+    metadata: &'a Metadata,
 }
 
 impl<'a> ColumnFeatures<'a> {
-    pub fn from_map(metadata: &'a HashMap<String, String>) -> Self {
+    pub fn from_map(metadata: &'a Metadata) -> Self {
         Self { metadata }
     }
 
@@ -238,5 +238,75 @@ impl ColumnFeaturesBuilder {
 
     pub fn build(self) -> HashMap<String, String> {
         self.entries
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::DataType;
+
+    use super::*;
+
+    #[test]
+    fn field_features_preserve_metadata_and_serialization() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let identity = CatalogTableColumnIdentity {
+            start: -10,
+            step: 2,
+            high_water_mark: Some(20),
+            allow_explicit_insert: false,
+        };
+        let mut metadata = ColumnFeaturesBuilder::new()
+            .with_generation_expression("id + 1")
+            .with_current_default(r#""quoted default""#)
+            .with_not_null_constraint()
+            .with_identity(&identity)
+            .build();
+        metadata.insert("custom.key".to_string(), "unchanged".to_string());
+        let field = Field::new("id", DataType::Int64, false).with_metadata(metadata.clone());
+        let decoded: Field = serde_json::from_value(serde_json::to_value(&field)?)?;
+        assert_eq!(decoded, field);
+        assert_eq!(decoded.metadata(), &metadata);
+        assert_eq!(
+            serde_json::to_value(decoded.metadata())?,
+            serde_json::to_value(&metadata)?,
+        );
+        for features in [
+            ColumnFeatures::from_field(&decoded),
+            ColumnFeatures::from_map(decoded.metadata()),
+        ] {
+            assert_eq!(features.generation_expression().as_deref(), Some("id + 1"));
+            assert_eq!(
+                features.current_default().as_deref(),
+                Some("quoted default")
+            );
+            assert_eq!(
+                features.raw(ColumnFeatureKey::CurrentDefault),
+                Some(r#""quoted default""#)
+            );
+            assert!(features.is_not_null_constraint());
+            assert_eq!(features.identity(), Some(identity.clone()));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn missing_and_invalid_metadata_remain_absent() {
+        for metadata in [
+            Metadata::new(),
+            Metadata::from([
+                ("delta.identity.start", "invalid"),
+                ("delta.identity.step", "1"),
+                ("delta.identity.allowExplicitInsert", "true"),
+                ("sail.column.notNull", "false"),
+            ]),
+        ] {
+            let features = ColumnFeatures::from_map(&metadata);
+            assert_eq!(features.generation_expression(), None);
+            assert_eq!(features.current_default(), None);
+            assert_eq!(features.raw(ColumnFeatureKey::CurrentDefault), None);
+            assert_eq!(features.identity(), None);
+            assert!(!features.is_not_null_constraint());
+        }
     }
 }

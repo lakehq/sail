@@ -42,7 +42,7 @@ impl SessionFactory<()> for WorkerSessionFactory {
         execution.batch_size = ConfigNonZeroUsize::try_new(self.config.execution.batch_size)?;
         execution.spill_compression =
             super::temporary_file_compression(self.config.runtime.temporary_files.compression);
-        super::apply_parquet_config(&mut execution.parquet, &self.config.parquet);
+        super::apply_parquet_config(&mut execution.parquet, &self.config.parquet)?;
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
@@ -55,6 +55,11 @@ impl SessionFactory<()> for WorkerSessionFactory {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::common::DataFusionError;
+    use datafusion::common::parquet_config::{
+        DFParquetCompression, DFParquetEncoding, DFParquetStatistics, DFTimeUnit,
+    };
+
     use super::*;
 
     #[tokio::test]
@@ -66,27 +71,94 @@ mod tests {
         config.parquet.pushdown_filters = true;
         config.parquet.schema_force_view_types = false;
         config.parquet.binary_as_string = true;
-        config.parquet.compression = "gzip(3)".to_string();
         config.parquet.max_row_group_size = 2048;
         let handle = tokio::runtime::Handle::current();
         let runtime = RuntimeHandle::new(handle.clone(), handle);
-        let session = WorkerSessionFactory::new(Arc::new(config), runtime).create(())?;
-        let state = session.state_ref();
-        let state = state.read();
-        let parquet = &state.config_options().execution.parquet;
-        assert!(!parquet.enable_page_index);
-        assert!(!parquet.pruning);
-        assert_eq!(parquet.metadata_size_hint, Some(32768));
-        assert!(parquet.pushdown_filters);
-        assert!(!parquet.schema_force_view_types);
-        assert!(parquet.binary_as_string);
-        assert_eq!(parquet.compression.as_deref(), Some("gzip(3)"));
-        assert_eq!(parquet.max_row_group_size, 2048);
-        assert_eq!(parquet.coerce_int96.as_deref(), Some("us"));
-        assert_eq!(
-            parquet.created_by,
-            concat!("sail version ", env!("CARGO_PKG_VERSION"))
-        );
+        for (
+            compression,
+            expected_compression,
+            statistics,
+            expected_statistics,
+            encoding,
+            expected_encoding,
+        ) in [
+            (
+                "gzip(3)",
+                DFParquetCompression::Gzip(3),
+                "chunk",
+                DFParquetStatistics::Chunk,
+                Some("plain"),
+                Some(DFParquetEncoding::Plain),
+            ),
+            (
+                "zstd(3)",
+                DFParquetCompression::Zstd(3),
+                "page",
+                DFParquetStatistics::Page,
+                None,
+                None,
+            ),
+            (
+                "SNAPPY",
+                DFParquetCompression::Snappy,
+                "none",
+                DFParquetStatistics::None,
+                Some("DELTA_BINARY_PACKED"),
+                Some(DFParquetEncoding::DeltaBinaryPacked),
+            ),
+        ] {
+            config.parquet.compression = compression.to_string();
+            config.parquet.statistics_enabled = statistics.to_string();
+            config.parquet.encoding = encoding.map(str::to_string);
+            let session =
+                WorkerSessionFactory::new(Arc::new(config.clone()), runtime.clone()).create(())?;
+            let state = session.state_ref();
+            let state = state.read();
+            let parquet = &state.config_options().execution.parquet;
+            assert!(!parquet.enable_page_index);
+            assert!(!parquet.pruning);
+            assert_eq!(parquet.metadata_size_hint, Some(32768));
+            assert!(parquet.pushdown_filters);
+            assert!(!parquet.schema_force_view_types);
+            assert!(parquet.binary_as_string);
+            assert_eq!(parquet.compression, Some(expected_compression));
+            assert_eq!(parquet.statistics_enabled, Some(expected_statistics));
+            assert_eq!(parquet.encoding, expected_encoding);
+            assert_eq!(parquet.max_row_group_size, 2048);
+            assert_eq!(parquet.coerce_int96, Some(DFTimeUnit::Microsecond));
+            assert_eq!(
+                parquet.created_by,
+                concat!("sail version ", env!("CARGO_PKG_VERSION"))
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn worker_rejects_invalid_parquet_config() -> Result<(), Box<dyn std::error::Error>> {
+        let mut config = AppConfig::load()?;
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        for (compression, statistics, encoding) in [
+            ("invalid", "page", None),
+            ("gzip", "page", None),
+            ("brotli", "page", None),
+            ("zstd", "page", None),
+            ("zstd(23)", "page", None),
+            ("snappy(2)", "page", None),
+            ("zstd(3)", "invalid", None),
+            ("zstd(3)", "page", Some("invalid")),
+        ] {
+            config.parquet.compression = compression.to_string();
+            config.parquet.statistics_enabled = statistics.to_string();
+            config.parquet.encoding = encoding.map(str::to_string);
+            let result =
+                WorkerSessionFactory::new(Arc::new(config.clone()), runtime.clone()).create(());
+            assert!(
+                matches!(result, Err(DataFusionError::Configuration(_))),
+                "compression={compression}, statistics={statistics}, encoding={encoding:?}"
+            );
+        }
         Ok(())
     }
 }

@@ -77,7 +77,7 @@ impl TableProvider for IcebergMetadataRelationProvider {
     async fn scan(
         &self,
         session: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -111,7 +111,7 @@ impl TableProvider for IcebergMetadataRelationProvider {
                 relation: self.relation_type,
                 source,
                 projection: projection
-                    .cloned()
+                    .map(<[usize]>::to_vec)
                     .unwrap_or_else(|| (0..self.schema.fields().len()).collect()),
                 limit,
             },

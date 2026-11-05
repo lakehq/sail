@@ -45,6 +45,8 @@ enum MetricUnit {
     Byte,
     #[serde(rename = "s")]
     Second,
+    #[serde(rename = "1")]
+    Dimensionless,
 }
 
 impl fmt::Display for MetricUnit {
@@ -52,6 +54,7 @@ impl fmt::Display for MetricUnit {
         match self {
             MetricUnit::Byte => write!(f, "byte"),
             MetricUnit::Second => write!(f, "s"),
+            MetricUnit::Dimensionless => write!(f, "1"),
         }
     }
 }

@@ -182,6 +182,19 @@ def test_checkpoint_preserves_partitioning_and_ordering(spark, local, snapshot):
     aggregate_plan = normalize_plan_text(checkpointed.groupBy("key").count()._explain_string())  # noqa: SLF001
     ordered_plan = normalize_plan_text(checkpointed.sortWithinPartitions("key", "id")._explain_string())  # noqa: SLF001
 
+    assert checkpointed.schema == source.schema
+    assert sorted(tuple(row) for row in checkpointed.collect()) == [(i, i % 4) for i in range(100)]
+    assert sorted(tuple(row) for row in checkpointed.groupBy("key").count().collect()) == [
+        (key, 25) for key in range(4)
+    ]
+    partitions = {}
+    for row in checkpointed.select("id", "key", sf.spark_partition_id().alias("pid")).collect():
+        partitions.setdefault(row.pid, []).append((row.key, row.id))
+    assert all(rows == sorted(rows) for rows in partitions.values())
+    assert all(
+        len({pid for pid, rows in partitions.items() if any(k == key for k, _ in rows)}) == 1 for key in range(4)
+    )
+
     assert aggregate_plan == snapshot
     assert ordered_plan == snapshot
 
@@ -193,6 +206,7 @@ def test_checkpoint_preserves_saved_row_order(spark, local):
     checkpointed = source.localCheckpoint() if local else source.checkpoint()
 
     assert checkpointed.collect() == [(i,) for i in range(9, -1, -1)]
+    assert checkpointed.limit(3).collect() == [(9,), (8,), (7,)]
 
 
 @pytest.mark.parametrize("local", [False, True], ids=["checkpoint", "local-checkpoint"])

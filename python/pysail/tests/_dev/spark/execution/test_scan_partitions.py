@@ -79,6 +79,8 @@ def test_small_filtered_build_is_materialized_once(spark, tmp_path, sizes, snaps
     plan = normalize_plan_text(query._explain_string(mode="codegen"))  # noqa: SLF001
     assert plan == snapshot
     assert sorted(row.probe_id for row in query.collect()) == list(range(0, sum(sizes), 2))
+    assert query.schema.simpleString() == "struct<probe_id:bigint>"
+    assert not query.schema["probe_id"].nullable
 
 
 @pytest.mark.parametrize("kind", ["round_robin", "hash"])

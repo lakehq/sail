@@ -665,7 +665,7 @@ mod tests {
         ]))))
     }
 
-    fn metadata_expressions(schema: &Schema) -> Vec<ProjectionExpr> {
+    fn metadata_expressions() -> Vec<ProjectionExpr> {
         let expressions = [
             expr_fn::coalesce(vec![expr_fn::input_file_name(), lit("")]),
             ScalarUDF::from(InputFileBlockStartFunc::new()).call(vec![]),
@@ -674,7 +674,7 @@ mod tests {
         ];
         create_physical_exprs(
             &expressions,
-            &DFSchema::try_from(schema.clone()).unwrap(),
+            &DFSchema::empty(),
             &ExecutionProps::default(),
             &PhysicalPlanningContext::default(),
         )
@@ -691,14 +691,22 @@ mod tests {
             ProjectionExprs::from_indices(&(0..schema.fields().len()).collect::<Vec<_>>(), &schema);
         Arc::new(
             ProjectionExec::try_new(
-                identity
-                    .iter()
-                    .cloned()
-                    .chain(metadata_expressions(&schema)),
+                identity.iter().cloned().chain(metadata_expressions()),
                 input,
             )
             .unwrap(),
         )
+    }
+
+    fn assert_identity_columns(projection: &ProjectionExec, width: usize) {
+        let schema = projection.input().schema();
+        for (index, expression) in projection.expr()[..width].iter().enumerate() {
+            let column = expression.expr.downcast_ref::<Column>().unwrap();
+            assert_eq!(column.index(), index);
+            assert_eq!(column.name(), schema.field(index).name());
+            assert_eq!(&expression.alias, schema.field(index).name());
+            assert_eq!(projection.schema().field(index), schema.field(index));
+        }
     }
 
     fn join_filter() -> JoinFilter {
@@ -789,12 +797,24 @@ mod tests {
                     raw_projection.clone(),
                     columns("r"),
                 );
+                if raw_projection.as_ref().is_some_and(|p| !p.is_empty()) {
+                    let schema = input.schema();
+                    assert_eq!(schema.field(0), schema.field(2));
+                    assert_eq!(schema.field(0).name(), "rvalue");
+                    assert_eq!(schema.field(0).data_type(), &DataType::Int64);
+                    assert!(schema.field(0).is_nullable());
+                }
                 let plan = metadata_projection(Arc::clone(&input));
+                assert_identity_columns(
+                    plan.downcast_ref::<ProjectionExec>().unwrap(),
+                    input.schema().fields().len(),
+                );
                 let schema = plan.schema();
                 let visible_width = input.schema().fields().len();
                 let optimized = optimize_streamed(plan);
                 assert_eq!(optimized.schema(), schema);
                 let projection = optimized.downcast_ref::<ProjectionExec>().unwrap();
+                assert_identity_columns(projection, visible_width);
                 let join = projection.input().downcast_ref::<HashJoinExec>().unwrap();
                 let expected: Vec<_> = raw_projection
                     .unwrap_or_else(|| (0..raw_width).collect())
@@ -818,6 +838,7 @@ mod tests {
                 assert!(Arc::ptr_eq(join.left(), original.left()));
                 let right = join.right().downcast_ref::<ProjectionExec>().unwrap();
                 assert_eq!(right.expr().len(), 5);
+                assert_identity_columns(right, 2);
                 assert!(
                     right.expr()[2..]
                         .iter()
@@ -844,7 +865,7 @@ mod tests {
             Some(vec![2]),
             columns("r"),
         );
-        let metadata = metadata_expressions(&join.schema());
+        let metadata = metadata_expressions();
         let expression = Arc::new(BinaryExpr::new(
             Arc::new(LambdaVariable::new(
                 1,
@@ -903,6 +924,7 @@ mod tests {
             let optimized = optimize_streamed(plan);
             assert_eq!(optimized.schema(), schema);
             let projection = optimized.downcast_ref::<ProjectionExec>().unwrap();
+            assert_identity_columns(projection, width);
             for expression in &projection.expr()[..width] {
                 assert!(expression.expr.is::<Column>());
             }

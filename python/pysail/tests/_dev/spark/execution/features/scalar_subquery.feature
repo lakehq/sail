@@ -2172,8 +2172,8 @@ Feature: Scalar subqueries in distributed execution
         | 0.0        | 0 |
         | 16777216.0 | 2 |
 
-  # Spark rejects outer references in a grouping-set subquery, which Sail already ran before
-  # cast keys. Expected values come from running each outer row's query uncorrelated on Spark.
+  # Spark rejects correlated grouping sets. Use independent literal-bound Sail queries:
+  # Sail/DataFusion emits empty grand totals for mixed sets, unlike Spark (SPARK-29701).
   Rule: Cast correlation keys keep the GROUPING results of grouping sets
     @sail-only
     Scenario Outline: A cast correlation keeps <function> of a rolled-up column
@@ -2287,18 +2287,18 @@ Feature: Scalar subqueries in distributed execution
         ORDER BY o.id NULLS FIRST, o.s NULLS FIRST, n NULLS FIRST
         """
       Then query result collected ordered
-        | id   | s    | n     |
-        | NULL | NULL | NULL  |
-        | 0    | 0    | <n0>  |
-        | 0    | 0    | <n0>  |
-        | 0    | 00   | <n00> |
-        | 1    | 1    | <n1>  |
-        | 2    | 2    | NULL  |
+        | id   | s    | n         |
+        | NULL | NULL | <missing> |
+        | 0    | 0    | <n0>      |
+        | 0    | 0    | <n0>      |
+        | 0    | 00   | <n00>     |
+        | 1    | 1    | <n1>      |
+        | 2    | 2    | <missing> |
 
       Examples:
-        | grouping                 | operator    | producer                                             | n0 | n00 | n1 |
-        | GROUPING SETS ((k), ())  | a generator | explode(array(count(*), count(*) + 1))               | 3  | 2   | 2  |
-        | ROLLUP(k)                | a generator | explode(array(count(*), count(*) + 1))               | 3  | 2   | 2  |
-        | CUBE(k)                  | a generator | explode(array(count(*), count(*) + 1))               | 3  | 2   | 2  |
-        | GROUPING SETS ((k), (k)) | a window    | row_number() OVER (PARTITION BY k ORDER BY count(*)) | 2  | 2   | 2  |
-        | GROUPING SETS ((k), (k)) | a generator | explode(array(count(*), count(*) + 1))               | 3  | 2   | 2  |
+        | grouping                 | operator    | producer                                             | n0 | n00 | n1 | missing |
+        | GROUPING SETS ((k), ())  | a generator | explode(array(count(*), count(*) + 1))               | 3  | 2   | 2  | 1       |
+        | ROLLUP(k)                | a generator | explode(array(count(*), count(*) + 1))               | 3  | 2   | 2  | 1       |
+        | CUBE(k)                  | a generator | explode(array(count(*), count(*) + 1))               | 3  | 2   | 2  | 1       |
+        | GROUPING SETS ((k), (k)) | a window    | row_number() OVER (PARTITION BY k ORDER BY count(*)) | 2  | 2   | 2  | NULL    |
+        | GROUPING SETS ((k), (k)) | a generator | explode(array(count(*), count(*) + 1))               | 3  | 2   | 2  | NULL    |

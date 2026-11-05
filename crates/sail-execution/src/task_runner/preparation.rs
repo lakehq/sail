@@ -7,7 +7,6 @@ use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{DataFusionError, internal_err};
 use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
@@ -108,9 +107,9 @@ impl TaskPreparation {
                 if ds.downcast_to_file_source::<ParquetSource>().is_some()
                     && base_config.expr_adapter_factory.is_none()
                 {
-                    let adapter_factory: Arc<dyn PhysicalExprAdapterFactory> =
-                        Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {});
-                    builder = builder.with_expr_adapter(Some(adapter_factory));
+                    builder = builder.with_expr_adapter(Some(
+                        SchemaEvolutionPhysicalExprAdapterFactory::shared(),
+                    ));
                 }
                 return Ok(Transformed::yes(
                     DataSourceExec::from_data_source(builder.build()) as Arc<dyn ExecutionPlan>,

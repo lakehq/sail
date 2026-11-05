@@ -11,7 +11,7 @@ mod read;
 mod write;
 
 pub use read::ArrowReadFormat;
-pub use write::ArrowWriteFormat;
+pub use write::{ArrowSink, ArrowWriteFormat};
 
 pub type ArrowDataSource = ListingDataSource<ArrowFormatFactory>;
 

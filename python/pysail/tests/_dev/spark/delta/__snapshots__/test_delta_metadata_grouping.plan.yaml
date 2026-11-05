@@ -360,7 +360,7 @@ data:
         AggregateExec: mode=Final, gby=[], aggr=[min(?table?.#2), max(?table?.#2)]
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[min(?table?.#2), max(?table?.#2)]
-              DataSourceExec: file_groups={1 group: [[<tmp>/missing_row_count_plans/part-0.parquet]]}, projection=[v@0 as #2], file_type=parquet
+              DataSourceExec: file_groups={1 group: [[<tmp>/missing_row_count_plans/part-0.parquet]]}, projection=[v@0 as #2], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
   filtered_group: |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as p, #4@1 as count]
@@ -482,7 +482,7 @@ data:
             AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(__sail_delta_count_weight) as __sail_delta_count_sum]
               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
                 UnionExec
-                  ProjectionExec: expr=[CAST(column1@0 AS Int64) as #2, column2@1 as __sail_delta_count_weight]
+                  ProjectionExec: expr=[CAST(column1@0 AS Int64;N) as #2, column2@1 as __sail_delta_count_weight]
                     DataSourceExec: partitions=1, partition_sizes=[1]
                   DataSourceExec: file_groups={1 group: [[<tmp>/metadata_plan_inputs/part-1.parquet]]}, projection=[v@0 as #2, 1 as __sail_delta_count_weight], file_type=parquet
   filtered_count: |-
@@ -556,7 +556,7 @@ data:
           AggregateExec: mode=Partial, gby=[#3@0 as #3, #4@1 as #4], aggr=[]
             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
               UnionExec
-                ProjectionExec: expr=[CAST(column1@0 AS Int32) as #3, column2@1 as #4, column3@2 as __sail_delta_count_weight]
+                ProjectionExec: expr=[CAST(column1@0 AS Int32;N) as #3, column2@1 as #4, column3@2 as __sail_delta_count_weight]
                   DataSourceExec: partitions=1, partition_sizes=[1]
                 DataSourceExec: file_groups={1 group: [[<tmp>/metadata_plan_inputs/part-1.parquet]]}, projection=[q@2 as #3, p@1 as #4, 1 as __sail_delta_count_weight], file_type=parquet
   partition_group: |-
@@ -568,7 +568,7 @@ data:
             AggregateExec: mode=Partial, gby=[#0@0 as #0, #1@1 as #1], aggr=[sum(__sail_delta_count_weight) as __sail_delta_count_sum]
               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
                 UnionExec
-                  ProjectionExec: expr=[column1@0 as #0, CAST(column2@1 AS Int32) as #1, column3@2 as __sail_delta_count_weight]
+                  ProjectionExec: expr=[column1@0 as #0, CAST(column2@1 AS Int32;N) as #1, column3@2 as __sail_delta_count_weight]
                     DataSourceExec: partitions=1, partition_sizes=[1]
                   DataSourceExec: file_groups={1 group: [[<tmp>/metadata_plan_inputs/part-1.parquet]]}, projection=[p@1 as #0, q@2 as #1, 1 as __sail_delta_count_weight], file_type=parquet
 ---
@@ -1104,36 +1104,42 @@ data:
   absent_partition: |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as count(1), #4@1 as MIN(value), #5@2 as MAX(value)]
-      ProjectionExec: expr=[0 as #3, NULL as #4, NULL as #5]
-        PlaceholderRowExec
+      ProjectionExec: expr=[count(Int64(1))@0 as #3, min(filtered_metadata_alias.#2)@1 as #4, max(filtered_metadata_alias.#2)@2 as #5]
+        ProjectionExec: expr=[0 as count(Int64(1)), NULL as min(filtered_metadata_alias.#2), NULL as max(filtered_metadata_alias.#2)]
+          PlaceholderRowExec
   contradiction: |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as count(1), #4@1 as MIN(value), #5@2 as MAX(value)]
-      ProjectionExec: expr=[0 as #3, NULL as #4, NULL as #5]
-        PlaceholderRowExec
+      ProjectionExec: expr=[count(Int64(1))@0 as #3, min(filtered_metadata_alias.#2)@1 as #4, max(filtered_metadata_alias.#2)@2 as #5]
+        ProjectionExec: expr=[0 as count(Int64(1)), NULL as min(filtered_metadata_alias.#2), NULL as max(filtered_metadata_alias.#2)]
+          PlaceholderRowExec
   filtered: |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as count(1), #4@1 as count(value), #5@2 as MIN(value), #6@3 as MAX(value)]
-      ProjectionExec: expr=[4 as #3, 3 as #4, 2 as #5, 9 as #6]
-        PlaceholderRowExec
+      ProjectionExec: expr=[count(Int64(1))@0 as #3, count(filtered_metadata_alias.#2)@1 as #4, min(filtered_metadata_alias.#2)@2 as #5, max(filtered_metadata_alias.#2)@3 as #6]
+        ProjectionExec: expr=[4 as count(Int64(1)), 3 as count(filtered_metadata_alias.#2), 2 as min(filtered_metadata_alias.#2), 9 as max(filtered_metadata_alias.#2)]
+          PlaceholderRowExec
 ---
 name: "test_partition_filtered_exact_aggregates_do_not_read_files[name]"
 data:
   absent_partition: |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as count(1), #4@1 as MIN(value), #5@2 as MAX(value)]
-      ProjectionExec: expr=[0 as #3, NULL as #4, NULL as #5]
-        PlaceholderRowExec
+      ProjectionExec: expr=[count(Int64(1))@0 as #3, min(filtered_metadata_alias.#2)@1 as #4, max(filtered_metadata_alias.#2)@2 as #5]
+        ProjectionExec: expr=[0 as count(Int64(1)), NULL as min(filtered_metadata_alias.#2), NULL as max(filtered_metadata_alias.#2)]
+          PlaceholderRowExec
   contradiction: |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as count(1), #4@1 as MIN(value), #5@2 as MAX(value)]
-      ProjectionExec: expr=[0 as #3, NULL as #4, NULL as #5]
-        PlaceholderRowExec
+      ProjectionExec: expr=[count(Int64(1))@0 as #3, min(filtered_metadata_alias.#2)@1 as #4, max(filtered_metadata_alias.#2)@2 as #5]
+        ProjectionExec: expr=[0 as count(Int64(1)), NULL as min(filtered_metadata_alias.#2), NULL as max(filtered_metadata_alias.#2)]
+          PlaceholderRowExec
   filtered: |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as count(1), #4@1 as count(value), #5@2 as MIN(value), #6@3 as MAX(value)]
-      ProjectionExec: expr=[4 as #3, 3 as #4, 2 as #5, 9 as #6]
-        PlaceholderRowExec
+      ProjectionExec: expr=[count(Int64(1))@0 as #3, count(filtered_metadata_alias.#2)@1 as #4, min(filtered_metadata_alias.#2)@2 as #5, max(filtered_metadata_alias.#2)@3 as #6]
+        ProjectionExec: expr=[4 as count(Int64(1)), 3 as count(filtered_metadata_alias.#2), 2 as min(filtered_metadata_alias.#2), 9 as max(filtered_metadata_alias.#2)]
+          PlaceholderRowExec
 ---
 name: "test_partition_filtered_exact_aggregates_do_not_read_files[none]"
 data:

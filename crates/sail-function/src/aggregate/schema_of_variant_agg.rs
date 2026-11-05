@@ -16,9 +16,9 @@ use crate::schema_inference::InferredType;
 
 /// Aggregate function that merges variant schemas across rows.
 ///
-/// Returns the merged schema as a Spark type string. When all rows have the same
-/// type, returns that type. When types differ, returns VARIANT. For objects,
-/// merges fields from all rows.
+/// Returns the merged schema as a Spark type string, widening compatible numeric
+/// types and merging object fields and array elements. Incompatible types fall
+/// back to VARIANT.
 ///
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#schema_of_variant_agg>
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -136,5 +136,100 @@ impl Accumulator for SchemaOfVariantAggAccumulator {
                 .merged_schema
                 .as_ref()
                 .map_or(0, |s| s.estimated_size())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{Decimal128Array, StringArray, StringViewArray};
+    use parquet_variant_compute::cast_to_variant;
+
+    use super::*;
+    use crate::scalar::variant::spark_parse_json::from_utf8view_arr;
+
+    fn assert_update_and_merge(input: ArrayRef, expected: &str) -> Result<()> {
+        let expected = ScalarValue::Utf8(Some(expected.to_string()));
+        let mut direct = SchemaOfVariantAggAccumulator {
+            merged_schema: None,
+        };
+        direct.update_batch(std::slice::from_ref(&input))?;
+        assert_eq!(direct.evaluate()?, expected);
+
+        // Exercise serialized partial states, multi-row merge batches, an empty
+        // partial, SQL NULL state, and a second level of final aggregation.
+        for chunk_size in [1, 2, 3] {
+            let mut partials = vec![ScalarValue::Utf8(None)];
+            let mut empty = SchemaOfVariantAggAccumulator {
+                merged_schema: None,
+            };
+            partials.extend(empty.state()?);
+            for offset in (0..input.len()).step_by(chunk_size) {
+                let mut partial = SchemaOfVariantAggAccumulator {
+                    merged_schema: None,
+                };
+                partial
+                    .update_batch(&[input.slice(offset, chunk_size.min(input.len() - offset))])?;
+                partials.extend(partial.state()?);
+            }
+            for reverse in [false, true] {
+                let mut states = partials.clone();
+                if reverse {
+                    states.reverse();
+                }
+                let mut merged = SchemaOfVariantAggAccumulator {
+                    merged_schema: None,
+                };
+                merged.merge_batch(&[ScalarValue::iter_to_array(states)?])?;
+                assert_eq!(merged.evaluate()?, expected);
+                let mut final_agg = SchemaOfVariantAggAccumulator {
+                    merged_schema: None,
+                };
+                final_agg.merge_batch(&[ScalarValue::iter_to_array(merged.state()?)?])?;
+                final_agg.merge_batch(&[Arc::new(StringArray::from(vec![None, Some("VOID")]))])?;
+                assert_eq!(final_agg.evaluate()?, expected);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_numeric_schema_update_and_partial_final_merge() -> Result<()> {
+        for (json, expected) in [
+            (vec![Some("1.1"), Some("1e0"), None, Some("null")], "DOUBLE"),
+            (vec![Some("1.01"), Some("1.00"), None], "DECIMAL(3,2)"),
+            (
+                vec![Some("null"), Some("1"), Some("1.0"), None],
+                "DECIMAL(20,0)",
+            ),
+            (
+                vec![Some("0.000000000000000001"), Some("10.1000"), Some("-0.0")],
+                "DECIMAL(20,18)",
+            ),
+            (
+                vec![Some("1.1"), Some("11111111111111111111111111111111111111")],
+                "DOUBLE",
+            ),
+            (
+                vec![
+                    Some(r#"{"a":[1.01],"b":null}"#),
+                    Some(r#"{"a":[1.00],"b":1e0}"#),
+                ],
+                "OBJECT<a: ARRAY<DECIMAL(3,2)>, b: DOUBLE>",
+            ),
+            (vec![Some("1.1"), Some("true")], "VARIANT"),
+            (vec![Some("null"), None], "VOID"),
+        ] {
+            let input: ArrayRef = Arc::new(StringViewArray::from(json));
+            assert_update_and_merge(from_utf8view_arr(&input, false)?, expected)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal_cast_schema_update_and_partial_final_merge() -> Result<()> {
+        let decimals = Decimal128Array::from(vec![Some(101), Some(100), None])
+            .with_precision_and_scale(3, 2)?;
+        let variants: arrow::array::StructArray = cast_to_variant(&decimals)?.into();
+        assert_update_and_merge(Arc::new(variants), "DECIMAL(3,2)")
     }
 }

@@ -5,10 +5,10 @@ use datafusion::common::{Result, ScalarValue, plan_err};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::logical_expr::Expr;
 use datafusion::logical_expr::simplify::SimplifyContextBuilder;
-use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use sail_common_datafusion::datasource::{PhysicalSinkMode, RowLevelCommand, RowLevelWriteMode};
+use sail_common_datafusion::simplify_expressions::ExprSimplifier;
 use sail_data_source::options::ResolveOptions;
 use sail_logical_plan::row_level::RowLevelWriteNode;
 

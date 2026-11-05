@@ -216,7 +216,8 @@ impl TaskStreamChannelSink for CelebornStreamSink {
         Ok(())
     }
 
-    async fn abort(self: Box<Self>) -> Result<()> {
+    async fn abort(self: Box<Self>, _error: TaskStreamError) -> Result<()> {
+        // Failed mapper attempts are not published with mapper_end.
         Ok(())
     }
 }
@@ -249,8 +250,8 @@ impl TaskStreamSink for CelebornTaskStreamSink {
             .map_err(|error| DataFusionError::External(Box::new(error)))
     }
 
-    async fn abort(self: Box<Self>) -> Result<()> {
-        Box::new(self.channels).abort().await
+    async fn abort(self: Box<Self>, error: TaskStreamError) -> Result<()> {
+        Box::new(self.channels).abort(error).await
     }
 }
 

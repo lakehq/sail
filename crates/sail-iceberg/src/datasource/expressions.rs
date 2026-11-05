@@ -16,8 +16,8 @@ use datafusion::catalog::Session;
 use datafusion::common::{DFSchema, Result};
 use datafusion::logical_expr::simplify::SimplifyContextBuilder;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
-use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::PhysicalExpr;
+use sail_common_datafusion::simplify_expressions::ExprSimplifier;
 
 pub fn simplify_expr(
     session: &dyn Session,

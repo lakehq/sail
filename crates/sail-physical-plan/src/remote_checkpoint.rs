@@ -154,12 +154,6 @@ impl DataSource for CheckpointDataSource {
             .map(|source| self.map_source(source)))
     }
 
-    fn with_preserve_order(&self, preserve_order: bool) -> Option<Arc<dyn DataSource>> {
-        self.source
-            .with_preserve_order(preserve_order)
-            .map(|source| self.map_source(source))
-    }
-
     fn with_new_state(&self, state: Arc<dyn Any + Send + Sync>) -> Option<Arc<dyn DataSource>> {
         self.source
             .with_new_state(state)
@@ -845,8 +839,14 @@ fn validate_partition_location(
 #[expect(clippy::expect_used)]
 mod tests {
     use datafusion::arrow::array::Int32Array;
+    use datafusion::arrow::datatypes::Metadata;
     use datafusion::arrow::record_batch::RecordBatchOptions;
+    use datafusion::datasource::listing::PartitionedFile;
     use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
+    use datafusion::datasource::source::DataSourceExec;
+    use datafusion::datasource::table_schema::TableSchema;
+    use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::prelude::{SessionConfig, SessionContext};
     use object_store::memory::InMemory;
@@ -864,19 +864,69 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_source_preserves_file_order_after_fetch() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::clone(&column))])
+            .expect("nonempty ordering");
+        // DataFusion 56 preserves advertised ordering without an optimizer callback.
+        // Explicit file order must also survive for unordered checkpoint partitions.
+        for ordered in [true, false] {
+            let mut source = FileScanConfigBuilder::new(
+                ObjectStoreUrl::local_filesystem(),
+                Arc::new(ParquetSource::new(TableSchema::from(Arc::clone(&schema)))),
+            )
+            .with_file_groups(vec![
+                FileGroup::new(vec![PartitionedFile::new("part-0.parquet", 100)]),
+                FileGroup::new(vec![PartitionedFile::new("part-1.parquet", 100)]),
+            ])
+            .with_output_ordering(if ordered {
+                vec![ordering.clone()]
+            } else {
+                vec![]
+            })
+            .build();
+            source.preserve_order = !ordered;
+            assert!(source.preserves_file_order());
+            let expected_ordering = source.eq_properties().output_ordering();
+            assert_eq!(expected_ordering, ordered.then(|| ordering.clone()));
+            let source: Arc<dyn DataSource> = Arc::new(CheckpointDataSource::new(
+                Arc::new(source),
+                Partitioning::Hash(vec![Arc::clone(&column)], 2),
+            ));
+            let limited = source.with_fetch(Some(1)).expect("fetch pushdown");
+            assert_eq!(limited.fetch(), Some(1));
+            for source in [source, limited] {
+                assert!(source.is::<CheckpointDataSource>());
+                assert!(
+                    source
+                        .create_sibling_state(&ConfigOptions::default())
+                        .is_none()
+                );
+                let plan: Arc<dyn ExecutionPlan> = Arc::new(DataSourceExec::new(source));
+                assert_eq!(plan.output_ordering(), expected_ordering.as_ref());
+                assert_eq!(
+                    plan.output_partitioning(),
+                    &Partitioning::Hash(vec![Arc::clone(&column)], 2),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn storage_schema_uses_positional_names_and_preserves_metadata() {
         let logical = Arc::new(Schema::new_with_metadata(
             vec![
                 Field::new("value", DataType::Int64, false).with_metadata(
                     [("field-key".to_string(), "field-value".to_string())]
                         .into_iter()
-                        .collect(),
+                        .collect::<Metadata>(),
                 ),
                 Field::new("value", DataType::Utf8, true),
             ],
             [("schema-key".to_string(), "schema-value".to_string())]
                 .into_iter()
-                .collect(),
+                .collect::<Metadata>(),
         ));
 
         let storage = checkpoint_storage_schema(&logical);

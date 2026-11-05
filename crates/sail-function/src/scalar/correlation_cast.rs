@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
-use arrow::array::builder::Decimal128Builder;
 use arrow::array::{Array, ArrayRef, AsArray, Decimal128Array, Float64Array, new_null_array};
 use arrow::compute::kernels::cast_utils::Parser;
-use arrow::compute::{CastOptions, cast_with_options, parse_string_to_decimal_native};
+use arrow::compute::{CastOptions, cast_with_options};
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Decimal64Type, Decimal128Type, DecimalType,
     Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, TimeUnit,
@@ -161,14 +160,15 @@ fn cast_array(array: &ArrayRef, target: &DataType) -> Result<ArrayRef> {
             *p,
             *s,
         )?),
-        (_, DataType::Decimal128(p, s)) => {
-            let decimal = match array.data_type() {
-                DataType::Utf8 => decimal_values(array.as_string::<i32>().iter(), *p, *s)?,
-                DataType::LargeUtf8 => decimal_values(array.as_string::<i64>().iter(), *p, *s)?,
-                DataType::Utf8View => decimal_values(array.as_string_view().iter(), *p, *s)?,
-                _ => return internal_err!("expected string correlation CAST"),
-            };
-            Ok(Arc::new(decimal))
+        (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Decimal128(_, _)) => {
+            Ok(cast_with_options(
+                array,
+                target,
+                &CastOptions {
+                    safe: false,
+                    ..Default::default()
+                },
+            )?)
         }
         (DataType::Decimal128(_, 0), DataType::Int64) => {
             let array = array.as_primitive::<Decimal128Type>();
@@ -484,58 +484,6 @@ fn cast_double(array: &ArrayRef) -> std::result::Result<ArrayRef, ArrowError> {
     )?))
 }
 
-fn decimal_values<'a>(
-    values: impl Iterator<Item = Option<&'a str>>,
-    precision: u8,
-    scale: i8,
-) -> std::result::Result<Decimal128Array, ArrowError> {
-    let factor = 10_i128.pow(scale as u32);
-    // The supported precision and scale were checked before dispatch.
-    let maximum = Decimal128Type::MAX_FOR_EACH_PRECISION[usize::from(precision)];
-    let minimum = -maximum;
-    let mut builder = Decimal128Builder::with_capacity(values.size_hint().0);
-    for value in values {
-        let Some(value) = value else {
-            builder.append_null();
-            continue;
-        };
-        // Skip integer parsing for fractions; keep native rounding and error behavior.
-        let integer = (value.len() <= 39 && !value.contains('.'))
-            .then(|| {
-                (if value
-                    .as_bytes()
-                    .first()
-                    .is_some_and(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-'))
-                    && value.as_bytes().last().is_some_and(u8::is_ascii_digit)
-                {
-                    value
-                } else {
-                    value.trim()
-                })
-                .parse::<i128>()
-                .ok()
-            })
-            .flatten()
-            .and_then(|v| v.checked_mul(factor));
-        let parsed = match integer {
-            Some(value) => value,
-            None => parse_string_to_decimal_native::<Decimal128Type>(value, scale as usize)
-                .map_err(|_| {
-                    ArrowError::CastError(format!(
-                        "Cannot cast string '{value}' to value of {} type",
-                        Decimal128Type::DATA_TYPE
-                    ))
-                })?,
-        };
-        if parsed < minimum || parsed > maximum {
-            // Retain native first-row error text and priority.
-            Decimal128Type::validate_decimal_precision(parsed, precision, scale)?;
-        }
-        builder.append_value(parsed);
-    }
-    builder.finish().with_precision_and_scale(precision, scale)
-}
-
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::panic)]
 mod tests {
@@ -777,6 +725,74 @@ mod tests {
                     super::cast_array(&source, &target),
                     native(&source, &target),
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn string_decimal_casts_have_fixed_values() {
+        // Spark 4.2 (ANSI on/off) and Arrow 60 agree on these values and half-up rounding.
+        for (value, precision, scale, unscaled) in [
+            (" \t42\n", 9, 0, 42),
+            ("\t-42\n", 9, 0, -42),
+            ("1e2", 9, 0, 100),
+            ("1E-2", 9, 2, 1),
+            ("1.235", 4, 2, 124),
+            ("-1.235", 4, 2, -124),
+            ("9.994", 3, 2, 999),
+            ("-9.994", 3, 2, -999),
+        ] {
+            let expected: ArrayRef = Arc::new(
+                Decimal128Array::from(vec![None, Some(unscaled), None])
+                    .with_precision_and_scale(precision, scale)
+                    .unwrap(),
+            );
+            for array in [
+                Arc::new(StringArray::from(vec![None, Some(value), None])) as ArrayRef,
+                Arc::new(LargeStringArray::from(vec![None, Some(value), None])) as ArrayRef,
+                Arc::new(StringViewArray::from(vec![None, Some(value), None])) as ArrayRef,
+            ] {
+                for (offset, length) in [(0, 3), (1, 2), (0, 2), (0, 1), (1, 0)] {
+                    exact(
+                        decimal(&array.slice(offset, length), precision, scale),
+                        Ok(expected.slice(offset, length)),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn string_decimal_casts_have_fixed_errors_and_first_error_order() {
+        // Strict native casts reject Unicode whitespace and rounding overflow instead of returning NULL.
+        for (precision, scale, first, later, reason) in [
+            (
+                9,
+                0,
+                "\u{2003}42\u{2003}",
+                "1000000000",
+                "invalid decimal format",
+            ),
+            (9, 0, "bad", "1000000000", "invalid decimal format"),
+            (9, 0, "1000000000", "bad", "value does not fit"),
+            (3, 2, "9.995", "bad", "value does not fit"),
+            (3, 2, "-9.995", "bad", "value does not fit"),
+        ] {
+            let rows = vec![None, Some("0"), Some(first), Some(later)];
+            for array in [
+                Arc::new(StringArray::from(rows.clone())) as ArrayRef,
+                Arc::new(LargeStringArray::from(rows.clone())) as ArrayRef,
+                Arc::new(StringViewArray::from(rows)) as ArrayRef,
+            ] {
+                for (offset, length) in [(0, 4), (1, 3), (2, 1)] {
+                    let expected = arrow::error::ArrowError::CastError(format!(
+                        "Cannot cast string '{first}' to value of Decimal128({precision}, {scale}) type: {reason}"
+                    ));
+                    exact(
+                        decimal(&array.slice(offset, length), precision, scale),
+                        Err(expected.into()),
+                    );
+                }
             }
         }
     }

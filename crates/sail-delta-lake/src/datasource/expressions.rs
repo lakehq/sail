@@ -28,12 +28,12 @@ use datafusion::logical_expr::simplify::SimplifyContextBuilder;
 use datafusion::logical_expr::{
     BinaryExpr, Expr, ExprSchemable, Operator, TableProviderFilterPushDown,
 };
-use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::expressions::{IsNotNullExpr, IsNullExpr};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     Column as PhysicalColumn, Literal as PhysicalLiteral,
 };
+use sail_common_datafusion::simplify_expressions::ExprSimplifier;
 
 use crate::schema::arrow_field_physical_name;
 use crate::spec::{ColumnMappingMode, DeltaResult};

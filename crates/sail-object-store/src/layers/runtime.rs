@@ -51,6 +51,7 @@ impl RuntimeAwareObjectStore {
                 meta,
                 range,
                 attributes,
+                extensions,
             } => GetResult {
                 payload: GetResultPayload::Stream(
                     RuntimeAwareStream::new(move |_| stream, (), self.handle.clone()).boxed(),
@@ -58,6 +59,7 @@ impl RuntimeAwareObjectStore {
                 meta,
                 range,
                 attributes,
+                extensions,
             },
         }
     }
@@ -361,6 +363,77 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn get_result_preserves_state_across_runtimes() -> Result<(), Box<dyn Error>> {
+        let primary = Runtime::new()?;
+        let io = Runtime::new()?;
+        let store = RuntimeAwareObjectStore::try_new(
+            || Ok(Arc::new(object_store::memory::InMemory::new())),
+            io.handle().clone(),
+        )?;
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let data = Bytes::from(std::fs::read(&path)?);
+        let range = 1..4;
+        let expected = data.slice(1..4);
+        let meta = ObjectMeta {
+            location: Path::from("object"),
+            last_modified: chrono::DateTime::UNIX_EPOCH,
+            size: data.len() as u64,
+            e_tag: Some("etag".to_string()),
+            version: Some("version".to_string()),
+        };
+        let mut attributes = object_store::Attributes::new();
+        attributes.insert(object_store::Attribute::ContentType, "text/plain".into());
+        for file_payload in [false, true] {
+            let marker = Arc::new(AtomicUsize::new(42));
+            let mut extensions = object_store::Extensions::new();
+            extensions.insert(marker.clone());
+            extensions.insert("response context".to_string());
+            let payload = if file_payload {
+                GetResultPayload::File(std::fs::File::open(&path)?, path.clone())
+            } else {
+                let chunk = expected.clone();
+                let runtime_id = io.handle().id();
+                GetResultPayload::Stream(
+                    futures::stream::once(async move {
+                        assert_eq!(Handle::current().id(), runtime_id);
+                        Ok(chunk)
+                    })
+                    .boxed(),
+                )
+            };
+            let result = store.wrap_get_result(GetResult {
+                payload,
+                meta: meta.clone(),
+                range: range.clone(),
+                attributes: attributes.clone(),
+                extensions,
+            });
+            assert_eq!(result.meta, meta);
+            assert_eq!(result.range, range);
+            assert_eq!(result.attributes, attributes);
+            assert_eq!(result.extensions.len(), 2);
+            assert!(
+                result
+                    .extensions
+                    .get::<Arc<AtomicUsize>>()
+                    .is_some_and(|actual| Arc::ptr_eq(actual, &marker))
+            );
+            assert_eq!(
+                result.extensions.get::<String>().map(String::as_str),
+                Some("response context"),
+            );
+            assert_eq!(
+                matches!(result.payload, GetResultPayload::File(..)),
+                file_payload,
+            );
+            let actual = primary
+                .block_on(async { timeout(Duration::from_secs(5), result.bytes()).await })??;
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
     type Records = Arc<Mutex<Vec<(usize, Bytes, Id)>>>;
 
     #[derive(Debug)]
@@ -444,6 +517,7 @@ mod tests {
             Ok(PutResult {
                 e_tag: None,
                 version: None,
+                extensions: Default::default(),
             })
         }
 

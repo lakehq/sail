@@ -25,6 +25,11 @@
 - name: execution.expression.name
   description: The name of the expression.
 
+- name: execution.aggregate.phase
+  description: |
+    The aggregate expression phase: arguments, update, merge, state,
+    convert_to_state, evaluate, or an aggregate-owned internal_<subphase>.
+
 - name: flight.statement.type
   description: |
     The type of Flight SQL statement.

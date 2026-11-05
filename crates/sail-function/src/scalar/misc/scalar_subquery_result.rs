@@ -3,10 +3,11 @@ use std::sync::Arc;
 use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::{as_int64_array, as_struct_array};
-use datafusion_common::{Result, exec_err, internal_err};
+use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use sail_common_datafusion::error::NonRetryableExecutionError;
 
 use crate::functions_nested_utils::make_scalar_function;
 
@@ -69,9 +70,10 @@ impl ScalarUDFImpl for ScalarSubqueryResult {
             let counts = as_int64_array(result.column(1))?;
             for index in 0..result.len() {
                 if result.is_valid(index) && counts.is_valid(index) && counts.value(index) > 1 {
-                    return exec_err!(
+                    return Err(DataFusionError::External(Box::new(NonRetryableExecutionError(
                         "SCALAR_SUBQUERY_TOO_MANY_ROWS: scalar subquery returned more than one row"
-                    );
+                            .to_string(),
+                    ))));
                 }
             }
             // A missing correlated row nulls the parent struct. Propagate that
@@ -79,5 +81,64 @@ impl ScalarUDFImpl for ScalarSubqueryResult {
             let (_, columns) = result.flatten();
             Ok(Arc::clone(&columns[0]))
         })(&args.args)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{ArrayRef, Int32Array, Int64Array, StructArray};
+    use datafusion::arrow::datatypes::Field;
+
+    use super::*;
+
+    #[test]
+    #[expect(
+        clippy::panic,
+        reason = "Assert the typed cardinality error before inspecting its cause"
+    )]
+    fn multiple_matching_rows_return_typed_nonretryable_error() -> Result<()> {
+        for count in [1, 2] {
+            let value = Arc::new(Int32Array::from(vec![10])) as ArrayRef;
+            let input = StructArray::from(vec![
+                (
+                    Arc::new(Field::new("value", DataType::Int32, true)),
+                    value.clone(),
+                ),
+                (
+                    Arc::new(Field::new("count", DataType::Int64, false)),
+                    Arc::new(Int64Array::from(vec![count])) as ArrayRef,
+                ),
+            ]);
+            let arg_fields = vec![Arc::new(Field::new(
+                "result",
+                input.data_type().clone(),
+                true,
+            ))];
+            let udf = ScalarSubqueryResult::new();
+            let return_field = udf.return_field_from_args(ReturnFieldArgs {
+                arg_fields: &arg_fields,
+                scalar_arguments: &[None],
+            })?;
+            let result = udf.invoke_with_args(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Array(Arc::new(input))],
+                arg_fields,
+                number_rows: 1,
+                return_field,
+                config_options: Arc::new(Default::default()),
+            });
+            if count == 1 {
+                assert_eq!(result?.into_array(1)?.to_data(), value.to_data());
+            } else {
+                let Err(DataFusionError::External(error)) = result else {
+                    panic!("expected typed scalar cardinality failure");
+                };
+                assert!(error.is::<NonRetryableExecutionError>());
+                assert_eq!(
+                    error.to_string(),
+                    "SCALAR_SUBQUERY_TOO_MANY_ROWS: scalar subquery returned more than one row"
+                );
+            }
+        }
+        Ok(())
     }
 }

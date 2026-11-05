@@ -36,7 +36,7 @@ pub fn rename_physical_plan(
 pub fn rename_projected_physical_plan(
     plan: Arc<dyn ExecutionPlan>,
     names: &[String],
-    projection: Option<&Vec<usize>>,
+    projection: Option<&[usize]>,
 ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
     if let Some(projection) = projection {
         let names = projection

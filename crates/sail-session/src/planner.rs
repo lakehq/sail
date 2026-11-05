@@ -455,7 +455,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 Some(names) => {
                     let names = to_flow_event_field_names(names);
                     let projection = node.projection().map(|x| to_flow_event_projection(x));
-                    rename_projected_physical_plan(plan, &names, projection.as_ref())?
+                    rename_projected_physical_plan(plan, &names, projection.as_deref())?
                 }
                 None => plan,
             }

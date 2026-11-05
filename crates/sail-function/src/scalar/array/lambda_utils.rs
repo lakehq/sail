@@ -238,9 +238,8 @@ fn offsets_to_indices<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let total = offsets
         .last()
-        .map(|o| o.as_usize())
-        .unwrap_or(0)
-        .saturating_sub(offsets.first().map(|o| o.as_usize()).unwrap_or(0));
+        .as_usize()
+        .saturating_sub(offsets.first().as_usize());
     let mut out: Vec<i32> = Vec::with_capacity(total);
     for &[start, end] in offsets.array_windows::<2>() {
         let len = end.as_usize() - start.as_usize();
@@ -255,13 +254,17 @@ fn offsets_to_indices<O: OffsetSizeTrait>(
 mod tests {
     use std::sync::Arc;
 
-    use datafusion::arrow::array::{Array, ArrayRef, Int32Array, ListArray};
+    use datafusion::arrow::array::{
+        Array, ArrayRef, GenericListArray, Int32Array, ListArray, OffsetSizeTrait, new_empty_array,
+        new_null_array,
+    };
     use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
     use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion_common::Result;
+    use datafusion_common::cast::as_int32_array;
     use datafusion_expr::ColumnarValue;
 
-    use super::{ListValuesResult, extract_list_values};
+    use super::{ListValuesResult, extract_list_values, index_array, offsets_to_indices};
 
     fn element_list(offsets: Vec<i32>, nulls: Option<NullBuffer>) -> (ArrayRef, DataType) {
         let field = Arc::new(Field::new("element", DataType::Int32, true));
@@ -283,6 +286,55 @@ mod tests {
             }
             _ => None,
         })
+    }
+
+    fn check_list_indices<O: OffsetSizeTrait>() -> Result<()> {
+        let list = GenericListArray::<O>::new(
+            Arc::new(Field::new("element", DataType::Int32, true)),
+            OffsetBuffer::from_lengths([2, 0, 2, 1, 3]),
+            Arc::new(Int32Array::from(vec![
+                Some(10),
+                None,
+                Some(20),
+                Some(21),
+                Some(30),
+                Some(40),
+                None,
+                Some(42),
+            ])),
+            Some(NullBuffer::from(vec![true, true, false, true, true])),
+        );
+        for (input, expected) in [
+            (
+                Arc::new(list.clone()) as ArrayRef,
+                vec![0, 1, 0, 1, 0, 0, 1, 2],
+            ),
+            (Arc::new(list.slice(1, 3)), vec![0, 1, 0]),
+            (Arc::new(list.slice(1, 1)), vec![]),
+            (Arc::new(list.slice(2, 1)), vec![0, 1]),
+            (Arc::new(list.slice(4, 0)), vec![]),
+            (new_empty_array(list.data_type()), vec![]),
+            (new_null_array(list.data_type(), 2), vec![]),
+        ] {
+            let result = index_array("transform", &input)?;
+            let result = as_int32_array(result.as_ref())?;
+            assert_eq!(result, &Int32Array::from(expected));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn indices_cover_empty_null_and_sliced_lists() -> Result<()> {
+        check_list_indices::<i32>()?;
+        check_list_indices::<i64>()?;
+        let start = i64::from(i32::MAX) + 1;
+        let offsets = OffsetBuffer::new(vec![start, start, start + 2].into());
+        let result = offsets_to_indices("transform", &offsets)?;
+        assert_eq!(
+            as_int32_array(result.as_ref())?,
+            &Int32Array::from(vec![0, 1]),
+        );
+        Ok(())
     }
 
     #[test]

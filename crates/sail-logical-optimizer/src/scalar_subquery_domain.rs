@@ -1,11 +1,16 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow::datatypes::DataType;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, Result};
+use datafusion_common::{Column, DFSchema, Result, ScalarValue};
+use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::expr_rewriter::NamePreserver;
-use datafusion_expr::utils::{conjunction, split_conjunction};
-use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator};
+use datafusion_expr::logical_plan::{Aggregate, Union, Unnest};
+use datafusion_expr::utils::{conjunction, grouping_set_to_exprlist, powerset, split_conjunction};
+use datafusion_expr::{Expr, ExprSchemable, JoinType, LogicalPlan, LogicalPlanBuilder, Operator};
+use sail_common_datafusion::decorrelate::PullUpCorrelatedExpr;
 
 /// Evaluate non-equality scalar aggregates over the distinct outer values.
 /// Native decorrelation can then pull up equality on those values without
@@ -39,6 +44,19 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                 let Expr::ScalarSubquery(mut query) = expr else {
                     return Ok(Transformed::no(expr));
                 };
+                if let Some(rewritten) = singleton_window(&query.subquery, &input)? {
+                    query.outer_ref_columns = rewritten.all_out_ref_exprs();
+                    query.subquery = Arc::new(rewritten);
+                    return Ok(Transformed::yes(Expr::ScalarSubquery(query)));
+                }
+                if let Some(rewritten) = window_domain(&query.subquery, &input, config)? {
+                    query.subquery = Arc::new(rewritten);
+                    return Ok(Transformed::yes(Expr::ScalarSubquery(query)));
+                }
+                if let Some(rewritten) = grouped_domain(&query.subquery, &input, config)? {
+                    query.subquery = Arc::new(rewritten);
+                    return Ok(Transformed::yes(Expr::ScalarSubquery(query)));
+                }
                 let mut unsupported = false;
                 let mut needs_domain = false;
                 let mut aggregates = 0;
@@ -230,6 +248,1051 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
     }
 }
 
+/// Exact literal rows, not statistics or a cardinality estimate. Only renaming
+/// projections may intervene, so reading this input again cannot repeat effects.
+fn literal_outer_rows(plan: &LogicalPlan, limit: usize) -> Result<Option<Vec<Vec<Expr>>>> {
+    let rows = match plan {
+        LogicalPlan::Values(values) if values.values.len() <= limit => {
+            if !values
+                .values
+                .iter()
+                .flatten()
+                .all(|expr| matches!(expr.clone().unalias(), Expr::Literal(..)))
+            {
+                return Ok(None);
+            }
+            values
+                .values
+                .iter()
+                .map(|row| row.iter().cloned().map(Expr::unalias).collect())
+                .collect()
+        }
+        LogicalPlan::EmptyRelation(empty)
+            if empty.produce_one_row && empty.schema.fields().is_empty() =>
+        {
+            vec![vec![]]
+        }
+        LogicalPlan::SubqueryAlias(alias) => return literal_outer_rows(&alias.input, limit),
+        LogicalPlan::Projection(projection) => {
+            let Some(input) = literal_outer_rows(&projection.input, limit)? else {
+                return Ok(None);
+            };
+            let mut rows = Vec::with_capacity(input.len());
+            for row in input {
+                let mut output = Vec::with_capacity(projection.expr.len());
+                for expr in &projection.expr {
+                    output.push(match expr.clone().unalias() {
+                        Expr::Column(column) => {
+                            row[projection.input.schema().index_of_column(&column)?].clone()
+                        }
+                        literal @ Expr::Literal(..) => literal,
+                        _ => return Ok(None),
+                    });
+                }
+                rows.push(output);
+            }
+            rows
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(rows))
+}
+
+/// A single known binding needs no domain join or source duplication. Keep the
+/// original completed values and ordering pipeline, including extension nodes.
+fn singleton_window(plan: &LogicalPlan, outer: &LogicalPlan) -> Result<Option<LogicalPlan>> {
+    let references = plan.all_out_ref_exprs();
+    if references.is_empty() {
+        return Ok(None);
+    }
+    let mut window = false;
+    let mut volatile = false;
+    let unsupported = plan.exists(|node| {
+        window |= matches!(node, LogicalPlan::Window(_));
+        volatile |= node.expressions().iter().any(Expr::is_volatile);
+        if matches!(node, LogicalPlan::Subquery(_)) {
+            return Ok(true);
+        }
+        for expr in node.expressions() {
+            if expr.exists(|expr| {
+                Ok(matches!(
+                    expr,
+                    Expr::ScalarSubquery(_)
+                        | Expr::Exists(_)
+                        | Expr::InSubquery(_)
+                        | Expr::SetComparison(_)
+                ) || (expr.contains_outer()
+                    && !matches!(expr, Expr::OuterReferenceColumn(..))
+                    && !expr.any_column_refs()
+                    && !expr.is_volatile()))
+            })? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })?;
+    // Substituting into an outer-only immutable expression can expose a
+    // fallible operand to constant folding even in an inactive CASE branch.
+    // Leave such predicates to the column-bound domain path instead.
+    if unsupported || !window || !volatile {
+        return Ok(None);
+    }
+    let Some(rows) = literal_outer_rows(outer, 1)? else {
+        return Ok(None);
+    };
+    let [row] = rows.as_slice() else {
+        return Ok(None);
+    };
+    let mut bindings = Vec::new();
+    for reference in references {
+        let Expr::OuterReferenceColumn(field, column) = &reference else {
+            return Ok(None);
+        };
+        let Ok(index) = outer.schema().index_of_column(column) else {
+            return Ok(None);
+        };
+        if row[index].get_type(outer.schema())? != *field.data_type() {
+            return Ok(None);
+        }
+        bindings.push((reference, row[index].clone()));
+    }
+    // This pass must still see correlation to normalize scoped user keys.
+    let normalized = super::scalar_subquery_keys::normalize_user_window_keys(plan.clone())?.data;
+    let rewritten = normalized.transform_up(|node| {
+        let names = NamePreserver::new(&node);
+        node.map_expressions(|expr| {
+            let name = names.save(&expr);
+            expr.transform_up(|expr| {
+                if let Some((_, value)) = bindings.iter().find(|(reference, _)| reference == &expr)
+                {
+                    Ok(Transformed::yes(value.clone()))
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            })
+            .map(|result| result.update_data(|expr| name.restore(expr)))
+        })
+    })?;
+    Ok(Some(rewritten.data))
+}
+
+fn null_preserving(expr: &Expr) -> bool {
+    match expr {
+        Expr::Column(_) => true,
+        Expr::Alias(alias) => null_preserving(&alias.expr),
+        Expr::Cast(cast) => null_preserving(&cast.expr),
+        _ => false,
+    }
+}
+
+/// Only the correlated predicate may be volatile. Its completed Boolean is
+/// evaluated per candidate inner/binding row, never as an outer join key.
+fn window_pipeline(plan: &LogicalPlan) -> Result<bool> {
+    let (mut terminal, mut window, mut correlated) = (false, false, false);
+    let mut eligible = true;
+    plan.apply(|node| {
+        for expr in node.expressions() {
+            eligible &= !expr.exists(|expr| {
+                Ok(matches!(
+                    expr,
+                    Expr::ScalarSubquery(_)
+                        | Expr::InSubquery(_)
+                        | Expr::Exists(_)
+                        | Expr::SetComparison(_)
+                ))
+            })?;
+            if expr.contains_outer() {
+                eligible &= matches!(node, LogicalPlan::Filter(_))
+                    && window
+                    && !correlated
+                    && expr.is_volatile();
+                correlated = true;
+            } else {
+                eligible &= !expr.is_volatile();
+            }
+        }
+        match node {
+            LogicalPlan::Projection(projection) => {
+                eligible &= terminal || projection.expr.iter().all(null_preserving);
+            }
+            LogicalPlan::SubqueryAlias(_) => {}
+            LogicalPlan::Aggregate(aggregate) => {
+                eligible &= !terminal
+                    && aggregate.group_expr.is_empty()
+                    && !aggregate.aggr_expr.is_empty()
+                    && aggregate
+                        .aggr_expr
+                        .iter()
+                        .all(|expr| supported_aggregate(expr, true));
+                terminal = true;
+            }
+            LogicalPlan::Window(_) => {
+                eligible &= terminal && !correlated;
+                window = true;
+            }
+            LogicalPlan::Filter(_) => eligible &= terminal,
+            LogicalPlan::TableScan(scan) => eligible &= correlated && scan.fetch.is_none(),
+            LogicalPlan::Values(_) | LogicalPlan::EmptyRelation(_) => eligible &= correlated,
+            _ => eligible = false,
+        }
+        Ok(if eligible {
+            TreeNodeRecursion::Continue
+        } else {
+            TreeNodeRecursion::Stop
+        })
+    })?;
+    Ok(eligible && terminal && window && correlated)
+}
+
+fn window_domain(
+    plan: &LogicalPlan,
+    outer: &Arc<LogicalPlan>,
+    config: &dyn OptimizerConfig,
+) -> Result<Option<LogicalPlan>> {
+    if !window_pipeline(plan)? {
+        return Ok(None);
+    }
+    let references = plan.all_out_ref_exprs();
+    if references.is_empty() || grouped_work(plan, outer, references.len())?.is_none() {
+        return Ok(None);
+    }
+    let Some(rows) = literal_outer_rows(outer, 64)? else {
+        return Ok(None);
+    };
+    let mut indexes = Vec::new();
+    for reference in &references {
+        let Expr::OuterReferenceColumn(field, column) = reference else {
+            return Ok(None);
+        };
+        let Ok(index) = outer.schema().index_of_column(column) else {
+            return Ok(None);
+        };
+        if !(field.data_type().is_integer() || matches!(field.data_type(), DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View))
+            || rows.iter().any(|row| !matches!(&row[index], Expr::Literal(value, _) if value.data_type() == *field.data_type())) {
+            return Ok(None);
+        }
+        indexes.push(index);
+    }
+    let mut distinct = HashSet::new();
+    if rows.is_empty()
+        || rows
+            .iter()
+            .any(|row| !distinct.insert(indexes.iter().map(|&i| &row[i]).collect::<Vec<_>>()))
+    {
+        // Repeated bindings need independent evaluations and a shared row
+        // identity. DISTINCT or cloning a volatile outer would not supply it.
+        return Ok(None);
+    }
+    let mut reserved = HashSet::new();
+    for root in [plan, outer.as_ref()] {
+        root.apply(|node| {
+            reserved.extend(
+                node.schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().clone()),
+            );
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+    let mut private = |prefix| loop {
+        let name = config.alias_generator().next(prefix);
+        if reserved.insert(name.clone()) {
+            break Column::new_unqualified(name);
+        }
+    };
+    let bindings = references
+        .into_iter()
+        .map(|reference| {
+            let Expr::OuterReferenceColumn(_, outer) = &reference else {
+                unreachable!()
+            };
+            DomainBinding {
+                outer: outer.clone(),
+                reference,
+                key: private("__sail_window_domain"),
+            }
+        })
+        .collect::<Vec<_>>();
+    let predicate_key = private("__sail_window_predicate");
+    // The exact literal proof establishes both uniqueness and repeatability;
+    // there is deliberately no DISTINCT and no precomputed volatile RHS.
+    let domain = LogicalPlanBuilder::from(Arc::clone(outer))
+        .project(
+            bindings
+                .iter()
+                .map(|b| Expr::Column(b.outer.clone()).alias(&b.key.name)),
+        )?
+        .build()?;
+    let normalized = super::scalar_subquery_keys::normalize_user_window_keys(plan.clone())?.data;
+    let bound = bind_window_plan(&normalized, &domain, &bindings, &predicate_key)?;
+    Ok(Some(
+        LogicalPlanBuilder::from(bound)
+            .project(plan.schema().columns().into_iter().map(Expr::Column))?
+            .build()?,
+    ))
+}
+
+fn bind_window_plan(
+    plan: &LogicalPlan,
+    domain: &LogicalPlan,
+    bindings: &[DomainBinding],
+    predicate_key: &Column,
+) -> Result<LogicalPlan> {
+    if let LogicalPlan::Filter(filter) = plan
+        && filter.predicate.contains_outer()
+    {
+        let input = LogicalPlanBuilder::from(Arc::clone(&filter.input))
+            .cross_join(domain.clone())?
+            .build()?;
+        let columns = input
+            .schema()
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect::<Vec<_>>();
+        let predicate = filter
+            .predicate
+            .clone()
+            .transform_up(|expr| {
+                if let Some(binding) = bindings.iter().find(|binding| binding.reference == expr) {
+                    Ok(Transformed::yes(Expr::Column(binding.key.clone())))
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            })?
+            .data;
+        let mut staged = columns.clone();
+        staged.push(predicate.alias(&predicate_key.name));
+        // Preserve the entire predicate (including CASE masks) after inner × D.
+        // Volatile projection lineage prevents later equijoin extraction from
+        // evaluating just the RHS once per binding. Drop the Boolean after use.
+        return LogicalPlanBuilder::from(input)
+            .project(staged)?
+            .filter(Expr::Column(predicate_key.clone()))?
+            .project(columns)?
+            .build();
+    }
+    let inputs = plan.inputs();
+    let [input] = inputs.as_slice() else {
+        return datafusion_common::internal_err!("ineligible window domain input");
+    };
+    let input = bind_window_plan(input, domain, bindings, predicate_key)?;
+    let keys = || binding_exprs(bindings);
+    match plan {
+        LogicalPlan::Projection(projection) => {
+            let mut exprs = projection.expr.clone();
+            exprs.extend(keys());
+            LogicalPlanBuilder::from(input).project(exprs)?.build()
+        }
+        LogicalPlan::Filter(filter) => LogicalPlanBuilder::from(input)
+            .filter(filter.predicate.clone())?
+            .build(),
+        LogicalPlan::SubqueryAlias(alias) => {
+            let bound = LogicalPlanBuilder::from(input)
+                .alias(alias.alias.clone())?
+                .build()?;
+            restore_bound_output(bound, plan.schema(), bindings)
+        }
+        LogicalPlan::Window(window) => {
+            let names = NamePreserver::new(plan);
+            let exprs = window
+                .window_expr
+                .iter()
+                .map(|expr| {
+                    let name = names.save(expr);
+                    expr.clone()
+                        .transform_up(|expr| {
+                            let Expr::WindowFunction(mut function) = expr else {
+                                return Ok(Transformed::no(expr));
+                            };
+                            function.params.partition_by.extend(keys());
+                            Ok(Transformed::yes(Expr::WindowFunction(function)))
+                        })
+                        .map(|result| name.restore(result.data))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut output = plan
+                .schema()
+                .columns()
+                .into_iter()
+                .map(Expr::Column)
+                .collect::<Vec<_>>();
+            output.extend(keys());
+            LogicalPlanBuilder::from(input)
+                .window(exprs)?
+                .project(output)?
+                .build()
+        }
+        LogicalPlan::Aggregate(aggregate) => {
+            let correlation = conjunction(bindings.iter().map(|binding| {
+                datafusion_expr::binary_expr(
+                    Expr::Column(binding.key.clone()),
+                    Operator::IsNotDistinctFrom,
+                    binding.reference.clone(),
+                )
+            }))
+            .ok_or_else(|| datafusion_common::internal_datafusion_err!("empty window domain"))?;
+            let bound = LogicalPlanBuilder::from(input)
+                .aggregate(keys(), aggregate.aggr_expr.clone())?
+                .filter(correlation)?
+                .build()?;
+            let mut output = name_original_outputs(
+                bound.schema().columns()[bindings.len()..]
+                    .iter()
+                    .cloned()
+                    .map(Expr::Column)
+                    .collect(),
+                &aggregate.schema,
+            );
+            output.extend(keys());
+            LogicalPlanBuilder::from(bound).project(output)?.build()
+        }
+        _ => datafusion_common::internal_err!("ineligible window domain node"),
+    }
+}
+
+/// A bounded unary pipeline. Classify the entire plan before changing any node.
+/// The terminal SUM/MAX and its column/cast suffix are NULL on missing input;
+/// intermediate empty grouping sets, in contrast, must be completed in place.
+fn grouped_pipeline(plan: &LogicalPlan) -> Result<bool> {
+    let mut terminal = false;
+    let mut grouped = false;
+    let mut correlated = false;
+    let mut eligible = true;
+    plan.apply(|node| {
+        for expr in node.expressions() {
+            eligible &= !expr.is_volatile()
+                && !expr.exists(|expr| {
+                    Ok(matches!(
+                        expr,
+                        Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists(_)
+                    ))
+                })?;
+            if expr.contains_outer() {
+                correlated = true;
+                eligible &= terminal && matches!(node, LogicalPlan::Filter(_));
+            }
+        }
+        match node {
+            LogicalPlan::Projection(projection) => {
+                eligible &= terminal || projection.expr.iter().all(null_preserving);
+            }
+            LogicalPlan::SubqueryAlias(_) => {}
+            LogicalPlan::Filter(_) => eligible &= terminal,
+            LogicalPlan::Aggregate(aggregate) => {
+                if !terminal {
+                    eligible &= aggregate.group_expr.is_empty()
+                        && !aggregate.aggr_expr.is_empty()
+                        && aggregate
+                            .aggr_expr
+                            .iter()
+                            .all(|expr| supported_aggregate(expr, true));
+                    terminal = true;
+                } else {
+                    eligible &= !aggregate.group_expr.is_empty()
+                        && aggregate
+                            .aggr_expr
+                            .iter()
+                            .all(|expr| supported_aggregate(expr, false))
+                        && grouping_branches(aggregate)?.is_some();
+                    grouped = true;
+                }
+            }
+            LogicalPlan::Unnest(unnest) => {
+                eligible &= terminal
+                    && unnest.exec_columns.len() == 1
+                    && unnest.list_type_columns.len() == 1
+                    && unnest.struct_type_columns.is_empty();
+            }
+            LogicalPlan::TableScan(scan) => eligible &= terminal && scan.fetch.is_none(),
+            LogicalPlan::Values(_) | LogicalPlan::EmptyRelation(_) => eligible &= terminal,
+            _ => eligible = false,
+        }
+        Ok(if eligible {
+            TreeNodeRecursion::Continue
+        } else {
+            TreeNodeRecursion::Stop
+        })
+    })?;
+    Ok(eligible && terminal && grouped && correlated)
+}
+
+fn supported_aggregate(expr: &Expr, terminal: bool) -> bool {
+    let Expr::AggregateFunction(aggregate) = expr.clone().unalias() else {
+        return false;
+    };
+    let function = aggregate.func.inner();
+    (function.is::<datafusion::functions_aggregate::sum::Sum>()
+        || function.is::<datafusion::functions_aggregate::min_max::Max>()
+        || (!terminal && function.is::<datafusion::functions_aggregate::count::Count>()))
+        && aggregate.params.order_by.is_empty()
+}
+
+struct GroupingBranch {
+    active: Vec<usize>,
+    id: Option<ScalarValue>,
+}
+
+/// Preserve the original bit positions and duplicate ordinal, never including
+/// private domain columns in the grouping ID. The type is the resolved type,
+/// including any width required by repeated sets.
+fn grouping_id(active: &[bool], ordinal: u64, data_type: &DataType) -> Option<ScalarValue> {
+    let width = match data_type {
+        DataType::UInt8 => 8,
+        DataType::UInt16 => 16,
+        DataType::UInt32 => 32,
+        DataType::UInt64 => 64,
+        _ => return None,
+    };
+    let ordinal_bits = (u64::BITS - ordinal.leading_zeros()) as usize;
+    if active.len() + ordinal_bits > width {
+        return None;
+    }
+    let mut value = if ordinal == 0 {
+        0
+    } else {
+        ordinal << active.len()
+    };
+    for (index, included) in active.iter().enumerate() {
+        if !included {
+            value |= 1 << (active.len() - index - 1);
+        }
+    }
+    Some(match data_type {
+        DataType::UInt8 => ScalarValue::UInt8(Some(value as u8)),
+        DataType::UInt16 => ScalarValue::UInt16(Some(value as u16)),
+        DataType::UInt32 => ScalarValue::UInt32(Some(value as u32)),
+        DataType::UInt64 => ScalarValue::UInt64(Some(value)),
+        _ => return None,
+    })
+}
+
+/// Check expansion cardinality without constructing prefixes or a powerset.
+/// ROLLUP's width already has to fit the 64-bit grouping ID.
+fn grouping_set_count(grouping: &GroupingSet) -> Option<usize> {
+    match grouping {
+        GroupingSet::GroupingSets(sets) if !sets.is_empty() && sets.len() <= 4096 => {
+            Some(sets.len())
+        }
+        GroupingSet::Rollup(keys) if keys.len() <= 64 => Some(keys.len() + 1),
+        GroupingSet::Cube(keys) if keys.len() <= 12 => Some(1 << keys.len()),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static GROUPING_SET_MATERIALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn grouping_branches(aggregate: &Aggregate) -> Result<Option<Vec<GroupingBranch>>> {
+    let keys = grouping_set_to_exprlist(&aggregate.group_expr)?;
+    let [Expr::GroupingSet(grouping)] = aggregate.group_expr.as_slice() else {
+        return Ok(Some(vec![GroupingBranch {
+            active: (0..keys.len()).collect(),
+            id: None,
+        }]));
+    };
+    let Some(count) = grouping_set_count(grouping).filter(|_| keys.len() <= 64) else {
+        return Ok(None);
+    };
+    // Eligibility also calls this helper, before the whole-pipeline budget.
+    // Reject unrepresentable widths before allocating any expanded sets.
+    #[cfg(test)]
+    GROUPING_SET_MATERIALIZATIONS.with(|count| count.set(count.get() + 1));
+    let sets: Vec<Vec<&Expr>> = match grouping {
+        GroupingSet::GroupingSets(sets) => sets.iter().map(|set| set.iter().collect()).collect(),
+        GroupingSet::Rollup(keys) => (0..=keys.len())
+            .map(|end| keys[..end].iter().collect())
+            .collect(),
+        GroupingSet::Cube(keys) => powerset(keys)?,
+    };
+    let mut ordinals = HashMap::<Vec<bool>, u64>::new();
+    let mut branches = Vec::with_capacity(count);
+    for set in sets {
+        let active: Vec<_> = keys.iter().map(|key| set.contains(key)).collect();
+        let ordinal = ordinals.entry(active.clone()).or_default();
+        let Some(id) = grouping_id(
+            &active,
+            *ordinal,
+            aggregate.schema.field(keys.len()).data_type(),
+        ) else {
+            return Ok(None);
+        };
+        *ordinal += 1;
+        branches.push(GroupingBranch {
+            active: active
+                .iter()
+                .enumerate()
+                .filter_map(|(i, active)| active.then_some(i))
+                .collect(),
+            id: Some(id),
+        });
+    }
+    Ok(Some(branches))
+}
+
+struct DomainBinding {
+    reference: Expr,
+    outer: Column,
+    key: Column,
+}
+
+// Count occurrences, not distinct Arc pointers: neither optimization nor physical
+// planning memoizes shared relational inputs. Include expression/schema work so
+// wide plans and repeated outer domains consume the same budget as inner scans.
+const MAX_GROUPED_DOMAIN_WORK: usize = 16_384;
+
+fn node_work(plan: &LogicalPlan) -> Result<Option<usize>> {
+    let mut work = 1usize.checked_add(plan.schema().fields().len());
+    plan.apply_expressions(|expr| {
+        expr.apply(|_| {
+            work = work.and_then(|work| work.checked_add(1));
+            Ok(
+                if work.is_some_and(|work| work <= MAX_GROUPED_DOMAIN_WORK) {
+                    TreeNodeRecursion::Continue
+                } else {
+                    TreeNodeRecursion::Stop
+                },
+            )
+        })
+    })?;
+    Ok(work.filter(|&work| work <= MAX_GROUPED_DOMAIN_WORK))
+}
+
+fn plan_work(plan: &LogicalPlan) -> Result<Option<usize>> {
+    let mut work = Some(0usize);
+    plan.apply_with_subqueries(|node| {
+        work = work
+            .zip(node_work(node)?)
+            .and_then(|(total, node)| total.checked_add(node));
+        Ok(
+            if work.is_some_and(|work| work <= MAX_GROUPED_DOMAIN_WORK) {
+                TreeNodeRecursion::Continue
+            } else {
+                TreeNodeRecursion::Stop
+            },
+        )
+    })?;
+    Ok(work.filter(|&work| work <= MAX_GROUPED_DOMAIN_WORK))
+}
+
+/// An upper bound for lowering one aggregate. Each ordinary branch repeats its
+/// input; each empty-set completion repeats both that input and the domain. The
+/// allowance covers generated aggregates, projections, anti-join predicates,
+/// DISTINCT, UNION and output restoration, including their expression/field work.
+fn aggregate_work(
+    input: usize,
+    domain: usize,
+    own: usize,
+    width: usize,
+    bindings: usize,
+    branches: usize,
+    empty: usize,
+) -> Option<usize> {
+    let generated = width
+        .checked_add(bindings)?
+        .checked_mul(16)?
+        .checked_add(16)?;
+    input
+        .checked_add(own)?
+        .checked_add(generated)?
+        .checked_mul(branches.checked_add(empty)?)?
+        .checked_add(domain.checked_mul(empty)?)?
+        .checked_add(generated)
+}
+
+/// Preflight the *whole* pipeline before allocating aliases or rewriting nodes.
+/// Checked arithmetic and a single cumulative cap bound nested branch products,
+/// including missing-domain completion, not just the sets of any one aggregate.
+fn grouped_work(plan: &LogicalPlan, outer: &LogicalPlan, bindings: usize) -> Result<Option<usize>> {
+    fn estimate(plan: &LogicalPlan, domain: usize, bindings: usize) -> Result<Option<usize>> {
+        let Some(own) = node_work(plan)? else {
+            return Ok(None);
+        };
+        let work = match plan {
+            LogicalPlan::TableScan(_) | LogicalPlan::Values(_) | LogicalPlan::EmptyRelation(_) => {
+                // Original leaf, domain, and the cross join (including its fields).
+                own.checked_add(domain)
+                    .and_then(|work| work.checked_add(own))
+                    .and_then(|work| work.checked_add(bindings))
+            }
+            _ => {
+                let inputs = plan.inputs();
+                let [input] = inputs.as_slice() else {
+                    return Ok(None);
+                };
+                let Some(input) = estimate(input, domain, bindings)? else {
+                    return Ok(None);
+                };
+                if let LogicalPlan::Aggregate(aggregate) = plan {
+                    let Some(branches) = grouping_branches(aggregate)? else {
+                        return Ok(None);
+                    };
+                    let empty = branches
+                        .iter()
+                        .filter(|branch| branch.active.is_empty() && branch.id.is_some())
+                        .count();
+                    aggregate_work(
+                        input,
+                        domain,
+                        own,
+                        plan.schema().fields().len(),
+                        bindings,
+                        branches.len(),
+                        empty,
+                    )
+                } else {
+                    // Carry private columns; SubqueryAlias additionally restores
+                    // every public qualifier via a projection at this stage.
+                    bindings
+                        .checked_mul(4)
+                        .and_then(|extra| extra.checked_add(own.checked_mul(4)?))
+                        .and_then(|extra| input.checked_add(extra))
+                }
+            }
+        };
+        Ok(work.filter(|&work| work <= MAX_GROUPED_DOMAIN_WORK))
+    }
+    let Some(outer) = plan_work(outer)? else {
+        return Ok(None);
+    };
+    let Some(domain) = bindings
+        .checked_mul(4)
+        .and_then(|keys| outer.checked_add(keys)?.checked_add(2))
+    else {
+        return Ok(None);
+    };
+    Ok(estimate(plan, domain, bindings)?.and_then(|work| {
+        // Final public projection plus the outer input and its scalar join.
+        work.checked_add(outer)?
+            .checked_add(plan.schema().fields().len().checked_mul(4)?)?
+            .checked_add(4)
+            .filter(|&work| work <= MAX_GROUPED_DOMAIN_WORK)
+    }))
+}
+
+fn grouped_domain(
+    plan: &LogicalPlan,
+    outer: &Arc<LogicalPlan>,
+    config: &dyn OptimizerConfig,
+) -> Result<Option<LogicalPlan>> {
+    if !grouped_pipeline(plan)?
+        || outer.exists(|node| {
+            Ok(node
+                .expressions()
+                .iter()
+                .any(|expr| expr.is_volatile() || expr.contains_outer())
+                || matches!(
+                    node,
+                    LogicalPlan::Extension(_)
+                        | LogicalPlan::Subquery(_)
+                        | LogicalPlan::RecursiveQuery(_)
+                ))
+        })?
+    {
+        return Ok(None);
+    }
+    // Use the same guarded pull-up as ScalarSubqueryToJoin, on a disposable
+    // clone. Native-safe pipelines stay native even when expansion would exceed
+    // our budget; in particular duplicate nonempty grouping chains stay linear.
+    let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
+    if plan.clone().rewrite(&mut pull_up).is_ok() && pull_up.can_pull_up {
+        return Ok(None);
+    }
+    let references = plan.all_out_ref_exprs();
+    if grouped_work(plan, outer, references.len())?.is_none() {
+        return Ok(None);
+    }
+    let mut reserved = HashSet::new();
+    for root in [plan, outer.as_ref()] {
+        root.apply(|node| {
+            reserved.extend(
+                node.schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().clone()),
+            );
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+    let mut bindings = Vec::new();
+    for reference in references {
+        let Expr::OuterReferenceColumn(field, column) = &reference else {
+            return Ok(None);
+        };
+        if !outer.schema().has_column(column)
+            || outer
+                .schema()
+                .field(outer.schema().index_of_column(column)?)
+                .data_type()
+                != field.data_type()
+            || !(field.data_type().is_integer()
+                || matches!(
+                    field.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                ))
+        {
+            return Ok(None);
+        }
+        let key = loop {
+            let name = config.alias_generator().next("__sail_group_domain");
+            if reserved.insert(name.clone()) {
+                break Column::new_unqualified(name);
+            }
+        };
+        bindings.push(DomainBinding {
+            outer: column.clone(),
+            reference,
+            key,
+        });
+    }
+    if bindings.is_empty() {
+        return Ok(None);
+    }
+    let domain = LogicalPlanBuilder::from(Arc::clone(outer))
+        .project(
+            bindings
+                .iter()
+                .map(|binding| Expr::Column(binding.outer.clone()).alias(&binding.key.name)),
+        )?
+        .distinct()?
+        .build()?;
+    let rewritten = bind_grouped_plan(plan, &domain, &bindings)?;
+    Ok(Some(
+        LogicalPlanBuilder::from(rewritten)
+            .project(plan.schema().columns().into_iter().map(Expr::Column))?
+            .build()?,
+    ))
+}
+
+fn binding_exprs(bindings: &[DomainBinding]) -> Vec<Expr> {
+    bindings
+        .iter()
+        .map(|binding| Expr::Column(binding.key.clone()))
+        .collect()
+}
+
+/// Restore public column identity by position and private binding identity by
+/// lineage. In particular aliases must not capture the private key qualifier.
+fn restore_bound_output(
+    plan: LogicalPlan,
+    original: &DFSchema,
+    bindings: &[DomainBinding],
+) -> Result<LogicalPlan> {
+    let columns = plan.schema().columns();
+    let mut exprs: Vec<_> = original
+        .iter()
+        .enumerate()
+        .map(|(index, (qualifier, field))| {
+            Expr::Column(columns[index].clone()).alias_qualified(qualifier.cloned(), field.name())
+        })
+        .collect();
+    exprs.extend(
+        columns[original.fields().len()..]
+            .iter()
+            .zip(bindings)
+            .map(|(column, binding)| Expr::Column(column.clone()).alias(&binding.key.name)),
+    );
+    LogicalPlanBuilder::from(plan).project(exprs)?.build()
+}
+
+fn bind_grouped_plan(
+    plan: &LogicalPlan,
+    domain: &LogicalPlan,
+    bindings: &[DomainBinding],
+) -> Result<LogicalPlan> {
+    let keys = || binding_exprs(bindings);
+    let result = match plan {
+        LogicalPlan::Projection(projection) => {
+            let input = bind_grouped_plan(&projection.input, domain, bindings)?;
+            let mut exprs = projection.expr.clone();
+            exprs.extend(keys());
+            LogicalPlanBuilder::from(input).project(exprs)?.build()?
+        }
+        LogicalPlan::Filter(filter) => {
+            let input = bind_grouped_plan(&filter.input, domain, bindings)?;
+            let predicate = filter
+                .predicate
+                .clone()
+                .transform_up(|expr| {
+                    if let Some(binding) = bindings.iter().find(|binding| binding.reference == expr)
+                    {
+                        Ok(Transformed::yes(Expr::Column(binding.key.clone())))
+                    } else {
+                        Ok(Transformed::no(expr))
+                    }
+                })?
+                .data;
+            LogicalPlanBuilder::from(input).filter(predicate)?.build()?
+        }
+        LogicalPlan::SubqueryAlias(alias) => {
+            let input = bind_grouped_plan(&alias.input, domain, bindings)?;
+            let aliased = LogicalPlanBuilder::from(input)
+                .alias(alias.alias.clone())?
+                .build()?;
+            restore_bound_output(aliased, plan.schema(), bindings)?
+        }
+        LogicalPlan::Unnest(unnest) => {
+            let input = bind_grouped_plan(&unnest.input, domain, bindings)?;
+            LogicalPlan::Unnest(Unnest::try_new(
+                Arc::new(input),
+                unnest.exec_columns.clone(),
+                unnest.options.clone(),
+            )?)
+        }
+        LogicalPlan::Aggregate(aggregate) => {
+            let input = bind_grouped_plan(&aggregate.input, domain, bindings)?;
+            lower_bound_aggregate(aggregate, input, domain, bindings)?
+        }
+        LogicalPlan::TableScan(_) | LogicalPlan::Values(_) | LogicalPlan::EmptyRelation(_) => {
+            LogicalPlanBuilder::from(plan.clone())
+                .cross_join(domain.clone())?
+                .build()?
+        }
+        _ => return datafusion_common::internal_err!("ineligible grouping domain node"),
+    };
+    Ok(result)
+}
+
+fn lower_bound_aggregate(
+    aggregate: &Aggregate,
+    input: LogicalPlan,
+    domain: &LogicalPlan,
+    bindings: &[DomainBinding],
+) -> Result<LogicalPlan> {
+    let keys = grouping_set_to_exprlist(&aggregate.group_expr)?;
+    let branches = grouping_branches(aggregate)?.ok_or_else(|| {
+        datafusion_common::internal_datafusion_err!("ineligible grouping branches")
+    })?;
+    let mut outputs = Vec::new();
+    for branch in branches {
+        let mut group_expr = binding_exprs(bindings);
+        group_expr.extend(branch.active.iter().map(|&index| keys[index].clone()));
+        let actual = LogicalPlanBuilder::from(input.clone())
+            .aggregate(group_expr, aggregate.aggr_expr.clone())?
+            .build()?;
+        let actual = if aggregate.group_expr.is_empty() {
+            // Keep the correlation directly above the terminal aggregate so
+            // scalar validation can prove its per-binding cardinality.
+            let correlation = conjunction(bindings.iter().map(|binding| {
+                datafusion_expr::binary_expr(
+                    Expr::Column(binding.key.clone()),
+                    Operator::IsNotDistinctFrom,
+                    binding.reference.clone(),
+                )
+            }))
+            .ok_or_else(|| datafusion_common::internal_datafusion_err!("empty grouping domain"))?;
+            LogicalPlanBuilder::from(actual)
+                .filter(correlation)?
+                .build()?
+        } else {
+            actual
+        };
+        let columns = actual.schema().columns();
+        let mut exprs = Vec::new();
+        for (index, _) in keys.iter().enumerate() {
+            exprs.push(
+                match branch.active.iter().position(|&active| active == index) {
+                    Some(position) => Expr::Column(columns[bindings.len() + position].clone()),
+                    None => datafusion_expr::lit(ScalarValue::try_from(
+                        aggregate.schema.field(index).data_type(),
+                    )?),
+                },
+            );
+        }
+        if let Some(id) = &branch.id {
+            exprs.push(datafusion_expr::lit(id.clone()));
+        }
+        exprs.extend(
+            columns[bindings.len() + branch.active.len()..]
+                .iter()
+                .cloned()
+                .map(Expr::Column),
+        );
+        let named = name_original_outputs(exprs, &aggregate.schema);
+        let mut named = named;
+        named.extend(binding_exprs(bindings));
+        outputs.push(Arc::new(
+            LogicalPlanBuilder::from(actual).project(named)?.build()?,
+        ));
+
+        // FIXME: Align empty-input mixed/duplicate grouping sets with Spark
+        // (SPARK-29701). Spark emits no rows, while DataFusion preserves empty
+        // grand totals. Keep correlated and literal-bound Sail evaluation
+        // consistent until both paths can change together; a downstream
+        // explode(array(count, count + 1)) can currently yield 1 instead of NULL.
+        // Native mixed grouping sets emit an empty grand total. Adding domain
+        // keys would lose it, so complete missing *input* domains before HAVING.
+        // The terminal global SUM/MAX needs no row: its missing scalar is NULL.
+        if branch.active.is_empty() && branch.id.is_some() {
+            let present = LogicalPlanBuilder::from(input.clone())
+                .project(bindings.iter().map(|binding| {
+                    Expr::Column(binding.key.clone())
+                        .alias(format!("{}__present", binding.key.name))
+                }))?
+                .distinct()?
+                .build()?;
+            let predicates = bindings
+                .iter()
+                .zip(present.schema().columns())
+                .map(|(binding, column)| {
+                    datafusion_expr::binary_expr(
+                        Expr::Column(binding.key.clone()),
+                        Operator::IsNotDistinctFrom,
+                        Expr::Column(column),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let missing = LogicalPlanBuilder::from(domain.clone())
+                .join_on(present, JoinType::LeftAnti, predicates)?
+                .build()?;
+            let mut defaults = keys
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    ScalarValue::try_from(aggregate.schema.field(index).data_type())
+                        .map(datafusion_expr::lit)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            defaults.push(datafusion_expr::lit(branch.id.clone().ok_or_else(
+                || datafusion_common::internal_datafusion_err!("missing grouping id"),
+            )?));
+            for expr in &aggregate.aggr_expr {
+                let Expr::AggregateFunction(function) = expr.clone().unalias() else {
+                    return datafusion_common::internal_err!("unsupported grouping aggregate");
+                };
+                defaults.push(datafusion_expr::lit(
+                    function
+                        .func
+                        .default_value(&expr.get_type(aggregate.input.schema())?)?,
+                ));
+            }
+            let mut defaults = name_original_outputs(defaults, &aggregate.schema);
+            defaults.extend(binding_exprs(bindings));
+            outputs.push(Arc::new(
+                LogicalPlanBuilder::from(missing)
+                    .project(defaults)?
+                    .build()?,
+            ));
+        }
+    }
+    if outputs.len() == 1 {
+        return Ok(Arc::unwrap_or_clone(outputs.remove(0)));
+    }
+    let union = LogicalPlan::Union(Union::try_new(outputs)?);
+    restore_bound_output(union, &aggregate.schema, bindings)
+}
+
+fn name_original_outputs(exprs: Vec<Expr>, schema: &DFSchema) -> Vec<Expr> {
+    exprs
+        .into_iter()
+        .zip(schema.iter())
+        .map(|(expr, (qualifier, field))| expr.alias_qualified(qualifier.cloned(), field.name()))
+        .collect()
+}
+
 /// Evaluate the scalar aggregate's projection on empty input, retaining defaults
 /// such as COUNT = 0 without replacing legitimate null results of nonempty groups.
 fn empty_scalar_value(plan: &LogicalPlan) -> Result<Expr> {
@@ -317,4 +1380,766 @@ fn native_equality(expr: &Expr) -> bool {
     };
     (inner_key(&binary.left) && !binary.right.any_column_refs())
         || (inner_key(&binary.right) && !binary.left.any_column_refs())
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::Array;
+    use datafusion::dataframe::DataFrame;
+    use datafusion::execution::session_state::SessionStateBuilder;
+    use datafusion::functions_aggregate::expr_fn::{count, max, sum};
+    use datafusion::functions_nested::expr_fn::make_array;
+    use datafusion::optimizer::OptimizerContext;
+    use datafusion_common::cast::as_int64_array;
+    use datafusion_common::internal_datafusion_err;
+    use datafusion_expr::{col, lit, out_ref_col, scalar_subquery};
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct CountedBinding {
+        signature: datafusion_expr::Signature,
+        rows: Arc<std::sync::Mutex<Vec<Option<i64>>>>,
+    }
+
+    impl PartialEq for CountedBinding {
+        fn eq(&self, other: &Self) -> bool {
+            Arc::ptr_eq(&self.rows, &other.rows)
+        }
+    }
+
+    impl Eq for CountedBinding {}
+
+    impl std::hash::Hash for CountedBinding {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            std::ptr::hash(Arc::as_ptr(&self.rows), state);
+        }
+    }
+
+    impl datafusion_expr::ScalarUDFImpl for CountedBinding {
+        fn name(&self) -> &str {
+            "counted_binding"
+        }
+
+        fn signature(&self) -> &datafusion_expr::Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn invoke_with_args(
+            &self,
+            args: datafusion_expr::ScalarFunctionArgs,
+        ) -> Result<datafusion_expr::ColumnarValue> {
+            let array = args.args[0].clone().into_array(args.number_rows)?;
+            let values = as_int64_array(array.as_ref())?;
+            let mut rows = self
+                .rows
+                .lock()
+                .map_err(|_| internal_datafusion_err!("ledger poisoned"))?;
+            let output = values
+                .iter()
+                .map(|value| {
+                    let prior = rows.iter().filter(|&&row| row == value).count();
+                    rows.push(value);
+                    value.map(|value| value + (prior % 2) as i64)
+                })
+                .collect::<arrow::array::Int64Array>();
+            Ok(datafusion_expr::ColumnarValue::Array(Arc::new(output)))
+        }
+    }
+
+    #[tokio::test]
+    async fn singleton_window_keeps_per_candidate_volatile_evaluation() -> Result<()> {
+        use datafusion::functions_aggregate::count::count_udaf;
+        use datafusion::prelude::SessionConfig;
+        use datafusion_expr::expr::WindowFunction;
+        use datafusion_expr::{ScalarUDF, Signature, Volatility, when};
+
+        for conditional in [false, true] {
+            for value in [Some(1), Some(3), None] {
+                let rows = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let state = SessionStateBuilder::new()
+                    .with_default_features()
+                    .with_config(SessionConfig::new().with_target_partitions(1))
+                    .with_optimizer_rules(crate::default_optimizer_rules())
+                    .build();
+                let function = ScalarUDF::from(CountedBinding {
+                    signature: Signature::exact(vec![DataType::Int64], Volatility::Volatile),
+                    rows: Arc::clone(&rows),
+                });
+                // The input's g values alternate. A per-outer evaluation, or
+                // partitioning by raw g, cannot give the four-row window.
+                let input = LogicalPlanBuilder::values(
+                    (1..=5i64)
+                        .map(|seq| vec![lit(seq), lit(2 - seq % 2)])
+                        .collect(),
+                )?
+                .project(vec![col("column1").alias("seq"), col("column2").alias("g")])?
+                .filter(col("seq").lt(lit(5i64)))?
+                .build()?;
+                let expected_count = if conditional { 2 } else { 4 };
+                for correlated in [false, true] {
+                    rows.lock()
+                        .map_err(|_| internal_datafusion_err!("ledger poisoned"))?
+                        .clear();
+                    let reference = if correlated {
+                        out_ref_col(DataType::Int64, "o.x")
+                    } else {
+                        lit(ScalarValue::Int64(value))
+                    };
+                    let predicate = col("g").eq(function.call(vec![reference]));
+                    let predicate = if conditional {
+                        when(col("seq").lt_eq(lit(2i64)), lit(false)).otherwise(predicate)?
+                    } else {
+                        predicate
+                    };
+                    let window = WindowFunction::new(count_udaf(), vec![lit(1i64)]);
+                    let inner = LogicalPlanBuilder::from(input.clone())
+                        .filter(predicate)?
+                        .window(vec![Expr::WindowFunction(Box::new(window)).alias("c")])?
+                        .aggregate(Vec::<Expr>::new(), vec![max(col("c")).alias("n")])?
+                        .build()?;
+                    let plan = if correlated {
+                        LogicalPlanBuilder::values(vec![vec![lit(ScalarValue::Int64(value))]])?
+                            .project(vec![col("column1").alias("x")])?
+                            .alias("o")?
+                            .project(vec![
+                                col("o.x"),
+                                scalar_subquery(Arc::new(inner)).alias("n"),
+                            ])?
+                            .build()?
+                    } else {
+                        LogicalPlanBuilder::from(inner)
+                            .project(vec![lit(ScalarValue::Int64(value)).alias("x"), col("n")])?
+                            .build()?
+                    };
+                    let batches = DataFrame::new(state.clone(), plan).collect().await?;
+                    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+                    let result = as_int64_array(batches[0].column(1).as_ref())?;
+                    if value == Some(1) {
+                        assert_eq!(
+                            result.iter().collect::<Vec<_>>(),
+                            vec![Some(expected_count)]
+                        );
+                    } else {
+                        assert!(result.is_null(0));
+                    }
+                    let actual = rows
+                        .lock()
+                        .map_err(|_| internal_datafusion_err!("ledger poisoned"))?
+                        .clone();
+                    println!(
+                        "binding={value:?} conditional={conditional} correlated={correlated}: {actual:?}"
+                    );
+                    // The full optimizer merges the local seq filter with
+                    // this filter in both forms; CASE alone masks UDF rows.
+                    assert_eq!(actual, vec![value; if conditional { 3 } else { 5 }]);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_domain_stages_full_predicate_per_candidate() -> Result<()> {
+        use datafusion::functions_aggregate::count::count_udaf;
+        use datafusion::prelude::SessionConfig;
+        use datafusion_expr::expr::WindowFunction;
+        use datafusion_expr::{ScalarUDF, Signature, Volatility, when};
+
+        for conditional in [false, true] {
+            let rows = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let function = ScalarUDF::from(CountedBinding {
+                signature: Signature::exact(vec![DataType::Int64], Volatility::Volatile),
+                rows: Arc::clone(&rows),
+            });
+            let input = LogicalPlanBuilder::values(
+                (1..=4i64)
+                    .map(|seq| vec![lit(seq), lit(2 - seq % 2)])
+                    .collect(),
+            )?
+            .project(vec![col("column1").alias("seq"), col("column2").alias("g")])?
+            .build()?;
+            let inner = |reference| -> Result<LogicalPlan> {
+                let predicate = col("g").eq(function.call(vec![reference]));
+                let predicate = if conditional {
+                    when(col("seq").lt_eq(lit(2i64)), lit(false)).otherwise(predicate)?
+                } else {
+                    predicate
+                };
+                LogicalPlanBuilder::from(input.clone())
+                    .filter(predicate)?
+                    .window(vec![
+                        Expr::WindowFunction(Box::new(WindowFunction::new(
+                            count_udaf(),
+                            vec![lit(1i64)],
+                        )))
+                        .alias("c"),
+                    ])?
+                    .aggregate(Vec::<Expr>::new(), vec![max(col("c")).alias("n")])?
+                    .build()
+            };
+            let state = SessionStateBuilder::new()
+                .with_default_features()
+                .with_config(SessionConfig::new().with_target_partitions(1))
+                .with_optimizer_rules(crate::default_optimizer_rules())
+                .build();
+            let mut expected_ledger = Vec::new();
+            let mut expected_results = Vec::new();
+            for value in [Some(1), Some(2), Some(3), None] {
+                let batches = DataFrame::new(state.clone(), inner(lit(ScalarValue::Int64(value)))?)
+                    .collect()
+                    .await?;
+                let result = as_int64_array(batches[0].column(0).as_ref())?;
+                expected_results.push((value, (!result.is_null(0)).then(|| result.value(0))));
+                expected_ledger.extend(vec![value; if conditional { 2 } else { 4 }]);
+            }
+            assert_eq!(
+                expected_results,
+                vec![
+                    (Some(1), Some(if conditional { 2 } else { 4 })),
+                    (Some(2), None),
+                    (Some(3), None),
+                    (None, None)
+                ]
+            );
+            let mut literal_ledger = rows
+                .lock()
+                .map_err(|_| internal_datafusion_err!("ledger poisoned"))?
+                .clone();
+            literal_ledger.sort();
+            expected_ledger.sort();
+            assert_eq!(literal_ledger, expected_ledger);
+            rows.lock()
+                .map_err(|_| internal_datafusion_err!("ledger poisoned"))?
+                .clear();
+            let outer = LogicalPlanBuilder::values(vec![
+                vec![lit(1i64)],
+                vec![lit(2i64)],
+                vec![lit(3i64)],
+                vec![lit(ScalarValue::Int64(None))],
+            ])?
+            .project(vec![col("column1").alias("x")])?
+            .alias("o")?
+            .build()?;
+            let prototype = |outer| -> Result<LogicalPlan> {
+                LogicalPlanBuilder::from(outer)
+                    .project(vec![
+                        col("o.x"),
+                        scalar_subquery(Arc::new(inner(out_ref_col(DataType::Int64, "o.x"))?))
+                            .alias("n"),
+                    ])?
+                    .build()
+            };
+            let original = prototype(outer)?;
+            let context = OptimizerContext::new();
+            let rewritten = NormalizeScalarSubqueryDomain.rewrite(original.clone(), &context)?;
+            assert!(rewritten.transformed);
+            assert_eq!(rewritten.data.schema(), original.schema());
+            assert!(
+                !NormalizeScalarSubqueryDomain
+                    .rewrite(rewritten.data.clone(), &context)?
+                    .transformed
+            );
+            let mut staged = 0;
+            rewritten.data.apply_with_subqueries(|node| {
+                if let LogicalPlan::Projection(projection) = node {
+                    for expr in &projection.expr {
+                        if expr.is_volatile() {
+                            assert_eq!(
+                                expr.get_type(projection.input.schema())?,
+                                DataType::Boolean
+                            );
+                            assert!(!expr.contains_outer());
+                            staged += 1;
+                        }
+                    }
+                }
+                if let LogicalPlan::Window(window) = node {
+                    assert!(window.input.all_out_ref_exprs().is_empty());
+                    for expr in &window.window_expr {
+                        let Expr::WindowFunction(function) = expr.clone().unalias() else {
+                            return datafusion_common::internal_err!("expected window expression");
+                        };
+                        assert_eq!(function.params.partition_by.len(), 1);
+                    }
+                }
+                assert!(!matches!(node, LogicalPlan::Distinct(_)));
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            assert_eq!(staged, 1);
+            let frame = DataFrame::new(state.clone(), original);
+            println!(
+                "conditional={conditional} optimized: {}",
+                frame.clone().into_optimized_plan()?.display_indent()
+            );
+            let mut actual = Vec::new();
+            for batch in frame.collect().await? {
+                let bindings = as_int64_array(batch.column(0).as_ref())?;
+                let values = as_int64_array(batch.column(1).as_ref())?;
+                actual.extend(bindings.iter().zip(values.iter()));
+            }
+            actual.sort();
+            expected_results.sort();
+            assert_eq!(actual, expected_results);
+            let mut actual_ledger = rows
+                .lock()
+                .map_err(|_| internal_datafusion_err!("ledger poisoned"))?
+                .clone();
+            actual_ledger.sort();
+            println!("conditional={conditional} domain ledger: {actual_ledger:?}");
+            assert_eq!(actual_ledger, expected_ledger);
+            for outer in [
+                LogicalPlanBuilder::values(vec![vec![lit(1i64)], vec![lit(1i64)]])?
+                    .project(vec![col("column1").alias("x")])?
+                    .alias("o")?
+                    .build()?,
+                LogicalPlanBuilder::values(vec![vec![lit(1i64)], vec![lit(2i64)]])?
+                    .project(vec![function.call(vec![col("column1")]).alias("x")])?
+                    .alias("o")?
+                    .build()?,
+            ] {
+                let original = prototype(outer)?;
+                let rejected = NormalizeScalarSubqueryDomain.rewrite(original.clone(), &context)?;
+                assert!(!rejected.transformed);
+                assert_eq!(rejected.data, original);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn literal_outer_proof_rejects_duplicates_unknowns_and_effects() -> Result<()> {
+        let one = LogicalPlanBuilder::values(vec![vec![lit(1i64)]])?
+            .project(vec![col("column1").alias("x")])?
+            .alias("o")?
+            .build()?;
+        assert_eq!(literal_outer_rows(&one, 1)?, Some(vec![vec![lit(1i64)]]));
+        for unknown in [
+            input("o")?,
+            LogicalPlanBuilder::from(one.clone())
+                .filter(lit(false))?
+                .build()?,
+            LogicalPlanBuilder::from(one.clone())
+                .project(vec![datafusion::functions::expr_fn::random()])?
+                .build()?,
+            LogicalPlanBuilder::values(vec![vec![lit(1i64)], vec![lit(1i64)]])?.build()?,
+        ] {
+            assert!(literal_outer_rows(&unknown, 1)?.is_none());
+        }
+        Ok(())
+    }
+
+    fn input(name: &str) -> Result<LogicalPlan> {
+        LogicalPlanBuilder::values(vec![
+            vec![lit(1i64)],
+            vec![lit(2i64)],
+            vec![lit(1i64)],
+            vec![lit(ScalarValue::Int64(None))],
+        ])?
+        .project(vec![col("column1").alias("k")])?
+        .alias(name)?
+        .build()
+    }
+
+    fn prototype(generator: bool) -> Result<LogicalPlan> {
+        let inner = LogicalPlanBuilder::from(input("i")?)
+            .filter(col("i.k").eq(out_ref_col(DataType::Int64, "o.k")))?
+            .filter(col("i.k").eq(lit(1i64)))?;
+        let inner = if generator {
+            inner
+                .aggregate(
+                    vec![Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+                        vec![col("i.k")],
+                        vec![],
+                    ]))],
+                    vec![count(lit(1i64)).alias("c")],
+                )?
+                .project(vec![
+                    make_array(vec![col("c"), col("c") + lit(1i64)]).alias("z"),
+                ])?
+                .unnest_column("z")?
+                .alias("generated")?
+                .aggregate(
+                    Vec::<Expr>::new(),
+                    vec![max(col("generated.z")).alias("result")],
+                )?
+        } else {
+            let lower = inner
+                .aggregate(vec![col("i.k")], vec![count(lit(1i64)).alias("c")])?
+                .project(vec![col("i.k").alias("k"), col("c")])?
+                .alias("lower")?
+                .filter(col("lower.k").eq(out_ref_col(DataType::Int64, "o.k")))?;
+            lower
+                .aggregate(
+                    vec![Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+                        vec![col("lower.k")],
+                        vec![col("lower.k")],
+                        vec![],
+                    ]))],
+                    Vec::<Expr>::new(),
+                )?
+                .project(vec![
+                    datafusion_expr::cast(
+                        datafusion_expr::bitwise_and(
+                            col(Aggregate::INTERNAL_GROUPING_ID),
+                            lit(1u8),
+                        ),
+                        DataType::Int64,
+                    )
+                    .alias("z"),
+                ])?
+                .alias("bits")?
+                .aggregate(Vec::<Expr>::new(), vec![sum(col("bits.z")).alias("result")])?
+        }
+        .project(vec![col("result")])?
+        .build()?;
+        LogicalPlanBuilder::from(input("o")?)
+            .project(vec![
+                col("o.k"),
+                scalar_subquery(Arc::new(inner)).alias("result"),
+            ])?
+            .build()
+    }
+
+    #[tokio::test]
+    async fn grouped_domain_prototypes() -> Result<()> {
+        for generator in [false, true] {
+            let original = prototype(generator)?;
+            let context = OptimizerContext::new();
+            let rewritten = NormalizeScalarSubqueryDomain.rewrite(original.clone(), &context)?;
+            assert!(rewritten.transformed);
+            let repeated =
+                NormalizeScalarSubqueryDomain.rewrite(rewritten.data.clone(), &context)?;
+            assert!(!repeated.transformed);
+            assert_eq!(repeated.data, rewritten.data);
+            let mut unions = 0;
+            rewritten.data.apply_with_subqueries(|node| {
+                if matches!(node, LogicalPlan::Union(_) | LogicalPlan::Unnest(_)) {
+                    assert!(node.all_out_ref_exprs().is_empty());
+                    unions += usize::from(matches!(node, LogicalPlan::Union(_)));
+                }
+                if let LogicalPlan::Unnest(unnest) = node {
+                    let rebuilt = Unnest::try_new(
+                        Arc::clone(&unnest.input),
+                        unnest.exec_columns.clone(),
+                        unnest.options.clone(),
+                    )?;
+                    assert_eq!(rebuilt.schema, unnest.schema);
+                    assert_eq!(rebuilt.dependency_indices, unnest.dependency_indices);
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            assert!(unions > 0);
+            let state = SessionStateBuilder::new()
+                .with_default_features()
+                .with_optimizer_rules(crate::default_optimizer_rules())
+                .build();
+            let batches = DataFrame::new(state, original).collect().await?;
+            let mut values = Vec::new();
+            for batch in batches {
+                let keys = as_int64_array(batch.column(0).as_ref())?;
+                let results = as_int64_array(batch.column(1).as_ref())?;
+                for row in 0..batch.num_rows() {
+                    assert!(!results.is_null(row));
+                    values.push((
+                        (!keys.is_null(row)).then(|| keys.value(row)),
+                        results.value(row),
+                    ));
+                }
+            }
+            values.sort();
+            let one = if generator { 3 } else { 1 };
+            assert_eq!(
+                values,
+                vec![(None, 1), (Some(1), one), (Some(1), one), (Some(2), 1)]
+            );
+        }
+        Ok(())
+    }
+
+    fn grouping_chain(depth: usize, empty: bool) -> Result<LogicalPlan> {
+        let mut inner = LogicalPlanBuilder::from(input("i")?)
+            .filter(col("i.k").eq(out_ref_col(DataType::Int64, "o.k")))?
+            .build()?;
+        for _ in 0..depth {
+            inner = LogicalPlanBuilder::from(inner)
+                .aggregate(
+                    vec![Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+                        vec![col("i.k")],
+                        if empty { vec![] } else { vec![col("i.k")] },
+                    ]))],
+                    vec![count(lit(1i64)).alias("c")],
+                )?
+                .project(vec![col("i.k"), col("c")])?
+                .build()?;
+        }
+        let inner = LogicalPlanBuilder::from(inner)
+            .aggregate(Vec::<Expr>::new(), vec![sum(col("c")).alias("result")])?
+            .project(vec![col("result")])?
+            .build()?;
+        LogicalPlanBuilder::from(input("o")?)
+            .project(vec![scalar_subquery(Arc::new(inner)).alias("result")])?
+            .build()
+    }
+
+    #[tokio::test]
+    async fn native_grouping_chains_stay_linear() -> Result<()> {
+        for depth in [2, 4, 8, 12] {
+            let original = grouping_chain(depth, false)?;
+            let rewritten = NormalizeScalarSubqueryDomain
+                .rewrite(original.clone(), &OptimizerContext::new())?;
+            assert!(!rewritten.transformed);
+            assert_eq!(rewritten.data, original);
+            let state = SessionStateBuilder::new()
+                .with_default_features()
+                .with_optimizer_rules(crate::default_optimizer_rules())
+                .build();
+            let frame = DataFrame::new(state, original);
+            let optimized = frame.clone().into_optimized_plan()?;
+            let (mut nodes, mut sources, mut groups) = (0, 0, 0);
+            optimized.apply_with_subqueries(|node| {
+                nodes += 1;
+                sources += usize::from(matches!(node, LogicalPlan::Values(_)));
+                if let LogicalPlan::Aggregate(aggregate) = node {
+                    groups += usize::from(matches!(
+                        aggregate.group_expr.as_slice(),
+                        [Expr::GroupingSet(_)]
+                    ));
+                }
+                assert!(!matches!(node, LogicalPlan::Union(_)));
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            assert_eq!(sources, 2);
+            assert_eq!(groups, depth);
+            assert!(nodes <= 4 * depth + 16, "depth={depth}, nodes={nodes}");
+            for batch in frame.collect().await? {
+                let values = as_int64_array(batch.column(0).as_ref())?;
+                for row in 0..batch.num_rows() {
+                    if !values.is_null(row) {
+                        assert_eq!(values.value(row), 4);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn grouped_budget_counts_completion_and_declines_atomically() -> Result<()> {
+        assert!(aggregate_work(usize::MAX, 1, 1, 1, 1, 2, 1).is_none());
+        assert!(aggregate_work(1, usize::MAX, 1, 1, 1, 2, 2).is_none());
+        assert!(aggregate_work(1, 1, 1, usize::MAX, 1, 2, 1).is_none());
+        assert!(aggregate_work(1, 1, 1, 1, 1, usize::MAX, 1).is_none());
+        let mut accepted = 0;
+        let mut declined = 0;
+        for depth in [1, 2, 4, 8, 12] {
+            let original = grouping_chain(depth, true)?;
+            let LogicalPlan::Projection(projection) = &original else {
+                unreachable!()
+            };
+            let Expr::ScalarSubquery(query) = projection.expr[0].clone().unalias() else {
+                unreachable!()
+            };
+            assert!(grouped_pipeline(&query.subquery)?);
+            let budget = grouped_work(&query.subquery, &projection.input, 1)?;
+            let rewritten = NormalizeScalarSubqueryDomain
+                .rewrite(original.clone(), &OptimizerContext::new())?;
+            if let Some(budget) = budget {
+                accepted += 1;
+                assert!(rewritten.transformed);
+                assert!(plan_work(&rewritten.data)?.is_some_and(|actual| actual <= budget));
+                // An empty set has a second input occurrence for completion,
+                // as well as another occurrence of the outer domain itself.
+                let mut sources = 0usize;
+                rewritten.data.apply_with_subqueries(|node| {
+                    sources += usize::from(matches!(node, LogicalPlan::Values(_)));
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+                assert!(sources > 2usize.pow(depth as u32 + 1));
+            } else {
+                declined += 1;
+                assert!(!rewritten.transformed);
+                assert_eq!(rewritten.data, original);
+            }
+        }
+        assert!(accepted > 0 && declined > 0);
+        Ok(())
+    }
+
+    fn grouping_aggregate(width: usize, grouping: GroupingSet) -> Result<Aggregate> {
+        let input = LogicalPlanBuilder::values(vec![vec![lit(1i64); width.max(1)]])?
+            .project(
+                (0..width.max(1)).map(|i| col(format!("column{}", i + 1)).alias(format!("c{i}"))),
+            )?
+            .alias("i")?
+            .filter(col("i.c0").eq(out_ref_col(DataType::Int64, "o.k")))?
+            .build()?;
+        Aggregate::try_new(
+            Arc::new(input),
+            vec![Expr::GroupingSet(grouping)],
+            vec![count(lit(1i64)).alias("c")],
+        )
+    }
+
+    #[test]
+    fn rollup_preflight_rejects_width_before_materialization() -> Result<()> {
+        for width in [64, 65, 128] {
+            let aggregate = grouping_aggregate(
+                width,
+                GroupingSet::Rollup((0..width).map(|i| col(format!("i.c{i}"))).collect()),
+            )?;
+            let before = GROUPING_SET_MATERIALIZATIONS.get();
+            let branches = grouping_branches(&aggregate)?;
+            assert_eq!(
+                GROUPING_SET_MATERIALIZATIONS.get() - before,
+                usize::from(width == 64)
+            );
+            if width == 64 {
+                let branches = branches
+                    .ok_or_else(|| internal_datafusion_err!("64-key rollup must be supported"))?;
+                assert_eq!(branches.len(), 65);
+                assert!(branches[0].active.is_empty());
+                assert_eq!(branches[0].id, Some(ScalarValue::UInt64(Some(u64::MAX))));
+                assert_eq!(branches[64].active, (0..64).collect::<Vec<_>>());
+                assert_eq!(branches[64].id, Some(ScalarValue::UInt64(Some(0))));
+            } else {
+                assert!(branches.is_none());
+            }
+            let inner = LogicalPlanBuilder::from(LogicalPlan::Aggregate(aggregate))
+                .aggregate(Vec::<Expr>::new(), vec![sum(col("c")).alias("result")])?
+                .build()?;
+            let before = GROUPING_SET_MATERIALIZATIONS.get();
+            assert_eq!(grouped_pipeline(&inner)?, width == 64);
+            assert_eq!(
+                GROUPING_SET_MATERIALIZATIONS.get() - before,
+                usize::from(width == 64)
+            );
+            if width > 64 {
+                let original = LogicalPlanBuilder::from(input("o")?)
+                    .project(vec![scalar_subquery(Arc::new(inner)).alias("result")])?
+                    .build()?;
+                let rewritten = NormalizeScalarSubqueryDomain
+                    .rewrite(original.clone(), &OptimizerContext::new())?;
+                assert!(!rewritten.transformed);
+                assert_eq!(rewritten.data, original);
+                assert_eq!(GROUPING_SET_MATERIALIZATIONS.get(), before);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn grouping_preflight_preserves_cardinality_boundaries() -> Result<()> {
+        for (width, grouping, expected) in [
+            (0, GroupingSet::GroupingSets(vec![]), None),
+            (0, GroupingSet::GroupingSets(vec![vec![]; 4096]), Some(4096)),
+            (0, GroupingSet::GroupingSets(vec![vec![]; 4097]), None),
+            (0, GroupingSet::Rollup(vec![]), Some(1)),
+            (0, GroupingSet::Cube(vec![]), Some(1)),
+            (
+                12,
+                GroupingSet::Cube((0..12).map(|i| col(format!("i.c{i}"))).collect()),
+                Some(4096),
+            ),
+            (
+                13,
+                GroupingSet::Cube((0..13).map(|i| col(format!("i.c{i}"))).collect()),
+                None,
+            ),
+            (
+                65,
+                GroupingSet::GroupingSets(vec![(0..65).map(|i| col(format!("i.c{i}"))).collect()]),
+                None,
+            ),
+        ] {
+            let aggregate = grouping_aggregate(width, grouping)?;
+            let before = GROUPING_SET_MATERIALIZATIONS.get();
+            let branches = grouping_branches(&aggregate)?;
+            assert_eq!(branches.as_ref().map(Vec::len), expected);
+            assert_eq!(
+                GROUPING_SET_MATERIALIZATIONS.get() - before,
+                usize::from(expected.is_some())
+            );
+        }
+        // Ordinary GROUP BY has no grouping ID and must not inherit its width limit.
+        let mut aggregate = grouping_aggregate(
+            65,
+            GroupingSet::Rollup((0..65).map(|i| col(format!("i.c{i}"))).collect()),
+        )?;
+        aggregate = Aggregate::try_new(
+            aggregate.input,
+            (0..65).map(|i| col(format!("i.c{i}"))).collect(),
+            aggregate.aggr_expr,
+        )?;
+        let branches = grouping_branches(&aggregate)?
+            .ok_or_else(|| internal_datafusion_err!("ordinary GROUP BY must be supported"))?;
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].active.len(), 65);
+        assert!(branches[0].id.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn grouping_id_widths_and_ordinals() -> Result<()> {
+        for (width, data_type) in [
+            (8, DataType::UInt8),
+            (16, DataType::UInt16),
+            (32, DataType::UInt32),
+            (64, DataType::UInt64),
+        ] {
+            let active = vec![false; width];
+            let value = grouping_id(&active, 0, &data_type)
+                .ok_or_else(|| internal_datafusion_err!("grouping ID must fit {data_type}"))?;
+            assert_eq!(value.data_type(), data_type);
+            assert_eq!(
+                value,
+                ScalarValue::UInt64(Some(if width == 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << width) - 1
+                }))
+                .cast_to(&data_type)?
+            );
+            assert!(grouping_id(&active, 1, &data_type).is_none());
+            let active = vec![true; width - 1];
+            assert_eq!(
+                grouping_id(&active, 1, &data_type),
+                Some(ScalarValue::UInt64(Some(1u64 << (width - 1))).cast_to(&data_type)?)
+            );
+        }
+        assert_eq!(
+            grouping_id(&[true, false, true], 2, &DataType::UInt8),
+            Some(ScalarValue::UInt8(Some(18)))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_grouped_pipeline_is_atomic() -> Result<()> {
+        let original = prototype(true)?;
+        let LogicalPlan::Projection(projection) = &original else {
+            unreachable!()
+        };
+        let Expr::ScalarSubquery(query) = projection.expr[1].clone().unalias() else {
+            unreachable!()
+        };
+        for candidate in [
+            LogicalPlanBuilder::from(Arc::clone(&query.subquery))
+                .limit(0, Some(1))?
+                .build()?,
+            LogicalPlanBuilder::from(Arc::clone(&query.subquery))
+                .project(vec![datafusion::functions::expr_fn::random()])?
+                .build()?,
+            LogicalPlanBuilder::from(Arc::clone(&query.subquery))
+                .union(Arc::unwrap_or_clone(Arc::clone(&query.subquery)))?
+                .build()?,
+        ] {
+            assert!(!grouped_pipeline(&candidate)?);
+        }
+        Ok(())
+    }
 }

@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use datafusion::functions_window::row_number::row_number_udwf;
-use datafusion::optimizer::decorrelate::PullUpCorrelatedExpr;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, Result};
@@ -13,6 +12,7 @@ use datafusion_expr::{
     Expr, LogicalPlan, LogicalPlanBuilder, Operator, Projection, WindowFrame,
     WindowFunctionDefinition, lit,
 };
+use sail_common_datafusion::decorrelate::PullUpCorrelatedExpr;
 use sail_logical_plan::sort::RequiredSortNode;
 
 /// A correlated LIMIT applies independently to every equality key. Rank the

@@ -9,6 +9,7 @@ by default, which also covers reading nested fields next to INT96 columns in ID 
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import pytest
@@ -93,7 +94,13 @@ def test_delta_spark_table_query_matches(
     if name in _KNOWN_QUERY_FAILURES:
         reason, partitioned_only = _KNOWN_QUERY_FAILURES[name]
         if delta_spark_table["partitioned"] or not partitioned_only:
-            request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
+            request.applymarker(
+                pytest.mark.xfail(
+                    name != "intersect" or os.environ.get("SAIL_MODE", "local") != "local-cluster",
+                    reason=reason,
+                    strict=True,
+                )
+            )
     view = f"delta_spark_{delta_spark_table['mode']}_{int(delta_spark_table['partitioned'])}"
     spark.read.format("delta").load(delta_spark_table["path"]).createOrReplaceTempView(view)
     delta_jvm_spark.read.format("delta").load(delta_spark_table["path"]).createOrReplaceTempView(view)
@@ -157,19 +164,11 @@ def test_sail_reads_delta_spark_renamed_and_dropped_columns(
 
 @pytest.mark.parametrize("partitioned", [False, True], ids=["unpartitioned", "partitioned"])
 def test_sail_coalesces_struct_from_delta_spark_table(
-    request,
     spark: SparkSession,
     delta_jvm_spark: SparkSession,
     tmp_path: Path,
     partitioned: bool,  # noqa: FBT001
 ) -> None:
-    if partitioned:
-        request.applymarker(
-            pytest.mark.xfail(
-                reason="a struct built by an expression lacks the column mapping metadata of the planned struct type",
-                strict=True,
-            )
-        )
     path = tmp_path / "coalesce"
     table = f"delta.`{path}`"
     partition_clause = "PARTITIONED BY (name)" if partitioned else ""

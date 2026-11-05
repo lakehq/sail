@@ -79,7 +79,15 @@ message ExtendedPhysicalPlanNode {
     InputFileMetadataExecNode input_file_metadata = 64;
     DeltaMaintenanceExecNode delta_maintenance = 65;
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
+    EmptyGroupingSetsExecNode empty_grouping_sets = 67;
+    ArrowSinkExecNode arrow_sink = 68;
   }
+}
+
+// DataFusion's flattened group masks cannot represent zero-column groups.
+message EmptyGroupingSetsExecNode {
+  bytes aggregate_plan = 1;
+  uint64 group_count = 2;
 }
 
 message InputFileMetadataExecNode {
@@ -365,6 +373,8 @@ message SparkDateFormatUdf {
 
 message SparkMapFromArraysUdf {
   bool last_value_wins = 1;
+  optional bool value_contains_null = 2;
+  optional bool nullable = 3;
 }
 
 message SparkMapFromEntriesUdf {
@@ -741,6 +751,11 @@ message CsvExecNode {
   bytes options = 2;
 }
 
+enum ParquetExprAdapterKind {
+  PARQUET_EXPR_ADAPTER_KIND_DATAFUSION_DEFAULT = 0;
+  PARQUET_EXPR_ADAPTER_KIND_SAIL_SCHEMA_EVOLUTION = 1;
+}
+
 message ParquetExecNode {
   bytes base_config = 1;
   bytes options = 2;
@@ -749,6 +764,8 @@ message ParquetExecNode {
   StructFieldMatching struct_field_matching = 5;
   SchemaEvolutionTimezoneMode timezone_mode = 6;
   repeated bytes virtual_columns = 7;
+  // Absent legacy payloads use Sail schema evolution with fields 5 and 6.
+  optional ParquetExprAdapterKind expr_adapter_kind = 8;
 }
 
 message ArrowExecNode {
@@ -804,12 +821,14 @@ message PartitionedTopKExecNode {
   uint64 partition_prefix_len = 2;
   uint64 fetch = 3;
   PartitionedTopKWindowFnKind window_fn_kind = 4;
+  optional bytes ranking_field = 5;
 }
 
 enum PartitionedTopKWindowFnKind {
   PARTITIONED_TOP_K_WINDOW_FN_KIND_UNSPECIFIED = 0;
   PARTITIONED_TOP_K_WINDOW_FN_KIND_ROW_NUMBER = 1;
   PARTITIONED_TOP_K_WINDOW_FN_KIND_RANK = 2;
+  PARTITIONED_TOP_K_WINDOW_FN_KIND_DENSE_RANK = 3;
 }
 
 message AppendMode {}
@@ -963,6 +982,15 @@ message TextSinkExecNode {
   bytes line_sep = 4;
   CompressionTypeVariant compression_type_variant = 5;
   optional PhysicalSortExprNodeCollection sort_order = 6;
+}
+
+// The input is carried by the enclosing extension node.
+message ArrowSinkExecNode {
+  bytes base_config = 1;
+  string compression = 2;
+  optional int32 compression_level = 3;
+  uint64 alignment = 4;
+  optional PhysicalSortExprNodeCollection sort_order = 5;
 }
 
 message FileDeleteExecNode {

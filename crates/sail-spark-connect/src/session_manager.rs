@@ -72,8 +72,8 @@ impl ServerSessionMutator for SparkSessionMutator {
         let session_timezone = spark
             .plan_config()
             .map_err(|e| internal_datafusion_err!("{e}"))?
-            .session_timezone
-            .to_string();
+            .session_timezone_label()
+            .parse()?;
         let mut config = config;
         config.options_mut().execution.time_zone = Some(session_timezone);
         Ok(config
@@ -133,4 +133,60 @@ pub async fn create_spark_session_manager_with_factory(
         system,
     )
     .await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use pyo3::Python;
+    use sail_common::runtime::RuntimeManager;
+    use sail_common::utils::datetime::get_system_timezone;
+    use sail_common_datafusion::extension::SessionExtensionAccessor;
+    use sail_telemetry::telemetry::init_telemetry;
+    use sail_telemetry::{ResourceKind, ResourceOptions};
+
+    use super::*;
+    use crate::spark::config::SparkConfigKey;
+
+    #[test]
+    fn session_initial_timezone_matches_system()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        Python::initialize();
+        let config = Arc::new(AppConfig::load()?);
+        let runtime = RuntimeManager::try_new(&config.runtime)?;
+        let handle = runtime.handle();
+        handle.primary().block_on(async {
+            init_telemetry(
+                &config.telemetry,
+                &config.catalog.system,
+                ResourceOptions {
+                    kind: ResourceKind::Server,
+                },
+            )?;
+            let mut system = ActorSystem::new();
+            let manager = create_spark_session_manager(config, handle.clone(), &mut system).await?;
+            let ctx = manager
+                .get_or_create_session_context("timezone-test".into(), "".into())
+                .await?;
+            let spark = ctx.extension::<SparkSession>()?;
+            let system_timezone = get_system_timezone()?;
+            let values =
+                spark.get_config(vec![SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.into()])?;
+            assert_eq!(values[0].value.as_deref(), Some(system_timezone.as_str()));
+            assert_eq!(
+                spark.plan_config()?.session_timezone.as_ref(),
+                system_timezone
+            );
+            assert_eq!(
+                ctx.copied_config()
+                    .options()
+                    .execution
+                    .time_zone
+                    .as_ref()
+                    .map(|tz| tz.as_str()),
+                Some(system_timezone.as_str())
+            );
+            manager.shutdown().await?;
+            Ok(())
+        })
+    }
 }

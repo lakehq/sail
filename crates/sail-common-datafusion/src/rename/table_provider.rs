@@ -78,7 +78,7 @@ impl TableProvider for RenameTableProvider {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -115,5 +115,56 @@ impl TableProvider for RenameTableProvider {
         _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         internal_err!("the renamed table is not supposed to be used for DML")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{Int32Array, RecordBatch};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::datasource::MemTable;
+    use datafusion::execution::context::SessionContext;
+    use datafusion::physical_plan::collect;
+    use datafusion::physical_plan::projection::ProjectionExec;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn scan_preserves_projection_order_and_values() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(Int32Array::from(vec![Some(3), None])),
+            ],
+        )?;
+        let inner = Arc::new(MemTable::try_new(schema, vec![vec![batch.clone()]])?);
+        let provider = RenameTableProvider::try_new(
+            inner.clone(),
+            vec!["renamed_a".to_string(), "renamed_b".to_string()],
+        )?;
+        let context = SessionContext::new();
+        let state = context.state();
+        for projection in [None, Some(&[][..]), Some(&[1, 0][..])] {
+            let plan = provider.scan(&state, projection, &[], None).await?;
+            assert!(plan.is::<ProjectionExec>());
+            let expected_schema = match projection {
+                Some(indices) => Arc::new(provider.schema().project(indices)?),
+                None => provider.schema(),
+            };
+            assert_eq!(plan.schema(), expected_schema);
+            let reference = inner.scan(&state, projection, &[], None).await?;
+            let reference = collect(reference, context.task_ctx()).await?;
+            let result = collect(plan, context.task_ctx()).await?;
+            assert_eq!(result.len(), 1);
+            assert_eq!(reference.len(), 1);
+            assert_eq!(result[0].num_rows(), batch.num_rows());
+            assert_eq!(result[0].columns(), reference[0].columns());
+        }
+        Ok(())
     }
 }

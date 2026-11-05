@@ -472,11 +472,15 @@ impl From<CommonErrorCause> for SparkThrowable {
             CommonErrorCause::Schema(x)
             | CommonErrorCause::Plan(x)
             | CommonErrorCause::Configuration(x) => SparkThrowable::AnalysisException(x),
-            CommonErrorCause::Execution(x) => {
+            CommonErrorCause::Execution(x) | CommonErrorCause::NonRetryableExecution(x) => {
                 if is_timestamp_parse_error(&x) {
                     SparkThrowable::DateTimeException(x)
                 } else if is_array_index_out_of_bounds_error(&x) {
                     SparkThrowable::ArrayIndexOutOfBoundsException(x)
+                } else if x.starts_with("[DUPLICATED_MAP_KEY]") {
+                    // Constant folding may evaluate a map during planning, but the
+                    // duplicate-key failure is still a Spark runtime exception.
+                    SparkThrowable::SparkRuntimeException(x)
                 } else {
                     // TODO: handle situations where a different exception type is more appropriate.
                     SparkThrowable::AnalysisException(x)
@@ -566,6 +570,105 @@ mod tests {
         assert!(truncated.starts_with("python traceback start\n"));
         assert!(truncated.contains(TRUNCATED_MARKER));
         assert!(truncated.ends_with("[UDTF_ARROW_TYPE_CONVERSION_ERROR]\n"));
+    }
+
+    #[expect(clippy::unwrap_used)]
+    fn assert_status_class(status: Status, class: &str, message: &str) {
+        assert_eq!(status.code(), Code::Internal);
+        assert_eq!(status.message(), message);
+        let info = status.get_details_error_info().unwrap();
+        assert_eq!(info.reason, class);
+        assert_eq!(
+            info.metadata.get("classes"),
+            Some(&format!("[\"{class}\"]"))
+        );
+    }
+
+    #[test]
+    fn analysis_errors_preserve_their_class_and_message() {
+        let message = "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] named_struct requires an even number of arguments, got 3";
+        assert_status_class(
+            SparkError::from(PlanError::analysis(message)).into(),
+            "org.apache.spark.sql.AnalysisException",
+            message,
+        );
+        assert_status_class(
+            SparkError::from(PlanError::invalid("invalid request")).into(),
+            "java.lang.IllegalArgumentException",
+            "invalid argument: invalid request",
+        );
+    }
+
+    #[test]
+    fn duplicate_map_keys_preserve_runtime_class_through_error_wrappers() -> serde_json::Result<()>
+    {
+        use sail_common_datafusion::error::RemoteError;
+
+        let message = "[DUPLICATED_MAP_KEY] Duplicate map key a was found. To allow duplicate keys, set `spark.sql.mapKeyDedupPolicy` to `LAST_WIN`.";
+        let execution = || DataFusionError::Execution(message.to_owned());
+        let cause = CommonErrorCause::new::<PyErrExtractor>(&execution());
+        let cause = serde_json::from_str(&serde_json::to_string(&cause)?)?;
+        for (error, expected_message) in [
+            (execution(), message.to_owned()),
+            (
+                DataFusionError::Context("constant folding".to_owned(), Box::new(execution())),
+                format!("Execution error: {message}"),
+            ),
+            (
+                DataFusionError::External(Box::new(RemoteError { cause })),
+                message.to_owned(),
+            ),
+        ] {
+            assert_status_class(
+                SparkError::from(PlanError::from(error)).into(),
+                "org.apache.spark.SparkRuntimeException",
+                &expected_message,
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_map_key_mapping_is_limited_to_the_canonical_execution_error() {
+        for cause in [
+            CommonErrorCause::Execution("unrelated execution error".to_owned()),
+            CommonErrorCause::Execution("input mentions [DUPLICATED_MAP_KEY]".to_owned()),
+            CommonErrorCause::Execution("[DUPLICATED_MAP_KEY_OTHER] unrelated".to_owned()),
+            CommonErrorCause::Plan("[DUPLICATED_MAP_KEY] invalid plan".to_owned()),
+        ] {
+            assert!(matches!(
+                SparkThrowable::from(cause),
+                SparkThrowable::AnalysisException(_)
+            ));
+        }
+        assert!(matches!(
+            SparkThrowable::from(CommonErrorCause::InvalidArgument(
+                "[DUPLICATED_MAP_KEY] invalid request".to_owned()
+            )),
+            SparkThrowable::IllegalArgumentException(_)
+        ));
+    }
+
+    #[test]
+    fn nonretryable_execution_preserves_local_and_remote_client_message() -> serde_json::Result<()>
+    {
+        use sail_common_datafusion::error::{NonRetryableExecutionError, RemoteError};
+
+        let expected = "SCALAR_SUBQUERY_TOO_MANY_ROWS: scalar subquery returned more than one row";
+        let error =
+            DataFusionError::External(Box::new(NonRetryableExecutionError(expected.into())));
+        let cause = CommonErrorCause::new::<PyErrExtractor>(&error);
+        let remote = RemoteError {
+            cause: serde_json::from_str(&serde_json::to_string(&cause)?)?,
+        };
+        for cause in [cause, CommonErrorCause::new::<PyErrExtractor>(&remote)] {
+            assert!(!cause.is_retryable());
+            assert!(matches!(
+                SparkThrowable::from(cause),
+                SparkThrowable::AnalysisException(message) if message == expected
+            ));
+        }
+        Ok(())
     }
 
     #[test]

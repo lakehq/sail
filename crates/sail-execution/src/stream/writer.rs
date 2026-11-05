@@ -2,7 +2,9 @@ use std::fmt;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::{DataFusionError, Result};
-use futures::future::try_join_all;
+use futures::future::{join_all, try_join_all};
+
+use crate::stream::error::TaskStreamError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStreamWriteState {
@@ -22,7 +24,7 @@ pub trait TaskStreamSink: Send {
     /// so that each channel preserves its input batch order.
     async fn write(&mut self, batches: Vec<Option<RecordBatch>>) -> Result<TaskStreamWriteState>;
     async fn commit(self: Box<Self>) -> Result<()>;
-    async fn abort(self: Box<Self>) -> Result<()>;
+    async fn abort(self: Box<Self>, error: TaskStreamError) -> Result<()>;
 }
 
 /// A physical sink for exactly one channel of the task stream.
@@ -30,7 +32,7 @@ pub trait TaskStreamSink: Send {
 pub trait TaskStreamChannelSink: Send {
     async fn write(&mut self, batch: RecordBatch) -> Result<TaskStreamWriteState>;
     async fn commit(self: Box<Self>) -> Result<()>;
-    async fn abort(self: Box<Self>) -> Result<()>;
+    async fn abort(self: Box<Self>, error: TaskStreamError) -> Result<()>;
 }
 
 pub(crate) struct MultiChannelTaskStreamSink {
@@ -80,11 +82,16 @@ impl TaskStreamSink for MultiChannelTaskStreamSink {
         Ok(())
     }
 
-    async fn abort(self: Box<Self>) -> Result<()> {
-        for sink in self.sinks.into_iter().flatten() {
-            sink.abort().await?;
-        }
-        Ok(())
+    async fn abort(self: Box<Self>, error: TaskStreamError) -> Result<()> {
+        // Notify every channel even if another channel's cleanup fails.
+        let results = join_all(
+            self.sinks
+                .into_iter()
+                .flatten()
+                .map(|sink| sink.abort(error.clone())),
+        )
+        .await;
+        results.into_iter().collect()
     }
 }
 
@@ -103,6 +110,7 @@ mod tests {
         barrier: Option<Arc<Barrier>>,
         state: TaskStreamWriteState,
         fail: bool,
+        fail_abort: bool,
         aborted: Arc<AtomicUsize>,
     }
 
@@ -122,8 +130,11 @@ mod tests {
             Ok(())
         }
 
-        async fn abort(self: Box<Self>) -> Result<()> {
+        async fn abort(self: Box<Self>, _error: TaskStreamError) -> Result<()> {
             self.aborted.fetch_add(1, Ordering::SeqCst);
+            if self.fail_abort {
+                return Err(DataFusionError::Execution("cleanup failed".to_string()));
+            }
             Ok(())
         }
     }
@@ -142,6 +153,7 @@ mod tests {
                         barrier: Some(barrier.clone()),
                         state: TaskStreamWriteState::Active,
                         fail: false,
+                        fail_abort: false,
                         aborted: Arc::new(AtomicUsize::new(0)),
                     }) as Box<dyn TaskStreamChannelSink>)
                 })
@@ -167,6 +179,7 @@ mod tests {
                         barrier: None,
                         state: TaskStreamWriteState::Closed,
                         fail: false,
+                        fail_abort: false,
                         aborted: Arc::new(AtomicUsize::new(0)),
                     }) as Box<dyn TaskStreamChannelSink>)
                 })
@@ -194,6 +207,7 @@ mod tests {
                         barrier: (i == 0).then(|| Arc::new(Barrier::new(2))),
                         state: TaskStreamWriteState::Active,
                         fail: i == 1,
+                        fail_abort: false,
                         aborted: aborted.clone(),
                     }) as Box<dyn TaskStreamChannelSink>)
                 })
@@ -204,8 +218,35 @@ mod tests {
                 .await
                 .map_err(|error| DataFusionError::External(Box::new(error)))?;
         assert!(result.is_err());
-        Box::new(sink).abort().await?;
+        Box::new(sink)
+            .abort(TaskStreamError::Unknown("write failed".to_string()))
+            .await?;
         assert_eq!(aborted.load(Ordering::SeqCst), 2);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn abort_notifies_all_channels_even_when_cleanup_fails() {
+        let aborted = Arc::new(AtomicUsize::new(0));
+        let sink = MultiChannelTaskStreamSink {
+            sinks: (0..2)
+                .map(|i| {
+                    Some(Box::new(TestSink {
+                        barrier: None,
+                        state: TaskStreamWriteState::Active,
+                        fail: false,
+                        fail_abort: i == 0,
+                        aborted: aborted.clone(),
+                    }) as Box<dyn TaskStreamChannelSink>)
+                })
+                .collect(),
+        };
+        assert!(
+            Box::new(sink)
+                .abort(TaskStreamError::Unknown("input failed".into()))
+                .await
+                .is_err()
+        );
+        assert_eq!(aborted.load(Ordering::SeqCst), 2);
     }
 }

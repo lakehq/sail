@@ -893,7 +893,7 @@ mod tests {
 
     use std::collections::HashMap;
 
-    use datafusion::arrow::datatypes::{Field, Fields, Schema};
+    use datafusion::arrow::datatypes::{Field, Fields, Metadata, Schema};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use super::*;
@@ -1204,7 +1204,7 @@ mod tests {
         let inner_field = Field::new("child", DataType::Int32, false).with_metadata(
             [(PARQUET_FIELD_ID_META_KEY.to_string(), "777".to_string())]
                 .into_iter()
-                .collect(),
+                .collect::<Metadata>(),
         );
         let arrow_struct = Field::new(
             "parent",
@@ -1214,7 +1214,7 @@ mod tests {
         .with_metadata(
             [(PARQUET_FIELD_ID_META_KEY.to_string(), "555".to_string())]
                 .into_iter()
-                .collect(),
+                .collect::<Metadata>(),
         );
 
         let mut next_id = 10;

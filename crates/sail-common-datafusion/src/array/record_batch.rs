@@ -2,8 +2,8 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, LargeListArray, ListArray, MapArray, PrimitiveArray, RecordBatch,
-    RecordBatchOptions, StructArray, new_null_array,
+    Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, MapArray, PrimitiveArray,
+    RecordBatch, RecordBatchOptions, StructArray, new_null_array,
 };
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{
@@ -172,6 +172,27 @@ pub fn cast_array_positionally_recursively(
         }
         (DataType::LargeList(_), DataType::LargeList(target_field)) => {
             cast_large_list_array_positionally(src, target_field)
+        }
+        (DataType::FixedSizeList(_, size), DataType::FixedSizeList(target_field, target_size))
+            if size == target_size =>
+        {
+            let list = src
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "Failed to downcast array to FixedSizeListArray".to_string(),
+                    )
+                })?;
+            let values =
+                cast_array_positionally_recursively(list.values(), target_field.data_type())?;
+            Ok(Arc::new(FixedSizeListArray::try_new_with_length(
+                target_field.clone(),
+                *size,
+                values,
+                list.nulls().cloned(),
+                list.len(),
+            )?))
         }
         (DataType::Map(_, _), DataType::Map(target_field, sorted)) => {
             cast_map_array_positionally(src, target_field, *sorted)
@@ -395,6 +416,69 @@ mod tests {
         let field_refs_vec: Vec<FieldRef> = fields.into_iter().map(Arc::new).collect();
         let field_refs: Fields = field_refs_vec.into();
         StructArray::new(field_refs, columns, None)
+    }
+
+    #[test]
+    fn cast_fixed_size_list_rebinds_struct_children_positionally() {
+        let values: ArrayRef = Arc::new(make_struct_array(
+            vec![
+                Field::new("x", DataType::Int32, true),
+                Field::new("x", DataType::Int32, true),
+            ],
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])),
+                Arc::new(Int32Array::from(vec![10, 20, 30])),
+            ],
+        ));
+        let field = Arc::new(Field::new("item", values.data_type().clone(), true));
+        let source: ArrayRef = Arc::new(
+            FixedSizeListArray::new(
+                field,
+                1,
+                values,
+                Some(datafusion::arrow::buffer::NullBuffer::from(vec![
+                    true, false, true,
+                ])),
+            )
+            .slice(1, 2),
+        );
+        let target_fields: Fields = vec![
+            Field::new("first", DataType::Int32, true),
+            Field::new("second", DataType::Int64, true),
+        ]
+        .into();
+        let target = DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Struct(target_fields), true)),
+            1,
+        );
+        let output = cast_array_positionally_recursively(&source, &target).unwrap();
+        let output = output
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        assert_eq!(output.len(), 2);
+        assert_eq!(output.nulls(), source.nulls());
+        let values = output
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(
+            values
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap(),
+            &Int32Array::from(vec![None, Some(3)])
+        );
+        assert_eq!(
+            values
+                .column(1)
+                .as_any()
+                .downcast_ref::<datafusion::arrow::array::Int64Array>()
+                .unwrap(),
+            &datafusion::arrow::array::Int64Array::from(vec![20, 30])
+        );
     }
 
     #[test]

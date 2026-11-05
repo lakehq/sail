@@ -1,5 +1,6 @@
 use datafusion::physical_plan::Metric;
 use datafusion::physical_plan::metrics::{Label, MetricValue};
+use num_traits::ToPrimitive;
 use sail_common::telemetry::KeyValue;
 
 use crate::execution::metrics::{MetricEmitter, MetricHandled};
@@ -106,6 +107,24 @@ impl MetricEmitter for DefaultMetricEmitter {
                     )
                     .emit();
             }
+            MetricValue::Ratio {
+                name,
+                ratio_metrics,
+            } if name == "output_rows_skew" && metric.partition().is_none() => {
+                // This is an operator-wide score, not a per-partition row count.
+                // A zero denominator denotes N/A, not a balanced distribution.
+                let total = ratio_metrics.total();
+                if total != 0
+                    && let (Some(part), Some(total)) =
+                        (ratio_metrics.part().to_f64(), total.to_f64())
+                {
+                    registry
+                        .execution_output_rows_skew
+                        .recorder(part / total)
+                        .with_attributes(attributes)
+                        .emit();
+                }
+            }
             // Peak-memory metrics are handled only by emitters that recognize both the physical
             // operator and the DataFusion metric name.
             MetricValue::PeakMemoryUsage { .. }
@@ -162,5 +181,120 @@ impl LabelExtractor {
                 .emit();
         }
         attributes
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::common::{Result, internal_err};
+    use datafusion::physical_plan::metrics::{
+        BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, RatioMetrics,
+    };
+    use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
+
+    use super::*;
+    use crate::execution::metrics::testing::{export_metrics, exported_metrics};
+
+    #[test]
+    fn output_rows_skew_preserves_ratio_and_operator_scope() -> Result<()> {
+        for (rows, expected) in [
+            (vec![], None),
+            (vec![0], Some(0.0)),
+            (vec![0, 0], None),
+            (vec![10, 10, 10, 10], Some(0.0)),
+            (vec![40, 0, 0, 0], Some(1.0)),
+            (vec![10, 30], Some(0.4)),
+        ] {
+            let upstream = ExecutionPlanMetricsSet::new();
+            for (partition, rows) in rows.into_iter().enumerate() {
+                MetricBuilder::new(&upstream)
+                    .output_rows(partition)
+                    .add(rows);
+            }
+            let mut metrics = MetricsSet::new();
+            if let Some(skew) = BaselineMetrics::output_rows_skew_metric(&upstream.clone_inner()) {
+                metrics.push(skew);
+            }
+            let exported = export_metrics(
+                &DefaultMetricEmitter,
+                &metrics,
+                &[(MetricAttribute::EXECUTION_OPERATOR_ID, "operator".into())],
+            )?;
+            let metrics = exported_metrics(&exported).collect::<Vec<_>>();
+            let Some(expected) = expected else {
+                assert!(metrics.is_empty());
+                continue;
+            };
+            assert_eq!(metrics.len(), 1);
+            let metric = metrics[0];
+            assert_eq!(metric.name(), "execution.output_rows_skew");
+            assert_eq!(metric.unit(), "1");
+            let AggregatedMetrics::F64(MetricData::Gauge(gauge)) = metric.data() else {
+                return internal_err!("expected an f64 skew gauge");
+            };
+            let points = gauge.data_points().collect::<Vec<_>>();
+            assert_eq!(points.len(), 1);
+            assert!((points[0].value() - expected).abs() < 1e-10);
+            assert_eq!(
+                points[0].attributes().cloned().collect::<Vec<_>>(),
+                vec![opentelemetry::KeyValue::new(
+                    MetricAttribute::EXECUTION_OPERATOR_ID,
+                    "operator"
+                )]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn unknown_names_types_and_partitioned_skew_remain_unknown() -> Result<()> {
+        let mut metrics = MetricsSet::new();
+        for (value, partition) in [
+            (
+                MetricValue::Count {
+                    name: "output_rows_skew".into(),
+                    count: Count::new(),
+                },
+                None,
+            ),
+            (
+                MetricValue::Ratio {
+                    name: "unknown_ratio".into(),
+                    ratio_metrics: RatioMetrics::new(),
+                },
+                None,
+            ),
+            (
+                MetricValue::Ratio {
+                    name: "output_rows_skew".into(),
+                    ratio_metrics: RatioMetrics::new(),
+                },
+                Some(0),
+            ),
+            (
+                MetricValue::PeakMemoryUsage {
+                    name: "peak_mem_used".into(),
+                    gauge: Default::default(),
+                },
+                None,
+            ),
+        ] {
+            metrics.push(Arc::new(Metric::new(value, partition)));
+        }
+        let exported = export_metrics(&DefaultMetricEmitter, &metrics, &[])?;
+        let metrics = exported_metrics(&exported).collect::<Vec<_>>();
+        assert_eq!(metrics.len(), 1);
+        assert_eq!(metrics[0].name(), "execution.unknown_metric_count");
+        let AggregatedMetrics::U64(MetricData::Sum(sum)) = metrics[0].data() else {
+            return internal_err!("expected an unknown metric counter");
+        };
+        assert_eq!(
+            sum.data_points().map(|p| p.value()).collect::<Vec<_>>(),
+            vec![4]
+        );
+        Ok(())
     }
 }

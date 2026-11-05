@@ -209,6 +209,43 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn preserves_nonretryable_execution_through_status_and_flight()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::common::DataFusionError;
+        use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+        use sail_common_datafusion::error::NonRetryableExecutionError;
+
+        use crate::stream::error::TaskStreamError;
+
+        let expected = "SCALAR_SUBQUERY_TOO_MANY_ROWS: scalar subquery returned more than one row";
+        let stream = RecordBatchStreamAdapter::new(
+            Arc::new(Schema::empty()),
+            futures::stream::iter([Err(DataFusionError::External(Box::new(
+                NonRetryableExecutionError(expected.into()),
+            )))]),
+        );
+        let TaskRunnerMessage::ReportTaskStatus {
+            status: TaskStatus::Failed,
+            cause: Some(cause),
+            ..
+        } = TaskMonitor::execute(task_key(), Box::pin(stream)).await
+        else {
+            return Err("expected task failure with cause".into());
+        };
+        // Control-plane task reports and data-plane Flight errors serialize the same cause.
+        let cause: CommonErrorCause = serde_json::from_str(&serde_json::to_string(&cause)?)?;
+        assert!(!cause.is_retryable());
+        let status = tonic::Status::from(TaskStreamError::from(cause));
+        let cause = CommonErrorCause::from(TaskStreamError::from(status));
+        assert!(matches!(&cause, CommonErrorCause::NonRetryableExecution(x) if x == expected));
+        assert!(!cause.is_retryable());
+        Ok(())
+    }
+
     fn task_key() -> TaskKey {
         TaskKey {
             job_id: JobId::from(1),

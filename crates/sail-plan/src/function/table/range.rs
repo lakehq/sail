@@ -37,13 +37,13 @@ impl TableProvider for RangeTableProvider {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = self.node.schema().inner().clone();
         let projection = projection
-            .cloned()
+            .map(<[usize]>::to_vec)
             .unwrap_or_else(|| (0..schema.fields().len()).collect());
         Ok(Arc::new(RangeExec::try_new(
             self.node.range().clone(),
@@ -108,5 +108,32 @@ impl TableFunctionImpl for RangeTableFunction {
         Ok(Arc::new(RangeTableProvider {
             node: Arc::new(node),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::execution::context::SessionContext;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn scan_preserves_slice_projection() -> Result<()> {
+        let provider = RangeTableProvider {
+            node: Arc::new(RangeNode::try_new("id".to_string(), 0, 10, 1, 2)?),
+        };
+        let state = SessionContext::new().state();
+        for projection in [None, Some([0].as_slice()), Some([].as_slice())] {
+            let plan = provider.scan(&state, projection, &[], None).await?;
+            let range = plan
+                .downcast_ref::<RangeExec>()
+                .ok_or_else(|| datafusion_common::internal_datafusion_err!("expected RangeExec"))?;
+            assert_eq!(range.projection(), projection.unwrap_or(&[0]));
+            assert_eq!(range.num_partitions(), 2);
+            assert_eq!(range.range(), provider.node.range());
+            assert_eq!(range.original_schema(), &provider.schema());
+            assert_eq!(plan.schema().fields().len(), range.projection().len());
+        }
+        Ok(())
     }
 }

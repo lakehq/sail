@@ -31,6 +31,9 @@ pub fn rewrite_aggregate(
     let Some(input) = AggregateInput::try_new(aggregate.input.as_ref()) else {
         return Ok(None);
     };
+    if input.scan().skip.is_some_and(|skip| skip > 0) {
+        return Ok(None);
+    }
     let Some(row_count) = source.row_count() else {
         return Ok(None);
     };
@@ -120,7 +123,8 @@ impl<'a> AggregateInput<'a> {
                 .with_projection(scan.projection.clone())
                 .with_filters(scan.filters.clone())
                 .with_fetch(scan.fetch)
-                .with_statistics_requests(scan.statistics_requests.clone())
+                .with_skip(scan.skip)
+                .with_statistics_requests(scan.statistics_requests.as_ref().clone())
                 .build()?,
         );
         self.plan
@@ -635,5 +639,145 @@ fn constant_scalar(expression: &Expr) -> Option<ScalarValue> {
         Expr::TryCast(cast) => constant_scalar(cast.expr.as_ref())
             .and_then(|value| value.cast_to(cast.field.data_type()).ok()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used, clippy::panic)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use datafusion::arrow::datatypes::Field;
+    use datafusion::functions_aggregate::expr_fn::{count, min, sum};
+    use datafusion::logical_expr::logical_plan::builder::LogicalTableSource;
+    use datafusion::logical_expr::{LogicalPlanBuilder, col, lit};
+    use datafusion_expr::statistics::StatisticsRequest;
+
+    use super::*;
+
+    struct AllNullStatistics(SchemaRef);
+
+    impl ExactAggregateStatistics for AllNullStatistics {
+        fn schema(&self) -> SchemaRef {
+            Arc::clone(&self.0)
+        }
+
+        fn row_count(&self) -> Option<usize> {
+            Some(3)
+        }
+
+        fn column_statistics(&self, logical_path: &[String]) -> Option<ColumnStatistics> {
+            (logical_path == ["a"]).then(|| ColumnStatistics {
+                null_count: Precision::Exact(3),
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn scan_skip_blocks_full_and_partial_aggregate_replacement() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let statistics = AllNullStatistics(Arc::clone(&schema));
+        let source = Arc::new(LogicalTableSource::new(schema));
+        // DataFusion's TableScanBuilder permits skip without fetch, even without skip pushdown.
+        for skip in [None, Some(0), Some(1), Some(4)] {
+            for partial in [false, true] {
+                let scan = TableScanBuilder::new("t", source.clone())
+                    .with_skip(skip)
+                    .build()?;
+                let mut expressions = vec![count(lit(1)), min(col("a"))];
+                if partial {
+                    expressions.push(sum(col("a")));
+                }
+                let plan = LogicalPlanBuilder::from(LogicalPlan::TableScan(scan))
+                    .project(vec![col("a")])?
+                    .alias("input")?
+                    .aggregate(Vec::<Expr>::new(), expressions)?
+                    .build()?;
+                let LogicalPlan::Aggregate(aggregate) = plan else {
+                    panic!("expected aggregate");
+                };
+                let rewritten = rewrite_aggregate(&aggregate, &statistics)?;
+                if skip.is_some_and(|skip| skip > 0) {
+                    assert!(rewritten.is_none(), "skip={skip:?}, partial={partial}");
+                    continue;
+                }
+                let LogicalPlan::Projection(projection) = rewritten.expect("metadata rewrite")
+                else {
+                    panic!("expected projection");
+                };
+                assert_eq!(projection.schema, aggregate.schema);
+                for (expression, expected) in projection
+                    .expr
+                    .iter()
+                    .zip([ScalarValue::Int64(Some(3)), ScalarValue::Int32(None)])
+                {
+                    let Expr::Alias(alias) = expression else {
+                        panic!("expected alias");
+                    };
+                    assert_eq!(alias.expr.as_ref(), &Expr::Literal(expected, None));
+                }
+                if partial {
+                    let LogicalPlan::Aggregate(residual) = projection.input.as_ref() else {
+                        panic!("expected residual aggregate");
+                    };
+                    assert_eq!(residual.aggr_expr.len(), 1);
+                    assert_eq!(residual.input, aggregate.input);
+                    assert_eq!(
+                        AggregateInput::try_new(&residual.input)
+                            .expect("residual input")
+                            .scan()
+                            .skip,
+                        skip
+                    );
+                } else {
+                    let LogicalPlan::EmptyRelation(row) = projection.input.as_ref() else {
+                        panic!("expected one metadata row");
+                    };
+                    assert!(row.produce_one_row);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn replacing_source_preserves_scan_state() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let source = Arc::new(LogicalTableSource::new(schema.clone()));
+        let requests = BTreeSet::from([
+            StatisticsRequest::RowCount,
+            StatisticsRequest::Min(Arc::new(Column::from_name("a"))),
+            StatisticsRequest::NullCount(Arc::new(Column::from_name("b"))),
+        ]);
+        for skip in [None, Some(0), Some(1), Some(6)] {
+            let scan = TableScanBuilder::new("t", source.clone())
+                .with_projection(Some(vec![1, 0]))
+                .with_filters(vec![col("a").gt(lit(1))])
+                .with_fetch(Some(5))
+                .with_skip(skip)
+                .with_statistics_requests(requests.clone())
+                .build()?;
+            let plan = LogicalPlan::TableScan(scan.clone());
+            let source: Arc<dyn TableSource> = Arc::new(LogicalTableSource::new(schema.clone()));
+            let replacement = AggregateInput::try_new(&plan)
+                .expect("table scan")
+                .replace_source(source.clone())?;
+            let LogicalPlan::TableScan(replacement) = replacement else {
+                panic!("expected table scan");
+            };
+            assert!(Arc::ptr_eq(&replacement.source, &source));
+            assert_eq!(replacement.table_name, scan.table_name);
+            assert_eq!(replacement.projection, scan.projection);
+            assert_eq!(replacement.projected_schema, scan.projected_schema);
+            assert_eq!(replacement.filters, scan.filters);
+            assert_eq!(replacement.fetch, scan.fetch);
+            assert_eq!(replacement.skip, scan.skip);
+            assert_eq!(replacement.statistics_requests.as_ref(), &requests);
+        }
+        Ok(())
     }
 }

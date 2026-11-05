@@ -4,7 +4,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion::functions::core::expr_ext::FieldAccessor;
-use datafusion_common::arrow::datatypes::{DataType, Field};
+use datafusion_common::arrow::datatypes::{DataType, Field, Metadata};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, plan_err,
@@ -340,7 +340,7 @@ impl RowLevelWriteNode {
             output: CommandOutput::Count,
             schema: Arc::new(DFSchema::from_unqualified_fields(
                 vec![Field::new("count", DataType::Int64, true)].into(),
-                Default::default(),
+                Metadata::default(),
             )?),
         })
     }

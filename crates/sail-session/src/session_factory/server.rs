@@ -130,7 +130,7 @@ impl ServerSessionFactory {
         super::apply_parquet_config(
             &mut config.options_mut().execution.parquet,
             &self.config.parquet,
-        );
+        )?;
         self.apply_optimizer_config(&mut config)?;
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)

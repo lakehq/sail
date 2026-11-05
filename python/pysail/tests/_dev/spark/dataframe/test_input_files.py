@@ -3,6 +3,8 @@
 import pytest
 from pyspark.sql.utils import AnalysisException
 
+JSON_FILE_COUNT = 3
+
 
 def test_input_files_single_file(spark, tmp_path):
     """Return the single file backing a one-partition dataset."""
@@ -17,23 +19,36 @@ def test_input_files_single_file(spark, tmp_path):
     assert files[0].endswith(".json")
 
 
-def test_input_files_multiple_files(spark, tmp_path):
-    """Return one entry per file when the dataset spans multiple partitions."""
-    partitions = 3
-    spark.range(0, 10, 1, partitions).write.json(str(tmp_path), mode="overwrite")
-    df = spark.read.format("json").load(str(tmp_path))
+@pytest.fixture
+def three_json_files(tmp_path):
+    files = [tmp_path / f"part {i}.json" for i in range(JSON_FILE_COUNT)]
+    for i, file in enumerate(files):
+        file.write_text("".join(f'{{"id": {value}}}\n' for value in range(i, 10, 3)), encoding="utf-8")
+    return tmp_path, {file.as_uri() for file in files}
 
-    assert len(df.inputFiles()) == partitions
+
+def test_input_files_multiple_files(spark, three_json_files):
+    """Return one entry per file, independent of writer batching."""
+    path, expected_files = three_json_files
+    df = spark.read.format("json").load(str(path))
+
+    files = df.inputFiles()
+    assert len(files) == JSON_FILE_COUNT
+    assert set(files) == expected_files
+    assert [row.id for row in df.orderBy("id").collect()] == list(range(10))
 
 
-def test_input_files_union_is_deduplicated(spark, tmp_path):
+def test_input_files_union_is_deduplicated(spark, three_json_files):
     """Files shared by both sides of a union are reported only once."""
-    partitions = 3
-    spark.range(0, 10, 1, partitions).write.json(str(tmp_path), mode="overwrite")
-    df = spark.read.format("json").load(str(tmp_path))
+    path, expected_files = three_json_files
+    df = spark.read.format("json").load(str(path))
+    union = df.union(df)
 
     # The union references the same source twice; the files must not be double-counted.
-    assert len(df.union(df).inputFiles()) == partitions
+    files = union.inputFiles()
+    assert len(files) == JSON_FILE_COUNT
+    assert set(files) == expected_files
+    assert [row.id for row in union.orderBy("id").collect()] == sorted(list(range(10)) * 2)
 
 
 def test_input_files_excludes_hidden_markers(spark, tmp_path):

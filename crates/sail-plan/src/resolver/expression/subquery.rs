@@ -5,6 +5,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, Tre
 use datafusion_expr::logical_plan::{Filter, Projection};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, expr_fn};
 use sail_common::spec;
+use sail_function::scalar::misc::in_subquery_nullable::InSubqueryNullable;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -346,6 +347,7 @@ impl PlanResolver<'_> {
                 subquery_cols.len()
             )));
         }
+        let mut nullable = false;
         let filter_expr = outer_refs
             .into_iter()
             .zip(subquery_cols)
@@ -364,6 +366,10 @@ impl PlanResolver<'_> {
                     subquery_plan.schema(),
                     &self.config,
                 )?;
+                // Inspect each comparison key, not a non-null tuple container or
+                // columns later added by decorrelation.
+                nullable |= outer.nullable(schema.as_ref())?
+                    || inner.nullable(subquery_plan.schema().as_ref())?;
                 let equal = Expr::eq(inner, outer);
                 Ok(if negated {
                     equal.clone().or(equal.is_null())
@@ -381,7 +387,12 @@ impl PlanResolver<'_> {
         } else {
             expr_fn::not_exists(Arc::new(filtered))
         };
-        Ok(NamedExpr::new(vec!["in_subquery".to_string()], exists_expr))
+        // A typed identity carries the source contract through nested expressions
+        // and aliases before the projected EXISTS itself is rewritten.
+        Ok(NamedExpr::new(
+            vec!["in_subquery".to_string()],
+            InSubqueryNullable::wrap(exists_expr, nullable),
+        ))
     }
 
     /// Resolves a Subquery by looking up the referenced plan from state and delegating to existing subquery resolvers.

@@ -296,7 +296,8 @@ impl TaskStreamChannelSink for StorageStreamSink {
         self.flush_file().await
     }
 
-    async fn abort(self: Box<Self>) -> Result<()> {
+    async fn abort(self: Box<Self>, _error: TaskStreamError) -> Result<()> {
+        // Blocking readers are scheduled only after the producer succeeds.
         let locations = self
             .store
             .list(Some(&self.prefix))

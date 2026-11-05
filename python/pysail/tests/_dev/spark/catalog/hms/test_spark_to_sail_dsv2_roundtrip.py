@@ -11,6 +11,7 @@ because their HMS metadata contracts are intentionally different.
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import pytest
@@ -26,10 +27,7 @@ if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
 _DSV2_FORMATS = ["parquet", "csv", "json", "avro", "delta"]
-# Sail reads every DSV2 format above, but cannot *write* Avro: its writer raises
-# "Writer not implemented for this format". The reverse (Sail-write) parametrization
-# keeps Avro in the matrix as xfail with that real error, so a future Avro writer
-# landing turns the xfail green without touching the read-side coverage.
+# Avro writes work locally, but the distributed plan codec does not support its sink.
 _SAIL_WRITE_FORMATS = [
     "parquet",
     "csv",
@@ -37,7 +35,8 @@ _SAIL_WRITE_FORMATS = [
     pytest.param(
         "avro",
         marks=pytest.mark.xfail(
-            reason="Sail has no Avro writer ('Writer not implemented for this format')",
+            os.environ.get("SAIL_MODE", "local") == "local-cluster",
+            reason="the distributed plan codec does not support the Avro DataSinkExec",
             strict=True,
         ),
     ),

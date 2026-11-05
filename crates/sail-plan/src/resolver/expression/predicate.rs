@@ -2,12 +2,16 @@ use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{DFSchemaRef, Result as DataFusionResult, ScalarValue};
+use datafusion_common::{
+    DFSchemaRef, Result as DataFusionResult, ScalarValue, plan_datafusion_err,
+};
 use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, LambdaVariable};
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::get_field;
 use sail_common::spec;
+use sail_common_datafusion::type_coercion::binary_type_coercion::comparison_coercion_with_session_timezone;
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
@@ -16,6 +20,7 @@ use sail_function::scalar::update_struct_field::UpdateStructField;
 
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
+use crate::function::struct_utils::{align_comparison_struct_names, cast_comparison_operand};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -354,6 +359,8 @@ pub(super) fn coerce_comparison_predicate(
     Ok(match expression {
         expr::Expr::BinaryExpr(BinaryExpr { left, op, right }) if is_comparison(op) => {
             let (left, right) = coerce_comparison_pair(*left, *right, op, schema, config)?;
+            let (left, right) =
+                normalize_nested_comparison_operands(vec![left, right], schema, config)?.two()?;
             expr::Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
         }
         expr::Expr::InList(InList {
@@ -361,6 +368,12 @@ pub(super) fn coerce_comparison_predicate(
             mut list,
             negated,
         }) => {
+            let arguments = std::iter::once(*expr).chain(list).collect();
+            let (first, rest) =
+                align_comparison_struct_names(arguments, schema, config.case_sensitive)?
+                    .at_least_one()?;
+            *expr = first;
+            list = rest;
             let mut expr_type = expr.get_type(schema.as_ref())?;
             let mut list_types = list
                 .iter()
@@ -382,7 +395,7 @@ pub(super) fn coerce_comparison_predicate(
                     ansi_float_comparison_types(&data_types, config.case_sensitive)
             {
                 widened = true;
-                expr = Box::new(cast_comparison_operand(*expr, &expr_type, &targets[0]));
+                *expr = cast_comparison_operand(*expr, &expr_type, &targets[0]);
                 list = list
                     .into_iter()
                     .zip(&list_types)
@@ -394,54 +407,52 @@ pub(super) fn coerce_comparison_predicate(
                 data_types = targets;
             }
 
-            let Some(coercion) = find_timestamp_string_in_coercion(
+            let coercion = find_timestamp_string_in_coercion(
                 &data_types,
                 &config.session_timezone,
                 config.ansi_mode,
                 config.case_sensitive,
-            ) else {
-                // DataFusion rewrites a short IN list on a column into equalities, which merge
-                // -0.0 and 0.0; its IN set does not. Keep that rewrite for the cast column.
-                if widened
-                    && column
-                    && (1..=3).contains(&list.len())
-                    && !list.iter().any(is_null_literal_expression)
-                {
-                    return Ok(recursive_list_in_as_comparisons(*expr, list, negated));
-                }
-                return Ok(expr::Expr::InList(InList::new(expr, list, negated)));
-            };
+            );
             let has_null_list_value = list.iter().any(is_null_literal_expression);
-            let recursive_list_coercion =
-                matches!(&coercion, TimestampStringInCoercion::List { .. });
-
-            let expr = apply_timestamp_string_in_coercion(
-                *expr,
-                &expr_type,
-                &coercion,
-                schema,
-                &config.session_timezone,
-                config.ansi_mode,
-                0,
-            )?;
-            let list = list
-                .into_iter()
-                .zip(list_types)
-                .map(|(value, data_type)| {
-                    apply_timestamp_string_in_coercion(
-                        value,
-                        &data_type,
-                        &coercion,
-                        schema,
-                        &config.session_timezone,
-                        config.ansi_mode,
-                        0,
-                    )
-                })
-                .collect::<DataFusionResult<Vec<_>>>()?;
-            if recursive_list_coercion && has_null_list_value && !expr.is_volatile() {
+            let expand_equalities = if let Some(coercion) = coercion {
+                let recursive_list_coercion =
+                    matches!(&coercion, TimestampStringInCoercion::List { .. });
+                *expr = apply_timestamp_string_in_coercion(
+                    *expr,
+                    &expr_type,
+                    &coercion,
+                    schema,
+                    &config.session_timezone,
+                    config.ansi_mode,
+                    0,
+                )?;
+                list = list
+                    .into_iter()
+                    .zip(list_types)
+                    .map(|(value, data_type)| {
+                        apply_timestamp_string_in_coercion(
+                            value,
+                            &data_type,
+                            &coercion,
+                            schema,
+                            &config.session_timezone,
+                            config.ansi_mode,
+                            0,
+                        )
+                    })
+                    .collect::<DataFusionResult<Vec<_>>>()?;
                 // A static nested IN set can miss an equal value when the set also contains NULL.
                 // Spark defines IN as a Kleene equality disjunction for non-volatile operands.
+                recursive_list_coercion && has_null_list_value && !expr.is_volatile()
+            } else {
+                // DataFusion rewrites a short IN list on a column into equalities, which merge
+                // -0.0 and 0.0; its IN set does not. Keep that rewrite for the cast column.
+                widened && column && (1..=3).contains(&list.len()) && !has_null_list_value
+            };
+            let arguments = std::iter::once(*expr).chain(list).collect();
+            let (expr, list) =
+                normalize_nested_comparison_operands(arguments, schema, config)?.at_least_one()?;
+            if expand_equalities {
                 recursive_list_in_as_comparisons(expr, list, negated)
             } else {
                 expr::Expr::InList(InList::new(Box::new(expr), list, negated))
@@ -449,6 +460,36 @@ pub(super) fn coerce_comparison_predicate(
         }
         expression => expression,
     })
+}
+
+/// Projection schema inference runs before our analyzer, using upstream coercion.
+/// Give it exactly equal nested types so it never matches duplicate fields by name.
+/// Call only after Spark's numeric/timestamp rewrites and positional name alignment.
+fn normalize_nested_comparison_operands(
+    expressions: Vec<expr::Expr>,
+    schema: &DFSchemaRef,
+    config: &PlanConfig,
+) -> DataFusionResult<Vec<expr::Expr>> {
+    let types = expressions
+        .iter()
+        .map(|expression| expression.get_type(schema.as_ref()))
+        .collect::<DataFusionResult<Vec<_>>>()?;
+    if !types.iter().any(DataType::is_nested) {
+        return Ok(expressions);
+    }
+    let common = types.iter().try_fold(DataType::Null, |common, data_type| {
+        comparison_coercion_with_session_timezone(
+            &common,
+            data_type,
+            Some(&config.session_timezone),
+        )
+        .ok_or_else(|| plan_datafusion_err!("Cannot coerce nested comparison operands {types:?}"))
+    })?;
+    Ok(expressions
+        .into_iter()
+        .zip(&types)
+        .map(|(expression, data_type)| cast_comparison_operand(expression, data_type, &common))
+        .collect())
 }
 
 fn is_null_literal_expression(expression: &expr::Expr) -> bool {
@@ -713,15 +754,6 @@ pub(in crate::resolver) fn ansi_float_comparison_types(
     }
 }
 
-fn cast_comparison_operand(expression: expr::Expr, from: &DataType, to: &DataType) -> expr::Expr {
-    if from == to {
-        expression
-    } else {
-        // Cast the complete operand once, including volatile arrays and structs.
-        cast(expression, to.clone())
-    }
-}
-
 fn coerce_comparison_pair(
     left: expr::Expr,
     right: expr::Expr,
@@ -729,6 +761,8 @@ fn coerce_comparison_pair(
     schema: &DFSchemaRef,
     config: &PlanConfig,
 ) -> DataFusionResult<(expr::Expr, expr::Expr)> {
+    let (left, right) =
+        align_comparison_struct_names(vec![left, right], schema, config.case_sensitive)?.two()?;
     let left_type = left.get_type(schema.as_ref())?;
     let right_type = right.get_type(schema.as_ref())?;
 
@@ -1233,5 +1267,346 @@ impl PlanResolver<'_> {
                 case_insensitive,
             )),
         ))
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::panic, reason = "Assert typed expression shapes in tests")]
+mod tests {
+    use std::collections::HashMap;
+
+    use datafusion::arrow::array::{
+        Array, ArrayRef, AsArray, Int32Array, Int64Array, ListArray, RecordBatch, StructArray,
+    };
+    use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
+    use datafusion::arrow::datatypes::{Int64Type, Schema};
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::DFSchema;
+    use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, col};
+
+    use super::*;
+
+    fn comparison_schema(left: DataType, right: DataType) -> DataFusionResult<DFSchemaRef> {
+        Ok(Arc::new(DFSchema::try_from(Schema::new(vec![
+            Field::new("l", left, true),
+            Field::new("r", right, true),
+        ]))?))
+    }
+
+    fn assert_pre_analyzer_schema(expression: Expr, schema: &DFSchemaRef) -> PlanResult<()> {
+        expression.apply(|expression| {
+            match expression {
+                Expr::BinaryExpr(BinaryExpr { left, right, op }) if is_comparison(*op) => {
+                    assert_eq!(
+                        left.get_type(schema.as_ref())?,
+                        right.get_type(schema.as_ref())?
+                    );
+                }
+                Expr::InList(InList { expr, list, .. }) => {
+                    for value in list {
+                        assert_eq!(
+                            expr.get_type(schema.as_ref())?,
+                            value.get_type(schema.as_ref())?
+                        );
+                    }
+                }
+                _ => {}
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(
+            expression.to_field(schema.as_ref())?.1.data_type(),
+            &DataType::Boolean
+        );
+        let input = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::clone(schema),
+        }));
+        // No analyzer or optimizer runs before projection schema inference.
+        let projection = Projection::try_new(vec![expression], input)?;
+        assert_eq!(projection.schema.field(0).data_type(), &DataType::Boolean);
+        Ok(())
+    }
+
+    #[test]
+    fn nested_comparisons_have_exact_types_before_projection_inference() -> PlanResult<()> {
+        let wrap_struct =
+            |data_type| DataType::Struct(vec![Field::new("s", data_type, false)].into());
+        let wrap_list =
+            |data_type| DataType::List(Arc::new(Field::new_list_field(data_type, true)));
+        for names in [["x", "x"], ["", ""]] {
+            let left = DataType::Struct(
+                vec![
+                    Field::new(names[0], DataType::Int32, false),
+                    Field::new(names[1], DataType::Int64, true),
+                ]
+                .into(),
+            );
+            let right = DataType::Struct(
+                vec![
+                    Field::new(names[0], DataType::Int64, true),
+                    Field::new(names[1], DataType::Int32, false),
+                ]
+                .into(),
+            );
+            for wrap in [
+                std::convert::identity as fn(DataType) -> DataType,
+                wrap_struct,
+                wrap_list,
+            ] {
+                let schema = comparison_schema(wrap(left.clone()), wrap(right.clone()))?;
+                for op in [
+                    Operator::Eq,
+                    Operator::NotEq,
+                    Operator::Lt,
+                    Operator::LtEq,
+                    Operator::Gt,
+                    Operator::GtEq,
+                    Operator::IsDistinctFrom,
+                    Operator::IsNotDistinctFrom,
+                ] {
+                    let expression = Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(col("l")),
+                        op,
+                        Box::new(col("r")),
+                    ));
+                    let expression =
+                        coerce_comparison_predicate(expression, &schema, &PlanConfig::default())?;
+                    assert_pre_analyzer_schema(expression, &schema)?;
+                }
+                for list in [
+                    vec![],
+                    vec![col("r")],
+                    vec![col("r"), lit(ScalarValue::Null)],
+                ] {
+                    let expression = Expr::InList(InList::new(Box::new(col("l")), list, false));
+                    let expression =
+                        coerce_comparison_predicate(expression, &schema, &PlanConfig::default())?;
+                    assert_pre_analyzer_schema(expression, &schema)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn comparison_alignment_preserves_leaves_metadata_and_merges_nullability() -> PlanResult<()> {
+        let metadata = HashMap::from([("tag".to_owned(), "kept".to_owned())]);
+        let left = DataType::Struct(
+            vec![
+                Field::new("x", DataType::Int32, false).with_metadata(metadata.clone()),
+                Field::new("x", DataType::Int64, true),
+            ]
+            .into(),
+        );
+        let right = DataType::Struct(
+            vec![
+                Field::new("X", DataType::Int64, true).with_metadata(metadata.clone()),
+                Field::new("x", DataType::Int32, false),
+            ]
+            .into(),
+        );
+        let schema = comparison_schema(left, right)?;
+        let expression =
+            coerce_comparison_predicate(col("l").eq(col("r")), &schema, &PlanConfig::default())?;
+        let Expr::BinaryExpr(BinaryExpr { left, right, .. }) = &expression else {
+            panic!("expected comparison")
+        };
+        let expected = DataType::Struct(
+            vec![
+                Field::new("x", DataType::Int64, true).with_metadata(metadata.clone()),
+                Field::new("x", DataType::Int64, true),
+            ]
+            .into(),
+        );
+        assert_eq!(left.get_type(schema.as_ref())?, expected);
+        assert_eq!(right.get_type(schema.as_ref())?, expected);
+        let Expr::ScalarFunction(restore) = right.as_ref() else {
+            panic!("expected common names restored after cast")
+        };
+        assert_eq!(restore.name(), "spark_struct_rename");
+        let Expr::Cast(cast) = &restore.args[0] else {
+            panic!("expected numeric cast after rename")
+        };
+        let Expr::ScalarFunction(rename) = cast.expr.as_ref() else {
+            panic!("expected positional rename")
+        };
+        assert_eq!(rename.name(), "spark_struct_rename");
+        assert_eq!(
+            cast.expr.get_type(schema.as_ref())?,
+            DataType::Struct(
+                vec![
+                    Field::new("__sail_comparison_field_0", DataType::Int64, true)
+                        .with_metadata(metadata),
+                    Field::new("__sail_comparison_field_1", DataType::Int32, false),
+                ]
+                .into()
+            )
+        );
+        assert_pre_analyzer_schema(expression, &schema)?;
+        Ok(())
+    }
+
+    #[test]
+    fn expanded_in_comparisons_are_normalized_after_numeric_and_timestamp_rewrites()
+    -> PlanResult<()> {
+        let make_type = |first, second| {
+            DataType::List(Arc::new(Field::new_list_field(
+                DataType::Struct(
+                    vec![
+                        Field::new("x", first, false),
+                        Field::new("x", second, false),
+                    ]
+                    .into(),
+                ),
+                false,
+            )))
+        };
+        // The short column IN rewrite must still unify other, non-FLOAT leaves.
+        let schema = comparison_schema(
+            make_type(DataType::Float32, DataType::Int32),
+            make_type(DataType::Int64, DataType::Int64),
+        )?;
+        let expression = coerce_comparison_predicate(
+            col("l").in_list(vec![col("r")], false),
+            &schema,
+            &PlanConfig::default(),
+        )?;
+        assert!(matches!(&expression, Expr::BinaryExpr(_)));
+        assert_pre_analyzer_schema(expression, &schema)?;
+        // The recursive timestamp rewrite with a NULL expands to equality disjunctions.
+        let schema = comparison_schema(
+            make_type(
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                DataType::Int32,
+            ),
+            make_type(DataType::Utf8, DataType::Int64),
+        )?;
+        for ansi_mode in [false, true] {
+            let config = PlanConfig {
+                ansi_mode,
+                ..PlanConfig::default()
+            };
+            let expression = coerce_comparison_predicate(
+                col("l").in_list(vec![col("r"), lit(ScalarValue::Null)], false),
+                &schema,
+                &config,
+            )?;
+            assert!(matches!(&expression, Expr::BinaryExpr(_)));
+            assert_pre_analyzer_schema(expression, &schema)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_field_casts_preserve_positional_values_and_null_masks() -> PlanResult<()> {
+        let validity = NullBuffer::from(vec![true, true, true, false]);
+        let left = Arc::new(StructArray::try_new(
+            vec![
+                Field::new("x", DataType::Int32, true),
+                Field::new("x", DataType::Int64, false),
+            ]
+            .into(),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(4)])),
+                Arc::new(Int64Array::from(vec![10, 20, 30, 40])),
+            ],
+            Some(validity.clone()),
+        )?) as ArrayRef;
+        let right = Arc::new(StructArray::try_new(
+            vec![
+                Field::new("X", DataType::Int64, true),
+                Field::new("x", DataType::Int32, false),
+            ]
+            .into(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(2), None, Some(4)])),
+                Arc::new(Int32Array::from(vec![10, 21, 30, 40])),
+            ],
+            Some(validity.clone()),
+        )?) as ArrayRef;
+        let context = SessionContext::new();
+        for nested in [false, true] {
+            let wrap = |array: ArrayRef| -> ArrayRef {
+                if nested {
+                    Arc::new(ListArray::new(
+                        Arc::new(Field::new_list_field(array.data_type().clone(), true)),
+                        // The third list includes a NULL struct; the NULL list is empty.
+                        OffsetBuffer::new(vec![0, 1, 2, 4, 4].into()),
+                        array,
+                        Some(validity.clone()),
+                    ))
+                } else {
+                    array
+                }
+            };
+            let left = wrap(Arc::clone(&left));
+            let right = wrap(Arc::clone(&right));
+            let batch = RecordBatch::try_from_iter(vec![("l", left), ("r", right)])?;
+            let schema = Arc::new(DFSchema::try_from(batch.schema())?);
+            let expression = coerce_comparison_predicate(
+                col("l").eq(col("r")),
+                &schema,
+                &PlanConfig::default(),
+            )?;
+            let Expr::BinaryExpr(binary) = &expression else {
+                panic!("expected comparison")
+            };
+            for (operand, seconds) in [
+                (&binary.left, vec![10, 20, 30, 40]),
+                (&binary.right, vec![10, 21, 30, 40]),
+            ] {
+                let physical =
+                    context.create_physical_expr(operand.as_ref().clone(), schema.as_ref())?;
+                let result = physical.evaluate(&batch)?.into_array(4)?;
+                assert_eq!(result.data_type(), &operand.get_type(schema.as_ref())?);
+                assert_eq!(result.nulls(), Some(&validity));
+                let result = if nested {
+                    result.as_list::<i32>().values()
+                } else {
+                    &result
+                };
+                assert_eq!(result.nulls(), Some(&validity));
+                assert_eq!(
+                    result.as_struct().column(0).as_primitive::<Int64Type>(),
+                    &Int64Array::from(vec![Some(1), Some(2), None, Some(4)])
+                );
+                assert_eq!(
+                    result.as_struct().column(1).as_primitive::<Int64Type>(),
+                    &Int64Array::from(seconds)
+                );
+            }
+            let result = context
+                .create_physical_expr(expression, schema.as_ref())?
+                .evaluate(&batch)?
+                .into_array(4)?;
+            assert_eq!(
+                result.as_boolean().iter().collect::<Vec<_>>(),
+                vec![Some(true), Some(false), Some(true), None]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn primitive_comparisons_keep_existing_coercion() -> PlanResult<()> {
+        let schema = comparison_schema(DataType::Int32, DataType::Int64)?;
+        for expression in [
+            col("l").eq(col("r")),
+            col("l").in_list(vec![col("r")], false),
+        ] {
+            assert_eq!(
+                coerce_comparison_predicate(expression.clone(), &schema, &PlanConfig::default())?,
+                expression
+            );
+        }
+        let schema = comparison_schema(DataType::Float32, DataType::Int64)?;
+        let expression =
+            coerce_comparison_predicate(col("l").eq(col("r")), &schema, &PlanConfig::default())?;
+        assert_eq!(
+            expression,
+            cast(col("l"), DataType::Float64).eq(cast(col("r"), DataType::Float64))
+        );
+        Ok(())
     }
 }

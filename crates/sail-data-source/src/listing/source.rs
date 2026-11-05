@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -89,7 +90,18 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
         false
     }
 
-    /// Validate a user-provided file schema against the physical file schema.
+    /// Obtain physical schemas for validating a user-provided schema. Formats may
+    /// keep file schemas separate when explicit reads support evolution that inference does not.
+    async fn infer_schemas_for_validation(
+        &self,
+        ctx: &dyn Session,
+        files: &[ListingFileSample<'_>],
+        compression: CompressionTypeVariant,
+    ) -> Result<Vec<SchemaRef>> {
+        Ok(vec![self.infer_schema(ctx, files, compression).await?])
+    }
+
+    /// Validate a user-provided file schema against one physical file schema.
     fn validate_explicit_schema(&self, _schema: &Schema, _physical: &Schema) -> Result<()> {
         Ok(())
     }
@@ -185,18 +197,18 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
         let (schema, partition_fields) = match schema {
             Some(schema) if !schema.fields().is_empty() => {
                 let physical = if read_format.requires_explicit_schema_validation() {
-                    Some(
-                        read_format
-                            .infer_schema(ctx, &sampled_files, compression)
-                            .await?,
-                    )
+                    read_format
+                        .infer_schemas_for_validation(ctx, &sampled_files, compression)
+                        .await?
                 } else if read_case_sensitive {
-                    None
+                    vec![]
                 } else {
                     read_format
                         .infer_schema(ctx, &sampled_files, compression)
                         .await
                         .ok()
+                        .into_iter()
+                        .collect()
                 };
                 // Spark matches a user-specified schema against the physical file
                 // columns case-insensitively by default (`spark.sql.caseSensitive=false`).
@@ -204,11 +216,9 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 // the file stats and reader (which resolve columns by exact name) find the data.
                 let schema = if read_case_sensitive {
                     schema
-                } else if let Some(physical) = &physical {
-                    reconcile_schema_names_case_insensitive(schema, physical)?
                 } else {
-                    // Keeps the user schema if physical schema inference is unavailable.
-                    schema
+                    // An empty physical schema list leaves the user schema unchanged.
+                    reconcile_schema_names_case_insensitive(schema, &physical)?
                 };
                 // When the partition columns are not specified, auto-discover
                 // them from `key=value` segments in the listing paths.
@@ -230,7 +240,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 };
                 let (partition_fields, schema) =
                     get_partition_columns_and_file_schema(&schema, partition_by)?;
-                if let Some(physical) = physical {
+                for physical in physical {
                     read_format.validate_explicit_schema(&schema, &physical)?;
                 }
                 (Arc::new(schema), partition_fields)
@@ -251,7 +261,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 //   the `spark.sql.sources.partitionColumnTypeInference.enabled` option.
                 let partition_fields = partition_by
                     .into_iter()
-                    .map(|col| Arc::new(Field::new(col, DataType::Utf8, false)))
+                    .map(|col| Arc::new(Field::new(col, DataType::Utf8, true)))
                     .collect();
                 (schema, partition_fields)
             }
@@ -349,33 +359,85 @@ async fn listing_target_nonempty(ctx: &dyn Session, url: &Url) -> Result<bool> {
 
 // Reconciles a user-specified schema's field names with the physical file schema
 // case-insensitively, matching Spark's default `spark.sql.caseSensitive=false`.
-fn reconcile_schema_names_case_insensitive(schema: Schema, physical: &Schema) -> Result<Schema> {
+fn reconcile_schema_names_case_insensitive(
+    schema: Schema,
+    physical: &[SchemaRef],
+) -> Result<Schema> {
+    // Only names are needed here. Merging physical types would reject safe per-file widening.
+    let physical_names = physical
+        .iter()
+        .flat_map(|schema| schema.fields().iter().map(|field| field.name()))
+        .collect::<BTreeSet<_>>();
     let mut fields = Vec::with_capacity(schema.fields().len());
     for field in schema.fields() {
         let name = field.name();
-        let mut matches = physical
-            .fields()
+        let mut matches = physical_names
             .iter()
-            .filter(|f| f.name().eq_ignore_ascii_case(name));
+            .filter(|physical_name| physical_name.eq_ignore_ascii_case(name));
         let reconciled = match matches.next() {
             None => Arc::clone(field),
             Some(first) => {
                 if let Some(second) = matches.next() {
-                    let mut names = vec![first.name().as_str(), second.name().as_str()];
-                    names.extend(matches.map(|f| f.name().as_str()));
+                    let mut names = vec![first.as_str(), second.as_str()];
+                    names.extend(matches.map(|name| name.as_str()));
                     return plan_err!(
                         "Ambiguous case-insensitive column match for `{name}`: [{}]",
                         names.join(", ")
                     );
                 }
-                if first.name() == name {
+                if *first == name {
                     Arc::clone(field)
                 } else {
-                    Arc::new(field.as_ref().clone().with_name(first.name().as_str()))
+                    Arc::new(field.as_ref().clone().with_name(first.as_str()))
                 }
             }
         };
         fields.push(reconciled);
     }
     Ok(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconcile_names_without_merging_types_preserves_requested_schema() -> Result<()> {
+        let metadata = datafusion::arrow::datatypes::Metadata::from_iter([(
+            "comment".to_string(),
+            "requested".to_string(),
+        )]);
+        let field = Field::new("VALUE", DataType::Int64, false).with_metadata(metadata);
+        let missing = Field::new("missing", DataType::Utf8, true);
+        let schema = Schema::new_with_metadata(
+            vec![missing.clone(), field.clone()],
+            datafusion::arrow::datatypes::Metadata::from_iter([(
+                "source".to_string(),
+                "user".to_string(),
+            )]),
+        );
+        let physical = [DataType::Int32, DataType::Int64]
+            .map(|data_type| Arc::new(Schema::new(vec![Field::new("value", data_type, true)])));
+        let expected = Schema::new_with_metadata(
+            vec![missing, field.with_name("value")],
+            schema.metadata().clone(),
+        );
+        assert_eq!(
+            reconcile_schema_names_case_insensitive(schema.clone(), &[])?,
+            schema
+        );
+        assert_eq!(
+            reconcile_schema_names_case_insensitive(schema, &physical)?,
+            expected
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_names_rejects_ambiguous_physical_names() {
+        let schema = Schema::new(vec![Field::new("value", DataType::Int64, true)]);
+        let physical = ["value", "VALUE"]
+            .map(|name| Arc::new(Schema::new(vec![Field::new(name, DataType::Int64, true)])));
+        assert!(reconcile_schema_names_case_insensitive(schema, &physical).is_err());
+    }
 }

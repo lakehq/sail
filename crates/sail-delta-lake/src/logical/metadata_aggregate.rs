@@ -85,6 +85,9 @@ fn rewrite_empty_projection_limit(
         return Ok(None);
     };
     let scan = input.scan();
+    if scan.skip.is_some_and(|skip| skip > 0) {
+        return Ok(None);
+    }
     let Some(source) = scan.source.downcast_ref::<DeltaTableSource>() else {
         return Ok(None);
     };
@@ -199,7 +202,7 @@ fn rewrite_exact_ungrouped_aggregate(
         return Ok(None);
     };
     let scan = input.scan();
-    if scan.fetch.is_some() {
+    if scan.fetch.is_some() || scan.skip.is_some_and(|skip| skip > 0) {
         return Ok(None);
     }
     let Some(source) = scan.source.downcast_ref::<DeltaTableSource>() else {
@@ -234,7 +237,7 @@ fn rewrite_metadata_grouping(
         return Ok(None);
     };
     let scan = input.scan();
-    if scan.fetch.is_some() {
+    if scan.fetch.is_some() || scan.skip.is_some_and(|skip| skip > 0) {
         return Ok(None);
     }
     let Some(source) = scan.source.downcast_ref::<DeltaTableSource>() else {
@@ -469,4 +472,178 @@ fn build_metadata_branch(
         projection,
         Arc::new(values),
     )?)))
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used, clippy::panic)]
+mod tests {
+    use datafusion::functions_aggregate::expr_fn::count;
+    use datafusion::prelude::{SessionContext, col, lit};
+    use object_store::memory::InMemory;
+    use object_store::{ObjectStore, ObjectStoreExt};
+    use url::Url;
+
+    use super::*;
+    use crate::datasource::DeltaScanConfig;
+    use crate::delta_log::{StorageConfig, default_logstore};
+    use crate::snapshot::{DeltaSnapshot, DeltaSnapshotConfig};
+    use crate::spec::{Action, Add, DataType, Metadata, Protocol, StructField, StructType};
+
+    async fn source_fixture(require_files: bool) -> Result<Arc<dyn TableSource>> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = default_logstore(
+            Arc::clone(&store),
+            Arc::clone(&store),
+            &Url::parse("memory:///").expect("URL"),
+            &StorageConfig,
+        );
+        let metadata = Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([
+                StructField::not_null("id", DataType::LONG),
+                StructField::not_null("p", DataType::LONG),
+            ])
+            .expect("schema"),
+            vec!["p".into()],
+            0,
+            Default::default(),
+        )
+        .expect("metadata");
+        let actions = [
+            Action::Protocol(Protocol::new(1, 2, None, None)),
+            Action::Metadata(metadata),
+            Action::Add(Add {
+                path: "p=0/data.parquet".into(),
+                partition_values: [("p".into(), Some("0".into()))].into_iter().collect(),
+                size: 100,
+                data_change: true,
+                stats: Some(
+                    r#"{"numRecords":3,"minValues":{"id":2},"maxValues":{"id":4},"nullCount":{"id":0}}"#
+                        .into(),
+                ),
+                ..Default::default()
+            }),
+        ];
+        let bytes = actions
+            .iter()
+            .map(|action| serde_json::to_string(action).expect("action"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        store
+            .put(&crate::spec::commit_path(0), bytes.into())
+            .await?;
+        let snapshot = DeltaSnapshot::try_new(
+            log_store.as_ref(),
+            DeltaSnapshotConfig {
+                require_files,
+                ..Default::default()
+            },
+            Some(0),
+            None,
+        )
+        .await
+        .expect("snapshot");
+        Ok(Arc::new(
+            DeltaTableSource::try_new(Arc::new(snapshot), log_store, DeltaScanConfig::default())
+                .expect("source"),
+        ))
+    }
+
+    #[tokio::test]
+    async fn scan_skip_blocks_metadata_aggregate_grouping_and_empty_limit() -> Result<()> {
+        let state = SessionContext::new().state();
+        for require_files in [true, false] {
+            let source = source_fixture(require_files).await?;
+            assert!(!source.supports_skip_pushdown());
+            for skip in [None, Some(0), Some(1), Some(4)] {
+                for (fetch, filters, partition_only) in [
+                    (None, vec![], true),
+                    (Some(0), vec![], true),
+                    (Some(2), vec![], true),
+                    (None, vec![col("p").eq(lit(0_i64))], true),
+                    (None, vec![col("id").gt(lit(2_i64))], false),
+                ] {
+                    let eligible = !skip.is_some_and(|skip| skip > 0) && partition_only;
+                    let scan = TableScanBuilder::new("t", Arc::clone(&source))
+                        .with_skip(skip)
+                        .with_fetch(fetch)
+                        .with_filters(filters)
+                        .build()?;
+                    for (groups, expressions) in [
+                        (vec![], vec![count(lit(1))]),
+                        (vec![col("p")], vec![count(lit(1))]),
+                        (vec![col("p")], vec![]),
+                    ] {
+                        let plan = LogicalPlanBuilder::from(LogicalPlan::TableScan(scan.clone()))
+                            .aggregate(groups, expressions)?
+                            .build()?;
+                        let LogicalPlan::Aggregate(aggregate) = &plan else {
+                            panic!("expected aggregate");
+                        };
+                        if aggregate.group_expr.is_empty() {
+                            let exact = rewrite_exact_ungrouped_aggregate(aggregate, &state)?;
+                            assert_eq!(
+                                exact.is_some(),
+                                eligible && fetch.is_none() && require_files
+                            );
+                            if let Some(LogicalPlan::Projection(projection)) = exact {
+                                assert_eq!(projection.schema, aggregate.schema);
+                                let Expr::Alias(alias) = &projection.expr[0] else {
+                                    panic!("expected count alias");
+                                };
+                                assert_eq!(alias.expr.as_ref(), &lit(3_i64));
+                            }
+                        }
+                        let rewritten = DeltaMetadataAggregateRewriter
+                            .rewrite(plan.clone(), &state)
+                            .await?;
+                        assert_eq!(rewritten.transformed, eligible && fetch.is_none());
+                        assert_eq!(rewritten.data.schema(), plan.schema());
+                        if !rewritten.transformed {
+                            assert_eq!(rewritten.data, plan);
+                        } else {
+                            assert!(matches!(rewritten.data, LogicalPlan::Projection(_)));
+                        }
+                    }
+                    let empty_scan = TableScanBuilder::from(scan)
+                        .with_projection(Some(vec![]))
+                        .build()?;
+                    let plan = LogicalPlanBuilder::from(LogicalPlan::TableScan(empty_scan))
+                        .limit(1, Some(2))?
+                        .build()?;
+                    let rewritten = DeltaMetadataAggregateRewriter
+                        .rewrite(plan.clone(), &state)
+                        .await?;
+                    assert_eq!(rewritten.transformed, eligible && require_files);
+                    assert_eq!(rewritten.data.schema(), plan.schema());
+                    if !rewritten.transformed {
+                        assert_eq!(rewritten.data, plan);
+                    } else if let Some(fetch) = fetch {
+                        let LogicalPlan::EmptyRelation(rows) = rewritten.data else {
+                            panic!("expected zero or one row");
+                        };
+                        assert_eq!(rows.produce_one_row, fetch == 2);
+                    } else {
+                        let LogicalPlan::Projection(projection) = rewritten.data else {
+                            panic!("expected empty projection over range");
+                        };
+                        assert!(projection.expr.is_empty());
+                        let LogicalPlan::Extension(extension) = projection.input.as_ref() else {
+                            panic!("expected range");
+                        };
+                        let range = extension
+                            .node
+                            .as_any()
+                            .downcast_ref::<RangeNode>()
+                            .expect("range");
+                        assert_eq!(range.range().start, 0);
+                        assert_eq!(range.range().end, 2);
+                        assert_eq!(range.range().step, 1);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }

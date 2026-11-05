@@ -54,11 +54,9 @@ struct AggregateProjections {
 /// A map from a grouping expression to the column that materializes it.
 type GroupingReplacements = Vec<(Expr, Expr)>;
 
-/// Returns the name of a volatile (non-deterministic) scalar expression found
-/// in an aggregate context. Catches two Spark CheckAnalysis violations:
-/// 1. Volatile scalar UDF used directly in aggregate projections (outside any aggregate fn)
-/// 2. Volatile scalar UDF nested inside aggregate function arguments
-fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
+/// Find volatile scalar calls in an aggregate function's inputs, including
+/// filters and ordering. Output expressions are evaluated after aggregation.
+fn find_volatile_aggregate_input(expr: &Expr) -> Option<String> {
     let mut found_name: Option<String> = None;
     let _ = expr.apply(|e| {
         if let Expr::ScalarFunction(f) = e
@@ -74,6 +72,310 @@ fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
         Ok(TreeNodeRecursion::Continue)
     });
     found_name
+}
+
+#[cfg(test)]
+mod volatility_tests {
+    use datafusion::functions::math::expr_fn::random;
+    use datafusion::functions_aggregate::expr_fn::{count, sum};
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::Result;
+    use datafusion_expr::utils::find_aggregate_exprs;
+    use datafusion_expr::{ExprFunctionExt, ScalarUDF, col, lit};
+
+    use super::*;
+    use crate::config::PlanConfig;
+
+    #[test]
+    fn volatile_output_stays_above_aggregate() -> PlanResult<()> {
+        let context = SessionContext::new();
+        let resolver = PlanResolver::new(&context, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+        let id = state.register_field_name("id");
+        let input = LogicalPlanBuilder::values(vec![vec![lit(1_i64)], vec![lit(2_i64)]])?
+            .project(vec![col("column1").alias(&id)])?
+            .build()?;
+        let plan = resolver.rewrite_aggregate(
+            input.clone(),
+            vec![NamedExpr::new(vec!["c".into()], count(lit(1)) + random())],
+            vec![NamedExpr::new(vec!["id".into()], col(id))],
+            None,
+            false,
+            &mut state,
+        )?;
+        let LogicalPlan::Projection(projection) = plan else {
+            return Err(PlanError::internal("expected output projection"));
+        };
+        assert!(projection.expr.iter().any(Expr::is_volatile));
+        assert!(find_aggregate_exprs(&projection.expr).is_empty());
+        let LogicalPlan::Aggregate(aggregate) = projection.input.as_ref() else {
+            return Err(PlanError::internal(
+                "expected aggregate below volatile output",
+            ));
+        };
+        assert_eq!(aggregate.aggr_expr, vec![count(lit(1))]);
+        assert_eq!(aggregate.input.as_ref(), &input);
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_cardinality_assertion_is_not_nondeterminism() {
+        let assertion = ScalarUDF::from(ScalarSubqueryResult::new()).call(vec![lit(1)]);
+        assert!(find_volatile_aggregate_input(&sum(assertion.clone())).is_none());
+        assert!(find_volatile_aggregate_input(&sum(assertion + random())).is_some());
+    }
+
+    #[test]
+    fn output_volatility_is_not_an_aggregate_input() {
+        let aggregates = find_aggregate_exprs(&[count(lit(1)) + random()]);
+        assert_eq!(aggregates.len(), 1);
+        assert!(find_volatile_aggregate_input(&aggregates[0]).is_none());
+    }
+
+    #[test]
+    fn aggregate_arguments_filters_and_ordering_reject_volatility() -> Result<()> {
+        let expressions: Vec<Expr> = vec![
+            sum(random()),
+            count(lit(1)).filter(random().gt(lit(0.5))).build()?,
+            sum(lit(1))
+                .order_by(vec![random().sort(true, true)])
+                .build()?,
+        ];
+        for expr in expressions {
+            assert_eq!(
+                find_volatile_aggregate_input(&expr).as_deref(),
+                Some("random")
+            );
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod grouping_tests {
+    use datafusion::functions_aggregate::grouping::grouping;
+    use datafusion::prelude::SessionContext;
+    use datafusion_expr::{GroupingSet, col, lit, out_ref_col};
+    use sail_function::aggregate::grouping_id::GroupingIdFunction;
+
+    use super::*;
+    use crate::config::PlanConfig;
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn correlated_mask_is_materialized_at_having_stage() -> PlanResult<()> {
+        let context = SessionContext::new();
+        let resolver = PlanResolver::new(&context, Arc::new(PlanConfig::new()?));
+        for data_type in [DataType::Int64, DataType::Float32] {
+            let mut state = PlanResolverState::new();
+            let name = state.register_field_name("k");
+            let key = col(&name);
+            let input = LogicalPlanBuilder::values(vec![vec![lit(1i64)], vec![lit(2i64)]])?
+                .project(vec![col("column1").alias(&name)])?
+                .build()?;
+            let gid = AggregateUDF::from(GroupingIdFunction::new()).call(vec![key.clone()]);
+            let plan = resolver.rewrite_aggregate(
+                input,
+                vec![NamedExpr::new(vec!["z".into()], key.clone())],
+                vec![NamedExpr::new(
+                    vec!["k".into()],
+                    Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+                        vec![key.clone()],
+                        vec![key],
+                    ])),
+                )],
+                Some(gid.eq(out_ref_col(data_type.clone(), "o.g"))),
+                false,
+                &mut state,
+            )?;
+            let LogicalPlan::Projection(output) = &plan else {
+                unreachable!()
+            };
+            let LogicalPlan::Filter(having) = output.input.as_ref() else {
+                unreachable!()
+            };
+            let LogicalPlan::Projection(keys) = having.input.as_ref() else {
+                unreachable!()
+            };
+            assert!(matches!(keys.input.as_ref(), LogicalPlan::Aggregate(_)));
+            let Expr::BinaryExpr(comparison) = &having.predicate else {
+                unreachable!()
+            };
+            let Expr::Column(key) = comparison.left.as_ref() else {
+                unreachable!()
+            };
+            assert_eq!(comparison.right.as_ref(), &out_ref_col(data_type, "o.g"));
+            assert_eq!(
+                keys.schema
+                    .field(keys.schema.index_of_column(key)?)
+                    .data_type(),
+                &DataType::Int64
+            );
+            assert_eq!(
+                keys.expr.last().unwrap().clone().unalias(),
+                cast(
+                    bitwise_and(
+                        cast(PlanResolver::grouping_id_column(), DataType::UInt64),
+                        lit(1u64)
+                    ),
+                    DataType::Int64
+                )
+            );
+            assert_eq!(plan.schema().fields().len(), 1);
+            assert!(!plan.schema().has_column(key));
+            let input = Arc::unwrap_or_clone(Arc::clone(&keys.input));
+            let predicate = (keys.expr.last().unwrap().clone().unalias() + lit(1i64))
+                .eq(out_ref_col(DataType::Int64, "o.g"));
+            let (unchanged, retained) = PlanResolver::materialize_grouping_comparison(
+                input.clone(),
+                predicate.clone(),
+                &mut state,
+            )?;
+            assert_eq!(unchanged, input);
+            assert_eq!(retained, predicate);
+            for compared_type in [DataType::Float32, DataType::Float64] {
+                let value = cast(
+                    keys.expr.last().unwrap().clone().unalias(),
+                    compared_type.clone(),
+                );
+                let predicate = value.clone().eq(out_ref_col(compared_type.clone(), "o.g"));
+                let (typed, predicate) = PlanResolver::materialize_grouping_comparison(
+                    input.clone(),
+                    predicate,
+                    &mut state,
+                )?;
+                let LogicalPlan::Projection(typed) = typed else {
+                    unreachable!()
+                };
+                assert_eq!(typed.input.as_ref(), &input);
+                assert_eq!(typed.expr.last().unwrap().clone().unalias(), value);
+                let Expr::BinaryExpr(comparison) = predicate else {
+                    unreachable!()
+                };
+                let Expr::Column(key) = comparison.left.as_ref() else {
+                    unreachable!()
+                };
+                assert_eq!(
+                    typed
+                        .schema
+                        .field(typed.schema.index_of_column(key)?)
+                        .data_type(),
+                    &compared_type
+                );
+                let predicate = cast(
+                    keys.expr.last().unwrap().clone().unalias() + lit(1i64),
+                    compared_type.clone(),
+                )
+                .eq(out_ref_col(compared_type, "o.g"));
+                let (unchanged, retained) = PlanResolver::materialize_grouping_comparison(
+                    input.clone(),
+                    predicate.clone(),
+                    &mut state,
+                )?;
+                assert_eq!(unchanged, input);
+                assert_eq!(retained, predicate);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_grouping_reads_use_original_bits_with_or_without_correlation() -> PlanResult<()> {
+        let context = SessionContext::new();
+        let resolver = PlanResolver::new(&context, Arc::new(PlanConfig::new()?));
+        for key_count in [0, 1, 8, 16, 32, 63] {
+            for duplicate in [false, true] {
+                for correlated in [false, true] {
+                    let mut state = PlanResolverState::new();
+                    let names = (0..key_count.max(1))
+                        .map(|_| state.register_field_name("k"))
+                        .collect::<Vec<_>>();
+                    let input = LogicalPlanBuilder::values(vec![vec![lit(1i64)]])?
+                        .project(names.iter().map(|name| col("column1").alias(name)))?
+                        .filter(col(&names[0]).eq(if correlated {
+                            out_ref_col(DataType::Int64, "outer.k")
+                        } else {
+                            lit(1i64)
+                        }))?
+                        .build()?;
+                    let keys = names[..key_count].iter().map(col).collect::<Vec<_>>();
+                    let mut sets = vec![keys.clone(), vec![]];
+                    if duplicate {
+                        sets.extend([keys.clone(), vec![]]);
+                    }
+                    let groups = vec![Expr::GroupingSet(GroupingSet::GroupingSets(sets))];
+                    let repeated = PlanResolver::has_duplicate_grouping_sets(&groups)?;
+                    let gid = AggregateUDF::from(GroupingIdFunction::new()).call(keys.clone());
+                    let mut projections = vec![NamedExpr::new(vec!["gid".into()], gid)];
+                    if !keys.is_empty() {
+                        projections.push(NamedExpr::new(
+                            vec!["bit".into()],
+                            grouping(keys[0].clone()),
+                        ));
+                    }
+                    let plan = resolver.rewrite_aggregate(
+                        input,
+                        projections,
+                        vec![NamedExpr::new(
+                            names[..key_count].to_vec(),
+                            groups[0].clone(),
+                        )],
+                        None,
+                        false,
+                        &mut state,
+                    )?;
+                    let mask = if key_count == 0 {
+                        0
+                    } else {
+                        u64::MAX >> (64 - key_count)
+                    };
+                    let expected = if repeated {
+                        cast(
+                            bitwise_and(
+                                cast(PlanResolver::grouping_id_column(), DataType::UInt64),
+                                lit(mask),
+                            ),
+                            DataType::Int64,
+                        )
+                    } else {
+                        cast(PlanResolver::grouping_id_column(), DataType::Int64)
+                    };
+                    let mut found = false;
+                    plan.apply(|node| {
+                        if let LogicalPlan::Projection(projection) = node {
+                            found |= projection
+                                .expr
+                                .iter()
+                                .any(|expr| expr.clone().unalias() == expected);
+                        }
+                        if let LogicalPlan::Aggregate(aggregate) = node {
+                            assert_eq!(aggregate.group_expr, groups);
+                            let expected_type = Aggregate::grouping_id_type(
+                                key_count,
+                                if key_count == 0 {
+                                    if duplicate { 3 } else { 1 }
+                                } else {
+                                    usize::from(duplicate)
+                                },
+                            );
+                            assert_eq!(
+                                aggregate.schema.field(key_count).data_type(),
+                                &expected_type
+                            );
+                            assert!(!aggregate.schema.field(key_count).is_nullable());
+                        }
+                        Ok(TreeNodeRecursion::Continue)
+                    })?;
+                    assert!(
+                        found,
+                        "{key_count} {duplicate} {correlated}: {}",
+                        plan.display_indent()
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl PlanResolver<'_> {
@@ -240,15 +542,6 @@ impl PlanResolver<'_> {
         let having = having
             .map(|expr| Self::replace_grouping_expressions(expr, &replacements))
             .transpose()?;
-
-        // Grouping keys now reference input columns; other volatile calls remain invalid.
-        for proj in &projections {
-            if let Some(name) = find_volatile_in_aggregate_context(&proj.expr) {
-                return Err(PlanError::AnalysisError(format!(
-                    "Non-deterministic expression {name} should not appear in an aggregate query",
-                )));
-            }
-        }
 
         self.rewrite_prepared_aggregate(
             input,
@@ -468,15 +761,10 @@ impl PlanResolver<'_> {
         let group_exprs = grouping.iter().map(|x| x.expr.clone()).collect::<Vec<_>>();
         let has_grouping_set = Self::has_grouping_set(&group_exprs);
         let grouping_exprs = Self::distinct_grouping_expressions_from_exprs(&group_exprs);
-        let duplicate_sets = has_grouping_set
-            && Self::correlation_keeps_grouping(&input, &group_exprs)?
-            && !having
-                .as_ref()
-                .is_some_and(Self::compares_grouping_with_outer)
-            && !projections
-                .iter()
-                .any(|x| Self::compares_grouping_with_outer(&x.expr))
-            && Self::has_duplicate_grouping_sets(&group_exprs)?;
+        // Duplicate ordinals are internal, regardless of correlation. Resolve
+        // user reads against the original grouping keys; any later rewrite must
+        // preserve that layout rather than expose the ordinal as a grouping bit.
+        let duplicate_sets = has_grouping_set && Self::has_duplicate_grouping_sets(&group_exprs)?;
         let projections = projections
             .into_iter()
             .map(|x| {
@@ -505,10 +793,15 @@ impl PlanResolver<'_> {
         if let Some(having) = having.as_ref() {
             aggregate_candidates.push(having.clone());
         }
-        let aggregate_exprs = Self::disambiguate_aggregate_expressions(
-            find_aggregate_exprs(&aggregate_candidates),
-            state,
-        );
+        let aggregate_exprs = find_aggregate_exprs(&aggregate_candidates);
+        for aggregate in &aggregate_exprs {
+            if let Some(name) = find_volatile_aggregate_input(aggregate) {
+                return Err(PlanError::analysis(format!(
+                    "Non-deterministic expression {name} should not appear in the arguments of an aggregate function",
+                )));
+            }
+        }
+        let aggregate_exprs = Self::disambiguate_aggregate_expressions(aggregate_exprs, state);
         let plan = LogicalPlanBuilder::from(input)
             .aggregate(group_exprs, aggregate_exprs.clone())?
             .build()?;
@@ -599,6 +892,11 @@ impl PlanResolver<'_> {
                     self.rewrite_partition_expressions(plan, vec![having], state)?;
                 let having =
                     Self::rebase_expression(having.one()?, &aggregate_or_grouping_exprs, &plan)?;
+                let (plan, having) = if duplicate_sets && having.contains_outer() {
+                    Self::materialize_grouping_comparison(plan, having, state)?
+                } else {
+                    (plan, having)
+                };
                 LogicalPlanBuilder::from(plan).having(having)?.build()?
             }
             None => plan,
@@ -652,6 +950,89 @@ impl PlanResolver<'_> {
         Ok(LogicalPlanBuilder::from(plan)
             .project(projections)?
             .build()?)
+    }
+
+    /// Keep masked grouping-ID equality a column comparison at its original
+    /// HAVING stage. Native decorrelation can carry that typed value through an
+    /// enclosing aggregate without grouping by the internal duplicate ordinal.
+    fn materialize_grouping_comparison(
+        plan: LogicalPlan,
+        predicate: Expr,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Expr)> {
+        let mut materialized = Vec::<(Expr, Column)>::new();
+        let predicate = predicate
+            .transform_up(|expr| {
+                let Expr::BinaryExpr(mut binary) = expr else {
+                    return Ok(Transformed::no(expr));
+                };
+                if binary.op != datafusion_expr::Operator::Eq {
+                    return Ok(Transformed::no(Expr::BinaryExpr(binary)));
+                }
+                let is_key = |inner: &Expr, outer: &Expr| {
+                    if !outer.contains_outer() || outer.any_column_refs() {
+                        return false;
+                    }
+                    // The comparison resolver may already have coerced the
+                    // Int64 read to a floating type. This conversion is total;
+                    // arbitrary expressions around the masked read are not.
+                    let inner = match inner {
+                        Expr::Cast(cast) if matches!(cast.field.data_type(), DataType::Float32 | DataType::Float64) => cast.expr.as_ref(),
+                        _ => inner,
+                    };
+                    // Only the resolver-generated masked read. Do not eagerly
+                    // evaluate user expressions from guarded predicates merely
+                    // because they read this ID.
+                    let Expr::Cast(value) = inner else { return false };
+                    let Expr::BinaryExpr(mask) = value.expr.as_ref() else { return false };
+                    let Expr::Cast(id) = mask.left.as_ref() else { return false };
+                    value.field.data_type() == &DataType::Int64
+                        && mask.op == datafusion_expr::Operator::BitwiseAnd
+                        && id.field.data_type() == &DataType::UInt64
+                        && matches!(id.expr.as_ref(), Expr::Column(column) if column.name == Aggregate::INTERNAL_GROUPING_ID)
+                        && matches!(mask.right.as_ref(), Expr::Literal(ScalarValue::UInt64(Some(_)), _))
+                };
+                let inner = if is_key(&binary.left, &binary.right) {
+                    &mut binary.left
+                } else if is_key(&binary.right, &binary.left) {
+                    &mut binary.right
+                } else {
+                    return Ok(Transformed::no(Expr::BinaryExpr(binary)));
+                };
+                let column = if let Some((_, column)) =
+                    materialized.iter().find(|(expr, _)| expr == inner.as_ref())
+                {
+                    column.clone()
+                } else {
+                    let column =
+                        Column::new_unqualified(state.register_hidden_field_name("grouping_key"));
+                    materialized.push((inner.as_ref().clone(), column.clone()));
+                    column
+                };
+                **inner = Expr::Column(column);
+                Ok(Transformed::yes(Expr::BinaryExpr(binary)))
+            })?
+            .data;
+        if materialized.is_empty() {
+            return Ok((plan, predicate));
+        }
+        let mut projection = plan
+            .schema()
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect::<Vec<_>>();
+        projection.extend(
+            materialized
+                .into_iter()
+                .map(|(expr, column)| expr.alias(column.name)),
+        );
+        Ok((
+            LogicalPlanBuilder::from(plan)
+                .project(projection)?
+                .build()?,
+            predicate,
+        ))
     }
 
     pub(crate) fn input_sort_ordering(input: &LogicalPlan) -> Option<Vec<SortExpr>> {
@@ -1342,18 +1723,6 @@ impl PlanResolver<'_> {
             let column = Expr::Column(column);
             sets.iter().all(|set| set.contains(&column))
         }))
-    }
-
-    /// Whether an expression reads both the outer query and a grouping function, which
-    /// native decorrelation cannot pull up once the grouping ID is masked.
-    fn compares_grouping_with_outer(expr: &Expr) -> bool {
-        expr.contains_outer()
-            && expr
-                .exists(|expr| {
-                    Ok(matches!(expr, Expr::AggregateFunction(function)
-                        if matches!(function.func.name(), "grouping" | "grouping_id")))
-                })
-                .unwrap_or(true)
     }
 
     /// Whether two grouping sets group by the same expressions, in any order.

@@ -224,7 +224,7 @@ mod tests {
         .await?;
         // Manifests do not exist until after planning.
         let plan = provider
-            .scan(&driver.state(), Some(&vec![1, 5]), &[], None)
+            .scan(&driver.state(), Some(&[1, 5]), &[], None)
             .await?;
         assert_eq!(plan.output_partitioning().partition_count(), 2);
         let scan = plan

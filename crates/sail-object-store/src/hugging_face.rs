@@ -298,6 +298,7 @@ impl ObjectStore for HuggingFaceObjectStore {
                 meta,
                 range: 0..0,
                 attributes: Default::default(),
+                extensions: Default::default(),
             })
         } else {
             // TODO: The cache is not ideal for cluster mode. In cluster mode, the driver

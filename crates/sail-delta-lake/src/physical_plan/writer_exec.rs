@@ -880,7 +880,7 @@ impl DeltaWriterExec {
                     &writer_schema,
                     logical_schema_for_mapping.as_ref(),
                     kernel_mode,
-                    timezone.as_deref(),
+                    timezone.as_ref().map(|tz| tz.as_str()),
                 )?;
 
                 writer

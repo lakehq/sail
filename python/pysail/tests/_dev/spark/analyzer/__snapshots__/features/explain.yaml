@@ -18,9 +18,9 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#4@0 as k, #5@1 as SUM(v)], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]], schema=[k:Int32, SUM(v):Int64;N]
       ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]], schema=[#4:Int32, #5:Int64;N]
-        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, aggregate_arguments_time=<metric>, aggregation_time=<metric>, emitting_time=<metric>, time_calculating_group_ids=<metric>], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]], schema=[#2:Int32, sum(t.#3):Int64;N]
-          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1, metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, fetch_time=<metric>, repartition_time=<metric>, send_time=<metric>], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]], schema=[#2:Int32, sum(t.#3)[sum]:Int64;N]
-            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, skipped_aggregation_rows=<metric>, aggregate_arguments_time=<metric>, aggregation_time=<metric>, emitting_time=<metric>, time_calculating_group_ids=<metric>, reduction_factor=<metric>], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]], schema=[#2:Int32, sum(t.#3)[sum]:Int64;N]
+        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, agg_expr_<metric>_arguments_time=<metric>, agg_expr_<metric>_evaluate_time=<metric>, agg_expr_<metric>_merge_time=<metric>, agg_expr_<metric>_state_time=<metric>, aggregate_arguments_time=<metric>, aggregation_time=<metric>, emitting_time=<metric>, time_calculating_group_ids=<metric>, output_rows_skew=<metric>], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]], schema=[#2:Int32, sum(t.#3):Int64;N]
+          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1, metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, fetch_time=<metric>, repartition_time=<metric>, send_time=<metric>, output_rows_skew=<metric>], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]], schema=[#2:Int32, sum(t.#3)[sum]:Int64;N]
+            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, early_emit_count=<metric>, skipped_aggregation_rows=<metric>, agg_expr_<metric>_arguments_time=<metric>, agg_expr_<metric>_convert_to_state_time=<metric>, agg_expr_<metric>_state_time=<metric>, agg_expr_<metric>_update_time=<metric>, aggregate_arguments_time=<metric>, aggregation_time=<metric>, emitting_time=<metric>, time_calculating_group_ids=<metric>, output_rows_skew=<metric>, reduction_factor=<metric>], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]], schema=[#2:Int32, sum(t.#3)[sum]:Int64;N]
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]], schema=[#2:Int32, #3:Int32]
                 DataSourceExec: partitions=1, partition_sizes=[1], metrics=[], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]], schema=[column1:Int32, column2:Int32]
 ---
@@ -134,6 +134,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -228,6 +231,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -290,6 +296,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -387,9 +396,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:

@@ -18,6 +18,7 @@ pub(crate) mod datetime_utils;
 mod generator;
 mod metadata;
 mod scalar;
+pub(crate) mod struct_utils;
 mod table;
 mod window;
 

@@ -59,7 +59,6 @@ use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::functions::{
     UDFCoercionExt, fields_with_udf, value_fields_with_higher_order_udf_and_lambdas,
 };
-use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::type_coercion::{is_datetime, is_interval, is_signed_numeric, is_timestamp};
 use datafusion_expr::utils::merge_schema;
 // DataFusion's MERGE statement is coerced as in DataFusion, though Sail does not create it.
@@ -71,8 +70,8 @@ use datafusion_expr::{
 };
 use itertools::{Itertools as _, izip};
 use sail_common_datafusion::type_coercion::binary_type_coercion::{
-    BinaryTypeCoercer, comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
-    type_union_coercion,
+    BinaryTypeCoercer, comparison_coercion_with_session_timezone, conditional_common_type,
+    like_coercion, regex_coercion, type_union_coercion,
 };
 use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
@@ -148,7 +147,8 @@ fn coerce_plan_and_subqueries(plan: LogicalPlan, config: &ConfigOptions) -> Resu
     let session_time_zone = config
         .execution
         .time_zone
-        .as_deref()
+        .as_ref()
+        .map(|tz| tz.as_str())
         .map(arrow_timezone_label);
     let session_time_zone = session_time_zone.as_deref();
 
@@ -1453,6 +1453,22 @@ fn coerced_argument_types<F: UDFCoercionExt>(
         .map(|e| e.to_field(schema).map(|(_, f)| f))
         .collect::<Result<Vec<_>>>()?;
 
+    // DataFusion's coalesce coercion preserves each struct argument's own child
+    // nullability. Its CASE rewrite requires exactly equal branch types instead.
+    if func.name() == "coalesce"
+        && current_fields
+            .iter()
+            .any(|field| field.data_type().is_nested())
+    {
+        let types = current_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let common = conditional_common_type(&types)
+            .ok_or_else(|| plan_datafusion_err!("Cannot coerce coalesce arguments {types:?}"))?;
+        return Ok(vec![common; expressions.len()]);
+    }
+
     fields_with_udf(&current_fields, func).map(|fields| {
         fields
             .into_iter()
@@ -1566,22 +1582,26 @@ fn coerce_case_expression(
             })
         })
         .transpose()?;
-    let then_else_coerce_type =
-        get_coerce_type_for_case_expression(&then_types, else_type.as_ref()).ok_or_else(|| {
-            if let Some(else_type) = else_type {
-                plan_datafusion_err!(
-                    "Failed to coerce then ({}) and else ({else_type}) \
+    let result_types = then_types
+        .iter()
+        .chain(else_type.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let then_else_coerce_type = conditional_common_type(&result_types).ok_or_else(|| {
+        if let Some(else_type) = else_type {
+            plan_datafusion_err!(
+                "Failed to coerce then ({}) and else ({else_type}) \
                          to common types in CASE WHEN expression",
-                    then_types.iter().join(", ")
-                )
-            } else {
-                plan_datafusion_err!(
-                    "Failed to coerce then ({}) and else (None) \
+                then_types.iter().join(", ")
+            )
+        } else {
+            plan_datafusion_err!(
+                "Failed to coerce then ({}) and else (None) \
                          to common types in CASE WHEN expression",
-                    then_types.iter().join(", ")
-                )
-            }
-        })?;
+                then_types.iter().join(", ")
+            )
+        }
+    })?;
 
     // do cast if found common coercible types
     let case_expr = case
@@ -1810,38 +1830,10 @@ fn merge_into_schema(plan: &LogicalPlan) -> Result<Option<DFSchema>> {
     merge_dml_schema(dml).map(Some)
 }
 
-// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/logical_plan/dml.rs#L213-L221
-// TODO: Remove after DataFusion 56
 /// Build the target-plus-source schema used by MERGE expressions.
 #[expect(clippy::disallowed_types)]
 pub fn merge_dml_schema(dml: &DmlStatement) -> Result<DFSchema> {
-    let WriteOp::MergeInto(_) = &dml.op else {
-        return internal_err!("DmlStatement::merge_schema requires a MERGE operation");
-    };
-    // TODO: Use the operation's target qualifier after DataFusion 56.
-    //  DataFusion 55 qualifies the MERGE target with the table name.
-    expression_merge_op_schema_for(&dml.table_name, &dml.target.schema(), dml.input.schema())
-}
-
-// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/logical_plan/dml.rs#L361-L378
-// TODO: Remove after DataFusion 56
-/// Build a MERGE expression schema before constructing the operation.
-fn expression_merge_op_schema_for(
-    target_qualifier: &TableReference,
-    target_schema: &Schema,
-    source_schema: &DFSchema,
-) -> Result<DFSchema> {
-    if source_schema.iter().any(|(qualifier, _)| {
-        qualifier.is_some_and(|qualifier| qualifier.resolved_eq(target_qualifier))
-    }) {
-        return plan_err!(
-            "MERGE target qualifier '{}' conflicts with a source qualifier",
-            target_qualifier
-        );
-    }
-
-    DFSchema::try_from_qualified_schema(target_qualifier.clone(), target_schema)?
-        .join(source_schema)
+    dml.merge_schema()
 }
 
 // TODO: Remove after DataFusion 56
@@ -2076,9 +2068,7 @@ mod test {
         Ok(())
     }
 
-    // TODO: Enable after DataFusion 56, which infers the type of a LIMIT parameter.
     #[test]
-    #[ignore]
     fn untyped_limit_parameter_remains_inferable_after_coercion() -> Result<()> {
         let plan = LogicalPlan::Limit(Limit {
             input: empty(),
@@ -2188,10 +2178,10 @@ mod test {
         // target schema to be visible to the analyzer, which only sees
         // `plan.inputs()` (the source plan) by default.
         let on = col("target.id").eq(col("source.id"));
-        // TODO: Use `MergeIntoOp::new` after DataFusion 56.
-        let merge_op = MergeIntoOp {
+        let merge_op = MergeIntoOp::new(
+            target_table_name.clone(),
             on,
-            clauses: vec![
+            vec![
                 MergeIntoClause {
                     kind: MergeIntoClauseKind::Matched,
                     predicate: None,
@@ -2206,7 +2196,7 @@ mod test {
                     },
                 },
             ],
-        };
+        );
         let plan = LogicalPlan::Dml(DmlStatement::new(
             target_table_name,
             target_source,
@@ -2234,6 +2224,73 @@ mod test {
             panic!("expected INSERT");
         };
         assert_eq!(values[0].to_string(), "CAST(source.id AS UInt32)");
+        Ok(())
+    }
+
+    #[test]
+    fn merge_into_uses_target_alias_and_rejects_source_qualifier_conflicts() -> Result<()> {
+        use datafusion_common::{Column, DataFusionError};
+        use datafusion_expr::dml::MergeIntoOp;
+        use datafusion_expr::{DmlStatement, WriteOp};
+
+        let target_name = TableReference::bare("target");
+        let target_alias = TableReference::bare("t");
+        let target_schema = Schema::new(vec![Field::new("id", DataType::UInt32, false)]);
+        let target = table_scan(Some(target_name.clone()), &target_schema, None)?.build()?;
+        let LogicalPlan::TableScan(target) = target else {
+            panic!("expected TableScan");
+        };
+        let source_schema = Schema::new(vec![Field::new("id", DataType::Int64, true)]);
+        for (source_name, conflicts) in [
+            (target_name.clone(), false),
+            (target_alias.clone(), true),
+            (TableReference::full("catalog", "schema", "t"), true),
+        ] {
+            let source = table_scan(Some(source_name.clone()), &source_schema, None)?.build()?;
+            let target_column = Column::new(Some(target_alias.clone()), "id");
+            let source_column = Column::new(Some(source_name), "id");
+            let on = Expr::Column(target_column.clone()).eq(Expr::Column(source_column.clone()));
+            let dml = DmlStatement::new(
+                target_name.clone(),
+                Arc::clone(&target.source),
+                WriteOp::MergeInto(Box::new(MergeIntoOp::new(target_alias.clone(), on, vec![]))),
+                Arc::new(source),
+            );
+            let schema = super::merge_dml_schema(&dml);
+            if conflicts {
+                let message = "MERGE target qualifier 't' conflicts with a source qualifier";
+                assert!(
+                    matches!(schema, Err(DataFusionError::Plan(ref actual)) if actual == message)
+                );
+                assert!(matches!(
+                    TypeCoercion::new().analyze(LogicalPlan::Dml(dml), &ConfigOptions::default()),
+                    Err(DataFusionError::Plan(ref actual)) if actual == message
+                ));
+                continue;
+            }
+
+            let schema = schema?;
+            assert_eq!(
+                schema.columns(),
+                vec![target_column.clone(), source_column.clone()]
+            );
+            assert_eq!(schema.field(0).as_ref(), target_schema.field(0));
+            assert_eq!(schema.field(1).as_ref(), source_schema.field(0));
+            let analyzed =
+                TypeCoercion::new().analyze(LogicalPlan::Dml(dml), &ConfigOptions::default())?;
+            let LogicalPlan::Dml(dml) = analyzed else {
+                panic!("expected Dml");
+            };
+            assert_eq!(dml.table_name, target_name);
+            let WriteOp::MergeInto(op) = dml.op else {
+                panic!("expected MergeInto");
+            };
+            assert_eq!(op.target_qualifier(), &target_alias);
+            assert_eq!(
+                op.on,
+                cast(Expr::Column(target_column), DataType::Int64).eq(Expr::Column(source_column))
+            );
+        }
         Ok(())
     }
 
@@ -3670,7 +3727,7 @@ mod test {
         )?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("+08:00".into());
+        options.execution.time_zone = Some("+08:00".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3800,7 +3857,7 @@ mod test {
         )?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Los_Angeles".into());
+        options.execution.time_zone = Some("America/Los_Angeles".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3824,7 +3881,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(col("a").eq(constant), input)?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Los_Angeles".into());
+        options.execution.time_zone = Some("America/Los_Angeles".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3848,7 +3905,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(col("a").lt_eq(constant), input)?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("+05:30".into());
+        options.execution.time_zone = Some("+05:30".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3890,7 +3947,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(col("ntz").eq(col("ltz")), input)?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Los_Angeles".into());
+        options.execution.time_zone = Some("America/Los_Angeles".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3917,7 +3974,7 @@ mod test {
         )?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Los_Angeles".into());
+        options.execution.time_zone = Some("America/Los_Angeles".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3950,7 +4007,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(set_comparison, outer)?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("+08:00".into());
+        options.execution.time_zone = Some("+08:00".parse()?);
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,

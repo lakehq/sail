@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
+use datafusion::arrow::datatypes::{
+    DataType, Field, Fields, Metadata, Schema, SchemaRef, TimeUnit,
+};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::physical_plan::parquet::metadata::{
@@ -22,8 +24,9 @@ use sail_common_datafusion::scan::load_parquet_scan_metadata;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
-use crate::listing::utils::{NanosecondTimestamps, try_merge_normalized};
+use crate::listing::utils::{NanosecondTimestamps, list_all_files, try_merge_normalized};
 use crate::options::r#gen::ParquetReadOptions;
+use crate::url::PathGlobFilter;
 
 #[derive(Debug, Clone)]
 pub struct ParquetReadFormat {
@@ -114,16 +117,15 @@ impl ReadFormat for ParquetReadFormat {
         files: &[ListingFileSample<'_>],
         _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
-        let options = self.options.clone().into_table_options();
+        let options = self.options.clone().into_table_options()?;
         fail_for_encryption_factory(&options)?;
 
-        let coerce_int96 = options
+        let coerce_int96 = options.global.coerce_int96.map(TimeUnit::from);
+        let coerce_int96_tz = options
             .global
-            .coerce_int96
-            .as_deref()
-            .map(parse_coerce_int96_string)
-            .transpose()?;
-        let coerce_int96_tz = options.global.coerce_int96_tz.as_deref().map(Arc::from);
+            .coerce_int96_tz
+            .as_ref()
+            .map(|tz| Arc::from(tz.as_str()));
 
         let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let metadata_size_hint = options.global.metadata_size_hint;
@@ -198,7 +200,8 @@ impl ReadFormat for ParquetReadFormat {
             .config_options()
             .execution
             .time_zone
-            .as_deref()
+            .as_ref()
+            .map(|tz| tz.as_str())
             .unwrap_or("UTC");
         normalize_widened_timestamp_timezones(&mut schemas, session_timezone);
 
@@ -236,7 +239,7 @@ impl ReadFormat for ParquetReadFormat {
         file_schema: SchemaRef,
         _compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
-        let options = self.options.clone().into_table_options();
+        let options = self.options.clone().into_table_options()?;
         let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let metadata = DFParquetMetadata::new(store, object)
             .with_metadata_size_hint(options.global.metadata_size_hint)
@@ -253,7 +256,7 @@ impl ReadFormat for ParquetReadFormat {
     }
 
     async fn scan(&self, ctx: &dyn Session, mut input: ListingScanInput) -> Result<FileScanConfig> {
-        let options = self.options.clone().into_table_options();
+        let options = self.options.clone().into_table_options()?;
         fail_for_encryption_factory(&options)?;
 
         let mut source =
@@ -282,7 +285,7 @@ impl ReadFormat for ParquetReadFormat {
             .with_file_groups(input.file_groups)
             .with_constraints(input.constraints)
             .with_statistics(input.statistics)
-            .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})))
+            .with_expr_adapter(Some(SchemaEvolutionPhysicalExprAdapterFactory::shared()))
             .with_projection_indices(input.projection)?
             .with_limit(input.limit)
             .with_output_ordering(input.output_ordering)
@@ -295,6 +298,48 @@ impl ReadFormat for ParquetReadFormat {
 
     fn requires_explicit_schema_validation(&self) -> bool {
         true
+    }
+
+    async fn infer_schemas_for_validation(
+        &self,
+        ctx: &dyn Session,
+        files: &[ListingFileSample<'_>],
+        compression: CompressionTypeVariant,
+    ) -> Result<Vec<SchemaRef>> {
+        let path_glob_filter = self
+            .path_glob_filter()
+            .map(PathGlobFilter::parse)
+            .transpose()?;
+        let mut individual_files = vec![];
+        for group in files {
+            // Validation cannot use the inference sample: a later file could require
+            // a narrowing cast that the generic execution adapter would otherwise allow.
+            let objects = list_all_files(
+                group.url,
+                ctx,
+                group.store.as_ref(),
+                path_glob_filter.as_ref(),
+            )
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+            individual_files.extend(objects.into_iter().map(|object| ListingFileSample {
+                url: group.url,
+                store: Arc::clone(&group.store),
+                objects: vec![object],
+            }));
+        }
+        let concurrency: usize = ctx.config_options().execution.meta_fetch_concurrency.into();
+        futures::stream::iter(individual_files)
+            .map(|file: ListingFileSample<'_>| async move {
+                // Reuse the same footer, hint, and option handling as inference, but
+                // never merge independent files before checking the requested schema.
+                self.infer_schema(ctx, &[file], compression).await
+            })
+            .boxed() // Workaround for https://github.com/rust-lang/rust/issues/64552
+            .buffered(concurrency)
+            .try_collect()
+            .await
     }
 
     fn validate_explicit_schema(&self, schema: &Schema, physical: &Schema) -> Result<()> {
@@ -491,30 +536,63 @@ fn clear_metadata(schema: Schema) -> Schema {
         .fields()
         .iter()
         .map(|field| {
-            Arc::new(field.as_ref().clone().with_metadata(Default::default())) // clear meta
+            Arc::new(field.as_ref().clone().with_metadata(Metadata::new())) // clear meta
         })
         .collect::<Fields>();
     Schema::new(fields)
 }
 
-/// Parses `coerce_int96` setting into an Arrow [`TimeUnit`].
-///
-/// This is adapted from DataFusion's Parquet data source implementation.
-fn parse_coerce_int96_string(setting: &str) -> Result<TimeUnit> {
-    match setting.to_lowercase().as_str() {
-        "ns" => Ok(TimeUnit::Nanosecond),
-        "us" => Ok(TimeUnit::Microsecond),
-        "ms" => Ok(TimeUnit::Millisecond),
-        "s" => Ok(TimeUnit::Second),
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet `coerce_int96` setting: {setting}. Valid values are: ns, us, ms, and s."
-        ))),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hinted_int96_keeps_utc_and_non_int96_timestamps() -> Result<()> {
+        use datafusion::parquet::schema::parser::parse_message_type;
+        use datafusion::prelude::SessionContext;
+
+        use crate::options::ResolveOptions;
+
+        let ctx = SessionContext::default();
+        ctx.state_ref()
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .time_zone = Some("America/Los_Angeles".parse()?);
+        let options = ParquetReadOptions::resolve(&ctx.state(), vec![])?.into_table_options()?;
+        let data_type = DataType::Timestamp(
+            options
+                .global
+                .coerce_int96
+                .map(TimeUnit::from)
+                .ok_or_else(|| {
+                    DataFusionError::Internal("missing default INT96 unit".to_string())
+                })?,
+            options
+                .global
+                .coerce_int96_tz
+                .as_ref()
+                .map(|tz| Arc::from(tz.as_str())),
+        );
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parse_message_type(
+            "message test { OPTIONAL INT96 ts; OPTIONAL INT64 ntz; }",
+        )?));
+        let schema = Schema::new(vec![
+            timestamp_field("ts", TimeUnit::Microsecond, None),
+            timestamp_field("ntz", TimeUnit::Microsecond, None),
+        ]);
+        let coerced = coerce_hinted_int96_timestamps(schema, &parquet_schema, &data_type);
+        assert_eq!(
+            coerced.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        );
+        assert_eq!(
+            coerced.field(1).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+        Ok(())
+    }
 
     fn timestamp_field(name: &str, unit: TimeUnit, tz: Option<&str>) -> Field {
         Field::new(name, DataType::Timestamp(unit, tz.map(Into::into)), true)

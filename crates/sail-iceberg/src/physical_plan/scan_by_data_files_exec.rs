@@ -17,7 +17,6 @@ use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
-use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -468,11 +467,12 @@ impl ScanByDataFilesState {
             .with_file_groups(file_groups)
             .with_projection_indices(self.projection.clone())?
             .with_limit(self.limit)
-            .with_expr_adapter(Some(Arc::new(
+            .with_expr_adapter(Some(
                 SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
                     StructFieldMatching::FieldId,
-                ),
-            ) as Arc<dyn PhysicalExprAdapterFactory>))
+                )
+                .shared(),
+            ))
             .build();
         if let Some(projection) = &self.input_file_projection {
             // Metadata expressions reference the projected scan columns, not the file schema.

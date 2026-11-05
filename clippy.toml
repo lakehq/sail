@@ -6,7 +6,8 @@ disallowed-types = [
     { path = "datafusion_catalog::table::TableProviderFactory" },
     { path = "datafusion_datasource::file_format::FileFormatFactory" },
     { path = "datafusion_expr::logical_plan::DdlStatement" },
-    { path = "datafusion_expr::logical_plan::DescribeTable" },
+    # DataFusion represents DESCRIBE and other catalog commands with Show.
+    { path = "datafusion_expr::logical_plan::Show" },
     { path = "datafusion_expr::logical_plan::DmlStatement" },
     { path = "datafusion_expr::logical_plan::Statement" },
     { path = "datafusion_expr::logical_plan::dml::CopyTo" },
