@@ -41,9 +41,11 @@ impl PlanResolver<'_> {
         schema
             .iter()
             .filter(|(_, field)| {
-                state
-                    .get_field_info(field.name())
-                    .is_ok_and(|info| !info.is_hidden() && info.matches(name, plan_id))
+                state.get_field_info(field.name()).is_ok_and(|info| {
+                    !info.is_hidden()
+                        && info.matches(name, plan_id)
+                        && (!self.config.case_sensitive || info.name() == name)
+                })
             })
             .map(|x| x.into())
             .collect()

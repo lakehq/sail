@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from pysail.testing.spark.utils.parity import (
+from pysail.testing._dev.spark.utils.parity import (
     assert_math_function_frames_equal,
     normalize_datetime_dtypes,
     normalize_pandas_data_frame,

@@ -2,13 +2,34 @@ use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::{Field, FieldRef};
 use datafusion_common::{DFSchemaRef, HashMap, HashSet, ScalarValue, TableReference};
-use datafusion_expr::LogicalPlan;
+use datafusion_expr::{LogicalPlan, TableSource};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::query::{CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution};
+
+/// Identifies what a catalog table read scans.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(super) struct TableSourceKey {
+    pub catalog: Option<String>,
+    pub database: Vec<String>,
+    pub name: String,
+    pub format: String,
+    pub location: Option<String>,
+    pub properties: Vec<(String, String)>,
+    pub options: Vec<(String, String)>,
+    pub temporal_options: Vec<(String, String)>,
+}
+
+struct SharedTableSource(Arc<dyn TableSource>);
+
+impl std::fmt::Debug for SharedTableSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SharedTableSource").finish_non_exhaustive()
+    }
+}
 
 /// The field information for fields in the logical plan.
 #[derive(Debug, Clone)]
@@ -63,8 +84,13 @@ pub(super) struct PlanResolverStateConfig {
 
 #[derive(Debug, Default)]
 pub(super) enum AggregateState {
+    Lateral {
+        projections: Vec<NamedExpr>,
+    },
     /// The expressions in the `GROUP BY` clause is being resolved.
-    Grouping { projections: Vec<NamedExpr> },
+    Grouping {
+        projections: Vec<NamedExpr>,
+    },
     /// The expressions in the `HAVING` clause is being resolved.
     Having {
         projections: Vec<NamedExpr>,
@@ -78,6 +104,7 @@ pub(super) enum AggregateState {
 #[derive(Debug)]
 pub(super) struct PlanResolverState {
     next_id: usize,
+    next_lateral_id: usize,
     next_origin: usize,
     /// Multipart relation names represented by opaque DataFusion qualifiers.
     relation_names: HashMap<TableReference, Vec<String>>,
@@ -115,6 +142,9 @@ pub(super) struct PlanResolverState {
     lambda_param_scopes: Vec<Vec<(String, Option<FieldRef>)>>,
     /// The named windows defined in the current query, keyed by window name.
     windows: std::collections::HashMap<String, spec::Window>,
+    /// The sources of the catalog tables read so far, shared by repeated references to
+    /// the same table within the query.
+    table_sources: HashMap<TableSourceKey, SharedTableSource>,
 }
 
 impl Default for PlanResolverState {
@@ -127,6 +157,7 @@ impl PlanResolverState {
     pub fn new() -> Self {
         Self {
             next_id: 0,
+            next_lateral_id: 0,
             next_origin: 0,
             relation_names: HashMap::new(),
             fields: HashMap::new(),
@@ -144,6 +175,7 @@ impl PlanResolverState {
             positional_param_values: Vec::new(),
             lambda_param_scopes: Vec::new(),
             windows: std::collections::HashMap::new(),
+            table_sources: HashMap::new(),
         }
     }
 
@@ -176,6 +208,31 @@ impl PlanResolverState {
         let id = self.next_id;
         self.next_id += 1;
         format!("#{id}")
+    }
+
+    /// Reserve a typed lateral binding without consuming output field IDs.
+    /// Most select lists never use these bindings, so keep their namespace separate.
+    pub fn register_lateral_field(&mut self, source: Option<&str>) -> PlanResult<String> {
+        let (origin, plan_ids) = match source {
+            Some(source) => {
+                let info = self.get_field_info(source)?;
+                (info.origin, info.plan_ids.clone())
+            }
+            None => (self.next_origin(), HashSet::new()),
+        };
+        let field_id = format!("#lateral{}", self.next_lateral_id);
+        self.next_lateral_id += 1;
+        self.fields.insert(
+            field_id.clone(),
+            FieldInfo {
+                plan_ids,
+                origin,
+                name: String::new(),
+                // Temporary bindings must not participate in wildcard expansion.
+                hidden: true,
+            },
+        );
+        Ok(field_id)
     }
 
     /// Returns a new attribute identity.
@@ -344,6 +401,13 @@ impl PlanResolverState {
         }
     }
 
+    pub fn get_lateral_projections(&self) -> &[NamedExpr] {
+        match &self.aggregate_state {
+            AggregateState::Lateral { projections } => projections,
+            _ => &[],
+        }
+    }
+
     pub fn get_projections_for_grouping(&self) -> &[NamedExpr] {
         match &self.aggregate_state {
             AggregateState::Grouping { projections } => projections.as_ref(),
@@ -394,6 +458,16 @@ impl PlanResolverState {
 
     pub fn ctes(&self) -> impl Iterator<Item = &Arc<CteInfo>> {
         self.ctes.values()
+    }
+
+    pub fn get_table_source(&self, key: &TableSourceKey) -> Option<Arc<dyn TableSource>> {
+        self.table_sources
+            .get(key)
+            .map(|source| Arc::clone(&source.0))
+    }
+
+    pub fn insert_table_source(&mut self, key: TableSourceKey, source: Arc<dyn TableSource>) {
+        self.table_sources.insert(key, SharedTableSource(source));
     }
 
     /// Returns the output attributes of the CTE definitions referenced so far.
@@ -566,6 +640,7 @@ impl Drop for MissingInputScope<'_> {
 pub(crate) struct QueryScope<'a> {
     state: &'a mut PlanResolverState,
     previous_outer_query_schema: Option<DFSchemaRef>,
+    previous_aggregate_state: AggregateState,
 }
 
 impl<'a> QueryScope<'a> {
@@ -575,9 +650,12 @@ impl<'a> QueryScope<'a> {
         // directly recovered inputs become visible to correlation in either order.
         let schema = PlanResolver::local_schema(&schema, state);
         let previous_outer_query_schema = state.outer_query_schema.replace(schema);
+        // Select aliases and grouping bindings belong to their own query scope.
+        let previous_aggregate_state = std::mem::take(&mut state.aggregate_state);
         Self {
             state,
             previous_outer_query_schema,
+            previous_aggregate_state,
         }
     }
 
@@ -589,6 +667,7 @@ impl<'a> QueryScope<'a> {
 impl Drop for QueryScope<'_> {
     fn drop(&mut self) {
         self.state.outer_query_schema = self.previous_outer_query_schema.take();
+        self.state.aggregate_state = std::mem::take(&mut self.previous_aggregate_state);
     }
 }
 

@@ -22,6 +22,7 @@ tokio = { workspace = true }
 moka = { workspace = true }
 url = { workspace = true }
 log = { workspace = true }
+base64 = { workspace = true }
 
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-common = { path = "../sail-common" }

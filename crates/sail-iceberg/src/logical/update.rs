@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion_common::Result;
 use datafusion_expr::{Extension, LogicalPlan};
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, OPERATION_COLUMN, RowLevelCommand,
     RowLevelOperationType, RowLevelWriteMode, UpdateInfo,
@@ -78,6 +79,7 @@ pub(crate) fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
         expanded.target().clone(),
         Arc::new(datafusion_common::DFSchema::empty()),
     )
+    .with_output(CommandOutput::Empty)
     .with_expected_snapshot_id(Some(snapshot_id));
     Ok(LogicalPlan::Extension(Extension {
         node: Arc::new(node),

@@ -24,6 +24,7 @@ use sail_common_datafusion::catalog::{
 use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
     BucketBy, CATALOG_TABLE_OPTION, DataSource, DeltaCheckConstraintExpr, DeltaConstraintViolation,
     OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, create_sort_order,
@@ -129,6 +130,7 @@ impl DataSource for DeltaLakeSource {
         };
         let SinkInfo {
             input,
+            sql_insert,
             mode,
             partition_by,
             bucket_by,
@@ -160,6 +162,11 @@ impl DataSource for DeltaLakeSource {
             node: Arc::new(DeltaWriteNode::new(
                 Arc::new(input),
                 DeltaWriteNodeOptions {
+                    output: if sql_insert {
+                        CommandOutput::Empty
+                    } else {
+                        CommandOutput::Count
+                    },
                     path,
                     mode,
                     partition_by,
@@ -690,6 +697,7 @@ fn delta_alter_operation_name(operation: &LakeSourceAlterTableOperation) -> &'st
 #[derive(Clone, Debug, Educe)]
 #[educe(PartialEq, Eq, Hash, PartialOrd)]
 pub struct DeltaWriteNodeOptions {
+    pub output: CommandOutput,
     pub path: String,
     pub mode: SinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
@@ -713,8 +721,8 @@ impl DeltaWriteNode {
     pub fn new(input: Arc<LogicalPlan>, options: DeltaWriteNodeOptions) -> Self {
         Self {
             input,
+            schema: options.output.df_schema(),
             options,
-            schema: Arc::new(DFSchema::empty()),
         }
     }
 
@@ -761,6 +769,7 @@ pub(crate) async fn plan_delta_write(
     node: &DeltaWriteNode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let DeltaWriteNodeOptions {
+        output,
         path,
         mode,
         partition_by,
@@ -856,7 +865,7 @@ pub(crate) async fn plan_delta_write(
         }
         PhysicalSinkMode::IgnoreIfExists if table_exists => {
             return Ok(Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
-                physical_input.schema(),
+                output.schema(),
             )));
         }
         _ => {}
@@ -954,6 +963,7 @@ pub(crate) async fn plan_delta_write(
         None,
         table_exists,
     )
+    .with_output(output)
     .with_generation_expressions(extract_generation_expressions(Some(logical_schema)))
     .with_default_expressions(extract_default_expressions(Some(logical_schema)))
     .with_target_nullability(extract_target_nullability(Some(logical_schema)))

@@ -185,6 +185,7 @@ pub(crate) async fn build_row_level_rewrite_plan(
         ctx.options().user_metadata.clone(),
         write_context,
         ctx.lakehouse_table().cloned(),
+        ctx.config().output,
     )
 }
 
@@ -351,17 +352,20 @@ pub(crate) async fn assemble_row_level_mor_plan(
         commit_input
     };
 
-    Ok(Arc::new(DeltaCommitExec::new(
-        Arc::new(CoalescePartitionsExec::new(commit_input)),
-        ctx.table_url().clone(),
-        partition_columns,
-        true,
-        table_schema,
-        PhysicalSinkMode::Append,
-        ctx.options().user_metadata.clone(),
-        write_context.commit_context.clone(),
-        ctx.lakehouse_table().cloned(),
-    )))
+    Ok(Arc::new(
+        DeltaCommitExec::new(
+            Arc::new(CoalescePartitionsExec::new(commit_input)),
+            ctx.table_url().clone(),
+            partition_columns,
+            true,
+            table_schema,
+            PhysicalSinkMode::Append,
+            ctx.options().user_metadata.clone(),
+            write_context.commit_context.clone(),
+            ctx.lakehouse_table().cloned(),
+        )
+        .with_output(ctx.config().output),
+    ))
 }
 
 pub(super) fn hash_repartition_by_column(

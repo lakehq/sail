@@ -259,7 +259,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_sum"
+        "success": "ok"
       }
     }
   ]

@@ -251,6 +251,8 @@ impl SourceInfo {
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
     pub input: LogicalPlan,
+    /// SQL INSERT has a format-selected result, unlike CTAS and internal writes.
+    pub sql_insert: bool,
     pub mode: SinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,

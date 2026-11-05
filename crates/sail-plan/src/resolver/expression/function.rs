@@ -11,6 +11,7 @@ use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::explode::Explode;
 use sail_function::scalar::multi_expr::MultiExpr;
+use sail_function::scalar::vector::norm::VectorNorm;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
@@ -262,7 +263,7 @@ impl PlanResolver<'_> {
         // When `COUNT(DISTINCT *)` is used, expand the wildcard display names
         // to individual column names so the output header matches Spark JVM behavior
         // (e.g., `count(DISTINCT a, b, c)` instead of `count(DISTINCT *)`).
-        let argument_display_names =
+        let mut argument_display_names =
             if is_distinct && argument_display_names.iter().any(|n| n == "*") {
                 schema
                     .columns()
@@ -279,6 +280,13 @@ impl PlanResolver<'_> {
             } else {
                 argument_display_names
             };
+        // Only the built-in norm displays its default degree, not same-named UDFs.
+        if let Expr::ScalarFunction(function) = &func
+            && function.func.inner().is::<VectorNorm>()
+            && function.args.len() == 1
+        {
+            argument_display_names.push("2.0".to_string());
+        }
         let service = self.ctx.extension::<PlanService>()?;
         // A single-field inline uses the scalar rewrite path, so preserve its
         // default field name here. Explicit aliases are applied by the caller.

@@ -312,12 +312,15 @@ class ArrayConverter(Converter):
         offsets = array.offsets.to_pylist()
         valid = array.is_valid().to_pylist()
         result = []
+        # Flattening removes the slice prefix and children of null lists.
+        start = 0
         for i in range(len(array)):
             if not valid[i]:
                 result.append(None)
             else:
-                (start, end) = (offsets[i], offsets[i + 1])
+                end = start + offsets[i + 1] - offsets[i]
                 result.append(values[start:end])
+                start = end
         return result
 
     def from_pyspark(self, data: Sequence[Any]) -> pa.Array:

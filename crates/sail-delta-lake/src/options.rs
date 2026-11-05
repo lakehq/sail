@@ -223,6 +223,7 @@ mod tests {
             .build()?;
         let info = SinkInfo {
             input: input.clone(),
+            sql_insert: false,
             mode: SinkMode::OverwriteIf {
                 condition: Box::new(ExprWithSource::new(col("p").eq(lit(1)), None)),
             },
