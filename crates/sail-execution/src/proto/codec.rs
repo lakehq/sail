@@ -32,11 +32,13 @@ use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::functions::string::repeat::RepeatFunc;
 use datafusion::functions_nested::extract::ArrayElement;
 use datafusion::functions_nested::map_extract::MapExtract;
-use datafusion::functions_window::cume_dist::cume_dist_udwf;
-use datafusion::functions_window::lead_lag::{lag_udwf, lead_udwf};
-use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf, nth_value_udwf};
-use datafusion::functions_window::rank::{dense_rank_udwf, percent_rank_udwf, rank_udwf};
-use datafusion::functions_window::row_number::row_number_udwf;
+use datafusion::functions_window::cume_dist::{CumeDist, cume_dist_udwf};
+use datafusion::functions_window::lead_lag::{WindowShift, lag_udwf, lead_udwf};
+use datafusion::functions_window::nth_value::{
+    NthValue, first_value_udwf, last_value_udwf, nth_value_udwf,
+};
+use datafusion::functions_window::rank::{Rank, dense_rank_udwf, percent_rank_udwf, rank_udwf};
+use datafusion::functions_window::row_number::{RowNumber, row_number_udwf};
 use datafusion::logical_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
 };
@@ -203,7 +205,9 @@ use sail_function::scalar::geo::st_asbinary::StAsBinary;
 use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
 use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
-use sail_function::scalar::json::{JsonObjectKeys, SparkFromJson, SparkSchemaOfJson, SparkToJson};
+use sail_function::scalar::json::{
+    JsonAsText, JsonLength, JsonObjectKeys, SparkFromJson, SparkSchemaOfJson, SparkToJson,
+};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
@@ -3969,7 +3973,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
-            "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
+            "date_trunc" | "datetrunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
             "spark_time_trunc" | "time_trunc" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTimeTrunc::new())))
@@ -4061,8 +4065,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
             || node_inner.is::<LeastFunc>()
-            || node_inner.is::<JsonObjectKeys>()
-            || node_inner.is::<JsonTuple>()
             || node_inner.is::<FormatNumber>()
             || node_inner.is::<Levenshtein>()
             || node_inner.is::<Randstr>()
@@ -4174,10 +4176,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
             || node_inner.is::<Xpath>()
-            || matches!(node.name(), "date_part" | "datepart" | "extract")
-            || node.name() == "json_as_text"
-            || node.name() == "json_len"
-            || node.name() == "json_length"
+            || node_inner.is::<JsonAsText>()
+            || node_inner.is::<JsonLength>()
+            || node_inner.is::<JsonObjectKeys>()
+            || node_inner.is::<JsonTuple>()
         {
             UdfKind::Standard(r#gen::StandardUdf {})
         } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromArrays>() {
@@ -4720,14 +4722,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
-        let udwf_kind = if node.inner().is::<SparkNtile>() {
-            UdwfKind::Standard(r#gen::StandardUdwf {})
-        } else if let Some(func) = node.inner().downcast_ref::<SparkFirstLastValue>() {
+        let udwf_kind = if let Some(func) = node.inner().downcast_ref::<SparkFirstLastValue>() {
             UdwfKind::SparkFirstLastValue(r#gen::SparkFirstLastValueUdwf {
                 first: matches!(func.kind(), SparkFirstLastValueKind::First),
                 ignore_nulls: func.ignore_nulls(),
             })
-        } else if matches!(
+        } else if node.inner().is::<SparkNtile>()
+            || node.inner().is::<CumeDist>()
+            // Rank implements rank, dense_rank, and percent_rank.
+            || node.inner().is::<Rank>()
+            // NthValue implements first_value, last_value, and nth_value.
+            || node.inner().is::<NthValue>()
+            // WindowShift implements lag and lead.
+            || node.inner().is::<WindowShift>()
+            || node.inner().is::<RowNumber>()
+            || matches!(
+            // Keep name matching as a fallback if upstream splits these into separate implementations.
             node.name(),
             "cume_dist"
                 | "dense_rank"
@@ -6265,6 +6275,8 @@ mod tests {
     use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
     use datafusion::arrow::datatypes::{Schema, SchemaRef};
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion::functions::datetime::date_part::DatePartFunc;
+    use datafusion::functions::datetime::date_trunc::DateTruncFunc;
     use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
     use datafusion::physical_expr::HigherOrderFunctionExpr;
     use datafusion::physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode;
@@ -7955,11 +7967,32 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_spark_date_part_udf() -> Result<()> {
-        let decoded = round_trip_udf(ScalarUDF::from(SparkDatePart::new()))?;
-
-        assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
-        assert_eq!(decoded.name(), "date_part");
+    fn test_round_trip_datetime_udfs_preserves_implementation() -> Result<()> {
+        for udf in [
+            ScalarUDF::from(SparkDatePart::new()),
+            ScalarUDF::from(DatePartFunc::new()),
+            ScalarUDF::from(SparkDateTrunc::new()),
+            ScalarUDF::from(DateTruncFunc::new()),
+        ] {
+            let decoded = round_trip_udf(udf.clone())?;
+            assert_eq!(decoded.name(), udf.name());
+            assert_eq!(
+                decoded.inner().is::<SparkDatePart>(),
+                udf.inner().is::<SparkDatePart>()
+            );
+            assert_eq!(
+                decoded.inner().is::<DatePartFunc>(),
+                udf.inner().is::<DatePartFunc>()
+            );
+            assert_eq!(
+                decoded.inner().is::<SparkDateTrunc>(),
+                udf.inner().is::<SparkDateTrunc>()
+            );
+            assert_eq!(
+                decoded.inner().is::<DateTruncFunc>(),
+                udf.inner().is::<DateTruncFunc>()
+            );
+        }
 
         Ok(())
     }
