@@ -37,7 +37,7 @@ use datafusion::functions_window::lead_lag::{WindowShift, lag_udwf, lead_udwf};
 use datafusion::functions_window::nth_value::{
     NthValue, first_value_udwf, last_value_udwf, nth_value_udwf,
 };
-use datafusion::functions_window::rank::{Rank, dense_rank_udwf, percent_rank_udwf, rank_udwf};
+use datafusion::functions_window::rank::{dense_rank_udwf, percent_rank_udwf, rank_udwf};
 use datafusion::functions_window::row_number::{RowNumber, row_number_udwf};
 use datafusion::logical_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
@@ -4441,7 +4441,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
                 "percentile" => Ok(Arc::new(AggregateUDF::from(PercentileFunction::new()))),
-                "percentile_approx" => {
+                "percentile_approx" | "approx_percentile" => {
                     Ok(Arc::new(AggregateUDF::from(ApproxPercentileCont::new())))
                 }
                 "product" => Ok(Arc::new(AggregateUDF::from(ProductFunction::new()))),
@@ -4734,8 +4734,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if node.inner().is::<SparkNtile>()
             || node.inner().is::<CumeDist>()
-            // Rank implements rank, dense_rank, and percent_rank.
-            || node.inner().is::<Rank>()
+            // Rank::new accepts custom names. Matching every Rank by type would bypass
+            // the function registry and send unknown names to the built-in decoder.
+            // Keep rank, dense_rank, and percent_rank covered by the name checks below.
+            // || node.inner().is::<Rank>()
             // NthValue implements first_value, last_value, and nth_value.
             || node.inner().is::<NthValue>()
             // WindowShift implements lag and lead.
@@ -8030,6 +8032,61 @@ mod tests {
         assert_eq!(func.kind(), SparkFirstLastValueKind::Last);
         assert!(func.ignore_nulls());
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_custom_named_rank_udwfs() -> Result<()> {
+        use datafusion::logical_expr::registry::FunctionRegistry;
+        use datafusion::functions_window::rank::{Rank, RankType};
+        use datafusion::logical_expr::{WindowFrame, WindowFunctionDefinition};
+        use datafusion::physical_expr::window::StandardWindowExpr;
+        use datafusion::physical_plan::windows::{WindowUDFExpr, create_window_expr};
+        use datafusion_proto::physical_plan::from_proto::parse_physical_window_expr;
+        use datafusion_proto::physical_plan::to_proto::serialize_physical_window_expr;
+        use datafusion_proto::physical_plan::DefaultPhysicalProtoConverter;
+
+        for rank_type in [RankType::Basic, RankType::Dense, RankType::Percent] {
+            let udwf = Arc::new(WindowUDF::from(Rank::new(
+                "custom_rank".to_string(),
+                rank_type,
+            )));
+            let schema = Arc::new(Schema::empty());
+            let expr = create_window_expr(
+                &WindowFunctionDefinition::WindowUDF(Arc::clone(&udwf)),
+                "result".to_string(),
+                &[],
+                &[],
+                &[],
+                Arc::new(WindowFrame::new(None)),
+                Arc::clone(&schema),
+                false,
+                false,
+                None,
+            )?;
+            let codec = RemoteExecutionCodec;
+            let converter = DefaultPhysicalProtoConverter {};
+            let proto = serialize_physical_window_expr(&expr, &codec, &converter)?;
+            let mut task_context = TaskContext::default();
+            task_context.register_udwf(Arc::clone(&udwf))?;
+            let decode_context = PhysicalPlanDecodeContext::new(&task_context, &codec);
+            let decoded = parse_physical_window_expr(
+                &proto,
+                &decode_context,
+                schema.as_ref(),
+                &converter,
+            )?;
+            let decoded = decoded
+                .as_any()
+                .downcast_ref::<StandardWindowExpr>()
+                .ok_or_else(|| plan_datafusion_err!("expected a standard window expression"))?;
+            let decoded = decoded
+                .get_standard_func_expr()
+                .as_any()
+                .downcast_ref::<WindowUDFExpr>()
+                .ok_or_else(|| plan_datafusion_err!("expected a window UDF expression"))?;
+            assert!(Arc::ptr_eq(decoded.fun(), &udwf), "rank type: {rank_type:?}");
+        }
         Ok(())
     }
 
