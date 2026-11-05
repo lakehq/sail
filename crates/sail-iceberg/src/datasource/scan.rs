@@ -914,14 +914,20 @@ impl IcebergScan {
                             }),
                             min_value: if matches!(scalar, ScalarValue::Float32(Some(value)) if value.is_nan()) || matches!(scalar, ScalarValue::Float64(Some(value)) if value.is_nan()) { Precision::Absent } else { Precision::Exact(scalar.clone()) },
                             max_value: if matches!(scalar, ScalarValue::Float32(Some(value)) if value.is_nan()) || matches!(scalar, ScalarValue::Float64(Some(value)) if value.is_nan()) { Precision::Absent } else { Precision::Exact(scalar) },
-                            // An identity partition column costs next to nothing to read: a
-                            // file either does not store it, or stores one value for every
-                            // row. So a missing size counts as nothing, whichever of the two
-                            // or a metrics mode of `none` is behind it, and reading the column
-                            // does not send the scan back to the size of the whole file.
+                            // A missing size does not make the column unknown: a file either
+                            // does not store it or stores one value for every row, whichever
+                            // of the two or a metrics mode of `none` is behind it, so reading
+                            // the column does not send the scan back to the size of the whole
+                            // file. Only the output of the column is left to count.
                             byte_size: Precision::Inexact(
-                                Self::column_byte_size(data_file.column_sizes(), field)
-                                    .unwrap_or_default() as usize,
+                                Self::column_output_size(
+                                    field,
+                                    data_file.record_count(),
+                                    data_file.column_sizes(),
+                                )
+                                .unwrap_or_else(|| {
+                                    Self::offsets_size(data_file.record_count())
+                                }) as usize,
                             ),
                             ..ColumnStatistics::new_unknown()
                         };
@@ -950,9 +956,13 @@ impl IcebergScan {
                     .map(Self::bound_precision)
                     .unwrap_or(Precision::Absent);
 
-                let byte_size = Self::column_byte_size(data_file.column_sizes(), field)
-                    .map(|size| Precision::Inexact(size as usize))
-                    .unwrap_or(Precision::Absent);
+                let byte_size = Self::column_output_size(
+                    field,
+                    data_file.record_count(),
+                    data_file.column_sizes(),
+                )
+                .map(|size| Precision::Inexact(size as usize))
+                .unwrap_or(Precision::Absent);
 
                 ColumnStatistics {
                     null_count,
@@ -972,12 +982,41 @@ impl IcebergScan {
         }
     }
 
+    /// Estimated size of `field` in the output of the scan, which is what `JoinSelection`
+    /// compares when it picks the side of a hash join to build.
+    ///
+    /// A fixed-width value has a known size whatever the file compressed it to, and a
+    /// highly compressible column would otherwise look far smaller than the rows it
+    /// produces. For any other type the manifest only has the compressed bytes, so the
+    /// estimate is those bytes plus the offset that each row takes at the least.
+    fn column_output_size(
+        field: &Field,
+        rows: u64,
+        column_sizes: &HashMap<i32, u64>,
+    ) -> Option<u64> {
+        if let Some(width) = field.data_type().primitive_width() {
+            return Some(rows.saturating_mul(width as u64));
+        }
+        if let DataType::Struct(fields) = field.data_type() {
+            return fields.iter().try_fold(0u64, |total, child| {
+                Self::column_output_size(child, rows, column_sizes)
+                    .map(|size| total.saturating_add(size))
+            });
+        }
+        Self::column_byte_size(column_sizes, field)
+            .map(|size| size.saturating_add(Self::offsets_size(rows)))
+    }
+
+    /// Size of the 32-bit offsets of a variable-width array with `rows` rows.
+    fn offsets_size(rows: u64) -> u64 {
+        rows.saturating_mul(size_of::<i32>() as u64)
+    }
+
     /// On-disk size of `field` according to the manifest's `column_sizes`.
     ///
     /// Iceberg records a size per leaf column, so a nested field is the sum over its
     /// leaves unless the field itself has an entry. The sizes are compressed bytes,
-    /// the same unit as `file_size_in_bytes`, so they are only an estimate of what a
-    /// column costs once decoded.
+    /// the same unit as `file_size_in_bytes`.
     fn column_byte_size(column_sizes: &HashMap<i32, u64>, field: &Field) -> Option<u64> {
         if let Some(field_id) = iceberg_field_id(field).unwrap_or_default()
             && let Some(size) = column_sizes.get(&field_id)
@@ -2087,7 +2126,7 @@ mod tests {
     }
 
     #[test]
-    fn column_statistics_carry_the_manifest_column_sizes() -> Result<()> {
+    fn column_statistics_estimate_the_output_of_each_column() -> Result<()> {
         let (read_scan, file) = wide_column_fixture()?;
         let statistics = read_scan.create_file_statistics(&file);
         assert_eq!(statistics.total_byte_size, Precision::Exact(1_024_000));
@@ -2099,9 +2138,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 Precision::Inexact(8_000),
-                Precision::Inexact(12_000),
-                Precision::Inexact(1_000_000),
-                Precision::Inexact(3_000),
+                Precision::Inexact(16_000),
+                Precision::Inexact(1_004_000),
+                Precision::Inexact(14_000),
             ]
         );
 
@@ -2109,17 +2148,28 @@ mod tests {
         assert_eq!(aggregated.total_byte_size, Precision::Exact(2_048_000));
         assert_eq!(
             aggregated.column_statistics[2].byte_size,
-            Precision::Inexact(2_000_000)
+            Precision::Inexact(2_008_000)
         );
 
         let mut without_sizes = file;
         without_sizes.column_sizes.clear();
         let statistics = read_scan.create_file_statistics(&without_sizes);
-        assert!(
+        assert_eq!(
             statistics
                 .column_statistics
                 .iter()
-                .all(|column| column.byte_size == Precision::Absent)
+                .map(|column| column.byte_size)
+                .collect::<Vec<_>>(),
+            vec![
+                Precision::Inexact(8_000),
+                Precision::Absent,
+                Precision::Absent,
+                Precision::Absent,
+            ]
+        );
+        assert_eq!(
+            IcebergScan::projected_byte_size(&statistics, Some(&vec![0])),
+            Some(8_000)
         );
         assert_eq!(
             IcebergScan::projected_byte_size(&statistics, Some(&vec![0, 1])),
@@ -2134,12 +2184,27 @@ mod tests {
         let statistics = read_scan.create_file_statistics(&file);
         assert_eq!(
             IcebergScan::projected_byte_size(&statistics, Some(&vec![0, 1, 2])),
-            Some(1_020_000)
+            Some(1_028_000)
         );
         assert_eq!(
             IcebergScan::projected_byte_size(&statistics, Some(&vec![3, 2, 1, 0])),
             None
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_compressible_column_is_sized_by_the_rows_it_produces() -> Result<()> {
+        let (read_scan, mut file) = wide_column_fixture()?;
+        file.column_sizes = HashMap::from([(1, 10), (2, 5), (3, 1_000_000), (5, 1), (6, 1)]);
+        let statistics = read_scan.create_file_statistics(&file);
+        let size = |projection: Vec<usize>| {
+            IcebergScan::projected_byte_size(&statistics, Some(&projection))
+        };
+        assert_eq!(size(vec![0]), Some(8_000));
+        assert_eq!(size(vec![1]), Some(4_005));
+        assert_eq!(size(vec![0, 1]), Some(12_005));
+        assert_eq!(size(vec![3]), Some(12_001));
         Ok(())
     }
 
@@ -2277,7 +2342,7 @@ mod tests {
             Some(&vec![0, 1]),
         )
         .await?;
-        let expected = (file_size / 100 * 2) as usize;
+        let expected = 12_000 + (file_size / 100) as usize;
         assert_eq!(narrow, Precision::Inexact(expected));
         assert!(
             expected * 10 < file_size as usize,
@@ -2315,11 +2380,40 @@ mod tests {
 
         let (narrow, file_size) =
             planned_byte_size(read_scan, file, spec, Some(&vec![0, 3])).await?;
-        let expected = (file_size / 100 * 2) as usize;
+        let expected = 12_000 + (file_size / 100) as usize;
         assert_eq!(narrow, Precision::Inexact(expected));
         assert!(
             expected * 10 < file_size as usize,
             "the narrow projection must not be sized as the whole file"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_identity_partition_column_without_a_size_counts_its_offsets() -> Result<()> {
+        let spec = PartitionSpec::builder()
+            .with_spec_id(0)
+            .add_field(2, "tag", Transform::Identity)
+            .build();
+        let (read_scan, mut file) = wide_column_fixture()?;
+        let read_scan = IcebergScan::new_empty(
+            read_scan.table_uri(),
+            read_scan.schema.clone(),
+            vec![spec],
+            0,
+        )?;
+        file.partition = vec![Some(Literal::Primitive(PrimitiveLiteral::String(
+            "tag".to_string(),
+        )))];
+        file.column_sizes.remove(&2);
+        let statistics = read_scan.create_file_statistics(&file);
+        assert_eq!(
+            statistics.column_statistics[3].byte_size,
+            Precision::Inexact(4_000)
+        );
+        assert_eq!(
+            IcebergScan::projected_byte_size(&statistics, Some(&vec![0, 3])),
+            Some(12_000)
         );
         Ok(())
     }
