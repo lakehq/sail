@@ -248,7 +248,13 @@
       description: The table containing user session information.
       columns:
         - name: session_id
-          description: The unique identifier for the session.
+          description: The unique server-generated identifier for the session.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::types::string()
+          nullable: false
+        - name: client_session_id
+          description: The session identifier provided by the client.
           rust_type: String
           sql_type: STRING
           arrow_type: crate::types::string()

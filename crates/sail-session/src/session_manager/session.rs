@@ -4,7 +4,20 @@ use tokio::sync::oneshot;
 
 use crate::error::SessionResult;
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct SessionKey {
+    pub user_id: String,
+    pub client_session_id: String,
+}
+
+impl std::fmt::Display for SessionKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}:{}", self.user_id, self.client_session_id)
+    }
+}
+
 pub struct ServerSession {
+    pub session_key: SessionKey,
     pub state: ServerSessionState,
 }
 

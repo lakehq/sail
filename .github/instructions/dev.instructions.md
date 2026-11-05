@@ -64,15 +64,46 @@ We describe scenarios with `Given`, `When`, and `Then`. We assert user-facing ou
 
 The BDD tests are structured as follows:
 
-- `python/pysail/tests/**/*.feature` (test case definitions)
-- `python/pysail/tests/**/test*_features.py` (test loaders)
-- `python/pysail/testing/**/steps/*.py` (step implementations)
+- `python/pysail/tests/_dev/**/*.feature` (test case definitions)
+- `python/pysail/tests/_dev/**/test*_features.py` (test loaders)
+- `python/pysail/testing/_dev/**/steps/*.py` (step implementations)
+
+Sanity tests remain in `python/pysail/tests`. Shared helpers used by these tests live in
+`python/pysail/testing`. Development-only helpers live in `python/pysail/testing/_dev`.
+To test an installed wheel with a source checkout, set `PYSAIL_SOURCE_PATH` to the
+`python/pysail` directory in the checkout and run `pytest --pyargs pysail.tests pysail.tests._dev`.
 
 Python tests are suitable for Spark DataFrame APIs. The BDD tests should already cover Spark SQL features comprehensively, and Python unit tests additionally ensure that the _interface_ is working properly.
 
 Some BDD tests or Python tests rely on snapshot files. Run the `pytest` command with the `--snapshot-update` flag to update the snapshot files when necessary. You can combine it with the `-k` flag to only update snapshots for specific tests.
 
 Rust tests are strongly discouraged unless you are testing internal utilities whose inputs are easy to construct in Rust and whose outputs are straightforward to verify. All testing around query execution and Arrow data should be done via BDD tests or Python tests.
+
+### Spark Test Compatibility
+
+Use `pytest.mark.spark` for PySpark version requirements and JVM Spark exclusions instead of `pytest.mark.skipif`, `pytest.mark.skip`, or `pytest.skip`. The marker is handled during collection by `pysail.testing.spark.markers`.
+
+- `version` is a version specifier for the installed PySpark client, such as `">=4.1"` or `">=4.1,<4.2"`.
+- `skip_if_jvm=True` skips a test when running against JVM Spark, for example when testing a Sail extension.
+- `reason` describes the API requirement or backend difference.
+- `cross_version=True` indicates that a test should preferably run across all supported PySpark versions, subject to its version requirements and JVM Spark exclusions. Other tests generally only need to run with one supported version.
+
+Keep independent requirements as separate markers with separate reasons. Do not concatenate reasons. For example:
+
+```python
+@pytest.mark.spark(version=">=4.1", reason="Uses arrow_udf")
+@pytest.mark.spark(skip_if_jvm=True, reason="Checks Sail-specific execution plans")
+def test_arrow_udf_plan(spark):
+    ...
+```
+
+Use module-level `pytestmark` for shared requirements and `pytest.param(..., marks=pytest.mark.spark(...))` for parameter-specific requirements. Repeated version requirements must all be satisfied, and explicitly supplied boolean flags must agree across inherited markers.
+
+Test collection must work with any supported PySpark version and without building the PySail library. Import version-dependent PySpark APIs inside test functions or fixtures so tests can be collected before the `spark` marker skips unsupported versions.
+
+In test code and test helpers, import `pysail._native` and any PySail modules that load it only inside test functions or fixtures at runtime, or under `if TYPE_CHECKING:` for type annotations. Keep these imports out of module-level runtime code, including in `conftest.py`, so collection does not require the native library.
+
+In BDD feature files, use tags such as `@spark-4.1` for a minimum PySpark version and `@sail-only` for JVM Spark exclusions. These tags are converted to `spark` markers. Continue using ordinary skip mechanisms for conditions unrelated to Spark compatibility, such as platform restrictions or missing optional dependencies.
 
 ## Contributing
 

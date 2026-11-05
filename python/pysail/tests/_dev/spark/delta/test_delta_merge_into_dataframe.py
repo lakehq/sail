@@ -1,0 +1,121 @@
+import pandas as pd
+import pytest
+from pandas.testing import assert_frame_equal
+from pyspark.sql import functions as F  # noqa: N812
+
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
+
+pytestmark = pytest.mark.spark(version=">=4", reason="Uses DataFrame.mergeInto")
+
+
+def test_dataframe_merge_into_basic(spark, tmp_path):
+    table_name = "delta_merge_into_df"
+    table_path = tmp_path / "delta_merge_target"
+    table_path_literal = escape_sql_string_literal(str(table_path))
+
+    target_df = spark.createDataFrame([(1, "old"), (2, "keep")], "id INT, value STRING")
+    target_df.write.format("delta").mode("overwrite").save(str(table_path))
+
+    spark.sql(f"CREATE TABLE {table_name} (id INT, value STRING) USING DELTA LOCATION '{table_path_literal}'")
+    try:
+        source_df = spark.createDataFrame([(1, "new"), (3, "insert")], "src_id INT, src_value STRING")
+        (
+            source_df.mergeInto(table_name, F.expr("id = src_id"))
+            .whenMatched()
+            .update(assignments={"value": F.col("src_value")})
+            .whenNotMatched()
+            .insert(assignments={"id": F.col("src_id"), "value": F.col("src_value")})
+            .merge()
+        )
+
+        result = spark.table(table_name).sort("id").toPandas()
+        expected = pd.DataFrame({"id": [1, 2, 3], "value": ["new", "keep", "insert"]}).astype(
+            {"id": "int32", "value": "string"}
+        )
+        assert_frame_equal(result, expected, check_dtype=False)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_dataframe_merge_into_omitted_identity(spark, tmp_path):
+    table_name = "delta_merge_into_df_identity"
+    table_path = tmp_path / "identity_target"
+    table_path_literal = escape_sql_string_literal(str(table_path))
+    spark.sql(f"""
+        CREATE TABLE {table_name} (id BIGINT GENERATED ALWAYS AS IDENTITY, k INT, value INT)
+        USING DELTA LOCATION '{table_path_literal}'
+    """)
+    try:
+        spark.sql(f"INSERT INTO {table_name} (k,value) VALUES (1,10)")  # noqa: S608
+        source = spark.createDataFrame([(1, 11), (2, 22)], "src_k INT, src_value INT")
+        (
+            source.mergeInto(table_name, F.expr("k = src_k"))
+            .whenMatched()
+            .update(assignments={"value": F.col("src_value")})
+            .whenNotMatched()
+            .insert(assignments={"k": F.col("src_k"), "value": F.col("src_value")})
+            .merge()
+        )
+        assert spark.read.format("delta").load(str(table_path)).orderBy("k").collect() == [(1, 1, 11), (2, 2, 22)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_dataframe_merge_into_insert_all_and_delete(spark, tmp_path):
+    table_name = "delta_merge_into_df_insert_all_delete"
+    table_path = tmp_path / "delta_merge_target_insert_all_delete"
+    table_path_literal = escape_sql_string_literal(str(table_path))
+
+    target_df = spark.createDataFrame([(14, "old_tom"), (23, "old_alice"), (99, "orphan")], "id INT, name STRING")
+    target_df.write.format("delta").mode("overwrite").save(str(table_path))
+
+    spark.sql(f"CREATE TABLE {table_name} (id INT, name STRING) USING DELTA LOCATION '{table_path_literal}'")
+    try:
+        source_df = spark.createDataFrame([(14, "Tom"), (23, "Alice"), (16, "Bob")], "id INT, name STRING")
+
+        (
+            source_df.mergeInto(table_name, F.col("id") == source_df["id"])
+            .whenMatched()
+            .update(assignments={"name": source_df["name"]})
+            .whenNotMatched()
+            .insertAll()
+            .whenNotMatchedBySource()
+            .delete()
+            .merge()
+        )
+
+        result = spark.table(table_name).sort("id").toPandas()
+        expected = pd.DataFrame({"id": [14, 16, 23], "name": ["Tom", "Bob", "Alice"]}).astype(
+            {"id": "int32", "name": "string"}
+        )
+        assert_frame_equal(result, expected, check_dtype=False)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame arguments in spark.sql()")
+def test_merge_into_path_target_with_dataframe_source(spark, tmp_path):
+    table_path = tmp_path / "delta_merge_df_arg_target"
+    table_path_str = str(table_path)
+
+    target_df = spark.createDataFrame([(1, "old"), (2, "keep")], "id INT, value STRING")
+    target_df.write.format("delta").mode("overwrite").save(table_path_str)
+
+    source_df = spark.createDataFrame([(1, "new"), (3, "insert")], "id INT, value STRING")
+
+    spark.sql(
+        f"""
+        MERGE INTO delta.`{table_path_str}` AS tgt
+        USING {{src_df}} AS src
+        ON tgt.id = src.id
+        WHEN MATCHED THEN UPDATE SET tgt.value = src.value
+        WHEN NOT MATCHED THEN INSERT *
+        """,
+        src_df=source_df,
+    )
+
+    result = spark.read.format("delta").load(table_path_str).sort("id").toPandas()
+    expected = pd.DataFrame({"id": [1, 2, 3], "value": ["new", "keep", "insert"]}).astype(
+        {"id": "int32", "value": "string"}
+    )
+    assert_frame_equal(result, expected, check_dtype=False)

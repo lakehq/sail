@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -52,6 +53,7 @@ impl Actor for SessionManagerActor {
             options,
             session_factory,
             job_runner_factory,
+            session_ids: HashMap::new(),
             sessions: IndexMap::new(),
             drivers: Default::default(),
             driver_gateway,
@@ -84,26 +86,26 @@ impl Actor for SessionManagerActor {
     ) -> ActorAction {
         match message {
             SessionManagerMessage::GetOrCreateSession {
-                session_id,
+                client_session_id,
                 user_id,
                 result,
-            } => self.handle_get_or_create_session(ctx, session_id, user_id, result),
+            } => self.handle_get_or_create_session(ctx, client_session_id, user_id, result),
             SessionManagerMessage::CompleteSessionCreation {
                 session_id,
-                user_id,
                 context,
                 driver_id,
                 activation,
-            } => self.handle_complete_session_creation(
-                ctx, session_id, user_id, context, driver_id, activation,
-            ),
+            } => self
+                .handle_complete_session_creation(ctx, session_id, context, driver_id, activation),
             SessionManagerMessage::ProbeIdleSession {
                 session_id,
                 instant,
             } => self.handle_probe_idle_session(ctx, session_id, instant),
-            SessionManagerMessage::DeleteSession { session_id, result } => {
-                self.handle_delete_session(ctx, session_id, result)
-            }
+            SessionManagerMessage::DeleteSession {
+                client_session_id,
+                user_id,
+                result,
+            } => self.handle_delete_session(ctx, client_session_id, user_id, result),
             SessionManagerMessage::SetSessionFailure { session_id } => {
                 self.handle_set_session_failure(ctx, session_id)
             }
