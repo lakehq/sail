@@ -2,6 +2,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use arrow::datatypes::{Decimal128Type, Decimal256Type};
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/mode.rs>
 use datafusion::arrow::array::{
     Array, ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray,
@@ -146,7 +147,12 @@ impl AggregateUDFImpl for ModeFunction {
                     data_type, tie_break,
                 ))
             }
-
+            DataType::Decimal128(_, _) => Box::new(
+                PrimitiveModeAccumulator::<Decimal128Type>::new(data_type, tie_break),
+            ),
+            DataType::Decimal256(_, _) => Box::new(
+                PrimitiveModeAccumulator::<Decimal256Type>::new(data_type, tie_break),
+            ),
             DataType::Float16 => Box::new(FloatModeAccumulator::<Float16Type>::new(
                 data_type, tie_break,
             )),
