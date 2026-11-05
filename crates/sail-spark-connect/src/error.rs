@@ -49,6 +49,22 @@ pub enum SparkError {
     AnalysisError(String),
     #[error("parse error: {0}")]
     ParseError(String),
+    // https://github.com/apache/spark/blob/v4.2.1/common/utils/src/main/resources/error/error-conditions.json#L3876
+    #[error("The handle {0} is invalid. {1}")]
+    InvalidHandle(String, InvalidHandle),
+}
+
+// https://github.com/apache/spark/blob/v4.2.1/common/utils/src/main/resources/error/error-conditions.json#L3879-L3913
+#[derive(Debug, Error)]
+pub enum InvalidHandle {
+    #[error("Handle must be an UUID string of the format '00112233-4455-6677-8899-aabbccddeeff'")]
+    Format,
+    #[error("The existing Spark server driver instance has restarted. Please reconnect.")]
+    SessionChanged,
+    #[error("Session was closed.")]
+    SessionClosed,
+    #[error("Session not found.")]
+    SessionNotFound,
 }
 
 impl SparkError {
@@ -147,6 +163,12 @@ impl From<SessionError> for SparkError {
             SessionError::DataFusionError(e) => SparkError::DataFusionError(e),
             SessionError::IoError(e) => SparkError::IoError(e),
             SessionError::InvalidArgument(message) => SparkError::InvalidArgument(message),
+            SessionError::NotFound(session_id) => {
+                SparkError::InvalidHandle(session_id, InvalidHandle::SessionNotFound)
+            }
+            SessionError::NotRunning(session_id) => {
+                SparkError::InvalidHandle(session_id, InvalidHandle::SessionClosed)
+            }
             SessionError::InternalError(message) => SparkError::InternalError(message),
         }
     }
@@ -237,6 +259,7 @@ pub(crate) enum SparkThrowable {
     #[expect(dead_code)]
     SparkUpgradeException(String),
     SparkException(String),
+    SparkSQLException(String, SparkErrorClass),
     PythonException(String),
 }
 
@@ -256,6 +279,7 @@ impl SparkThrowable {
             | SparkThrowable::SparkRuntimeException(message)
             | SparkThrowable::SparkUpgradeException(message)
             | SparkThrowable::SparkException(message)
+            | SparkThrowable::SparkSQLException(message, _)
             | SparkThrowable::PythonException(message) => message,
         }
     }
@@ -285,8 +309,42 @@ impl SparkThrowable {
             SparkThrowable::SparkRuntimeException(_) => "org.apache.spark.SparkRuntimeException",
             SparkThrowable::SparkUpgradeException(_) => "org.apache.spark.SparkUpgradeException",
             SparkThrowable::SparkException(_) => "org.apache.spark.SparkException",
+            SparkThrowable::SparkSQLException(_, _) => "org.apache.spark.SparkSQLException",
             SparkThrowable::PythonException(_) => "org.apache.spark.api.python.PythonException",
         }
+    }
+
+    pub fn error_class(&self) -> Option<&SparkErrorClass> {
+        match self {
+            SparkThrowable::SparkSQLException(_, error_class) => Some(error_class),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SparkErrorClass {
+    pub name: &'static str,
+    pub message_parameters: HashMap<&'static str, String>,
+    pub sql_state: &'static str,
+}
+
+impl SparkErrorClass {
+    fn invalid_handle(handle: &str, sub_class: &InvalidHandle) -> Self {
+        SparkErrorClass {
+            name: match sub_class {
+                InvalidHandle::Format => "INVALID_HANDLE.FORMAT",
+                InvalidHandle::SessionChanged => "INVALID_HANDLE.SESSION_CHANGED",
+                InvalidHandle::SessionClosed => "INVALID_HANDLE.SESSION_CLOSED",
+                InvalidHandle::SessionNotFound => "INVALID_HANDLE.SESSION_NOT_FOUND",
+            },
+            message_parameters: HashMap::from([("handle", handle.to_string())]),
+            sql_state: "HY000",
+        }
+    }
+
+    fn message(&self, detail: &impl std::fmt::Display) -> String {
+        format!("[{}] {detail} SQLSTATE: {}", self.name, self.sql_state)
     }
 }
 
@@ -301,6 +359,13 @@ impl SparkThrowable {
 /// (3x + 4/3x). A cap of 2500 bytes leaves room for `ErrorInfo` details and other
 /// gRPC headers in addition to the duplicated status message.
 const MAX_GRPC_STATUS_MESSAGE_LEN: usize = 2500;
+
+/// The maximum size of metadata fields in `ErrorInfo`.
+///
+/// Matches the default of Spark's `spark.connect.grpc.maxMetadataSize`.
+/// Like Spark, `errorClass` and `messageParameters` are omitted together
+/// when the serialized parameters exceed this size.
+const MAX_METADATA_SIZE: usize = 1024;
 
 const TRUNCATED_MARKER: &str = "\n[truncated]\n";
 
@@ -335,6 +400,15 @@ impl From<SparkThrowable> for Status {
         let mut metadata = HashMap::new();
         // We do not add the "stackTrace" field since the Java stack trace is not available.
         metadata.insert("classes".into(), format!("[\"{class}\"]"));
+
+        if let Some(error_class) = throwable.error_class() {
+            let message_parameters = serde_json::json!(error_class.message_parameters).to_string();
+            if message_parameters.len() <= MAX_METADATA_SIZE {
+                metadata.insert("errorClass".into(), error_class.name.to_string());
+                metadata.insert("messageParameters".into(), message_parameters);
+            }
+            metadata.insert("sqlState".into(), error_class.sql_state.to_string());
+        }
 
         let mut details = ErrorDetails::new();
         details.set_error_info(class, "org.apache.spark", metadata);
@@ -461,6 +535,10 @@ impl From<SparkError> for Status {
             }
             SparkError::AnalysisError(s) => SparkThrowable::AnalysisException(s).into(),
             SparkError::ParseError(s) => SparkThrowable::ParseException(s).into(),
+            ref e @ SparkError::InvalidHandle(ref handle, ref sub_class) => {
+                let error_class = SparkErrorClass::invalid_handle(handle, sub_class);
+                SparkThrowable::SparkSQLException(error_class.message(e), error_class).into()
+            }
             e @ SparkError::SendError(_) => {
                 Status::cancelled(truncate_grpc_message(&e.to_string()))
             }
@@ -488,6 +566,42 @@ mod tests {
         assert!(truncated.starts_with("python traceback start\n"));
         assert!(truncated.contains(TRUNCATED_MARKER));
         assert!(truncated.ends_with("[UDTF_ARROW_TYPE_CONVERSION_ERROR]\n"));
+    }
+
+    #[test]
+    fn error_class_metadata_is_added() -> Result<(), String> {
+        let sid = "00000000-0000-0000-0000-000000000000".to_string();
+        let status = Status::from(SparkError::InvalidHandle(sid, InvalidHandle::SessionClosed));
+        let info = status
+            .get_details_error_info()
+            .ok_or("missing error info")?;
+        let error_class = info.metadata.get("errorClass");
+        assert_eq!(
+            error_class.ok_or("missing error class")?,
+            "INVALID_HANDLE.SESSION_CLOSED"
+        );
+        let message_parameters = info.metadata.get("messageParameters");
+        assert_eq!(
+            message_parameters.ok_or("missing message parameters")?,
+            "{\"handle\":\"00000000-0000-0000-0000-000000000000\"}"
+        );
+        let sql_state = info.metadata.get("sqlState");
+        assert_eq!(sql_state.ok_or("missing sql state")?, "HY000");
+        Ok(())
+    }
+
+    #[test]
+    fn oversized_message_parameters_are_omitted() -> Result<(), String> {
+        let sid = "x".repeat(MAX_METADATA_SIZE + 1);
+        let status = Status::from(SparkError::InvalidHandle(sid, InvalidHandle::SessionClosed));
+        let info = status
+            .get_details_error_info()
+            .ok_or("missing error info")?;
+        assert!(!info.metadata.contains_key("errorClass"));
+        assert!(!info.metadata.contains_key("messageParameters"));
+        let sql_state = info.metadata.get("sqlState");
+        assert_eq!(sql_state.ok_or("missing sql state")?, "HY000");
+        Ok(())
     }
 
     #[test]
