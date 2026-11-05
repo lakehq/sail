@@ -48,18 +48,21 @@ def data(identity):
     return _data
 
 
+@pytest.mark.spark(cross_version=True)
 def test_query_fails_when_session_timeout_precedes_heartbeat(bad_sessions, data):
     spark = bad_sessions.create()
     with pytest.raises(SparkConnectGrpcException):
         data(spark).collect()
 
 
+@pytest.mark.spark(cross_version=True)
 def test_command_fails_when_session_timeout_precedes_heartbeat(bad_sessions, data):
     spark = bad_sessions.create()
     with pytest.raises(SparkConnectGrpcException):
         data(spark).write.format("noop").mode("overwrite").save()
 
 
+@pytest.mark.spark(cross_version=True)
 def test_query_succeeds_when_heartbeat_precedes_session_timeout(good_sessions, data):
     spark = good_sessions.create()
     assert data(spark).collect() == [Row(id=0)]
@@ -67,6 +70,7 @@ def test_query_succeeds_when_heartbeat_precedes_session_timeout(good_sessions, d
     assert spark.range(1).count() == 1
 
 
+@pytest.mark.spark(cross_version=True)
 def test_command_succeeds_when_heartbeat_precedes_session_timeout(good_sessions, data):
     spark = good_sessions.create()
     data(spark).write.format("noop").mode("overwrite").save()

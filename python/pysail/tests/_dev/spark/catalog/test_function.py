@@ -113,6 +113,7 @@ def test_list_functions_has_metadata_for_built_ins(spark):
         assert functions[name].description
 
 
+@pytest.mark.spark(cross_version=True)
 def test_list_functions_includes_user_registered_udfs(spark):
     function_name = "catalog_add_one"
     spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {function_name}")
@@ -275,6 +276,7 @@ def test_get_missing_or_qualified_builtin_function(spark, name):
 @pytest.mark.xfail(
     not is_jvm_spark(), reason="Catalog.getFunction is not implemented", raises=AnalysisException, strict=True
 )
+@pytest.mark.spark(cross_version=True)
 def test_get_python_function_metadata(spark, python_function):
     function = spark.catalog.getFunction(python_function)
     assert function.name == python_function
@@ -285,6 +287,7 @@ def test_get_python_function_metadata(spark, python_function):
 
 # Adapted from Spark 3 (3.5.9): pyspark/sql/tests/connect/test_parity_catalog.py,
 # CatalogParityTests.test_list_functions; uses built-ins/Python UDFs instead of persistent Java functions.
+@pytest.mark.spark(cross_version=True)
 def test_list_python_functions_in_namespaces(spark, python_function):
     database = f"functions_{uuid.uuid4().hex}"
     spark.sql(f"CREATE DATABASE {database}")

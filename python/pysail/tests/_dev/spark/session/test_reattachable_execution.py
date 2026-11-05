@@ -8,7 +8,6 @@ from pyspark.sql.connect import proto as pb
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.session import spark_session_factory
-from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 @pytest.fixture(scope="module")
@@ -21,7 +20,8 @@ def fail():
     return _fail
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail only")
+@pytest.mark.spark(skip_if_jvm=True, reason="Tests Sail execution error handling without reattachment")
+@pytest.mark.spark(cross_version=True)
 def test_execution_error_without_reattachment(remote, fail):
     """Error handling for reattachable execution (the default) is exercised frequently in other tests.
     This test ensures that the error can still be propagated for (non-default) non-reattachable execution.

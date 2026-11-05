@@ -1,9 +1,6 @@
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
-if is_jvm_spark():
-    pytest.skip("Sail streaming tests", allow_module_level=True)
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Tests Sail streaming query behavior")
 
 
 def test_streaming_query(spark):

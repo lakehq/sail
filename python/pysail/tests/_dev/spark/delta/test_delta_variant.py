@@ -8,13 +8,11 @@ import pyarrow.parquet as pq
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
 
-from pysail.testing.spark.utils.common import pyspark_version
-
 if TYPE_CHECKING:
     from pathlib import Path
 
 
-pytestmark = pytest.mark.skipif(pyspark_version() < (4,), reason="Variant SQL functions require PySpark 4+")
+pytestmark = pytest.mark.spark(version=">=4", reason="Uses VARIANT SQL functions")
 
 
 def _write_shredded_variant_delta_table(table_location: Path) -> None:

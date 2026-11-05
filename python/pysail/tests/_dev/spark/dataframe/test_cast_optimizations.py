@@ -291,7 +291,7 @@ def test_tinyint_try_cast_preserves_overflow_nulls(spark, ansi):
         assert [row[0] for row in result] == [None, -128, -1, 0, 127, None, None]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail physical expression schema must match its analyzed schema")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail physical expression schema must match its analyzed schema")
 @pytest.mark.parametrize("ansi", [False, True])
 @pytest.mark.parametrize("nullable", [False, True])
 def test_mixed_arithmetic_keeps_analyzed_protocol_arrow_nullability_and_metadata(spark, ansi, nullable):

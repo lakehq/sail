@@ -239,7 +239,7 @@ def test_create_or_replace_table_as_select(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark does not handle v1 and v2 tables properly")
 def test_save_as_table_append_creates_table(spark):
     # `saveAsTable` with `mode="append"` should create the table if it does not exist.
     df = spark.createDataFrame([(1, "Alice"), (2, "Bob")], schema="id LONG, name STRING")
@@ -258,7 +258,7 @@ def test_save_as_table_append_creates_table(spark):
     assert_frame_equal(actual, expected)
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark does not handle v1 and v2 tables properly")
 def test_write_to(spark, tmp_path):
     location = str(tmp_path / "t3")
     df = spark.createDataFrame([(2002, "Bob")], schema="id LONG, name STRING")
@@ -328,6 +328,7 @@ def test_write_options(spark, tmp_path):
     ]
 
 
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark cannot infer partition columns when reading paths")
 def test_write_with_partition_columns(spark, tmp_path):
     location = str(tmp_path / "t5")
     spark.sql(f"""
@@ -346,9 +347,6 @@ def test_write_with_partition_columns(spark, tmp_path):
         (42, "foo"),
     ]
 
-    if is_jvm_spark():
-        pytest.skip("Spark cannot infer partition columns when reading paths")
-
     assert spark.read.parquet(location).select("a", "b").collect() == [
         ("42", "foo"),
     ]
@@ -361,17 +359,17 @@ def test_write_with_partition_columns(spark, tmp_path):
         pytest.param(
             "parquet",
             "write_to",
-            marks=pytest.mark.skipif(is_jvm_spark(), reason="Spark can't write into v1 tables with writeTo"),
+            marks=pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark can't write into v1 tables with writeTo"),
         ),
         pytest.param(
             "delta",
             "write_to",
-            marks=pytest.mark.skipif(is_jvm_spark(), reason="Delta Lake isn't configured for JVM Spark tests"),
+            marks=pytest.mark.spark(skip_if_jvm=True, reason="Delta Lake isn't configured for JVM Spark tests"),
         ),
         pytest.param(
             "delta",
             "save_as_table",
-            marks=pytest.mark.skipif(is_jvm_spark(), reason="Delta Lake isn't configured for JVM Spark tests"),
+            marks=pytest.mark.spark(skip_if_jvm=True, reason="Delta Lake isn't configured for JVM Spark tests"),
         ),
     ],
 )

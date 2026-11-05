@@ -4,7 +4,7 @@ import pyarrow as pa
 import pytest
 from pyspark.errors import IllegalArgumentException, SparkRuntimeException
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 def _optimized_plan(spark, query):
@@ -33,8 +33,8 @@ def _float_array(bits, width):
     return pa.Array.from_buffers(data_type, len(bits), [pa.py_buffer(validity), pa.py_buffer(raw)])
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="Arrow table ingestion requires PySpark 4+")
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail preserves distinct NaN payloads in numeric equality")
+@pytest.mark.spark(version=">=4", reason="Uses Arrow table input")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail preserves distinct NaN payloads in numeric equality")
 @pytest.mark.parametrize("windowed", [False, True])
 @pytest.mark.parametrize("ansi", [False, True])
 def test_float_to_double_correlation_preserves_target_nan_classes_and_raw_values(spark, windowed, ansi):
@@ -118,7 +118,7 @@ def test_float_to_double_correlation_preserves_target_nan_classes_and_raw_values
         spark.catalog.dropTempView("optimizer_double_keys")
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark decorrelates these lossy upcasts by distinct raw keys")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark decorrelates these lossy upcasts by distinct raw keys")
 @pytest.mark.parametrize(
     ("source", "target", "first"),
     [("INT", "FLOAT", 16777216), ("BIGINT", "FLOAT", 16777216), ("BIGINT", "DOUBLE", 9007199254740992)],
@@ -183,7 +183,7 @@ def test_exact_nested_cast_correlation_preserves_key_strategy(spark, source, tar
             "map('a',1,'b',NULL)",
             "map('a',1L,'b',NULL)",
             False,
-            marks=pytest.mark.skipif(is_jvm_spark(), reason="Spark rejects equality between map values"),
+            marks=pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark rejects equality between map values"),
         ),
     ],
 )
@@ -211,8 +211,8 @@ def test_additional_casts_preserve_values_and_key_strategy(spark, source, target
             "X'ff'",
             "'ab'",
             r"(?i)utf.?8",
-            marks=pytest.mark.skipif(
-                is_jvm_spark(), reason="Sail rejects invalid UTF-8; Spark uses replacement decoding"
+            marks=pytest.mark.spark(
+                skip_if_jvm=True, reason="Sail rejects invalid UTF-8; JVM Spark uses replacement decoding"
             ),
         ),
         ("DECIMAL(19,0)", "BIGINT", "1", "9223372036854775808", "1L", r"(?i)(range|overflow|cast)"),
@@ -238,7 +238,7 @@ def test_partial_casts_preserve_errors_after_local_filters(spark, source, target
         spark.conf.set("spark.sql.ansi.enabled", previous)
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail permits raw Time64 values outside the civil-day range")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail permits raw Time64 values outside the civil-day range")
 def test_nested_time_string_correlation_keeps_colliding_computed_keys(spark):
     # Arrow's Time64 formatter wraps seconds through u32. These distinct raw times
     # have the same string key, even though ordinary in-range time formatting is exact.
@@ -252,8 +252,8 @@ def test_nested_time_string_correlation_keeps_colliding_computed_keys(spark):
     assert _computed_correlation_cast(_optimized_plan(spark, query))
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="Arrow table ingestion requires PySpark 4+")
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail's strict UTF-8 cast has a distinct non-NULL error contract")
+@pytest.mark.spark(version=">=4", reason="Uses Arrow table input")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail's strict UTF-8 cast has a distinct non-NULL error contract")
 @pytest.mark.parametrize("shape", ["binary", "list", "struct"])
 def test_cast_correlation_respects_null_validity(spark, shape, request):
     # Spark skips casting a NULL parent. Keep that desired row oracle even though

@@ -237,6 +237,7 @@ def reverse_sorted_map_in_pandas(df):
     return df.orderBy(col("id")).mapInPandas(reverse_batches, schema="id long")
 
 
+@pytest.mark.spark(cross_version=True)
 def test_map_in_pandas_reordered_rows_can_be_sorted_again(spark):
     actual = reverse_sorted_map_in_pandas(spark.range(0, 4, 1, 1)).orderBy(col("id")).toPandas()
     expected = pd.DataFrame({"id": [0, 1, 2, 3]}, dtype="int64")
@@ -244,6 +245,7 @@ def test_map_in_pandas_reordered_rows_can_be_sorted_again(spark):
     assert_frame_equal(actual, expected)
 
 
+@pytest.mark.spark(cross_version=True)
 def test_map_in_pandas_reordering_does_not_satisfy_window_ordering(spark):
     window = Window.orderBy(col("id"))
 

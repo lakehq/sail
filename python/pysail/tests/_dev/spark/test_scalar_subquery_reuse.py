@@ -262,13 +262,10 @@ def test_repeated_correlated_aggregate_subqueries(spark, tables):
     assert [tuple(row) for row in df.collect()] == [(1, 20, 20), (2, 5, 5)]
 
 
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
 def test_repeated_dataframe_aggregate_scalar_subqueries(spark, tables):
     from pyspark.sql import functions as F  # noqa: N812
 
-    from pysail.testing.spark.utils.common import pyspark_version
-
-    if pyspark_version() < (4,):
-        pytest.skip("DataFrame.scalar requires PySpark 4+")
     t = spark.table(tables["t"])
     df = spark.range(1).select(
         t.select(F.max("x")).scalar().alias("a"),
@@ -280,13 +277,10 @@ def test_repeated_dataframe_aggregate_scalar_subqueries(spark, tables):
         assert scalar_subquery_slots(df) == [2]
 
 
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
 def test_dataframe_scalar_subquery_column_used_twice(spark, tables):
     from pyspark.sql import functions as F  # noqa: N812
 
-    from pysail.testing.spark.utils.common import pyspark_version
-
-    if pyspark_version() < (4,):
-        pytest.skip("DataFrame.scalar requires PySpark 4+")
     # The client sends the subquery plan once for each use of the column.
     column = spark.table(tables["t"]).select(F.max("x")).scalar()
     df = spark.range(1).select(column.alias("a"), (column + 1).alias("b"))
@@ -456,7 +450,7 @@ def arrow_table(spark, tmp_path_factory):
     spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Arrow types that Spark does not support")
+@pytest.mark.spark(skip_if_jvm=True, reason="Arrow types that JVM Spark does not support")
 @pytest.mark.parametrize(
     "column",
     [
@@ -482,7 +476,7 @@ def test_repeated_aggregate_scalar_subqueries_over_arrow_types(spark, arrow_tabl
     assert sorted(scalar_subquery_slots(df)) == [3]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Arrow types that Spark does not support")
+@pytest.mark.spark(skip_if_jvm=True, reason="Arrow types that JVM Spark does not support")
 @pytest.mark.parametrize("column", [c for c, _, _ in ARROW_COUNT_ONLY_COLUMNS])
 def test_repeated_count_scalar_subqueries_over_arrow_types(spark, arrow_table, column):
     df = spark.sql(

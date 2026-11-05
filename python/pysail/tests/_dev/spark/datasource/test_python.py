@@ -18,22 +18,7 @@ from pysail.testing.spark.session import spark_session_factory
 from pysail.testing.spark.utils.common import pyspark_version
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
-try:
-    from pyspark.sql.datasource import (
-        DataSource,
-        DataSourceArrowWriter,
-        DataSourceReader,
-        DataSourceWriter,
-        EqualTo,
-        Filter,
-        GreaterThan,
-        GreaterThanOrEqual,
-        InputPartition,
-        LessThan,
-        LessThanOrEqual,
-    )
-except ImportError:
-    pytest.skip("Python DataSource API is not available in this Spark version", allow_module_level=True)
+pytestmark = pytest.mark.spark(version=">=4.1", reason="Uses Python DataSource filter pushdown")
 
 
 def _read_test_state(path: str | Path) -> dict[str, Any]:
@@ -55,145 +40,10 @@ def _update_test_state(path: str, **updates: Any) -> None:
 # ============================================================================
 
 
-class RangeInputPartition(InputPartition):
-    """Partition for RangeDataSource containing a range of values."""
-
-    def __init__(self, partition_id: int, start: int, end: int):
-        super().__init__(partition_id)
-        self.start = start
-        self.end = end
-
-    def __repr__(self):
-        return f"RangeInputPartition({self.partition_id}, start={self.start}, end={self.end})"
-
-
-class RangeDataSourceReader(DataSourceReader):
-    """Reader for RangeDataSource that generates sequential integers."""
-
-    BATCH_SIZE = 8192
-
-    def __init__(self, start: int, end: int, num_partitions: int, step: int = 1):
-        self.start = start
-        self.end = end
-        self.num_partitions = max(1, num_partitions)
-        self.step = step
-        self._filters: list[Filter] = []
-
-    def pushFilters(self, filters: list[Filter]) -> Iterator[Filter]:  # noqa: N802
-        """
-        Accept filters that can be applied to the range.
-
-        We can handle simple comparison filters on the 'id' column.
-        """
-        for f in filters:
-            if isinstance(
-                f, EqualTo | GreaterThan | GreaterThanOrEqual | LessThan | LessThanOrEqual
-            ) and f.attribute == ("id",):
-                self._filters.append(f)
-            else:
-                yield f
-
-    def partitions(self) -> list[InputPartition]:
-        """Split the range into partitions for parallel reading."""
-        total_values = (self.end - self.start) // self.step
-        values_per_partition = max(1, total_values // self.num_partitions)
-
-        partitions = []
-        current_start = self.start
-
-        for i in range(self.num_partitions):
-            if current_start >= self.end:
-                break
-
-            if i == self.num_partitions - 1:
-                partition_end = self.end
-            else:
-                partition_end = min(current_start + values_per_partition * self.step, self.end)
-
-            partitions.append(RangeInputPartition(i, current_start, partition_end))
-            current_start = partition_end
-
-        return partitions if partitions else [RangeInputPartition(0, self.start, self.end)]
-
-    def read(self, partition: InputPartition) -> Iterator[Any]:
-        """Generate RecordBatches for a partition."""
-        if not isinstance(partition, RangeInputPartition):
-            msg = f"Expected RangeInputPartition, got {type(partition)}"
-            raise TypeError(msg)
-
-        start = partition.start
-        end = partition.end
-
-        for f in self._filters:
-            if isinstance(f, EqualTo) and isinstance(f.value, int):
-                if start <= f.value < end:
-                    yield pa.RecordBatch.from_pydict({"id": [f.value]}, schema=pa.schema([("id", pa.int64())]))
-                return
-            elif isinstance(f, GreaterThan) and isinstance(f.value, int):
-                start = max(start, f.value + 1)
-            elif isinstance(f, GreaterThanOrEqual) and isinstance(f.value, int):
-                start = max(start, f.value)
-            elif isinstance(f, LessThan) and isinstance(f.value, int):
-                end = min(end, f.value)
-            elif isinstance(f, LessThanOrEqual) and isinstance(f.value, int):
-                end = min(end, f.value + 1)
-
-        schema = pa.schema([("id", pa.int64())])
-        batch_values: list[int] = []
-        for i in range(start, end, self.step):
-            batch_values.append(i)
-            if len(batch_values) >= self.BATCH_SIZE:
-                yield pa.RecordBatch.from_pydict({"id": batch_values}, schema=schema)
-                batch_values = []
-
-        if batch_values:
-            yield pa.RecordBatch.from_pydict({"id": batch_values}, schema=schema)
-
-
-class RangeDataSource(DataSource):
-    """
-    A data source that generates sequential integers.
-
-    This is useful for testing and demonstration. It supports:
-    - Parallel reading via partitions
-    - Filter pushdown for comparison operators
-    - Configurable range and step
-
-    Options:
-        start: Starting value (default: 0)
-        end: Ending value (exclusive, required)
-        step: Step between values (default: 1)
-        numPartitions: Number of partitions (default: 4)
-    """
-
-    @classmethod
-    def name(cls) -> str:
-        return "range"
-
-    def schema(self):
-        # Allow testing DDL string fallback via options
-        if self.options.get("use_ddl_schema", "false").lower() == "true":
-            return "id BIGINT"
-        # PyArrow Schema preferred; DDL string fallback also works for basic types
-        return pa.schema([("id", pa.int64())])
-
-    def reader(self, schema) -> DataSourceReader:  # noqa: ARG002
-        """Create a reader for this range."""
-        start = int(self.options.get("start", "0"))
-        end = int(self.options.get("end", "10"))
-        step = int(self.options.get("step", "1"))
-        num_partitions = int(self.options.get("numPartitions", "4"))
-
-        return RangeDataSourceReader(start, end, num_partitions, step)
-
-
-# ============================================================================
-# Basic API tests that don't require a Spark session
-# ============================================================================
-
-
 def test_python_range_datasource_api():
     """Test RangeDataSource API without server."""
+    from pysail.testing._dev.spark.datasource import RangeDataSource
+
     # Test with default PyArrow schema
     ds = RangeDataSource(options={"start": "0", "end": "10", "numPartitions": "2"})
     assert ds.name() == "range"
@@ -828,6 +678,8 @@ def test_python_filter_pushdown_reader_with_non_callable_push_filters(spark):
 
 def test_python_ddl_schema_fallback(spark):
     """Test that DDL string schema is correctly parsed and used."""
+    from pysail.testing._dev.spark.datasource import RangeDataSource
+
     spark.dataSource.register(RangeDataSource)
 
     # This uses the option we added to RangeDataSource to force DDL schema return
@@ -849,6 +701,8 @@ def test_python_ddl_schema_fallback(spark):
 
 
 def test_python_datasource_options_are_case_insensitive(spark):
+    from pysail.testing._dev.spark.datasource import RangeDataSource
+
     spark.dataSource.register(RangeDataSource)
 
     rows = spark.read.format("range").option("END", "2").load().collect()
@@ -1023,6 +877,14 @@ def test_python_filter_pushdown_complex_and(spark):
 
 def _create_writable_test_datasource():
     """Create a writable datasource class with per-test local commit state."""
+    from pyspark.sql.datasource import (
+        DataSource,
+        DataSourceArrowWriter,
+        DataSourceReader,
+        DataSourceWriter,
+        InputPartition,
+    )
+
     datasource_name = f"writable_test_{uuid4().hex}"
 
     class InMemoryWriter(DataSourceWriter):
@@ -1168,6 +1030,8 @@ def test_python_arrow_write(spark, tmp_path):
 
 def test_python_write_overwrite_mode(spark, tmp_path):
     """Test that overwrite mode is passed correctly."""
+    from pyspark.sql.datasource import DataSource, DataSourceWriter
+
     state_path = tmp_path / "overwrite_state.json"
 
     class OverwriteCheckWriter(DataSourceWriter):
@@ -1209,6 +1073,8 @@ def test_python_write_overwrite_mode(spark, tmp_path):
 
 def test_python_write_append_mode(spark, tmp_path):
     """Test that append mode is passed correctly."""
+    from pyspark.sql.datasource import DataSource, DataSourceWriter
+
     state_path = tmp_path / "append_state.json"
 
     class AppendCheckWriter(DataSourceWriter):
@@ -1249,6 +1115,8 @@ def test_python_write_append_mode(spark, tmp_path):
 
 def test_python_write_commit(spark, tmp_path):
     """Test that commit is called with all partition messages."""
+    from pyspark.sql.datasource import DataSource, DataSourceWriter
+
     state_path = tmp_path / "commit_state.json"
 
     class CommitTrackingWriter(DataSourceWriter):
@@ -1307,6 +1175,7 @@ def test_python_write_empty_dataframe(spark, tmp_path):
 
 def test_python_write_no_writer_implemented(spark):
     """Test error when writer() is not implemented."""
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
 
     class ReadOnlyDataSource(DataSource):
         def __init__(self, options):
@@ -1345,6 +1214,8 @@ def test_python_write_no_writer_implemented(spark):
 
 def test_python_write_abort_on_failure(spark, tmp_path):
     """Test that abort is called when writer.write() raises an exception."""
+    from pyspark.sql.datasource import DataSource, DataSourceWriter
+
     state_path = tmp_path / "abort_on_failure_state.json"
 
     class FailingWriter(DataSourceWriter):
@@ -1391,6 +1262,8 @@ def test_python_write_abort_on_failure(spark, tmp_path):
 
 def test_python_write_save_path_passed(spark, tmp_path):
     """Test that .save("/my/path") passes the path to DataSource via options["path"]."""
+    from pyspark.sql.datasource import DataSource, DataSourceWriter
+
     state_path = tmp_path / "save_path_state.json"
 
     class PathCheckWriter(DataSourceWriter):
@@ -1470,6 +1343,8 @@ def test_python_read_load_path_passed(spark):
 
 def test_python_write_commit_failure_triggers_abort(spark, tmp_path):
     """Test that abort is called when commit() raises an exception."""
+    from pyspark.sql.datasource import DataSource, DataSourceWriter
+
     state_path = tmp_path / "commit_failure_state.json"
 
     class CommitFailWriter(DataSourceWriter):
@@ -1544,6 +1419,8 @@ def test_python_write_null_values(spark, tmp_path):
 
 def test_python_write_none_commit_message(spark, tmp_path):
     """Test that writer returning None as commit message is handled correctly."""
+    from pyspark.sql.datasource import DataSource, DataSourceWriter
+
     state_path = tmp_path / "none_commit_message_state.json"
 
     class NoneMessageWriter(DataSourceWriter):
@@ -1590,6 +1467,7 @@ def test_python_write_none_commit_message(spark, tmp_path):
 
 def test_python_sql_create_table_and_select(spark):
     """Test CREATE TABLE ... USING with a tuple-based Python data source."""
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
     from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
     table_name = f"sql_simple_{uuid4().hex[:8]}"
@@ -1631,6 +1509,7 @@ def test_python_sql_create_table_and_select(spark):
 
 def test_python_sql_create_table_and_select_with_filter(spark):
     """Test SQL queries with WHERE clause on a Python data source table."""
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
     from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
     table_name = f"sql_filter_{uuid4().hex[:8]}"
@@ -1670,6 +1549,8 @@ def test_python_sql_create_table_and_select_with_filter(spark):
 
 def test_python_sql_create_table_arrow_datasource(spark):
     """Test CREATE TABLE ... USING with an Arrow-based Python data source."""
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
     table_name = f"sql_arrow_{uuid4().hex[:8]}"
 
     class SQLArrowDataSource(DataSource):
@@ -1712,6 +1593,8 @@ def test_python_sql_create_table_arrow_datasource(spark):
 
 def test_python_sql_insert_into_python_datasource(spark, tmp_path):
     """Test INSERT INTO on a Python data source table."""
+    from pyspark.sql.datasource import DataSource, DataSourceReader, DataSourceWriter, InputPartition
+
     table_name = f"sql_insert_{uuid4().hex[:8]}"
     state_path = tmp_path / "sql_insert_state.json"
 
