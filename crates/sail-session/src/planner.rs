@@ -23,9 +23,10 @@ use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::{DataSource, DataSourceExec};
 use datafusion_datasource::{PartitionedFile, TableSchema};
-use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
+use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::{Partitioning, RangePartitioning, create_physical_sort_exprs};
+use log::warn;
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -436,7 +437,6 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 input.as_ref(),
                 node.num_partitions(),
                 node.kind(),
-                node.partitioning_expressions(),
                 session,
                 planning_ctx,
             )?;
@@ -595,8 +595,7 @@ fn plan_explicit_partitioning(
     schema: &DFSchema,
     input: &dyn ExecutionPlan,
     num_partitions: Option<usize>,
-    kind: ExplicitRepartitionKind,
-    expressions: &[Expr],
+    kind: &ExplicitRepartitionKind,
     session: &dyn Session,
     planning_ctx: &PhysicalPlanningContext,
 ) -> datafusion_common::Result<Partitioning> {
@@ -616,7 +615,28 @@ fn plan_explicit_partitioning(
                 internal_err!("explicit round-robin repartition requires a target partition count")
             }
         },
-        ExplicitRepartitionKind::Hash => {
+        ExplicitRepartitionKind::Range(sorts) => {
+            // TODO: Sample split points from the input and plan `Partitioning::Range`.
+            let kind =
+                ExplicitRepartitionKind::Hash(sorts.iter().map(|sort| sort.expr.clone()).collect());
+            let partitioning = plan_explicit_partitioning(
+                planner,
+                schema,
+                input,
+                num_partitions,
+                &kind,
+                session,
+                planning_ctx,
+            )?;
+            // A single partition has no key ranges to overlap.
+            if partitioning.partition_count() > 1 {
+                warn!(
+                    "range repartitioning is planned as hash repartitioning, so the partition key ranges can overlap"
+                );
+            }
+            Ok(partitioning)
+        }
+        ExplicitRepartitionKind::Hash(expressions) => {
             if expressions.is_empty() {
                 return internal_err!(
                     "explicit hash repartitioning requires at least one partitioning expression"
@@ -659,8 +679,8 @@ mod tests {
     use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_common::{ScalarValue, ToDFSchema};
     use datafusion_expr::{
-        ColumnarValue, LogicalPlanBuilder, TableSource, Volatility, cast, col, create_udf, lit,
-        rollup, scalar_subquery, when,
+        ColumnarValue, Expr, LogicalPlanBuilder, TableSource, Volatility, cast, col, create_udf,
+        lit, rollup, scalar_subquery, when,
     };
     use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
     use object_store::memory::InMemory;
@@ -1261,7 +1281,6 @@ mod tests {
         schema: &Arc<Schema>,
         num_partitions: Option<usize>,
         kind: ExplicitRepartitionKind,
-        expressions: &[Expr],
     ) -> datafusion_common::Result<Partitioning> {
         let planner = DefaultPhysicalPlanner::with_extension_planners(vec![]);
         let session_state = SessionContext::new().state();
@@ -1273,8 +1292,7 @@ mod tests {
             &df_schema,
             input,
             num_partitions,
-            kind,
-            expressions,
+            &kind,
             &session_state,
             &planning_ctx,
         )
@@ -1290,7 +1308,6 @@ mod tests {
             &schema,
             Some(3),
             ExplicitRepartitionKind::RoundRobin,
-            &[],
         )
         .unwrap();
 
@@ -1307,7 +1324,6 @@ mod tests {
             &schema,
             Some(1),
             ExplicitRepartitionKind::RoundRobin,
-            &[],
         )
         .unwrap();
 
@@ -1324,7 +1340,6 @@ mod tests {
             &schema,
             Some(0),
             ExplicitRepartitionKind::RoundRobin,
-            &[],
         )
         .unwrap_err();
 
@@ -1340,14 +1355,8 @@ mod tests {
         let schema = schema();
         let input = EmptyExec::new(Arc::clone(&schema));
 
-        let error = plan_partitioning(
-            &input,
-            &schema,
-            None,
-            ExplicitRepartitionKind::RoundRobin,
-            &[],
-        )
-        .unwrap_err();
+        let error = plan_partitioning(&input, &schema, None, ExplicitRepartitionKind::RoundRobin)
+            .unwrap_err();
 
         assert!(
             error
@@ -1360,14 +1369,13 @@ mod tests {
     fn test_plan_explicit_partitioning_returns_hash_for_single_partition_with_expressions() {
         let schema = schema();
         let input = EmptyExec::new(Arc::clone(&schema));
-        let expressions = [col("id")];
+        let expressions = vec![col("id")];
 
         let partitioning = plan_partitioning(
             &input,
             &schema,
             Some(1),
-            ExplicitRepartitionKind::Hash,
-            &expressions,
+            ExplicitRepartitionKind::Hash(expressions),
         )
         .unwrap();
 
@@ -1378,17 +1386,38 @@ mod tests {
     }
 
     #[test]
-    fn test_plan_explicit_partitioning_returns_hash_for_expressions() {
+    fn test_plan_explicit_partitioning_plans_range_as_hash_on_sort_keys() {
         let schema = schema();
         let input = EmptyExec::new(Arc::clone(&schema));
-        let expressions = [col("id")];
 
         let partitioning = plan_partitioning(
             &input,
             &schema,
             Some(3),
-            ExplicitRepartitionKind::Hash,
-            &expressions,
+            ExplicitRepartitionKind::Range(vec![col("id").sort(false, false)]),
+        )
+        .unwrap();
+
+        match partitioning {
+            Partitioning::Hash(expressions, 3) => {
+                assert_eq!(expressions.len(), 1);
+                assert_eq!(expressions[0].to_string(), "id@0");
+            }
+            other => panic!("expected hash partitioning on the sort key, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_plan_explicit_partitioning_returns_hash_for_expressions() {
+        let schema = schema();
+        let input = EmptyExec::new(Arc::clone(&schema));
+        let expressions = vec![col("id")];
+
+        let partitioning = plan_partitioning(
+            &input,
+            &schema,
+            Some(3),
+            ExplicitRepartitionKind::Hash(expressions),
         )
         .unwrap();
 
@@ -1407,14 +1436,13 @@ mod tests {
             Partitioning::RoundRobinBatch(4),
         )
         .unwrap();
-        let expressions = [col("id")];
+        let expressions = vec![col("id")];
 
         let partitioning = plan_partitioning(
             &input,
             &schema,
             None,
-            ExplicitRepartitionKind::Hash,
-            &expressions,
+            ExplicitRepartitionKind::Hash(expressions),
         )
         .unwrap();
 
@@ -1433,14 +1461,8 @@ mod tests {
         )
         .unwrap();
 
-        let partitioning = plan_partitioning(
-            &input,
-            &schema,
-            Some(4),
-            ExplicitRepartitionKind::Coalesce,
-            &[],
-        )
-        .unwrap();
+        let partitioning =
+            plan_partitioning(&input, &schema, Some(4), ExplicitRepartitionKind::Coalesce).unwrap();
 
         assert!(matches!(partitioning, Partitioning::UnknownPartitioning(2)));
     }
