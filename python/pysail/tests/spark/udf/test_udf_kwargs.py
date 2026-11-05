@@ -6,10 +6,7 @@ from pyspark.sql.types import ArrayType, DataType, IntegerType, LongType, Row, S
 
 from pysail.testing.spark.utils.common import pyspark_version
 
-pytestmark = pytest.mark.skipif(
-    pyspark_version() < (4,),
-    reason="UDF/UDTF keyword arguments require PySpark 4+",
-)
+pytestmark = pytest.mark.spark(version=">=4", reason="Uses UDF and UDTF keyword arguments")
 
 
 @pytest.fixture(scope="module")
@@ -129,10 +126,7 @@ def test_udtf_row_output_invalid_scalar_raises_pickle_exception():
         RowOutputUDTF().collect()
 
 
-@pytest.mark.skipif(
-    pyspark_version() < (4, 1),
-    reason="Arrow UDTF tests require PySpark 4.1+",
-)
+@pytest.mark.spark(version=">=4.1", reason="Tests Arrow UDTF conversion error classes")
 def test_arrow_udtf_type_conversion_error_class_is_preserved():
     from pyspark.errors.exceptions.connect import PythonException
 
@@ -165,10 +159,7 @@ def test_arrow_udtf_lateral_view_uses_argument_schema(spark, use_arrow):
     assert df.collect() == [Row(passthrough=b"passthrough", value="value", output="value")]
 
 
-@pytest.mark.skipif(
-    pyspark_version() < (4, 1),
-    reason="UDTF analyze tests require PySpark 4.1+",
-)
+@pytest.mark.spark(version=">=4.1", reason="Tests UDTF analysis of argument types")
 def test_udtf_analyze_preserves_array_type():
     from pyspark.sql.udtf import AnalyzeArgument, AnalyzeResult
 
@@ -189,10 +180,7 @@ def test_udtf_analyze_preserves_array_type():
     assert df.collect() == [Row(a=[1, 2, 3])]
 
 
-@pytest.mark.skipif(
-    pyspark_version() < (4, 1),
-    reason="UDTF table arguments require PySpark 4.1+",
-)
+@pytest.mark.spark(version=">=4.1", reason="Uses UDTF table arguments")
 def test_udtf_analyze_marks_table_argument(spark):
     from pyspark.sql.udtf import AnalyzeArgument, AnalyzeResult
 

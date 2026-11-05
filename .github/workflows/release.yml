@@ -188,6 +188,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: build
+          rust-toolchain: stable
           target: ${{ matrix.platform.target }}
           # We need to specify the interpreter explicitly even if we are building for ABI3.
           # This is to avoid unexpected PyPy wheels when building inside containers.
@@ -271,6 +272,12 @@ jobs:
           python-version: "3.11"
 
       # We need the build tools when installing the package from source.
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3

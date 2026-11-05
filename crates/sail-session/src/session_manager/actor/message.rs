@@ -12,13 +12,12 @@ use crate::error::SessionResult;
 
 pub enum SessionManagerMessage {
     GetOrCreateSession {
-        session_id: String,
+        client_session_id: String,
         user_id: String,
         result: oneshot::Sender<SessionResult<SessionContext>>,
     },
     CompleteSessionCreation {
         session_id: String,
-        user_id: String,
         context: SessionContext,
         driver_id: Option<DriverId>,
         activation: ExecutionResult<()>,
@@ -29,8 +28,9 @@ pub enum SessionManagerMessage {
         instant: Instant,
     },
     DeleteSession {
-        session_id: String,
-        result: oneshot::Sender<SessionResult<()>>,
+        client_session_id: String,
+        user_id: String,
+        result: oneshot::Sender<SessionResult<String>>,
     },
     SetSessionFailure {
         session_id: String,
@@ -62,13 +62,22 @@ impl SpanAssociation for SessionManagerMessage {
         let mut p: Vec<(&'static str, String)> = vec![];
         match self {
             SessionManagerMessage::GetOrCreateSession {
-                session_id,
+                client_session_id,
                 user_id: _,
                 result: _,
             }
-            | SessionManagerMessage::CompleteSessionCreation {
-                session_id,
+            | SessionManagerMessage::DeleteSession {
+                client_session_id,
                 user_id: _,
+                result: _,
+            } => {
+                p.push((
+                    SpanAttribute::SESSION_CLIENT_SIDE_ID,
+                    client_session_id.clone(),
+                ));
+            }
+            SessionManagerMessage::CompleteSessionCreation {
+                session_id,
                 context: _,
                 driver_id: _,
                 activation: _,
@@ -76,10 +85,6 @@ impl SpanAssociation for SessionManagerMessage {
             | SessionManagerMessage::ProbeIdleSession {
                 session_id,
                 instant: _,
-            }
-            | SessionManagerMessage::DeleteSession {
-                session_id,
-                result: _,
             }
             | SessionManagerMessage::SetSessionFailure { session_id } => {
                 p.push((SpanAttribute::SESSION_ID, session_id.to_string()));

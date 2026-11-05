@@ -6,8 +6,6 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.types import DateType, IntegerType, Row, StringType, StructField, StructType
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
-
 
 @pytest.fixture(scope="module")
 def udf_add_one():
@@ -314,7 +312,7 @@ def test_write_csv(spark, simple_df, tmpdir, infer_schema):
     )
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail only")
+@pytest.mark.spark(skip_if_jvm=True, reason="Tests Sail's nested and multiple generator support")
 def test_explode(spark):
     assert_frame_equal(
         spark.createDataFrame(
@@ -383,6 +381,7 @@ def test_inline_null_struct(spark):
     ]
 
 
+@pytest.mark.spark(cross_version=True)
 def test_udf(df, udf_add_one, udf_add_x_y, udf_add):
     assert_frame_equal(
         df.sort("a").limit(1).select(udf_add_one(F.col("a"))).toPandas(),
@@ -406,6 +405,7 @@ def test_udf(df, udf_add_one, udf_add_x_y, udf_add):
     )
 
 
+@pytest.mark.spark(cross_version=True)
 def test_udf_binary_view_input(spark, tmp_path):
     path = str(tmp_path / "binary.parquet")
     spark.createDataFrame([(b"value",)], "value BINARY").write.parquet(path)
@@ -437,7 +437,7 @@ def test_sql_named_window_clause(spark, df_view):
         spark.sql(f"SELECT min(a) OVER w AS min FROM {df_view}").toPandas()  # noqa: S608
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail only")
+@pytest.mark.spark(skip_if_jvm=True, reason="Uses Sail's dollar-prefixed SQL parameters")
 def test_sql_parameters(spark):
     actual = spark.sql("SELECT 1 AS text WHERE $1 > 'a'", ["b"]).toPandas()
     expected = pd.DataFrame({"text": [1]}).astype({"text": "int32"})
@@ -447,10 +447,7 @@ def test_sql_parameters(spark):
     assert_frame_equal(actual, expected)
 
 
-@pytest.mark.skipif(
-    pyspark_version() < (4,),
-    reason="DataFrame arguments in spark.sql() require Spark 4+",
-)
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame arguments in spark.sql()")
 def test_sql_dataframe_argument(spark):
     df = spark.range(10)
     actual = spark.sql(
