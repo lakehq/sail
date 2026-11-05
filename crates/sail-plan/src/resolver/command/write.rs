@@ -410,6 +410,25 @@ impl PlanResolver<'_> {
                             &["mergeSchema", "merge_schema"],
                         );
                     if !lake_source_merge_schema {
+                        if info.format.eq_ignore_ascii_case("delta")
+                            && matches!(&mode, WriteMode::TruncateIf { .. })
+                            && matches!(&column_match, WriteColumnMatch::ByName)
+                        {
+                            // Name alignment can fill omitted columns, but must not discard
+                            // unknown columns before Delta validates a conditional overwrite.
+                            for field in input.schema().fields() {
+                                if !info
+                                    .columns
+                                    .iter()
+                                    .any(|column| column.name.eq_ignore_ascii_case(field.name()))
+                                {
+                                    return Err(PlanError::invalid(format!(
+                                        "column not found in target table: {}",
+                                        field.name()
+                                    )));
+                                }
+                            }
+                        }
                         input = self
                             .rewrite_write_input(input, column_match, info, state)
                             .await?;

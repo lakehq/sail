@@ -3,6 +3,7 @@ from contextlib import nullcontext
 from datetime import UTC, date, datetime
 
 import pandas as pd
+import pyarrow.parquet as pq
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.errors import AnalysisException
@@ -647,22 +648,120 @@ def test_delta_io_replace_where_check_switch(spark, tmp_path):
 
 
 @pytest.mark.parametrize("replace_where_check", [None, "false"], indirect=True)
+@pytest.mark.parametrize("not_null", [False, True], ids=["nullable", "not-null"])
+@pytest.mark.parametrize(
+    ("row", "input_schema"),
+    [((1, 20, 30), "p INT, v INT, extra INT"), ((1, 30), "p INT, extra INT")],
+    ids=["extra", "extra-and-omitted"],
+)
 @pytest.mark.usefixtures("replace_where_check")
-def test_delta_io_save_as_table_replace_where_rejects_extra_columns(spark, tmp_path):
+def test_delta_io_save_as_table_replace_where_rejects_extra_columns(spark, tmp_path, not_null, row, input_schema):
+    # Delta 3.3.2 SchemaEnforcementSuite: reject schema merging with replaceWhere - overwrite option.
     path = tmp_path / "extra_columns"
     table = "delta_replace_where_extra_columns"
+    nullability = "NOT NULL" if not_null else ""
     spark.sql(
-        f"CREATE TABLE {table} (p INT NOT NULL, v INT) USING DELTA LOCATION '{escape_sql_string_literal(str(path))}'"
+        f"CREATE TABLE {table} (p INT {nullability}, v INT) USING DELTA "
+        f"LOCATION '{escape_sql_string_literal(str(path))}'"
     )
     try:
         spark.sql("INSERT INTO delta_replace_where_extra_columns VALUES (1, 10), (2, 11)")
         before = _delta_commits(path)
+        schema = spark.table(table).schema
+        metadata = _delta_metadata(path)
         with pytest.raises(Exception, match=r"(?i)(schema|column)"):
-            spark.createDataFrame([(1, 20, 30)], "p INT, v INT, extra INT").write.format("delta").mode(
-                "overwrite"
-            ).option("replaceWhere", "p = 1").option("overwriteSchema", "true").saveAsTable(table)
+            spark.createDataFrame([row], input_schema).write.format("delta").mode("overwrite").option(
+                "replaceWhere", "p = 1"
+            ).option("overwriteSchema", "true").saveAsTable(table)
         assert _delta_commits(path) == before
         assert spark.table(table).orderBy("v").collect() == [(1, 10), (2, 11)]
+        assert spark.table(table).schema == schema
+        assert _delta_metadata(path) == metadata
+
+        # A valid retry still aligns columns by name and preserves the target metadata.
+        spark.createDataFrame([(20, 1)], "v INT, p INT").write.format("delta").mode("overwrite").option(
+            "replaceWhere", "p = 1"
+        ).option("overwriteSchema", "true").saveAsTable(table)
+        assert spark.table(table).orderBy("v").collect() == [(2, 11), (1, 20)]
+        assert len(_delta_commits(path)) == len(before) + 1
+        assert spark.table(table).schema == schema
+        assert _delta_metadata(path) == metadata
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("conditional", [False, True], ids=["ordinary-overwrite", "replace-where-merge-schema"])
+def test_delta_io_save_as_table_overwrite_schema_evolution(spark, tmp_path, conditional):
+    path = tmp_path / "schema_evolution"
+    table = "delta_overwrite_schema_evolution"
+    spark.sql(
+        f"CREATE TABLE {table} (p INT NOT NULL, v INT) USING DELTA LOCATION '{escape_sql_string_literal(str(path))}'"
+    )
+    try:
+        spark.sql("INSERT INTO delta_overwrite_schema_evolution VALUES (1, 10), (2, 11)")
+        writer = (
+            spark.createDataFrame([(1, 20, 30)], "p INT, v INT, extra INT")
+            .write.format("delta")
+            .mode("overwrite")
+            .option("overwriteSchema", "true")
+        )
+        if conditional:
+            # Conditional schema evolution is not supported yet; it must not drop the extra column.
+            before = _delta_commits(path)
+            with pytest.raises(Exception, match="schema evolution not yet implemented"):
+                writer.option("replaceWhere", "p = 1").option("mergeSchema", "true").saveAsTable(table)
+            assert _delta_commits(path) == before
+            expected = [(1, 10), (2, 11)]
+            assert spark.table(table).columns == ["p", "v"]
+        else:
+            writer.saveAsTable(table)
+            expected = [(1, 20, 30)]
+            assert spark.table(table).columns == ["p", "v", "extra"]
+        assert spark.table(table).orderBy("v").collect() == expected
+        assert spark.read.format("delta").load(str(path)).orderBy("v").collect() == expected
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("api", ["path", "table"])
+@pytest.mark.parametrize("overwrite_schema", [False, True], ids=["merge-only", "both-flags"])
+@pytest.mark.usefixtures("replace_where_check")
+def test_delta_io_replace_where_merge_preserves_field_metadata(spark, tmp_path, api, overwrite_schema):
+    # SchemaUtilsSuite: schema merging should pick current nullable and metadata.
+    path = tmp_path / "merge_field_metadata"
+    table = "delta_merge_field_metadata"
+    spark.sql(
+        f"CREATE TABLE {table} (p INT NOT NULL, v INT COMMENT 'keep') USING DELTA "
+        f"LOCATION '{escape_sql_string_literal(str(path))}'"
+    )
+    try:
+        spark.sql("INSERT INTO delta_merge_field_metadata VALUES (1, 10), (2, 11)")
+        metadata = _delta_metadata(path)
+        fields = json.loads(metadata["schemaString"])["fields"]
+        assert fields[0]["nullable"] is False
+        assert fields[1]["metadata"]["comment"] == "keep"
+        writer = (
+            spark.createDataFrame([(1, 20)], "p INT, v INT")
+            .write.format("delta")
+            .mode("overwrite")
+            .option("replaceWhere", "p = 1")
+            .option("mergeSchema", "true")
+            .option("overwriteSchema", str(overwrite_schema).lower())
+        )
+        if api == "path":
+            writer.save(str(path))
+        else:
+            writer.saveAsTable(table)
+        expected = [(2, 11), (1, 20)]
+        assert spark.read.format("delta").load(str(path)).orderBy("v").collect() == expected
+        assert _delta_metadata(path) == metadata
+        before = _delta_commits(path)
+        # Reopening by path must still enforce the persisted NOT NULL constraint.
+        with pytest.raises(Exception, match=r"(?i)(NOT_NULL|not null)"):
+            spark.createDataFrame([(None, 30)], "p INT, v INT").write.format("delta").mode("append").save(str(path))
+        assert _delta_commits(path) == before
+        assert _delta_metadata(path) == metadata
+        assert spark.read.format("delta").load(str(path)).orderBy("v").collect() == expected
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
@@ -685,6 +784,76 @@ def test_delta_io_replace_where_late_failure_does_not_commit(spark, tmp_path, ap
         assert _delta_commits(path) == before
         assert all(file.read_bytes() == contents for file, contents in active_files.items())
         assert spark.read.format("delta").load(str(path)).orderBy("v").collect() == [(1, 10), (2, 11)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("partitioned", [False, True], ids=["unpartitioned", "partitioned"])
+@pytest.mark.parametrize("mapping", ["none", "name"])
+@pytest.mark.parametrize(
+    ("predicate", "incoming", "deleted_values"),
+    [
+        ("p = 1", [(1, 20)], [10, 12]),
+        ("p = 1 AND v != 12", [(1, 20)], [10]),
+        ("p = 1", [], [10, 12]),
+        ("p IS NULL", [(None, 20)], [0]),
+        ("true", [(1, 20)], [0, 10, 11, 12]),
+    ],
+    ids=["partition", "partial", "empty-input", "null-partition", "all-rows"],
+)
+@pytest.mark.usefixtures("replace_where_check")
+def test_delta_io_replace_where_change_data(spark, tmp_path, partitioned, mapping, predicate, incoming, deleted_values):
+    # DeltaSuite.testReplaceWhereWithCdf: CDF includes every deleted and inserted row.
+    path = tmp_path / "replace_where_cdf"
+    table = "delta_replace_where_cdf"
+    partition = "PARTITIONED BY (p)" if partitioned else ""
+    spark.sql(
+        f"CREATE TABLE {table} (p INT, v INT) USING DELTA {partition} "
+        f"LOCATION '{escape_sql_string_literal(str(path))}' "
+        f"TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true', 'delta.columnMapping.mode' = '{mapping}')"
+    )
+    try:
+        initial = [(None, 0), (1, 10), (2, 11), (1, 12)]
+        spark.createDataFrame(initial, "p INT, v INT").coalesce(1).write.format("delta").mode("append").save(str(path))
+        metadata = _delta_metadata(path)
+        frame = spark.createDataFrame(incoming, "p INT, v INT")
+        _conditional_overwrite(spark, frame, path, table, "path", predicate)
+        expected = sorted([row for row in initial if row[1] not in deleted_values] + incoming, key=lambda row: row[1])
+        assert spark.read.format("delta").load(str(path)).orderBy("v").collect() == expected
+        expected_changes = [(p, v, "delete", 2) for p, v in initial if v in deleted_values]
+        expected_changes += [(p, v, "insert", 2) for p, v in incoming]
+        expected_changes.sort(key=lambda row: row[1])
+        changes = (
+            spark.read.format("delta")
+            .option("readChangeFeed", "true")
+            .option("startingVersion", 2)
+            .option("endingVersion", 2)
+            .load(str(path))
+            .select("p", "v", "_change_type", "_commit_version")
+            .orderBy("v")
+            .collect()
+        )
+        assert changes == expected_changes
+        # Explicit CDC is authoritative: remove actions cannot fill in missing change rows.
+        actions = [json.loads(line) for line in _delta_commits(path)["00000000000000000002.json"].splitlines()]
+        cdc = [action["cdc"] for action in actions if "cdc" in action]
+        if cdc:
+            fields = json.loads(metadata["schemaString"])["fields"]
+            names = [field["metadata"].get("delta.columnMapping.physicalName", field["name"]) for field in fields]
+            persisted = []
+            for action in cdc:
+                assert action["dataChange"] is False
+                for row in pq.ParquetFile(path / action["path"]).read().to_pylist():
+                    values = []
+                    for name in names:
+                        if name in action["partitionValues"]:
+                            value = action["partitionValues"][name]
+                            values.append(int(value) if value is not None else None)
+                        else:
+                            values.append(row[name])
+                    persisted.append((*values, row["_change_type"], 2))
+            assert sorted(persisted, key=lambda row: row[1]) == expected_changes
+        assert _delta_metadata(path) == metadata
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
