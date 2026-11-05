@@ -8,15 +8,10 @@ from pyspark.errors import AnalysisException, SparkRuntimeException
 from pyspark.sql import Row, Window
 from pyspark.sql.types import DecimalType, IntegerType, StringType, StructField, StructType
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark
 
-COLUMN_SELECTOR_MARK = pytest.mark.skipif(
-    pyspark_version() < (4,), reason="the Spark Connect client does not support column selectors before PySpark 4"
-)
-SQL_DATAFRAME_ARGS_MARK = pytest.mark.skipif(
-    pyspark_version() < (4,),
-    reason="the Spark Connect client does not support DataFrame SQL arguments before PySpark 4",
-)
+COLUMN_SELECTOR_MARK = pytest.mark.spark(version=">=4", reason="Uses Spark Connect column selectors")
+SQL_DATAFRAME_ARGS_MARK = pytest.mark.spark(version=">=4", reason="Uses DataFrame arguments in spark.sql()")
 
 
 @pytest.fixture
@@ -948,6 +943,7 @@ def test_filter_missing_input_union_preserves_output_qualifier(spark):
 
 
 @pytest.mark.parametrize("cogroup", [False, True], ids=["group-map", "co-group-map"])
+@pytest.mark.spark(cross_version=True)
 def test_filter_grouped_map_rejects_grouping_attribute(filter_source, cogroup):
     grouped = filter_source.groupBy("key")
     if cogroup:
@@ -993,7 +989,7 @@ def test_filter_missing_attributes_discard_failed_projection_resolution(spark, f
     assert result.collect() == [Row(keep="keep")]
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.exists")
 @pytest.mark.parametrize("failure", ["nested-field", "ambiguous-name"])
 def test_filter_correlated_subquery_discards_failed_descendant_bindings(spark, failure):
     outer = spark.createDataFrame([(1, "OUTER"), (2, "OUTER")], "x int, marker string").alias("o")
@@ -1013,7 +1009,7 @@ def test_filter_correlated_subquery_discards_failed_descendant_bindings(spark, f
     assert outer.where(inner.exists()).collect() == [Row(x=1, marker="OUTER")]
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.exists")
 @pytest.mark.parametrize("failure", ["nested-field", "ambiguous-name"])
 @pytest.mark.parametrize("reverse_predicate", [False, True])
 def test_filter_descendant_fallback_preserves_earlier_bindings(spark, failure, reverse_predicate):
@@ -1038,7 +1034,7 @@ def test_filter_descendant_fallback_preserves_earlier_bindings(spark, failure, r
     assert outer.where(inner.exists()).collect() == []
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.exists")
 @pytest.mark.parametrize("failure", ["nested-field", "ambiguous-name"])
 def test_filter_descendant_fallback_preserves_deeper_bindings(spark, failure):
     outer = spark.createDataFrame([(1, "OUTER"), (2, "OUTER")], "x int, marker string").alias("o")
@@ -1302,7 +1298,7 @@ def test_filter_qualified_attribute_replaced_by_with_column(spark, columns, pred
     assert replaced.select(*columns).where(predicate).collect() == expected
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.exists")
 def test_filter_descendant_fallback_discards_multiple_failed_outputs(spark):
     outer = spark.createDataFrame([(1, 2)], "x int, z int")
     inner = (
@@ -1315,7 +1311,7 @@ def test_filter_descendant_fallback_discards_multiple_failed_outputs(spark):
     assert outer.where(inner.exists()).collect() == [Row(x=1, z=2)]
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.exists")
 @pytest.mark.parametrize("failure", ["visible-root", "descendant-type"])
 def test_filter_descendant_fallback_preserves_resolution_errors(spark, failure):
     if failure == "visible-root":
@@ -1341,7 +1337,7 @@ def test_filter_visible_predicate_preserves_projection(filter_source):
 
 
 @pytest.mark.parametrize("with_missing_attribute", [False, True])
-@pytest.mark.skipif(pyspark_version() < (4,), reason="Wildcard expansion in a filter requires Spark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses wildcard expansion in a filter")
 def test_filter_wildcard_uses_visible_projection(filter_source, with_missing_attribute):
     predicate = F.to_json(F.struct("*")) == '{"key":"b"}'
     if with_missing_attribute:
@@ -1350,7 +1346,7 @@ def test_filter_wildcard_uses_visible_projection(filter_source, with_missing_att
     assert result.collect() == [Row(key="b")]
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="Wildcard expansion in a filter requires Spark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses wildcard expansion in a filter")
 def test_filter_struct_wildcard_uses_visible_projection(filter_source):
     source = filter_source.select(F.struct("key", "value").alias("payload"))
     projected = source.select(F.struct(F.col("payload.key").alias("key")).alias("payload"))
@@ -1358,7 +1354,7 @@ def test_filter_struct_wildcard_uses_visible_projection(filter_source):
     assert result.collect() == [Row(payload=Row(key="b"))]
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="Column regex expansion in a filter requires Spark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses column regex expansion in a filter")
 def test_filter_column_regex_uses_visible_projection(filter_source):
     projected = filter_source.select("key")
     result = projected.where(F.to_json(F.struct(projected.colRegex("`.*`"))) == '{"key":"b"}')
@@ -1485,7 +1481,7 @@ def test_filter_missing_attribute_through_dataframe_distinct(filter_source, subs
     assert result.collect() == [Row(key="b", value=2)]
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.lateralJoin requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.lateralJoin")
 @pytest.mark.xfail(
     not is_jvm_spark(),
     reason="Sail lowers lateral joins to joins, which cannot expose missing left attributes",
@@ -1629,7 +1625,7 @@ def test_parameterized_query_rejects_hidden_attribute(spark, query, args, operat
         operation(spark.sql(query, args=args)).collect()
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.exists")
 @pytest.mark.parametrize(
     "query",
     [
@@ -1735,7 +1731,7 @@ def test_filter_physical_column_name_preserves_correlated_scope(spark, tmp_path,
     assert result.collect() == [Row(id=0)]
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.exists")
 @pytest.mark.parametrize("with_window", [False, True], ids=["sorted-view", "window-over-sorted-view"])
 def test_filter_temp_view_boundary_survives_window_rewrite(spark, with_window):
     name = "filter_sorted_physical_view"
@@ -1811,7 +1807,7 @@ def test_filter_missing_attribute_ignores_internal_auxiliaries(spark, operation,
             projected.where(predicate).collect()
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.exists")
 @pytest.mark.parametrize(
     "failure", ["missing-field", "non-struct", "invalid-selector", "dynamic-selector", "dynamic-primitive-selector"]
 )
@@ -1835,7 +1831,7 @@ def test_filter_correlated_extract_discards_invalid_descendant(spark, failure):
     assert outer.where(inner.exists()).collect() == [Row(payload=payload)]
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.exists")
 @pytest.mark.parametrize("selector", ["column", "sql-column", "sql-field"])
 def test_filter_correlated_extract_preserves_selector_kind(spark, selector):
     outer = spark.createDataFrame(
@@ -1856,7 +1852,7 @@ def test_filter_correlated_extract_preserves_selector_kind(spark, selector):
     assert result.collect() == expected
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.exists")
 @pytest.mark.parametrize("predicate_kind", ["column", "sql", "case-column"])
 @pytest.mark.xfail(
     not is_jvm_spark(),
@@ -1880,7 +1876,7 @@ def test_filter_correlated_computed_struct_rejects_column_selector(spark, predic
         outer.where(inner.where(predicate).exists()).collect()
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.exists")
 @pytest.mark.parametrize("child_kind", ["nested", "aliased"])
 def test_filter_correlated_computed_selector_preserves_outer_fallback(spark, child_kind):
     outer = spark.createDataFrame(
@@ -1901,7 +1897,7 @@ def test_filter_correlated_computed_selector_preserves_outer_fallback(spark, chi
     ]
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.exists")
 def test_filter_correlated_sql_case_selector_preserves_outer_fallback(spark):
     outer = spark.createDataFrame(
         [({"selector": 1}, "selector"), ({"selector": 2}, "selector")],

@@ -2,11 +2,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
-
-pytestmark = pytest.mark.skipif(
-    is_jvm_spark() and pyspark_version() < (4, 2),
-    reason="vector_avg requires Spark 4.2+",
+pytestmark = pytest.mark.spark(
+    version=">=4.2",
+    reason="Uses the vector_avg SQL function",
 )
 
 

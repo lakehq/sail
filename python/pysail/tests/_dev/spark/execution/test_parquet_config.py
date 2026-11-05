@@ -9,10 +9,9 @@ from pyiceberg.schema import Schema
 from pyiceberg.types import LongType, NestedField, TimestampType
 
 from pysail.testing.spark.session import spark_connect_server
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.tests._dev.spark.iceberg.utils import create_sql_catalog
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail worker Parquet configuration")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail worker Parquet configuration")
 
 
 @pytest.fixture(scope="module", params=["local", "local-cluster"])

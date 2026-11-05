@@ -3,9 +3,9 @@ import pyspark.sql.types as T  # noqa: N812
 import pytest
 from pyspark.sql import Row
 
-pytestmark = pytest.mark.skipif(
-    not hasattr(T, "VariantType") or not hasattr(T, "VariantVal"),
-    reason="VariantType is not available in this Spark version",
+pytestmark = pytest.mark.spark(
+    version=">=4",
+    reason="Uses VariantType and VariantVal",
 )
 
 
@@ -21,6 +21,7 @@ def test_variant_val_round_trip(spark):
     assert bytes(actual.metadata) == bytes(value.metadata)
 
 
+@pytest.mark.spark(cross_version=True)
 def test_variant_udf_output_casts_to_json(spark):
     @F.udf(T.VariantType())
     def make_variant(i):
@@ -31,6 +32,7 @@ def test_variant_udf_output_casts_to_json(spark):
     assert actual == [Row(v='{"a":"a"}'), Row(v='{"a":"b"}'), Row(v='{"a":"c"}')]
 
 
+@pytest.mark.spark(cross_version=True)
 def test_complex_variant_udf_output_casts_to_json(spark):
     def make_variant(i):
         return T.VariantVal(bytes([2, 1, 0, 0, 2, 5, 97 + i]), bytes([1, 1, 0, 1, 97]))
@@ -57,6 +59,7 @@ def test_complex_variant_udf_output_casts_to_json(spark):
     assert actual == [Row(v='{v -> {"a":"a"}}'), Row(v='{v -> {"a":"b"}}'), Row(v='{v -> {"a":"c"}}')]
 
 
+@pytest.mark.spark(cross_version=True)
 def test_variant_pandas_udf_output_casts_to_int(spark):
     pandas = pytest.importorskip("pandas")
 

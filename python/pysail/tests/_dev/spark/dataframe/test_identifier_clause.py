@@ -2,13 +2,8 @@
 
 import pytest
 
-from pysail.testing.spark.utils.common import pyspark_version
-
 # Named SQL parameters via args=dict were introduced in Spark 3.4 / Spark Connect.
-pytestmark = pytest.mark.skipif(
-    pyspark_version() < (3, 4),
-    reason="spark.sql() named SQL parameters require Spark 3.4+",
-)
+pytestmark = pytest.mark.spark(version=">=3.4", reason="Uses named SQL parameters in spark.sql()")
 
 
 def test_identifier_variable_column_in_select(spark):

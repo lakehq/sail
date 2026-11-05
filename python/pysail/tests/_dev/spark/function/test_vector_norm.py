@@ -123,6 +123,7 @@ def test_vector_norm_output_names(spark, entry):
 
 
 @pytest.mark.parametrize("use_arrow", [False, True])
+@pytest.mark.spark(cross_version=True)
 def test_vector_norm_inline_udf_output_name(spark, use_arrow):
     @sf.udf("float", useArrow=use_arrow)
     def vector_norm(value):
@@ -136,6 +137,7 @@ def test_vector_norm_inline_udf_output_name(spark, use_arrow):
     assert df.select("vector_norm(v)").collect() == [(4.0,)] * 4
 
 
+@pytest.mark.spark(cross_version=True)
 def test_vector_norm_registered_udf_output_name(spark, remote):
     source = spark.createDataFrame([([3.0, 4.0],)] * 4, "v ARRAY<FLOAT>").repartition(4)
     spark.udf.register("vector_norm", lambda value: value[0] + 1.0, "float")

@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import contextlib
 import uuid
+from typing import TYPE_CHECKING
 
 import pytest
 
-from pysail import _native
-from pysail.testing._dev.containers.unity_defaults import DEFAULT_CATALOG
+if TYPE_CHECKING:
+    from pysail import _native
 
-UnityCatalogProvider = _native._catalog._unity.UnityCatalogProvider  # noqa: SLF001
-DatabaseNotFoundError = _native._catalog.DatabaseNotFoundError  # noqa: SLF001
-TableNotFoundError = _native._catalog.TableNotFoundError  # noqa: SLF001
+
+from pysail.testing._dev.containers.unity_defaults import DEFAULT_CATALOG
 
 _DELTA_UNITY_TABLE_ID_KEY = "io.unitycatalog.tableId"
 _DELTA_UNITY_TABLE_ID_LEGACY_KEY = "table_id"
@@ -65,8 +65,10 @@ def _location(database: list[str], table: str) -> str:
     return f"s3://deltadata/{database[-1]}/{table}"
 
 
-def _cleanup_database(catalog: UnityCatalogProvider, database: list[str]) -> None:
-    with contextlib.suppress(DatabaseNotFoundError, RuntimeError):
+def _cleanup_database(catalog: _native._catalog._unity.UnityCatalogProvider, database: list[str]) -> None:
+    from pysail import _native
+
+    with contextlib.suppress(_native._catalog.DatabaseNotFoundError, RuntimeError):  # noqa: SLF001
         for table in catalog.list_tables(database):
             catalog.drop_table(database, table.name, if_exists=True)
         catalog.drop_database(database, if_exists=True)
@@ -114,7 +116,7 @@ def _assert_simple_table(table: object, database: list[str]) -> None:
     assert columns["baz"].is_partition is True
 
 
-def test_create_schema(unity_catalog: UnityCatalogProvider) -> None:
+def test_create_schema(unity_catalog: _native._catalog._unity.UnityCatalogProvider) -> None:
     database = _database("create_schema")
     second_database = _database("create_schema_if_not_exists")
     full_database = _full_database(database)
@@ -167,19 +169,23 @@ def test_create_schema(unity_catalog: UnityCatalogProvider) -> None:
         _cleanup_database(unity_catalog, second_database)
 
 
-def test_get_nonexistent_schema(unity_catalog: UnityCatalogProvider) -> None:
-    with pytest.raises(DatabaseNotFoundError):
+def test_get_nonexistent_schema(unity_catalog: _native._catalog._unity.UnityCatalogProvider) -> None:
+    from pysail import _native
+
+    with pytest.raises(_native._catalog.DatabaseNotFoundError):  # noqa: SLF001
         unity_catalog.get_database(_database("get_nonexistent_schema"))
 
 
-def test_get_schema(unity_catalog: UnityCatalogProvider) -> None:
+def test_get_schema(unity_catalog: _native._catalog._unity.UnityCatalogProvider) -> None:
+    from pysail import _native
+
     database = _database("get_schema")
     full_database = _full_database(database)
     properties = [("owner", "Lake"), ("community", "Sail")]
     try:
-        with pytest.raises(DatabaseNotFoundError):
+        with pytest.raises(_native._catalog.DatabaseNotFoundError):  # noqa: SLF001
             unity_catalog.get_database(database)
-        with pytest.raises(DatabaseNotFoundError):
+        with pytest.raises(_native._catalog.DatabaseNotFoundError):  # noqa: SLF001
             unity_catalog.get_database(full_database)
 
         created = unity_catalog.create_database(database, properties=properties)
@@ -194,7 +200,7 @@ def test_get_schema(unity_catalog: UnityCatalogProvider) -> None:
         _cleanup_database(unity_catalog, database)
 
 
-def test_list_schemas(unity_catalog: UnityCatalogProvider) -> None:
+def test_list_schemas(unity_catalog: _native._catalog._unity.UnityCatalogProvider) -> None:
     prefix = f"list_schemas_{uuid.uuid4().hex}"
     databases = [[f"{prefix}_{suffix}"] for suffix in ("ios", "macos")]
 
@@ -226,7 +232,9 @@ def test_list_schemas(unity_catalog: UnityCatalogProvider) -> None:
             _cleanup_database(unity_catalog, database)
 
 
-def test_drop_schema(unity_catalog: UnityCatalogProvider) -> None:
+def test_drop_schema(unity_catalog: _native._catalog._unity.UnityCatalogProvider) -> None:
+    from pysail import _native
+
     database = _database("drop_schema")
     full_database = _full_database(database)
     cascade_database = _database("drop_schema_cascade")
@@ -237,9 +245,9 @@ def test_drop_schema(unity_catalog: UnityCatalogProvider) -> None:
         assert unity_catalog.get_database(full_database).database == full_database
 
         unity_catalog.drop_database(database)
-        with pytest.raises(DatabaseNotFoundError):
+        with pytest.raises(_native._catalog.DatabaseNotFoundError):  # noqa: SLF001
             unity_catalog.get_database(database)
-        with pytest.raises(DatabaseNotFoundError):
+        with pytest.raises(_native._catalog.DatabaseNotFoundError):  # noqa: SLF001
             unity_catalog.get_database(full_database)
         with pytest.raises(RuntimeError):
             unity_catalog.drop_database(full_database)
@@ -249,9 +257,9 @@ def test_drop_schema(unity_catalog: UnityCatalogProvider) -> None:
         assert unity_catalog.get_database(cascade_database).database == full_cascade_database
         assert unity_catalog.get_database(full_cascade_database).database == full_cascade_database
         unity_catalog.drop_database(cascade_database, cascade=True)
-        with pytest.raises(DatabaseNotFoundError):
+        with pytest.raises(_native._catalog.DatabaseNotFoundError):  # noqa: SLF001
             unity_catalog.get_database(cascade_database)
-        with pytest.raises(DatabaseNotFoundError):
+        with pytest.raises(_native._catalog.DatabaseNotFoundError):  # noqa: SLF001
             unity_catalog.get_database(full_cascade_database)
     finally:
         _cleanup_database(unity_catalog, database)
@@ -259,7 +267,7 @@ def test_drop_schema(unity_catalog: UnityCatalogProvider) -> None:
 
 
 def test_create_table(
-    unity_catalog: UnityCatalogProvider,
+    unity_catalog: _native._catalog._unity.UnityCatalogProvider,
     unity_database: list[str],
 ) -> None:
     table = unity_catalog.create_table(
@@ -346,7 +354,7 @@ def test_create_table(
 
 
 def test_get_table(
-    unity_catalog: UnityCatalogProvider,
+    unity_catalog: _native._catalog._unity.UnityCatalogProvider,
     unity_database: list[str],
 ) -> None:
     unity_catalog.create_table(
@@ -371,7 +379,7 @@ def test_get_table(
 
 
 def test_list_tables(
-    unity_catalog: UnityCatalogProvider,
+    unity_catalog: _native._catalog._unity.UnityCatalogProvider,
     unity_database: list[str],
 ) -> None:
     assert unity_catalog.list_tables(unity_database) == []
@@ -395,9 +403,11 @@ def test_list_tables(
 
 
 def test_drop_table(
-    unity_catalog: UnityCatalogProvider,
+    unity_catalog: _native._catalog._unity.UnityCatalogProvider,
     unity_database: list[str],
 ) -> None:
+    from pysail import _native
+
     unity_catalog.create_table(
         unity_database,
         "t1",
@@ -408,7 +418,7 @@ def test_drop_table(
     assert unity_catalog.get_table(unity_database, "t1").name == "t1"
 
     unity_catalog.drop_table(unity_database, "t1")
-    with pytest.raises(TableNotFoundError):
+    with pytest.raises(_native._catalog.TableNotFoundError):  # noqa: SLF001
         unity_catalog.get_table(unity_database, "t1")
     with pytest.raises(RuntimeError):
         unity_catalog.drop_table(unity_database, "t1")

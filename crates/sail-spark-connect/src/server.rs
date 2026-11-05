@@ -1,15 +1,17 @@
 use async_stream;
 use datafusion::prelude::SessionContext;
 use log::debug;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_session::session_manager::SessionManager;
 use tonic::codegen::tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
 
-use crate::error::{ProtoFieldExt, SparkError, SparkResult};
+use crate::error::{InvalidHandle, ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::ExecutorMetadata;
 use crate::service;
 use crate::service::ExecutePlanResponseStream;
+use crate::session::SparkSession;
 use crate::spark::connect::analyze_plan_request::Analyze;
 use crate::spark::connect::interrupt_request::{Interrupt, InterruptType};
 use crate::spark::connect::release_execute_request::{Release, ReleaseAll, ReleaseUntil};
@@ -114,7 +116,28 @@ async fn handle_command(
     }
 }
 
-// TODO: make sure that `server_side_session_id` is set properly
+fn validated_session_id(session_id: String) -> Result<String, SparkError> {
+    if session_id.len() == 36 && Uuid::try_parse(&session_id).is_ok() {
+        Ok(session_id)
+    } else {
+        Err(SparkError::InvalidHandle(session_id, InvalidHandle::Format))
+    }
+}
+
+fn validated_server_session_id(
+    ctx: &SessionContext,
+    client_observed_server_side_session_id: Option<&str>,
+) -> Result<String, SparkError> {
+    let spark = ctx.extension::<SparkSession>().map_err(SparkError::from)?;
+    match client_observed_server_side_session_id {
+        None => Ok(spark.server_session_id().to_string()),
+        Some(id) if id == spark.server_session_id() => Ok(id.to_string()),
+        _ => Err(SparkError::InvalidHandle(
+            spark.session_id().to_string(),
+            InvalidHandle::SessionChanged,
+        )),
+    }
+}
 
 #[tonic::async_trait]
 impl SparkConnectService for SparkConnectServer {
@@ -126,7 +149,7 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let session_id = request.session_id;
+        let session_id = validated_session_id(request.session_id)?;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let metadata = ExecutorMetadata {
             operation_id: request
@@ -140,6 +163,10 @@ impl SparkConnectService for SparkConnectServer {
             .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
+        validated_server_session_id(
+            &ctx,
+            request.client_observed_server_side_session_id.as_deref(),
+        )?;
         let Plan { op_type: op } = request.plan.required("plan")?;
         let op = op.required("plan op")?;
         let stream = match op {
@@ -167,13 +194,17 @@ impl SparkConnectService for SparkConnectServer {
 
         let request = request.into_inner();
         debug!("{request:?}");
-        let session_id = request.session_id.clone();
+        let session_id = validated_session_id(request.session_id.clone())?;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = self
             .session_manager
             .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
+        let server_side_session_id = validated_server_session_id(
+            &ctx,
+            request.client_observed_server_side_session_id.as_deref(),
+        )?;
         let analyze = request.analyze.required("analyze")?;
         let result = match analyze {
             Analyze::Schema(schema) => {
@@ -235,7 +266,7 @@ impl SparkConnectService for SparkConnectServer {
         };
         let response = AnalyzePlanResponse {
             session_id: request.session_id.clone(),
-            server_side_session_id: request.session_id,
+            server_side_session_id,
             result,
         };
         debug!("{response:?}");
@@ -250,13 +281,17 @@ impl SparkConnectService for SparkConnectServer {
 
         let request = request.into_inner();
         debug!("{request:?}");
-        let session_id = request.session_id.clone();
+        let session_id = validated_session_id(request.session_id.clone())?;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = self
             .session_manager
             .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
+        validated_server_session_id(
+            &ctx,
+            request.client_observed_server_side_session_id.as_deref(),
+        )?;
         let config_request::Operation { op_type: op } = request.operation.required("operation")?;
         let op = op.required("operation type")?;
         let response = match op {
@@ -299,13 +334,17 @@ impl SparkConnectService for SparkConnectServer {
             }
         };
         debug!("{first:?}");
-        let session_id = first.session_id.clone();
+        let session_id = validated_session_id(first.session_id.clone())?;
         let user_id = first.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = self
             .session_manager
             .get_or_create_session_context(session_id.clone(), user_id)
             .await
             .map_err(SparkError::from)?;
+        let server_side_session_id = validated_server_session_id(
+            &ctx,
+            first.client_observed_server_side_session_id.as_deref(),
+        )?;
         let payload = first.payload;
         let stream = async_stream::try_stream! {
             if let Some(payload) = payload {
@@ -325,7 +364,7 @@ impl SparkConnectService for SparkConnectServer {
         let artifacts = service::handle_add_artifacts(&ctx, stream).await?;
         let response = AddArtifactsResponse {
             session_id: first.session_id.clone(),
-            server_side_session_id: first.session_id,
+            server_side_session_id,
             artifacts,
         };
         debug!("{response:?}");
@@ -338,17 +377,21 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<ArtifactStatusesResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let session_id = request.session_id.clone();
+        let session_id = validated_session_id(request.session_id.clone())?;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = self
             .session_manager
             .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
+        let server_side_session_id = validated_server_session_id(
+            &ctx,
+            request.client_observed_server_side_session_id.as_deref(),
+        )?;
         let statuses = service::handle_artifact_statuses(&ctx, request.names).await?;
         let response = ArtifactStatusesResponse {
             session_id: request.session_id.clone(),
-            server_side_session_id: request.session_id,
+            server_side_session_id,
             statuses,
         };
         debug!("{response:?}");
@@ -361,13 +404,17 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<InterruptResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let session_id = request.session_id.clone();
+        let session_id = validated_session_id(request.session_id.clone())?;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = self
             .session_manager
             .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
+        let server_side_session_id = validated_server_session_id(
+            &ctx,
+            request.client_observed_server_side_session_id.as_deref(),
+        )?;
         let ids = match InterruptType::try_from(request.interrupt_type) {
             Ok(InterruptType::All) => Ok(service::handle_interrupt_all(&ctx).await?),
             Ok(InterruptType::Tag) => {
@@ -390,7 +437,7 @@ impl SparkConnectService for SparkConnectServer {
         };
         let response = InterruptResponse {
             session_id: request.session_id.clone(),
-            server_side_session_id: request.session_id,
+            server_side_session_id,
             interrupted_ids: ids?,
         };
         debug!("{response:?}");
@@ -405,13 +452,17 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<Self::ReattachExecuteStream>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let session_id = request.session_id;
+        let session_id = validated_session_id(request.session_id)?;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = self
             .session_manager
             .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
+        validated_server_session_id(
+            &ctx,
+            request.client_observed_server_side_session_id.as_deref(),
+        )?;
         let stream =
             service::handle_reattach_execute(&ctx, request.operation_id, request.last_response_id)
                 .await?;
@@ -424,13 +475,17 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<ReleaseExecuteResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let session_id = request.session_id.clone();
+        let session_id = validated_session_id(request.session_id.clone())?;
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = self
             .session_manager
             .get_or_create_session_context(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
+        let server_side_session_id = validated_server_session_id(
+            &ctx,
+            request.client_observed_server_side_session_id.as_deref(),
+        )?;
         let response_id = match request.release.required("release")? {
             Release::ReleaseAll(ReleaseAll {}) => None,
             Release::ReleaseUntil(ReleaseUntil { response_id }) => Some(response_id),
@@ -438,7 +493,7 @@ impl SparkConnectService for SparkConnectServer {
         service::handle_release_execute(&ctx, request.operation_id.clone(), response_id).await?;
         let response = ReleaseExecuteResponse {
             session_id: request.session_id.clone(),
-            server_side_session_id: request.session_id,
+            server_side_session_id,
             operation_id: Some(request.operation_id),
         };
         debug!("{response:?}");
@@ -454,15 +509,16 @@ impl SparkConnectService for SparkConnectServer {
         if request.allow_reconnect {
             Err(SparkError::unsupported("reconnect session"))?;
         }
-        let session_id = request.session_id.clone();
-        let _user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
-        self.session_manager
-            .delete_session(session_id)
+        let session_id = validated_session_id(request.session_id.clone())?;
+        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
+        let server_side_session_id = self
+            .session_manager
+            .delete_session(session_id, user_id)
             .await
             .map_err(SparkError::from)?;
         let response = ReleaseSessionResponse {
             session_id: request.session_id.clone(),
-            server_side_session_id: request.session_id,
+            server_side_session_id,
         };
         debug!("{response:?}");
         Ok(Response::new(response))

@@ -54,7 +54,9 @@ def test_exact_widening_literal_comparisons_remove_the_cast(
         spark.catalog.dropTempView("optimizer_literal_keys")
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark simplifies nonrepresentable comparisons beyond Sail's exact rewrite")
+@pytest.mark.spark(
+    skip_if_jvm=True, reason="JVM Spark simplifies nonrepresentable comparisons beyond Sail's exact rewrite"
+)
 @pytest.mark.parametrize("literal", ["1.0000000000000002", "16777217", "'NaN'"])
 def test_float_widening_literal_comparison_keeps_inexact_or_nan_casts(spark, literal):
     spark.createDataFrame([(0, 1.0), (1, 16777216.0), (2, None)], "seq int,k float").createOrReplaceTempView(
@@ -69,7 +71,7 @@ def test_float_widening_literal_comparison_keeps_inexact_or_nan_casts(spark, lit
         spark.catalog.dropTempView("optimizer_literal_guards")
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Preserve Sail's existing TRY_CAST schema contract")
+@pytest.mark.spark(skip_if_jvm=True, reason="Preserve Sail's existing TRY_CAST schema contract")
 @pytest.mark.parametrize(
     ("query", "nullable", "values"),
     [

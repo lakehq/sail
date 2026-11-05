@@ -1,11 +1,11 @@
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
-
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail planner rejection")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.exists")
+@pytest.mark.spark(
+    skip_if_jvm=True, reason="Tests Sail rejection of correlated EXISTS with nested aggregation or LIMIT/OFFSET"
+)
 @pytest.mark.parametrize("negated", [False, True], ids=["exists", "not-exists"])
 def test_correlated_exists_rejects_nested_limit_before_grouping(spark, negated):
     candidate = spark.createDataFrame([(1,), (2,), (3,)], "id INT").alias("c")

@@ -7,11 +7,9 @@ import pytest
 from pyspark.sql import functions as sf
 from pyspark.sql.types import ArrayType, FloatType, StructField
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
-
-pytestmark = pytest.mark.skipif(
-    is_jvm_spark() and pyspark_version() < (4, 2),
-    reason="vector aggregates require Spark 4.2+",
+pytestmark = pytest.mark.spark(
+    version=">=4.2",
+    reason="Uses vector_avg and vector_sum SQL functions",
 )
 
 

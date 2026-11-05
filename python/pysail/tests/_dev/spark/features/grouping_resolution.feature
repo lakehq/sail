@@ -491,3 +491,49 @@ Feature: Grouping and sort resolution
       | FaLsE |
       | TRUE  |
       | TrUe  |
+
+  Scenario: Aliased aggregates over a column and over its date keep separate outputs
+    When query
+      """
+      WITH e AS (
+        SELECT * FROM VALUES
+          (1, TIMESTAMP'2024-03-04 10:00:00'),
+          (1, TIMESTAMP'2024-03-05 11:00:00')
+        AS e(k, ts)
+      ), d AS (
+        SELECT * FROM VALUES (1) AS d(g)
+      )
+      SELECT g, min(ts) AS first_at, min(to_date(ts)) AS first_on,
+             max(ts) AS last_at, max(to_date(ts)) AS last_on
+      FROM e JOIN d ON k = g
+      GROUP BY g
+      """
+    Then query result
+      | g | first_at            | first_on   | last_at             | last_on    |
+      | 1 | 2024-03-04 10:00:00 | 2024-03-04 | 2024-03-05 11:00:00 | 2024-03-05 |
+    Then query column types
+      | column   | type      |
+      | g        | int       |
+      | first_at | timestamp |
+      | first_on | date      |
+      | last_at  | timestamp |
+      | last_on  | date      |
+
+  Scenario: Unaliased aggregates over a column and over its date keep separate outputs
+    When query
+      """
+      WITH e AS (
+        SELECT * FROM VALUES
+          (1, TIMESTAMP'2024-03-04 10:00:00'),
+          (1, TIMESTAMP'2024-03-05 11:00:00')
+        AS e(k, ts)
+      ), d AS (
+        SELECT * FROM VALUES (1) AS d(g)
+      )
+      SELECT g, min(ts), min(to_date(ts))
+      FROM e JOIN d ON k = g
+      GROUP BY g
+      """
+    Then query result
+      | g | min(ts)             | min(to_date(ts)) |
+      | 1 | 2024-03-04 10:00:00 | 2024-03-04       |

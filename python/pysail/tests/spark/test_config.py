@@ -83,9 +83,10 @@ def test_sql_set_time_zone_local_and_reset_restore_the_same_zone(spark):
         spark.conf.set("spark.sql.session.timeZone", zone)
 
 
+@pytest.mark.spark(
+    skip_if_jvm=True, reason="a `local` remote returns the same JVM Spark session instead of a second one"
+)
 def test_sql_set_time_zone_is_isolated_between_sessions(spark, remote):
-    if remote.startswith("local"):
-        pytest.skip("a `local` remote returns the same Spark session instead of a second one")
     key = "spark.sql.session.timeZone"
     with spark_session_factory(remote) as sessions:
         other = sessions.create()

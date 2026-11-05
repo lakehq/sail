@@ -32,10 +32,11 @@ impl DeleteFileRef {
 
 /// The read descriptor after snapshot, sequence, and partition matching.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum PositionDeleteFile {
-    Parquet {
+pub enum PositionDeleteFile {
+    File {
         path: String,
         size: u64,
+        file_format: DataFileFormat,
     },
     DeletionVector {
         path: String,
@@ -60,12 +61,11 @@ impl TryFrom<&DataFile> for PositionDeleteFile {
                 range: offset as u64..(offset + size) as u64,
                 cardinality: file.record_count,
             })
-        } else if file.content == DataContentType::PositionDeletes
-            && file.file_format == DataFileFormat::Parquet
-        {
-            Ok(Self::Parquet {
+        } else if file.content == DataContentType::PositionDeletes {
+            Ok(Self::File {
                 path: file.file_path.clone(),
                 size: file.file_size_in_bytes,
+                file_format: file.file_format,
             })
         } else {
             datafusion_common::exec_err!(
@@ -73,6 +73,40 @@ impl TryFrom<&DataFile> for PositionDeleteFile {
                 file.file_path
             )
         }
+    }
+}
+
+/// An equality-delete read descriptor after applicability and schema resolution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EqualityDeleteFile {
+    pub path: String,
+    pub size: u64,
+    pub file_format: DataFileFormat,
+    pub equality_ids: Vec<i32>,
+}
+
+impl TryFrom<&DataFile> for EqualityDeleteFile {
+    type Error = datafusion_common::DataFusionError;
+
+    fn try_from(file: &DataFile) -> Result<Self, Self::Error> {
+        if file.content != DataContentType::EqualityDeletes {
+            return datafusion_common::exec_err!(
+                "Unsupported Iceberg equality delete file: {}",
+                file.file_path
+            );
+        }
+        if file.equality_ids.is_empty() {
+            return datafusion_common::plan_err!(
+                "equality delete file {} has empty equality_ids",
+                file.file_path
+            );
+        }
+        Ok(Self {
+            path: file.file_path.clone(),
+            size: file.file_size_in_bytes,
+            file_format: file.file_format,
+            equality_ids: file.equality_ids.clone(),
+        })
     }
 }
 
@@ -495,6 +529,103 @@ mod tests {
             data_sequence_number: seq,
             partition_spec_id,
             is_unpartitioned_spec,
+        }
+    }
+
+    #[test]
+    fn equality_descriptor_excludes_nonfinite_metrics_and_validates_content() {
+        use crate::spec::{Datum, PrimitiveType};
+
+        let mut file = make_delete(
+            DataContentType::EqualityDeletes,
+            "s3://t/equality.parquet",
+            vec![],
+            0,
+            None,
+            2,
+            true,
+        )
+        .data_file;
+        file.equality_ids = vec![2, 1];
+        let expected = EqualityDeleteFile {
+            path: file.file_path.clone(),
+            size: file.file_size_in_bytes,
+            file_format: DataFileFormat::Parquet,
+            equality_ids: vec![2, 1],
+        };
+        for value in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            file.lower_bounds.insert(
+                3,
+                Datum::new(
+                    PrimitiveType::Double,
+                    PrimitiveLiteral::Double(value.into()),
+                ),
+            );
+            file.upper_bounds = file.lower_bounds.clone();
+            let descriptor = EqualityDeleteFile::try_from(&file).unwrap();
+            assert_eq!(descriptor, expected);
+            let json = serde_json::to_string(&descriptor).unwrap();
+            assert_eq!(
+                serde_json::from_str::<EqualityDeleteFile>(&json).unwrap(),
+                expected
+            );
+        }
+        file.content = DataContentType::Data;
+        assert!(EqualityDeleteFile::try_from(&file).is_err());
+        file.content = DataContentType::PositionDeletes;
+        assert!(EqualityDeleteFile::try_from(&file).is_err());
+        file.content = DataContentType::EqualityDeletes;
+        file.equality_ids.clear();
+        assert!(EqualityDeleteFile::try_from(&file).is_err());
+    }
+
+    #[test]
+    fn ordinary_delete_descriptors_preserve_format_without_requiring_a_decoder() {
+        for format in [
+            DataFileFormat::Parquet,
+            DataFileFormat::Avro,
+            DataFileFormat::Orc,
+        ] {
+            let mut file = make_delete(
+                DataContentType::EqualityDeletes,
+                "s3://t/delete",
+                vec![],
+                0,
+                None,
+                2,
+                true,
+            )
+            .data_file;
+            file.file_format = format;
+            let equality = EqualityDeleteFile::try_from(&file).unwrap();
+            assert_eq!(equality.file_format, format);
+            assert_eq!(
+                serde_json::from_str::<EqualityDeleteFile>(
+                    &serde_json::to_string(&equality).unwrap()
+                )
+                .unwrap(),
+                equality
+            );
+            file.content = DataContentType::PositionDeletes;
+            file.equality_ids.clear();
+            let position = PositionDeleteFile::try_from(&file).unwrap();
+            assert_eq!(
+                position,
+                PositionDeleteFile::File {
+                    path: file.file_path.clone(),
+                    size: file.file_size_in_bytes,
+                    file_format: format,
+                }
+            );
+            assert_eq!(
+                serde_json::from_str::<PositionDeleteFile>(
+                    &serde_json::to_string(&position).unwrap()
+                )
+                .unwrap(),
+                position
+            );
+            file.content = DataContentType::Data;
+            assert!(PositionDeleteFile::try_from(&file).is_err());
         }
     }
 

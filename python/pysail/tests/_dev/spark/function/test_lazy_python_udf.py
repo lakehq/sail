@@ -25,6 +25,7 @@ def null_string(spark):  # noqa: ARG001
 
 
 @pytest.mark.parametrize("dynamic_null", [False, True])
+@pytest.mark.spark(cross_version=True)
 def test_sequence_extracts_python_udf_before_null_short_circuit(
     spark,
     fail_string,
@@ -39,6 +40,7 @@ def test_sequence_extracts_python_udf_before_null_short_circuit(
         spark.range(1).select(F.sequence(start, fail_string("id").cast("long"))).collect()
 
 
+@pytest.mark.spark(cross_version=True)
 def test_convert_timezone_extracts_python_udf_for_dynamic_null(
     spark,
     fail_string,
@@ -54,6 +56,7 @@ def test_convert_timezone_extracts_python_udf_for_dynamic_null(
         ).collect()
 
 
+@pytest.mark.spark(cross_version=True)
 def test_convert_timezone_python_null_short_circuits_invalid_zone(
     spark,
     null_string,

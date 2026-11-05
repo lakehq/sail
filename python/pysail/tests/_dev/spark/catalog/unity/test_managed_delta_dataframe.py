@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from pysail.testing.spark.utils.common import pyspark_version
 from pysail.tests._dev.spark.catalog.unity.conftest import _unity_delta_commit_info, _unity_table_info
 
 if TYPE_CHECKING:
@@ -130,10 +129,7 @@ def test_managed_delta_create_and_schema_merge_write_spark_struct_field_type_jso
         spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")
 
 
-@pytest.mark.skipif(
-    pyspark_version() < (4,),
-    reason="DataFrame arguments in spark.sql() require Spark 4+",
-)
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame arguments in spark.sql()")
 def test_spark_sql_merge_dataframe_source_is_unity_managed(
     spark: SparkSession,
     unity_rest_url: str,

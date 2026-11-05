@@ -5,7 +5,7 @@ import pytest
 from pyspark.errors import AnalysisException
 from pyspark.sql.types import IntegerType, Row, StringType, StructField, StructType
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 def test_get_item_ignore_case(spark):
@@ -15,14 +15,13 @@ def test_get_item_ignore_case(spark):
 
 
 @pytest.mark.parametrize("computed", [False, True])
+@pytest.mark.spark(version=">=4", reason="Uses Spark Connect column selectors")
 def test_struct_field_selector_kind(spark, computed):
     df = spark.createDataFrame([((1,), "selector")], "payload struct<selector:int>, selector string")
     payload = F.coalesce(F.col("payload"), F.col("payload")) if computed else F.col("payload")
 
     assert df.select(payload.getField("selector").alias("value")).collect() == [Row(value=1)]
     assert df.select(payload["selector"].alias("value")).collect() == [Row(value=1)]
-    if pyspark_version() < (4,):
-        pytest.skip("the Spark Connect client does not support column selectors before PySpark 4")
     with pytest.raises(AnalysisException, match=r"INVALID_EXTRACT_FIELD_TYPE|extraction must be a literal"):
         df.select(payload[F.col("selector")]).collect()
 
@@ -146,16 +145,12 @@ def test_string_to_date_accepts_t_separator(spark):
         spark.conf.set("spark.sql.ansi.enabled", original_ansi)
 
 
+@pytest.mark.spark(version=">=4", reason="Uses Column.try_cast")
 def test_try_cast_invalid_date(spark):
     """Test that try_cast returns NULL for invalid date/timestamp values.
 
     See: https://github.com/lakehq/sail/issues/1192
     """
-    # try_cast was added in Spark 4.0
-    col = F.col("x")
-    if not callable(getattr(col, "try_cast", None)):
-        pytest.skip("try_cast not available in this Spark version")
-
     df = spark.createDataFrame(
         schema="id STRING, some_date STRING",
         data=[("a", "2025-99-99")],
@@ -249,7 +244,7 @@ def test_recovered_struct_field_preserves_successful_extraction_after_array(spar
         projected.where("s.a.x = 1").collect()
 
 
-@pytest.mark.skipif(pyspark_version() < (4, 2), reason="NullType extraction propagation was added in Spark 4.2")
+@pytest.mark.spark(version=">=4.2", reason="Tests NullType propagation through recovered column extraction")
 @pytest.mark.xfail(
     not is_jvm_spark(),
     reason="Sail follows Spark 3.5-4.1 recovery; Spark 4.2 propagates NULL through the newer map value",
@@ -265,8 +260,8 @@ def _sail_bug(reason):
     return pytest.mark.xfail(not is_jvm_spark(), reason=reason, strict=True)
 
 
-SPARK_42_DATAFRAME_COLUMN_MARK = pytest.mark.skipif(
-    pyspark_version() < (4, 2), reason="Spark 4.2 filters DataFrame column candidates by the output before merging"
+SPARK_42_DATAFRAME_COLUMN_MARK = pytest.mark.spark(
+    version=">=4.2", reason="Tests output-based filtering of DataFrame column candidates before merging"
 )
 
 
