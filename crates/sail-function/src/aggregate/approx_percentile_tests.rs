@@ -1,9 +1,9 @@
-use super::*;
-
 use arrow::array::Int64Array;
 use arrow::datatypes::{TimeUnit, i256};
 use datafusion_physical_expr::expressions::{CastExpr, Column, Literal};
 use half::f16;
+
+use super::*;
 
 fn accumulator(
     data_type: DataType,
