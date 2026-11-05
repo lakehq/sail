@@ -7,6 +7,22 @@ on:
         description: The Spark version to test
         type: string
         required: true
+      spark_versions:
+        description: JSON array of PySpark versions in the matrix
+        type: string
+        required: true
+      seed:
+        description: Seed shared by all runners for deterministic test group assignment
+        type: string
+        required: true
+      suite_choices:
+        description: JSON array of enabled suite names
+        type: string
+        required: true
+      partial:
+        description: Whether this job belongs to a partial rather than full Python test run
+        type: boolean
+        required: true
     secrets:
       CODECOV_TOKEN:
         required: false
@@ -18,6 +34,9 @@ jobs:
     env:
       HATCH_ENV: "test.spark-${{ inputs.spark_version }}"
       PYSAIL_SOURCE_PATH: ${{ github.workspace }}/python/pysail
+      PYSAIL_TEST_SEED: ${{ inputs.seed }}
+      PYSAIL_TEST_SPARK_VERSIONS: ${{ inputs.spark_versions }}
+      PYSAIL_TEST_SUITE_CHOICES: ${{ inputs.suite_choices }}
       # Coverage environment variables
       RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-python-${{ inputs.spark_version }}-%p-%m.profraw
@@ -51,6 +70,11 @@ jobs:
         run: |
           hatch run install-pysail
 
+      - name: Install Kerberos client
+        run: |
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install --yes krb5-user
+
       - name: List Python packages
         continue-on-error: true
         run: |
@@ -68,7 +92,12 @@ jobs:
           fi
 
       - name: Run Tests
-        run: hatch run pytest -n 2 --dist=loadfile --pyargs pysail.tests pysail.tests._dev
+        run: |
+          # A version may have no assigned tests; pytest uses exit 5 for this case.
+          hatch run pytest --pyargs pysail.tests pysail.tests._dev -v || {
+            status=$?
+            test "$status" -eq 5
+          }
 
       # Generate coverage report after Python tests
       - name: Generate coverage report
@@ -89,7 +118,7 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage-python-${{ inputs.spark_version }}.info
-          flags: python-unit-tests
-          name: python-unit-tests
+          flags: ${{ inputs.partial && 'python-partial-tests' || 'python-tests' }}
+          name: ${{ inputs.partial && 'python-partial-tests' || 'python-tests' }}-${{ inputs.spark_version }}
           fail_ci_if_error: ${{ github.repository == 'lakehq/sail' }}
           env_vars: OS

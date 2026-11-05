@@ -17,10 +17,17 @@ jobs:
   setup:
     name: Setup
     runs-on: ubuntu-slim
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
     outputs:
+      python_tests_matrix: ${{ steps.versions.outputs.matrix }}
+      python_tests_versions: ${{ steps.versions.outputs.versions }}
+      python_tests_choices: ${{ steps.choices.outputs.choices }}
+      python_tests_partial: ${{ github.event_name != 'schedule' }}
       build_package: ${{ github.event_name == 'schedule' || github.event_name == 'push' || steps.filter.outputs.package == 'true' || steps.baseline-workflow.outputs.workflow_run_id == '' }}
       baseline_run_id: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
-      run_catalog_tests: ${{ ((github.event_name == 'pull_request' && (steps.message.outputs.run_catalog_tests == 'true' || steps.label.outputs.run_catalog_tests == 'true')) || github.event_name == 'schedule') && 'true' || 'false' }}
       run_spark_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.message.outputs.run_spark_tests == 'true' || steps.label.outputs.run_spark_tests == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
       run_ibis_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.message.outputs.run_ibis_tests == 'true' || steps.label.outputs.run_ibis_tests == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
     steps:
@@ -63,7 +70,6 @@ jobs:
               commit_sha: context.payload.pull_request !== undefined ? context.payload.pull_request.head.sha : context.sha,
             });
             const patterns = [
-                { name: 'run_catalog_tests', pattern: "\\[catalog tests?\\]", flags: "i" },
                 { name: 'run_spark_tests', pattern: "\\[(spark )?tests?\\]", flags: "i" },
                 { name: 'run_ibis_tests', pattern: "\\[(ibis )?tests?\\]", flags: "i" },
             ];
@@ -77,9 +83,65 @@ jobs:
         with:
           script: |
             const labels = context.payload.pull_request?.labels?.map(label => label.name) || [];
-            core.setOutput('run_catalog_tests', labels.includes('run catalog tests') ? 'true' : 'false');
             core.setOutput('run_spark_tests', labels.includes('run spark tests') ? 'true' : 'false');
             core.setOutput('run_ibis_tests', labels.includes('run ibis tests') ? 'true' : 'false');
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - uses: pypa/hatch@install
+
+      - name: Verify report scripts
+        run: node --test .github/scripts/*.test.cjs
+
+      - name: Read PySpark versions
+        id: versions
+        run: |
+          python - <<'PYTHON'
+          import json
+          import os
+          import tomllib
+          from pathlib import Path
+          config = tomllib.loads(Path("pyproject.toml").read_text())
+          versions = config["tool"]["hatch"]["envs"]["test"]["matrix"][0]["spark"]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"versions={json.dumps(versions)}\n")
+              output.write(f"matrix={json.dumps({'spark_version': versions})}\n")
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write(f"HATCH_ENV=test.spark-{versions[-1]}\n")
+          PYTHON
+
+      - name: Discover suites
+        env:
+          PYTHONPATH: ${{ github.workspace }}/python
+          PYSAIL_TEST_SUITE_MANIFEST: python-test-suites.json
+        run: |
+          # Exit 5 means no tests were collected.
+          hatch run pytest --collect-only -q --pyargs pysail.tests pysail.tests._dev || {
+            status=$?
+            test "$status" -eq 5
+          }
+
+      - name: Resolve suite choices
+        uses: actions/github-script@v9
+        id: choices
+        with:
+          script: |
+            const { preparePythonTestSuites } = require('./.github/scripts/python-test-suites.cjs');
+            const choices = await preparePythonTestSuites({
+              github,
+              context,
+              runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            });
+            core.setOutput('choices', JSON.stringify(choices));
+
+      - uses: actions/upload-artifact@v7
+        if: github.event_name == 'pull_request'
+        with:
+          name: python-test-report-${{ github.run_attempt }}
+          path: python-test-report
+          retention-days: 7
 
   rust-tests:
     name: Rust Tests
@@ -127,26 +189,19 @@ jobs:
 
   python-tests:
     name: Python Tests
-    if: ${{ github.event_name != 'schedule' && needs.setup.outputs.build_package == 'true' }}
+    if: ${{ !failure() && !cancelled() && needs.setup.outputs.build_package == 'true' }}
     uses: ./.github/workflows/python-tests.yml
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     strategy:
       fail-fast: false
-      matrix:
-        spark-version: ["3.5.9", "4.0.4", "4.1.3", "4.2.0"]
+      matrix: ${{ fromJSON(needs.setup.outputs.python_tests_matrix) }}
     with:
-      spark_version: ${{ matrix.spark-version }}
-    needs:
-      - setup
-      - rust-build
-
-  catalog-tests:
-    name: Catalog Integration Tests
-    if: ${{ needs.setup.outputs.build_package == 'true' && needs.setup.outputs.run_catalog_tests == 'true' }}
-    uses: ./.github/workflows/catalog-tests.yml
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      spark_version: ${{ matrix.spark_version }}
+      spark_versions: ${{ needs.setup.outputs.python_tests_versions }}
+      suite_choices: ${{ needs.setup.outputs.python_tests_choices }}
+      seed: ${{ github.event_name == 'pull_request' && format('pull/{0}', github.event.pull_request.number) || format('commit/{0}', github.sha) }}
+      partial: ${{ fromJSON(needs.setup.outputs.python_tests_partial) }}
     needs:
       - setup
       - rust-build
@@ -160,7 +215,6 @@ jobs:
       - python-tests
       - spark-tests
       - ibis-tests
-      - catalog-tests
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:

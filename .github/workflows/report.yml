@@ -9,7 +9,14 @@ on:
       - completed
 
 permissions:
+  contents: read
+  actions: read
   pull-requests: write
+
+concurrency:
+  group: report-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   report:
@@ -18,6 +25,15 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/pull-request-report
+        if: github.event.workflow_run.name == 'Build'
+        # Setup may have failed before generating the report.
+        continue-on-error: true
+        with:
+          workflow_run_id: ${{ github.event.workflow_run.id }}
+          artifact_name: python-test-report-${{ github.event.workflow_run.run_attempt }}
+          report_name: sail-python-test-suites
 
       # The Spark tests are not always run,
       # so we ignore the error if the artifact is not found.

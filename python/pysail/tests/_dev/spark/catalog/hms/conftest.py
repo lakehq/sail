@@ -553,3 +553,13 @@ def _scala_option_to_string(option) -> str | None:
         value = option.get()
         return value.toString() if hasattr(value, "toString") else str(value)
     return None
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    root = Path(__file__).parent
+    for item in items:
+        if item.path.is_relative_to(root):
+            item.add_marker(
+                pytest.mark.spark(version="==4.1.*", reason="HMS reference fixture uses the Iceberg Spark 4.1 runtime")
+            )
