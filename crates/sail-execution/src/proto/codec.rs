@@ -8037,14 +8037,14 @@ mod tests {
 
     #[test]
     fn test_round_trip_custom_named_rank_udwfs() -> Result<()> {
-        use datafusion::logical_expr::registry::FunctionRegistry;
         use datafusion::functions_window::rank::{Rank, RankType};
+        use datafusion::logical_expr::registry::FunctionRegistry;
         use datafusion::logical_expr::{WindowFrame, WindowFunctionDefinition};
         use datafusion::physical_expr::window::StandardWindowExpr;
         use datafusion::physical_plan::windows::{WindowUDFExpr, create_window_expr};
+        use datafusion_proto::physical_plan::DefaultPhysicalProtoConverter;
         use datafusion_proto::physical_plan::from_proto::parse_physical_window_expr;
         use datafusion_proto::physical_plan::to_proto::serialize_physical_window_expr;
-        use datafusion_proto::physical_plan::DefaultPhysicalProtoConverter;
 
         for rank_type in [RankType::Basic, RankType::Dense, RankType::Percent] {
             let udwf = Arc::new(WindowUDF::from(Rank::new(
@@ -8070,12 +8070,8 @@ mod tests {
             let mut task_context = TaskContext::default();
             task_context.register_udwf(Arc::clone(&udwf))?;
             let decode_context = PhysicalPlanDecodeContext::new(&task_context, &codec);
-            let decoded = parse_physical_window_expr(
-                &proto,
-                &decode_context,
-                schema.as_ref(),
-                &converter,
-            )?;
+            let decoded =
+                parse_physical_window_expr(&proto, &decode_context, schema.as_ref(), &converter)?;
             let decoded = decoded
                 .as_any()
                 .downcast_ref::<StandardWindowExpr>()
@@ -8085,7 +8081,10 @@ mod tests {
                 .as_any()
                 .downcast_ref::<WindowUDFExpr>()
                 .ok_or_else(|| plan_datafusion_err!("expected a window UDF expression"))?;
-            assert!(Arc::ptr_eq(decoded.fun(), &udwf), "rank type: {rank_type:?}");
+            assert!(
+                Arc::ptr_eq(decoded.fun(), &udwf),
+                "rank type: {rank_type:?}"
+            );
         }
         Ok(())
     }
