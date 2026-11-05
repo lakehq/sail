@@ -244,8 +244,8 @@ mod tests {
         }
     }
 
-    async fn fixture(existing: bool) -> (Arc<MemoryCatalogProvider>, Namespace) {
-        let namespace = Namespace::try_from(vec!["db".to_string()]).unwrap();
+    async fn fixture(existing: bool) -> CatalogResult<(Arc<MemoryCatalogProvider>, Namespace)> {
+        let namespace = Namespace::try_from(vec!["db".to_string()])?;
         let provider = Arc::new(MemoryCatalogProvider::new(
             "memory".into(),
             namespace.clone(),
@@ -255,15 +255,15 @@ mod tests {
             let mut old = options();
             old.columns[0].name = "old_column".into();
             old.properties = vec![("owner".into(), "old".into())];
-            provider.create_table(&namespace, "t", old).await.unwrap();
+            provider.create_table(&namespace, "t", old).await?;
         }
-        (provider, namespace)
+        Ok((provider, namespace))
     }
 
     #[tokio::test]
-    async fn replacement_stage_and_definite_failure_preserve_visible_state() {
+    async fn replacement_stage_and_definite_failure_preserve_visible_state() -> CatalogResult<()> {
         for existing in [false, true] {
-            let (provider, namespace) = fixture(existing).await;
+            let (provider, namespace) = fixture(existing).await?;
             let before = provider
                 .get_table(&namespace, "t")
                 .await
@@ -271,8 +271,7 @@ mod tests {
                 .map(status_value);
             let staged = provider
                 .stage_replacement(&namespace, "t", options())
-                .await
-                .unwrap();
+                .await?;
             assert_eq!(
                 provider
                     .get_table(&namespace, "t")
@@ -297,15 +296,15 @@ mod tests {
                 before
             );
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn replacement_staging_keeps_explicit_properties_separate() {
-        let (provider, namespace) = fixture(true).await;
+    async fn replacement_staging_keeps_explicit_properties_separate() -> CatalogResult<()> {
+        let (provider, namespace) = fixture(true).await?;
         let staged = provider
             .stage_replacement(&namespace, "t", options())
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(staged.properties, vec![("owner".into(), "old".into())]);
         assert_eq!(
             staged.property_updates,
@@ -313,27 +312,31 @@ mod tests {
         );
         let mut request = options();
         request.properties.clear();
-        let staged = provider
-            .stage_replacement(&namespace, "t", request)
-            .await
-            .unwrap();
+        let staged = provider.stage_replacement(&namespace, "t", request).await?;
         assert_eq!(staged.properties, vec![("owner".into(), "old".into())]);
         assert!(staged.property_updates.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn replacement_cannot_hide_original_publication_authority() {
+    async fn replacement_cannot_hide_original_publication_authority() -> CatalogResult<()> {
         for (key, value) in [
             ("table_type", "iceberg"),
             ("classification", "ICEBERG"),
             ("metadata.catalog", "managed"),
         ] {
-            let (provider, namespace) = fixture(true).await;
+            let (provider, namespace) = fixture(true).await?;
             {
-                let mut db = provider.databases.get_mut(&namespace).unwrap();
-                let TableKind::Table { properties, .. } = &mut db.tables.get_mut("t").unwrap().kind
+                let mut db = provider.databases.get_mut(&namespace).ok_or_else(|| {
+                    CatalogError::InvalidArgument("expected fixture database".into())
+                })?;
+                let TableKind::Table { properties, .. } = &mut db
+                    .tables
+                    .get_mut("t")
+                    .ok_or_else(|| CatalogError::InvalidArgument("expected fixture table".into()))?
+                    .kind
                 else {
-                    panic!("expected table")
+                    return Err(CatalogError::InvalidArgument("expected table".into()));
                 };
                 properties.push((key.into(), value.into()));
             }
@@ -344,10 +347,11 @@ mod tests {
                 Err(CatalogError::UnsupportedCapability(_))
             ));
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn replacement_conflicts_never_invoke_publisher() {
+    async fn replacement_conflicts_never_invoke_publisher() -> CatalogResult<()> {
         for mutation in [
             "catalog",
             "database",
@@ -357,19 +361,19 @@ mod tests {
             "aba",
             "absent_aba",
         ] {
-            let (provider, namespace) = fixture(mutation != "absent_aba").await;
+            let (provider, namespace) = fixture(mutation != "absent_aba").await?;
             let mut staged = provider
                 .stage_replacement(&namespace, "t", options())
-                .await
-                .unwrap();
+                .await?;
             match mutation {
                 "catalog" => staged.catalog_generation += 1,
                 "database" => staged.database_generation += 1,
                 "generation" => staged.table_generation += 1,
-                "rename" => provider
-                    .rename_table(&namespace, "t", &namespace, "renamed")
-                    .await
-                    .unwrap(),
+                "rename" => {
+                    provider
+                        .rename_table(&namespace, "t", &namespace, "renamed")
+                        .await?
+                }
                 "drop" | "aba" => {
                     provider
                         .drop_table(
@@ -380,20 +384,13 @@ mod tests {
                                 purge: false,
                             },
                         )
-                        .await
-                        .unwrap();
+                        .await?;
                     if mutation == "aba" {
-                        provider
-                            .create_table(&namespace, "t", options())
-                            .await
-                            .unwrap();
+                        provider.create_table(&namespace, "t", options()).await?;
                     }
                 }
                 "absent_aba" => {
-                    provider
-                        .create_table(&namespace, "t", options())
-                        .await
-                        .unwrap();
+                    provider.create_table(&namespace, "t", options()).await?;
                     provider
                         .drop_table(
                             &namespace,
@@ -403,8 +400,7 @@ mod tests {
                                 purge: false,
                             },
                         )
-                        .await
-                        .unwrap();
+                        .await?;
                 }
                 _ => unreachable!(),
             }
@@ -425,17 +421,18 @@ mod tests {
             );
             assert!(!called.load(Ordering::SeqCst), "{mutation}");
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn replacement_publication_is_atomic_and_survives_caller_cancellation() {
+    async fn replacement_publication_is_atomic_and_survives_caller_cancellation()
+    -> CatalogResult<()> {
         tokio::time::timeout(Duration::from_secs(10), async {
             for cancel in [false, true] {
-                let (provider, namespace) = fixture(true).await;
+                let (provider, namespace) = fixture(true).await?;
                 let staged = provider
                     .stage_replacement(&namespace, "t", options())
-                    .await
-                    .unwrap();
+                    .await?;
                 let expected = prepared_status(&staged, &namespace, "t");
                 let entered = Arc::new(Barrier::new(2));
                 let release = Arc::new(Barrier::new(2));
@@ -464,35 +461,45 @@ mod tests {
                 }
                 release.wait().await;
                 if cancel {
-                    assert!(task.await.unwrap_err().is_cancelled());
+                    let error = task.await.err().ok_or_else(|| {
+                        CatalogError::InvalidArgument("expected cancelled publication task".into())
+                    })?;
+                    assert!(error.is_cancelled());
                 } else {
-                    task.await.unwrap().unwrap();
+                    task.await.map_err(|error| {
+                        CatalogError::InvalidArgument(format!("publication task failed: {error}"))
+                    })??;
                 }
                 // This read waits for detached finalization, rather than polling or sleeping.
                 assert_eq!(
-                    status_value(provider.get_table(&namespace, "t").await.unwrap()),
+                    status_value(provider.get_table(&namespace, "t").await?),
                     status_value(expected)
                 );
             }
+            Ok::<(), CatalogError>(())
         })
         .await
-        .expect("publication or catalog read deadlocked");
+        .map_err(|error| {
+            CatalogError::InvalidArgument(format!(
+                "publication or catalog read deadlocked: {error}"
+            ))
+        })??;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn replacement_unknown_and_panic_fail_closed_only_for_affected_table() {
+    async fn replacement_unknown_and_panic_fail_closed_only_for_affected_table() -> CatalogResult<()>
+    {
         tokio::time::timeout(Duration::from_secs(10), async {
             for panic in [false, true] {
-                let (provider, namespace) = fixture(true).await;
+                let (provider, namespace) = fixture(true).await?;
                 provider
                     .create_table(&namespace, "unaffected", options())
-                    .await
-                    .unwrap();
-                let before = provider.get_table(&namespace, "t").await.unwrap();
+                    .await?;
+                let before = provider.get_table(&namespace, "t").await?;
                 let staged = provider
                     .stage_replacement(&namespace, "t", options())
-                    .await
-                    .unwrap();
+                    .await?;
                 let result = provider
                     .publish_replacement(
                         staged,
@@ -533,7 +540,9 @@ mod tests {
                     provider
                         .databases
                         .get(&namespace)
-                        .unwrap()
+                        .ok_or_else(|| {
+                            CatalogError::InvalidArgument("expected fixture database".into())
+                        })?
                         .tables
                         .get("t")
                         .cloned()
@@ -541,8 +550,14 @@ mod tests {
                     Some(status_value(before))
                 );
             }
+            Ok::<(), CatalogError>(())
         })
         .await
-        .expect("unknown outcome poisoned catalog access");
+        .map_err(|error| {
+            CatalogError::InvalidArgument(format!(
+                "unknown outcome poisoned catalog access: {error}"
+            ))
+        })??;
+        Ok(())
     }
 }
