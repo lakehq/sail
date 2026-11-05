@@ -1,3 +1,5 @@
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pyspark.errors import AnalysisException
@@ -10,6 +12,57 @@ def test_get_item_ignore_case(spark):
     df = spark.sql("SELECT struct(1 AS b) AS a")
     assert df.select(df.a.getItem("b")).collect() == [Row(**{"a.b": 1})]
     assert df.select(df.a.getItem("B")).collect() == [Row(**{"a.B": 1})]
+
+
+def test_array_of_structs_field_by_name(spark):
+    df = spark.sql("SELECT array(named_struct('p', 'x', 'q', 1), named_struct('p', 'y', 'q', 2)) AS a")
+    a = F.col("a")
+
+    assert df.select(a["p"]).collect() == [Row(**{"a.p": ["x", "y"]})]
+    assert df.select(a["P"]).collect() == [Row(**{"a.P": ["x", "y"]})]
+    assert df.select(a.getField("q")).collect() == [Row(**{"a.q": [1, 2]})]
+    assert df.select(a.getItem("q")).collect() == [Row(**{"a.q": [1, 2]})]
+    assert df.select(a[F.lit("q")]).collect() == [Row(**{"a.q": [1, 2]})]
+    assert df.select(F.slice(a, -1, 1)["p"][0]).collect() == [Row(**{"slice(a, -1, 1).p[0]": "y"})]
+    assert df.select(F.slice(a, -1, 1).getField("p")).collect() == [Row(**{"slice(a, -1, 1).p": ["y"]})]
+    assert df.where(a["q"][1] == 2).select(a["q"].alias("v")).collect() == [Row(v=[1, 2])]
+
+
+@pytest.mark.parametrize("field", ["zz", "0"])
+@pytest.mark.parametrize("ansi", ["true", "false"])
+def test_array_of_structs_missing_field(spark, field, ansi):
+    df = spark.sql("SELECT array(named_struct('p', 'x')) AS a")
+    previous = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", ansi)
+    try:
+        with pytest.raises(AnalysisException, match=r"FIELD_NOT_FOUND|missing or ambiguous field"):
+            df.select(F.col("a")[field]).collect()
+        with pytest.raises(AnalysisException, match=r"FIELD_NOT_FOUND|missing or ambiguous field"):
+            df.select(F.col("a").getField(field)).collect()
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous)
+
+
+@pytest.mark.parametrize(
+    "list_type",
+    [pa.large_list, lambda item: pa.list_(item, 2)],
+    ids=["large_list", "fixed_size_list"],
+)
+def test_array_of_structs_field_by_name_in_arrow_list_types(spark, tmp_path, list_type):
+    item = pa.struct([("p", pa.int32())])
+    table = pa.table({"a": pa.array([[{"p": 1}, {"p": 2}]], type=list_type(item))})
+    pq.write_table(table, tmp_path / "data.parquet")
+
+    df = spark.read.parquet(str(tmp_path))
+
+    assert df.select(F.col("a")["p"]).collect() == [Row(**{"a.p": [1, 2]})]
+
+
+def test_array_of_structs_index_stays_an_index(spark):
+    df = spark.sql("SELECT array(named_struct('q', 1), named_struct('q', 2)) AS a")
+
+    assert df.select(F.col("a")[1]).collect() == [Row(**{"a[1]": Row(q=2)})]
+    assert df.select(F.col("a").getItem(0)["q"]).collect() == [Row(**{"a[0].q": 1})]
 
 
 @pytest.mark.parametrize("computed", [False, True])

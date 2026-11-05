@@ -327,6 +327,30 @@ impl PlanResolver<'_> {
             self.resolve_named_expression(child, schema, state).await?;
         let data_type = expr.get_type(schema)?;
 
+        // Spark reads a string literal on an array of structs as a field of every element, even
+        // if the string looks like a number. A column never selects a field, even if it is named
+        // like one, so this must run before attribute selectors are turned into literals below.
+        if let spec::Expr::Literal(spec::Literal::Utf8 { value: Some(field) }) = &extraction
+            && matches!(
+                &data_type,
+                DataType::List(item) | DataType::LargeList(item) | DataType::FixedSizeList(item, _)
+                    if matches!(item.data_type(), DataType::Struct(_))
+            )
+        {
+            let Ok(Some(values)) = self.resolve_potentially_nested_field(
+                expr.clone(),
+                &data_type,
+                std::slice::from_ref(field),
+            ) else {
+                discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
+                return Err(PlanError::AnalysisError(format!(
+                    "missing or ambiguous field: {field}"
+                )));
+            };
+            let name = format!("{}.{field}", name.one()?);
+            return Ok(NamedExpr::new(vec![name], values));
+        }
+
         // For Maps, we support non-literal expressions as keys
         if matches!(data_type, DataType::Map(_, _)) {
             let NamedExpr {
