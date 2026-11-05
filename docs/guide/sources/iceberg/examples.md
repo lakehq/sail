@@ -88,6 +88,17 @@ WHERE event_time >= TIMESTAMP '2025-01-02 00:00:00'
   AND event_time < TIMESTAMP '2025-01-03 00:00:00';
 ```
 
+## Partition Evolution and Write Ordering
+
+Change the partition spec for future writes without rewriting existing files:
+
+```sql
+ALTER TABLE events ADD PARTITION FIELD bucket(4, id) AS id_bucket;
+ALTER TABLE events WRITE ORDERED BY event_time DESC NULLS LAST;
+```
+
+Existing files keep their original partition specs. The write order applies to newly written files; use `ORDER BY` in queries when result ordering matters.
+
 ## Format Version
 
 Sail creates version 2 Iceberg tables by default. Set `format-version` in `TBLPROPERTIES` to create a table in another supported version:
@@ -159,6 +170,8 @@ WHEN MATCHED THEN UPDATE SET name = source.name
 WHEN NOT MATCHED THEN INSERT (id, name) VALUES (source.id, source.name);
 ```
 
+Version 2 merge-on-read `UPDATE` and `MERGE` write Parquet position deletes and replacement rows. Version 2 merge-on-read row-level `DELETE` has separate restrictions; see the [DML support matrix](./features#dml-operations).
+
 For a version 3 table, set each DML operation to merge-on-read through its table property:
 
 ```sql
@@ -200,3 +213,27 @@ df = spark.read.format("iceberg").option("tag", "release_1").load(path)
 ```
 
 Use a snapshot ID, timestamp, or reference from the table history. For catalog-backed tables, read and write by table name so Sail follows the catalog metadata pointer. See [catalogs and maintenance](./features#catalogs-and-maintenance) for details.
+
+Create a tag for the current snapshot of the populated SQL `users` table and read it by name:
+
+```sql
+ALTER TABLE users CREATE TAG release_1;
+SELECT * FROM users VERSION AS OF 'release_1';
+ALTER TABLE users DROP TAG release_1;
+```
+
+## Metadata and Maintenance
+
+Inspect snapshots and compact the SQL `users` table:
+
+```sql
+SELECT snapshot_id, committed_at FROM users.snapshots;
+SELECT * FROM users.refs;
+CALL system.ancestors_of(table => 'users');
+CALL system.rewrite_data_files(
+  table => 'users',
+  options => map('rewrite-all', 'true')
+);
+```
+
+`rewrite_data_files` performs main-branch binpack compaction. See the [feature matrix](./features#catalogs-and-maintenance) for other maintenance procedures.
