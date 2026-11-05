@@ -73,6 +73,7 @@ macro_rules! duration_none {
     };
 }
 
+pub mod approx_percentile;
 pub mod bitmap_and_agg;
 pub mod bitmap_construct_agg;
 pub mod bitmap_or_agg;
