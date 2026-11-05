@@ -121,62 +121,6 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         &self.signature
     }
 
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if !(2..=3).contains(&arg_types.len()) {
-            return plan_err!("percentile_approx requires 2 or 3 arguments");
-        }
-        fn dictionary_value_type(mut data_type: &DataType) -> &DataType {
-            while let DataType::Dictionary(_, value) = data_type {
-                data_type = value;
-            }
-            data_type
-        }
-        let input = dictionary_value_type(&arg_types[0]);
-        let input = match input {
-            DataType::Null => DataType::Float64,
-            dt if dt.is_numeric()
-                || matches!(
-                    dt,
-                    DataType::Interval(IntervalUnit::YearMonth) | DataType::Duration(_)
-                ) =>
-            {
-                dt.clone()
-            }
-            dt => {
-                return plan_err!(
-                    "percentile_approx requires numeric input or a supported interval, got {dt}"
-                );
-            }
-        };
-        let percentage = match dictionary_value_type(&arg_types[1]) {
-            DataType::List(field)
-            | DataType::LargeList(field)
-            | DataType::FixedSizeList(field, _)
-            | DataType::ListView(field)
-            | DataType::LargeListView(field)
-                if dictionary_value_type(field.data_type()).is_numeric()
-                    || dictionary_value_type(field.data_type()) == &DataType::Null =>
-            {
-                DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true)))
-            }
-            dt if dt.is_numeric() || dt == &DataType::Null => DataType::Float64,
-            dt => {
-                return plan_err!(
-                    "percentile_approx percentage must be numeric or a numeric array, got {dt}"
-                );
-            }
-        };
-        let mut types = vec![input, percentage];
-        if let Some(accuracy) = arg_types.get(2) {
-            let accuracy = dictionary_value_type(accuracy);
-            if !accuracy.is_integer() {
-                return plan_err!("percentile_approx accuracy must be an integer");
-            }
-            types.push(accuracy.clone());
-        }
-        Ok(types)
-    }
-
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         let types = self.coerce_types(arg_types)?;
         if matches!(types[1], DataType::List(_)) {
@@ -259,6 +203,62 @@ impl AggregateUDFImpl for ApproxPercentileCont {
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
         AggregateOrderSensitivity::Insensitive
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if !(2..=3).contains(&arg_types.len()) {
+            return plan_err!("percentile_approx requires 2 or 3 arguments");
+        }
+        fn dictionary_value_type(mut data_type: &DataType) -> &DataType {
+            while let DataType::Dictionary(_, value) = data_type {
+                data_type = value;
+            }
+            data_type
+        }
+        let input = dictionary_value_type(&arg_types[0]);
+        let input = match input {
+            DataType::Null => DataType::Float64,
+            dt if dt.is_numeric()
+                || matches!(
+                    dt,
+                    DataType::Interval(IntervalUnit::YearMonth) | DataType::Duration(_)
+                ) =>
+            {
+                dt.clone()
+            }
+            dt => {
+                return plan_err!(
+                    "percentile_approx requires numeric input or a supported interval, got {dt}"
+                );
+            }
+        };
+        let percentage = match dictionary_value_type(&arg_types[1]) {
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::FixedSizeList(field, _)
+            | DataType::ListView(field)
+            | DataType::LargeListView(field)
+                if dictionary_value_type(field.data_type()).is_numeric()
+                    || dictionary_value_type(field.data_type()) == &DataType::Null =>
+            {
+                DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true)))
+            }
+            dt if dt.is_numeric() || dt == &DataType::Null => DataType::Float64,
+            dt => {
+                return plan_err!(
+                    "percentile_approx percentage must be numeric or a numeric array, got {dt}"
+                );
+            }
+        };
+        let mut types = vec![input, percentage];
+        if let Some(accuracy) = arg_types.get(2) {
+            let accuracy = dictionary_value_type(accuracy);
+            if !accuracy.is_integer() {
+                return plan_err!("percentile_approx accuracy must be an integer");
+            }
+            types.push(accuracy.clone());
+        }
+        Ok(types)
     }
 }
 
