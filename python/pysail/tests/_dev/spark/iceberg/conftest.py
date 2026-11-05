@@ -1,19 +1,21 @@
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 from pyiceberg.table import Table
 
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.tests._dev.spark.iceberg.utils import create_sql_catalog
 
 if TYPE_CHECKING:
     from pyiceberg.schema import Schema
 
 
-@pytest.fixture(scope="session", autouse=True)
-def skip_if_jvm_spark():
-    if is_jvm_spark():
-        pytest.skip("Iceberg tests for JVM Spark")
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    root = Path(__file__).parent
+    for item in items:
+        if item.path.is_relative_to(root):
+            item.add_marker(pytest.mark.spark(skip_if_jvm=True, reason="Tests Sail's Iceberg integration"))
 
 
 @pytest.fixture

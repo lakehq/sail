@@ -6,8 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from pysail.testing.spark.utils.common import pyspark_version
-
 SCALAR_SUBQUERY_SLOTS = re.compile(r"ScalarSubqueryExec: subqueries=(\d+)")
 # The rows of the table that the rollback fixture creates, at its first and current snapshots.
 ROWS_AT_FIRST_SNAPSHOT = 1
@@ -51,7 +49,7 @@ def versioned_table(spark, tmp_path):
     spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.scalar requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
 @pytest.mark.parametrize(
     ("left_first", "right_first", "expected", "slots"),
     [
@@ -147,7 +145,7 @@ def rollback_on_schema(spark, tmp_path, request):
     spark.sql(f"DROP TABLE IF EXISTS {iceberg_table}")
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="Python data sources require PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
 def test_references_to_an_iceberg_table_in_one_query_read_one_snapshot(spark, rollback_on_schema):
     iceberg_table, hook_table, location = rollback_on_schema
     assert spark.sql(f"SELECT count(*) FROM {iceberg_table}").collect()[0][0] == ROWS_AT_CURRENT_SNAPSHOT  # noqa: S608

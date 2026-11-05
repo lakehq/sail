@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from pysail.testing.spark.utils.common import pyspark_version
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 SCALAR_SUBQUERY_SLOTS = re.compile(r"ScalarSubqueryExec: subqueries=(\d+)")
@@ -29,7 +28,7 @@ def versioned_table(spark, tmp_path):
     spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.scalar requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
 @pytest.mark.parametrize(
     ("left_version", "right_version", "expected", "slots"),
     [
@@ -111,7 +110,7 @@ def commit_on_schema(spark, tmp_path, request):
     spark.sql(f"DROP TABLE IF EXISTS {delta_table}")
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="Python data sources require PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
 def test_references_to_a_delta_table_in_one_query_read_one_version(spark, commit_on_schema):
     delta_table, hook_table, log_dir = commit_on_schema
     rows = spark.sql(f"SELECT count(*) FROM {delta_table}").collect()[0][0]  # noqa: S608

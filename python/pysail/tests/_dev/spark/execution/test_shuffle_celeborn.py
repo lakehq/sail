@@ -11,7 +11,6 @@ import pytest
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
-from pysail.testing.spark.utils.common import is_jvm_spark
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -22,7 +21,7 @@ if TYPE_CHECKING:
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only"),
+    pytest.mark.spark(skip_if_jvm=True, reason="Sail local-cluster mode only"),
 ]
 
 
@@ -94,6 +93,7 @@ def test_repartition_collect_with_celeborn_shuffle(remote):
     ]
 
 
+@pytest.mark.spark(cross_version=True)
 def test_consumed_celeborn_shuffle_data_is_removed(spark, celeborn_master: MasterService):
     @F.udf("long")
     def identity(value):

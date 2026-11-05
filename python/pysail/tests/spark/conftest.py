@@ -13,4 +13,5 @@ __all__ = ["local_timezone", "remote", "session_timezone", "spark", "spark_docte
 
 def pytest_configure(config: pytest.Config) -> None:
     config.pluginmanager.import_plugin("pysail.testing.fixtures")
+    config.pluginmanager.import_plugin("pysail.testing.spark.markers")
     config.pluginmanager.import_plugin("pysail.testing.spark.doctest")

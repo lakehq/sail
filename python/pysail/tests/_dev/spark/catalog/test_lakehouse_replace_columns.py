@@ -4,11 +4,10 @@ import json
 import pytest
 
 from pysail.testing._dev.spark.ddl import exercise_lakehouse_replace_columns
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 from pysail.tests._dev.spark.catalog.test_lakehouse_column_ddl import identity, metadata_schema
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Requires lakehouse extensions")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Lakehouse extensions are not configured for JVM Spark tests")
 
 
 @pytest.mark.parametrize("fmt", ["delta", "iceberg"])

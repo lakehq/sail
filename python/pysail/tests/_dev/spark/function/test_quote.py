@@ -3,7 +3,7 @@
 import pandas as pd
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
@@ -35,10 +35,7 @@ def test_quote(spark):
     assert pd.isna(actual["result"].iloc[5])
 
 
-@pytest.mark.skipif(
-    pyspark_version() < (4, 1),
-    reason="pyspark.sql.functions.quote was added in PySpark 4.1",
-)
+@pytest.mark.spark(version=">=4.1", reason="Uses pyspark.sql.functions.quote")
 def test_quote_function_api(spark):
     """Tests sf.quote() function from pyspark.sql.functions matches the SQL form."""
     from pyspark.sql import functions as sf

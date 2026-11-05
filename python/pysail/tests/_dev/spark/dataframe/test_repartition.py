@@ -5,7 +5,7 @@ from pandas.testing import assert_frame_equal
 from pyspark.errors import AnalysisException, IllegalArgumentException
 from pyspark.sql import Row
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.plan import normalize_plan_text
 
 
@@ -31,6 +31,7 @@ def normalized_plan(df):
     return normalize_plan_text(df._explain_string())  # noqa: SLF001
 
 
+@pytest.mark.spark(cross_version=True)
 def test_explicit_repartition(spark):
     assert partition_count(spark.range(0, 10, 1, 2)) == 2  # noqa: PLR2004
     assert (
@@ -44,6 +45,7 @@ def test_explicit_repartition(spark):
 # Ported from Spark 3 (3.5.9): pyspark/sql/dataframe.py, DataFrame.repartitionByRange doctest.
 # Uses Connect partition IDs/counts instead of the RDD API.
 @pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.spark(cross_version=True)
 def test_range_repartition_preserves_rows_and_partition_count(spark, descending):
     source = spark.range(0, 36, 1, 4).withColumn("key", F.col("id") % 12)
     key = F.col("key").desc() if descending else F.col("key").asc()
@@ -89,7 +91,7 @@ def test_explicit_repartition_spreads_identical_rows(spark):
     assert partition_ids == set(range(4))
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail only")
+@pytest.mark.spark(skip_if_jvm=True, reason="Tests Sail's round-robin row assignment")
 def test_repartition_assigns_rows_round_robin(spark):
     df = spark.sql("SELECT id FROM range(0, 6, 1, 1)")
     repartitioned = df.repartition(2)
@@ -129,7 +131,7 @@ def test_explicit_repartition_plan_shape_uses_expected_physical_nodes(spark):
     assert "RepartitionExec: partitioning=Hash([" in hash_plan
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
 @pytest.mark.yamlsnapshot(group="plan")
 def test_explicit_repartition_pushes_column_projection_down_plan(spark, snapshot):
     df1 = spark.sql("SELECT id AS id1 FROM range(6)")
@@ -164,7 +166,7 @@ def test_explicit_repartition_pushes_column_projection_down_result(spark):
     ]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
 @pytest.mark.yamlsnapshot(group="plan")
 def test_explicit_repartition_hash_partitioning_remaps_after_projection_pushdown_plan(spark, snapshot):
     df1 = spark.sql("SELECT id AS id1 FROM range(6)")
@@ -181,7 +183,7 @@ def test_explicit_repartition_hash_partitioning_remaps_after_projection_pushdown
     assert plan == snapshot
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
 @pytest.mark.yamlsnapshot(group="plan")
 def test_explicit_repartition_does_not_push_filter_down_plan(spark, snapshot):
     df = spark.range(6).repartition(3).filter(F.col("id") % 2 == 0)
@@ -190,6 +192,7 @@ def test_explicit_repartition_does_not_push_filter_down_plan(spark, snapshot):
     assert plan == snapshot
 
 
+@pytest.mark.spark(cross_version=True)
 def test_explicit_coalesce(spark):
     assert partition_count(spark.range(0, 10, 1, 2).coalesce(1)) == 1
     assert partition_count(spark.range(0, 10, 1, 2).coalesce(2)) == 2  # noqa: PLR2004
@@ -197,6 +200,7 @@ def test_explicit_coalesce(spark):
     assert partition_count(spark.range(0, 10, 1, 4).coalesce(2)) == 2  # noqa: PLR2004
 
 
+@pytest.mark.spark(cross_version=True)
 def test_coalesce_hint(spark):
     df = spark.range(0, 12, 1, 4).select("id", (F.col("id") % 3).alias("group"))
 
@@ -208,6 +212,7 @@ def test_coalesce_hint(spark):
     assert_frame_equal(actual, expected)
 
 
+@pytest.mark.spark(cross_version=True)
 def test_coalesce_hint_rejects_zero_partitions(spark):
     with pytest.raises(Exception, match="COALESCE hint requires at least one partition"):
         partition_count(spark.range(0, 10, 1, 2).hint("COALESCE", 0))
@@ -219,11 +224,12 @@ def test_coalesce_sql_hint_rejects_invalid_partition_types(spark, parameters):
         spark.sql(f"SELECT /*+ COALESCE({parameters}) */ id FROM range(6)").collect()  # noqa: S608
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail supports Int64 partition counts")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail supports Int64 partition counts")
 @pytest.mark.parametrize(
     "hint",
     ["COALESCE(2L)", "REPARTITION(2L)", "REPARTITION(2L, id)", "REPARTITION(+2L)", "REPARTITION(+2L, id)"],
 )
+@pytest.mark.spark(cross_version=True)
 def test_sql_hint_accepts_int64_partition_count(spark, hint):
     result = spark.sql(f"SELECT /*+ {hint} */ id FROM range(0, 12, 1, 4)")  # noqa: S608
     assert partition_count(result) == 2  # noqa: PLR2004
@@ -238,7 +244,7 @@ def test_sql_hint_rejects_non_positive_partition_count(spark, hint, count):
         spark.sql(f"SELECT /*+ {hint} */ id FROM range(6)").collect()  # noqa: S608
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail supports Int64 partition counts")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail supports Int64 partition counts")
 @pytest.mark.parametrize("hint", ["COALESCE({count})", "REPARTITION({count})", "REPARTITION({count}, id)"])
 @pytest.mark.parametrize("count", ["0L", "+0L", "-1L", "-2147483649L"])
 def test_sql_hint_rejects_non_positive_int64_partition_count(spark, hint, count):
@@ -247,14 +253,14 @@ def test_sql_hint_rejects_non_positive_int64_partition_count(spark, hint, count)
         spark.sql(f"SELECT /*+ {hint} */ id FROM range(6)").collect()  # noqa: S608
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail supports Int64 partition counts")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail supports Int64 partition counts")
 @pytest.mark.parametrize("hint", ["COALESCE", "REPARTITION"])
 def test_dataframe_hint_rejects_negative_int64_partition_count(spark, hint):
     with pytest.raises(IllegalArgumentException):
         spark.range(6).hint(hint, -(2**31) - 1).collect()
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail supports Int64 partition counts")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail supports Int64 partition counts")
 @pytest.mark.parametrize("hint", ["COALESCE", "REPARTITION"])
 @pytest.mark.parametrize("count", [2**31, 2**63 - 1])
 def test_dataframe_hint_accepts_large_partition_count(spark, hint, count):
@@ -276,7 +282,7 @@ def test_shuffle_partitions_rejects_invalid_config(spark, value):
         spark.conf.set("spark.sql.shuffle.partitions", previous)
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail supports Int64 partition counts")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail supports Int64 partition counts")
 @pytest.mark.parametrize("value", ["1", "2147483648", "9223372036854775807"])
 def test_shuffle_partitions_accepts_int64_bounds(spark, value):
     previous = spark.conf.get("spark.sql.shuffle.partitions")
@@ -287,6 +293,7 @@ def test_shuffle_partitions_accepts_int64_bounds(spark, value):
         spark.conf.set("spark.sql.shuffle.partitions", previous)
 
 
+@pytest.mark.spark(cross_version=True)
 def test_repartition_hint(spark):
     """Apply an integer REPARTITION hint without changing the rows."""
     df = spark.range(0, 12, 1, 4).select("id", (F.col("id") % 3).alias("group"))
@@ -314,6 +321,7 @@ def test_repartition_hint_rejects_invalid_parameters(spark, parameters):
 
 @pytest.mark.parametrize("with_count", [False, True])
 @pytest.mark.parametrize("columns", [("group",), ("group", "bucket"), ("s.key", "`a.b`")])
+@pytest.mark.spark(cross_version=True)
 def test_repartition_hint_by_columns(spark, with_count, columns):
     old_partitions = spark.conf.get("spark.sql.shuffle.partitions")
     old_adaptive = spark.conf.get("spark.sql.adaptive.enabled")
@@ -337,6 +345,7 @@ def test_repartition_hint_by_columns(spark, with_count, columns):
 
 
 @pytest.mark.parametrize("parameters", ["3, id", "3, r.id"])
+@pytest.mark.spark(cross_version=True)
 def test_repartition_sql_hint_recovers_projected_column(spark, parameters):
     result = spark.sql(f"SELECT /*+ REPARTITION({parameters}) */ id + 1 AS value FROM range(12) r")  # noqa: S608
     assert result.columns == ["value"]
@@ -353,6 +362,7 @@ def test_repartition_sql_hint_recovers_projected_column(spark, parameters):
         "SELECT /*+ UNKNOWN_HINT(id) REPARTITION(3, id) */ id FROM range(12)",
     ],
 )
+@pytest.mark.spark(cross_version=True)
 def test_repartition_sql_hint_precedence(spark, query):
     result = spark.sql(query)
     assert partition_count(result) == 3  # noqa: PLR2004
@@ -360,6 +370,7 @@ def test_repartition_sql_hint_precedence(spark, query):
 
 
 @pytest.mark.parametrize("hint", ["REPARTITION(id)", "REPARTITION"])
+@pytest.mark.spark(cross_version=True)
 def test_repartition_sql_hint_default_partition_count(spark, hint):
     old_partitions = spark.conf.get("spark.sql.shuffle.partitions")
     old_adaptive = spark.conf.get("spark.sql.adaptive.enabled")
@@ -374,6 +385,7 @@ def test_repartition_sql_hint_default_partition_count(spark, hint):
         spark.conf.set("spark.sql.adaptive.enabled", old_adaptive)
 
 
+@pytest.mark.spark(cross_version=True)
 def test_sql_hint_delimiters_in_comments_and_strings(spark):
     result = spark.sql("SELECT /* REPARTITION(99) */ '/*+ REPARTITION(99) */' AS value")
     assert partition_count(result) == 1
@@ -401,7 +413,7 @@ def test_repartition_sql_hint_rejects_invalid_parameters(spark, parameters):
         spark.sql(f"SELECT /*+ REPARTITION({parameters}) */ id FROM range(12)").collect()  # noqa: S608
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
 @pytest.mark.yamlsnapshot(group="plan")
 def test_repartition_column_hint_plan(spark, snapshot):
     result = spark.sql("SELECT /*+ REPARTITION(3, id) */ id + 1 AS value FROM range(12)")
@@ -424,6 +436,7 @@ def test_explicit_coalesce_preserves_rows(spark):
     assert_frame_equal(actual, expected)
 
 
+@pytest.mark.spark(cross_version=True)
 def test_explicit_coalesce_keeps_input_partitions_intact(spark):
     row_count = 48
     input_partition_count = 4
@@ -441,6 +454,7 @@ def test_explicit_coalesce_keeps_input_partitions_intact(spark):
     assert sum(len(group) for group in groups) == input_partition_count
 
 
+@pytest.mark.spark(cross_version=True)
 def test_explicit_coalesce_after_filter_and_projection(spark):
     row_count = 12
     partition_count_before = 4
@@ -513,9 +527,7 @@ def test_repartition_then_sort_within_partitions_by_removed_attribute(repartitio
     assert result.collect() == [Row(a=3), Row(a=2), Row(a=1)]
 
 
-@pytest.mark.skipif(
-    pyspark_version() < (4,), reason="the Spark Connect client does not support column selectors before PySpark 4"
-)
+@pytest.mark.spark(version=">=4", reason="Uses Spark Connect column selectors")
 def test_repartition_recovered_struct_rejects_column_selector(spark):
     source = spark.createDataFrame([((1, 2), 5)], "s struct<x:int, k:int>, a int")
     projected = source.select("s", "a").select("a")

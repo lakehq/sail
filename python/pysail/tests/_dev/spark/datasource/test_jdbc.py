@@ -11,12 +11,11 @@ from pathlib import Path
 import pytest
 from testcontainers.postgres import PostgresContainer
 
-from pysail.testing.spark.utils.common import pyspark_version
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.spark(version=">=4.1", reason="Uses the JDBC Python DataSource with filter pushdown"),
+]
 
-pytestmark = pytest.mark.integration
-
-if pyspark_version() < (4, 1):
-    pytest.skip("Python data source requires Spark 4.1+", allow_module_level=True)
 
 _PG_IMAGE = "postgres:16-alpine"
 _PG_USER = "testuser"

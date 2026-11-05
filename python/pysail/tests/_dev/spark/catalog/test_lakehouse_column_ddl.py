@@ -3,10 +3,9 @@ import json
 
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Requires lakehouse extensions")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Lakehouse extensions are not configured for JVM Spark tests")
 
 
 @pytest.fixture(params=["delta", "iceberg"])

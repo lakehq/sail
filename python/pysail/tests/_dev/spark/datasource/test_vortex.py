@@ -9,12 +9,8 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-try:
-    from pyspark.sql.datasource import EqualTo as _EqualTo  # noqa: F401
-except ImportError:
-    pytest.skip(
-        "Python DataSource API with filter pushdown not available (requires PySpark 4.1+)", allow_module_level=True
-    )
+pytestmark = pytest.mark.spark(version=">=4.1", reason="Uses Python DataSource filter pushdown")
+
 
 try:
     import vortex

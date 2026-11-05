@@ -3,14 +3,13 @@ from uuid import uuid4
 
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 SCALAR_SUBQUERY_SLOTS = re.compile(r"ScalarSubqueryExec: subqueries=(\d+)")
 
 pytestmark = [
-    pytest.mark.skipif(is_jvm_spark(), reason="Sail physical plans"),
-    pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.scalar requires PySpark 4+"),
+    pytest.mark.spark(skip_if_jvm=True, reason="Sail physical plans"),
+    pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar"),
 ]
 
 # Each trial builds both reads anew. The server decodes the read options of each read into its

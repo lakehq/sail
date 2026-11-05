@@ -4,14 +4,10 @@ from uuid import uuid4
 
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
-try:
-    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
-    from pyspark.sql.types import IntegerType, StructField, StructType
-except ImportError:
-    pytest.skip("Python DataSource API is not available in this Spark version", allow_module_level=True)
+pytestmark = pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
+
 
 SCALAR_SUBQUERY_SLOTS = re.compile(r"ScalarSubqueryExec: subqueries=(\d+)")
 
@@ -23,6 +19,9 @@ def scalar_subquery_slots(df):
 @pytest.fixture
 def counting_table(spark, tmp_path):
     """Returns (table, counter path) for a Python data source table that logs each read."""
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+    from pyspark.sql.types import IntegerType, StructField, StructType
+
     table_name = f"sql_reads_{uuid4().hex[:8]}"
     counter = str(tmp_path / "reads.txt")
 
@@ -57,7 +56,7 @@ def reads(counter):
         return 0
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail physical plans")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail physical plans")
 @pytest.mark.parametrize(
     "query",
     [
@@ -93,7 +92,7 @@ def test_python_data_source_table_is_read_for_each_reference(spark, counting_tab
         spark.sql(f"DROP VIEW IF EXISTS {view_name}")
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail physical plans")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail physical plans")
 @pytest.mark.parametrize("read", ["table", "format"])
 def test_python_data_source_dataframe_view_is_read_for_each_reference(spark, counting_table, read):
     table_name, counter = counting_table
@@ -109,7 +108,7 @@ def test_python_data_source_dataframe_view_is_read_for_each_reference(spark, cou
         spark.catalog.dropTempView(view_name)
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail physical plans")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail physical plans")
 @pytest.mark.parametrize(
     ("query", "slots", "expected_reads"),
     [

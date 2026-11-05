@@ -5,13 +5,9 @@ from pyspark import StorageLevel
 from pyspark.sql import functions as sf
 
 from pysail.testing.spark.session import spark_connect_server
-from pysail.testing.spark.utils.common import pyspark_version
 from pysail.testing.spark.utils.plan import normalize_plan_text
 
-pytestmark = pytest.mark.skipif(
-    pyspark_version() < (4,),
-    reason="checkpoint and localCheckpoint require PySpark Connect 4+",
-)
+pytestmark = pytest.mark.spark(version=">=4", reason="Uses Spark Connect DataFrame checkpoint APIs")
 
 
 @pytest.fixture(scope="module")

@@ -21,24 +21,14 @@ from pyiceberg.partitioning import (
     YearTransform,
 )
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
-try:
-    from pyspark.sql.functions import partitioning
-
-    HAS_PARTITIONING = True
-except ImportError:
-    HAS_PARTITIONING = False
-    partitioning = None
-
 # Skip reason for Glue Iceberg tests
 MOTO_ICEBERG_SKIP = "moto does not support Glue OpenTableFormatInput API for Iceberg tables"
 
 
 @pytest.mark.skip(reason=MOTO_ICEBERG_SKIP)
 @pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
-@pytest.mark.skipif(not HAS_PARTITIONING, reason="partitioning module not available in this Spark version")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark does not handle v1 and v2 tables properly")
+@pytest.mark.spark(version=">=4", reason="Uses pyspark.sql.functions.partitioning")
 @pytest.mark.parametrize(
     ("transform_name", "transform_func", "expected_transform_type"),
     [
@@ -53,6 +43,8 @@ def test_glue_partition_transform_time_based(
     spark, moto_endpoint, transform_name, transform_func, expected_transform_type
 ):
     """Test time-based partition transforms via PySpark V2 API with Glue catalog."""
+    from pyspark.sql.functions import partitioning
+
     table_name = f"t_{transform_name}"
 
     # Create dataframe with timestamp data
@@ -94,10 +86,12 @@ def test_glue_partition_transform_time_based(
 
 @pytest.mark.skip(reason=MOTO_ICEBERG_SKIP)
 @pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
-@pytest.mark.skipif(not HAS_PARTITIONING, reason="partitioning module not available in this Spark version")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark does not handle v1 and v2 tables properly")
+@pytest.mark.spark(version=">=4", reason="Uses pyspark.sql.functions.partitioning")
 def test_glue_partition_transform_bucket(spark, moto_endpoint):
     """Test bucket partition transform via PySpark V2 API with Glue catalog."""
+    from pyspark.sql.functions import partitioning
+
     table_name = "t_bucket"
     num_buckets = 10
 

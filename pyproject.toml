@@ -35,6 +35,7 @@ test = [
     "pyspark-client==4.2.0",
     "pandas<3",
     "duckdb>=1.0,<2",
+    "packaging>=21.3,<27",
     "pytest>=9.1,<9.2",
     "pytest-xdist>=3.7,<4",
     "pytest-rerunfailures>=16.7,<17",
@@ -99,6 +100,7 @@ dependencies = [
     "pyspark[connect]==4.2.0",
     "ibis-framework>=12,<13",
     "pandas<3",
+    "packaging>=21.3,<27",
     "pytest>=9.1,<9.2",
     "pytest-timeout>=2.4,<3",
     "pytest-bdd>=8.1,<9",
@@ -156,6 +158,7 @@ installer = "pip"
 skip-install = true
 dependencies = [
     "pandas<3",
+    "packaging>=21.3,<27",
     "pytest>=9.1,<9.2",
     "pytest-xdist>=3.7,<4",
     "pytest-rerunfailures>=16.7,<17",
@@ -238,7 +241,7 @@ dependencies = [
     "filelock>=3.7.0,<4",
     "fsspec[s3]",
     "hypothesis>=6.58.0,<7",
-    "packaging>=21.3",
+    "packaging>=21.3,<27",
     # without this constraint, pyspark starts to fail some memtable cleanup tests
     # with pytest 8.4.0
     "pytest>=8.2.0,<8.4.0",

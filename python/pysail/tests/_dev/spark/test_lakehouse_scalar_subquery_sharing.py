@@ -13,10 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail physical plans")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail physical plans")
 
 SCALAR_SUBQUERY_SLOTS = re.compile(r"ScalarSubqueryExec: subqueries=(\d+)")
 DATA_SCANS = re.compile(r"\bDataSourceExec:")
@@ -125,9 +124,8 @@ def test_aggregates_over_different_versions_are_not_shared(spark, lake_table, wh
 
 
 @pytest.mark.parametrize("where", list(FILTERS))
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
 def test_repeated_dataframe_aggregates_share_one_result(spark, lake_table, where):
-    if pyspark_version() < (4,):
-        pytest.skip("DataFrame.scalar requires PySpark 4+")
     from pyspark.sql import functions as F  # noqa: N812
 
     name, partitioned, _ = lake_table

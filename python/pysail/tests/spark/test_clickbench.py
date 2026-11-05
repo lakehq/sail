@@ -5,7 +5,6 @@ import pyarrow.parquet as pq
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.plan import normalize_plan_text
 
 _CLICKBENCH_SCHEMA = pa.schema(
@@ -200,7 +199,7 @@ def queries():
 
 # ClickBench query ID is zero-based.
 @pytest.mark.parametrize("q", list(range(43)), ids=[f"{x:02}" for x in range(43)])
-@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
 @pytest.mark.yamlsnapshot(group="plan")
 def test_clickbench_query_plan(spark, q, queries, snapshot):
     sql = queries[q]

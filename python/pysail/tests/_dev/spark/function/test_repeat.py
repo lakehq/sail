@@ -3,8 +3,6 @@
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
 
 def test_repeat_columns(spark):
     data = [
@@ -34,7 +32,7 @@ def test_space_column(spark):
     assert [row.result for row in actual] == ["", "", " ", "  ", "   "]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail system tables only")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail system tables only")
 def test_repeat_in_system_table_filter(spark):
     # System table filters execute on the driver, whose task context has no
     # default DataFusion UDF registry when the cluster plan is decoded.

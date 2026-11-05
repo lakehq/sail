@@ -5,9 +5,8 @@ import pytest
 from pyspark.sql import Row
 
 from pysail.testing.spark.session import spark_connect_server
-from pysail.testing.spark.utils.common import is_jvm_spark
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail local-cluster mode only")
 
 
 @pytest.fixture(
@@ -104,6 +103,7 @@ def test_shuffle_remains_usable_after_repeated_limits(spark):
         "empty",
     ],
 )
+@pytest.mark.spark(cross_version=True)
 def test_shuffle_reader_coalesces_batches_in_channel_order(spark, input_sizes, partitions, completed_sizes):
     def make_batches(batches):
         for _ in batches:
@@ -140,6 +140,7 @@ def test_shuffle_reader_coalesces_batches_in_channel_order(spark, input_sizes, p
 
 
 @pytest.mark.timeout(30)
+@pytest.mark.spark(cross_version=True)
 def test_shuffle_reader_coalesces_batches_across_producers(spark):
     def make_batches(batches):
         for batch in batches:

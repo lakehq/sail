@@ -2,11 +2,10 @@ import pyarrow as pa
 import pytest
 
 from pysail.testing.spark.session import spark_connect_server
-from pysail.testing.spark.utils.common import is_jvm_spark
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
-
-datasource = pytest.importorskip("pyspark.sql.datasource")
+pytestmark = pytest.mark.spark(
+    version=">=4", skip_if_jvm=True, reason="Uses the Python DataSource API in Sail local-cluster mode"
+)
 
 
 @pytest.fixture(scope="module", params=[128, 512])
@@ -25,7 +24,10 @@ def remote(batch_size):
         yield server.remote
 
 
+@pytest.mark.spark(cross_version=True)
 def test_python_datasource_respects_execution_batch_size(spark, batch_size):
+    from pyspark.sql import datasource
+
     row_count = batch_size * 3 + 7
 
     class RowReader(datasource.DataSourceReader):

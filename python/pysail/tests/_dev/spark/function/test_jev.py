@@ -14,9 +14,8 @@ from pyspark.errors.exceptions.connect import SparkConnectGrpcException
 
 from pysail.testing._dev.jev import JevMock
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
-from pysail.testing.spark.utils.common import is_jvm_spark
 
-pytestmark = [pytest.mark.skipif(is_jvm_spark(), reason="Jev functions are Sail extensions"), pytest.mark.timeout(60)]
+pytestmark = [pytest.mark.spark(skip_if_jvm=True, reason="Jev functions are Sail extensions"), pytest.mark.timeout(60)]
 
 EXPECTED_NOUL = 0.75
 EXPECTED_CONFIDENCE = 0.8
@@ -624,6 +623,7 @@ def test_generated_column_name_includes_options(spark, jev):
     assert jev.request_count == 0
 
 
+@pytest.mark.spark(cross_version=True)
 def test_registered_python_function_named_like_jev_is_not_intercepted(remote, jev):
     from pyspark.sql.types import StringType
 

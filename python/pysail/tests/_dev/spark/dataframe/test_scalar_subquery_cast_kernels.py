@@ -5,9 +5,7 @@ import pyarrow.parquet as pq
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
-
-pytestmark = pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.scalar requires PySpark 4+")
+pytestmark = pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
 
 
 @pytest.fixture
@@ -86,11 +84,20 @@ def test_correlated_decimal_bigint_cast_preserves_boundary_values(cast_key_scan)
         _cast_key_counts(invalid, outer, "bigint").collect()
 
 
-@pytest.mark.parametrize("unit", ["us", "ns"])
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "us",
+        pytest.param(
+            "ns",
+            marks=pytest.mark.spark(
+                skip_if_jvm=True, reason="JVM Spark Parquet does not support nanosecond timestamp logical types"
+            ),
+        ),
+    ],
+)
 @pytest.mark.parametrize("zone", [None, "UTC"])
 def test_correlated_timestamp_date_cast_floors_the_full_input_range(cast_key_scan, unit, zone):
-    if unit == "ns" and is_jvm_spark():
-        pytest.skip("Spark Parquet does not support nanosecond timestamp logical types")
     day = 86_400_000_000 if unit == "us" else 86_400_000_000_000
     values = [-(1 << 63), -day - 1, -day, -1, 0, day - 1, day, (1 << 63) - 1, None]
     days = sorted({value // day for value in values if value is not None}) + [None]  # noqa: RUF005

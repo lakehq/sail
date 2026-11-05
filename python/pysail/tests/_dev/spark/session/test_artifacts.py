@@ -36,6 +36,7 @@ def artifact_sessions(spark, remote):
     strict=True,
 )
 @pytest.mark.parametrize("archive", [False, True], ids=["file", "archive-alias"])
+@pytest.mark.spark(cross_version=True)
 def test_artifact_files_are_available_in_workers_and_isolated_by_session(artifact_sessions, tmp_path, archive):
     name = f"artifact_{uuid.uuid4().hex}"
     worker_path = f"{name}/nested/value.txt" if archive else f"{name}.txt"

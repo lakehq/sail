@@ -8,11 +8,7 @@ import pytest
 from pyspark.errors import PySparkException
 from pyspark.sql import functions as f
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
-
-SUBQUERY_API = pytest.mark.skipif(
-    pyspark_version() < (4,), reason="DataFrame subqueries and lateral joins require PySpark 4+"
-)
+SUBQUERY_API = pytest.mark.spark(version=">=4", reason="Uses DataFrame subquery and lateral join APIs")
 
 
 @pytest.fixture(autouse=True)
@@ -435,7 +431,7 @@ def test_using_join_coalesces_repeated_bound_key(source, other):
 
 
 @SUBQUERY_API
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail supports bound outer columns rejected by JVM Spark")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail supports bound outer columns rejected by JVM Spark")
 def test_scalar_subquery_supports_bound_outer_column(source, other):
     result = source.select(
         "id", other.where(other.id == source.id.outer()).agg(f.max("z").alias("z")).scalar().alias("z")
@@ -454,7 +450,7 @@ def test_scalar_subquery_supports_bound_outer_column(source, other):
 
 
 @SUBQUERY_API
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail supports bound outer columns rejected by JVM Spark")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail supports bound outer columns rejected by JVM Spark")
 def test_exists_subquery_supports_bound_outer_column(source, other):
     result = source.where(other.where(other.id == source.id.outer()).exists()).select("id")
     expected = [
@@ -466,7 +462,7 @@ def test_exists_subquery_supports_bound_outer_column(source, other):
     assert result.dtypes == [("id", "bigint")]
 
 
-@pytest.mark.skipif(pyspark_version() < (4, 1), reason="Column.isin with a DataFrame requires PySpark 4.1+")
+@pytest.mark.spark(version=">=4.1", reason="Uses Column.isin with a DataFrame argument")
 def test_isin_accepts_dataframe_subquery(source, other):
     result = source.select("id", source.id.isin(other.select("id")).alias("b"))
     expected = [

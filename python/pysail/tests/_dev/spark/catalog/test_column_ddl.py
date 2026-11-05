@@ -1,7 +1,6 @@
 # ruff: noqa: S608
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
@@ -43,7 +42,7 @@ def test_csv_column_changes_reject_without_reinterpreting_existing_data(spark, t
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Requires Iceberg extension")
+@pytest.mark.spark(skip_if_jvm=True, reason="Iceberg extensions are not configured for JVM Spark tests")
 @pytest.mark.parametrize(
     ("operation", "expected_names"),
     [

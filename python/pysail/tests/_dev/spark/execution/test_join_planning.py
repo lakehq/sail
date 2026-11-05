@@ -3,10 +3,9 @@ from pyspark.sql import Row
 from pyspark.sql.types import LongType, StructField, StructType
 
 from pysail.testing.spark.session import spark_connect_server
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.plan import normalize_plan_text
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail physical optimizer configuration")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail physical optimizer configuration")
 
 
 @pytest.fixture(scope="module")
