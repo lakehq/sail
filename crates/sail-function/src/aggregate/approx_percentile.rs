@@ -7,7 +7,8 @@ use std::sync::Arc;
 use arrow::array::{
     Array, ArrayRef, Float64Array, ListArray, RecordBatch, RecordBatchOptions, UInt64Array,
 };
-use arrow::datatypes::{DataType, Field, FieldRef, Schema};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit, Schema};
 use datafusion_common::{
     Result, ScalarValue, downcast_value, not_impl_err, plan_datafusion_err, plan_err,
 };
@@ -15,6 +16,7 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{Accumulator, AggregateUDFImpl, ColumnarValue, Signature, Volatility};
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
+use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
 
 use crate::aggregate::quantile_summary::{QuantileSummary, Sample};
 
@@ -132,8 +134,19 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         let input = dictionary_value_type(&arg_types[0]);
         let input = match input {
             DataType::Null => DataType::Float64,
-            dt if dt.is_numeric() => dt.clone(),
-            dt => return plan_err!("percentile_approx requires numeric input, got {dt}"),
+            dt if dt.is_numeric()
+                || matches!(
+                    dt,
+                    DataType::Interval(IntervalUnit::YearMonth) | DataType::Duration(_)
+                ) =>
+            {
+                dt.clone()
+            }
+            dt => {
+                return plan_err!(
+                    "percentile_approx requires numeric input or a supported interval, got {dt}"
+                );
+            }
         };
         let percentage = match dictionary_value_type(&arg_types[1]) {
             DataType::List(field)
@@ -182,7 +195,32 @@ impl AggregateUDFImpl for ApproxPercentileCont {
             .map(|field| field.data_type().clone())
             .collect::<Vec<_>>();
         let data_type = self.return_type(&arg_types)?;
-        Ok(Arc::new(Field::new(self.name(), data_type, true)))
+        let value_type = match &data_type {
+            DataType::List(element) => element.data_type(),
+            data_type => data_type,
+        };
+        let metadata = matches!(
+            value_type,
+            DataType::Interval(IntervalUnit::YearMonth) | DataType::Duration(_)
+        )
+        .then(|| {
+            arg_fields[0]
+                .metadata()
+                .get(SAIL_SPARK_INTERVAL_METADATA_KEY)
+        })
+        .flatten()
+        .map(|value| (SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), value.clone()))
+        .into_iter()
+        .collect();
+        let field = match data_type {
+            DataType::List(element) => Field::new_list(
+                self.name(),
+                element.as_ref().clone().with_metadata(metadata),
+                true,
+            ),
+            data_type => Field::new(self.name(), data_type, true).with_metadata(metadata),
+        };
+        Ok(Arc::new(field))
     }
 
     #[inline]
@@ -250,12 +288,14 @@ impl Accumulator for ApproxPercentileAccumulator {
             return ScalarValue::try_from(self.return_type.clone());
         }
         let values = self.digest.quantiles(&self.percentiles);
-        if matches!(self.return_type, DataType::List(_)) {
-            Ok(ScalarValue::List(ScalarValue::new_list(
-                &values,
-                &self.value_type,
-                false,
-            )))
+        if let DataType::List(element) = &self.return_type {
+            let values = ScalarValue::iter_to_array(values)?;
+            Ok(ScalarValue::List(Arc::new(ListArray::new(
+                Arc::clone(element),
+                OffsetBuffer::from_lengths([values.len()]),
+                values,
+                None,
+            ))))
         } else {
             Ok(values[0].clone())
         }
