@@ -99,7 +99,9 @@ def test_arrow_udf_plan(spark):
 
 Use module-level `pytestmark` for shared requirements and `pytest.param(..., marks=pytest.mark.spark(...))` for parameter-specific requirements. Repeated version requirements must all be satisfied, and explicitly supplied boolean flags must agree across inherited markers.
 
-Keep version-specific imports inside test functions or fixtures so unsupported PySpark versions can collect the tests before skipping them.
+Test collection must work with any supported PySpark version and without building the PySail library. Import version-dependent PySpark APIs inside test functions or fixtures so tests can be collected before the `spark` marker skips unsupported versions.
+
+In test code and test helpers, import `pysail._native` and any PySail modules that load it only inside test functions or fixtures at runtime, or under `if TYPE_CHECKING:` for type annotations. Keep these imports out of module-level runtime code, including in `conftest.py`, so collection does not require the native library.
 
 In BDD feature files, use tags such as `@spark-4.1` for a minimum PySpark version and `@sail-only` for JVM Spark exclusions. These tags are converted to `spark` markers. Continue using ordinary skip mechanisms for conditions unrelated to Spark compatibility, such as platform restrictions or missing optional dependencies.
 
