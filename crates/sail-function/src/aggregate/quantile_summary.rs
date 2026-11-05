@@ -177,6 +177,62 @@ impl QuantileSummary {
         last.value.clone()
     }
 
+    // Called only on a nonempty compressed summary and validated percentages.
+    pub fn quantiles(&self, percentiles: &[f64]) -> Vec<ScalarValue> {
+        if let [percentile] = percentiles {
+            return vec![self.quantile(*percentile)];
+        }
+        let first = &self.sampled[0];
+        let last = &self.sampled[self.sampled.len() - 1];
+        let mut target_error = None;
+        let mut sample = first;
+        let mut remaining = self.sampled[1..].iter();
+        let mut min_rank = first.g;
+        let mut query = |percentile: f64| {
+            if percentile <= self.relative_error {
+                return first.value.clone();
+            }
+            if percentile >= 1.0 - self.relative_error {
+                return last.value.clone();
+            }
+            let error = *target_error.get_or_insert_with(|| {
+                self.sampled
+                    .iter()
+                    .map(|s| s.g + s.delta)
+                    .max()
+                    .unwrap_or(0)
+                    / 2
+            });
+            let rank = (percentile * self.count as f64).ceil() as u64;
+            loop {
+                if min_rank + sample.delta <= rank + error && rank <= min_rank + error {
+                    break;
+                }
+                let Some(next) = remaining.next() else {
+                    break;
+                };
+                sample = next;
+                min_rank += sample.g;
+            }
+            // Keep the cursor on the match so repeated ranks reuse the observation.
+            sample.value.clone()
+        };
+        if percentiles.windows(2).all(|pair| pair[0] <= pair[1])
+            || percentiles
+                .iter()
+                .all(|p| *p <= self.relative_error || *p >= 1.0 - self.relative_error)
+        {
+            return percentiles.iter().map(|p| query(*p)).collect();
+        }
+        let mut positions = (0..percentiles.len()).collect::<Vec<_>>();
+        positions.sort_unstable_by(|a, b| percentiles[*a].total_cmp(&percentiles[*b]));
+        let mut values = vec![ScalarValue::Null; percentiles.len()];
+        for position in positions {
+            values[position] = query(percentiles[position]);
+        }
+        values
+    }
+
     pub fn size(&self) -> usize {
         size_of_val(self)
             + self.head.capacity() * size_of_val(&ScalarValue::Null)

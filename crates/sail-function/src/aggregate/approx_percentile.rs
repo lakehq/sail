@@ -164,13 +164,16 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         Ok(types)
     }
 
-    // DataFusion 55 requires this type-only entry point; field inference lives below.
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let fields = arg_types
-            .iter()
-            .map(|data_type| Arc::new(Field::new("arg", data_type.clone(), true)))
-            .collect::<Vec<_>>();
-        Ok(self.return_field(&fields)?.data_type().clone())
+        let types = self.coerce_types(arg_types)?;
+        if matches!(types[1], DataType::List(_)) {
+            Ok(DataType::List(Arc::new(Field::new_list_field(
+                types[0].clone(),
+                false,
+            ))))
+        } else {
+            Ok(types[0].clone())
+        }
     }
 
     fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
@@ -178,12 +181,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
             .iter()
             .map(|field| field.data_type().clone())
             .collect::<Vec<_>>();
-        let types = self.coerce_types(&arg_types)?;
-        let data_type = if matches!(types[1], DataType::List(_)) {
-            DataType::List(Arc::new(Field::new_list_field(types[0].clone(), false)))
-        } else {
-            types[0].clone()
-        };
+        let data_type = self.return_type(&arg_types)?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
@@ -251,11 +249,7 @@ impl Accumulator for ApproxPercentileAccumulator {
         if self.digest.count == 0 || self.percentiles.is_empty() {
             return ScalarValue::try_from(self.return_type.clone());
         }
-        let values = self
-            .percentiles
-            .iter()
-            .map(|p| self.digest.quantile(*p))
-            .collect::<Vec<_>>();
+        let values = self.digest.quantiles(&self.percentiles);
         if matches!(self.return_type, DataType::List(_)) {
             Ok(ScalarValue::List(ScalarValue::new_list(
                 &values,
