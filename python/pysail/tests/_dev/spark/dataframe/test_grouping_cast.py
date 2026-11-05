@@ -74,3 +74,31 @@ def test_having_refers_to_the_column_and_not_to_its_cast(spark):
             assert rows(df) == Counter({(2, 1): 1})
     finally:
         spark.sql("DROP VIEW cast_key_having")
+
+
+def test_order_by_a_grouping_function_over_a_cast_key(spark):
+    spark.sql("SELECT * FROM VALUES (1), (2) AS t(k)").createOrReplaceTempView("cast_key_order")
+    query = (
+        "SELECT k, cast(k AS bigint) AS b, count(*) AS c FROM cast_key_order "
+        "GROUP BY rollup(k, cast(k AS bigint)) ORDER BY {}, k, b"
+    )
+    try:
+        df = spark.sql(query.format("grouping(cast(k AS bigint))"))
+        assert [tuple(row) for row in df.collect()] == [
+            (1, 1, 1),
+            (2, 2, 1),
+            (None, None, 2),
+            (1, None, 1),
+            (2, None, 1),
+        ]
+
+        df = spark.sql(query.format("grouping_id(k, cast(k AS bigint))"))
+        assert [tuple(row) for row in df.collect()] == [
+            (1, 1, 1),
+            (2, 2, 1),
+            (1, None, 1),
+            (2, None, 1),
+            (None, None, 2),
+        ]
+    finally:
+        spark.sql("DROP VIEW cast_key_order")
