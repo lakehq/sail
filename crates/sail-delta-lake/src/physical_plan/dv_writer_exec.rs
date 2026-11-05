@@ -805,10 +805,8 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                 }
             }
 
-            if output_actions.is_empty() {
-                return encode_actions(Vec::new(), None);
-            }
-
+            // Keep operation identity and exact zero metrics even when there are no DV
+            // actions. An independent CDF branch may still require a commit.
             let total_invalidated_rows = write_metrics.newly_invalidated_rows();
             output_rows.add(total_invalidated_rows as usize);
             log::debug!(

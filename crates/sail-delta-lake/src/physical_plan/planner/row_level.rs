@@ -5,6 +5,7 @@ use datafusion::catalog::Session;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, Result, internal_err};
 use datafusion::physical_plan::ExecutionPlan;
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{RowLevelCommand, RowLevelWriteMode};
 use sail_data_source::options::ResolveOptions;
 use sail_logical_plan::merge::{MergeMatchedAction, MergeNotMatchedBySourceAction};
@@ -45,7 +46,8 @@ pub async fn create_row_level_write_physical_plan(
                 with_schema_evolution: false,
                 operation: None,
             };
-            create_delta_row_level_writer(ctx, node.mode(), info, target_snapshot).await
+            create_delta_row_level_writer(ctx, node.mode(), info, target_snapshot, node.output())
+                .await
         }
         RowLevelCommand::Merge => {
             let expanded_input = effects.write_rows.ok_or_else(|| {
@@ -64,7 +66,8 @@ pub async fn create_row_level_write_physical_plan(
                 with_schema_evolution: node.with_schema_evolution(),
                 operation: build_merge_operation(node),
             };
-            create_delta_row_level_writer(ctx, node.mode(), info, target_snapshot).await
+            create_delta_row_level_writer(ctx, node.mode(), info, target_snapshot, node.output())
+                .await
         }
         RowLevelCommand::Update => {
             let expanded_input = effects.write_rows.ok_or_else(|| {
@@ -86,7 +89,8 @@ pub async fn create_row_level_write_physical_plan(
                         .and_then(|condition| condition.source.clone()),
                 }),
             };
-            create_delta_row_level_writer(ctx, node.mode(), info, target_snapshot).await
+            create_delta_row_level_writer(ctx, node.mode(), info, target_snapshot, node.output())
+                .await
         }
     }
 }
@@ -139,6 +143,7 @@ async fn create_delta_row_level_writer(
     mode: RowLevelWriteMode,
     info: RowLevelWriteInfo,
     target_snapshot: Arc<DeltaSnapshot>,
+    output: CommandOutput,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let (target_options, _) =
         split_delta_write_options_and_table_properties(info.target.options.clone())?;
@@ -157,6 +162,7 @@ async fn create_delta_row_level_writer(
         None,
         true,
     )
+    .with_output(output)
     .with_table_snapshot(Some(target_snapshot))
     .with_lakehouse_table(info.target.lakehouse_table.clone());
     let planner_ctx = PlannerContext::new(ctx, config);

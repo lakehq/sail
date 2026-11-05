@@ -432,7 +432,11 @@ impl OperationMetrics {
                             + self.num_target_rows_deleted.unwrap_or_default(),
                     );
                 }
-                self.num_target_change_files_added.get_or_insert(0);
+                self.num_target_change_files_added
+                    .get_or_insert(self.num_added_change_files.take().unwrap_or_default());
+                self.num_target_change_file_bytes = self
+                    .num_target_change_file_bytes
+                    .or(self.change_file_bytes.take());
                 self.num_target_deletion_vectors_added.get_or_insert(0);
                 self.num_target_deletion_vectors_updated.get_or_insert(0);
                 if self.num_target_deletion_vectors_removed.is_none() {

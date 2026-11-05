@@ -1,8 +1,11 @@
 import pysail
-from pysail import _native
+
+pytest_plugins = ["pysail.testing.fixtures"]
 
 
 def test_version():
+    from pysail import _native
+
     v1, v2, v3, *_ = pysail.__version__.split(".")
     major, minor, patch = _native._SAIL_VERSION.split(".")  # noqa: SLF001
     assert v1 == major

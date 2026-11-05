@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use datafusion::functions::core::expr_fn::coalesce;
 use datafusion::functions_aggregate::expr_fn::count;
+use datafusion::functions_nested::expr_fn::{array_element, make_array};
 use datafusion::optimizer::decorrelate::PullUpCorrelatedExpr;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
@@ -36,6 +37,112 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
+        if let Expr::InSubquery(query) = expr {
+            let inner = query.subquery.subquery;
+            if inner.schema().fields().len() != 1 {
+                return Err(plan_datafusion_err!(
+                    "IN subquery must return exactly one column"
+                ));
+            }
+            let column = inner
+                .schema()
+                .columns()
+                .into_iter()
+                .next()
+                .ok_or_else(|| plan_datafusion_err!("IN subquery has no output"))?;
+            if inner.all_out_ref_exprs().is_empty() {
+                // Evaluate an uncorrelated RHS in full before testing membership.
+                // In particular, its scalar aggregate must retain its empty-input row.
+                let alias = self.state.register_field_name("");
+                let equal =
+                    Expr::Column(Column::new(Some(alias.clone()), column.name)).eq(*query.expr);
+                let predicate = if query.negated {
+                    equal.clone().or(equal.is_null())
+                } else {
+                    equal
+                };
+                let inner = LogicalPlanBuilder::from(inner)
+                    .alias(alias.clone())?
+                    .build()?;
+                let result = self.mark_join(inner, predicate, alias)?;
+                return Ok(Transformed::yes(if query.negated {
+                    !result
+                } else {
+                    result
+                }));
+            }
+            if Self::scalar_aggregate_has_filter(&inner) == Some(false) {
+                // A global aggregate produces exactly one row even when its
+                // correlated input is empty. Let scalar decorrelation preserve
+                // that row before applying the membership comparison.
+                let equal = (*query.expr).eq(expr_fn::scalar_subquery(inner));
+                return Ok(Transformed::yes(coalesce(vec![
+                    if query.negated { !equal } else { equal },
+                    lit(false),
+                ])));
+            }
+            if Self::scalar_aggregate_has_filter(&inner) == Some(true) {
+                // A scalar subquery uses NULL both for a missing row and for
+                // a null value. A singleton array distinguishes HAVING's rejected
+                // rows (NULL) from retained null values ([NULL]). Use DataFusion's
+                // nullable make_array result so scalar-subquery nullability does
+                // not let simplification discard the missing-row check.
+                let packed = make_array(vec![Expr::Column(column)]);
+                let inner = LogicalPlanBuilder::from(inner)
+                    .project(vec![packed])?
+                    .build()?;
+                let field = self.state.register_field_name("");
+                let mut expressions = self
+                    .plan
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .map(Expr::Column)
+                    .collect::<Vec<_>>();
+                expressions.push(expr_fn::scalar_subquery(Arc::new(inner)).alias(&field));
+                let input = mem::replace(&mut self.plan, empty_logical_plan());
+                self.plan = LogicalPlanBuilder::from(input)
+                    .project(expressions)?
+                    .build()?;
+                let packed = ident(field);
+                let value = array_element(packed.clone(), lit(1_i64));
+                let equal = (*query.expr).eq(value);
+                return Ok(Transformed::yes(
+                    datafusion_expr::when(packed.is_null(), lit(query.negated)).otherwise(
+                        coalesce(vec![if query.negated { !equal } else { equal }, lit(false)]),
+                    )?,
+                ));
+            }
+            let outer = query
+                .expr
+                .transform_up(|expr| {
+                    if let Expr::Column(column) = expr {
+                        let (_, field) = self.plan.schema().qualified_field_from_column(&column)?;
+                        Ok(Transformed::yes(Expr::OuterReferenceColumn(
+                            field.clone(),
+                            column,
+                        )))
+                    } else {
+                        Ok(Transformed::no(expr))
+                    }
+                })?
+                .data;
+            let equal = Expr::Column(column).eq(outer);
+            // Spark projects IN as an existence test. NOT IN additionally excludes
+            // rows whose comparison can be unknown because either operand is null.
+            let predicate = if query.negated {
+                equal.clone().or(equal.is_null())
+            } else {
+                equal
+            };
+            let result = self
+                .correlated_exists(LogicalPlanBuilder::from(inner).filter(predicate)?.build()?)?;
+            return Ok(Transformed::yes(if query.negated {
+                !result
+            } else {
+                result
+            }));
+        }
         let Expr::Exists(exists) = expr else {
             return Ok(Transformed::no(expr));
         };
@@ -104,7 +211,7 @@ impl ExistsRewriter<'_> {
                     match limit.get_skip_type()? {
                         SkipType::Literal(0) => Arc::unwrap_or_clone(limit.input),
                         SkipType::Literal(skip) => {
-                            if Self::is_scalar_aggregate(&limit.input) {
+                            if Self::scalar_aggregate_has_filter(&limit.input).is_some() {
                                 return Ok(lit(false));
                             }
                             if limit.input.exists(|plan| {
@@ -163,6 +270,10 @@ impl ExistsRewriter<'_> {
         let query = LogicalPlanBuilder::from(query)
             .alias(alias.clone())?
             .build()?;
+        self.mark_join(query, predicate, alias)
+    }
+
+    fn mark_join(&mut self, query: LogicalPlan, predicate: Expr, alias: String) -> Result<Expr> {
         let input = mem::replace(&mut self.plan, empty_logical_plan());
         self.plan = LogicalPlanBuilder::from(input)
             .join_on(query, JoinType::LeftMark, Some(predicate))?
@@ -216,13 +327,19 @@ impl ExistsRewriter<'_> {
         Ok(())
     }
 
-    fn is_scalar_aggregate(query: &LogicalPlan) -> bool {
+    /// Identify a scalar aggregate and whether a filter can remove its output row.
+    fn scalar_aggregate_has_filter(query: &LogicalPlan) -> Option<bool> {
         match query {
-            LogicalPlan::Projection(projection) => Self::is_scalar_aggregate(&projection.input),
-            LogicalPlan::SubqueryAlias(alias) => Self::is_scalar_aggregate(&alias.input),
-            LogicalPlan::Sort(sort) => Self::is_scalar_aggregate(&sort.input),
-            LogicalPlan::Aggregate(aggregate) => aggregate.group_expr.is_empty(),
-            _ => false,
+            LogicalPlan::Projection(projection) => {
+                Self::scalar_aggregate_has_filter(&projection.input)
+            }
+            LogicalPlan::SubqueryAlias(alias) => Self::scalar_aggregate_has_filter(&alias.input),
+            LogicalPlan::Sort(sort) => Self::scalar_aggregate_has_filter(&sort.input),
+            LogicalPlan::Filter(filter) => {
+                Self::scalar_aggregate_has_filter(&filter.input).map(|_| true)
+            }
+            LogicalPlan::Aggregate(aggregate) => aggregate.group_expr.is_empty().then_some(false),
+            _ => None,
         }
     }
 }

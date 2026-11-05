@@ -53,6 +53,7 @@ impl PlanResolver<'_> {
             }
         };
         let builder = WritePlanBuilder::new()
+            .with_sql_insert()
             .with_mode(WriteMode::Replace {
                 error_if_absent: false,
             })
@@ -130,6 +131,7 @@ impl PlanResolver<'_> {
         }
 
         let builder = WritePlanBuilder::new()
+            .with_sql_insert()
             .with_mode(mode)
             .with_insert_partition(partition)
             .with_target(WriteTarget::Table {
@@ -250,6 +252,7 @@ impl PlanResolver<'_> {
             .rewrite_write_input(input, column_match, &info, state)
             .await?;
         let builder = WritePlanBuilder::new()
+            .with_sql_insert()
             .with_mode(mode)
             .with_target(WriteTarget::DataSource)
             .with_format(format)

@@ -133,17 +133,20 @@ async fn build_full_overwrite_plan(
         writer
     };
 
-    Ok(Arc::new(DeltaCommitExec::new(
-        Arc::new(CoalescePartitionsExec::new(commit_input)),
-        ctx.table_url().clone(),
-        ctx.partition_columns().to_vec(),
-        ctx.table_exists(),
-        input_schema,
-        PhysicalSinkMode::Overwrite,
-        ctx.options().user_metadata.clone(),
-        write_context.commit_context.clone(),
-        ctx.lakehouse_table().cloned(),
-    )))
+    Ok(Arc::new(
+        DeltaCommitExec::new(
+            Arc::new(CoalescePartitionsExec::new(commit_input)),
+            ctx.table_url().clone(),
+            ctx.partition_columns().to_vec(),
+            ctx.table_exists(),
+            input_schema,
+            PhysicalSinkMode::Overwrite,
+            ctx.options().user_metadata.clone(),
+            write_context.commit_context.clone(),
+            ctx.lakehouse_table().cloned(),
+        )
+        .with_output(ctx.config().output),
+    ))
 }
 
 async fn build_overwrite_if_plan(
@@ -287,20 +290,23 @@ async fn build_overwrite_if_plan(
     actions.extend(change_data_writer);
     let union_actions = UnionExec::try_new(actions)?;
 
-    Ok(Arc::new(DeltaCommitExec::new(
-        Arc::new(CoalescePartitionsExec::new(union_actions)),
-        ctx.table_url().clone(),
-        ctx.partition_columns().to_vec(),
-        ctx.table_exists(),
-        input_schema,
-        PhysicalSinkMode::OverwriteIf {
-            condition: None,
-            source: predicate_source,
-        },
-        ctx.options().user_metadata.clone(),
-        write_context.commit_context.clone(),
-        ctx.lakehouse_table().cloned(),
-    )))
+    Ok(Arc::new(
+        DeltaCommitExec::new(
+            Arc::new(CoalescePartitionsExec::new(union_actions)),
+            ctx.table_url().clone(),
+            ctx.partition_columns().to_vec(),
+            ctx.table_exists(),
+            input_schema,
+            PhysicalSinkMode::OverwriteIf {
+                condition: None,
+                source: predicate_source,
+            },
+            ctx.options().user_metadata.clone(),
+            write_context.commit_context.clone(),
+            ctx.lakehouse_table().cloned(),
+        )
+        .with_output(ctx.config().output),
+    ))
 }
 
 async fn build_old_data_plan(
