@@ -659,7 +659,6 @@ fn rewrite_map_zip_with_temporal_key(
     schema: &DFSchemaRef,
     ansi_mode: bool,
     session_timezone: &Arc<str>,
-    last_value_wins: bool,
 ) -> PlanResult<expr::Expr> {
     let map_type = map.get_type(schema.as_ref())?;
     let DataType::Map(entries, _) = &map_type else {
@@ -708,9 +707,9 @@ fn rewrite_map_zip_with_temporal_key(
         vec![key_parameter.to_owned(), value_parameter.to_owned()],
         body,
     ));
-    let udf = Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
-        last_value_wins,
-    )));
+    let udf = Arc::new(HigherOrderUDF::new_from_impl(
+        SparkTransformKeys::new_preserving_duplicates(),
+    ));
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         udf,
         vec![map, lambda],
@@ -744,7 +743,6 @@ fn map_zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             &plan_config.session_timezone_label(),
         )
     {
-        let last_value_wins = plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
         let session_timezone = plan_config.session_timezone_label();
         left = rewrite_map_zip_with_temporal_key(
             left,
@@ -752,7 +750,6 @@ fn map_zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             schema,
             plan_config.ansi_mode,
             &session_timezone,
-            last_value_wins,
         )?;
         right = rewrite_map_zip_with_temporal_key(
             right,
@@ -760,7 +757,6 @@ fn map_zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             schema,
             plan_config.ansi_mode,
             &session_timezone,
-            last_value_wins,
         )?;
     }
     let right = lambda_with_fresh_parameter(right, "__map_zip_right")?;

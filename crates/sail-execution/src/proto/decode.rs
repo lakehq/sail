@@ -191,10 +191,21 @@ pub(super) fn try_decode_higher_order_udf(
         HigherOrderUdfKind::TransformValues(r#gen::SparkTransformValuesUdf {}) => {
             Arc::new(HigherOrderUDF::new_from_impl(SparkTransformValues::new()))
         }
-        HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf { last_value_wins }) => {
-            Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
-                last_value_wins,
-            )))
+        HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf {
+            last_value_wins,
+            preserve_duplicates,
+        }) => {
+            let transform_keys = match (last_value_wins, preserve_duplicates) {
+                (true, true) => {
+                    return Err(datafusion::common::DataFusionError::Plan(
+                        "transform_keys cannot both keep last values and preserve duplicate keys"
+                            .to_owned(),
+                    ));
+                }
+                (false, true) => SparkTransformKeys::new_preserving_duplicates(),
+                (last_value_wins, false) => SparkTransformKeys::new(last_value_wins),
+            };
+            Arc::new(HigherOrderUDF::new_from_impl(transform_keys))
         }
         HigherOrderUdfKind::Filter(r#gen::SparkArrayFilterUdf { index_first }) => {
             if index_first {

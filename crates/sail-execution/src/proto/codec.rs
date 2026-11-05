@@ -8293,7 +8293,8 @@ mod tests {
         use datafusion::physical_expr::create_physical_expr;
         use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 
-        for last_value_wins in [false, true] {
+        for (last_value_wins, preserve_duplicates) in [(false, false), (true, false), (false, true)]
+        {
             let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
             builder.keys().append_value(1);
             builder.values().append_value(10);
@@ -8309,10 +8310,13 @@ mod tests {
                 "k".to_string(),
                 Some(Arc::new(Field::new("k", DataType::Int32, false))),
             ));
+            let udf = if preserve_duplicates {
+                SparkTransformKeys::new_preserving_duplicates()
+            } else {
+                SparkTransformKeys::new(last_value_wins)
+            };
             let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
-                Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
-                    last_value_wins,
-                ))),
+                Arc::new(HigherOrderUDF::new_from_impl(udf)),
                 vec![col("m"), lambda(["k", "v"], key + lit(1i32))],
             ));
             let physical = create_physical_expr(
@@ -8323,9 +8327,33 @@ mod tests {
             )?;
             let decoded = round_trip_expr(&physical, &schema)?;
             assert_eq!(as_hof(&decoded)?.name(), "transform_keys");
+            let decoded_udf = as_hof(&decoded)?.fun().inner();
+            let decoded_transform_keys = (decoded_udf.as_ref() as &dyn Any)
+                .downcast_ref::<SparkTransformKeys>()
+                .ok_or_else(|| plan_datafusion_err!("decoded UDF is not transform_keys"))?;
+            assert_eq!(decoded_transform_keys.is_last_value_wins(), last_value_wins);
+            assert_eq!(
+                decoded_transform_keys.preserves_duplicates(),
+                preserve_duplicates
+            );
             assert_same_result(&physical, &decoded, schema, vec![Arc::new(map)])?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_reject_conflicting_transform_keys_policies() {
+        let udf = r#gen::HigherOrderUdf {
+            higher_order_udf_kind: Some(
+                r#gen::higher_order_udf::HigherOrderUdfKind::TransformKeys(
+                    r#gen::SparkTransformKeysUdf {
+                        last_value_wins: true,
+                        preserve_duplicates: true,
+                    },
+                ),
+            ),
+        };
+        assert!(super::super::decode::try_decode_higher_order_udf(&udf).is_err());
     }
 
     /// Distributed round-trip for `exists(arr, v -> v > 2)` over `[[1, 2, 3]]`.

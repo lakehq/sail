@@ -204,6 +204,26 @@ Feature: map_zip_with higher-order function
         | result |
         | 1      |
 
+    Scenario Outline: Keep the first entry when temporal key coercion merges keys
+      Given config spark.sql.ansi.enabled = true
+      And config spark.sql.mapKeyDedupPolicy = <policy>
+      When query
+        """
+        SELECT map_values(map_zip_with(
+          map('2024-01-01', 10, '2024-01-01 00:00:00', 20),
+          map(TIMESTAMP '2024-01-01 00:00:00', 30),
+          (k, v1, v2) -> coalesce(v1, 0) + coalesce(v2, 0)
+        )) AS result
+        """
+      Then query result
+        | result |
+        | [40]   |
+
+      Examples:
+        | policy    |
+        | EXCEPTION |
+        | LAST_WIN  |
+
     Scenario: ANSI mode coerces string and integer keys to a common integer type
       Given config spark.sql.ansi.enabled = true
       When query
