@@ -200,6 +200,9 @@ datafusion-functions-nested = { version = "55.2.0", default-features = false }
 datafusion-physical-expr = { version = "55.2.0" }
 datafusion-session = { version = "55.2.0" }
 datafusion-spark = { version = "55.2.0", features = ["core"] }
+datafusion-functions-aggregate-common = { version = "55.2.0" }
+datafusion-macros = { version = "55.2.0" }
+datafusion-physical-expr-common = { version = "55.2.0" }
 pyo3 = { version = "0.29.0", features = ["serde"] }
 jiter = { version = "0.17.0", default-features = false }
 arrow = { version = "59.2.0", features = ["chrono-tz"] }
