@@ -1,8 +1,7 @@
 import pytest
 from pyspark.sql import types as T  # noqa: N812
 
-if not hasattr(T.StructType, "toDDL"):
-    pytest.skip("`toDDL` is not available in this Spark version", allow_module_level=True)
+pytestmark = pytest.mark.spark(version=">=4", reason="Uses StructType.toDDL")
 
 
 def test_null(spark):  # noqa: ARG001
@@ -279,7 +278,7 @@ def test_map(spark):  # noqa: ARG001
     assert schema.toDDL() == "a MAP<STRING, INT>, b MAP<FLOAT, INT>"
 
 
-@pytest.mark.skipif(not hasattr(T, "VariantType"), reason="`VariantType` is not available in this Spark version")
+@pytest.mark.spark(version=">=4", reason="Uses VariantType")
 def test_variant(spark):  # noqa: ARG001
     schema = T.StructType(
         [
@@ -331,7 +330,7 @@ def test_geography(spark):  # noqa: ARG001
     assert schema.toDDL() == "col GEOMETRY"
 
 
-@pytest.mark.skipif(not hasattr(T, "TimeType"), reason="`TimeType` is not available in this Spark version")
+@pytest.mark.spark(version=">=4.1", reason="Uses TimeType")
 def test_time(spark):  # noqa: ARG001
     schema = T.StructType(
         [

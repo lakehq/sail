@@ -13,11 +13,11 @@ import contextlib
 
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 pytest.importorskip("pyarrow")
 
-pytestmark = pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.toArrow requires PySpark 4.0+")
+pytestmark = pytest.mark.spark(version=">=4", reason="Uses DataFrame.toArrow")
 
 
 @pytest.fixture(scope="module")
@@ -57,10 +57,18 @@ ARROW_TYPES = [
 ]
 
 
-@pytest.mark.parametrize(("name", "query", "expected"), ARROW_TYPES, ids=[c[0] for c in ARROW_TYPES])
-def test_to_arrow_type(arrow_spark, name, query, expected):
-    if name in {"time", "to_time"} and pyspark_version() < (4, 1):
-        pytest.skip("TIME type requires PySpark 4.1+")
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        pytest.param(
+            *case[1:],
+            id=case[0],
+            marks=pytest.mark.spark(version=">=4.1") if case[0] in {"time", "to_time"} else [],
+        )
+        for case in ARROW_TYPES
+    ],
+)
+def test_to_arrow_type(arrow_spark, query, expected):
     table = arrow_spark.sql(query).toArrow()
     assert str(table.schema.field(0).type) == expected
 

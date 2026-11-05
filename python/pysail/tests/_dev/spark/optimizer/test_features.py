@@ -5,9 +5,7 @@ import re
 import pytest
 from pytest_bdd import scenarios
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail only")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Tests Sail optimizer behavior")
 
 COLLECTED_KEY_LIMIT = 60_000
 

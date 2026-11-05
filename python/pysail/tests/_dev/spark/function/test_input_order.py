@@ -25,6 +25,7 @@ from pysail.testing.spark.utils.common import is_jvm_spark
     not is_jvm_spark(),
     reason="requires the Python UDF worker (JVM Spark or a sail-server-python launch)",
 )
+@pytest.mark.spark(cross_version=True)
 def test_pandas_udf_first_arrival_preserves_order(spark):
     df = spark.createDataFrame([(30, "c"), (10, "a"), (20, "b")], ("v", "k"))
 
@@ -40,6 +41,7 @@ def test_pandas_udf_first_arrival_preserves_order(spark):
     not is_jvm_spark(),
     reason="requires the Python UDF worker (JVM Spark or a sail-server-python launch)",
 )
+@pytest.mark.spark(cross_version=True)
 def test_pandas_udf_first_arrival_stable_coalesce(spark):
     stable = spark.createDataFrame([(30, "c"), (10, "a"), (20, "b")], ("v", "k")).coalesce(1)
 
@@ -55,7 +57,7 @@ def test_pandas_udf_first_arrival_stable_coalesce(spark):
 # guarantee about which one `first` sees -- after `repartition(3)` it returns 2. Sail keeps the
 # original input order and returns 1, which is a stronger guarantee than Spark offers rather
 # than a divergence from it, so the assertion only holds on Sail.
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark does not order tied keys deterministically")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark does not order tied keys deterministically")
 def test_repartition_then_order_preserved(spark):
     dft = spark.createDataFrame([(1, "a"), (2, "a"), (3, "a")], ("v", "k")).repartition(3)
     result = dft.orderBy("k").groupBy().agg(F.first("v")).collect()

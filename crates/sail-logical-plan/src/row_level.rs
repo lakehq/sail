@@ -935,13 +935,21 @@ pub fn expand_update(
     )?;
 
     let change_data = if requirements.change_data {
-        let mut before = normalized.field_names.iter().map(col).collect::<Vec<_>>();
+        let mut before = normalized
+            .field_names
+            .iter()
+            .map(|name| Expr::Column(Column::from_name(name)))
+            .collect::<Vec<_>>();
         before.push(lit("update_preimage").alias("_change_type"));
         let before = LogicalPlanBuilder::from(normalized.plan.clone())
             .filter(predicate.clone())?
             .project(before)?
             .build()?;
-        let mut after = normalized.field_names.iter().map(col).collect::<Vec<_>>();
+        let mut after = normalized
+            .field_names
+            .iter()
+            .map(|name| Expr::Column(Column::from_name(name)))
+            .collect::<Vec<_>>();
         after.push(lit("update_postimage").alias("_change_type"));
         let after = LogicalPlanBuilder::from(write_rows.clone())
             .filter(col(OPERATION_COLUMN).eq(lit(RowLevelOperationType::Update.as_i32())))?

@@ -5,6 +5,7 @@ import re
 from typing import TYPE_CHECKING
 
 import pytest
+from packaging.version import Version
 
 from pysail.testing.spark.fixtures import (
     local_timezone,
@@ -13,7 +14,7 @@ from pysail.testing.spark.fixtures import (
     spark,
     spark_doctest,
 )
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -22,6 +23,7 @@ __all__ = ["local_timezone", "remote", "session_timezone", "spark", "spark_docte
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    config.pluginmanager.import_plugin("pysail.testing.spark.markers")
     config.pluginmanager.import_plugin("pysail.testing.spark.doctest")
     # Register custom markers.
     config.addinivalue_line(
@@ -51,7 +53,7 @@ def pytest_bdd_apply_tag(tag: str, function: Callable[..., object]) -> bool | No
         return True
 
     if tag == "sail-only":
-        pytest.mark.skipif(is_jvm_spark(), reason="Sail-only feature not supported by JVM Spark")(function)
+        pytest.mark.spark(skip_if_jvm=True, reason="Tests a Sail-only feature")(function)
         return True
 
     if tag == "skip-on-windows":
@@ -66,14 +68,11 @@ def pytest_bdd_apply_tag(tag: str, function: Callable[..., object]) -> bool | No
     if (m := SPARK_TAG_PATTERN.fullmatch(tag)) is not None:
         try:
             s = m.group(1)
-            version = tuple(int(part) for part in s.split("."))
-            if not version:
-                msg = "empty version"
-                raise ValueError(msg)  # noqa: TRY301
+            Version(s)
         except ValueError as e:
             msg = f"invalid Spark version tag: {tag}"
             raise ValueError(msg) from e
-        pytest.mark.skipif(pyspark_version() < version, reason=f"Requires Spark {s}+")(function)
+        pytest.mark.spark(version=f">={s}")(function)
         return True
 
     return None

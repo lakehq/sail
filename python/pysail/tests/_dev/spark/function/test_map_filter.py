@@ -3,8 +3,6 @@ import pytest
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql import types as T  # noqa: N812
 
-from pysail.testing.spark.utils.common import pyspark_version
-
 
 def test_map_filter_removes_null_metadata_values(spark):
     source = spark.createDataFrame(
@@ -59,7 +57,7 @@ def test_map_filter_captures_column_across_batches(spark):
     ]
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="Arrow Table input requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses Arrow table input")
 def test_map_filter_arrow_map_slice_with_hidden_null_entries(spark):
     # The null row has a physical zero-valued entry. Its predicate must not run;
     # the zeros outside the slice likewise must not participate in filtering.

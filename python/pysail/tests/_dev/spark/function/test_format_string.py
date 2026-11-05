@@ -185,7 +185,7 @@ def test_format_string_char_uppercase(spark):
 # milliseconds, so its `%t` conversions land far from the input date (`%tY` on a 2023
 # timestamp yields `55952`). Sail formats the real value, so this assertion only holds
 # on Sail. Drop the marker if Spark starts passing milliseconds.
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark's %t conversions misread the timestamp")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark's %t conversions misread the timestamp")
 def test_format_string_time_hour_24(spark):
     actual = spark.sql("SELECT format_string('Hour: %tH', TIMESTAMP '2023-12-25 14:30:45') AS result").toPandas()
     expected = pd.DataFrame({"result": ["Hour: 14"]})
@@ -202,7 +202,7 @@ def test_format_string_time_minute(spark):
 # milliseconds, so its `%t` conversions land far from the input date (`%tY` on a 2023
 # timestamp yields `55952`). Sail formats the real value, so this assertion only holds
 # on Sail. Drop the marker if Spark starts passing milliseconds.
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark's %t conversions misread the timestamp")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark's %t conversions misread the timestamp")
 def test_format_string_time_second(spark):
     actual = spark.sql("SELECT format_string('Second: %tS', TIMESTAMP '2023-12-25 14:30:45') AS result").toPandas()
     expected = pd.DataFrame({"result": ["Second: 45"]})
@@ -213,7 +213,7 @@ def test_format_string_time_second(spark):
 # milliseconds, so its `%t` conversions land far from the input date (`%tY` on a 2023
 # timestamp yields `55952`). Sail formats the real value, so this assertion only holds
 # on Sail. Drop the marker if Spark starts passing milliseconds.
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark's %t conversions misread the timestamp")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark's %t conversions misread the timestamp")
 def test_format_string_date_year(spark):
     actual = spark.sql("SELECT format_string('Year: %tY', TIMESTAMP '2023-12-25 14:30:45') AS result").toPandas()
     expected = pd.DataFrame({"result": ["Year: 2023"]})
@@ -224,7 +224,7 @@ def test_format_string_date_year(spark):
 # milliseconds, so its `%t` conversions land far from the input date (`%tY` on a 2023
 # timestamp yields `55952`). Sail formats the real value, so this assertion only holds
 # on Sail. Drop the marker if Spark starts passing milliseconds.
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark's %t conversions misread the timestamp")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark's %t conversions misread the timestamp")
 def test_format_string_date_month(spark):
     actual = spark.sql("SELECT format_string('Month: %tm', TIMESTAMP '2023-12-25 14:30:45') AS result").toPandas()
     expected = pd.DataFrame({"result": ["Month: 12"]})
@@ -241,7 +241,7 @@ def test_format_string_date_day(spark):
 # milliseconds, so its `%t` conversions land far from the input date (`%tY` on a 2023
 # timestamp yields `55952`). Sail formats the real value, so this assertion only holds
 # on Sail. Drop the marker if Spark starts passing milliseconds.
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark's %t conversions misread the timestamp")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark's %t conversions misread the timestamp")
 def test_format_string_date_iso(spark):
     actual = spark.sql("SELECT format_string('ISO Date: %tF', TIMESTAMP '2023-12-25 14:30:45') AS result").toPandas()
     expected = pd.DataFrame({"result": ["ISO Date: 2023-12-25"]})
@@ -252,7 +252,7 @@ def test_format_string_date_iso(spark):
 # milliseconds, so its `%t` conversions land far from the input date (`%tY` on a 2023
 # timestamp yields `55952`). Sail formats the real value, so this assertion only holds
 # on Sail. Drop the marker if Spark starts passing milliseconds.
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark's %t conversions misread the timestamp")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark's %t conversions misread the timestamp")
 def test_format_string_full_month_name(spark):
     actual = spark.sql("SELECT format_string('Month: %tB', TIMESTAMP '2023-12-25 14:30:45') AS result").toPandas()
     expected = pd.DataFrame({"result": ["Month: December"]})
@@ -263,7 +263,7 @@ def test_format_string_full_month_name(spark):
 # milliseconds, so its `%t` conversions land far from the input date (`%tY` on a 2023
 # timestamp yields `55952`). Sail formats the real value, so this assertion only holds
 # on Sail. Drop the marker if Spark starts passing milliseconds.
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark's %t conversions misread the timestamp")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark's %t conversions misread the timestamp")
 def test_format_string_full_day_name(spark):
     actual = spark.sql("SELECT format_string('Day: %tA', TIMESTAMP '2023-12-25 14:30:45') AS result").toPandas()
     expected = pd.DataFrame({"result": ["Day: Monday"]})

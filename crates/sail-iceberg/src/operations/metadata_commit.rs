@@ -243,7 +243,8 @@ mod tests {
     use crate::operations::replacement_test_support::{ReplacementFault, ReplacementStore};
 
     #[tokio::test]
-    async fn replacement_storage_requires_exact_readback_and_never_deletes_unknown() {
+    async fn replacement_storage_requires_exact_readback_and_never_deletes_unknown()
+    -> Result<(), Box<dyn std::error::Error>> {
         for fault in [
             ReplacementFault::LostAck,
             ReplacementFault::PutThenAlreadyExists,
@@ -253,8 +254,7 @@ mod tests {
             ReplacementFault::CompetingVersion,
         ] {
             let store = Arc::new(ReplacementStore::new(fault));
-            let context =
-                StoreContext::new(store.clone(), &Url::parse("memory:///table").unwrap()).unwrap();
+            let context = StoreContext::new(store.clone(), &Url::parse("memory:///table")?)?;
             let publication = MetadataFileCommit {
                 path: Path::from("metadata/v2.metadata.json"),
                 location: "memory:///table/metadata/v2.metadata.json".into(),
@@ -263,19 +263,14 @@ mod tests {
                 style: MetadataFileStyle::Versioned,
                 version_hint: "2".into(),
             };
-            assert!(
-                !publication
-                    .replacement_version_exists(&context)
-                    .await
-                    .unwrap()
-            );
+            assert!(!publication.replacement_version_exists(&context).await?);
             let result = publication.write_replacement(&context).await;
             match fault {
                 ReplacementFault::LostAck | ReplacementFault::PutThenAlreadyExists => {
-                    assert_eq!(result.unwrap(), MetadataWriteOutcome::Written)
+                    assert_eq!(result?, MetadataWriteOutcome::Written)
                 }
                 ReplacementFault::ConditionalConflict => {
-                    assert_eq!(result.unwrap(), MetadataWriteOutcome::Conflict)
+                    assert_eq!(result?, MetadataWriteOutcome::Conflict)
                 }
                 _ => assert!(result.is_err(), "{fault:?}: {result:?}"),
             }
@@ -288,23 +283,24 @@ mod tests {
                 ReplacementFault::LostAck
                 | ReplacementFault::PutThenAlreadyExists
                 | ReplacementFault::CompetingVersion => {
-                    assert_eq!(stored.unwrap().bytes().await.unwrap(), publication.bytes)
+                    assert_eq!(stored?.bytes().await?, publication.bytes)
                 }
                 _ => assert_eq!(
-                    stored.unwrap().bytes().await.unwrap(),
+                    stored?.bytes().await?,
                     Bytes::from_static(b"different metadata")
                 ),
             }
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn replacement_storage_existing_version_is_a_non_destructive_conflict() {
+    async fn replacement_storage_existing_version_is_a_non_destructive_conflict()
+    -> Result<(), Box<dyn std::error::Error>> {
         let store = StoreContext::new(
             Arc::new(object_store::memory::InMemory::new()),
-            &Url::parse("memory:///table").unwrap(),
-        )
-        .unwrap();
+            &Url::parse("memory:///table")?,
+        )?;
         let publication = MetadataFileCommit {
             path: Path::from("metadata/v2.metadata.json"),
             location: "memory:///table/metadata/v2.metadata.json".into(),
@@ -313,33 +309,17 @@ mod tests {
             style: MetadataFileStyle::Versioned,
             version_hint: "2".into(),
         };
-        assert!(
-            !publication
-                .replacement_version_exists(&store)
-                .await
-                .unwrap()
-        );
+        assert!(!publication.replacement_version_exists(&store).await?);
         assert_eq!(
-            publication.write_replacement(&store).await.unwrap(),
+            publication.write_replacement(&store).await?,
             MetadataWriteOutcome::Written
         );
-        assert!(
-            publication
-                .replacement_version_exists(&store)
-                .await
-                .unwrap()
-        );
+        assert!(publication.replacement_version_exists(&store).await?);
         assert_eq!(
-            store
-                .prefixed
-                .get(&publication.path)
-                .await
-                .unwrap()
-                .bytes()
-                .await
-                .unwrap(),
+            store.prefixed.get(&publication.path).await?.bytes().await?,
             publication.bytes
         );
+        Ok(())
     }
 
     #[test]

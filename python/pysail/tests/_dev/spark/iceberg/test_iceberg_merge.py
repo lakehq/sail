@@ -9,7 +9,6 @@ from pyiceberg.schema import Schema
 from pyiceberg.table import TableProperties
 from pyiceberg.typedef import Record
 from pyiceberg.types import LongType, NestedField, StringType
-from pyspark.sql.dataframe import DataFrame as SparkDataFrame
 
 from pysail.testing._dev.spark.steps.iceberg import (
     _current_manifest_list,
@@ -198,10 +197,8 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
         _drop_table(spark, table_name)
 
 
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.mergeInto")
 def test_iceberg_dataframe_merge_into_mor_update_delete_insert(spark, tmp_path):
-    if not hasattr(SparkDataFrame, "mergeInto"):
-        pytest.skip("DataFrame.mergeInto requires Spark 4.0+ (missing in this PySpark)")
-
     table_name = "iceberg_dataframe_merge_mor"
     table_path = tmp_path / table_name
 

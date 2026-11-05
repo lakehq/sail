@@ -331,7 +331,7 @@ def test_csv_read_truncated_rows_dropmalformed(spark, tmp_path, infer_schema):
     assert df.collect() == [full_row(infer_schema)]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="`allowTruncatedRows` is a Sail-only option")
+@pytest.mark.spark(skip_if_jvm=True, reason="`allowTruncatedRows` is a Sail-only option")
 @pytest.mark.parametrize("infer_schema", [True, False])
 def test_csv_read_truncated_rows_disallowed(spark, tmp_path, infer_schema):
     df = read_truncated_rows_csv(spark, tmp_path, infer_schema, {"allowTruncatedRows": "false"})
@@ -373,7 +373,7 @@ def test_csv_infer_schema_skips_whitespace_only_lines(spark, tmp_path):
     assert [tuple(r) for r in df.collect()] == [(1, 2), (3, 4)]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark splits quoted values at line breaks without `multiLine`")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark splits quoted values at line breaks without `multiLine`")
 @pytest.mark.parametrize(
     ("value", "expected"),
     [("p\n\nq", "p\n\nq"), ("p\n   \nq", "p\nq")],

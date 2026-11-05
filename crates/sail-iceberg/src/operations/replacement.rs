@@ -432,7 +432,7 @@ mod tests {
         }
     }
 
-    fn historical_metadata() -> TableMetadata {
+    fn historical_metadata() -> serde_json::Result<TableMetadata> {
         serde_json::from_value(serde_json::json!({
             "format-version": 3, "table-uuid": "12345678-1234-1234-1234-123456789abc",
             "location": "memory:///table", "last-sequence-number": 4,
@@ -448,27 +448,27 @@ mod tests {
             "sort-orders":[{"order-id":4,"fields":[{"source-id":10,"transform":"identity","direction":"asc","null-order":"nulls-first"}]}],
             "default-sort-order-id":4,
             "refs":{"main":{"snapshot-id":42,"type":"branch"},"audit":{"snapshot-id":42,"type":"branch"},"frozen":{"snapshot-id":42,"type":"tag"}}
-        })).unwrap()
+        }))
     }
 
     #[test]
-    fn replacement_private_metadata_preserves_history_and_resets_defaults() {
-        let base = historical_metadata();
-        let before = serde_json::to_value(&base).unwrap();
+    fn replacement_private_metadata_preserves_history_and_resets_defaults()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let base = historical_metadata()?;
+        let before = serde_json::to_value(&base)?;
         let input = ArrowSchema::new(vec![
             Field::new("replacement", DataType::Int64, false),
             Field::new("old", DataType::Int32, true),
         ]);
         let staged = prepare_replacement(
-            &Url::parse("memory:///table").unwrap(),
+            &Url::parse("memory:///table")?,
             catalog(true),
             Some("table/metadata/v2.metadata.json".into()),
             Some(&base),
             &input,
-        )
-        .unwrap();
+        )?;
         let metadata = staged.metadata;
-        let after = serde_json::to_value(&metadata).unwrap();
+        let after = serde_json::to_value(&metadata)?;
         for key in [
             "table-uuid",
             "snapshots",
@@ -480,7 +480,7 @@ mod tests {
         ] {
             assert_eq!(after[key], before[key], "{key}");
         }
-        assert_eq!(serde_json::to_value(&base).unwrap(), before);
+        assert_eq!(serde_json::to_value(&base)?, before);
         assert_eq!(metadata.current_snapshot_id, None);
         assert!(!metadata.refs.contains_key("main"));
         assert_eq!(after["refs"]["audit"], before["refs"]["audit"]);
@@ -496,24 +496,30 @@ mod tests {
                 .partition_specs
                 .iter()
                 .find(|spec| spec.spec_id() == metadata.default_spec_id)
-                .unwrap()
-                .fields()
-                .is_empty()
+                .is_some_and(|spec| spec.fields().is_empty())
         );
         assert_eq!(metadata.default_sort_order_id, Some(0));
-        assert_eq!(metadata.properties.get("retained").unwrap(), "yes");
-        assert_eq!(metadata.properties.get("owner").unwrap(), "new");
+        assert_eq!(
+            metadata.properties.get("retained").map(String::as_str),
+            Some("yes")
+        );
+        assert_eq!(
+            metadata.properties.get("owner").map(String::as_str),
+            Some("new")
+        );
         assert_eq!(
             staged.base_metadata_file.as_deref(),
             Some("table/metadata/v2.metadata.json")
         );
+        Ok(())
     }
 
     #[test]
-    fn replacement_absent_empty_and_invalid_properties_are_private() {
-        let url = Url::parse("memory:///table").unwrap();
+    fn replacement_absent_empty_and_invalid_properties_are_private()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let url = Url::parse("memory:///table")?;
         let input = ArrowSchema::new(vec![Field::new("replacement", DataType::Int64, false)]);
-        let fresh = prepare_replacement(&url, catalog(false), None, None, &input).unwrap();
+        let fresh = prepare_replacement(&url, catalog(false), None, None, &input)?;
         assert!(fresh.metadata.snapshots.is_empty());
         assert!(fresh.metadata.table_uuid.is_some());
         assert!(fresh.metadata.current_snapshot_id.is_none());
@@ -523,15 +529,14 @@ mod tests {
             Some("table/metadata/v1.metadata.json".into()),
             Some(&fresh.metadata),
             &input,
-        )
-        .unwrap();
+        )?;
         assert!(empty_replacement.metadata.snapshots.is_empty());
         assert_eq!(
             empty_replacement.metadata.table_uuid,
             fresh.metadata.table_uuid
         );
-        let base = historical_metadata();
-        let before = serde_json::to_value(&base).unwrap();
+        let base = historical_metadata()?;
+        let before = serde_json::to_value(&base)?;
         assert!(prepare_replacement(&url, catalog(false), None, Some(&base), &input).is_err());
         assert!(prepare_replacement(&url, catalog(true), None, None, &input).is_err());
         for (key, value) in [("format-version", "garbage"), ("format-version", "99")] {
@@ -541,17 +546,17 @@ mod tests {
                 prepare_replacement(&url, request, None, Some(&base), &input).is_err(),
                 "{key}={value}"
             );
-            assert_eq!(serde_json::to_value(&base).unwrap(), before);
+            assert_eq!(serde_json::to_value(&base)?, before);
         }
+        Ok(())
     }
 
     #[test]
-    fn replacement_version_uses_authoritative_default_and_rejects_downgrades() {
-        let url = Url::parse("memory:///table").unwrap();
+    fn replacement_version_uses_authoritative_default_and_rejects_downgrades()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let url = Url::parse("memory:///table")?;
         let input = ArrowSchema::new(vec![Field::new("replacement", DataType::Int64, false)]);
-        let fresh = prepare_replacement(&url, catalog(false), None, None, &input)
-            .unwrap()
-            .metadata;
+        let fresh = prepare_replacement(&url, catalog(false), None, None, &input)?.metadata;
         assert_eq!(fresh.format_version, FormatVersion::V2);
         for version in [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3] {
             let mut base = fresh.clone();
@@ -573,12 +578,18 @@ mod tests {
                         .property_updates
                         .push(("format-version".into(), (requested as i32).to_string()));
                 }
-                let before = serde_json::to_value(&base).unwrap();
+                let before = serde_json::to_value(&base)?;
                 let result = prepare_replacement(&url, request, None, Some(&base), &input);
                 if requested.is_some_and(|requested| requested < version) {
-                    assert!(result.unwrap_err().to_string().contains("cannot downgrade"));
+                    assert!(
+                        result
+                            .err()
+                            .ok_or("format downgrade must fail")?
+                            .to_string()
+                            .contains("cannot downgrade")
+                    );
                 } else {
-                    let replacement = result.unwrap();
+                    let replacement = result?;
                     let expected = requested.unwrap_or(version);
                     assert_eq!(replacement.metadata.format_version, expected);
                     assert!(
@@ -594,7 +605,7 @@ mod tests {
                             .contains(&("format-version".into(), (expected as i32).to_string()))
                     );
                 }
-                assert_eq!(serde_json::to_value(&base).unwrap(), before);
+                assert_eq!(serde_json::to_value(&base)?, before);
             }
         }
         // As on creation, schema-required versions are reflected in the effective catalog.
@@ -610,8 +621,7 @@ mod tests {
                 None,
                 existing.then_some(&fresh),
                 &nanos,
-            )
-            .unwrap();
+            )?;
             assert_eq!(replacement.metadata.format_version, FormatVersion::V3);
             assert!(
                 replacement
@@ -620,13 +630,15 @@ mod tests {
                     .contains(&("format-version".into(), "3".into()))
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn replacement_applies_only_explicit_property_updates_to_authoritative_base() {
-        let url = Url::parse("memory:///table").unwrap();
+    fn replacement_applies_only_explicit_property_updates_to_authoritative_base()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let url = Url::parse("memory:///table")?;
         let input = ArrowSchema::new(vec![Field::new("old", DataType::Int32, true)]);
-        let mut base = historical_metadata();
+        let mut base = historical_metadata()?;
         base.properties.insert("owner".into(), "external".into());
         for override_owner in [false, true] {
             let mut request = catalog(true);
@@ -640,16 +652,19 @@ mod tests {
             } else {
                 vec![]
             };
-            let replacement =
-                prepare_replacement(&url, request, None, Some(&base), &input).unwrap();
+            let replacement = prepare_replacement(&url, request, None, Some(&base), &input)?;
             let expected = if override_owner {
                 "requested"
             } else {
                 "external"
             };
             assert_eq!(
-                replacement.metadata.properties.get("owner").unwrap(),
-                expected
+                replacement
+                    .metadata
+                    .properties
+                    .get("owner")
+                    .map(String::as_str),
+                Some(expected)
             );
             assert!(!replacement.metadata.properties.contains_key("removed"));
             assert!(
@@ -684,42 +699,46 @@ mod tests {
                     .contains_key("option.example")
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn replacement_rejects_unbindable_historical_sort_orders_without_changing_history() {
-        let url = Url::parse("memory:///table").unwrap();
-        let mut base = historical_metadata();
+    fn replacement_rejects_unbindable_historical_sort_orders_without_changing_history()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let url = Url::parse("memory:///table")?;
+        let mut base = historical_metadata()?;
         base.sort_orders[0].fields[0].transform = Transform::Bucket(16);
         base.sort_orders.push(SortOrder::unsorted_order());
         base.default_sort_order_id = Some(0);
-        let before = serde_json::to_value(&base).unwrap();
+        let before = serde_json::to_value(&base)?;
         for field in [
             Field::new("replacement", DataType::Int64, false),
             Field::new("old", DataType::Boolean, true),
         ] {
             let input = ArrowSchema::new(vec![field]);
-            let error =
-                prepare_replacement(&url, catalog(true), None, Some(&base), &input).unwrap_err();
+            let error = prepare_replacement(&url, catalog(true), None, Some(&base), &input)
+                .err()
+                .ok_or("unbound historical sort order must fail")?;
             assert!(
                 error
                     .to_string()
                     .contains("unsupported Iceberg replacement: historical sort order 4")
             );
-            assert_eq!(serde_json::to_value(&base).unwrap(), before);
+            assert_eq!(serde_json::to_value(&base)?, before);
         }
         let input = ArrowSchema::new(vec![
             Field::new("old", DataType::Int64, true),
             Field::new("replacement", DataType::Utf8, false),
         ]);
-        let replacement =
-            prepare_replacement(&url, catalog(true), None, Some(&base), &input).unwrap();
+        let replacement = prepare_replacement(&url, catalog(true), None, Some(&base), &input)?;
         assert_eq!(replacement.metadata.sort_orders, base.sort_orders);
         assert_eq!(replacement.metadata.default_sort_order_id, Some(0));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn replacement_publication_faults_preserve_artifacts_and_catalog_access() {
+    async fn replacement_publication_faults_preserve_artifacts_and_catalog_access()
+    -> Result<(), Box<dyn std::error::Error>> {
         for fault in [
             ReplacementFault::LostAck,
             ReplacementFault::PutThenAlreadyExists,
@@ -730,28 +749,24 @@ mod tests {
                 let url = crate::lake_source::IcebergLakeSource::parse_table_url(vec![
                     "memory:///table".into(),
                 ])
-                .await
-                .unwrap();
+                .await?;
                 let store = Arc::new(ReplacementStore::new(fault));
-                let context = StoreContext::new(store.clone(), &url).unwrap();
-                let namespace = Namespace::try_from(vec!["db".to_string()]).unwrap();
+                let context = StoreContext::new(store.clone(), &url)?;
+                let namespace = Namespace::try_from(vec!["db".to_string()])?;
                 let provider = Arc::new(MemoryCatalogProvider::new(
                     "memory".into(),
                     namespace.clone(),
                     None,
                 ));
-                let manager = Arc::new(
-                    CatalogManager::try_new(CatalogManagerOptions {
-                        catalogs: HashMap::from([(
-                            "memory".into(),
-                            provider.clone() as Arc<dyn CatalogProvider>,
-                        )]),
-                        default_catalog: "memory".into(),
-                        default_database: vec!["db".into()],
-                        global_temporary_database: vec!["global_temp".into()],
-                    })
-                    .unwrap(),
-                );
+                let manager = Arc::new(CatalogManager::try_new(CatalogManagerOptions {
+                    catalogs: HashMap::from([(
+                        "memory".into(),
+                        provider.clone() as Arc<dyn CatalogProvider>,
+                    )]),
+                    default_catalog: "memory".into(),
+                    default_database: vec!["db".into()],
+                    global_temporary_database: vec!["global_temp".into()],
+                })?);
                 let task = SessionContext::new_with_config(
                     SessionConfig::new().with_extension(manager.clone()),
                 )
@@ -783,19 +798,17 @@ mod tests {
                 let base = if existing {
                     let mut old = options.clone();
                     old.columns[0].name = "old".into();
-                    provider.create_table(&namespace, "t", old).await.unwrap();
+                    provider.create_table(&namespace, "t", old).await?;
                     let schema = ArrowSchema::new(vec![Field::new("old", DataType::Int64, false)]);
-                    let base = prepare_replacement(&url, catalog(false), None, None, &schema)
-                        .unwrap()
-                        .metadata;
+                    let base =
+                        prepare_replacement(&url, catalog(false), None, None, &schema)?.metadata;
                     store
                         .inner
                         .put(
                             &Path::from("table/metadata/v1.metadata.json"),
-                            Bytes::from(base.to_json().unwrap()).into(),
+                            Bytes::from(base.to_json()?).into(),
                         )
-                        .await
-                        .unwrap();
+                        .await?;
                     Some(base)
                 } else {
                     None
@@ -810,35 +823,30 @@ mod tests {
                         store
                             .inner
                             .get(&Path::from("table/metadata/v1.metadata.json"))
-                            .await
-                            .unwrap()
+                            .await?
                             .bytes()
-                            .await
-                            .unwrap(),
+                            .await?,
                     )
                 } else {
                     None
                 };
                 let staged = manager
                     .stage_table_replacement(&["t"], options.clone())
-                    .await
-                    .unwrap();
+                    .await?;
                 let replacement = prepare_replacement(
                     &url,
                     staged,
                     existing.then(|| "table/metadata/v1.metadata.json".into()),
                     base.as_ref(),
                     &input,
-                )
-                .unwrap();
+                )?;
                 store
                     .inner
                     .put(
                         &Path::from("table/data/task.parquet"),
                         Bytes::from_static(b"task data").into(),
                     )
-                    .await
-                    .unwrap();
+                    .await?;
                 let commit = IcebergCommitInfo {
                     table_uri: url.to_string(),
                     row_count: 1,
@@ -881,7 +889,7 @@ mod tests {
                 let result =
                     commit_replacement(&task, &url, &context, replacement.clone(), &commit).await;
                 if matches!(fault, ReplacementFault::PreflightList) {
-                    let error = result.expect_err("preflight listing must fail");
+                    let error = result.err().ok_or("preflight listing must fail")?;
                     assert!(error.to_string().contains("preflight listing failed"));
                     assert!(!error.to_string().contains("state is unknown"));
                     assert_eq!(store.metadata_puts.load(Ordering::SeqCst), 0);
@@ -895,15 +903,10 @@ mod tests {
                         before
                     );
                     assert_eq!(
-                        provider.list_tables(&namespace).await.unwrap().len(),
+                        provider.list_tables(&namespace).await?.len(),
                         usize::from(existing)
                     );
-                    let files = store
-                        .inner
-                        .list(None)
-                        .try_collect::<Vec<_>>()
-                        .await
-                        .unwrap();
+                    let files = store.inner.list(None).try_collect::<Vec<_>>().await?;
                     assert_eq!(
                         files
                             .iter()
@@ -919,20 +922,18 @@ mod tests {
                     );
                     store.disabled.store(true, Ordering::SeqCst);
                     // Retrying the same staged identity must not encounter an uncertain name.
-                    commit_replacement(&task, &url, &context, replacement, &commit)
-                        .await
-                        .unwrap();
+                    commit_replacement(&task, &url, &context, replacement, &commit).await?;
                 } else {
-                    result.unwrap();
+                    result?;
                 }
-                let status = provider.get_table(&namespace, "t").await.unwrap();
+                let status = provider.get_table(&namespace, "t").await?;
                 let TableKind::Table {
                     columns,
                     properties,
                     ..
                 } = status.kind
                 else {
-                    panic!("expected table")
+                    return Err("expected table".into());
                 };
                 assert_eq!(columns[0].name, "replacement");
                 let version = if existing { 2 } else { 1 };
@@ -948,44 +949,37 @@ mod tests {
                     .get(&Path::from(format!(
                         "table/metadata/v{version}.metadata.json"
                     )))
-                    .await
-                    .unwrap()
+                    .await?
                     .bytes()
-                    .await
-                    .unwrap();
-                let metadata = TableMetadata::from_json(&bytes).unwrap();
-                let snapshot = metadata.current_snapshot().unwrap();
-                let manifests = load_manifest_list(&context, snapshot.manifest_list())
-                    .await
-                    .unwrap();
+                    .await?;
+                let metadata = TableMetadata::from_json(&bytes)?;
+                let snapshot = metadata
+                    .current_snapshot()
+                    .ok_or("replacement must publish a current snapshot")?;
+                let manifests = load_manifest_list(&context, snapshot.manifest_list()).await?;
                 assert_eq!(manifests.entries().len(), 1);
-                let manifest = load_manifest(&context, &manifests.entries()[0].manifest_path)
-                    .await
-                    .unwrap();
+                let manifest =
+                    load_manifest(&context, &manifests.entries()[0].manifest_path).await?;
                 assert_eq!(manifest.entries().len(), 1);
                 assert_eq!(manifest.entries()[0].data_file.record_count, 1);
                 context
                     .prefixed
                     .head(&Path::from("data/task.parquet"))
-                    .await
-                    .unwrap();
+                    .await?;
                 if let Some(before) = base_bytes {
                     assert_eq!(
                         store
                             .inner
                             .get(&Path::from("table/metadata/v1.metadata.json"))
-                            .await
-                            .unwrap()
+                            .await?
                             .bytes()
-                            .await
-                            .unwrap(),
+                            .await?,
                         before
                     );
                 }
                 provider
                     .rename_table(&namespace, "t", &namespace, "renamed")
-                    .await
-                    .unwrap();
+                    .await?;
                 provider
                     .drop_table(
                         &namespace,
@@ -995,20 +989,17 @@ mod tests {
                             purge: false,
                         },
                     )
-                    .await
-                    .unwrap();
-                provider
-                    .create_table(&namespace, "t", options)
-                    .await
-                    .unwrap();
-                assert_eq!(provider.list_tables(&namespace).await.unwrap().len(), 1);
+                    .await?;
+                provider.create_table(&namespace, "t", options).await?;
+                assert_eq!(provider.list_tables(&namespace).await?.len(), 1);
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn replacement_rejects_unsupported_write_format() {
-        let base = historical_metadata();
+    fn replacement_rejects_unsupported_write_format() -> Result<(), Box<dyn std::error::Error>> {
+        let base = historical_metadata()?;
         let mut request = catalog(true);
         request
             .property_updates
@@ -1016,7 +1007,7 @@ mod tests {
         let input = ArrowSchema::new(vec![Field::new("replacement", DataType::Int64, false)]);
         assert!(
             prepare_replacement(
-                &Url::parse("memory:///table").unwrap(),
+                &Url::parse("memory:///table")?,
                 request,
                 None,
                 Some(&base),
@@ -1025,5 +1016,6 @@ mod tests {
             .is_err(),
             "write.format.default=orc must not silently select a Parquet writer"
         );
+        Ok(())
     }
 }

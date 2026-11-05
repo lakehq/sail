@@ -3,10 +3,7 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from pysail.testing.spark.utils.common import pyspark_version
-
-if pyspark_version() < (4, 1):
-    pytest.skip("Python data source requires Spark 4.1+", allow_module_level=True)
+pytestmark = pytest.mark.spark(version=">=4.1", reason="Uses the JDBC Python DataSource with filter pushdown")
 
 
 @pytest.mark.parametrize(
