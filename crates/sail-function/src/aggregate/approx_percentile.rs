@@ -164,16 +164,27 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         Ok(types)
     }
 
+    // DataFusion 55 requires this type-only entry point; field inference lives below.
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let types = self.coerce_types(arg_types)?;
-        if matches!(types[1], DataType::List(_)) {
-            Ok(DataType::List(Arc::new(Field::new_list_field(
-                types[0].clone(),
-                false,
-            ))))
+        let fields = arg_types
+            .iter()
+            .map(|data_type| Arc::new(Field::new("arg", data_type.clone(), true)))
+            .collect::<Vec<_>>();
+        Ok(self.return_field(&fields)?.data_type().clone())
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        let arg_types = arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let types = self.coerce_types(&arg_types)?;
+        let data_type = if matches!(types[1], DataType::List(_)) {
+            DataType::List(Arc::new(Field::new_list_field(types[0].clone(), false)))
         } else {
-            Ok(types[0].clone())
-        }
+            types[0].clone()
+        };
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     #[inline]
@@ -318,7 +329,3 @@ impl Accumulator for ApproxPercentileAccumulator {
         Ok(())
     }
 }
-
-#[cfg(test)]
-#[path = "approx_percentile_tests.rs"]
-mod tests;

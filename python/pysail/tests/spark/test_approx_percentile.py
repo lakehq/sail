@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 import pytest
+from pyspark.errors import PySparkException
 from pyspark.sql import Row, Window
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import ArrayType, IntegerType
@@ -28,7 +29,7 @@ def test_approx_percentile_selects_observations(spark, function):
 
 @pytest.mark.parametrize("data_type", ["tinyint", "smallint", "int", "bigint", "float", "double", "decimal(10,2)"])
 def test_approx_percentile_preserves_numeric_type(spark, function, data_type):
-    df = spark.sql(f"SELECT CAST(value AS {data_type}) AS value FROM VALUES (0), (1), (2), (10) AS t(value)")
+    df = spark.sql(f"SELECT CAST(value AS {data_type}) AS value FROM VALUES (0), (1), (2), (10) AS t(value)")  # noqa: S608
     result = df.select(getattr(F, function)("value", [0.0, 0.5, 1.0], 1000000).alias("value"))
     expected = [Decimal("0.00"), Decimal("1.00"), Decimal("10.00")] if data_type.startswith("decimal") else [0, 1, 10]
     assert result.collect() == [Row(value=expected)]
@@ -37,7 +38,7 @@ def test_approx_percentile_preserves_numeric_type(spark, function, data_type):
 
 def test_approx_percentile_foldable_parameters(spark, function):
     result = spark.sql(
-        f"SELECT {function}(value, array(1.0 / 2, CAST(1 AS DOUBLE)), 100 * 100) AS value "
+        f"SELECT {function}(value, array(1.0 / 2, CAST(1 AS DOUBLE)), 100 * 100) AS value "  # noqa: S608
         "FROM VALUES (0), (1), (2), (10) AS t(value)"
     )
     assert result.collect() == [Row(value=[1, 10])]
@@ -46,7 +47,7 @@ def test_approx_percentile_foldable_parameters(spark, function):
 @pytest.mark.parametrize("rows", [[], [(None,), (None,)]], ids=["empty", "all-null"])
 def test_approx_percentile_empty_input(spark, function, rows):
     condition = "true" if rows else "false"
-    df = spark.sql(f"SELECT CAST(NULL AS INT) AS value FROM range(2) WHERE {condition}")
+    df = spark.sql(f"SELECT CAST(NULL AS INT) AS value FROM range(2) WHERE {condition}")  # noqa: S608
     result = df.select(
         getattr(F, function)("value", 0.5).alias("scalar"),
         getattr(F, function)("value", [0.0, 0.5, 1.0]).alias("array"),
@@ -84,7 +85,7 @@ def test_approx_percentile_window(spark, function):
 
 def test_approx_percentile_filter(spark, function):
     result = spark.sql(
-        f"SELECT {function}(value, 0.5) FILTER (WHERE value > 1) AS filtered_value "
+        f"SELECT {function}(value, 0.5) FILTER (WHERE value > 1) AS filtered_value "  # noqa: S608
         "FROM VALUES (1), (1), (1), (2), (3), (NULL) AS t(value)"
     )
     assert result.collect() == [Row(filtered_value=2)]
@@ -92,12 +93,12 @@ def test_approx_percentile_filter(spark, function):
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail does not support DISTINCT for approximate percentiles")
 def test_approx_percentile_rejects_distinct(spark, function):
-    with pytest.raises(Exception, match="does not support DISTINCT"):
-        spark.sql(f"SELECT {function}(DISTINCT value, 0.75) FROM VALUES (1), (1), (1), (2), (3) AS t(value)").collect()
+    with pytest.raises(PySparkException, match="does not support DISTINCT"):
+        spark.sql(f"SELECT {function}(DISTINCT value, 0.75) FROM VALUES (1), (1), (1), (2), (3) AS t(value)").collect()  # noqa: S608
 
 
 @pytest.mark.parametrize(
-    "percentage, accuracy",
+    ("percentage", "accuracy"),
     [
         ("-0.1", "10000"),
         ("1.1", "10000"),
@@ -118,18 +119,18 @@ def test_approx_percentile_rejects_distinct(spark, function):
     ],
 )
 def test_approx_percentile_rejects_invalid_parameters(spark, function, percentage, accuracy):
-    with pytest.raises(Exception):
-        spark.sql(f"SELECT {function}(id, {percentage}, {accuracy}) FROM range(4)").collect()
+    with pytest.raises(PySparkException):
+        spark.sql(f"SELECT {function}(id, {percentage}, {accuracy}) FROM range(4)").collect()  # noqa: S608
 
 
 def test_approx_percentile_maximum_accuracy(spark, function):
-    result = spark.sql(f"SELECT {function}(id, array(0.0, 0.5, 1.0), 2147483647) AS value FROM range(4)")
+    result = spark.sql(f"SELECT {function}(id, array(0.0, 0.5, 1.0), 2147483647) AS value FROM range(4)")  # noqa: S608
     assert result.collect() == [Row(value=[0, 1, 3])]
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail preserves observations that Spark rounds through double")
 @pytest.mark.parametrize(
-    "data_type, values",
+    ("data_type", "values"),
     [
         ("bigint", ["9007199254740993", "9007199254740995", "9007199254740997"]),
         ("decimal(38,18)", ["12345678901234567890.123456789012345678", "12345678901234567890.123456789012345679"]),
@@ -137,7 +138,7 @@ def test_approx_percentile_maximum_accuracy(spark, function):
 )
 def test_approx_percentile_preserves_exact_observations(spark, function, data_type, values):
     literals = ", ".join(f"(CAST('{value}' AS {data_type}))" for value in values)
-    result = spark.sql(f"SELECT {function}(value, array(0.0, 0.5, 1.0)) AS value FROM VALUES {literals} AS t(value)")
+    result = spark.sql(f"SELECT {function}(value, array(0.0, 0.5, 1.0)) AS value FROM VALUES {literals} AS t(value)")  # noqa: S608
     convert = int if data_type == "bigint" else Decimal
     expected = [convert(values[i]) for i in [0, (len(values) - 1) // 2, -1]]
     assert result.collect() == [Row(value=expected)]
