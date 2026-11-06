@@ -52,7 +52,12 @@ impl PlanResolver<'_> {
                 }
                 projected_exprs.push(
                     cast(lit(ScalarValue::Null), target_field.data_type().clone())
-                        .alias(state.register_field_name(target_name)),
+                        .alias_with_metadata(
+                            state.register_field_name(target_name),
+                            Some(datafusion_expr::expr::FieldMetadata::from(
+                                target_field.metadata().clone(),
+                            )),
+                        ),
                 );
                 continue;
             };
