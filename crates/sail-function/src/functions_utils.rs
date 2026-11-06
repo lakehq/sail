@@ -152,8 +152,11 @@ pub fn offset_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> usize {
 /// ```
 #[inline]
 pub fn offset_span<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> (usize, usize) {
-    let start = offsets.first().as_usize();
-    (start, offsets.last().as_usize() - start)
+    // TODO: Uncomment after DataFusion 56
+    // let start = offsets.first().as_usize();
+    // (start, offsets.last().as_usize() - start)
+    let start = offsets[0].as_usize();
+    (start, offsets[offsets.len() - 1].as_usize() - start)
 }
 
 // [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/utils.rs#L21-L67
