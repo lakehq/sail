@@ -402,6 +402,93 @@ mod tests {
         Ok(())
     }
 
+    async fn collect_int64(df: DataFrame) -> Result<Vec<Option<i64>>> {
+        let plan = df
+            .clone()
+            .into_optimized_plan()?
+            .display_indent()
+            .to_string();
+        assert!(plan.contains("coalesce_lazy"), "{plan}");
+        let batches = df.collect().await?;
+        Ok(batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .map(|array| array.iter().collect::<Vec<_>>())
+                    .unwrap_or_default()
+            })
+            .collect())
+    }
+
+    /// Covers a lazy argument evaluated on every row whose body uses no
+    /// columns, an all-rows argument followed by a partial one, and rows that
+    /// stay NULL after every argument.
+    #[tokio::test]
+    async fn coalesce_lazy_mixed_pending_rows_and_trailing_nulls() -> Result<()> {
+        let x = || col("x");
+        let null = || lit(ScalarValue::Int64(None));
+        let df = table(vec![(
+            "x",
+            Arc::new(Int64Array::from_iter_values(0..10)) as ArrayRef,
+        )])?
+        .select(vec![
+            coalesce(vec![
+                // NULL on every row.
+                when(rand().lt(lit(2.0)), null()).end()?,
+                // Evaluated on every row, uses no columns, NULL on every row.
+                when(rand().lt(lit(2.0)), null()).end()?,
+                // Evaluated on every row; NULL where x is even.
+                when((x() % lit(2_i64)).eq(lit(0_i64)), null()).otherwise(x() * lit(10_i64))?,
+                // Evaluated on the even rows; NULL where x % 3 = 0.
+                when((x() % lit(3_i64)).eq(lit(0_i64)), null()).otherwise(x() * lit(100_i64))?,
+            ])
+            .alias("v"),
+        ])?;
+        let expected = (0..10_i64)
+            .map(|x| match (x % 2, x % 3) {
+                (1, _) => Some(x * 10),
+                (_, 0) => None,
+                _ => Some(x * 100),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(collect_int64(df).await?, expected);
+        Ok(())
+    }
+
+    /// The lazy path with a struct return type.
+    #[tokio::test]
+    async fn coalesce_lazy_struct_values() -> Result<()> {
+        use datafusion::functions::core::expr_fn::{get_field, named_struct};
+
+        let x = || col("x");
+        let df = table(vec![(
+            "x",
+            Arc::new(Int64Array::from_iter_values(0..10)) as ArrayRef,
+        )])?
+        .select(vec![
+            get_field(
+                coalesce(vec![
+                    when(
+                        rand().lt(lit(2.0)).and((x() % lit(2_i64)).eq(lit(0_i64))),
+                        lit(ScalarValue::Null),
+                    )
+                    .otherwise(named_struct(vec![lit("a"), x()]))?,
+                    named_struct(vec![lit("a"), x() * lit(10_i64)]),
+                ]),
+                "a",
+            )
+            .alias("v"),
+        ])?;
+        let expected = (0..10_i64)
+            .map(|x| Some(if x % 2 == 0 { x * 10 } else { x }))
+            .collect::<Vec<_>>();
+        assert_eq!(collect_int64(df).await?, expected);
+        Ok(())
+    }
+
     /// Like Spark's `Coalesce`, arguments are evaluated lazily and at most
     /// once per row, also when an argument is volatile.
     #[tokio::test]
