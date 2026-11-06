@@ -1,5 +1,5 @@
-//! Hadoop commit immutability/stale-base semantics from Iceberg 1.11 TestHadoopCommits,
-//! with deterministic storage barriers and the Sail-specific one-publication codec lag.
+//! Sail publication-race tests with deterministic storage barriers.
+//! Cover immutable metadata versions, stale-base rejection, cancellation, and codec lag.
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
