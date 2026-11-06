@@ -28,10 +28,10 @@ use datafusion::arrow::array::{
 };
 use datafusion::common::Column;
 use datafusion::common::scalar::ScalarValue;
-use datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion::physical_optimizer::pruning::PruningStatistics;
 use datafusion::physical_plan::Accumulator;
 use log::warn;
+use sail_common_datafusion::min_max::common::{MaxAccumulator, MinAccumulator};
 
 use super::DeltaSnapshot;
 use crate::datasource::pruning::{

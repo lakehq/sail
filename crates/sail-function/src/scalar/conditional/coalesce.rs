@@ -1,9 +1,5 @@
 // [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/core/coalesce.rs
 
-// SPDX-License-Identifier: Apache-2.0
-// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
-// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
-
 use std::sync::Arc;
 
 use arrow::array::{BooleanArray, new_null_array};

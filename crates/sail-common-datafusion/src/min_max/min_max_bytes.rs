@@ -1,18 +1,18 @@
 // [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions-aggregate/src/min_max/min_max_bytes.rs
 
+use std::mem::size_of;
+use std::sync::Arc;
+
 use arrow::array::{
     Array, ArrayRef, AsArray, BinaryBuilder, BinaryViewBuilder, BooleanArray, LargeBinaryBuilder,
     LargeStringBuilder, StringBuilder, StringViewBuilder,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::hash_map::Entry;
+use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{HashMap, Result, internal_err};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
-use std::mem::size_of;
-use std::sync::Arc;
-
-use datafusion_common::utils::split_vec_min_alloc;
 
 /// Implements fast Min/Max [`GroupsAccumulator`] for "bytes" types ([`StringArray`],
 /// [`BinaryArray`], [`StringViewArray`], etc)
@@ -24,7 +24,7 @@ use datafusion_common::utils::split_vec_min_alloc;
 /// [`BinaryArray`]: arrow::array::BinaryArray
 /// [`StringViewArray`]: arrow::array::StringViewArray
 #[derive(Debug)]
-pub(crate) struct MinMaxBytesAccumulator {
+pub struct MinMaxBytesAccumulator {
     /// Inner data storage.
     inner: MinMaxBytesState,
     /// if true, is `MIN` otherwise is `MAX`

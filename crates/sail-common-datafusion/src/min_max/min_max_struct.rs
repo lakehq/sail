@@ -1,26 +1,18 @@
 // [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions-aggregate/src/min_max/min_max_struct.rs
 
-// SPDX-License-Identifier: Apache-2.0
-// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
-// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+use std::cmp::Ordering;
+use std::sync::Arc;
 
-use std::{cmp::Ordering, sync::Arc};
-
-use arrow::{
-    array::{
-        Array, ArrayData, ArrayRef, AsArray, BooleanArray, MutableArrayData, StructArray,
-        new_empty_array,
-    },
-    datatypes::DataType,
+use arrow::array::{
+    Array, ArrayData, ArrayRef, AsArray, BooleanArray, MutableArrayData, StructArray,
+    new_empty_array,
 };
-use datafusion_common::{
-    Result, internal_err,
-    scalar::{copy_array_data, partial_cmp_struct},
-};
+use arrow::datatypes::DataType;
+use datafusion_common::scalar::{copy_array_data, partial_cmp_struct};
+use datafusion_common::utils::split_vec_min_alloc;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
-
-use datafusion_common::utils::split_vec_min_alloc;
 
 /// Accumulator for MIN/MAX operations on Struct data types.
 ///
@@ -28,7 +20,7 @@ use datafusion_common::utils::split_vec_min_alloc;
 /// during aggregation, depending on the `is_min` flag.
 ///
 /// The comparison is done based on the struct fields in order.
-pub(crate) struct MinMaxStructAccumulator {
+pub struct MinMaxStructAccumulator {
     /// Inner data storage.
     inner: MinMaxStructState,
     /// if true, is `MIN` otherwise is `MAX`
@@ -325,10 +317,12 @@ impl MinMaxStructState {
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
+
     use arrow::array::{Int32Array, StringArray, StructArray};
     use arrow::datatypes::{DataType, Field, Fields, Int32Type};
-    use std::sync::Arc;
+
+    use super::*;
 
     fn create_test_struct_array(
         int_values: Vec<Option<i32>>,

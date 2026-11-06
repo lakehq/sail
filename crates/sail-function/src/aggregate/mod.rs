@@ -84,7 +84,6 @@ pub mod histogram_numeric;
 pub mod hll_sketch;
 pub mod kurtosis;
 pub mod max_min_by;
-pub mod min_max;
 pub mod mode;
 pub mod percentile;
 pub mod percentile_disc;

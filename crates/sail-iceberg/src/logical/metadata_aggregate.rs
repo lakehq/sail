@@ -12,6 +12,7 @@ use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 use sail_common_datafusion::metadata_aggregate::{
     AggregateInput, ExactAggregateStatistics, rewrite_aggregate,
 };
+use sail_common_datafusion::min_max::min_max::{Max, Min};
 
 use super::IcebergTableSource;
 use crate::datasource::scan::{IcebergScan, IcebergScanPlan};
@@ -124,7 +125,6 @@ fn supported_aggregate(expression: &Expr) -> bool {
         Expr::Alias(alias) => supported_aggregate(&alias.expr),
         Expr::AggregateFunction(function) => {
             use datafusion::functions_aggregate::count::Count;
-            use datafusion::functions_aggregate::min_max::{Max, Min};
             if function.params.filter.is_some()
                 || !function.params.order_by.is_empty()
                 || function.params.null_treatment.is_some()

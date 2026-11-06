@@ -1,35 +1,31 @@
 // [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions-aggregate/src/min_max.rs
 
-// SPDX-License-Identifier: Apache-2.0
-// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
-// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
-
 //! [`Max`] and [`MaxAccumulator`] accumulator for the `max` function
 //! [`Min`] and [`MinAccumulator`] accumulator for the `min` function
+
+use std::cmp::Ordering;
+use std::collections::VecDeque;
+use std::fmt::Debug;
+use std::mem::{size_of, size_of_val};
+use std::ops::Deref;
 
 use arrow::array::{ArrayRef, ArrowPrimitiveType, downcast_primitive};
 use arrow::datatypes::{DataType, FieldRef, Float16Type, Float32Type, Float64Type};
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::stats::Precision;
-use datafusion_common::{ColumnStatistics, Result, exec_err, internal_err};
+use datafusion_common::{ColumnStatistics, Result, ScalarValue, exec_err, internal_err};
+use datafusion_expr::function::AccumulatorArgs;
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, GroupsAccumulator, SetMonotonicity, Signature, StatisticsArgs,
+    Volatility, udaf_default_return_field,
+};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_physical_expr::expressions;
-use std::cmp::Ordering;
-use std::fmt::Debug;
 
-use crate::aggregate::min_max::min_max_bytes::MinMaxBytesAccumulator;
-use crate::aggregate::min_max::min_max_struct::MinMaxStructAccumulator;
-use datafusion_common::ScalarValue;
-use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, SetMonotonicity, Signature, Volatility,
-    function::AccumulatorArgs, udaf_default_return_field,
-};
-use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
-use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
-use sail_common_datafusion::float_semantics::{float_gt, float_lt};
-use std::collections::VecDeque;
-use std::mem::{size_of, size_of_val};
-use std::ops::Deref;
+use crate::float_semantics::{float_gt, float_lt};
+use crate::min_max::common::{MaxAccumulator, MinAccumulator};
+use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
+use crate::min_max::min_max_struct::MinMaxStructAccumulator;
 
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     // make sure that the input types only has one element.
@@ -588,7 +584,7 @@ impl Accumulator for SlidingMinAccumulator {
 /// - amortized O(1) for push
 /// - O(1) for pop
 #[derive(Debug)]
-pub(crate) struct MovingMin<T> {
+pub struct MovingMin<T> {
     deque: VecDeque<(u64, T)>,
     push_seq: u64,
     pop_seq: u64,
@@ -714,7 +710,7 @@ fn moving_deque_heap_size<T>(deque: &VecDeque<(u64, T)>, elem_heap: impl Fn(&T) 
 /// - amortized O(1) for push
 /// - O(1) for pop
 #[derive(Debug)]
-pub(crate) struct MovingMax<T> {
+pub struct MovingMax<T> {
     deque: VecDeque<(u64, T)>,
     push_seq: u64,
     pop_seq: u64,
@@ -820,23 +816,21 @@ impl<T: PartialOrd> MovingMax<T> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::panic)]
 mod tests {
-    use super::*;
-    use arrow::{
-        array::{
-            Array, AsArray, DictionaryArray, Float32Array, Int8Array, Int32Array,
-            IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
-            PrimitiveArray, StringArray,
-        },
-        datatypes::{
-            ArrowDictionaryKeyType, Field, Float32Type, IntervalDayTimeType,
-            IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, Schema,
-        },
+    use std::sync::Arc;
+
+    use arrow::array::{
+        Array, AsArray, DictionaryArray, Float32Array, Int8Array, Int32Array, IntervalDayTimeArray,
+        IntervalMonthDayNanoArray, IntervalYearMonthArray, PrimitiveArray, StringArray,
+    };
+    use arrow::datatypes::{
+        ArrowDictionaryKeyType, Field, Float32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
+        IntervalUnit, IntervalYearMonthType, Schema,
     };
     use datafusion_expr::EmitTo;
-    use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
-    use std::sync::Arc;
+
+    use super::*;
 
     #[test]
     fn grouped_float_min_max_total_order() -> Result<()> {

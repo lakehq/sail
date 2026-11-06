@@ -4,12 +4,13 @@ use datafusion::arrow::array::{
     Array, ArrayRef, GenericListArray, OffsetSizeTrait, as_large_list_array, as_list_array,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion::functions_aggregate::min_max;
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::{
     Accumulator, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
+use sail_common_datafusion::min_max::common::{MaxAccumulator, MinAccumulator};
+use sail_common_datafusion::min_max::min_max;
 
 use crate::functions_nested_utils::make_scalar_function;
 
@@ -187,12 +188,12 @@ where
         let inner_array = array.value(i);
         let value = match op {
             ArrayOp::Min => {
-                let mut min_accumulator = min_max::MinAccumulator::try_new(data_type)?;
+                let mut min_accumulator = MinAccumulator::try_new(data_type)?;
                 min_accumulator.update_batch(&[inner_array])?;
                 min_accumulator.evaluate()?
             }
             ArrayOp::Max => {
-                let mut max_accumulator = min_max::MaxAccumulator::try_new(data_type)?;
+                let mut max_accumulator = MaxAccumulator::try_new(data_type)?;
                 max_accumulator.update_batch(&[inner_array])?;
                 max_accumulator.evaluate()?
             }

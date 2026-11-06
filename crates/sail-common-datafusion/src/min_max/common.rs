@@ -2,6 +2,9 @@
 
 //! Basic min/max functionality shared across DataFusion aggregate functions
 
+use std::cmp::Ordering;
+use std::mem::size_of_val;
+
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array, Decimal32Array,
     Decimal64Array, Decimal128Array, Decimal256Array, DurationMicrosecondArray,
@@ -17,8 +20,8 @@ use arrow::compute;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::{DataFusionError, Result, ScalarValue, downcast_value, internal_err};
 use datafusion_expr_common::accumulator::Accumulator;
-use sail_common_datafusion::float_semantics::{FloatSemantics, compare_floats};
-use std::{cmp::Ordering, mem::size_of_val};
+
+use crate::float_semantics::{FloatSemantics, compare_floats};
 
 macro_rules! choose_min_max {
     (min) => {
@@ -683,6 +686,7 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

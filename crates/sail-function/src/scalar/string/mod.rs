@@ -1,4 +1,5 @@
 pub mod btrim;
+pub mod common;
 pub mod decimal_format;
 pub mod format_number;
 pub mod levenshtein;

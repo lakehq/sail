@@ -183,9 +183,10 @@ pub fn has_float_leaf(data_type: &DataType) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow::array::{Float16Array, Float32Array, Float64Array, Int32Array, ListArray};
     use arrow::datatypes::Int32Type;
+
+    use super::*;
 
     #[test]
     fn normalize_float_folds_negative_zero() {

@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion::functions_aggregate::min_max::{Max, Min};
 use datafusion::optimizer::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -11,6 +10,7 @@ use datafusion_expr::{
     Aggregate, Distinct, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator,
     Projection, SubqueryAlias,
 };
+use sail_common_datafusion::min_max::min_max::{Max, Min};
 
 /// Simplifies deduplication and removes duplicate-only grouping beneath MIN/MAX.
 #[derive(Debug, Default)]
