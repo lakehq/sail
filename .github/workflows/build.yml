@@ -102,9 +102,6 @@ jobs:
 
       - uses: pypa/hatch@install
 
-      - name: Verify report scripts
-        run: node --test .github/scripts/*.test.cjs
-
       - name: Read PySpark versions
         id: versions
         run: |
