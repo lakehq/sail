@@ -97,6 +97,7 @@ async fn data_file(
 
 fn commit(url: &Url, file: DataFile) -> IcebergCommitInfo {
     IcebergCommitInfo {
+        snapshot_properties: Default::default(),
         table_uri: url.to_string(),
         row_count: 1,
         action_summary: None,

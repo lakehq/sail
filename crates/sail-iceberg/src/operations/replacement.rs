@@ -858,6 +858,7 @@ mod tests {
                     )
                     .await?;
                 let commit = IcebergCommitInfo {
+                    snapshot_properties: Default::default(),
                     table_uri: url.to_string(),
                     row_count: 1,
                     action_summary: None,
@@ -1124,6 +1125,7 @@ mod tests {
             let old_file = write_row(&store, "old", 1, 1).await?;
             let new_file = write_row(&store, "replacement", 2, 2).await?;
             let append = IcebergCommitInfo {
+                snapshot_properties: Default::default(),
                 table_uri: url.to_string(),
                 row_count: 1,
                 action_summary: None,

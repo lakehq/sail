@@ -213,6 +213,7 @@ pub(crate) async fn prepare_bootstrap_snapshot(
         Some(manifest_metadata),
     )
     .with_bootstrap(true)
+    .with_snapshot_properties(commit_info.snapshot_properties.clone())
     .with_action_summary_properties(
         commit_info
             .action_summary
@@ -304,6 +305,7 @@ pub async fn bootstrap_new_table_with_style(
         Some(manifest_metadata),
     )
     .with_bootstrap(true)
+    .with_snapshot_properties(commit_info.snapshot_properties.clone())
     .with_action_summary_properties(
         commit_info
             .action_summary
@@ -821,6 +823,7 @@ mod tests {
                 requirements: vec![],
                 action_summary: None,
                 table_properties: vec![("format-version".to_string(), "2".to_string())],
+                snapshot_properties: Default::default(),
                 lakehouse_table: None,
                 snapshot_update_kind: crate::operations::SnapshotUpdateKind::FastAppend,
                 schema: Some(schema),
@@ -912,6 +915,7 @@ mod tests {
                     requirements: vec![],
                     action_summary: None,
                     table_properties: vec![],
+                    snapshot_properties: Default::default(),
                     lakehouse_table: None,
                     snapshot_update_kind: crate::operations::SnapshotUpdateKind::FastAppend,
                     schema: None,
@@ -1037,6 +1041,7 @@ mod tests {
                         "zstd".to_string(),
                     ),
                 ],
+                snapshot_properties: Default::default(),
                 lakehouse_table: None,
                 snapshot_update_kind: crate::operations::SnapshotUpdateKind::FastAppend,
                 schema: Some(schema),

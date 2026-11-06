@@ -209,12 +209,12 @@ fn empty_snapshot(
     prepared.manifests.push((path.clone(), bytes));
     let mut summary = Summary::new(Operation::Append);
     for key in [
-        "total-records",
-        "total-files-size",
-        "total-data-files",
-        "total-delete-files",
-        "total-position-deletes",
-        "total-equality-deletes",
+        crate::spec::snapshots::summary::TOTAL_RECORDS,
+        crate::spec::snapshots::summary::TOTAL_FILES_SIZE,
+        crate::spec::snapshots::summary::TOTAL_DATA_FILES,
+        crate::spec::snapshots::summary::TOTAL_DELETE_FILES,
+        crate::spec::snapshots::summary::TOTAL_POSITION_DELETES,
+        crate::spec::snapshots::summary::TOTAL_EQUALITY_DELETES,
     ] {
         summary.additional_properties.insert(key.into(), "0".into());
     }
