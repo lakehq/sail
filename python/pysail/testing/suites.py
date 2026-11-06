@@ -161,7 +161,7 @@ def infer_suite(item: pytest.Item, path: Path) -> str:
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]):
-    # The pre-yield phase runs before pytest's own -m and -k selection hooks.
+    # The pre-yield phase runs before the pytest -m and -k selection hooks.
     for item in items:
         names = set()
         for marker in item.iter_markers("suite"):
@@ -184,7 +184,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     yield
 
     # Other collection hooks attach Spark metadata to doctests and UDFs. Resolve
-    # it only after those hooks and pytest's standard -m/-k filters have run.
+    # it only after those hooks and the standard pytest -m/-k filters have run.
     seed, versions = matrix_versions()
     raw_choices = os.environ.get("PYSAIL_TEST_SUITE_CHOICES")
     choices = None
@@ -203,8 +203,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     manifest = os.environ.get("PYSAIL_TEST_SUITE_MANIFEST")
     if manifest is not None:
         if hasattr(config, "workerinput"):
-            msg = "Suite discovery must run without pytest-xdist workers"
+            msg = "Python test discovery must run without pytest-xdist workers"
             raise pytest.UsageError(msg)
+        # Export the inventory before CI selection and PySpark version assignment.
         inventory = [{"name": name, "test_count": count} for name, count in sorted(counts.items())]
         Path(manifest).write_text(json.dumps(inventory, indent=2) + "\n")
 

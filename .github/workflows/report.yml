@@ -28,7 +28,7 @@ jobs:
 
       - uses: ./.github/actions/pull-request-report
         if: github.event.workflow_run.name == 'Build'
-        # Test discovery may have failed before generating the report.
+        # Python test setup may have been skipped or failed before generating the selection report.
         continue-on-error: true
         with:
           workflow_run_id: ${{ github.event.workflow_run.id }}

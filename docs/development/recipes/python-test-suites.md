@@ -15,16 +15,20 @@ The `default` suite contains the remaining tests.
 
 ## Selecting Suites in CI
 
-The Build workflow enables non-integration suites by default for pull requests and pushes to the `main` branch.
+The Build workflow enables all suites except `slow` and `integration-*` by default for pull requests and pushes to the `main` branch.
 Scheduled builds enable every suite.
 For a pull request, maintainers can change the selection to include integration tests or focus on particular suites.
+
+Python test discovery and selection run only when the workflow builds a Python package.
+Documentation-only pull requests that reuse a baseline package skip Python tests and do not publish a Python test selection checklist.
+Re-running these builds does not enable Python tests.
 
 After the Build workflow completes, open the **Python Test Selection** comment and expand **Test Suites** to see the available suites and test counts.
 Check or uncheck the suites you want to run, then **re-run all jobs** or push another commit to apply the selection.
 Editing the comment does not start a build, and rerunning only failed jobs may reuse the previous selection.
 
 Please wait for the current build to finish before editing the checklist.
-The report published at the end of the build replaces the comment, so edits made while the build is running will be lost.
+When the build publishes its report, it replaces the checklist comment, so edits made while the build is running will be lost.
 
 Your choices are retained as new suites are discovered, and new suites use the defaults.
 If the checklist is missing or a suite has no checkbox, the defaults also apply.

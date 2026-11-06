@@ -10,7 +10,7 @@ const REPORT_NAME = "python-test-selection";
 
 function resolveSuiteChoices(suites, event, overrides) {
   if (!["pull_request", "push", "schedule"].includes(event)) {
-    throw new Error(`Unsupported test event: ${event}`);
+    throw new Error(`Unsupported Python test event: ${event}`);
   }
   return suites
     .filter(({ name }) => {
@@ -36,14 +36,14 @@ function parseSuiteChoices(body) {
 
 function validateInventory(inventory) {
   if (!Array.isArray(inventory)) {
-    throw new Error("Expected a suite inventory array");
+    throw new Error("Expected an inventory array");
   }
   if (!inventory.length || inventory.length > 200)
-    throw new Error("Invalid suite inventory size");
+    throw new Error("Invalid inventory size");
   const names = new Set();
   for (const entry of inventory) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry))
-      throw new Error("Invalid suite inventory entry");
+      throw new Error("Invalid inventory entry");
     const { name, test_count } = entry;
     if (
       typeof name !== "string" ||
@@ -52,7 +52,7 @@ function validateInventory(inventory) {
       !Number.isSafeInteger(test_count) ||
       test_count <= 0
     ) {
-      throw new Error("Invalid suite inventory entry");
+      throw new Error("Invalid inventory entry");
     }
     names.add(name);
   }
@@ -109,7 +109,7 @@ function renderSuiteChecklist(suites, run, selectedSuites) {
     "",
     [
       "Maintainers can edit the checkboxes below, then **re-run all jobs** or push a commit to apply their selection.",
-      "The build reads these choices during test discovery and keeps them when new test suites are discovered.",
+      "The build reads these choices after test discovery and keeps them when new test suites are discovered.",
       "Editing this comment does not start a build.",
     ].join(" "),
     "",

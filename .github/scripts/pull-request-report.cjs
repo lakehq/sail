@@ -114,8 +114,8 @@ async function validateReport(options) {
   const number = readPullRequestNumber(reportPath);
   if (number === undefined) return "";
 
-  // Suite checklists carry choices across builds, so only the current workflow
-  // attempt may publish them. Other reports retain their existing behavior.
+  // Python test selection reports carry suite choices across builds, so only the current
+  // workflow attempt may publish them. Other reports retain their existing behavior.
   if (reportName === "python-test-selection") {
     const body = fs.readFileSync(path.join(reportPath, "report.md"), "utf8");
     validateReportRun(body, reportName, options.context.payload.workflow_run);

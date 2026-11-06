@@ -94,7 +94,7 @@ jobs:
 
       - name: Run Tests
         run: |
-          hatch run pytest --pyargs pysail.tests pysail.tests._dev -q --durations=20 || {
+          hatch run pytest --pyargs pysail.tests pysail.tests._dev -q --timeout=120 --durations=20 || {
             status=$?
             # Pytest exits with code 5 when this version has no assigned tests.
             test "$status" -eq 5

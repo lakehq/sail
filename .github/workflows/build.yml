@@ -82,8 +82,11 @@ jobs:
             core.setOutput('run_spark_tests', labels.includes('run spark tests') ? 'true' : 'false');
             core.setOutput('run_ibis_tests', labels.includes('run ibis tests') ? 'true' : 'false');
 
-  python-test-discovery:
-    name: Python Test Discovery
+  python-test-setup:
+    name: Python Test Setup
+    if: ${{ needs.setup.outputs.build_package == 'true' }}
+    needs:
+      - setup
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -129,7 +132,7 @@ jobs:
             test "$status" -eq 5
           }
 
-      - name: Resolve test suite choices
+      - name: Select test suites
         uses: actions/github-script@v9
         id: choices
         with:
@@ -144,7 +147,8 @@ jobs:
             });
             core.setOutput('choices', JSON.stringify(choices));
 
-      - uses: actions/upload-artifact@v7
+      - name: Upload test selection report
+        uses: actions/upload-artifact@v7
         if: github.event_name == 'pull_request'
         with:
           name: python-test-selection-report
@@ -203,17 +207,17 @@ jobs:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.python-test-discovery.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.python-test-setup.outputs.matrix) }}
     with:
       spark_version: ${{ matrix.spark_version }}
-      spark_versions: ${{ needs.python-test-discovery.outputs.versions }}
-      suite_choices: ${{ needs.python-test-discovery.outputs.choices }}
+      spark_versions: ${{ needs.python-test-setup.outputs.versions }}
+      suite_choices: ${{ needs.python-test-setup.outputs.choices }}
       seed: ${{ github.event_name == 'pull_request' && format('pull/{0}', github.event.pull_request.number) || format('commit/{0}', github.sha) }}
-      partial: ${{ fromJSON(needs.python-test-discovery.outputs.partial) }}
+      partial: ${{ fromJSON(needs.python-test-setup.outputs.partial) }}
     needs:
       - setup
       - rust-build
-      - python-test-discovery
+      - python-test-setup
 
   codecov-notify:
     name: Codecov Notify
