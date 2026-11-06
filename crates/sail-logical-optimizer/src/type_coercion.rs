@@ -1566,6 +1566,8 @@ fn coerce_case_expression(
             })
         })
         .transpose()?;
+    // The plan resolver casts the values to the same common type in advance
+    // (see `coerce_conditional_values` in `sail-plan`).
     let then_else_coerce_type =
         get_coerce_type_for_case_expression(&then_types, else_type.as_ref()).ok_or_else(|| {
             if let Some(else_type) = else_type {

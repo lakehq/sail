@@ -44,6 +44,98 @@ Feature: if output schema
         | 2025-12-01 | 2025-12-01 | date        |
         | NULL       | NULL       | date        |
 
+  Rule: Common type of branches
+
+    Scenario Outline: IF has the common type of numeric branches: <case>
+      When query
+        """
+        SELECT
+          id,
+          if(id = 0, <first_branch>, <second_branch>) AS result,
+          typeof(if(id = 0, <first_branch>, <second_branch>)) AS result_type
+        FROM VALUES (0), (1) AS t(id)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result         | result_type   |
+        | 0  | <first_value>  | <result_type> |
+        | 1  | <second_value> | <result_type> |
+
+      Examples:
+        | case             | first_branch               | second_branch               | first_value | second_value | result_type   |
+        | INT then BIGINT  | 1                          | CAST(3000000000 AS BIGINT)  | 1           | 3000000000   | bigint        |
+        | BIGINT then INT  | CAST(3000000000 AS BIGINT) | 1                           | 3000000000  | 1            | bigint        |
+        | INT then DOUBLE  | 1                          | CAST(1.5 AS DOUBLE)         | 1.0         | 1.5          | double        |
+        | INT then DECIMAL | 1                          | CAST(1.75 AS DECIMAL(10,2)) | 1.00        | 1.75         | decimal(12,2) |
+
+    Scenario Outline: IF has the common type of INT and FLOAT branches with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          id,
+          if(id = 0, 1, CAST(1.5 AS FLOAT)) AS result,
+          typeof(if(id = 0, 1, CAST(1.5 AS FLOAT))) AS result_type
+        FROM VALUES (0), (1) AS t(id)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result | result_type   |
+        | 0  | 1.0    | <result_type> |
+        | 1  | 1.5    | <result_type> |
+
+      Examples:
+        | ansi  | result_type |
+        | true  | double      |
+        | false | float       |
+
+    Scenario: IF casts a DATE branch to TIMESTAMP in the session time zone
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT
+          id,
+          CAST(if(id = 0, TIMESTAMP'2020-01-01 10:00:00', DATE'2020-01-01') AS STRING) AS result,
+          CAST(if(id = 0, TIMESTAMP'2020-01-01 10:00:00', DATE'2020-01-01') AS TIMESTAMP_NTZ) AS ntz,
+          typeof(if(id = 0, TIMESTAMP'2020-01-01 10:00:00', DATE'2020-01-01')) AS result_type
+        FROM VALUES (0), (1) AS t(id)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result              | ntz                 | result_type |
+        | 0  | 2020-01-01 10:00:00 | 2020-01-01 10:00:00 | timestamp   |
+        | 1  | 2020-01-01 00:00:00 | 2020-01-01 00:00:00 | timestamp   |
+
+    Scenario: sequence over an IF bound with numeric branches of different types can be exploded
+      When query
+        """
+        SELECT c, i
+        FROM (
+          SELECT c, explode(sequence(0, if(c <= 0, 1, c) - 1)) AS i
+          FROM VALUES (CAST(2 AS BIGINT)), (CAST(1 AS BIGINT)) AS t(c)
+        )
+        """
+      Then query result
+        | c | i |
+        | 2 | 0 |
+        | 2 | 1 |
+        | 1 | 0 |
+
+    Scenario: IF returns nested values whose nullability differs across branches
+      When query
+        """
+        SELECT
+          x,
+          if(x < 0, array(named_struct('a', 1)), array(CAST(NULL AS STRUCT<a: INT>))) AS v,
+          if(x > 5, array(named_struct('a', 1)), array(CAST(NULL AS STRUCT<a: INT>))) AS w
+        FROM VALUES (-1), (1) AS t(x)
+        ORDER BY x
+        """
+      Then query result ordered
+        | x  | v      | w      |
+        | -1 | [{1}]  | [NULL] |
+        | 1  | [NULL] | [NULL] |
+
   @function(nullability)
   Rule: Output schema
 
