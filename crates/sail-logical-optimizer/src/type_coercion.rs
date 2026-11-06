@@ -3495,6 +3495,61 @@ mod test {
         );
     }
 
+    /// The common type of CASE values with nested types is nullable wherever a value is nullable,
+    /// regardless of the order of the values.
+    #[test]
+    fn test_case_result_type_widens_nested_nullability() {
+        use crate::type_coercion::case_result_type;
+
+        let int_field =
+            |name: &str, nullable| Arc::new(Field::new(name, DataType::Int32, nullable));
+        let r#struct = |nullable| DataType::Struct(vec![int_field("a", nullable)].into());
+        let renamed_struct = |nullable| DataType::Struct(vec![int_field("b", nullable)].into());
+        let list =
+            |nullable| DataType::List(Arc::new(Field::new_list_field(DataType::Int32, nullable)));
+        let map = |nullable| {
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(
+                        vec![
+                            Arc::new(Field::new("key", DataType::Utf8, false)),
+                            int_field("value", nullable),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                false,
+            )
+        };
+        let list_of_struct =
+            |nullable| DataType::List(Arc::new(Field::new_list_field(r#struct(nullable), true)));
+        let nested_struct = |nullable| {
+            DataType::Struct(vec![Arc::new(Field::new("s", r#struct(nullable), true))].into())
+        };
+
+        for (nullable, non_nullable) in [
+            (r#struct(true), r#struct(false)),
+            (r#struct(true), renamed_struct(false)),
+            (list(true), list(false)),
+            (map(true), map(false)),
+            (list_of_struct(true), list_of_struct(false)),
+            (nested_struct(true), nested_struct(false)),
+        ] {
+            for (then_type, else_type) in [(&nullable, &non_nullable), (&non_nullable, &nullable)] {
+                let common_type =
+                    case_result_type(std::slice::from_ref(then_type), Some(else_type));
+                assert!(
+                    common_type
+                        .as_ref()
+                        .is_some_and(|common_type| common_type.equals_datatype(&nullable)),
+                    "THEN {then_type} and ELSE {else_type} have the common type {common_type:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_case_expression_coercion() -> Result<()> {
         let schema = Arc::new(DFSchema::from_unqualified_fields(
