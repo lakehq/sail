@@ -180,7 +180,7 @@ use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzMode};
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
-use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
+use sail_function::scalar::datetime::spark_date_part::{SparkDatePart, SparkIntegerDatePart};
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalToCalendarInterval,
@@ -3956,6 +3956,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_date_part" | "date_part" | "datepart" | "extract" => {
                 Ok(Arc::new(ScalarUDF::from(SparkDatePart::new())))
             }
+            "spark_integer_date_part" => Ok(Arc::new(ScalarUDF::from(SparkIntegerDatePart::new()))),
             "spark_year" | "year" => Ok(Arc::new(ScalarUDF::from(SparkYear::new()))),
             "spark_luhn_check" | "luhn_check" => {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
@@ -4106,6 +4107,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
             || node_inner.is::<SparkDatePart>()
+            || node_inner.is::<SparkIntegerDatePart>()
             || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDayTimeIntervalToCalendarInterval>()
@@ -7986,6 +7988,7 @@ mod tests {
         for udf in [
             ScalarUDF::from(SparkDatePart::new()),
             ScalarUDF::from(DatePartFunc::new()),
+            ScalarUDF::from(SparkIntegerDatePart::new()),
             ScalarUDF::from(SparkDateTrunc::new()),
             ScalarUDF::from(DateTruncFunc::new()),
         ] {
@@ -7998,6 +8001,10 @@ mod tests {
             assert_eq!(
                 decoded.inner().is::<DatePartFunc>(),
                 udf.inner().is::<DatePartFunc>()
+            );
+            assert_eq!(
+                decoded.inner().is::<SparkIntegerDatePart>(),
+                udf.inner().is::<SparkIntegerDatePart>()
             );
             assert_eq!(
                 decoded.inner().is::<SparkDateTrunc>(),

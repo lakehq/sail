@@ -21,7 +21,7 @@ use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
-use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
+use sail_function::scalar::datetime::spark_date_part::{SparkDatePart, SparkIntegerDatePart};
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
@@ -56,7 +56,7 @@ use crate::function::datetime_utils::{
 
 fn integer_part(expr: Expr, part: &str) -> Expr {
     cast(
-        expr_fn::date_part(lit(part.to_uppercase()), expr),
+        ScalarUDF::from(SparkIntegerDatePart::new()).call(vec![lit(part.to_uppercase()), expr]),
         DataType::Int32,
     )
 }
