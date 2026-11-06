@@ -3,21 +3,24 @@ use std::sync::Arc;
 
 use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{DFSchemaRef, Result, plan_err};
-use datafusion_expr::{Expr, UserDefinedLogicalNodeCore, expr_vec_fmt};
+use datafusion_expr::{Expr, SortExpr, UserDefinedLogicalNodeCore, expr_vec_fmt};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub enum ExplicitRepartitionKind {
     Coalesce,
     RoundRobin,
-    Hash,
+    Hash(Vec<Expr>),
+    /// Each key keeps its sort direction and null order, which decide the partition ranges.
+    Range(Vec<SortExpr>),
 }
 
 impl ExplicitRepartitionKind {
-    fn as_str(self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match self {
             Self::Coalesce => "coalesce",
             Self::RoundRobin => "round_robin",
-            Self::Hash => "hash",
+            Self::Hash(_) => "hash",
+            Self::Range(_) => "range",
         }
     }
 }
@@ -28,7 +31,6 @@ pub struct ExplicitRepartitionNode {
     input: Arc<LogicalPlan>,
     num_partitions: Option<usize>,
     kind: ExplicitRepartitionKind,
-    partitioning_expressions: Vec<Expr>,
 }
 
 impl ExplicitRepartitionNode {
@@ -36,13 +38,11 @@ impl ExplicitRepartitionNode {
         input: Arc<LogicalPlan>,
         num_partitions: Option<usize>,
         kind: ExplicitRepartitionKind,
-        partitioning_expressions: Vec<Expr>,
     ) -> Self {
         Self {
             input,
             num_partitions,
             kind,
-            partitioning_expressions,
         }
     }
 
@@ -54,12 +54,8 @@ impl ExplicitRepartitionNode {
         self.num_partitions
     }
 
-    pub fn kind(&self) -> ExplicitRepartitionKind {
-        self.kind
-    }
-
-    pub fn partitioning_expressions(&self) -> &Vec<Expr> {
-        &self.partitioning_expressions
+    pub fn kind(&self) -> &ExplicitRepartitionKind {
+        &self.kind
     }
 }
 
@@ -77,17 +73,28 @@ impl UserDefinedLogicalNodeCore for ExplicitRepartitionNode {
     }
 
     fn expressions(&self) -> Vec<Expr> {
-        self.partitioning_expressions.clone()
+        match &self.kind {
+            ExplicitRepartitionKind::Coalesce | ExplicitRepartitionKind::RoundRobin => vec![],
+            ExplicitRepartitionKind::Hash(exprs) => exprs.clone(),
+            ExplicitRepartitionKind::Range(sorts) => {
+                sorts.iter().map(|sort| sort.expr.clone()).collect()
+            }
+        }
     }
 
     fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "ExplicitRepartition: kind={}, n={:?}, expr=[{}]",
+            "ExplicitRepartition: kind={}, n={:?}, expr=[",
             self.kind.as_str(),
             self.num_partitions,
-            expr_vec_fmt!(self.partitioning_expressions)
-        )
+        )?;
+        match &self.kind {
+            ExplicitRepartitionKind::Coalesce | ExplicitRepartitionKind::RoundRobin => {}
+            ExplicitRepartitionKind::Hash(exprs) => write!(f, "{}", expr_vec_fmt!(exprs))?,
+            ExplicitRepartitionKind::Range(sorts) => write!(f, "{}", expr_vec_fmt!(sorts))?,
+        }
+        write!(f, "]")
     }
 
     fn with_exprs_and_inputs(
@@ -98,12 +105,31 @@ impl UserDefinedLogicalNodeCore for ExplicitRepartitionNode {
         let (Some(input), true) = (inputs.pop(), inputs.is_empty()) else {
             return plan_err!("{} expects exactly one input", self.name());
         };
-        Ok(Self::new(
-            Arc::new(input),
-            self.num_partitions,
-            self.kind,
-            exprs,
-        ))
+        let expected = match &self.kind {
+            ExplicitRepartitionKind::Coalesce | ExplicitRepartitionKind::RoundRobin => 0,
+            ExplicitRepartitionKind::Hash(exprs) => exprs.len(),
+            ExplicitRepartitionKind::Range(sorts) => sorts.len(),
+        };
+        if exprs.len() != expected {
+            return plan_err!(
+                "{} expects {expected} expressions, got {}",
+                self.name(),
+                exprs.len()
+            );
+        }
+        let kind = match &self.kind {
+            ExplicitRepartitionKind::Coalesce => ExplicitRepartitionKind::Coalesce,
+            ExplicitRepartitionKind::RoundRobin => ExplicitRepartitionKind::RoundRobin,
+            ExplicitRepartitionKind::Hash(_) => ExplicitRepartitionKind::Hash(exprs),
+            ExplicitRepartitionKind::Range(sorts) => ExplicitRepartitionKind::Range(
+                sorts
+                    .iter()
+                    .zip(exprs)
+                    .map(|(sort, expr)| sort.with_expr(expr))
+                    .collect(),
+            ),
+        };
+        Ok(Self::new(Arc::new(input), self.num_partitions, kind))
     }
 
     fn necessary_children_exprs(&self, output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {

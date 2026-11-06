@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
@@ -75,6 +77,87 @@ def test_range_repartition_has_nonoverlapping_ordered_boundaries(spark, descendi
             assert min(groups[lower]) > max(groups[upper])
         else:
             assert max(groups[lower]) < min(groups[upper])
+
+
+def assert_range_repartition_plan(df, sorts):
+    plan = normalize_plan_text(df._explain_string(extended=True))  # noqa: SLF001
+    keys = ", ".join(rf"\S+ {sort}" for sort in sorts)
+    assert re.search(rf"ExplicitRepartition: kind=range, n=Some\(3\), expr=\[{keys}\]", plan), plan
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
+@pytest.mark.parametrize(
+    ("operation", "sorts"),
+    [
+        (lambda df: df.repartitionByRange(3, "id"), ["ASC NULLS FIRST"]),
+        (lambda df: df.repartitionByRange(3, F.col("id").desc()), ["DESC NULLS LAST"]),
+        (lambda df: df.repartitionByRange(3, F.col("id").asc_nulls_last()), ["ASC NULLS LAST"]),
+        (lambda df: df.repartitionByRange(3, F.col("id").desc_nulls_first()), ["DESC NULLS FIRST"]),
+        (lambda df: df.repartitionByRange(3, "id", F.col("key").desc()), ["ASC NULLS FIRST", "DESC NULLS LAST"]),
+        (lambda df: df.repartition(3, F.col("id").asc()), ["ASC NULLS FIRST"]),
+        (lambda df: df.select("key").repartitionByRange(3, "id"), ["ASC NULLS FIRST"]),
+    ],
+    ids=["default", "descending", "nulls-last", "nulls-first", "two-keys", "repartition-sort-order", "removed-key"],
+)
+def test_range_repartition_plans_range_kind(spark, operation, sorts):
+    assert_range_repartition_plan(operation(spark.range(12).withColumn("key", F.col("id") % 4)), sorts)
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
+@pytest.mark.parametrize("parameters", ["3, id", "3, 'id'"])
+def test_repartition_by_range_hint_plans_range_kind(spark, parameters):
+    assert_range_repartition_plan(
+        spark.sql(f"SELECT /*+ REPARTITION_BY_RANGE({parameters}) */ id FROM range(12)"),  # noqa: S608
+        ["ASC NULLS FIRST"],
+    )
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
+def test_repartition_by_range_hint_without_columns_plans_round_robin(spark):
+    plan = normalized_plan(spark.sql("SELECT /*+ REPARTITION_BY_RANGE(3) */ id FROM range(12)"))
+    assert "RepartitionExec: partitioning=RoundRobinBatch(3)" in plan
+
+
+@pytest.mark.parametrize("parameters", ["id + 1", "id, 3"])
+def test_repartition_by_range_hint_rejects_invalid_parameters(spark, parameters):
+    with pytest.raises(AnalysisException):
+        spark.sql(f"SELECT /*+ REPARTITION_BY_RANGE({parameters}) */ id FROM range(12)").collect()  # noqa: S608
+
+
+def test_repartition_rejects_mixed_sort_order_and_hash_expressions(spark):
+    with pytest.raises(IllegalArgumentException, match="are of type `SortOrder`, which means `RangePartitioning`"):
+        spark.range(12).repartition(3, F.col("id").asc(), F.col("id") + 1).collect()
+
+
+def test_repartition_to_one_partition_accepts_mixed_sort_order_and_hash_expressions(spark):
+    result = spark.range(12).repartition(1, F.col("id").asc(), F.col("id") + 1)
+    assert partition_count(result) == 1
+    assert sorted(row.id for row in result.collect()) == list(range(12))
+
+
+def test_repartition_with_one_shuffle_partition_accepts_mixed_sort_order_and_hash_expressions(spark):
+    try:
+        spark.conf.set("spark.sql.shuffle.partitions", "1")
+        result = spark.range(12).repartition(F.col("id").asc(), F.col("id") + 1)
+        assert sorted(row.id for row in result.collect()) == list(range(12))
+    finally:
+        spark.conf.unset("spark.sql.shuffle.partitions")
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [lambda: [F.lit(1)], lambda: ["id", "id"]],
+    ids=["literal", "repeated"],
+)
+def test_range_repartition_preserves_rows_for_constant_and_repeated_keys(spark, keys):
+    result = spark.range(12).repartitionByRange(3, *keys())
+    assert sorted(row.id for row in result.collect()) == list(range(12))
+
+
+def test_range_repartition_to_one_partition(spark):
+    result = spark.range(0, 12, 1, 3).repartitionByRange(1, "id")
+    assert partition_count(result) == 1
+    assert sorted(row.id for row in result.collect()) == list(range(12))
 
 
 def test_explicit_repartition_spreads_identical_rows(spark):
