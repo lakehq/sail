@@ -347,6 +347,9 @@ pub struct MergeIntoOptions {
     /// references target schema field IDs and is rewritten to actual column names
     /// by MERGE expansion before being applied as a post-processing projection.
     pub generated_column_exprs: Vec<(String, Expr)>,
+    /// Validated identity metadata from the target snapshot. Names initially reference
+    /// resolved field IDs and are normalized alongside MERGE assignments.
+    pub identity_columns: Vec<(String, crate::catalog::CatalogTableColumnIdentity)>,
     /// Resolved target column defaults used by explicit MERGE inserts.
     pub default_column_exprs: Vec<(String, Expr)>,
     /// Delta CHECK constraint expressions for the target table.

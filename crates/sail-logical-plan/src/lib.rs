@@ -1,5 +1,7 @@
 pub mod barrier;
 pub mod check_constraints;
+pub mod identity;
+pub mod identity_partition_key;
 pub mod map_partitions;
 pub mod merge;
 pub mod monotonic_id;

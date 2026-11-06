@@ -42,6 +42,7 @@ use sail_delta_lake::logical::DeltaMetadataAggregateRewriter;
 use sail_delta_lake::physical::DeltaPhysicalPlanner;
 use sail_iceberg::IcebergPhysicalPlanner;
 use sail_logical_plan::barrier::BarrierNode;
+use sail_logical_plan::identity_partition_key::IdentityPartitionKeyNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::range::RangeNode;
@@ -60,6 +61,7 @@ use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::identity_partition_key::IdentityPartitionKeyExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -353,6 +355,24 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 node.udf().clone(),
                 UserDefinedLogicalNode::schema(node).inner().clone(),
             ))
+        } else if let Some(node) = node.as_any().downcast_ref::<IdentityPartitionKeyNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!(
+                    "IdentityPartitionKeyExec requires exactly one physical input"
+                );
+            };
+            let keys = node
+                .keys()
+                .iter()
+                .map(|(mask, key)| Ok((input.schema().index_of(mask)?, key.clone())))
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
+            Arc::new(IdentityPartitionKeyExec::try_new(
+                input.clone(),
+                keys,
+                IdentityPartitionKeyExec::false_shards_for_partitions(
+                    session.config().target_partitions(),
+                ),
+            )?)
         } else if let Some(node) = node.as_any().downcast_ref::<MonotonicIdNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("MonotonicIdExec requires exactly one physical input");

@@ -306,6 +306,7 @@ use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::data_source::RemoteDataSourceExec;
+use sail_physical_plan::identity_partition_key::IdentityPartitionKeyExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
@@ -1478,6 +1479,28 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col,
                 source_present_col,
             )?)),
+            NodeKind::IdentityPartitionKey(r#gen::IdentityPartitionKeyExecNode {
+                input,
+                keys,
+                false_shards,
+            }) => {
+                let keys = keys
+                    .into_iter()
+                    .map(|key| {
+                        Ok((
+                            usize::try_from(key.mask_index).map_err(|_| {
+                                plan_datafusion_err!("identity partition mask index is too large")
+                            })?,
+                            key.column_name,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Arc::new(IdentityPartitionKeyExec::try_new(
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
+                    keys,
+                    false_shards,
+                )?))
+            }
             NodeKind::MonotonicId(r#gen::MonotonicIdExecNode {
                 input,
                 column_name,
@@ -3010,6 +3033,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_row_id_col: cardinality_check.target_row_id_col().to_string(),
                 target_present_col: cardinality_check.target_present_col().to_string(),
                 source_present_col: cardinality_check.source_present_col().to_string(),
+            })
+        } else if let Some(keys) = node.downcast_ref::<IdentityPartitionKeyExec>() {
+            NodeKind::IdentityPartitionKey(r#gen::IdentityPartitionKeyExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    keys.input().clone(),
+                )?,
+                keys: keys
+                    .keys()
+                    .iter()
+                    .map(|(index, name)| r#gen::IdentityPartitionKeyColumn {
+                        mask_index: *index as u64,
+                        column_name: name.clone(),
+                    })
+                    .collect(),
+                false_shards: keys.false_shards(),
             })
         } else if let Some(monotonic_id) = node.downcast_ref::<MonotonicIdExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -6326,6 +6366,106 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udaf(&udaf, &mut buf)?;
         codec.try_decode_udaf(&name, &buf)
+    }
+
+    #[test]
+    fn test_identity_partition_key_round_trip_and_invalid_codec() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Boolean, false),
+            Field::new("b", DataType::Boolean, false),
+            Field::new("nullable", DataType::Boolean, true),
+            Field::new("value", DataType::Int32, false),
+        ]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
+        let codec = RemoteExecutionCodec;
+        let context = TaskContext::default();
+        let keys = vec![
+            (0, "ka".to_string()),
+            (1, "kb".to_string()),
+            (2, "kn".to_string()),
+        ];
+        for shards in [1, 256, 4096] {
+            let plan = Arc::new(IdentityPartitionKeyExec::try_new(
+                input.clone(),
+                keys.clone(),
+                shards,
+            )?);
+            let expected_schema = plan.schema();
+            let bytes = try_encode_physical_plan(&codec, plan)?;
+            let decoded = try_decode_physical_plan(&context, &codec, &bytes)?;
+            let decoded = decoded
+                .downcast_ref::<IdentityPartitionKeyExec>()
+                .ok_or_else(|| plan_datafusion_err!("expected identity partition key operator"))?;
+            assert_eq!(decoded.keys(), keys);
+            assert_eq!(decoded.false_shards(), shards);
+            assert_eq!(decoded.schema(), expected_schema);
+        }
+        let input = try_encode_physical_plan(&codec, input)?;
+        let valid = r#gen::IdentityPartitionKeyColumn {
+            mask_index: 0,
+            column_name: "key".to_string(),
+        };
+        let converter = crate::proto::converter::RemotePhysicalProtoConverter::default();
+        for (keys, shards) in [
+            (vec![valid.clone()], 0),
+            (vec![valid.clone()], -1),
+            (vec![valid.clone()], 4097),
+            (vec![], 1),
+            (vec![valid.clone(), valid.clone()], 1),
+            (
+                vec![r#gen::IdentityPartitionKeyColumn {
+                    mask_index: u64::MAX,
+                    ..valid.clone()
+                }],
+                1,
+            ),
+            (
+                vec![r#gen::IdentityPartitionKeyColumn {
+                    mask_index: 4,
+                    ..valid.clone()
+                }],
+                1,
+            ),
+            (
+                vec![r#gen::IdentityPartitionKeyColumn {
+                    mask_index: 3,
+                    ..valid.clone()
+                }],
+                1,
+            ),
+            (
+                vec![r#gen::IdentityPartitionKeyColumn {
+                    column_name: "a".into(),
+                    ..valid.clone()
+                }],
+                1,
+            ),
+            (
+                vec![r#gen::IdentityPartitionKeyColumn {
+                    column_name: String::new(),
+                    ..valid
+                }],
+                1,
+            ),
+        ] {
+            let node = ExtendedPhysicalPlanNode {
+                node_kind: Some(NodeKind::IdentityPartitionKey(
+                    r#gen::IdentityPartitionKeyExecNode {
+                        input: input.clone(),
+                        keys,
+                        false_shards: shards,
+                    },
+                )),
+            };
+            assert!(
+                codec
+                    .try_decode(&node.encode_to_vec(), &[], &context, &converter)
+                    .is_err()
+            );
+        }
+        Ok(())
     }
 
     #[test]
