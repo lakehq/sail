@@ -446,10 +446,11 @@ impl PlanResolver<'_> {
                                 .await?
                         };
                     } else if conditional_delta_by_name
-                        && Self::has_missing_columns_without_schema_changes(input.schema(), info)
+                        && Self::can_rewrite_without_schema_changes(input.schema(), info)
                     {
-                        // Complete existing columns only: the helper must not discard new
-                        // fields or coerce supplied types before Delta validates evolution.
+                        // Normalize compatible inputs, including full-width generated values.
+                        // Do not discard new fields or coerce supplied types before Delta
+                        // validates schema evolution.
                         input = self
                             .rewrite_write_input_with_column_expressions(
                                 input,
@@ -1006,7 +1007,7 @@ impl PlanResolver<'_> {
         })
     }
 
-    fn has_missing_columns_without_schema_changes(schema: &DFSchema, info: &TableInfo) -> bool {
+    fn can_rewrite_without_schema_changes(schema: &DFSchema, info: &TableInfo) -> bool {
         let mut supplied = HashSet::new();
         for field in schema.fields() {
             let matches = info
@@ -1022,7 +1023,7 @@ impl PlanResolver<'_> {
                 return false;
             }
         }
-        (0..info.columns.len()).any(|index| !supplied.contains(&index))
+        true
     }
 
     /// Fast path for tables without column-level expressions (no generated columns,
@@ -1124,7 +1125,7 @@ impl PlanResolver<'_> {
     ///   non-generated input values (keyed by registered field IDs).
     /// - Protocol enforcement: when the user explicitly provides a value for a
     ///   generated column, the Delta protocol requires
-    ///   `value IS NULL OR value <=> expr IS TRUE`. We enforce this with
+    ///   `(value <=> expr) IS TRUE`, including explicit NULLs. We enforce this with
     ///   `CASE WHEN cond THEN gen_expr ELSE raise_error(msg) END`, so mismatches
     ///   fail at runtime instead of being silently overwritten.
     /// - Metadata propagation: `delta.generationExpression` is attached via
@@ -1292,10 +1293,8 @@ impl PlanResolver<'_> {
                     ))
                 })?;
                 let final_expr = if let Some(check_id) = &gen_check_field_ids[idx] {
-                    // User explicitly provided a value. Enforce Delta protocol:
-                    //     value IS NULL OR value <=> generation_expression IS TRUE
-                    // Use `<=>` (null-safe equal) so NULL on either side is handled
-                    // without spurious "IS TRUE" wrapping.
+                    // Explicit NULL is a supplied value, not an omitted column.
+                    // Delta requires null-safe equality with the generation expression.
                     // Cast both sides to the target column type so that type-compatible
                     // values (e.g. INT 2024 vs BIGINT 2024) are not treated as mismatches.
                     let user_value = col(Column::from_name(check_id));
@@ -1305,14 +1304,11 @@ impl PlanResolver<'_> {
                     let gen_expr_cast = gen_expr
                         .clone()
                         .cast_to(field.data_type(), &intermediate_schema)?;
-                    let check = user_value
-                        .clone()
-                        .is_null()
-                        .or(Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(user_value_cast),
-                            Operator::IsNotDistinctFrom,
-                            Box::new(gen_expr_cast),
-                        )));
+                    let check = Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(user_value_cast),
+                        Operator::IsNotDistinctFrom,
+                        Box::new(gen_expr_cast),
+                    ));
                     let err_msg = format!(
                         "[DELTA_GENERATED_COLUMNS_VALUE_MISMATCH] \
                          CHECK constraint for generated column `{}` \

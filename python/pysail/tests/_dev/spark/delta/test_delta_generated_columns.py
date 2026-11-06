@@ -138,3 +138,31 @@ def test_dataframewriter_path_overwrite_schema_does_not_rewrite_old_generated_co
     assert [row.asDict() for row in df.collect()] == [
         {"some_id": 1, "some_category": "A"},
     ]
+
+
+@pytest.mark.parametrize("mode", ["append", "overwrite"])
+@pytest.mark.parametrize(
+    ("source", "generated", "valid"),
+    [(1, None, False), (None, 2, False), (None, None, True)],
+    ids=["generated-null", "source-null", "both-null"],
+)
+def test_dataframewriter_path_validates_explicit_generated_nulls(spark, tmp_path, mode, source, generated, valid):
+    # Delta 4.4 GeneratedColumnSuite: the generation expression constraint should support null values.
+    path = tmp_path / "generated_nulls"
+    _create_empty_generated_column_table(path)
+    before = {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()}
+    writer = (
+        spark.createDataFrame([(source, generated, "A")], "some_id INT, gen INT, some_category STRING")
+        .write.format("delta")
+        .mode(mode)
+    )
+    if valid:
+        writer.save(str(path))
+        assert [row.asDict() for row in spark.read.format("delta").load(str(path)).collect()] == [
+            {"some_id": None, "gen": None, "some_category": "A"}
+        ]
+    else:
+        with pytest.raises(Exception, match="DELTA_GENERATED_COLUMNS_VALUE_MISMATCH"):
+            writer.save(str(path))
+        assert {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()} == before
+        assert spark.read.format("delta").load(str(path)).collect() == []

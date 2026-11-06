@@ -322,7 +322,7 @@ Feature: Delta Lake Generated Columns
         | id | event_time          | event_date |
         | 1  | 2024-05-10 12:00:00 | 2024-05-10 |
 
-    Scenario: Insert with NULL explicit generated column value is replaced by the expression
+    Scenario: Explicit NULL generated column values must match the expression
       Given statement template
         """
         CREATE TABLE delta_gen_col_enforce (
@@ -333,10 +333,21 @@ Feature: Delta Lake Generated Columns
         USING DELTA
         LOCATION {{ location.sql }}
         """
+      # Delta GeneratedColumnSuite: the generation expression constraint should support null values.
       Given statement
         """
         INSERT INTO delta_gen_col_enforce
-        VALUES (1, TIMESTAMP '2024-05-10 12:00:00', CAST(NULL AS DATE))
+        VALUES (1, CAST(NULL AS TIMESTAMP), CAST(NULL AS DATE))
+        """
+      Given statement with error DELTA_GENERATED_COLUMNS_VALUE_MISMATCH
+        """
+        INSERT INTO delta_gen_col_enforce
+        VALUES (2, TIMESTAMP '2024-05-10 12:00:00', CAST(NULL AS DATE))
+        """
+      Given statement with error DELTA_GENERATED_COLUMNS_VALUE_MISMATCH
+        """
+        INSERT INTO delta_gen_col_enforce (id, event_time, event_date)
+        VALUES (3, CAST(NULL AS TIMESTAMP), DATE '2024-05-10')
         """
       When query
         """
@@ -344,7 +355,7 @@ Feature: Delta Lake Generated Columns
         """
       Then query result ordered
         | id | event_date |
-        | 1  | 2024-05-10 |
+        | 1  | NULL       |
 
     Scenario: Insert with incorrect explicit generated column value fails
       Given statement template
