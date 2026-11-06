@@ -36,6 +36,7 @@ parquet-variant-json = { workspace = true }
 tokio = { workspace = true }
 serde_arrow = { workspace = true }
 itertools = { workspace = true }
+half = { workspace = true }
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }

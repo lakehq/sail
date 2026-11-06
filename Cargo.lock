@@ -7232,6 +7232,7 @@ dependencies = [
  "datafusion-expr",
  "either",
  "futures",
+ "half",
  "itertools 0.15.0",
  "lexical-core",
  "num-bigint 0.5.1",

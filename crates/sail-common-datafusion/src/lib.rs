@@ -7,6 +7,7 @@ pub mod datasource;
 pub mod display;
 pub mod error;
 pub mod extension;
+pub mod float_semantics;
 pub mod formatter;
 pub mod input_file;
 mod java_float;
