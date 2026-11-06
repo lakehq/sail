@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion_common::{Column, ScalarValue};
+use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{
     Expr, ExprSchemable, LogicalPlan, Projection, UNNAMED_TABLE, cast, col, lit,
 };
@@ -47,18 +48,20 @@ impl PlanResolver<'_> {
                 // As in Spark, a missing column is filled with nulls if the field is nullable.
                 if !target_field.is_nullable() {
                     return Err(PlanError::analysis(format!(
-                        "[UNRESOLVED_COLUMN] A column with name `{target_name}` cannot be resolved"
+                        "[UNRESOLVED_COLUMN] A column, variable, or function parameter with name `{target_name}` cannot be resolved."
                     )));
                 }
-                projected_exprs.push(
-                    cast(lit(ScalarValue::Null), target_field.data_type().clone())
-                        .alias_with_metadata(
-                            state.register_field_name(target_name),
-                            Some(datafusion_expr::expr::FieldMetadata::from(
-                                target_field.metadata().clone(),
-                            )),
-                        ),
-                );
+                let expr = lit(ScalarValue::try_from(target_field.data_type())?);
+                let field_id = state.register_field_name(target_name);
+                let expr = if target_field.metadata().is_empty() {
+                    expr.alias(field_id)
+                } else {
+                    expr.alias_with_metadata(
+                        field_id,
+                        Some(FieldMetadata::from(target_field.metadata())),
+                    )
+                };
+                projected_exprs.push(expr);
                 continue;
             };
             let (input_qualifier, input_field) = input.schema().qualified_field(input_idx);
