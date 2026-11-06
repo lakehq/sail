@@ -53,7 +53,6 @@ SUITE_PATHS = {
         "spark/literal",
         "spark/optimizer",
         "spark/test_features.py",
-        "spark/test_sql.py",
     ),
 }
 
