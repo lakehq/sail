@@ -410,10 +410,10 @@ impl PlanResolver<'_> {
                             &["mergeSchema", "merge_schema"],
                         );
                     if !lake_source_merge_schema {
-                        if info.format.eq_ignore_ascii_case("delta")
+                        let conditional_delta_by_name = info.format.eq_ignore_ascii_case("delta")
                             && matches!(&mode, WriteMode::TruncateIf { .. })
-                            && matches!(&column_match, WriteColumnMatch::ByName)
-                        {
+                            && matches!(&column_match, WriteColumnMatch::ByName);
+                        if conditional_delta_by_name {
                             // Name alignment can fill omitted columns, but must not discard
                             // unknown columns before Delta validates a conditional overwrite.
                             for field in input.schema().fields() {
@@ -429,9 +429,22 @@ impl PlanResolver<'_> {
                                 }
                             }
                         }
-                        input = self
-                            .rewrite_write_input(input, column_match, info, state)
-                            .await?;
+                        input = if conditional_delta_by_name
+                            && input.schema().fields().len() < info.columns.len()
+                        {
+                            // Conditional Delta writes complete omitted columns by name even
+                            // when the target has no column expressions or NOT NULL constraints.
+                            self.rewrite_write_input_with_column_expressions(
+                                input,
+                                column_match,
+                                info,
+                                state,
+                            )
+                            .await?
+                        } else {
+                            self.rewrite_write_input(input, column_match, info, state)
+                                .await?
+                        };
                     }
                     input = self
                         .apply_delta_table_constraints(input, info, state)

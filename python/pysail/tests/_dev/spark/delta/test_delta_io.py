@@ -525,6 +525,51 @@ def test_delta_io_replace_where_constraint_selection(spark, tmp_path, predicate,
 
 
 @pytest.mark.usefixtures("replace_where_check")
+@pytest.mark.parametrize(
+    ("columns", "expected_v", "omittable"),
+    [
+        pytest.param("p INT, v INT", None, True, id="nullable"),
+        pytest.param("p INT NOT NULL, v INT", None, True, id="unrelated-not-null"),
+        pytest.param("p INT, v INT DEFAULT 7", 7, True, id="default"),
+        pytest.param("p INT, v INT GENERATED ALWAYS AS (p + 10)", 11, True, id="generated"),
+        pytest.param("p INT, v INT NOT NULL", None, False, id="required"),
+    ],
+)
+def test_delta_io_save_as_table_replace_where_completes_omitted_columns(
+    spark, tmp_path, columns, expected_v, omittable
+):
+    # Spark 4.2.0 / Delta 4.4.0 preserves the target schema and completes omitted columns.
+    path = tmp_path / "omitted_columns"
+    table = "delta_replace_where_omitted_columns"
+    properties = " TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')" if "DEFAULT" in columns else ""
+    spark.sql(
+        f"CREATE TABLE {table} ({columns}) USING DELTA LOCATION '{escape_sql_string_literal(str(path))}'{properties}"
+    )
+    try:
+        spark.sql(f"INSERT INTO {table} VALUES (1, 11), (2, 12)")  # noqa: S608
+        metadata = _delta_metadata(path)
+        before = {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()}
+        writer = (
+            spark.createDataFrame([(1,)], "p INT")
+            .write.format("delta")
+            .mode("overwrite")
+            .option("replaceWhere", "p = 1")
+        )
+        if omittable:
+            writer.saveAsTable(table)
+            expected = [(1, expected_v), (2, 12)]
+        else:
+            with pytest.raises(Exception, match=r"(?i)(missing|not found|not.null)"):
+                writer.saveAsTable(table)
+            assert {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()} == before
+            expected = [(1, 11), (2, 12)]
+        assert spark.table(table).orderBy("p").collect() == expected
+        assert spark.read.format("delta").load(str(path)).orderBy("p").collect() == expected
+        assert _delta_metadata(path) == metadata
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
 def test_delta_io_save_as_table_replace_where_preserves_metadata(spark, tmp_path):
     path = tmp_path / "table_identity"
     table = "delta_replace_where_identity"
