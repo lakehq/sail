@@ -43,6 +43,7 @@ impl CoalesceFunc {
 }
 
 impl ScalarUDFImpl for CoalesceFunc {
+    // IMPORTANT: Do not change the name. DataFusion optimizer rules find these functions by name.
     fn name(&self) -> &str {
         "coalesce"
     }

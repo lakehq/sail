@@ -25,6 +25,7 @@ macro_rules! opt_downcast_arg {
 pub(crate) use downcast_arg;
 pub(crate) use opt_downcast_arg;
 
+// TODO: Remove all usage of `make_scalar_function` and implement `ScalarUDFImpl` directly.
 /// array function wrapper that differentiates between scalar (length 1) and array.
 pub(crate) fn make_scalar_function<F>(
     inner: F,
@@ -46,7 +47,7 @@ where
 
         let args = ColumnarValue::values_to_arrays(args)?;
 
-        let result = inner(&args);
+        let result = (inner)(&args);
 
         if is_scalar {
             // If all inputs are scalar, keeps output as scalar
