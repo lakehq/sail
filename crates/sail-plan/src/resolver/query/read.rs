@@ -646,6 +646,8 @@ impl PlanResolver<'_> {
                     "iceberg does not support user specified schema",
                 ));
             }
+            // FIXME: Match Spark Connect's precedence for conflicting case-insensitive path
+            // options. HashMap decoding loses wire order, making first-match selection unstable.
             if let Some(path) = source
                 .options
                 .iter()
