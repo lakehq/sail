@@ -233,14 +233,32 @@ where
     E: ParserExtra<'a, &'a str> + 'a,
 {
     // A date value is allowed to be followed by an arbitrary string which is ignored.
-    date()
+    // A complete day may also use the timestamp `T`/`t` separator; the time text is ignored.
+    // Partial dates keep the whitespace-only suffix, so `2023-01T...` stays invalid.
+    let year = signed(4, 7);
+    let month = unsigned(1, 2);
+    let day = unsigned(1, 2);
+    let t_separated = year
+        .then_ignore(just('-'))
+        .then(month)
+        .then_ignore(just('-'))
+        .then(day)
         .then_ignore(
-            any()
-                .filter(|c: &char| c.is_ascii_whitespace())
-                .then(any().repeated())
-                .or_not(),
+            just('T')
+                .or(just('t'))
+                .padded_by(just(' ').repeated())
+                .ignore_then(any().repeated()),
         )
-        .then_ignore(end())
+        .map(|((year, month), day)| DateValue { year, month, day });
+
+    let whitespace_separated = date().then_ignore(
+        any()
+            .filter(|c: &char| c.is_ascii_whitespace())
+            .then(any().repeated())
+            .or_not(),
+    );
+
+    choice((t_separated, whitespace_separated)).then_ignore(end())
 }
 
 pub fn create_timestamp_parser<'a, E>() -> impl Parser<'a, &'a str, TimestampValue<'a>, E>
@@ -255,4 +273,33 @@ where
     E: ParserExtra<'a, &'a str> + 'a,
 {
     time().then_ignore(end())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::error::SqlResult;
+    use crate::parser::parse_date;
+
+    fn ymd(input: &str) -> SqlResult<(i32, u8, u8)> {
+        let date = parse_date(input)?;
+        Ok((date.year, date.month, date.day))
+    }
+
+    #[test]
+    fn test_date_parser_accepts_t_separator() -> SqlResult<()> {
+        assert_eq!(ymd("2023-01-31")?, (2023, 1, 31));
+        assert_eq!(ymd("2023-01-31 13:45:00")?, (2023, 1, 31));
+        assert_eq!(ymd("2023-01-31T00:00:00")?, (2023, 1, 31));
+        assert_eq!(ymd("2023-01-31t13:45:00.123456")?, (2023, 1, 31));
+        assert_eq!(ymd("2023-01-31T01:30:00+02:00")?, (2023, 1, 31));
+        assert_eq!(ymd("2023-1-5T10:00:00")?, (2023, 1, 5));
+        assert_eq!(ymd("2023-01-31T")?, (2023, 1, 31));
+        assert_eq!(ymd("2023-01-31 T 13:45:00")?, (2023, 1, 31));
+        assert_eq!(ymd("2023")?, (2023, 1, 1));
+        assert_eq!(ymd("2023-01")?, (2023, 1, 1));
+        assert_eq!(ymd("2023-01 10:00:00")?, (2023, 1, 1));
+        assert!(parse_date("2023-01-31Z").is_err());
+        assert!(parse_date("2023-01T10:00:00").is_err());
+        Ok(())
+    }
 }

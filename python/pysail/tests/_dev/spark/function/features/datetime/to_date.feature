@@ -460,11 +460,55 @@ Feature: to_date with an argument coming from a column
         | region zone suffix         | '2024-01-15 12:00:00 America/New_York' | 2024-01-15   |
         | year zero                  | '0000-12-31'                           | 0000-12-31   |
         | five-digit year            | '10000-01-01'                          | +10000-01-01 |
+        | ISO T separator            | '2024-01-15T12:00:00'                  | 2024-01-15   |
+
+    # A complete year-month-day may use `T` or `t`; the time text is ignored.
+    # A bare `Z` suffix and a year-month followed by `T` stay invalid.
+    Scenario: CAST, TRY_CAST, and to_date accept a T separator
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT
+          CAST('2023-01-31T00:00:00' AS DATE) AS cast_t,
+          TRY_CAST('2023-01-31T00:00:00' AS DATE) AS try_t,
+          to_date('2023-01-31t13:45:00.123456') AS lower_t,
+          to_date('2023-1-5T10:00:00') AS short_t,
+          CAST('2023-01-31T' AS DATE) AS trailing_t,
+          CAST('2023-01-31 T 13:45:00' AS DATE) AS spaced_t,
+          to_date('2023-01-31T01:30:00+02:00') AS offset_t,
+          TRY_CAST('2023-01-31Z' AS DATE) AS try_z
+        """
+      Then query result
+        | cast_t     | try_t      | lower_t    | short_t    | trailing_t | spaced_t   | offset_t   | try_z |
+        | 2023-01-31 | 2023-01-31 | 2023-01-31 | 2023-01-05 | 2023-01-31 | 2023-01-31 | 2023-01-31 | NULL  |
+
+    Scenario: malformed date strings are NULL when ANSI mode is disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST('2023-01-31Z' AS DATE) AS cast_z, to_date('2023-01T10:00:00') AS partial_t
+        """
+      Then query result
+        | cast_z | partial_t |
+        | NULL   | NULL      |
+
+    Scenario Outline: ANSI CAST rejects <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(<input> AS DATE) AS result
+        """
+      Then query error CAST_INVALID_INPUT
+
+      Examples:
+        | case                     | input              |
+        | Z suffix                 | '2023-01-31Z'      |
+        | year-month followed by T | '2023-01T10:00:00' |
 
     @sail-bug
     Scenario Outline: Accepted date string that Sail rejects: <case>
       # Under ANSI these raise CAST_INVALID_INPUT in Sail; with ANSI off they come back as
-      # NULL. Both are wrong — Spark parses all three.
+      # NULL. Both are wrong — Spark parses both.
       When query
         """
         SELECT to_date(<input>) AS result
@@ -474,7 +518,6 @@ Feature: to_date with an argument coming from a column
         | 2024-01-15 |
 
       Examples:
-        | case                   | input                 |
-        | ISO T separator        | '2024-01-15T12:00:00' |
-        | leading whitespace     | ' 2024-01-15'         |
-        | surrounding whitespace | '  2024-01-15  '      |
+        | case                   | input            |
+        | leading whitespace     | ' 2024-01-15'    |
+        | surrounding whitespace | '  2024-01-15  ' |
