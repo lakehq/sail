@@ -143,13 +143,6 @@ pub fn offset_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> usize {
 /// child values of a sliced list or map. For strings/binary arrays, the start
 /// and length are measured in bytes. Values in null rows are included.
 /// An empty array has a length of zero but may have a nonzero start.
-///
-/// ```
-/// # use arrow::buffer::OffsetBuffer;
-/// # use datafusion_common::utils::offset_span;
-/// let offsets = OffsetBuffer::new(vec![100_i32, 103, 108].into());
-/// assert_eq!(offset_span(&offsets), (100, 8));
-/// ```
 #[inline]
 pub fn offset_span<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> (usize, usize) {
     // TODO: Uncomment after DataFusion 56
