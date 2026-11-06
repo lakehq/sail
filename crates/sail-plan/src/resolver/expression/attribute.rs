@@ -3,10 +3,13 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, TableReference};
 use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
-use datafusion_expr::{ExprSchemable, ScalarUDF, col, expr, lit};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, col, expr, lit, try_cast};
 use datafusion_functions::core::get_field;
+use datafusion_functions_nested::expr_fn::{array_element, map_extract};
 use sail_common::spec;
 use sail_function::scalar::array_struct_field::ArrayStructField;
+use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunctionInput};
@@ -180,9 +183,8 @@ impl PlanResolver<'_> {
                 }
                 Ok(FieldResolution::Missing) => {}
                 Ok(FieldResolution::Unsupported) => {
-                    // A map value or array item that Spark can extract keeps this
-                    // output's bindings. Do not fall back to an older attribute.
-                    // TODO: Extract map values and array items by dotted names.
+                    // Spark binds the name to this output even if it cannot extract the value,
+                    // so do not fall back to an older attribute.
                     return Err(PlanError::analysis(format!(
                         "attribute {name:?} is missing from the schema: cannot resolve attribute"
                     )));
@@ -565,8 +567,40 @@ impl PlanResolver<'_> {
                     };
                     self.resolve_potentially_nested_field(expr, &data_type, remaining)
                 }
+                DataType::Map(field, _) => {
+                    let DataType::Struct(fields) = field.data_type() else {
+                        return Ok(None);
+                    };
+                    let (Some(key), Some(value)) = (fields.first(), fields.get(1)) else {
+                        return Ok(None);
+                    };
+                    let Some(key) = self.map_key_from_name(name.as_ref(), key.data_type()) else {
+                        return Ok(None);
+                    };
+                    let expr = array_element(map_extract(expr, key), lit(1));
+                    self.resolve_potentially_nested_field(expr, value.data_type(), remaining)
+                }
                 _ => Ok(None),
             },
+        }
+    }
+
+    /// Casts a name to the map key type, as Spark does for a string literal.
+    // TODO: Support other key types that Spark casts a string to (timestamp, binary and boolean).
+    fn map_key_from_name(&self, name: &str, key_type: &DataType) -> Option<expr::Expr> {
+        let key = lit(name.to_string());
+        let ansi_mode = self.config.ansi_mode;
+        match key_type {
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Some(key),
+            DataType::Int32 if !ansi_mode => {
+                Some(ScalarUDF::new_from_impl(SparkCastStringToInt32::new()).call(vec![key]))
+            }
+            DataType::Date32 => {
+                Some(ScalarUDF::new_from_impl(SparkDate::new(!ansi_mode)).call(vec![key]))
+            }
+            key_type if key_type.is_numeric() && ansi_mode => Some(cast(key, key_type.clone())),
+            key_type if key_type.is_numeric() => Some(try_cast(key, key_type.clone())),
+            _ => None,
         }
     }
 

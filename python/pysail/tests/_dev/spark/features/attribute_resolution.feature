@@ -44,3 +44,138 @@ Feature: Attribute identity in column resolution
     Then query result
       | x    | n[0] |
       | NULL | NULL |
+
+  Scenario: A dotted name extracts a map value by key
+    When query
+      """
+      SELECT m.a, m.missing FROM VALUES (map('a', 'x')) AS t(m)
+      """
+    Then query result
+      | a | missing |
+      | x | NULL    |
+
+  Scenario: A dotted map key matches exactly when names are case-insensitive
+    Given config spark.sql.caseSensitive = false
+    When query
+      """
+      SELECT m.A FROM VALUES (map('a', 'x', 'A', 'y')) AS t(m)
+      """
+    Then query result
+      | A |
+      | y |
+
+  Scenario: A qualified dotted name extracts a map value
+    When query
+      """
+      SELECT t.m.a FROM VALUES (map('a', 'x')) AS t(m)
+      """
+    Then query result
+      | a |
+      | x |
+
+  Scenario: A dotted map value can be used in a filter
+    When query
+      """
+      SELECT id FROM VALUES (1, map('a', 'x')), (2, map('a', 'y')) AS t(id, m)
+      WHERE m.a = 'x'
+      """
+    Then query result
+      | id |
+      | 1  |
+
+  Scenario Outline: A dotted name continues into a struct map value
+    When query
+      """
+      SELECT m.<key>.s FROM VALUES (map('a', named_struct('s', 1))) AS t(m)
+      """
+    Then query result
+      | s       |
+      | <value> |
+
+    Examples:
+      | key     | value |
+      | a       | 1     |
+      | missing | NULL  |
+
+  Scenario: A missing field of a struct map value is an error
+    When query
+      """
+      SELECT m.a.x FROM VALUES (map('a', named_struct('s', 1))) AS t(m)
+      """
+    Then query error (?i)(cannot resolve|unresolved|not found|no such struct field)
+
+  Scenario: A dotted name extracts a map value inside a struct
+    When query
+      """
+      SELECT s.m.a FROM VALUES (named_struct('m', map('a', 1))) AS t(s)
+      """
+    Then query result
+      | a |
+      | 1 |
+
+  Scenario: A lateral alias exposes map values by dotted names
+    When query
+      """
+      SELECT map('a', 1) AS m, m.a + 1 AS n
+      """
+    Then query result
+      | m        | n |
+      | {a -> 1} | 2 |
+
+  Scenario: An outer reference extracts a map value by a dotted name
+    When query
+      """
+      SELECT id FROM VALUES (1, map('a', 'x')), (2, map('a', 'y')) AS t(id, m)
+      WHERE EXISTS (SELECT 1 FROM range(1) WHERE t.m.a = 'x')
+      """
+    Then query result
+      | id |
+      | 1  |
+
+  Scenario: A dotted name selects a map value by a non-string key
+    Given config spark.sql.ansi.enabled = false
+    When query
+      """
+      SELECT m.`1`, m.`2` FROM VALUES (map(1, 'a')) AS t(m)
+      """
+    Then query result
+      | 1 | 2    |
+      | a | NULL |
+
+  Scenario Outline: A dotted name is cast to the map key type
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT m.`<name>` AS v FROM VALUES (map(<key>, 'a')) AS t(m)
+      """
+    Then query result
+      | v       |
+      | <value> |
+
+    Examples:
+      | ansi  | key                    | name       | value |
+      | false | 1                      | 1          | a     |
+      | false | 1                      | x          | NULL  |
+      | true  | 1                      | 1          | a     |
+      | false | CAST(1 AS BIGINT)      | 1          | a     |
+      | false | CAST(1 AS BIGINT)      | x          | NULL  |
+      | true  | CAST(1 AS BIGINT)      | 1          | a     |
+      | false | CAST(1 AS DECIMAL(3))  | 1          | a     |
+      | false | 1.5D                   | 1.5        | a     |
+      | false | DATE '2024-01-01'      | 2024-01-01 | a     |
+      | false | DATE '2024-01-01'      | x          | NULL  |
+      | true  | DATE '2024-01-01'      | 2024-01-01 | a     |
+
+  Scenario Outline: A dotted name that is not a valid map key fails in ANSI mode
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT m.x FROM VALUES (map(<key>, 'a')) AS t(m)
+      """
+    Then query error (?i)cast
+
+    Examples:
+      | key               |
+      | 1                 |
+      | CAST(1 AS BIGINT) |
+      | DATE '2024-01-01' |
