@@ -19,9 +19,11 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
 use sail_function::scalar::array::spark_sequence::SparkSequenceLazy;
 use sail_function::scalar::datetime::convert_tz::ConvertTzLazy;
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
+use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
 use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
 use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
@@ -170,6 +172,7 @@ pub(super) fn try_encode_higher_order_udf(
     } else if let Some(transform_keys) = udf_inner.downcast_ref::<SparkTransformKeys>() {
         HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf {
             last_value_wins: transform_keys.is_last_value_wins(),
+            preserve_duplicates: transform_keys.preserves_duplicates(),
         })
     } else if let Some(transform) = udf_inner.downcast_ref::<SparkArrayTransform>() {
         HigherOrderUdfKind::Transform(r#gen::SparkArrayTransformUdf {
@@ -201,6 +204,13 @@ pub(super) fn try_encode_higher_order_udf(
     } else if let Some(regexp_instr) = udf_inner.downcast_ref::<SparkRegexpInstr>() {
         HigherOrderUdfKind::RegexpInstr(r#gen::SparkRegexpInstrUdf {
             ansi_mode: regexp_instr.ansi_mode(),
+        })
+    } else if udf_inner.is::<SparkArrayZipWith>() {
+        HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {})
+    } else if let Some(map_zip_with) = udf_inner.downcast_ref::<SparkMapZipWith>() {
+        HigherOrderUdfKind::MapZipWith(r#gen::SparkMapZipWithUdf {
+            ansi_mode: map_zip_with.ansi_mode(),
+            session_timezone: map_zip_with.session_timezone().to_owned(),
         })
     } else {
         return plan_err!("unsupported higher-order function: {}", hof.name());

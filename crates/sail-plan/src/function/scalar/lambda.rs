@@ -1,14 +1,16 @@
 use std::sync::{Arc, LazyLock};
 
 use datafusion_common::arrow::compute::can_cast_types;
-use datafusion_common::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
-use datafusion_common::{DFSchema, ScalarValue, plan_err};
+use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue, plan_err};
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
 use datafusion_expr::{
-    ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit,
+    ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ScalarUDF, ValueOrLambda, cast, expr,
+    lit,
 };
 use datafusion_functions_nested::expr_fn;
+use sail_common_datafusion::type_coercion::binary_type_coercion::set_operation_coercion;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
 use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
@@ -16,10 +18,15 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
+use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ntz_to_ltz;
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
+use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
 use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
 use sail_function::scalar::map::utils::map_type_from_key_value_types;
+use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_logical_optimizer::type_coercion::TypeCoercionRewriter;
 
 use crate::config::MapKeyDedupPolicy;
@@ -81,6 +88,9 @@ static SPARK_ARRAY_SORT_UDF: LazyLock<Arc<HigherOrderUDF>> =
 static SPARK_ARRAY_SORT_SWAPPED_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped())));
 
+static SPARK_ARRAY_ZIP_WITH_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new())));
+
 pub(crate) fn is_higher_order_function(name: &str) -> bool {
     matches!(
         name.trim().to_lowercase().as_str(),
@@ -88,12 +98,14 @@ pub(crate) fn is_higher_order_function(name: &str) -> bool {
             | "reduce"
             | "filter"
             | "map_filter"
+            | "map_zip_with"
             | "transform"
             | "transform_keys"
             | "transform_values"
             | "exists"
             | "forall"
             | "array_sort"
+            | "zip_with"
     )
 }
 
@@ -104,17 +116,26 @@ pub(crate) fn is_higher_order_function(name: &str) -> bool {
 pub(crate) fn get_lambda_parameters(
     function_name: &str,
     fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+    ansi_mode: bool,
+    session_timezone: &str,
 ) -> PlanResult<Vec<Vec<FieldRef>>> {
-    let udf = match function_name.trim().to_lowercase().as_str() {
+    let normalized_function_name = function_name.trim().to_lowercase();
+    let map_zip_with_udf = Arc::new(HigherOrderUDF::new_from_impl(SparkMapZipWith::new(
+        ansi_mode,
+        Arc::from(session_timezone),
+    )));
+    let udf: &Arc<HigherOrderUDF> = match normalized_function_name.as_str() {
         "aggregate" | "reduce" => &SPARK_ARRAY_AGGREGATE_UDF,
         "filter" => &SPARK_ARRAY_FILTER_UDF,
         "map_filter" => &SPARK_MAP_FILTER_UDF,
+        "map_zip_with" => &map_zip_with_udf,
         "transform_keys" => &SPARK_TRANSFORM_KEYS_UDF,
         "transform_values" => &SPARK_TRANSFORM_VALUES_UDF,
         "transform" => &SPARK_ARRAY_TRANSFORM_UDF,
         "exists" => &SPARK_ARRAY_EXISTS_UDF,
         "forall" => &SPARK_ARRAY_FORALL_UDF,
         "array_sort" => &SPARK_ARRAY_SORT_UDF,
+        "zip_with" => &SPARK_ARRAY_ZIP_WITH_UDF,
         other => {
             return Err(PlanError::internal(format!(
                 "not a higher-order function: {other}"
@@ -418,6 +439,42 @@ fn expect_lambda_arity(role: &str, expr: &expr::Expr, arity: usize) -> PlanResul
     Ok(())
 }
 
+fn bind_zip_function(
+    name: &str,
+    mut left: expr::Expr,
+    mut right: expr::Expr,
+    mut function: expr::Expr,
+    schema: &DFSchemaRef,
+    parameter_names: &[&str],
+    null_input_type: DataType,
+) -> PlanResult<(expr::Expr, expr::Expr, expr::Expr)> {
+    if !matches!(&function, expr::Expr::Lambda(_)) {
+        for input in [&mut left, &mut right] {
+            if input.get_type(schema.as_ref())? == DataType::Null {
+                validate_map_filter_null_expr(input, schema)?;
+                *input = lit(ScalarValue::try_new_null(&null_input_type)?);
+            }
+        }
+        let params = parameter_names
+            .iter()
+            .map(|base| {
+                let mut parameter = (*base).to_owned();
+                while lambda_body_uses_param(&function, &parameter)? {
+                    parameter.push('_');
+                }
+                Ok(parameter)
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        function = expr::Expr::Lambda(Lambda::new(params, function));
+    }
+    expect_lambda_arity(name, &function, parameter_names.len())?;
+    Ok((left, right, function))
+}
+
+fn untyped_null_array_type() -> DataType {
+    DataType::List(Arc::new(Field::new_list_field(DataType::Null, true)))
+}
+
 fn aggregate(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let args = input.arguments;
     let (array, zero, merge, finish) = match args.len() {
@@ -559,11 +616,153 @@ pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunct
         ("filter", F::custom(filter)),
         ("forall", F::custom(forall)),
         ("map_filter", F::custom(map_filter)),
-        ("map_zip_with", F::unknown("map_zip_with")),
+        ("map_zip_with", F::custom(map_zip_with)),
         ("reduce", F::custom(aggregate)),
         ("transform", F::custom(transform)),
         ("transform_keys", F::custom(transform_keys)),
         ("transform_values", F::custom(transform_values)),
-        ("zip_with", F::unknown("zip_with")),
+        ("zip_with", F::custom(zip_with)),
     ]
+}
+
+fn zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (left, right, function) = input.arguments.three()?;
+    let (left, right, function) = bind_zip_function(
+        "zip_with",
+        left,
+        right,
+        function,
+        input.function_context.schema,
+        &["__zip_left", "__zip_right"],
+        untyped_null_array_type(),
+    )?;
+    let right = lambda_with_fresh_parameter(right, "__zip_right")?;
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        Arc::clone(&SPARK_ARRAY_ZIP_WITH_UDF),
+        vec![left, right, function],
+    )))
+}
+
+fn map_key_type(data_type: &DataType) -> Option<&DataType> {
+    let DataType::Map(entries, _) = data_type else {
+        return None;
+    };
+    let DataType::Struct(fields) = entries.data_type() else {
+        return None;
+    };
+    fields.first().map(|field| field.data_type())
+}
+
+fn rewrite_map_zip_with_temporal_key(
+    map: expr::Expr,
+    target_key_type: &DataType,
+    schema: &DFSchemaRef,
+    ansi_mode: bool,
+    session_timezone: &Arc<str>,
+) -> PlanResult<expr::Expr> {
+    let map_type = map.get_type(schema.as_ref())?;
+    let DataType::Map(entries, _) = &map_type else {
+        return Ok(map);
+    };
+    let DataType::Struct(fields) = entries.data_type() else {
+        return Ok(map);
+    };
+    if fields.len() != 2 {
+        return Ok(map);
+    }
+    let key_field = &fields[0];
+    let source_key_type = key_field.data_type();
+    if source_key_type == target_key_type {
+        return Ok(map);
+    }
+
+    let key_parameter = "__map_zip_temporal_key";
+    let value_parameter = "__map_zip_temporal_value";
+    let key = expr::Expr::LambdaVariable(LambdaVariable::new(
+        key_parameter.to_owned(),
+        Some(Arc::clone(key_field)),
+    ));
+    let body = match (source_key_type, target_key_type) {
+        (
+            DataType::Date32 | DataType::Date64,
+            DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
+        ) => cast_timestamp_ntz_to_ltz(
+            cast(key, DataType::Timestamp(TimeUnit::Microsecond, None)),
+            timezone,
+            false,
+        ),
+        (
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+            DataType::Timestamp(TimeUnit::Microsecond, timezone),
+        ) => ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
+            .call(vec![key]),
+        (
+            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+        ) => ScalarUDF::from(SparkToUtf8::new().with_timezone(Some(Arc::clone(session_timezone))))
+            .call(vec![key]),
+        _ => return Ok(map),
+    };
+    let lambda = expr::Expr::Lambda(Lambda::new(
+        vec![key_parameter.to_owned(), value_parameter.to_owned()],
+        body,
+    ));
+    let udf = Arc::new(HigherOrderUDF::new_from_impl(
+        SparkTransformKeys::new_preserving_duplicates(),
+    ));
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        udf,
+        vec![map, lambda],
+    )))
+}
+
+fn map_zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
+    let plan_config = input.function_context.plan_config;
+    let (left, right, function) = input.arguments.three()?;
+    let (mut left, mut right, function) = bind_zip_function(
+        "map_zip_with",
+        left,
+        right,
+        function,
+        schema,
+        &[
+            "__map_zip_key",
+            "__map_zip_left_value",
+            "__map_zip_right_value",
+        ],
+        map_type_from_key_value_types(&DataType::Null, &DataType::Null),
+    )?;
+    let left_type = left.get_type(schema.as_ref())?;
+    let right_type = right.get_type(schema.as_ref())?;
+    if let (Some(left_key), Some(right_key)) = (map_key_type(&left_type), map_key_type(&right_type))
+        && let Some(target_key_type) = set_operation_coercion(
+            left_key,
+            right_key,
+            plan_config.ansi_mode,
+            &plan_config.session_timezone_label(),
+        )
+    {
+        let session_timezone = plan_config.session_timezone_label();
+        left = rewrite_map_zip_with_temporal_key(
+            left,
+            &target_key_type,
+            schema,
+            plan_config.ansi_mode,
+            &session_timezone,
+        )?;
+        right = rewrite_map_zip_with_temporal_key(
+            right,
+            &target_key_type,
+            schema,
+            plan_config.ansi_mode,
+            &session_timezone,
+        )?;
+    }
+    let right = lambda_with_fresh_parameter(right, "__map_zip_right")?;
+    let udf = SparkMapZipWith::new(plan_config.ansi_mode, plan_config.session_timezone_label());
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        Arc::new(HigherOrderUDF::new_from_impl(udf)),
+        vec![left, right, function],
+    )))
 }

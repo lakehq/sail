@@ -22,9 +22,11 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
 use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
+use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
 use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
 use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
@@ -189,10 +191,21 @@ pub(super) fn try_decode_higher_order_udf(
         HigherOrderUdfKind::TransformValues(r#gen::SparkTransformValuesUdf {}) => {
             Arc::new(HigherOrderUDF::new_from_impl(SparkTransformValues::new()))
         }
-        HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf { last_value_wins }) => {
-            Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
-                last_value_wins,
-            )))
+        HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf {
+            last_value_wins,
+            preserve_duplicates,
+        }) => {
+            let transform_keys = match (last_value_wins, preserve_duplicates) {
+                (true, true) => {
+                    return Err(datafusion::common::DataFusionError::Plan(
+                        "transform_keys cannot both keep last values and preserve duplicate keys"
+                            .to_owned(),
+                    ));
+                }
+                (false, true) => SparkTransformKeys::new_preserving_duplicates(),
+                (last_value_wins, false) => SparkTransformKeys::new(last_value_wins),
+            };
+            Arc::new(HigherOrderUDF::new_from_impl(transform_keys))
         }
         HigherOrderUdfKind::Filter(r#gen::SparkArrayFilterUdf { index_first }) => {
             if index_first {
@@ -258,5 +271,15 @@ pub(super) fn try_decode_higher_order_udf(
                 convert_tz,
             )))
         }
+        HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {}) => {
+            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new()))
+        }
+        HigherOrderUdfKind::MapZipWith(r#gen::SparkMapZipWithUdf {
+            ansi_mode,
+            session_timezone,
+        }) => Arc::new(HigherOrderUDF::new_from_impl(SparkMapZipWith::new(
+            ansi_mode,
+            Arc::from(session_timezone),
+        ))),
     })
 }

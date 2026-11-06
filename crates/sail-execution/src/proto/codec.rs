@@ -8231,6 +8231,145 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_distributed_zip_with_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
+
+        let left = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::<i32>::from_lengths(vec![2]),
+            Arc::new(Int32Array::from(vec![1, 2])),
+            None,
+        );
+        let right = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::<i32>::from_lengths(vec![2]),
+            Arc::new(Int32Array::from(vec![10, 20])),
+            None,
+        );
+        let fields = vec![
+            Field::new("left", left.data_type().clone(), true),
+            Field::new("right", right.data_type().clone(), true),
+        ];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let left_value = Expr::LambdaVariable(LambdaVariable::new(
+            "l".to_string(),
+            Some(Arc::new(Field::new("l", DataType::Int32, true))),
+        ));
+        let right_value = Expr::LambdaVariable(LambdaVariable::new(
+            "r".to_string(),
+            Some(Arc::new(Field::new("r", DataType::Int32, true))),
+        ));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new())),
+            vec![
+                col("left"),
+                col("right"),
+                lambda(["l", "r"], left_value + right_value),
+            ],
+        ));
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, &schema)?;
+
+        assert_eq!(as_hof(&decoded)?.name(), "zip_with");
+        assert_same_result(
+            &physical,
+            &decoded,
+            schema,
+            vec![Arc::new(left), Arc::new(right)],
+        )
+    }
+
+    #[test]
+    fn test_round_trip_distributed_map_zip_with_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Int32Builder, MapBuilder};
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
+
+        let mut left_builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
+        left_builder.keys().append_value(1);
+        left_builder.values().append_value(10);
+        left_builder.append(true)?;
+        let left = left_builder.finish();
+        let mut right_builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
+        right_builder.keys().append_value(1);
+        right_builder.values().append_value(20);
+        right_builder.append(true)?;
+        let right = right_builder.finish();
+        let fields = vec![
+            Field::new("left", left.data_type().clone(), true),
+            Field::new("right", right.data_type().clone(), true),
+        ];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let right_value = Expr::LambdaVariable(LambdaVariable::new(
+            "v2".to_string(),
+            Some(Arc::new(Field::new("v2", DataType::Int32, true))),
+        ));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkMapZipWith::new(
+                false,
+                Arc::from("America/Los_Angeles"),
+            ))),
+            vec![
+                col("left"),
+                col("right"),
+                lambda(["k", "v1", "v2"], right_value),
+            ],
+        ));
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, &schema)?;
+
+        assert_eq!(as_hof(&decoded)?.name(), "map_zip_with");
+        let encoded_udf = super::super::encode::try_encode_higher_order_udf(as_hof(&physical)?)?;
+        let decoded_udf = super::super::decode::try_decode_higher_order_udf(&encoded_udf)?;
+        let decoded_udf_inner = decoded_udf.inner();
+        let Some(decoded_map_zip_with) =
+            (decoded_udf_inner.as_ref() as &dyn Any).downcast_ref::<SparkMapZipWith>()
+        else {
+            return plan_err!("decoded UDF is not map_zip_with");
+        };
+        assert!(!decoded_map_zip_with.ansi_mode());
+        assert_eq!(
+            decoded_map_zip_with.session_timezone(),
+            "America/Los_Angeles"
+        );
+        assert_same_result(
+            &physical,
+            &decoded,
+            schema,
+            vec![Arc::new(left), Arc::new(right)],
+        )
+    }
+
+    #[test]
     fn test_round_trip_distributed_map_filter_value_only() -> Result<()> {
         use std::collections::HashMap;
 
@@ -8337,7 +8476,8 @@ mod tests {
         use datafusion::physical_expr::create_physical_expr;
         use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 
-        for last_value_wins in [false, true] {
+        for (last_value_wins, preserve_duplicates) in [(false, false), (true, false), (false, true)]
+        {
             let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
             builder.keys().append_value(1);
             builder.values().append_value(10);
@@ -8353,10 +8493,13 @@ mod tests {
                 "k".to_string(),
                 Some(Arc::new(Field::new("k", DataType::Int32, false))),
             ));
+            let udf = if preserve_duplicates {
+                SparkTransformKeys::new_preserving_duplicates()
+            } else {
+                SparkTransformKeys::new(last_value_wins)
+            };
             let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
-                Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
-                    last_value_wins,
-                ))),
+                Arc::new(HigherOrderUDF::new_from_impl(udf)),
                 vec![col("m"), lambda(["k", "v"], key + lit(1i32))],
             ));
             let physical = create_physical_expr(
@@ -8367,9 +8510,33 @@ mod tests {
             )?;
             let decoded = round_trip_expr(&physical, &schema)?;
             assert_eq!(as_hof(&decoded)?.name(), "transform_keys");
+            let decoded_udf = as_hof(&decoded)?.fun().inner();
+            let decoded_transform_keys = (decoded_udf.as_ref() as &dyn Any)
+                .downcast_ref::<SparkTransformKeys>()
+                .ok_or_else(|| plan_datafusion_err!("decoded UDF is not transform_keys"))?;
+            assert_eq!(decoded_transform_keys.is_last_value_wins(), last_value_wins);
+            assert_eq!(
+                decoded_transform_keys.preserves_duplicates(),
+                preserve_duplicates
+            );
             assert_same_result(&physical, &decoded, schema, vec![Arc::new(map)])?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_reject_conflicting_transform_keys_policies() {
+        let udf = r#gen::HigherOrderUdf {
+            higher_order_udf_kind: Some(
+                r#gen::higher_order_udf::HigherOrderUdfKind::TransformKeys(
+                    r#gen::SparkTransformKeysUdf {
+                        last_value_wins: true,
+                        preserve_duplicates: true,
+                    },
+                ),
+            ),
+        };
+        assert!(super::super::decode::try_decode_higher_order_udf(&udf).is_err());
     }
 
     /// Distributed round-trip for `exists(arr, v -> v > 2)` over `[[1, 2, 3]]`.
