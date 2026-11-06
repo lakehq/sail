@@ -10,7 +10,7 @@ use datafusion_expr::{
     Aggregate, Distinct, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator,
     Projection, SubqueryAlias,
 };
-use sail_common_datafusion::min_max::min_max::{Max, Min};
+use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 
 /// Simplifies deduplication and removes duplicate-only grouping beneath MIN/MAX.
 #[derive(Debug, Default)]

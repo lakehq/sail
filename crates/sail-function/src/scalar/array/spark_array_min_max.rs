@@ -10,7 +10,6 @@ use datafusion_expr::{
     Volatility,
 };
 use sail_common_datafusion::min_max::common::{MaxAccumulator, MinAccumulator};
-use sail_common_datafusion::min_max::min_max;
 
 use crate::functions_nested_utils::make_scalar_function;
 

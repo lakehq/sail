@@ -11,7 +11,7 @@ use datafusion::functions_aggregate::count::Count;
 use datafusion::logical_expr::logical_plan::{Aggregate, EmptyRelation, Projection, TableScan};
 use datafusion::logical_expr::{Expr, LogicalPlan, TableScanBuilder, TableSource};
 
-use crate::min_max::min_max::{Max, Min};
+use crate::min_max::min_max_agg::{Max, Min};
 
 /// The format validates row selection, deletion effects, and metric precision before
 /// exposing statistics. These are source facts, not propagated physical estimates.

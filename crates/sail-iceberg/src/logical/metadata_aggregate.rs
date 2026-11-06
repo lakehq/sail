@@ -12,7 +12,7 @@ use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 use sail_common_datafusion::metadata_aggregate::{
     AggregateInput, ExactAggregateStatistics, rewrite_aggregate,
 };
-use sail_common_datafusion::min_max::min_max::{Max, Min};
+use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 
 use super::IcebergTableSource;
 use crate::datasource::scan::{IcebergScan, IcebergScanPlan};
