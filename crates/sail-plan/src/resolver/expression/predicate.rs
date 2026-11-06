@@ -1,11 +1,10 @@
 use std::sync::{Arc, LazyLock};
 
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchema, DFSchemaRef, Result as DataFusionResult, ScalarValue};
 use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, LambdaVariable};
-use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::get_field;
@@ -15,6 +14,9 @@ use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_function::scalar::update_struct_field::UpdateStructField;
+use sail_logical_optimizer::type_coercion::{
+    case_result_type, cast_case_result_value, cast_nested_value,
+};
 
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
@@ -629,32 +631,22 @@ fn coerce_case_result_values(
     else {
         return Ok(expr::Expr::Case(case));
     };
-    // This is the common type that the analyzer uses, which reports the error if there is none.
-    // TODO: Unlike Spark, the common type keeps the scale of DECIMAL values that exceed the maximum
-    //  precision instead of their integral digits, and it is DECIMAL rather than DOUBLE for FLOAT or
-    //  DOUBLE with DECIMAL values. The type coercion of `coalesce` and UNION shares this.
-    let Some(common_type) = get_coerce_type_for_case_expression(&then_types, else_type.as_ref())
-    else {
+    // The analyzer reports the error if there is no common type.
+    let Some(common_type) = case_result_type(&then_types, else_type.as_ref()) else {
         return Ok(expr::Expr::Case(case));
     };
-    // The common type of nested values may not keep their field metadata (e.g. interval qualifiers).
-    // TODO: Widen different interval qualifiers (e.g. YEAR and MONTH to YEAR TO MONTH) instead of
-    //  keeping the first one.
-    let common_type = then_types
-        .iter()
-        .chain(else_type.iter())
-        .fold(common_type, |common_type, data_type| {
-            with_nested_field_metadata(common_type, data_type)
-        });
     let coerce =
         |value: Box<expr::Expr>, data_type: &DataType| -> DataFusionResult<Box<expr::Expr>> {
             if data_type.is_null() {
                 // The analyzer casts NULL values, including parameters that are not bound yet.
                 Ok(value)
-            } else if *data_type != common_type {
-                Ok(Box::new(value.cast_to(&common_type, schema)?))
             } else {
-                Ok(Box::new(cast_nested_value(*value, &common_type)))
+                Ok(Box::new(cast_case_result_value(
+                    *value,
+                    data_type,
+                    &common_type,
+                    schema,
+                )?))
             }
         };
     case.when_then_expr = case
@@ -701,62 +693,6 @@ fn cast_nested_coalesce_arguments(
         })
         .collect();
     expr::Expr::ScalarFunction(function)
-}
-
-/// Casts a value of a nested type to the type explicitly, unless it is a cast already.
-fn cast_nested_value(value: expr::Expr, data_type: &DataType) -> expr::Expr {
-    if data_type.is_nested() && !matches!(value, expr::Expr::Cast(_) | expr::Expr::TryCast(_)) {
-        expr::Expr::Cast(expr::Cast::new(Box::new(value), data_type.clone()))
-    } else {
-        value
-    }
-}
-
-/// Fills in missing field metadata of a nested data type from a data type of the same shape.
-fn with_nested_field_metadata(data_type: DataType, source: &DataType) -> DataType {
-    let field = |field: &FieldRef, source: &FieldRef| {
-        let data_type = with_nested_field_metadata(field.data_type().clone(), source.data_type());
-        let mut field = field.as_ref().clone().with_data_type(data_type);
-        if field.metadata().is_empty() {
-            field.set_metadata(source.metadata().clone());
-        }
-        Arc::new(field)
-    };
-    match (&data_type, source) {
-        (DataType::Struct(fields), DataType::Struct(sources)) => {
-            let sources = match fields
-                .iter()
-                .map(|field| sources.find(field.name()).map(|(_, source)| source))
-                .collect::<Option<Vec<_>>>()
-            {
-                Some(sources) => sources,
-                None if fields.len() == sources.len() => sources.iter().collect(),
-                None => return data_type,
-            };
-            DataType::Struct(
-                fields
-                    .iter()
-                    .zip(sources)
-                    .map(|(f, source)| field(f, source))
-                    .collect(),
-            )
-        }
-        (
-            DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _),
-            DataType::List(source)
-            | DataType::LargeList(source)
-            | DataType::FixedSizeList(source, _),
-        ) => match &data_type {
-            DataType::List(_) => DataType::List(field(f, source)),
-            DataType::LargeList(_) => DataType::LargeList(field(f, source)),
-            DataType::FixedSizeList(_, size) => DataType::FixedSizeList(field(f, source), *size),
-            _ => data_type,
-        },
-        (DataType::Map(f, sorted), DataType::Map(source, _)) => {
-            DataType::Map(field(f, source), *sorted)
-        }
-        _ => data_type,
-    }
 }
 
 /// Whether to compare FLOAT and integral operands as DOUBLE, like Spark ANSI. Integral
@@ -1422,9 +1358,9 @@ mod tests {
     use datafusion::arrow::compute::can_cast_types;
     use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue, internal_err};
-    use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
     use datafusion_expr::{Expr, ExprSchemable, col, lit, when};
     use datafusion_functions::core::expr_fn::coalesce;
+    use sail_logical_optimizer::type_coercion::case_result_type;
 
     use super::coerce_conditional_values;
 
@@ -1491,8 +1427,7 @@ mod tests {
         for (i, first) in types.iter().enumerate() {
             for (j, second) in types.iter().enumerate() {
                 let case = when(col("c"), col(format!("v{i}"))).otherwise(col(format!("v{j}")))?;
-                let Some(common_type) =
-                    get_coerce_type_for_case_expression(std::slice::from_ref(first), Some(second))
+                let Some(common_type) = case_result_type(std::slice::from_ref(first), Some(second))
                 else {
                     // The analyzer reports the error for values without a common type.
                     assert_eq!(coerce_conditional_values(case.clone(), &schema)?, case);
