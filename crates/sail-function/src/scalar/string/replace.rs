@@ -318,6 +318,7 @@ where
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use arrow::array::{Array, LargeStringArray, StringArray};
     use arrow::datatypes::DataType::{LargeUtf8, Utf8};

@@ -90,7 +90,6 @@ impl ScalarUDFImpl for RtrimFunc {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod tests {
     use arrow::array::{Array, StringArray, StringViewArray};
     use arrow::datatypes::DataType::{Utf8, Utf8View};

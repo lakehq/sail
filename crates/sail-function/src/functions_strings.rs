@@ -1,4 +1,8 @@
 // [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/strings.rs
+#![expect(
+    dead_code,
+    reason = "Copied from DataFusion as-is; only some helpers are used by Sail so far."
+)]
 
 use std::marker::PhantomData;
 use std::mem::size_of;
@@ -76,6 +80,10 @@ pub(crate) type ConcatLargeStringBuilder = ConcatByteArrayBuilder<LargeUtf8Type>
 
 impl<T: ConcatByteArrayType> ConcatByteArrayBuilder<T> {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
+        #[expect(
+            clippy::expect_used,
+            reason = "Deliberate panic with a clear message instead of a silently wrapping capacity (DataFusion #13796)."
+        )]
         let capacity = item_capacity
             .checked_add(1)
             .map(|i| i.saturating_mul(size_of::<T::Offset>()))
@@ -282,6 +290,10 @@ fn try_offset<O: OffsetSizeTrait>(len: usize) -> Result<O> {
 
 impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
+        #[expect(
+            clippy::expect_used,
+            reason = "Deliberate panic with a clear message instead of a silently wrapping capacity (DataFusion #13796)."
+        )]
         let capacity = item_capacity
             .checked_add(1)
             .map(|i| i.saturating_mul(size_of::<O>()))
@@ -356,6 +368,10 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     ///
     /// Panics if the cumulative byte length exceeds `O::MAX`.
     #[inline]
+    #[expect(
+        clippy::expect_used,
+        reason = "Infallible counterpart of `try_*`; panics on offset overflow by contract, like Arrow's builders."
+    )]
     pub fn append_value(&mut self, value: &str) {
         self.try_append_value(value)
             .expect("byte array offset overflow");
@@ -366,6 +382,10 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     /// Prefer [`Self::try_append_placeholder`], which returns an error instead
     /// of panicking.
     #[inline]
+    #[expect(
+        clippy::expect_used,
+        reason = "Infallible counterpart of `try_*`; panics on offset overflow by contract, like Arrow's builders."
+    )]
     pub fn append_placeholder(&mut self) {
         self.try_append_placeholder()
             .expect("byte array offset overflow");
@@ -413,6 +433,10 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     ///
     /// Panics if the cumulative byte length exceeds `O::MAX`.
     #[inline]
+    #[expect(
+        clippy::expect_used,
+        reason = "Infallible counterpart of `try_*`; panics on offset overflow by contract, like Arrow's builders."
+    )]
     pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F) {
         // SAFETY: caller upholds this method's UTF-8 contract.
         unsafe { self.try_append_byte_map(src, map) }.expect("byte array offset overflow");
@@ -456,6 +480,10 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     ///
     /// Panics if the cumulative byte length exceeds `O::MAX`.
     #[inline]
+    #[expect(
+        clippy::expect_used,
+        reason = "Infallible counterpart of `try_*`; panics on offset overflow by contract, like Arrow's builders."
+    )]
     pub fn append_with<F>(&mut self, f: F)
     where
         F: FnOnce(&mut GenericStringWriter<'_>),
@@ -666,6 +694,10 @@ impl StringViewArrayBuilder {
     /// Panics under the same conditions that [`Self::try_append_value`] returns
     /// an error.
     #[inline]
+    #[expect(
+        clippy::expect_used,
+        reason = "Infallible counterpart of `try_*`; panics on offset overflow by contract, like Arrow's builders."
+    )]
     pub fn append_value(&mut self, value: &str) {
         self.try_append_value(value)
             .expect("byte array offset overflow");
@@ -702,10 +734,8 @@ impl StringViewArrayBuilder {
         if self.in_progress.capacity() < required_cap {
             self.flush_in_progress();
             let to_reserve = (length as usize).max(self.next_block_size() as usize);
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "StringView's block size bounds growth, so reserve cannot overflow capacity arithmetically. This hot loop intentionally avoids the extra `try_reserve` checks. It remains subject to allocator failure/OOM, which must be managed externally."
-            )]
+            // StringView's block size bounds growth, so reserve cannot overflow capacity arithmetically.
+            // This hot loop intentionally avoids the extra `try_reserve` checks.
             self.in_progress.reserve(to_reserve);
         }
         Ok(())
@@ -716,6 +746,10 @@ impl StringViewArrayBuilder {
     /// Caller must invoke this only when no bytes of the current row are
     /// yet in `in_progress` — flushing mid-row would orphan partial data.
     #[inline]
+    #[expect(
+        clippy::expect_used,
+        reason = "Infallible counterpart of `try_*`; panics on offset overflow by contract, like Arrow's builders."
+    )]
     fn ensure_long_capacity(&mut self, length: u32) {
         self.try_ensure_long_capacity(length)
             .expect("byte array offset overflow");
@@ -729,6 +763,10 @@ impl StringViewArrayBuilder {
     /// function is `[inline(never)]` and has to handle short strings, so
     /// building the view here ourselves is faster.
     #[inline]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "Fixed-length slice to array conversion; cannot fail."
+    )]
     fn make_long_view_checked(
         length: u32,
         buffer_index: u32,
@@ -746,6 +784,10 @@ impl StringViewArrayBuilder {
     }
 
     #[inline]
+    #[expect(
+        clippy::expect_used,
+        reason = "Infallible counterpart of `try_*`; panics on offset overflow by contract, like Arrow's builders."
+    )]
     fn make_long_view(&self, length: u32, offset: u32, prefix_bytes: &[u8]) -> u128 {
         let buffer_index: u32 =
             i32::try_from(self.completed.len()).expect("buffer count exceeds i32::MAX") as u32;
@@ -819,6 +861,10 @@ impl StringViewArrayBuilder {
     /// `src.len()`, the in-progress buffer offset, or the number of completed
     /// buffers exceeds `i32::MAX`.
     #[inline]
+    #[expect(
+        clippy::expect_used,
+        reason = "Infallible counterpart of `try_*`; panics on offset overflow by contract, like Arrow's builders."
+    )]
     pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F) {
         // SAFETY: caller upholds this method's UTF-8 contract.
         unsafe { self.try_append_byte_map(src, map) }.expect("byte array offset overflow");
@@ -832,6 +878,10 @@ impl StringViewArrayBuilder {
     /// row's byte length, the in-progress buffer offset, or the number of
     /// completed buffers exceeds `i32::MAX`.
     #[inline]
+    #[expect(
+        clippy::expect_used,
+        reason = "Infallible counterpart of `try_*`; panics on offset overflow by contract, like Arrow's builders."
+    )]
     pub fn append_with<F>(&mut self, f: F)
     where
         F: FnOnce(&mut StringViewWriter<'_>),
@@ -1156,6 +1206,10 @@ pub(crate) const MAX_INLINE_LEN: usize = MAX_INLINE_VIEW_LEN as usize;
 /// based on the substring's length; the CPU often mispredicts that choice when
 /// lengths vary from row to row.
 #[inline]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixed-length slice to array conversion; cannot fail."
+)]
 pub(crate) fn sub_view(view: u128, source: &[u8], range: Range<usize>) -> u128 {
     debug_assert!(range.start <= range.end && range.end <= source.len());
 
@@ -1201,6 +1255,10 @@ pub(crate) fn substr_view(view: u128, string: &str, substr: &str) -> u128 {
 
 /// Reads `bytes` as a little-endian integer.
 #[inline]
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixed-length slice to array conversion; cannot fail."
+)]
 fn read_12_bytes(bytes: &[u8; 12]) -> u128 {
     let low = u64::from_le_bytes(bytes[..8].try_into().unwrap());
     let high = u32::from_le_bytes(bytes[8..].try_into().unwrap());
@@ -1489,6 +1547,7 @@ pub(crate) fn widest_string_type(types: &[DataType]) -> DataType {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use arrow::compute::cast;
     use arrow::datatypes::{BinaryType, BinaryViewType, LargeBinaryType};

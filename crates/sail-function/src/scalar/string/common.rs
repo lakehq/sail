@@ -472,7 +472,7 @@ fn case_conversion_utf8view(array: &ArrayRef, lower: bool) -> Result<ArrayRef> {
         return Ok(Arc::new(case_conversion_utf8view_ascii(
             string_array,
             lower,
-        )));
+        )?));
     }
     let item_len = string_array.len();
     // Null-preserving: reuse the input null buffer as the output null buffer.
@@ -542,7 +542,7 @@ fn case_conversion_array<O: OffsetSizeTrait>(array: &ArrayRef, lower: bool) -> R
 }
 
 /// Fast path for case conversion on an all-ASCII `StringViewArray`.
-fn case_conversion_utf8view_ascii(array: &StringViewArray, lower: bool) -> StringViewArray {
+fn case_conversion_utf8view_ascii(array: &StringViewArray, lower: bool) -> Result<StringViewArray> {
     // Specialize per conversion so the byte call inlines in the hot loops below.
     if lower {
         case_conversion_utf8view_ascii_inner(array, u8::to_ascii_lowercase)
@@ -556,10 +556,14 @@ fn case_conversion_utf8view_ascii(array: &StringViewArray, lower: bool) -> Strin
 /// long strings copy-and-convert into output buffers and have their view fields
 /// rewritten to address the new bytes. ASCII case conversion preserves is byte
 /// length, so no row migrates between the inline and long layouts.
+#[expect(
+    clippy::unwrap_used,
+    reason = "Fixed-length slice to array conversion; cannot fail."
+)]
 fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
     array: &StringViewArray,
     convert: F,
-) -> StringViewArray {
+) -> Result<StringViewArray> {
     let item_len = array.len();
     let views = array.views();
     let data_buffers = array.data_buffers();
@@ -609,19 +613,21 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
                     block_size = block_size.saturating_mul(2);
                 }
                 let to_reserve = len.max(block_size as usize);
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "StringView's block size bounds growth, so reserve cannot overflow capacity arithmetically. This hot loop intentionally avoids the extra `try_reserve` checks. It remains subject to allocator failure/OOM, which must be managed externally."
-                )]
+                // StringView's block size bounds growth, so reserve cannot overflow capacity arithmetically.
+                // This hot loop intentionally avoids the extra `try_reserve` checks.
                 in_progress.reserve(to_reserve);
             }
 
             // The in-progress block will be sealed at index `completed.len()`,
             // and our value starts at the current write position within it.
-            let buffer_index: u32 =
-                i32::try_from(completed.len()).expect("buffer count exceeds i32::MAX") as u32;
-            let new_offset: u32 =
-                i32::try_from(in_progress.len()).expect("offset exceeds i32::MAX") as u32;
+            let Ok(buffer_index) = i32::try_from(completed.len()) else {
+                return exec_err!("string view buffer count exceeds i32::MAX");
+            };
+            let buffer_index = buffer_index as u32;
+            let Ok(new_offset) = i32::try_from(in_progress.len()) else {
+                return exec_err!("string view offset exceeds i32::MAX");
+            };
+            let new_offset = new_offset as u32;
 
             // Source location from the input view: bytes 8..12 are buffer
             // index, bytes 12..16 are the offset within it.
@@ -654,7 +660,7 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
     // those same bytes; inline views were rewritten from valid inline bytes;
     // null/empty rows are zero views with no buffer reference; row count is
     // unchanged.
-    unsafe {
+    Ok(unsafe {
         StringViewArray::new_unchecked(
             ScalarBuffer::from(new_views),
             // TODO: Uncomment after DataFusion 56
@@ -662,7 +668,7 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
             completed,
             array.nulls().cloned(),
         )
-    }
+    })
 }
 
 /// Fast path for case conversion on an all-ASCII string array. ASCII case

@@ -247,13 +247,13 @@ impl ArrayAggAccumulator {
         // According to the Arrow spec, null values can point to non-empty lists
         // So this will check if all null values starting from the first valid value to the last one point to a 0 length list so we can just slice the underlying value
 
-        // Unwrapping is safe as we just checked if there is a null value
-        let nulls = list_array.nulls().unwrap();
+        // There is a null value, so the null buffer exists
+        let nulls = list_array.nulls()?;
 
         let mut valid_slices_iter = nulls.valid_slices();
 
-        // This is safe as we validated that there is at least 1 valid value in the array
-        let (start, end) = valid_slices_iter.next().unwrap();
+        // There is at least 1 valid value in the array
+        let (start, end) = valid_slices_iter.next()?;
 
         let start_offset = offsets[start];
 
@@ -1332,7 +1332,10 @@ impl DistinctArrayAggAccumulator {
                 counts,
                 row_hashes,
                 rows_buffer,
-            } = self.state.as_mut().unwrap();
+            } = self
+                .state
+                .as_mut()
+                .ok_or_else(|| internal_datafusion_err!("state must be set after ensure_state"))?;
             rows_buffer.clear();
             converter.append(rows_buffer, std::slice::from_ref(col))?;
 
@@ -1433,7 +1436,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
         } = self
             .state
             .as_ref()
-            .expect("state must be set when map is non-empty");
+            .ok_or_else(|| internal_datafusion_err!("state must be set when map is non-empty"))?;
 
         // Collect the group indices of all live entries.
         let mut live_indices: Vec<usize> =
@@ -1539,7 +1542,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
         } = self
             .state
             .as_mut()
-            .expect("retract_batch called before update_batch");
+            .ok_or_else(|| internal_datafusion_err!("retract_batch called before update_batch"))?;
 
         rows_buffer.clear();
         converter.append(rows_buffer, std::slice::from_ref(col))?;
@@ -1700,10 +1703,10 @@ impl OrderSensitiveArrayAggAccumulator {
         };
         if self.is_input_pre_ordered {
             if self.can_extend_preordered_run {
-                self.sorted_runs
-                    .last_mut()
-                    .expect("an extendable preordered run must exist")
-                    .end = entry_range.end;
+                let Some(run) = self.sorted_runs.last_mut() else {
+                    return internal_err!("an extendable preordered run must exist");
+                };
+                run.end = entry_range.end;
             } else {
                 self.sorted_runs.push(entry_range);
             }
@@ -2011,7 +2014,10 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         self.ensure_sorted_indices();
-        let sorted_indices = self.sorted_entry_indices.as_deref().unwrap();
+        let sorted_indices = self
+            .sorted_entry_indices
+            .as_deref()
+            .ok_or_else(|| internal_datafusion_err!("sorted indices must be set"))?;
         if sorted_indices.is_empty() {
             return Ok(ScalarValue::new_null_list(self.value_type.clone(), true, 1));
         }
@@ -2048,7 +2054,10 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.ensure_sorted_indices();
-        let sorted_indices = self.sorted_entry_indices.as_deref().unwrap();
+        let sorted_indices = self
+            .sorted_entry_indices
+            .as_deref()
+            .ok_or_else(|| internal_datafusion_err!("sorted indices must be set"))?;
         let payload = if sorted_indices.is_empty() {
             ScalarValue::new_null_list(self.value_type.clone(), true, 1)
         } else {
@@ -2120,7 +2129,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use std::sync::atomic::AtomicUsize;
 
@@ -2134,6 +2143,8 @@ mod tests {
 
     use super::*;
 
+    // TODO: Remove `expect` after DataFusion 56
+    #[expect(dead_code)]
     #[derive(Debug)]
     struct CountingMetric(Arc<AtomicUsize>);
 
@@ -2144,6 +2155,8 @@ mod tests {
     //     }
     // }
 
+    // TODO: Remove `expect` after DataFusion 56
+    #[expect(dead_code)]
     #[derive(Debug)]
     struct CountingMetrics(Arc<AtomicUsize>);
 
