@@ -6,7 +6,7 @@ const {
   writeReport,
 } = require("./pull-request-report.cjs");
 
-const REPORT_NAME = "sail-python-test-suites";
+const REPORT_NAME = "python-test-selection";
 
 function resolveSuiteChoices(suites, event, overrides = {}) {
   if (!["pull_request", "push", "schedule"].includes(event)) {
@@ -17,7 +17,10 @@ function resolveSuiteChoices(suites, event, overrides = {}) {
       if (event === "pull_request" && Object.hasOwn(overrides, name)) {
         return overrides[name];
       }
-      return event === "schedule" || !name.startsWith("integration-");
+      return (
+        event === "schedule" ||
+        (name !== "slow" && !name.startsWith("integration-"))
+      );
     })
     .map(({ name }) => name);
 }
@@ -73,7 +76,7 @@ function writeSuiteReport({
   runAttempt,
   suites,
   choices,
-  reportPath = "python-test-report",
+  reportPath = "python-test-selection-report",
 }) {
   const pr = context.payload.pull_request;
   if (!pr) return;
@@ -106,7 +109,7 @@ function renderSuiteChecklist(suites, run, selectedSuites = []) {
     "",
     [
       "Maintainers can edit the checkboxes below, then **re-run all jobs** or push a commit to apply their selection.",
-      "The build reads these choices during setup and keeps them when new test suites are discovered.",
+      "The build reads these choices during test discovery and keeps them when new test suites are discovered.",
       "Editing this comment does not start a build.",
     ].join(" "),
     "",
@@ -129,7 +132,7 @@ async function preparePythonTestSuites({
   context,
   runAttempt,
   inventoryPath = "python-test-suites.json",
-  reportPath = "python-test-report",
+  reportPath = "python-test-selection-report",
 }) {
   const suites = validateInventory(
     JSON.parse(fs.readFileSync(inventoryPath, "utf8")),

@@ -21,6 +21,7 @@ const inventory = [
   suite("default", 100),
   suite("udf", 30),
   suite("integration-hms", 5),
+  suite("slow", 49),
 ];
 const run = {
   id: 123,
@@ -35,8 +36,9 @@ const overrides = {
   default: true,
   udf: false,
   "integration-hms": true,
+  slow: true,
 };
-const choices = ["default", "integration-hms"];
+const choices = ["default", "integration-hms", "slow"];
 
 test("checklist renders the effective choices", () => {
   assert.deepEqual(
@@ -49,7 +51,7 @@ for (const event of ["pull_request", "push", "schedule"]) {
   test(`${event} defaults and checklist overrides`, () => {
     const defaults =
       event === "schedule"
-        ? ["default", "udf", "integration-hms"]
+        ? ["default", "udf", "integration-hms", "slow"]
         : ["default", "udf"];
     assert.deepEqual(resolveSuiteChoices(inventory, event), defaults);
     assert.deepEqual(
@@ -150,6 +152,7 @@ test("reads checklist choices only from the matching bot comment", async () => {
     default: true,
     udf: false,
     "integration-hms": true,
+    slow: true,
   });
   comments.length = 0;
   assert.deepEqual(await readSuiteChoices({ github, context }), {});
@@ -171,10 +174,10 @@ test("checkbox parsing accepts uppercase checks and uses the last choice", () =>
   );
 });
 
-test("setup resolves the inventory and writes the effective checklist", async (t) => {
+test("discovery resolves the inventory and writes the effective checklist", async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sail-selection-"));
   t.after(() => fs.rmSync(directory, { recursive: true }));
-  const reportPath = path.join(directory, "python-test-report");
+  const reportPath = path.join(directory, "python-test-selection-report");
   const inventoryPath = path.join(directory, "suites.json");
   fs.writeFileSync(inventoryPath, JSON.stringify(inventory));
   const github = {
@@ -206,7 +209,7 @@ test("setup resolves the inventory and writes the effective checklist", async (t
     "1\n",
   );
   const body = fs.readFileSync(path.join(reportPath, "report.md"), "utf8");
-  assert.ok(body.includes("<!-- sail-python-test-suites-run:123:2 -->"));
+  assert.ok(body.includes("<!-- python-test-selection-run:123:2 -->"));
   assert.equal(parseSuiteChoices(body).udf, false);
   assert.equal(Object.keys(parseSuiteChoices(body)).length, inventory.length);
   assert.ok(body.includes("it overwrites any edits made while it was running"));
@@ -216,7 +219,7 @@ test("setup resolves the inventory and writes the effective checklist", async (t
 test("does not write a pull request report for other build events", (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sail-selection-"));
   t.after(() => fs.rmSync(directory, { recursive: true }));
-  const reportPath = path.join(directory, "python-test-report");
+  const reportPath = path.join(directory, "python-test-selection-report");
   writeSuiteReport({
     context: { payload: {} },
     suites: inventory,

@@ -47,7 +47,7 @@ function pythonReport(t) {
     },
     core: { info() {} },
     reportPath,
-    reportName: "sail-python-test-suites",
+    reportName: "python-test-selection",
   };
   return { options, body, run, pr, comments };
 }
@@ -62,7 +62,7 @@ test("other reports need no checklist metadata or API lookups", async (t) => {
 
 test("all report types reject invalid names and pull request numbers", async (t) => {
   const reportPath = temporaryDirectory(t);
-  for (const reportName of ["gold-data", "sail-python-test-suites"]) {
+  for (const reportName of ["gold-data", "python-test-selection"]) {
     for (const number of ["0", "-1", "1.5", "1 extra", "9007199254740992"]) {
       fs.writeFileSync(path.join(reportPath, "pull-request.txt"), number);
       await assert.rejects(
@@ -81,7 +81,7 @@ test("all report types reject invalid names and pull request numbers", async (t)
 
 test("all report types skip missing or empty pull request numbers", async (t) => {
   const reportPath = temporaryDirectory(t);
-  for (const reportName of ["gold-data", "sail-python-test-suites"]) {
+  for (const reportName of ["gold-data", "python-test-selection"]) {
     assert.equal(await validateReport({ reportPath, reportName }), "");
     fs.writeFileSync(path.join(reportPath, "pull-request.txt"), "\n");
     assert.equal(await validateReport({ reportPath, reportName }), "");
@@ -107,8 +107,8 @@ test("Python reports reject metadata from another run or attempt", async (t) => 
   const invalidReports = [
     renderSuiteChecklist([], { ...run, id: run.id + 1 }),
     renderSuiteChecklist([], { ...run, run_attempt: run.run_attempt - 1 }),
-    "<!-- sail-python-test-suites -->\nMissing run metadata",
-    `<!-- sail-python-test-suites-run:${run.id}:${run.run_attempt} -->`,
+    "<!-- python-test-selection -->\nMissing run metadata",
+    `<!-- python-test-selection-run:${run.id}:${run.run_attempt} -->`,
   ];
   for (const body of invalidReports) {
     fs.writeFileSync(path.join(options.reportPath, "report.md"), body);

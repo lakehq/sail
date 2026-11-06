@@ -28,12 +28,12 @@ jobs:
 
       - uses: ./.github/actions/pull-request-report
         if: github.event.workflow_run.name == 'Build'
-        # Setup may have failed before generating the report.
+        # Test discovery may have failed before generating the report.
         continue-on-error: true
         with:
           workflow_run_id: ${{ github.event.workflow_run.id }}
-          artifact_name: python-test-report
-          report_name: sail-python-test-suites
+          artifact_name: python-test-selection-report
+          report_name: python-test-selection
 
       # The Spark tests are not always run,
       # so we ignore the error if the artifact is not found.

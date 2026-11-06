@@ -116,7 +116,7 @@ async function validateReport(options) {
 
   // Suite checklists carry choices across builds, so only the current workflow
   // attempt may publish them. Other reports retain their existing behavior.
-  if (reportName === "sail-python-test-suites") {
+  if (reportName === "python-test-selection") {
     const body = fs.readFileSync(path.join(reportPath, "report.md"), "utf8");
     validateReportRun(body, reportName, options.context.payload.workflow_run);
     if (!(await isCurrentReport({ ...options, number }))) return "";

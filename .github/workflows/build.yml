@@ -22,10 +22,6 @@ jobs:
       actions: read
       pull-requests: read
     outputs:
-      python_tests_matrix: ${{ steps.versions.outputs.matrix }}
-      python_tests_versions: ${{ steps.versions.outputs.versions }}
-      python_tests_choices: ${{ steps.choices.outputs.choices }}
-      python_tests_partial: ${{ github.event_name != 'schedule' }}
       build_package: ${{ github.event_name == 'schedule' || github.event_name == 'push' || steps.filter.outputs.package == 'true' || steps.baseline-workflow.outputs.workflow_run_id == '' }}
       baseline_run_id: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
       run_spark_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.message.outputs.run_spark_tests == 'true' || steps.label.outputs.run_spark_tests == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
@@ -86,6 +82,20 @@ jobs:
             core.setOutput('run_spark_tests', labels.includes('run spark tests') ? 'true' : 'false');
             core.setOutput('run_ibis_tests', labels.includes('run ibis tests') ? 'true' : 'false');
 
+  python-test-discovery:
+    name: Python Test Discovery
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      matrix: ${{ steps.versions.outputs.matrix }}
+      versions: ${{ steps.versions.outputs.versions }}
+      choices: ${{ steps.choices.outputs.choices }}
+      partial: ${{ github.event_name != 'schedule' }}
+    steps:
+      - uses: actions/checkout@v7
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -116,9 +126,9 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/python
           PYSAIL_TEST_SUITE_MANIFEST: python-test-suites.json
         run: |
-          # Exit 5 means no tests were collected.
           hatch run pytest --collect-only -qq --pyargs pysail.tests pysail.tests._dev || {
             status=$?
+            # Pytest exits with code 5 when no tests are collected.
             test "$status" -eq 5
           }
 
@@ -138,8 +148,8 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: github.event_name == 'pull_request'
         with:
-          name: python-test-report
-          path: python-test-report
+          name: python-test-selection-report
+          path: python-test-selection-report
           retention-days: 7
 
   rust-tests:
@@ -194,16 +204,17 @@ jobs:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.setup.outputs.python_tests_matrix) }}
+      matrix: ${{ fromJSON(needs.python-test-discovery.outputs.matrix) }}
     with:
       spark_version: ${{ matrix.spark_version }}
-      spark_versions: ${{ needs.setup.outputs.python_tests_versions }}
-      suite_choices: ${{ needs.setup.outputs.python_tests_choices }}
+      spark_versions: ${{ needs.python-test-discovery.outputs.versions }}
+      suite_choices: ${{ needs.python-test-discovery.outputs.choices }}
       seed: ${{ github.event_name == 'pull_request' && format('pull/{0}', github.event.pull_request.number) || format('commit/{0}', github.sha) }}
-      partial: ${{ fromJSON(needs.setup.outputs.python_tests_partial) }}
+      partial: ${{ fromJSON(needs.python-test-discovery.outputs.partial) }}
     needs:
       - setup
       - rust-build
+      - python-test-discovery
 
   codecov-notify:
     name: Codecov Notify
