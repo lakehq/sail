@@ -1,11 +1,12 @@
-/// [Credit]: <https://github.com/apache/datafusion/blob/e6e1eb229440591263c82bb2b913a4d5a16f9b70/datafusion/functions/src/utils.rs>
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
-
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::ArrowNativeType;
 use datafusion::arrow::array::ArrayRef;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::function::Hint;
+/// [Credit]: <https://github.com/apache/datafusion/blob/e6e1eb229440591263c82bb2b913a4d5a16f9b70/datafusion/functions/src/utils.rs>
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 /// Cap on memoized entries. A compiled `Regex` holds roughly 75 KiB once
 /// used, so memoizing a whole batch of unique patterns would pin hundreds of
@@ -119,6 +120,38 @@ where
             result.map(ColumnarValue::Array)
         }
     }
+}
+
+// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/common/src/utils/mod.rs#L1226-L1235
+/// Returns the number of values covered by an offset buffer.
+///
+/// Slicing a variable-length array narrows its offsets but retains its entire
+/// values buffer. Use this span to size output buffers: it counts child elements
+/// for lists and bytes for strings/binary arrays, including values in null rows.
+/// An empty array still has one offset and therefore a span of zero.
+#[inline]
+pub fn offset_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> usize {
+    offset_span(offsets).1
+}
+
+// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/common/src/utils/mod.rs#L1237-L1254
+/// Returns the start and length of the values covered by an offset buffer.
+///
+/// The returned pair can be passed to [`Array::slice`] to select the visible
+/// child values of a sliced list or map. For strings/binary arrays, the start
+/// and length are measured in bytes. Values in null rows are included.
+/// An empty array has a length of zero but may have a nonzero start.
+///
+/// ```
+/// # use arrow::buffer::OffsetBuffer;
+/// # use datafusion_common::utils::offset_span;
+/// let offsets = OffsetBuffer::new(vec![100_i32, 103, 108].into());
+/// assert_eq!(offset_span(&offsets), (100, 8));
+/// ```
+#[inline]
+pub fn offset_span<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> (usize, usize) {
+    let start = offsets.first().as_usize();
+    (start, offsets.last().as_usize() - start)
 }
 
 #[cfg(test)]
