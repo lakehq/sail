@@ -3558,6 +3558,87 @@ mod test {
         }
     }
 
+    /// List views are coerced like lists, to a list type, unless the values have the same type.
+    #[test]
+    fn test_case_result_type_of_list_views() {
+        use sail_common_datafusion::type_coercion::binary_type_coercion::comparison_coercion;
+
+        use crate::type_coercion::case_result_type;
+
+        let item = |data_type, nullable| Arc::new(Field::new_list_field(data_type, nullable));
+        let int_item = |nullable| item(DataType::Int32, nullable);
+        for (then_type, else_type, expected) in [
+            (
+                DataType::ListView(int_item(false)),
+                DataType::List(int_item(true)),
+                DataType::List(int_item(true)),
+            ),
+            (
+                DataType::List(int_item(true)),
+                DataType::ListView(item(DataType::Int64, false)),
+                DataType::List(item(DataType::Int64, true)),
+            ),
+            (
+                DataType::ListView(int_item(true)),
+                DataType::ListView(int_item(false)),
+                DataType::List(int_item(true)),
+            ),
+            (
+                DataType::LargeListView(int_item(true)),
+                DataType::List(int_item(true)),
+                DataType::LargeList(int_item(true)),
+            ),
+            (
+                DataType::ListView(int_item(true)),
+                DataType::LargeList(int_item(true)),
+                DataType::LargeList(int_item(true)),
+            ),
+            (
+                DataType::ListView(int_item(true)),
+                DataType::FixedSizeList(int_item(true), 2),
+                DataType::List(int_item(true)),
+            ),
+            (
+                DataType::LargeListView(int_item(true)),
+                DataType::ListView(int_item(true)),
+                DataType::LargeList(int_item(true)),
+            ),
+            (
+                DataType::LargeList(int_item(true)),
+                DataType::LargeListView(int_item(true)),
+                DataType::LargeList(int_item(true)),
+            ),
+            (
+                DataType::FixedSizeList(int_item(true), 2),
+                DataType::LargeListView(int_item(true)),
+                DataType::LargeList(int_item(true)),
+            ),
+            (
+                DataType::ListView(int_item(true)),
+                DataType::ListView(int_item(true)),
+                DataType::ListView(int_item(true)),
+            ),
+            (
+                DataType::LargeListView(int_item(true)),
+                DataType::LargeListView(int_item(true)),
+                DataType::LargeListView(int_item(true)),
+            ),
+        ] {
+            assert_eq!(
+                case_result_type(std::slice::from_ref(&then_type), Some(&else_type)),
+                Some(expected),
+                "THEN {then_type} and ELSE {else_type}"
+            );
+        }
+        assert_eq!(
+            comparison_coercion(
+                &DataType::ListView(int_item(false)),
+                &DataType::List(item(DataType::Int64, true))
+            ),
+            Some(DataType::List(item(DataType::Int64, true)))
+        );
+    }
+
     #[test]
     fn test_case_expression_coercion() -> Result<()> {
         let schema = Arc::new(DFSchema::from_unqualified_fields(
