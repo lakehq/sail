@@ -16,8 +16,8 @@ use crate::io::StoreContext;
 use crate::operations::bootstrap::prepare_bootstrap_snapshot;
 use crate::operations::helpers::format_version_for_schema;
 use crate::operations::metadata_commit::{
-    MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome, PreviousMetadataFile,
-    previous_metadata_log_entry,
+    BaseMetadataCodec, MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome,
+    PreviousMetadataFile, previous_metadata_log_entry,
 };
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::schema_evolution::SchemaEvolver;
@@ -35,6 +35,7 @@ pub struct IcebergTableReplacement {
     pub catalog: TableReplacement,
     pub base_metadata_file: Option<String>,
     pub metadata: TableMetadata,
+    pub(crate) base_codec: BaseMetadataCodec,
 }
 
 pub(crate) fn prepare_replacement(
@@ -47,6 +48,7 @@ pub(crate) fn prepare_replacement(
     if catalog.existing != base.is_some() {
         return plan_err!("Iceberg replacement catalog/storage existence mismatch");
     }
+    let base_codec = BaseMetadataCodec::capture(base)?;
     let input = arrow_schema_to_iceberg(input)?;
     let schema = match base {
         Some(base) => SchemaEvolver::assign_replacement_schema_ids(&input, base)?,
@@ -60,8 +62,11 @@ pub(crate) fn prepare_replacement(
             .map_err(DataFusionError::Plan)?,
         None => requested_spec,
     };
-    // A v1 spec retains void fields; removing their source columns cannot produce a valid v1 spec.
+    // V1 retains removed partition fields as void, even when their source columns are dropped.
     for field in spec.fields() {
+        if field.transform == Transform::Void {
+            continue;
+        }
         let source = schema.field_by_id(field.source_id).ok_or_else(|| {
             DataFusionError::Plan(
                 "replacement partition source is absent from the new schema".into(),
@@ -258,6 +263,7 @@ pub(crate) fn prepare_replacement(
         catalog,
         base_metadata_file,
         metadata,
+        base_codec,
     })
 }
 
@@ -335,8 +341,12 @@ pub(crate) async fn commit_replacement(
         .as_deref()
         .and_then(metadata_file_version_from_path)
         .map_or(1, |version| version + 1);
-    let publication =
-        MetadataFileCommit::prepare(table_url, &metadata, version, MetadataFileStyle::Versioned)?;
+    let publication = MetadataFileCommit::prepare(
+        table_url,
+        &metadata,
+        version,
+        MetadataFileStyle::Versioned(replacement.base_codec),
+    )?;
     let mut catalog = replacement.catalog;
     // Metadata pointer properties are informational for this path-managed catalog, but must
     // describe the same version as the installed definition.
@@ -994,6 +1004,247 @@ mod tests {
                 assert_eq!(provider.list_tables(&namespace).await?.len(), 1);
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn first_append_cannot_overwrite_acknowledged_replacement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        first_append_replacement_race(None).await
+    }
+
+    #[tokio::test]
+    async fn first_append_cannot_supersede_acknowledged_replacement_with_different_codec()
+    -> Result<(), Box<dyn std::error::Error>> {
+        first_append_replacement_race(Some("gzip")).await
+    }
+
+    async fn first_append_replacement_race(
+        replacement_codec: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use datafusion::arrow::array::Int64Array;
+        use datafusion::arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use tokio::time::{Duration, timeout};
+
+        use crate::operations::bootstrap::{PersistStrategy, bootstrap_first_snapshot};
+        use crate::table::metadata_loader::{decode_metadata_file, load_metadata_file_bytes};
+
+        async fn write_row(
+            store: &ReplacementStore,
+            name: &str,
+            id: i32,
+            value: i64,
+        ) -> Result<DataFile, Box<dyn std::error::Error>> {
+            let field = Field::new(name, DataType::Int64, false)
+                .with_metadata(HashMap::from([("PARQUET:field_id".into(), id.to_string())]));
+            let schema = Arc::new(ArrowSchema::new(vec![field]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(Int64Array::from(vec![value]))],
+            )?;
+            let mut writer = ArrowWriter::try_new(Vec::new(), schema, None)?;
+            writer.write(&batch)?;
+            let bytes = writer.into_inner()?;
+            let size = bytes.len();
+            store
+                .inner
+                .put(
+                    &Path::from(format!("table/data/{name}.parquet")),
+                    Bytes::from(bytes).into(),
+                )
+                .await?;
+            Ok(serde_json::from_value(serde_json::json!({
+                "content": "DATA", "file_path": format!("memory:///table/data/{name}.parquet"),
+                "file_format": "PARQUET", "partition": [], "record_count": 1,
+                "file_size_in_bytes": size, "partition_spec_id": 0
+            }))?)
+        }
+
+        timeout(Duration::from_secs(15), async {
+            let url = crate::lake_source::IcebergLakeSource::parse_table_url(vec![
+                "memory:///table".into(),
+            ])
+            .await?;
+            let store = Arc::new(ReplacementStore::new(ReplacementFault::BootstrapRace));
+            let context = StoreContext::new(store.clone(), &url)?;
+            let namespace = Namespace::try_from(vec!["db".to_string()])?;
+            let provider = Arc::new(MemoryCatalogProvider::new(
+                "memory".into(),
+                namespace.clone(),
+                None,
+            ));
+            let manager = Arc::new(CatalogManager::try_new(CatalogManagerOptions {
+                catalogs: HashMap::from([(
+                    "memory".into(),
+                    provider.clone() as Arc<dyn CatalogProvider>,
+                )]),
+                default_catalog: "memory".into(),
+                default_database: vec!["db".into()],
+                global_temporary_database: vec!["global_temp".into()],
+            })?);
+            let task = SessionContext::new_with_config(
+                SessionConfig::new().with_extension(manager.clone()),
+            )
+            .task_ctx();
+            let mut options = CreateTableOptions {
+                columns: vec![CreateTableColumnOptions {
+                    name: "old".into(),
+                    data_type: DataType::Int64,
+                    nullable: false,
+                    comment: None,
+                    default: None,
+                    generated_always_as: None,
+                    identity: None,
+                }],
+                comment: None,
+                constraints: vec![],
+                location: Some(url.to_string()),
+                format: "iceberg".into(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                mode: CreateTableMode::CreateOrReplace,
+                properties: vec![],
+                is_external: true,
+                is_write_precondition: true,
+            };
+            provider
+                .create_table(&namespace, "t", options.clone())
+                .await?;
+            let old_schema = ArrowSchema::new(vec![Field::new("old", DataType::Int64, false)]);
+            let base = prepare_replacement(&url, catalog(false), None, None, &old_schema)?.metadata;
+            store
+                .inner
+                .put(
+                    &Path::from("table/metadata/v1.metadata.json"),
+                    Bytes::from(base.to_json()?).into(),
+                )
+                .await?;
+            let old_file = write_row(&store, "old", 1, 1).await?;
+            let new_file = write_row(&store, "replacement", 2, 2).await?;
+            let append = IcebergCommitInfo {
+                table_uri: url.to_string(),
+                row_count: 1,
+                action_summary: None,
+                data_files: vec![old_file],
+                delete_files: vec![],
+                manifest_path: String::new(),
+                manifest_list_path: String::new(),
+                updates: vec![],
+                requirements: vec![],
+                table_properties: vec![],
+                lakehouse_table: None,
+                snapshot_update_kind: SnapshotUpdateKind::FastAppend,
+                schema: None,
+                partition_spec: None,
+            };
+            let append_task = {
+                let url = url.clone();
+                let context = context.clone();
+                let base = base.clone();
+                let append = append.clone();
+                tokio::spawn(async move {
+                    bootstrap_first_snapshot(
+                        &url,
+                        &context,
+                        &append,
+                        base,
+                        "table/metadata/v1.metadata.json",
+                        None,
+                        PersistStrategy::NewVersion,
+                    )
+                    .await
+                })
+            };
+            // The first append has captured v1 and reached its metadata PUT; no sleeps.
+            store.bootstrap_entered.wait().await;
+            options.columns[0].name = "replacement".into();
+            if let Some(codec) = replacement_codec {
+                options.properties.push(("write.metadata.compression-codec".into(), codec.into()));
+            }
+            let staged = manager.stage_table_replacement(&["t"], options).await?;
+            let input = ArrowSchema::new(vec![Field::new("replacement", DataType::Int64, false)]);
+            let replacement = prepare_replacement(
+                &url,
+                staged,
+                Some("table/metadata/v1.metadata.json".into()),
+                Some(&base),
+                &input,
+            )?;
+            let mut replacement_commit = append;
+            replacement_commit.data_files = vec![new_file];
+            replacement_commit.snapshot_update_kind = SnapshotUpdateKind::FullOverwrite;
+            commit_replacement(&task, &url, &context, replacement, &replacement_commit).await?;
+            let path = Path::from("table/metadata/v2.metadata.json");
+            let acknowledged = store.inner.get(&path).await?.bytes().await?;
+            let expected = TableMetadata::from_json(&decode_metadata_file(path.as_ref(), &acknowledged)?)?;
+            assert_eq!(
+                expected.current_schema().ok_or("missing schema")?.fields()[0].name,
+                "replacement"
+            );
+            // Complete replacement (including final listing, hint and catalog installation) first.
+            store.bootstrap_release.wait().await;
+            let append_result = append_task.await?;
+            let latest = find_latest_metadata_file(&context.base, &url).await?;
+            let visible = TableMetadata::from_json(&load_metadata_file_bytes(&context.base, &latest).await?)?;
+            eprintln!(
+                "codec={replacement_codec:?} append_result={append_result:?} acknowledged={} discovered={latest} visible_schema={:?}",
+                path, visible.current_schema()
+            );
+            assert_eq!(
+                latest, path.as_ref(),
+                "a stale append must not supersede an acknowledged replacement via another codec filename"
+            );
+            assert!(
+                append_result
+                    .as_ref()
+                    .is_err_and(|error| error.to_string().contains("replan")),
+                "stale append must fail rather than retry its old-schema files: {append_result:?}"
+            );
+            let actual_bytes = store.inner.get(&path).await?.bytes().await?;
+            let actual = TableMetadata::from_json(&decode_metadata_file(path.as_ref(), &actual_bytes)?)?;
+            for (label, metadata) in [("replacement", &expected), ("final", &actual)] {
+                let snapshot = metadata.current_snapshot().ok_or("missing snapshot")?;
+                let list = load_manifest_list(&context, snapshot.manifest_list()).await?;
+                let manifest = load_manifest(&context, &list.entries()[0].manifest_path).await?;
+                eprintln!(
+                    "{label} data file={}",
+                    manifest.entries()[0].data_file.file_path
+                );
+                assert_eq!(manifest.entries()[0].data_file.record_count, 1);
+                assert_eq!(
+                    manifest.entries()[0].data_file.file_path,
+                    "memory:///table/data/replacement.parquet"
+                );
+            }
+            let files = store.inner.list(None).try_collect::<Vec<_>>().await?;
+            assert_eq!(
+                files
+                    .iter()
+                    .filter(|file| file.location.as_ref().ends_with(".avro"))
+                    .count(),
+                2,
+                "only replacement manifests remain after the definite append conflict"
+            );
+            context
+                .prefixed
+                .head(&Path::from("data/old.parquet"))
+                .await?;
+            eprintln!(
+                "append_ok={} replacement_snapshot={:?} final_snapshot={:?} final_schema={:?}",
+                append_result.is_ok(),
+                expected.current_snapshot_id,
+                actual.current_snapshot_id,
+                actual.current_schema()
+            );
+            assert_eq!(
+                actual_bytes, acknowledged,
+                "acknowledged replacement metadata must be immutable"
+            );
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })
+        .await??;
         Ok(())
     }
 

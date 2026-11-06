@@ -7123,8 +7123,8 @@ mod tests {
             CatalogPartitionField, PartitionTransform, TableReplacement,
         };
         use sail_iceberg::operations::replacement::IcebergTableReplacement;
-        let replacement = IcebergTableReplacement {
-            catalog: TableReplacement {
+        let replacement: IcebergTableReplacement = serde_json::from_value(serde_json::json!({
+            "catalog": TableReplacement {
                 catalog_table: vec!["catalog".into(), "namespace".into(), "table".into()],
                 catalog_generation: 11, database_generation: 22, table_generation: 33,
                 require_existing: true, existing: true,
@@ -7134,8 +7134,10 @@ mod tests {
                 sort_by: vec![], properties: vec![("owner".into(), "test".into())],
                 property_updates: vec![("owner".into(), "requested".into())], is_external: true,
             },
-            base_metadata_file: Some("tmp/replacement-codec/metadata/v7.metadata.json".into()),
-            metadata: serde_json::from_value(serde_json::json!({
+            "base_metadata_file": "tmp/replacement-codec/metadata/v7.metadata.json",
+            // The captured base codec differs from the candidate properties.
+            "base_codec": "Gzip",
+            "metadata": serde_json::json!({
                 "format-version":2, "table-uuid":"12345678-1234-1234-1234-123456789abc",
                 "location":"file:///tmp/replacement-codec/", "last-sequence-number":8,
                 "last-updated-ms":100, "last-column-id":5,"current-schema-id":2,
@@ -7146,8 +7148,8 @@ mod tests {
                 "snapshot-log":[{"timestamp-ms":100,"snapshot-id":42}],
                 "metadata-log":[{"timestamp-ms":90,"metadata-file":"file:///tmp/replacement-codec/metadata/v6.metadata.json"}],
                 "refs":{"audit":{"snapshot-id":42,"type":"tag"}}
-            })).map_err(|e| plan_datafusion_err!("{e}"))?,
-        };
+            }),
+        })).map_err(|e| plan_datafusion_err!("{e}"))?;
         let expected =
             serde_json::to_value(&replacement).map_err(|e| plan_datafusion_err!("{e}"))?;
         assert_ne!(

@@ -13,7 +13,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use datafusion::arrow::datatypes::{
     DataType, Field as ArrowField, Fields, Schema as ArrowSchema, SchemaRef,
 };
@@ -25,7 +24,6 @@ use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use log::warn;
-use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker;
 use sail_common_datafusion::catalog::managed::metadata_location_value;
 use sail_common_datafusion::catalog::{
@@ -62,7 +60,10 @@ use crate::metadata_relation::{IcebergMetadataRelationType, metadata_relation_pr
 use crate::operations::bootstrap::{
     NewTableMetadataStyle, bootstrap_empty_table_metadata, replace_empty_table_metadata,
 };
-use crate::operations::metadata_commit::{PreviousMetadataFile, previous_metadata_log_entry};
+use crate::operations::metadata_commit::{
+    BaseMetadataCodec, MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome,
+    PreviousMetadataFile, previous_metadata_log_entry,
+};
 use crate::options::r#gen::{IcebergReadOptions, IcebergWriteOptions};
 use crate::physical_plan::IcebergWriterExecOptions;
 use crate::physical_plan::action_schema::iceberg_action_schema;
@@ -75,9 +76,8 @@ use crate::spec::{
     NullOrder, PartitionSpec, Schema, Snapshot, SortDirection, SortOrder, TableMetadata, Transform,
 };
 use crate::table::metadata_loader::{
-    encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
-    metadata_file_version_from_path, metadata_location_to_object_path_string,
-    table_metadata_location, write_version_hint,
+    load_metadata_file_bytes, metadata_file_version_from_path,
+    metadata_location_to_object_path_string, table_metadata_location,
 };
 use crate::table::{Table, find_latest_metadata_file};
 use crate::utils::metadata::metadata_files_for_version;
@@ -850,11 +850,10 @@ pub(crate) async fn plan_iceberg_write(
         _ => find_latest_metadata_file(&store, &table_url).await,
     };
     let table_exists = exists_res.is_ok();
-    if replacement.is_some()
-        && let Err(error) = &exists_res
+    if let Err(error) = &exists_res
         && !error.to_string().contains("No metadata files found")
     {
-        return plan_err!("cannot resolve Iceberg replacement base: {error}");
+        return plan_err!("cannot resolve Iceberg table metadata: {error}");
     }
 
     match mode {
@@ -1091,6 +1090,7 @@ impl IcebergLakeSource {
             let mut table_meta = TableMetadata::from_json(&metadata_bytes)
                 .map_err(|error| DataFusionError::External(Box::new(error)))?;
 
+            let base_codec = BaseMetadataCodec::capture(Some(&table_meta))?;
             let previous_entry = previous_metadata_log_entry(
                 &table_url,
                 PreviousMetadataFile::ObjectPath(&latest_metadata_file),
@@ -1138,63 +1138,22 @@ impl IcebergLakeSource {
             table_meta.last_updated_ms = timestamp_ms;
             table_meta.metadata_log.push(previous_entry);
 
-            let metadata_json = table_meta
-                .to_json()
-                .map_err(|error| DataFusionError::External(Box::new(error)))?;
-            let file_extension = metadata_file_extension_from_properties(&table_meta.properties)?;
-            let metadata_file = format!("metadata/v{next_version}{file_extension}");
-            let encoded_metadata = encode_metadata_file(&metadata_file, &metadata_json)
-                .map_err(|error| DataFusionError::External(Box::new(error)))?;
-            let metadata_path = object_store::path::Path::from(metadata_file.as_str());
-            let put_opts = object_store::PutOptions {
-                mode: object_store::PutMode::Create,
-                ..Default::default()
-            };
-            let payload = object_store::PutPayload::from(Bytes::from(encoded_metadata));
-            match store_ctx
-                .prefixed
-                .put_opts(&metadata_path, payload, put_opts)
-                .await
-            {
-                Ok(_) => {}
-                Err(object_store::Error::AlreadyExists { .. }) => {
-                    log::warn!(
-                        "Iceberg metadata file {} already exists for version {}. Retrying attempt {}",
-                        metadata_file,
-                        next_version,
-                        attempt
-                    );
+            let publication = MetadataFileCommit::prepare(
+                &table_url,
+                &table_meta,
+                next_version,
+                MetadataFileStyle::Versioned(base_codec),
+            )?;
+            match publication.write(&store_ctx).await? {
+                MetadataWriteOutcome::Written => {}
+                MetadataWriteOutcome::Conflict => {
                     if attempt >= MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES {
                         return Err(alter_table_properties_conflict_error());
                     }
                     continue;
                 }
-                Err(error) => return Err(DataFusionError::External(Box::new(error))),
             }
-
-            let version_files = metadata_files_for_version(&store_ctx, next_version).await?;
-            let conflict_after_write = version_files.iter().any(|path| path != &metadata_file);
-            if conflict_after_write {
-                log::warn!(
-                    "Concurrent Iceberg metadata writes detected for version {}: {:?}. Retrying attempt {}",
-                    next_version,
-                    version_files,
-                    attempt
-                );
-                if let Err(error) = store_ctx.prefixed.delete(&metadata_path).await {
-                    log::warn!(
-                        "Failed to delete conflicted Iceberg metadata file {}: {:?}",
-                        metadata_file,
-                        error
-                    );
-                }
-                if attempt >= MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES {
-                    return Err(alter_table_properties_conflict_error());
-                }
-                continue;
-            }
-
-            write_version_hint(&store_ctx.prefixed, &next_version.to_string()).await;
+            publication.write_hint(&store_ctx).await;
 
             return Ok((schema, partition_columns_from_table_metadata(&table_meta)?));
         }
@@ -1352,19 +1311,11 @@ impl IcebergLakeSource {
         }
 
         let path = &paths[0];
-        let mut table_url = match crate::utils::parse_absolute_url(path) {
-            Some(url) => url,
-            _ => crate::utils::file_url_from_absolute_path(path).ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "Iceberg table location must be an absolute path or URL: {path}"
-                ))
-            })?,
-        };
-
-        if !table_url.path().ends_with('/') {
-            table_url.set_path(&format!("{}/", table_url.path()));
-        }
-        Ok(table_url)
+        sail_data_source::parse_absolute_directory_url(path).ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "Iceberg table location must be an absolute path or URL: {path}"
+            ))
+        })
     }
 
     pub(crate) fn partition_columns_from_metadata(

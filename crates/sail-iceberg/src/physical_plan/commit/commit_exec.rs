@@ -48,8 +48,8 @@ use crate::operations::bootstrap::{
 };
 use crate::operations::helpers::format_version_for_schema;
 use crate::operations::metadata_commit::{
-    MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome, PreviousMetadataFile,
-    apply_snapshot_updates,
+    BaseMetadataCodec, MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome,
+    PreviousMetadataFile, apply_snapshot_updates,
 };
 use crate::operations::{SnapshotProducer, SnapshotUpdateKind, Transaction};
 use crate::physical_plan::action_schema::{CommitMeta, decode_actions_and_meta_from_batch};
@@ -918,6 +918,13 @@ impl ExecutionPlan for IcebergCommitExec {
                     }
                 })
             };
+            if let Some(Err(error)) = &latest_meta_res
+                && !error.to_string().contains("No metadata files found")
+            {
+                return Err(DataFusionError::Plan(format!(
+                    "cannot resolve Iceberg table metadata: {error}"
+                )));
+            }
             let catalog_metadata_table = catalog_table
                 .as_ref()
                 .filter(|_| catalog_commit_mode.uses_catalog_metadata());
@@ -1018,6 +1025,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 let bytes = load_metadata_file_bytes(&object_store, &latest_meta).await?;
                 let mut table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let base_codec = BaseMetadataCodec::capture(Some(&table_meta))?;
                 Self::validate_requirements(Some(&table_meta), &commit_info.requirements)?;
                 if dynamic_partition_overwrite {
                     let default_spec = table_meta.default_partition_spec().ok_or_else(|| {
@@ -1442,7 +1450,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 let style = if catalog_metadata_update_table.is_some() {
                     MetadataFileStyle::Unique
                 } else {
-                    MetadataFileStyle::Versioned
+                    MetadataFileStyle::Versioned(base_codec)
                 };
                 let prepared_metadata = apply_snapshot_updates(
                     &table_url,
@@ -2272,12 +2280,9 @@ mod tests {
                     .expect("first attempt")
                     .try_collect::<Vec<_>>()
                     .await;
-                if lose_acknowledgement {
-                    result.expect_err("publication succeeded but its acknowledgement was lost");
-                } else {
-                    let batches = result.expect("published first attempt");
-                    assert_eq!(batches[0].num_rows(), 1);
-                }
+                let batches =
+                    result.expect("published first attempt, reconciled by exact readback");
+                assert_eq!(batches[0].num_rows(), 1);
                 store_ctx
                     .prefixed
                     .head(&task_path)
@@ -2423,7 +2428,9 @@ mod tests {
                 &table_url,
                 &upgraded,
                 next_version,
-                MetadataFileStyle::Versioned,
+                MetadataFileStyle::Versioned(
+                    BaseMetadataCodec::capture(Some(&before)).expect("base codec"),
+                ),
             )
             .expect("upgrade metadata")
             .write(&store_ctx)

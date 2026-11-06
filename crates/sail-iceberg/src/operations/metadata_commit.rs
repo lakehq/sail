@@ -2,20 +2,34 @@ use bytes::Bytes;
 use datafusion_common::{DataFusionError, Result, internal_err};
 use object_store::ObjectStoreExt;
 use object_store::path::Path;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::io::StoreContext;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{MetadataLog, SnapshotLog, TableMetadata, TableUpdate};
 use crate::table::metadata_loader::{
-    encode_metadata_file, metadata_file_extension_from_properties, table_metadata_location,
-    write_version_hint,
+    MetadataFileCodec, encode_metadata_file, table_metadata_location, write_version_hint,
 };
 use crate::utils::metadata::metadata_files_for_version;
 
+/// Captured before changing candidate properties; never recomputed from a newer current version.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub(crate) struct BaseMetadataCodec(MetadataFileCodec);
+
+impl BaseMetadataCodec {
+    pub(crate) fn capture(base: Option<&TableMetadata>) -> Result<Self> {
+        Ok(Self(match base {
+            Some(base) => MetadataFileCodec::from_properties(&base.properties)?,
+            None => MetadataFileCodec::None,
+        }))
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum MetadataFileStyle {
-    Versioned,
+    // All participating Sail writers from the same immutable base contend on one key.
+    Versioned(BaseMetadataCodec),
     Unique,
 }
 
@@ -45,13 +59,15 @@ impl MetadataFileCommit {
         let json = metadata
             .to_json()
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        let extension = metadata_file_extension_from_properties(&metadata.properties)?;
+        // Validate the requested codec even when its physical encoding takes effect later.
+        let requested_codec = MetadataFileCodec::from_properties(&metadata.properties)?;
         let (file, version_hint) = match style {
-            MetadataFileStyle::Versioned => (
-                format!("metadata/v{version}{extension}"),
+            MetadataFileStyle::Versioned(base) => (
+                format!("metadata/v{version}{}", base.0.file_extension()),
                 version.to_string(),
             ),
             MetadataFileStyle::Unique => {
+                let extension = requested_codec.file_extension();
                 let name = format!("{version:05}-{}{extension}", uuid::Uuid::new_v4());
                 (format!("metadata/{name}"), name)
             }
@@ -73,53 +89,28 @@ impl MetadataFileCommit {
         &self.location
     }
 
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Only definite conflicts may be retried; other errors can leave publication uncertain.
     pub(crate) async fn write(&self, store: &StoreContext) -> Result<MetadataWriteOutcome> {
-        match store
-            .prefixed
-            .put_opts(
-                &self.path,
-                self.bytes.clone().into(),
-                object_store::PutOptions {
-                    mode: object_store::PutMode::Create,
-                    ..Default::default()
-                },
-            )
-            .await
-        {
-            Ok(_) => {}
-            Err(object_store::Error::AlreadyExists { .. }) => {
-                return Ok(MetadataWriteOutcome::Conflict);
-            }
-            Err(error) => return Err(DataFusionError::External(Box::new(error))),
-        }
-        if matches!(self.style, MetadataFileStyle::Versioned) {
-            let version_files = metadata_files_for_version(store, self.version).await?;
-            if version_files.iter().any(|file| file != self.path.as_ref()) {
-                match store.prefixed.delete(&self.path).await {
-                    Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
-                    Err(error) => {
-                        return Err(DataFusionError::Execution(format!(
-                            "failed to remove conflicted Iceberg metadata file {}; commit state is uncertain: {error}",
-                            self.path
-                        )));
-                    }
-                }
-                return Ok(MetadataWriteOutcome::Conflict);
-            }
-        }
-        Ok(MetadataWriteOutcome::Written)
+        self.write_replacement(store).await
     }
 
     /// Failures here are definitely unpublished: no metadata PUT has been attempted.
     pub(crate) async fn replacement_version_exists(&self, store: &StoreContext) -> Result<bool> {
+        // Catalog pointer publication, not directory discovery, orders unique metadata files.
+        if matches!(self.style, MetadataFileStyle::Unique) {
+            return Ok(false);
+        }
         Ok(!metadata_files_for_version(store, self.version)
             .await?
             .is_empty())
     }
 
     /// Call after the separate preflight, marking publication started immediately before this.
-    /// Path replacement never deletes a metadata version after it may have become visible.
+    /// Never delete a version after it may have become visible.
     pub(crate) async fn write_replacement(
         &self,
         store: &StoreContext,
@@ -154,11 +145,13 @@ impl MetadataFileCommit {
                 }
             }
         }
-        let versions = metadata_files_for_version(store, self.version).await?;
-        if versions.iter().any(|file| file != self.path.as_ref()) {
-            return Err(DataFusionError::Execution(
-                "concurrent Iceberg metadata publications; replacement state is unknown".into(),
-            ));
+        if matches!(self.style, MetadataFileStyle::Versioned(_)) {
+            let versions = metadata_files_for_version(store, self.version).await?;
+            if versions.iter().any(|file| file != self.path.as_ref()) {
+                return Err(DataFusionError::Execution(
+                    "concurrent Iceberg metadata publications; commit state is unknown".into(),
+                ));
+            }
         }
         Ok(MetadataWriteOutcome::Written)
     }
@@ -252,6 +245,8 @@ mod tests {
             ReplacementFault::Missing,
             ReplacementFault::ConditionalConflict,
             ReplacementFault::CompetingVersion,
+            ReplacementFault::ReadbackFailure,
+            ReplacementFault::PostflightList,
         ] {
             let store = Arc::new(ReplacementStore::new(fault));
             let context = StoreContext::new(store.clone(), &Url::parse("memory:///table")?)?;
@@ -260,7 +255,7 @@ mod tests {
                 location: "memory:///table/metadata/v2.metadata.json".into(),
                 bytes: Bytes::from_static(b"exact prepared metadata"),
                 version: 2,
-                style: MetadataFileStyle::Versioned,
+                style: MetadataFileStyle::Versioned(BaseMetadataCodec::capture(None)?),
                 version_hint: "2".into(),
             };
             assert!(!publication.replacement_version_exists(&context).await?);
@@ -282,7 +277,9 @@ mod tests {
                 ReplacementFault::Missing => assert!(stored.is_err()),
                 ReplacementFault::LostAck
                 | ReplacementFault::PutThenAlreadyExists
-                | ReplacementFault::CompetingVersion => {
+                | ReplacementFault::CompetingVersion
+                | ReplacementFault::ReadbackFailure
+                | ReplacementFault::PostflightList => {
                     assert_eq!(stored?.bytes().await?, publication.bytes)
                 }
                 _ => assert_eq!(
@@ -306,7 +303,7 @@ mod tests {
             location: "memory:///table/metadata/v2.metadata.json".into(),
             bytes: Bytes::from_static(b"prepared"),
             version: 2,
-            style: MetadataFileStyle::Versioned,
+            style: MetadataFileStyle::Versioned(BaseMetadataCodec::capture(None)?),
             version_hint: "2".into(),
         };
         assert!(!publication.replacement_version_exists(&store).await?);

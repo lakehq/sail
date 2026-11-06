@@ -35,6 +35,7 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_data_source::parse_absolute_directory_url;
 use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_mult::SparkTryMult;
@@ -422,9 +423,18 @@ impl PlanResolver<'_> {
                             && let Some(requested) = find_path_in_options(&sink_info.options)
                             && requested != *location
                         {
-                            return Err(PlanError::unsupported(
-                                "relocating an Iceberg table during replacement",
-                            ));
+                            let parse_location = |value: &str| {
+                                parse_absolute_directory_url(value).ok_or_else(|| {
+                                    PlanError::invalid(format!(
+                                        "Iceberg table location must be an absolute path or URL: {value}"
+                                    ))
+                                })
+                            };
+                            if parse_location(&requested)? != parse_location(location)? {
+                                return Err(PlanError::unsupported(
+                                    "relocating an Iceberg table during replacement",
+                                ));
+                            }
                         }
                         sink_info.options.push(OptionLayer::OptionList {
                             items: vec![("path".to_string(), location.clone())],
