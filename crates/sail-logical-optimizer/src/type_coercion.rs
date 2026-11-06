@@ -1682,11 +1682,16 @@ pub fn cast_nested_value(value: Expr, data_type: &DataType) -> Expr {
     }
 }
 
-/// Fills in missing field metadata of a nested data type from a data type of the same shape.
+/// Fills in missing field metadata of a nested data type from a data type of the same shape, and
+/// makes its nested fields nullable if the corresponding fields are nullable.
 fn with_nested_field_metadata(data_type: DataType, source: &DataType) -> DataType {
     let field = |field: &FieldRef, source: &FieldRef| {
         let data_type = with_nested_field_metadata(field.data_type().clone(), source.data_type());
-        let mut field = field.as_ref().clone().with_data_type(data_type);
+        let mut field = field
+            .as_ref()
+            .clone()
+            .with_data_type(data_type)
+            .with_nullable(field.is_nullable() || source.is_nullable());
         if field.metadata().is_empty() {
             field.set_metadata(source.metadata().clone());
         }
