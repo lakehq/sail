@@ -293,11 +293,16 @@ message ExtendedAggregateUdf {
     PySparkGroupMapUdaf py_spark_group_map = 3;
     PySparkBatchCollectorUdaf py_spark_batch_collector = 4;
     PercentileDiscUdaf percentile_disc = 5;
+    ArrayAggUdaf array_agg = 6;
   }
 }
 
 message PercentileDiscUdaf {
   bool ansi_mode = 1;
+}
+
+message ArrayAggUdaf {
+  bool is_input_pre_ordered = 1;
 }
 
 message StandardUdf {}

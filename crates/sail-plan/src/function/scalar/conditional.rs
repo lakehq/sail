@@ -5,6 +5,7 @@ use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::scalar::conversion::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
 use sail_function::scalar::datetime::spark_date::SparkDate;
@@ -73,7 +74,7 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     // TODO: Cast DATE values to TIMESTAMP in the session time zone like `case` and `if`.
     let arguments = coerce_string_temporal_values(arguments, &function_context)?;
-    Ok(expr_fn::coalesce(arguments))
+    Ok(ScalarUDF::from(CoalesceFunc::new()).call(arguments))
 }
 
 /// Spark defines `nvl2` as `if` on whether the first argument is not null.
@@ -391,5 +392,5 @@ fn zeroifnull(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             )));
         }
     };
-    Ok(expr_fn::coalesce(vec![arg, zero]))
+    Ok(ScalarUDF::from(CoalesceFunc::new()).call(vec![arg, zero]))
 }

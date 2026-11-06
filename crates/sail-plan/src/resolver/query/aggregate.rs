@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::functions_aggregate::{average, bit_and_or_xor, bool_and_or, count, min_max, sum};
+use datafusion::functions_aggregate::{average, bit_and_or_xor, bool_and_or, count, sum};
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
@@ -16,6 +16,7 @@ use datafusion_expr::{
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use sail_common::spec;
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
+use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::explode::Explode;
@@ -810,8 +811,8 @@ impl PlanResolver<'_> {
         args: &[Expr],
         schema: &DFSchemaRef,
     ) -> PlanResult<bool> {
-        if udf == min_max::min_udaf().as_ref()
-            || udf == min_max::max_udaf().as_ref()
+        if udf == &AggregateUDF::from(Min::new())
+            || udf == &AggregateUDF::from(Max::new())
             || udf == count::count_udaf().as_ref()
             || udf == bit_and_or_xor::bit_and_udaf().as_ref()
             || udf == bit_and_or_xor::bit_or_udaf().as_ref()

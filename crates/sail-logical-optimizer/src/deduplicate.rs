@@ -303,14 +303,22 @@ mod tests {
     use datafusion::datasource::provider_as_source;
     use datafusion::functions::crypto::expr_fn::sha256;
     use datafusion::functions::math::expr_fn::random;
-    use datafusion::functions_aggregate::expr_fn::{count, max, min, sum};
+    use datafusion::functions_aggregate::expr_fn::{count, sum};
     use datafusion::optimizer::{Optimizer, OptimizerContext};
     use datafusion_common::internal_err;
     use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_expr::expr_fn::ExprFunctionExt;
-    use datafusion_expr::{Volatility, cast, col, create_udaf, grouping_set, lit};
+    use datafusion_expr::{AggregateUDF, Volatility, cast, col, create_udaf, grouping_set, lit};
 
     use super::*;
+
+    fn max(expr: Expr) -> Expr {
+        AggregateUDF::from(Max::new()).call(vec![expr])
+    }
+
+    fn min(expr: Expr) -> Expr {
+        AggregateUDF::from(Min::new()).call(vec![expr])
+    }
 
     fn scan() -> Result<LogicalPlanBuilder> {
         let schema = Schema::new_with_metadata(

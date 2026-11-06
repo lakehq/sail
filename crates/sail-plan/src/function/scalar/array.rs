@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion::functions::expr_fn::{btrim, coalesce, nvl};
+use datafusion::functions::expr_fn::nvl;
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
@@ -20,10 +20,12 @@ use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::string::btrim::BTrimFunc;
 use sail_python_udf::udf::expr_contains_python_udf;
 
 use super::lambda::lambda_with_fresh_parameter;
@@ -172,7 +174,7 @@ fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
 }
 
 fn array_contains(array: expr::Expr, element: expr::Expr) -> PlanResult<expr::Expr> {
-    Ok(coalesce(vec![
+    Ok(ScalarUDF::from(CoalesceFunc::new()).call(vec![
         expr_fn::array_has(array.clone(), element),
         when(array.is_not_null(), lit(false)).end()?,
     ]))
@@ -351,7 +353,7 @@ fn sequence_timestamp_ltz_cast(argument: expr::Expr, timezone: &Arc<str>) -> exp
 }
 
 fn sequence_trim_string(argument: expr::Expr) -> expr::Expr {
-    btrim(vec![
+    ScalarUDF::from(BTrimFunc::new()).call(vec![
         argument,
         lit(SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS),
     ])

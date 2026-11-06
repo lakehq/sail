@@ -51,10 +51,11 @@ mod tests {
     use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
     use datafusion::datasource::source::DataSourceExec;
     use datafusion::execution::object_store::ObjectStoreUrl;
-    use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
+    use datafusion::logical_expr::AggregateUDF;
     use datafusion::physical_expr::aggregate::AggregateExprBuilder;
     use datafusion::physical_expr::expressions::col;
     use datafusion::physical_plan::aggregates::{AggregateMode, PhysicalGroupBy};
+    use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 
     use super::*;
 
@@ -63,9 +64,12 @@ mod tests {
         let source = Arc::new(ParquetSource::new(Arc::clone(&schema)));
         let scan = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source).build();
         let functions = if multiple {
-            vec![min_udaf(), max_udaf()]
+            vec![
+                Arc::new(AggregateUDF::from(Min::new())),
+                Arc::new(AggregateUDF::from(Max::new())),
+            ]
         } else {
-            vec![min_udaf()]
+            vec![Arc::new(AggregateUDF::from(Min::new()))]
         };
         let aggregates = functions
             .into_iter()

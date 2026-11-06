@@ -57,6 +57,20 @@ impl Default for ArrayAgg {
     }
 }
 
+// Sail: the distributed codec needs to construct and inspect the pre-ordered flag.
+impl ArrayAgg {
+    pub fn new(is_input_pre_ordered: bool) -> Self {
+        Self {
+            is_input_pre_ordered,
+            ..Self::default()
+        }
+    }
+
+    pub fn is_input_pre_ordered(&self) -> bool {
+        self.is_input_pre_ordered
+    }
+}
+
 impl AggregateUDFImpl for ArrayAgg {
     fn name(&self) -> &str {
         // IMPORTANT: Do not change the name. DataFusion optimizer rules find these functions by name.

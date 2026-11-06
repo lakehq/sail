@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
-use datafusion::functions::expr_fn::{coalesce, isnan};
+use datafusion::functions::expr_fn::isnan;
 use datafusion::functions_aggregate::{
-    approx_distinct, array_agg, average, bit_and_or_xor, bool_and_or, correlation, count,
-    covariance, first_last, grouping, min_max, percentile_cont, stddev, sum, variance,
+    approx_distinct, average, bit_and_or_xor, bool_and_or, correlation, count, covariance,
+    first_last, grouping, percentile_cont, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
@@ -20,8 +20,10 @@ use datafusion_expr::{
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
+use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::approx_percentile::ApproxPercentileCont;
+use sail_function::aggregate::array_agg::ArrayAgg;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
@@ -45,6 +47,7 @@ use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::vector::avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::scalar::r#struct::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
@@ -655,11 +658,11 @@ fn is_non_null_literal(expression: &expr::Expr) -> bool {
 }
 
 fn min_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    duplicate_agnostic_extreme(input, min_max::min_udaf)
+    duplicate_agnostic_extreme(input, || Arc::new(AggregateUDF::from(Min::new())))
 }
 
 fn max_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    duplicate_agnostic_extreme(input, min_max::max_udaf)
+    duplicate_agnostic_extreme(input, || Arc::new(AggregateUDF::from(Max::new())))
 }
 
 fn duplicate_agnostic_extreme(
@@ -725,7 +728,7 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     };
 
     let agg = expr::Expr::AggregateFunction(AggregateFunction {
-        func: array_agg::array_agg_udaf(),
+        func: Arc::new(AggregateUDF::from(ArrayAgg::default())),
         params: AggregateFunctionParams {
             args: vec![arg],
             distinct: true,
@@ -759,7 +762,7 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     };
 
     let agg = expr::Expr::AggregateFunction(AggregateFunction {
-        func: array_agg::array_agg_udaf(),
+        func: Arc::new(AggregateUDF::from(ArrayAgg::default())),
         params: AggregateFunctionParams {
             args: vec![arg],
             distinct: input.distinct,
@@ -776,7 +779,7 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 /// aggregate to a typed empty array so the empty case matches Spark instead of yielding NULL.
 fn coalesce_to_empty_array(agg: expr::Expr, element_type: &DataType) -> expr::Expr {
     let empty = ScalarValue::List(ScalarValue::new_list_nullable(&[], element_type));
-    coalesce(vec![agg, lit(empty)])
+    ScalarUDF::from(CoalesceFunc::new()).call(vec![agg, lit(empty)])
 }
 
 fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -788,7 +791,7 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let delim = other_args.first().cloned().unwrap_or_else(|| lit(""));
 
     let agg = expr::Expr::AggregateFunction(AggregateFunction {
-        func: array_agg::array_agg_udaf(),
+        func: Arc::new(AggregateUDF::from(ArrayAgg::default())),
         params: AggregateFunctionParams {
             args: vec![agg_col.clone()],
             distinct: input.distinct,
