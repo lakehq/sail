@@ -560,6 +560,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     root = Path(__file__).parent
     for item in items:
         if item.path.is_relative_to(root):
+            if item.get_closest_marker("timeout") is None:
+                # Allow time for container startup and catalog readiness before test execution.
+                item.add_marker(pytest.mark.timeout(600))
             item.add_marker(
                 pytest.mark.spark(version="==4.1.*", reason="HMS reference fixture uses the Iceberg Spark 4.1 runtime")
             )

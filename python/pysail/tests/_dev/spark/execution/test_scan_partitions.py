@@ -123,6 +123,7 @@ def test_scan_rewrite_preserves_sort_and_limit(spark, tmp_path):
 @pytest.mark.parametrize("table_format", ["delta", "iceberg", "iceberg_identity"])
 @pytest.mark.parametrize("metadata_as_data", [False, True])
 @pytest.mark.suite(name="slow")
+@pytest.mark.timeout(120)
 def test_lake_scan_row_groups(spark, tmp_path, sizes, table_format, metadata_as_data, scan_settings):
     path = tmp_path / "groups.parquet"
     write_row_groups(

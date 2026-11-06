@@ -68,8 +68,12 @@ function matchesPullRequest(pr, run, repo, number) {
     pr.state === "open" &&
     pr.head.sha === run.head_sha &&
     pr.base.repo.full_name === `${repo.owner}/${repo.repo}` &&
-    (!run.pull_requests.length ||
-      run.pull_requests.some((pullRequest) => pullRequest.number === number))
+    (run.pull_requests.length
+      ? run.pull_requests.some((pullRequest) => pullRequest.number === number)
+      : run.head_repository?.id != null &&
+        pr.head.repo?.id === run.head_repository.id &&
+        Boolean(run.head_branch) &&
+        pr.head.ref === run.head_branch)
   );
 }
 
