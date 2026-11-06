@@ -1,9 +1,10 @@
+use std::fmt::{Debug, Formatter};
+
 use object_store::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzureBuilder};
 use sail_catalog::credentials::CatalogCredentials;
 use sail_catalog::error::{CatalogError, CatalogResult};
 use tokio::sync::OnceCell;
 
-#[derive(Debug)]
 pub enum OneLakeCredentials {
     Static {
         bearer_token: String,
@@ -12,6 +13,24 @@ pub enum OneLakeCredentials {
         workspace: String,
         provider: OnceCell<AzureCredentialProvider>,
     },
+}
+
+// The trait requires `Debug`. A static token is usable exactly as it is printed, and the Azure
+// credential provider can hold an account key, so neither reaches the debug output.
+impl Debug for OneLakeCredentials {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Static { .. } => f
+                .debug_struct("Static")
+                .field("bearer_token", &"[REDACTED]")
+                .finish(),
+            Self::Dynamic { workspace, .. } => f
+                .debug_struct("Dynamic")
+                .field("workspace", workspace)
+                .field("provider", &"[REDACTED]")
+                .finish(),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -59,5 +78,42 @@ impl CatalogCredentials for OneLakeCredentials {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use object_store::StaticCredentialProvider;
+
+    use super::*;
+
+    #[test]
+    fn debug_output_hides_the_static_token() {
+        let credentials = OneLakeCredentials::Static {
+            bearer_token: "s3cr3t-token".to_string(),
+        };
+        let output = format!("{credentials:?}");
+        assert!(
+            !output.contains("s3cr3t-token"),
+            "unexpected debug output: {output}"
+        );
+    }
+
+    #[test]
+    fn debug_output_keeps_the_workspace_and_hides_the_provider() {
+        let provider: AzureCredentialProvider = Arc::new(StaticCredentialProvider::new(
+            AzureCredential::BearerToken("s3cr3t-token".to_string()),
+        ));
+        let credentials = OneLakeCredentials::Dynamic {
+            workspace: "my-workspace".to_string(),
+            provider: OnceCell::new_with(Some(provider)),
+        };
+        let output = format!("{credentials:?}");
+        assert!(
+            output.contains("my-workspace") && !output.contains("s3cr3t-token"),
+            "unexpected debug output: {output}"
+        );
     }
 }
