@@ -163,10 +163,17 @@ def infer_suite(item: pytest.Item, path: Path) -> str:
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]):
     # The pre-yield phase runs before pytest's own -m and -k selection hooks.
     for item in items:
-        marker = item.get_closest_marker("suite")
-        name = marker.kwargs.get("name") if marker else infer_suite(item, relative_test_path(item.path.resolve()))
-        validate_suite_name(name)
-        if marker is None:
+        names = set()
+        for marker in item.iter_markers("suite"):
+            name = marker.kwargs.get("name")
+            validate_suite_name(name)
+            names.add(name)
+        if len(names) > 1:
+            msg = f"{item.nodeid}: conflicting suite markers: {', '.join(sorted(names))}"
+            raise pytest.UsageError(msg)
+        if not names:
+            name = infer_suite(item, relative_test_path(item.path.resolve()))
+            validate_suite_name(name)
             item.add_marker(pytest.mark.suite(name=name))
 
         scenario = getattr(getattr(item, "function", None), "__scenario__", None)

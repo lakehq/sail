@@ -134,14 +134,69 @@ def test_function_groups_override_the_function_directory(suite_tests, group):
 
 
 def test_explicit_suite_is_preserved(suite_tests):
-    suite_tests.makepyfile(
+    test_file = suite_tests.makepyfile(
         test_custom="""
         import pytest
         @pytest.mark.suite(name="custom")
         def test_custom(): pass
     """
     )
+    delta = suite_tests.path / "spark" / "delta"
+    delta.mkdir(parents=True)
+    test_file.rename(delta / test_file.name)
     result = suite_tests.runpytest("-m", "suite(name='custom')")
+    result.assert_outcomes(passed=1, deselected=4)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        """
+        import pytest
+        pytestmark = pytest.mark.suite(name="delta")
+        @pytest.mark.suite(name="slow")
+        def test_conflict(): pass
+        """,
+        """
+        import pytest
+        class TestSuites:
+            pytestmark = pytest.mark.suite(name="delta")
+            @pytest.mark.suite(name="slow")
+            def test_conflict(self): pass
+        """,
+        """
+        import pytest
+        @pytest.mark.suite(name="delta")
+        @pytest.mark.suite(name="slow")
+        def test_conflict(): pass
+        """,
+        """
+        import pytest
+        @pytest.mark.suite(name="delta")
+        @pytest.mark.parametrize("value", [pytest.param(1, marks=pytest.mark.suite(name="slow"))])
+        def test_conflict(value): pass
+        """,
+    ],
+    ids=["module", "class", "function", "parameter"],
+)
+def test_conflicting_suite_markers_are_rejected(suite_tests, source):
+    suite_tests.makepyfile(test_conflict=source)
+    result = suite_tests.runpytest("-m", "suite(name='slow')")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*test_conflict.py::*: conflicting suite markers: delta, slow*"])
+
+
+def test_repeated_identical_suite_markers_are_allowed(suite_tests):
+    suite_tests.makepyfile(
+        test_repeated="""
+        import pytest
+        pytestmark = pytest.mark.suite(name="slow")
+        @pytest.mark.suite(name="slow")
+        @pytest.mark.suite(name="slow")
+        def test_repeated(): pass
+        """
+    )
+    result = suite_tests.runpytest("-m", "suite(name='slow')")
     result.assert_outcomes(passed=1, deselected=4)
 
 
