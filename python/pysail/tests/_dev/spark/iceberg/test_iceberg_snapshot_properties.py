@@ -183,9 +183,49 @@ def test_v2_snapshot_properties_cover_create_and_existing_writes(spark, tmp_path
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
+@pytest.mark.parametrize("existing_rows", [0, 1], ids=["bootstrap", "existing-snapshot"])
+@pytest.mark.parametrize("row_count", [0, 2], ids=["empty", "nonempty"])
+def test_snapshot_annotations_follow_action_summary_precedence(spark, tmp_path, existing_rows, row_count):
+    # Iceberg SparkWrite commits annotations before available action-summary properties.
+    table = "snapshot_properties_action_summary"
+    location = tmp_path / table
+    spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg LOCATION '{escape_sql_string_literal(str(location))}'")
+    try:
+        if existing_rows:
+            spark.range(10, 11).writeTo(table).append()
+        (
+            spark.range(row_count)
+            .repartition(3)
+            .writeTo(table)
+            .option("snapshot-property.spark.insert.num-inserted-rows", "999")
+            .option("snapshot-property.spark.delete.num-deleted-rows", "777")
+            .option("snapshot-property.spark.insert.custom", "allowed")
+            .append()
+        )
+        snapshot = _current_snapshot(_find_latest_metadata(location))
+        summary = snapshot["summary"]
+        assert summary["spark.insert.num-inserted-rows"] == str(row_count)
+        assert summary["spark.delete.num-deleted-rows"] == "777"
+        assert summary["spark.insert.custom"] == "allowed"
+        assert summary["total-records"] == str(existing_rows + row_count)
+        assert [row.id for row in spark.table(table).orderBy("id").collect()] == [
+            *range(row_count),
+            *([10] if existing_rows else []),
+        ]
+        spark.range(20, 21).writeTo(table).append()
+        metadata = _find_latest_metadata(location)
+        assert snapshot in metadata["snapshots"]
+        next_summary = _current_snapshot(metadata)["summary"]
+        assert next_summary["spark.insert.num-inserted-rows"] == "1"
+        assert "spark.delete.num-deleted-rows" not in next_summary
+        assert "spark.insert.custom" not in next_summary
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
 @pytest.mark.parametrize("key", [*_RESERVED_KEYS, pytest.param("", id="empty-suffix")])
 def test_snapshot_properties_reject_invalid_keys_before_creating_table(spark, tmp_path, key):
-    # Sail rejects all engine-owned keys and empty suffixes, deliberately stricter than Spark.
+    # Sail rejects explicitly reserved summary keys and empty suffixes.
     table = "snapshot_properties_invalid"
     location = tmp_path / table
     try:
