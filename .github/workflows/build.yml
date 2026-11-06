@@ -124,7 +124,7 @@ jobs:
         env:
           HATCH_ENV: test-discovery
           PYTHONPATH: ${{ github.workspace }}/python
-          PYSAIL_TEST_SUITE_MANIFEST: python-test-suites.json
+          PYSAIL_TEST_SUITE_MANIFEST: /tmp/python-test-suites.json
         run: |
           hatch run pytest --collect-only -qq --pyargs pysail.tests pysail.tests._dev || {
             status=$?
@@ -142,6 +142,8 @@ jobs:
               github,
               context,
               runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+              inventoryPath: '/tmp/python-test-suites.json',
+              reportPath: '/tmp/python-test-selection-report',
             });
             core.setOutput('choices', JSON.stringify(choices));
 
@@ -149,7 +151,7 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           name: python-test-selection-report
-          path: python-test-selection-report
+          path: /tmp/python-test-selection-report
           retention-days: 7
 
   rust-tests:

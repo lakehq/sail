@@ -23,7 +23,7 @@ function pythonReport(t) {
     pull_requests: [], // Fork workflow_run payloads can omit this association.
     repository: { full_name: "lakehq/sail" },
   };
-  const body = renderSuiteChecklist([], run);
+  const body = renderSuiteChecklist([], run, []);
   fs.writeFileSync(path.join(reportPath, "pull-request.txt"), "1\n");
   fs.writeFileSync(path.join(reportPath, "report.md"), body);
   const pr = {
@@ -105,8 +105,8 @@ test("Python report validation preserves the artifact and accepts missing bot co
 test("Python reports reject metadata from another run or attempt", async (t) => {
   const { options, run } = pythonReport(t);
   const invalidReports = [
-    renderSuiteChecklist([], { ...run, id: run.id + 1 }),
-    renderSuiteChecklist([], { ...run, run_attempt: run.run_attempt - 1 }),
+    renderSuiteChecklist([], { ...run, id: run.id + 1 }, []),
+    renderSuiteChecklist([], { ...run, run_attempt: run.run_attempt - 1 }, []),
     "<!-- python-test-selection -->\nMissing run metadata",
     `<!-- python-test-selection-run:${run.id}:${run.run_attempt} -->`,
   ];
@@ -137,14 +137,14 @@ test("Python reports cannot overwrite a newer run or attempt", async (t) => {
     { ...run, id: run.id + 1 },
     { ...run, run_attempt: run.run_attempt + 1 },
   ]) {
-    comments[0].body = renderSuiteChecklist([], newer);
+    comments[0].body = renderSuiteChecklist([], newer, []);
     assert.equal(await validateReport(options), "");
   }
   for (const older of [
     { ...run, id: run.id - 1 },
     { ...run, run_attempt: run.run_attempt - 1 },
   ]) {
-    comments[0].body = renderSuiteChecklist([], older);
+    comments[0].body = renderSuiteChecklist([], older, []);
     assert.equal(await validateReport(options), 1);
   }
 });

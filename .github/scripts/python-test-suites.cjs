@@ -8,7 +8,7 @@ const {
 
 const REPORT_NAME = "python-test-selection";
 
-function resolveSuiteChoices(suites, event, overrides = {}) {
+function resolveSuiteChoices(suites, event, overrides) {
   if (!["pull_request", "push", "schedule"].includes(event)) {
     throw new Error(`Unsupported test event: ${event}`);
   }
@@ -25,7 +25,7 @@ function resolveSuiteChoices(suites, event, overrides = {}) {
     .map(({ name }) => name);
 }
 
-function parseSuiteChoices(body = "") {
+function parseSuiteChoices(body) {
   const choices = {};
   const checkboxes = /^- \[([ xX])\] `([a-z0-9][a-z0-9-]*)`(?:\s|$)/gm;
   for (const [, checked, name] of body.matchAll(checkboxes)) {
@@ -68,7 +68,7 @@ async function readSuiteChoices({ github, context }) {
     pr.number,
     REPORT_NAME,
   );
-  return parseSuiteChoices(comment?.body);
+  return comment ? parseSuiteChoices(comment.body) : {};
 }
 
 function writeSuiteReport({
@@ -76,7 +76,7 @@ function writeSuiteReport({
   runAttempt,
   suites,
   choices,
-  reportPath = "python-test-selection-report",
+  reportPath,
 }) {
   const pr = context.payload.pull_request;
   if (!pr) return;
@@ -93,7 +93,7 @@ function writeSuiteReport({
   writeReport(reportPath, pr.number, report);
 }
 
-function renderSuiteChecklist(suites, run, selectedSuites = []) {
+function renderSuiteChecklist(suites, run, selectedSuites) {
   const enabled = new Set(selectedSuites);
   const lines = suites.map(
     ({ name, test_count }) =>
@@ -131,8 +131,8 @@ async function preparePythonTestSuites({
   github,
   context,
   runAttempt,
-  inventoryPath = "python-test-suites.json",
-  reportPath = "python-test-selection-report",
+  inventoryPath,
+  reportPath,
 }) {
   const suites = validateInventory(
     JSON.parse(fs.readFileSync(inventoryPath, "utf8")),

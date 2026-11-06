@@ -13,7 +13,7 @@ const {
   preparePythonTestSuites,
 } = require("./python-test-suites.cjs");
 
-const suite = (name, test_count = 1) => ({
+const suite = (name, test_count) => ({
   name,
   test_count,
 });
@@ -53,7 +53,7 @@ for (const event of ["pull_request", "push", "schedule"]) {
       event === "schedule"
         ? ["default", "udf", "integration-hms", "slow"]
         : ["default", "udf"];
-    assert.deepEqual(resolveSuiteChoices(inventory, event), defaults);
+    assert.deepEqual(resolveSuiteChoices(inventory, event, {}), defaults);
     assert.deepEqual(
       resolveSuiteChoices(inventory, event, overrides),
       event === "pull_request" ? choices : defaults,
@@ -63,10 +63,10 @@ for (const event of ["pull_request", "push", "schedule"]) {
 
 test("new suites use defaults and removed suites disappear", () => {
   const suites = [
-    suite("new"),
-    suite("integration-new"),
-    suite("udf"),
-    suite("constructor"),
+    suite("new", 1),
+    suite("integration-new", 1),
+    suite("udf", 1),
+    suite("constructor", 1),
   ];
   assert.deepEqual(resolveSuiteChoices(suites, "pull_request", overrides), [
     "new",
@@ -77,11 +77,11 @@ test("new suites use defaults and removed suites disappear", () => {
 test("unsupported events are rejected", () => {
   for (const event of [undefined, "workflow_dispatch", "constructor"]) {
     assert.throws(
-      () => resolveSuiteChoices(inventory, event),
+      () => resolveSuiteChoices(inventory, event, {}),
       /Unsupported test event/,
     );
     assert.throws(
-      () => resolveSuiteChoices([], event),
+      () => resolveSuiteChoices([], event, {}),
       /Unsupported test event/,
     );
   }
@@ -118,11 +118,11 @@ test("untrusted suite names and invalid inventories are rejected", () => {
     {},
     [],
     [null],
-    [suite("bad`name")],
+    [suite("bad`name", 1)],
     [suite("valid", "1")],
     [suite("valid", -1)],
     [suite("valid", 0)],
-    [suite("duplicate"), suite("duplicate")],
+    [suite("duplicate", 1), suite("duplicate", 1)],
     [{ name: "valid" }],
   ]) {
     assert.throws(() => validateInventory(data));
