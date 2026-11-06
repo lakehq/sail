@@ -79,6 +79,7 @@ message ExtendedPhysicalPlanNode {
     InputFileMetadataExecNode input_file_metadata = 64;
     DeltaMaintenanceExecNode delta_maintenance = 65;
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
+    IdentityPartitionKeyExecNode identity_partition_key = 67;
   }
 }
 
@@ -994,6 +995,17 @@ message MergeCardinalityCheckExecNode {
   string target_row_id_col = 2;
   string target_present_col = 3;
   string source_present_col = 4;
+}
+
+message IdentityPartitionKeyExecNode {
+  bytes input = 1;
+  repeated IdentityPartitionKeyColumn keys = 2;
+  int32 false_shards = 3;
+}
+
+message IdentityPartitionKeyColumn {
+  uint64 mask_index = 1;
+  string column_name = 2;
 }
 
 message MonotonicIdExecNode {

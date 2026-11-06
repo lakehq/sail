@@ -30,6 +30,7 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
 use crate::identity::{identity_next_value, identity_row_number, identity_value_expr};
+use crate::identity_partition_key::IdentityPartitionKeyNode;
 use crate::monotonic_id::MonotonicIdNode;
 use crate::row_level::{
     RowLevelEffectRequirements, StructFieldAlignment, align_row_level_value, evolve_row_level_field,
@@ -1279,6 +1280,8 @@ fn project_merge_with_identity(
     options: &MergeIntoOptions,
     insert_base: Expr,
 ) -> Result<LogicalPlan> {
+    // IS TRUE in the clause predicates makes every materialized generation mask
+    // non-null, even when physical expression schemas conservatively say nullable.
     let predicates = first_matching_clause_predicates(
         insert_base,
         options
@@ -1296,7 +1299,7 @@ fn project_merge_with_identity(
                 merge_name_key(&expr.schema_name().to_string(), options.case_sensitive)
             }))
             .collect::<HashSet<_>>();
-    let mut domains: Vec<(Expr, String, String)> = Vec::new();
+    let mut domains: Vec<(Expr, String, String, String)> = Vec::new();
     let mut allocations = Vec::new();
     for (name, identity) in &options.identity_columns {
         if !merge_generates_identity(options, name) {
@@ -1320,7 +1323,7 @@ fn project_merge_with_identity(
                 .collect::<Vec<_>>(),
         )
         .unwrap_or_else(|| lit(false));
-        let domain = if let Some(index) = domains.iter().position(|(expr, _, _)| expr == &mask) {
+        let domain = if let Some(index) = domains.iter().position(|(expr, _, _, _)| expr == &mask) {
             index
         } else {
             let marker = collision_free_source_alias(
@@ -1333,8 +1336,13 @@ fn project_merge_with_identity(
                 &mut occupied,
                 options.case_sensitive,
             );
+            let key = collision_free_source_alias(
+                "identity_partition_key",
+                &mut occupied,
+                options.case_sensitive,
+            );
             projections.push(mask.clone().alias(marker.clone()));
-            domains.push((mask, marker, number));
+            domains.push((mask, marker, number, key));
             domains.len() - 1
         };
         allocations.push((name, identity, domain));
@@ -1345,11 +1353,21 @@ fn project_merge_with_identity(
     if allocations.is_empty() {
         return Ok(plan);
     }
-    // Each true mask is one logical partition across all clauses and workers.
-    // False rows have their own partition and never consume identity arithmetic.
-    for (_, marker, number) in &domains {
+    plan = LogicalPlan::Extension(Extension {
+        node: Arc::new(IdentityPartitionKeyNode::try_new(
+            Arc::new(plan),
+            domains
+                .iter()
+                .map(|(_, marker, _, key)| (marker.clone(), key.clone()))
+                .collect(),
+        )?),
+    });
+    // True rows retain one allocation domain; false rows use bounded shards.
+    // Use the materialized key alone: a composite mask/key requirement can be
+    // satisfied by an existing Boolean-only hash partitioning.
+    for (_, _, number, key) in &domains {
         plan = LogicalPlanBuilder::from(plan)
-            .window(vec![identity_row_number(vec![col(marker)]).alias(number)])?
+            .window(vec![identity_row_number(vec![col(key)]).alias(number)])?
             .build()?;
     }
     let schema = plan.schema();
@@ -1358,9 +1376,9 @@ fn project_merge_with_identity(
         .fields()
         .iter()
         .filter(|field| {
-            !domains
-                .iter()
-                .any(|(_, marker, number)| field.name() == marker || field.name() == number)
+            !domains.iter().any(|(_, marker, number, key)| {
+                field.name() == marker || field.name() == number || field.name() == key
+            })
         })
         .map(|field| {
             let Some((name, identity, domain)) = allocations
@@ -1369,7 +1387,7 @@ fn project_merge_with_identity(
             else {
                 return Ok(column(field.name()));
             };
-            let (_, marker, number) = &domains[*domain];
+            let (_, marker, number, _) = &domains[*domain];
             let value = identity_value_expr(
                 name,
                 identity_next_value(identity),
