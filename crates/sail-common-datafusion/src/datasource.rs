@@ -422,6 +422,7 @@ pub enum DeltaConstraintViolation {
     Check,
     NotNull { column: String },
     Invariant { column: String },
+    ReplaceWhere,
 }
 
 /// Returns the path from options, or `None` if not set.

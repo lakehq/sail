@@ -76,6 +76,9 @@ pub(super) enum WriteMode {
     ///
     /// The data can have incompatible schema even if the target exists.
     Replace { error_if_absent: bool },
+    /// V1 saveAsTable overwrite, normalized after looking up the existing provider.
+    /// Only an existing Delta table with a compatible provider uses `replace_where`.
+    SaveAsTableOverwrite { replace_where: Option<String> },
     /// If the target exists, remove all data and write the data.
     /// If the target does not exist, return an error.
     ///
@@ -96,6 +99,26 @@ pub(super) enum WriteMode {
     ///
     /// The data must have compatible schema if the target exists.
     TruncatePartitions,
+}
+
+impl WriteMode {
+    pub(super) fn truncate_where(replace_where: String) -> PlanResult<Self> {
+        let invalid = |e| {
+            PlanError::invalid(format!(
+                "invalid replaceWhere expression: {replace_where} ({e})"
+            ))
+        };
+        let ast = sail_sql_analyzer::parser::parse_expression(&replace_where)
+            .map_err(|e| invalid(e.to_string()))?;
+        let expr = sail_sql_analyzer::expression::from_ast_expression(ast)
+            .map_err(|e| invalid(e.to_string()))?;
+        Ok(Self::TruncateIf {
+            condition: Box::new(spec::ExprWithSource {
+                expr,
+                source: Some(replace_where),
+            }),
+        })
+    }
 }
 
 pub(super) enum WriteTarget {
@@ -311,6 +334,22 @@ impl PlanResolver<'_> {
                 column_match,
             } => {
                 let info = self.resolve_table_info(&table).await?;
+                let mode = match mode {
+                    WriteMode::SaveAsTableOverwrite { replace_where } => {
+                        let conditional_delta = info.as_ref().is_some_and(|info| {
+                            info.format.eq_ignore_ascii_case("delta")
+                                && (write_format.is_empty()
+                                    || write_format.eq_ignore_ascii_case(&info.format))
+                        });
+                        match replace_where.filter(|_| conditional_delta) {
+                            Some(predicate) => WriteMode::truncate_where(predicate)?,
+                            None => WriteMode::Replace {
+                                error_if_absent: false,
+                            },
+                        }
+                    }
+                    mode => mode,
+                };
 
                 // Return early if the target exists and the mode says to skip
                 if matches!(mode, WriteMode::IgnoreIfExists) && info.is_some() {
@@ -370,9 +409,55 @@ impl PlanResolver<'_> {
                             &sink_info.options,
                             &["mergeSchema", "merge_schema"],
                         );
+                    let conditional_delta_by_name = info.format.eq_ignore_ascii_case("delta")
+                        && matches!(&mode, WriteMode::TruncateIf { .. })
+                        && matches!(&column_match, WriteColumnMatch::ByName);
                     if !lake_source_merge_schema {
+                        if conditional_delta_by_name {
+                            // Name alignment can fill omitted columns, but must not discard
+                            // unknown columns before Delta validates a conditional overwrite.
+                            for field in input.schema().fields() {
+                                if !info
+                                    .columns
+                                    .iter()
+                                    .any(|column| column.name.eq_ignore_ascii_case(field.name()))
+                                {
+                                    return Err(PlanError::invalid(format!(
+                                        "column not found in target table: {}",
+                                        field.name()
+                                    )));
+                                }
+                            }
+                        }
+                        input = if conditional_delta_by_name
+                            && input.schema().fields().len() < info.columns.len()
+                        {
+                            // Conditional Delta writes complete omitted columns by name even
+                            // when the target has no column expressions or NOT NULL constraints.
+                            self.rewrite_write_input_with_column_expressions(
+                                input,
+                                column_match,
+                                info,
+                                state,
+                            )
+                            .await?
+                        } else {
+                            self.rewrite_write_input(input, column_match, info, state)
+                                .await?
+                        };
+                    } else if conditional_delta_by_name
+                        && Self::can_rewrite_without_schema_changes(input.schema(), info)
+                    {
+                        // Normalize compatible inputs, including full-width generated values.
+                        // Do not discard new fields or coerce supplied types before Delta
+                        // validates schema evolution.
                         input = self
-                            .rewrite_write_input(input, column_match, info, state)
+                            .rewrite_write_input_with_column_expressions(
+                                input,
+                                column_match,
+                                info,
+                                state,
+                            )
                             .await?;
                     }
                     input = self
@@ -635,6 +720,9 @@ impl PlanResolver<'_> {
                 })
             }
             WriteMode::TruncatePartitions => Ok(SinkMode::OverwritePartitions),
+            WriteMode::SaveAsTableOverwrite { .. } => Err(PlanError::internal(
+                "saveAsTable overwrite must be normalized against the target table",
+            )),
         }
     }
 
@@ -923,6 +1011,25 @@ impl PlanResolver<'_> {
         })
     }
 
+    fn can_rewrite_without_schema_changes(schema: &DFSchema, info: &TableInfo) -> bool {
+        let mut supplied = HashSet::new();
+        for field in schema.fields() {
+            let matches = info
+                .columns
+                .iter()
+                .enumerate()
+                .filter(|(_, column)| column.name.eq_ignore_ascii_case(field.name()))
+                .collect::<Vec<_>>();
+            let Ok((index, column)) = matches.one() else {
+                return false;
+            };
+            if !supplied.insert(index) || field.data_type() != column.field().data_type() {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Fast path for tables without column-level expressions (no generated columns,
     /// no defaults, no identity). Pure schema coercion with alias/cast.
     fn rewrite_standard_write_input(
@@ -1022,7 +1129,7 @@ impl PlanResolver<'_> {
     ///   non-generated input values (keyed by registered field IDs).
     /// - Protocol enforcement: when the user explicitly provides a value for a
     ///   generated column, the Delta protocol requires
-    ///   `value IS NULL OR value <=> expr IS TRUE`. We enforce this with
+    ///   `(value <=> expr) IS TRUE`, including explicit NULLs. We enforce this with
     ///   `CASE WHEN cond THEN gen_expr ELSE raise_error(msg) END`, so mismatches
     ///   fail at runtime instead of being silently overwritten.
     /// - Metadata propagation: `delta.generationExpression` is attached via
@@ -1190,10 +1297,8 @@ impl PlanResolver<'_> {
                     ))
                 })?;
                 let final_expr = if let Some(check_id) = &gen_check_field_ids[idx] {
-                    // User explicitly provided a value. Enforce Delta protocol:
-                    //     value IS NULL OR value <=> generation_expression IS TRUE
-                    // Use `<=>` (null-safe equal) so NULL on either side is handled
-                    // without spurious "IS TRUE" wrapping.
+                    // Explicit NULL is a supplied value, not an omitted column.
+                    // Delta requires null-safe equality with the generation expression.
                     // Cast both sides to the target column type so that type-compatible
                     // values (e.g. INT 2024 vs BIGINT 2024) are not treated as mismatches.
                     let user_value = col(Column::from_name(check_id));
@@ -1203,14 +1308,11 @@ impl PlanResolver<'_> {
                     let gen_expr_cast = gen_expr
                         .clone()
                         .cast_to(field.data_type(), &intermediate_schema)?;
-                    let check = user_value
-                        .clone()
-                        .is_null()
-                        .or(Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(user_value_cast),
-                            Operator::IsNotDistinctFrom,
-                            Box::new(gen_expr_cast),
-                        )));
+                    let check = Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(user_value_cast),
+                        Operator::IsNotDistinctFrom,
+                        Box::new(gen_expr_cast),
+                    ));
                     let err_msg = format!(
                         "[DELTA_GENERATED_COLUMNS_VALUE_MISMATCH] \
                          CHECK constraint for generated column `{}` \
