@@ -17,8 +17,6 @@ use arrow::compute::{SortOptions, cast, filter, take as take_array};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use arrow::row::{OwnedRow, Row, RowConverter, Rows, SortField};
 use arrow_select::dictionary::garbage_collect_any_dictionary;
-
-use crate::functions_utils::offset_span;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::scalar::copy_array_data;
@@ -32,7 +30,7 @@ use datafusion_common::{
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, EmitTo, GroupsAccumulator, Signature, Volatility,
+    Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filter_to_nulls;
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
@@ -40,6 +38,8 @@ use datafusion_functions_aggregate_common::utils::ordering_fields;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use hashbrown::hash_table::HashTable;
 use itertools::{Either, Itertools};
+
+use crate::functions_utils::offset_span;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 /// ARRAY_AGG aggregate expression
@@ -72,6 +72,42 @@ impl AggregateUDFImpl for ArrayAgg {
             arg_types[0].clone(),
             true,
         ))))
+    }
+
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        let field = &acc_args.expr_fields[0];
+        let data_type = field.data_type();
+        let ignore_nulls = acc_args.ignore_nulls && field.is_nullable();
+
+        if acc_args.is_distinct {
+            return Ok(Box::new(DistinctArrayAggAccumulator::try_new(
+                data_type,
+                distinct_sort_options(&acc_args)?,
+                ignore_nulls,
+            )?));
+        }
+
+        let Some(ordering) = LexOrdering::new(acc_args.order_bys.to_vec()) else {
+            return Ok(Box::new(ArrayAggAccumulator::try_new(
+                data_type,
+                ignore_nulls,
+            )?));
+        };
+
+        let ordering_dtypes = ordering
+            .iter()
+            .map(|e| e.expr.data_type(acc_args.schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        OrderSensitiveArrayAggAccumulator::try_new(
+            data_type,
+            &ordering_dtypes,
+            &ordering,
+            self.is_input_pre_ordered,
+            acc_args.is_reversed,
+            ignore_nulls,
+        )
+        .map(|acc| Box::new(acc) as _)
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -114,60 +150,6 @@ impl AggregateUDFImpl for ArrayAgg {
         Ok(fields)
     }
 
-    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        AggregateOrderSensitivity::SoftRequirement
-    }
-
-    fn with_beneficial_ordering(
-        self: Arc<Self>,
-        beneficial_ordering: bool,
-    ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
-        Ok(Some(Arc::new(Self {
-            signature: self.signature.clone(),
-            is_input_pre_ordered: beneficial_ordering,
-        })))
-    }
-
-    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let field = &acc_args.expr_fields[0];
-        let data_type = field.data_type();
-        let ignore_nulls = acc_args.ignore_nulls && field.is_nullable();
-
-        if acc_args.is_distinct {
-            return Ok(Box::new(DistinctArrayAggAccumulator::try_new(
-                data_type,
-                distinct_sort_options(&acc_args)?,
-                ignore_nulls,
-            )?));
-        }
-
-        let Some(ordering) = LexOrdering::new(acc_args.order_bys.to_vec()) else {
-            return Ok(Box::new(ArrayAggAccumulator::try_new(
-                data_type,
-                ignore_nulls,
-            )?));
-        };
-
-        let ordering_dtypes = ordering
-            .iter()
-            .map(|e| e.expr.data_type(acc_args.schema))
-            .collect::<Result<Vec<_>>>()?;
-
-        OrderSensitiveArrayAggAccumulator::try_new(
-            data_type,
-            &ordering_dtypes,
-            &ordering,
-            self.is_input_pre_ordered,
-            acc_args.is_reversed,
-            ignore_nulls,
-        )
-        .map(|acc| Box::new(acc) as _)
-    }
-
-    fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
-        datafusion_expr::ReversedUDAF::Reversed(array_agg_udaf())
-    }
-
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         if args.is_distinct {
             distinct_sort_options(&args).is_ok()
@@ -193,6 +175,26 @@ impl AggregateUDFImpl for ArrayAgg {
         Ok(Box::new(ArrayAggGroupsAccumulator::new(
             data_type,
             ignore_nulls,
+        )))
+    }
+
+    fn with_beneficial_ordering(
+        self: Arc<Self>,
+        beneficial_ordering: bool,
+    ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
+        Ok(Some(Arc::new(Self {
+            signature: self.signature.clone(),
+            is_input_pre_ordered: beneficial_ordering,
+        })))
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::SoftRequirement
+    }
+
+    fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
+        datafusion_expr::ReversedUDAF::Reversed(Arc::new(AggregateUDF::new_from_impl(
+            ArrayAgg::default(),
         )))
     }
 
@@ -357,37 +359,6 @@ impl Accumulator for ArrayAggAccumulator {
         Ok(())
     }
 
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        // Append value like ListArray(Int64Array(1,2,3), Int64Array(4,5,6))
-        if states.is_empty() {
-            return Ok(());
-        }
-
-        assert_eq_or_internal_err!(states.len(), 1, "expects single state");
-
-        let list_arr = as_list_array(&states[0])?;
-
-        match Self::get_optional_values_to_merge_as_is(list_arr) {
-            Some(values) => {
-                // Make sure we don't insert empty lists
-                if !values.is_empty() {
-                    self.values.push_back(values);
-                }
-            }
-            None => {
-                for arr in list_arr.iter().flatten() {
-                    self.values.push_back(arr);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.evaluate()?])
-    }
-
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.values.is_empty() {
             return Ok(ScalarValue::new_null_list(self.datatype.clone(), true, 1));
@@ -415,6 +386,60 @@ impl Accumulator for ArrayAggAccumulator {
         let concated_array = arrow::compute::concat(&element_refs)?;
 
         Ok(SingleRowListArrayBuilder::new(concated_array).build_list_scalar())
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+            + (size_of::<ArrayRef>() * self.values.capacity())
+            + self
+                .values
+                .iter()
+                // Each ArrayRef might be just a reference to a bigger array, and many
+                // ArrayRefs here might be referencing exactly the same array, so if we
+                // were to call `arr.get_array_memory_size()`, we would be double-counting
+                // the same underlying data many times.
+                //
+                // Instead, we do an approximation by estimating how much memory each
+                // ArrayRef would occupy if its underlying data was fully owned by this
+                // accumulator.
+                //
+                // Note that this is just an estimation, but the reality is that this
+                // accumulator might not own any data.
+                .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
+                .sum::<usize>()
+            + self.datatype.size()
+            - size_of_val(&self.datatype)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.evaluate()?])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        // Append value like ListArray(Int64Array(1,2,3), Int64Array(4,5,6))
+        if states.is_empty() {
+            return Ok(());
+        }
+
+        assert_eq_or_internal_err!(states.len(), 1, "expects single state");
+
+        let list_arr = as_list_array(&states[0])?;
+
+        match Self::get_optional_values_to_merge_as_is(list_arr) {
+            Some(values) => {
+                // Make sure we don't insert empty lists
+                if !values.is_empty() {
+                    self.values.push_back(values);
+                }
+            }
+            None => {
+                for arr in list_arr.iter().flatten() {
+                    self.values.push_back(arr);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -451,29 +476,6 @@ impl Accumulator for ArrayAggAccumulator {
 
     fn supports_retract_batch(&self) -> bool {
         true
-    }
-
-    fn size(&self) -> usize {
-        size_of_val(self)
-            + (size_of::<ArrayRef>() * self.values.capacity())
-            + self
-                .values
-                .iter()
-                // Each ArrayRef might be just a reference to a bigger array, and many
-                // ArrayRefs here might be referencing exactly the same array, so if we
-                // were to call `arr.get_array_memory_size()`, we would be double-counting
-                // the same underlying data many times.
-                //
-                // Instead, we do an approximation by estimating how much memory each
-                // ArrayRef would occupy if its underlying data was fully owned by this
-                // accumulator.
-                //
-                // Note that this is just an estimation, but the reality is that this
-                // accumulator might not own any data.
-                .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
-                .sum::<usize>()
-            + self.datatype.size()
-            - size_of_val(&self.datatype)
     }
 }
 
@@ -1419,19 +1421,6 @@ impl Accumulator for DistinctArrayAggAccumulator {
     //     self.update_batch_impl(values, false)
     // }
 
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.evaluate()?])
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        self.merge_batch_impl(states, true)
-    }
-
-    // TODO: Uncomment after DataFusion 56
-    // fn merge_batch_grouped(&mut self, states: &[ArrayRef]) -> Result<()> {
-    //     self.merge_batch_impl(states, false)
-    // }
-
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.map.is_empty() {
             return Ok(ScalarValue::new_null_list(self.datatype.clone(), true, 1));
@@ -1479,6 +1468,42 @@ impl Accumulator for DistinctArrayAggAccumulator {
 
         let arr = ScalarValue::new_list(&values, &self.datatype, true);
         Ok(ScalarValue::List(arr))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+            + self
+                .state
+                .as_ref()
+                .map(|s| {
+                    s.group_rows
+                        .iter()
+                        .map(|r| r.row().data().len())
+                        .sum::<usize>()
+                        + s.group_rows.capacity() * size_of::<OwnedRow>()
+                        + s.counts.capacity() * size_of::<u64>()
+                        + s.row_hashes.capacity() * size_of::<u64>()
+                        + s.rows_buffer.size()
+                        + s.converter.size()
+                })
+                .unwrap_or(0)
+            + self.map_size
+            + self.hashes_buffer.capacity() * size_of::<u64>()
+            + self.datatype.size()
+            - size_of_val(&self.datatype)
+    }
+
+    // TODO: Uncomment after DataFusion 56
+    // fn merge_batch_grouped(&mut self, states: &[ArrayRef]) -> Result<()> {
+    //     self.merge_batch_impl(states, false)
+    // }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.evaluate()?])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.merge_batch_impl(states, true)
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -1554,7 +1579,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
                             self.map
                                 .find_mut(last_hash, |&(_, idx)| idx == last_idx)
                                 .ok_or_else(|| {
-                                    datafusion_common::internal_datafusion_err!(
+                                    internal_datafusion_err!(
                                         "DistinctArrayAggAccumulator: map is missing \
                                          group index {last_idx} during swap-remove \
                                          compaction"
@@ -1574,29 +1599,6 @@ impl Accumulator for DistinctArrayAggAccumulator {
 
     fn supports_retract_batch(&self) -> bool {
         true
-    }
-
-    fn size(&self) -> usize {
-        size_of_val(self)
-            + self
-                .state
-                .as_ref()
-                .map(|s| {
-                    s.group_rows
-                        .iter()
-                        .map(|r| r.row().data().len())
-                        .sum::<usize>()
-                        + s.group_rows.capacity() * size_of::<OwnedRow>()
-                        + s.counts.capacity() * size_of::<u64>()
-                        + s.row_hashes.capacity() * size_of::<u64>()
-                        + s.rows_buffer.size()
-                        + s.converter.size()
-                })
-                .unwrap_or(0)
-            + self.map_size
-            + self.hashes_buffer.capacity() * size_of::<u64>()
-            + self.datatype.size()
-            - size_of_val(&self.datatype)
     }
 }
 
@@ -2007,6 +2009,56 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         self.append_input_batch(&values[0], &values[1..])
     }
 
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        self.ensure_sorted_indices();
+        let sorted_indices = self.sorted_entry_indices.as_deref().unwrap();
+        if sorted_indices.is_empty() {
+            return Ok(ScalarValue::new_null_list(self.value_type.clone(), true, 1));
+        }
+
+        Ok(
+            SingleRowListArrayBuilder::new(self.select_values(sorted_indices, self.reverse)?)
+                .build_list_scalar(),
+        )
+    }
+
+    fn size(&self) -> usize {
+        let mut total = size_of_val(self)
+            + self
+                .batches
+                .iter()
+                .map(|batch| batch.get_array_memory_size())
+                .sum::<usize>()
+            + self.batches.capacity() * size_of::<ArrayRef>()
+            + self.entries.capacity() * size_of::<OrderedArrayAggEntry>()
+            + self.ordering_rows.size()
+            - size_of_val(&self.ordering_rows)
+            + self.ordering_converter.size()
+            - size_of_val(&self.ordering_converter)
+            + self.sorted_runs.capacity() * size_of::<Range<usize>>()
+            + self
+                .sorted_entry_indices
+                .as_ref()
+                .map(|indices| indices.capacity() * size_of::<usize>())
+                .unwrap_or_default();
+
+        total += self.value_type.size() - size_of_val(&self.value_type);
+        total + self.ordering_fields.size()
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        self.ensure_sorted_indices();
+        let sorted_indices = self.sorted_entry_indices.as_deref().unwrap();
+        let payload = if sorted_indices.is_empty() {
+            ScalarValue::new_null_list(self.value_type.clone(), true, 1)
+        } else {
+            SingleRowListArrayBuilder::new(self.select_values(sorted_indices, self.reverse)?)
+                .build_list_scalar()
+        };
+        let orderings = self.evaluate_orderings(sorted_indices, self.reverse)?;
+        Ok(vec![payload, orderings])
+    }
+
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());
@@ -2027,7 +2079,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             .as_any()
             .downcast_ref::<StructArray>()
             .ok_or_else(|| {
-                datafusion_common::internal_datafusion_err!(
+                internal_datafusion_err!(
                     "ordered array_agg ordering state must contain Struct values"
                 )
             })?;
@@ -2065,61 +2117,12 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         debug_assert_eq!(self.entries.len(), self.ordering_rows.num_rows());
         Ok(())
     }
-
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        self.ensure_sorted_indices();
-        let sorted_indices = self.sorted_entry_indices.as_deref().unwrap();
-        let payload = if sorted_indices.is_empty() {
-            ScalarValue::new_null_list(self.value_type.clone(), true, 1)
-        } else {
-            SingleRowListArrayBuilder::new(self.select_values(sorted_indices, self.reverse)?)
-                .build_list_scalar()
-        };
-        let orderings = self.evaluate_orderings(sorted_indices, self.reverse)?;
-        Ok(vec![payload, orderings])
-    }
-
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        self.ensure_sorted_indices();
-        let sorted_indices = self.sorted_entry_indices.as_deref().unwrap();
-        if sorted_indices.is_empty() {
-            return Ok(ScalarValue::new_null_list(self.value_type.clone(), true, 1));
-        }
-
-        Ok(
-            SingleRowListArrayBuilder::new(self.select_values(sorted_indices, self.reverse)?)
-                .build_list_scalar(),
-        )
-    }
-
-    fn size(&self) -> usize {
-        let mut total = size_of_val(self)
-            + self
-                .batches
-                .iter()
-                .map(|batch| batch.get_array_memory_size())
-                .sum::<usize>()
-            + self.batches.capacity() * size_of::<ArrayRef>()
-            + self.entries.capacity() * size_of::<OrderedArrayAggEntry>()
-            + self.ordering_rows.size()
-            - size_of_val(&self.ordering_rows)
-            + self.ordering_converter.size()
-            - size_of_val(&self.ordering_converter)
-            + self.sorted_runs.capacity() * size_of::<Range<usize>>()
-            + self
-                .sorted_entry_indices
-                .as_ref()
-                .map(|indices| indices.capacity() * size_of::<usize>())
-                .unwrap_or_default();
-
-        total += self.value_type.size() - size_of_val(&self.value_type);
-        total + self.ordering_fields.size()
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
     use arrow::array::{DictionaryArray, ListBuilder, StringBuilder};
     use arrow::datatypes::{Int32Type, Schema};
     use datafusion_common::cast::as_generic_string_array;
@@ -2127,7 +2130,8 @@ mod tests {
     use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-    use std::sync::atomic::AtomicUsize;
+
+    use super::*;
 
     #[derive(Debug)]
     struct CountingMetric(Arc<AtomicUsize>);

@@ -1,12 +1,13 @@
+/// [Credit]: <https://github.com/apache/datafusion/blob/e6e1eb229440591263c82bb2b913a4d5a16f9b70/datafusion/functions/src/utils.rs>
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::ArrowNativeType;
 use datafusion::arrow::array::ArrayRef;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::function::Hint;
-/// [Credit]: <https://github.com/apache/datafusion/blob/e6e1eb229440591263c82bb2b913a4d5a16f9b70/datafusion/functions/src/utils.rs>
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 
 /// Cap on memoized entries. A compiled `Regex` holds roughly 75 KiB once
 /// used, so memoizing a whole batch of unique patterns would pin hundreds of
