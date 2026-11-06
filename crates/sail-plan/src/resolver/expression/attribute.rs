@@ -3,11 +3,13 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, TableReference};
 use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
-use datafusion_expr::{ExprSchemable, ScalarUDF, col, expr, lit};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, col, expr, lit, try_cast};
 use datafusion_functions::core::get_field;
 use datafusion_functions_nested::expr_fn::{array_element, map_extract};
 use sail_common::spec;
 use sail_function::scalar::array_struct_field::ArrayStructField;
+use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunctionInput};
@@ -181,9 +183,10 @@ impl PlanResolver<'_> {
                 }
                 Ok(FieldResolution::Missing) => {}
                 Ok(FieldResolution::Unsupported) => {
-                    // An array item or a value of a map with non-string keys that Spark can
-                    // extract keeps this output's bindings. Do not fall back to an older attribute.
-                    // TODO: Extract these array items and map values by dotted names.
+                    // Spark binds an array item or a map value before type checking, so this
+                    // output keeps its bindings. Do not fall back to an older attribute.
+                    // Spark then rejects the name as an array index. Map keys that Sail does
+                    // not cast yet are a TODO in `map_key_from_name`.
                     return Err(PlanError::analysis(format!(
                         "attribute {name:?} is missing from the schema: cannot resolve attribute"
                     )));
@@ -573,20 +576,35 @@ impl PlanResolver<'_> {
                     let (Some(key), Some(value)) = (fields.first(), fields.get(1)) else {
                         return Ok(None);
                     };
-                    // The name is a key literal, which `map_extract` casts to the key type.
-                    // TODO: Spark casts the key leniently when ANSI mode is disabled.
-                    if !matches!(
-                        key.data_type(),
-                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-                    ) {
+                    let Some(key) = self.map_key_from_name(name.as_ref(), key.data_type()) else {
                         return Ok(None);
-                    }
-                    let expr =
-                        array_element(map_extract(expr, lit(name.as_ref().to_string())), lit(1));
+                    };
+                    let expr = array_element(map_extract(expr, key), lit(1));
                     self.resolve_potentially_nested_field(expr, value.data_type(), remaining)
                 }
                 _ => Ok(None),
             },
+        }
+    }
+
+    /// Returns the key that a name selects from a map. Spark casts the name to the key type
+    /// as it would a string literal, returning NULL for an invalid key unless ANSI mode is
+    /// enabled.
+    // TODO: Support the other key types that Spark casts a string to.
+    fn map_key_from_name(&self, name: &str, key_type: &DataType) -> Option<expr::Expr> {
+        let key = lit(name.to_string());
+        let ansi_mode = self.config.ansi_mode;
+        match key_type {
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Some(key),
+            DataType::Int32 if !ansi_mode => {
+                Some(ScalarUDF::new_from_impl(SparkCastStringToInt32::new()).call(vec![key]))
+            }
+            DataType::Date32 => {
+                Some(ScalarUDF::new_from_impl(SparkDate::new(!ansi_mode)).call(vec![key]))
+            }
+            key_type if key_type.is_numeric() && ansi_mode => Some(cast(key, key_type.clone())),
+            key_type if key_type.is_numeric() => Some(try_cast(key, key_type.clone())),
+            _ => None,
         }
     }
 

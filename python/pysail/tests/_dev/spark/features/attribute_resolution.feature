@@ -131,3 +131,51 @@ Feature: Attribute identity in column resolution
     Then query result
       | id |
       | 1  |
+
+  Scenario: A dotted name selects a map value by a non-string key
+    Given config spark.sql.ansi.enabled = false
+    When query
+      """
+      SELECT m.`1`, m.`2` FROM VALUES (map(1, 'a')) AS t(m)
+      """
+    Then query result
+      | 1 | 2    |
+      | a | NULL |
+
+  Scenario Outline: A dotted name is cast to the map key type
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT m.`<name>` AS v FROM VALUES (map(<key>, 'a')) AS t(m)
+      """
+    Then query result
+      | v       |
+      | <value> |
+
+    Examples:
+      | ansi  | key                    | name       | value |
+      | false | 1                      | 1          | a     |
+      | false | 1                      | x          | NULL  |
+      | true  | 1                      | 1          | a     |
+      | false | CAST(1 AS BIGINT)      | 1          | a     |
+      | false | CAST(1 AS BIGINT)      | x          | NULL  |
+      | true  | CAST(1 AS BIGINT)      | 1          | a     |
+      | false | CAST(1 AS DECIMAL(3))  | 1          | a     |
+      | false | 1.5D                   | 1.5        | a     |
+      | false | DATE '2024-01-01'      | 2024-01-01 | a     |
+      | false | DATE '2024-01-01'      | x          | NULL  |
+      | true  | DATE '2024-01-01'      | 2024-01-01 | a     |
+
+  Scenario Outline: A dotted name that is not a valid map key fails in ANSI mode
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT m.x FROM VALUES (map(<key>, 'a')) AS t(m)
+      """
+    Then query error (?i)cast
+
+    Examples:
+      | key               |
+      | 1                 |
+      | CAST(1 AS BIGINT) |
+      | DATE '2024-01-01' |
