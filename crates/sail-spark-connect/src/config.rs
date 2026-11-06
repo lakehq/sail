@@ -160,6 +160,17 @@ impl SparkRuntimeConfig {
                 ));
             }
         }
+        // Spark rejects a value that is not a boolean instead of storing it. The check belongs here
+        // rather than at the point of use, so that a rejected value leaves both the session
+        // configuration and the mirrored DataFusion Parquet option as they were.
+        if key == SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING
+            && value.trim().to_lowercase().parse::<bool>().is_err()
+        {
+            return Err(SparkError::invalid(format!(
+                "[INVALID_CONF_VALUE.TYPE_MISMATCH] The value '{value}' in the config \"{key}\" \
+                is invalid. It should be a/an 'boolean' value. SQLSTATE: 22022"
+            )));
+        }
         self.config.insert(key, value);
         Ok(())
     }
