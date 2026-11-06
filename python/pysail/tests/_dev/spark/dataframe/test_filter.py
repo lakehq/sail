@@ -1134,16 +1134,10 @@ def test_filter_does_not_recover_literal_function_names(spark, column, predicate
 
 
 @pytest.mark.parametrize(("color", "expected"), [("RED", [Row(id=1)]), ("red", [])])
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Sail does not extract map values by a dotted name",
-    strict=True,
-)
 def test_filter_missing_attribute_keeps_map_bindings(spark, color, expected):
     source = spark.createDataFrame([(1, ("red",)), (2, ("blue",))], "id int, attrs struct<color:string>")
     projected = source.withColumn("attrs", F.create_map(F.lit("color"), F.upper(F.col("attrs.color")))).select("id")
     result = projected.where(f"attrs.color = '{color}'")
-    # TODO: Extract map values by a dotted name as Spark does.
     # Spark extracts the map value instead of discarding the map and using the older struct.
     assert result.collect() == expected
 

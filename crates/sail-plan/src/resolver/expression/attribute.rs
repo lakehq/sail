@@ -5,6 +5,7 @@ use datafusion_common::{Column, DFSchema, DFSchemaRef, TableReference};
 use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
 use datafusion_expr::{ExprSchemable, ScalarUDF, col, expr, lit};
 use datafusion_functions::core::get_field;
+use datafusion_functions_nested::expr_fn::{array_element, map_extract};
 use sail_common::spec;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 
@@ -180,9 +181,9 @@ impl PlanResolver<'_> {
                 }
                 Ok(FieldResolution::Missing) => {}
                 Ok(FieldResolution::Unsupported) => {
-                    // A map value or array item that Spark can extract keeps this
-                    // output's bindings. Do not fall back to an older attribute.
-                    // TODO: Extract map values and array items by dotted names.
+                    // An array item or a value of a map with non-string keys that Spark can
+                    // extract keeps this output's bindings. Do not fall back to an older attribute.
+                    // TODO: Extract these array items and map values by dotted names.
                     return Err(PlanError::analysis(format!(
                         "attribute {name:?} is missing from the schema: cannot resolve attribute"
                     )));
@@ -564,6 +565,25 @@ impl PlanResolver<'_> {
                         _ => unreachable!("list data type matched above"),
                     };
                     self.resolve_potentially_nested_field(expr, &data_type, remaining)
+                }
+                DataType::Map(field, _) => {
+                    let DataType::Struct(fields) = field.data_type() else {
+                        return Ok(None);
+                    };
+                    let (Some(key), Some(value)) = (fields.first(), fields.get(1)) else {
+                        return Ok(None);
+                    };
+                    // The name is a key literal, which `map_extract` casts to the key type.
+                    // TODO: Spark casts the key leniently when ANSI mode is disabled.
+                    if !matches!(
+                        key.data_type(),
+                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                    ) {
+                        return Ok(None);
+                    }
+                    let expr =
+                        array_element(map_extract(expr, lit(name.as_ref().to_string())), lit(1));
+                    self.resolve_potentially_nested_field(expr, value.data_type(), remaining)
                 }
                 _ => Ok(None),
             },
