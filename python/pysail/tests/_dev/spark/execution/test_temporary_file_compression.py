@@ -27,6 +27,7 @@ def remote(request, execution_mode):
         yield server.remote
 
 
+@pytest.mark.suite(name="slow")
 def test_sort_temporary_file_compression(spark):
     rows = 120_000
     # Retain the padded keys in buffered rows; row ranks verify merge order after spilling.

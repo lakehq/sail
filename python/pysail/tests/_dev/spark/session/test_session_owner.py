@@ -4,11 +4,9 @@ import pytest
 from pyspark.errors.exceptions.connect import SparkConnectGrpcException
 from pyspark.sql import SparkSession
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
-
 pytestmark = [
-    pytest.mark.skipif(pyspark_version() < (4,), reason="Server-side session tracking requires PySpark 4+"),
-    pytest.mark.skipif(is_jvm_spark(), reason="PySpark allows only one remote per process in local mode"),
+    pytest.mark.spark(version=">=4", reason="Server-side session tracking requires PySpark 4+"),
+    pytest.mark.spark(skip_if_jvm=True, reason="PySpark allows only one remote per process in local mode"),
 ]
 
 
