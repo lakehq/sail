@@ -1910,6 +1910,34 @@ where
         | (FixedSizeList(lhs_field, _), List(rhs_field)) => {
             Some(List(coerce_list_children(lhs_field, rhs_field, coerce_fn)?))
         }
+        // Sail: list views are coerced like lists, to LargeList if either side is large
+        (
+            LargeListView(lhs_field),
+            List(rhs_field)
+            | LargeList(rhs_field)
+            | FixedSizeList(rhs_field, _)
+            | ListView(rhs_field)
+            | LargeListView(rhs_field),
+        )
+        | (
+            List(lhs_field)
+            | LargeList(lhs_field)
+            | FixedSizeList(lhs_field, _)
+            | ListView(lhs_field),
+            LargeListView(rhs_field),
+        )
+        | (ListView(lhs_field), LargeList(rhs_field))
+        | (LargeList(lhs_field), ListView(rhs_field)) => Some(LargeList(coerce_list_children(
+            lhs_field, rhs_field, coerce_fn,
+        )?)),
+        // Sail: list views are coerced like lists, to List otherwise
+        (
+            ListView(lhs_field),
+            List(rhs_field) | FixedSizeList(rhs_field, _) | ListView(rhs_field),
+        )
+        | (List(lhs_field) | FixedSizeList(lhs_field, _), ListView(rhs_field)) => {
+            Some(List(coerce_list_children(lhs_field, rhs_field, coerce_fn)?))
+        }
         _ => None,
     }
 }
