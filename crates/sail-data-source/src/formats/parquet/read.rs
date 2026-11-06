@@ -245,11 +245,19 @@ impl ReadFormat for ParquetReadFormat {
             .await?;
         let statistics =
             DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &file_schema)?;
-        let ordering = ordering_from_parquet_metadata(&metadata, &file_schema)?;
+        let ordering = if self.trusts_file_ordering() {
+            ordering_from_parquet_metadata(&metadata, &file_schema)?
+        } else {
+            None
+        };
         Ok(ListingFileMeta {
             statistics,
             ordering,
         })
+    }
+
+    fn trusts_file_ordering(&self) -> bool {
+        self.options.trust_sorting_columns
     }
 
     async fn scan(&self, ctx: &dyn Session, mut input: ListingScanInput) -> Result<FileScanConfig> {

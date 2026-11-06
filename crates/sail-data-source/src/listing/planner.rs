@@ -456,6 +456,7 @@ async fn do_collect_statistics_and_ordering(
         table: Some(statistics_cache_table_ref(
             part_file.table_reference.as_ref(),
             file_schema.as_ref(),
+            source.config().read_format.trusts_file_ordering(),
         )),
         path: meta.location.clone(),
     };
@@ -503,9 +504,11 @@ async fn do_collect_statistics_and_ordering(
 fn statistics_cache_table_ref(
     table: Option<&datafusion_common::TableReference>,
     schema: &arrow::datatypes::Schema,
+    trusts_file_ordering: bool,
 ) -> datafusion_common::TableReference {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
 
+    std::hash::Hash::hash(&trusts_file_ordering, &mut hasher);
     for field in schema.fields() {
         std::hash::Hash::hash(field.name(), &mut hasher);
         std::hash::Hash::hash(&field.data_type().to_string(), &mut hasher);

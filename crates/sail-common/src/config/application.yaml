@@ -587,6 +587,17 @@
     the UTF-8 flag for strings, causing string columns to be loaded as binary columns by default.
   experimental: true
 
+- key: parquet.trust_sorting_columns
+  type: boolean
+  default: "false"
+  description: |
+    (Reading) Whether to trust the `sorting_columns` field in Parquet file footers.
+    If the value is `true`, the planner can remove a sort when the footer declares an order that
+    satisfies the query. The data is not checked against the footer, so a file whose footer declares
+    an order that its data does not have returns rows in the wrong order.
+    If the value is `false`, the `sorting_columns` field is ignored.
+  experimental: true
+
 - key: parquet.bloom_filter_on_read
   type: boolean
   default: "true"

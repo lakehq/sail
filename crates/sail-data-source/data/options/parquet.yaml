@@ -210,6 +210,30 @@
         - option.binaryAsString
       parser: crate::options::parsers::parse_bool
 
+- key: trust_sorting_columns
+  description: |
+    (Reading) Whether to trust the `sorting_columns` field in Parquet file footers.
+    If the value is `true`, the planner can remove a sort when the footer declares an order that
+    satisfies the query. The data is not checked against the footer, so a file whose footer declares
+    an order that its data does not have returns rows in the wrong order.
+    If the value is `false`, the `sorting_columns` field is ignored.
+    Defaults to the Sail configuration option `parquet.trust_sorting_columns`.
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - trust_sorting_columns
+        - trustSortingColumns
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.trust_sorting_columns
+        - option.trustSortingColumns
+      parser: crate::options::parsers::parse_bool
+
 - key: coerce_int96
   description: |
     (Reading) Controls how the parquet reader interprets columns with physical type int96.
