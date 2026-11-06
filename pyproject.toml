@@ -201,6 +201,11 @@ matrix.spark.extra-dependencies = [
 ]
 env.CI.installer = "uv"
 
+[tool.hatch.envs.test-discovery]
+template = "test"
+extra-dependencies = ["pyspark-client==4.2.0"]
+path = ".venvs/test-discovery"
+
 [tool.hatch.envs.test-spark]
 matrix-name-format = "{variable}-{value}"
 python = "3.11"

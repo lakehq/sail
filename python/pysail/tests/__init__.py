@@ -9,4 +9,10 @@ these development tests. To run them against a release package, set
 `PYSAIL_SOURCE_PATH` to the `python/pysail` directory in the source checkout.
 This makes the `_dev` packages importable, but pytest needs the explicit package
 name `pysail.tests._dev` with `--pyargs` to collect tests from the source checkout.
+
+Do not add `conftest.py` to this directory. When collecting an installed wheel
+alongside source development tests, pytest visits both copies of this directory
+and imports their conftest files under the same `pysail.tests.conftest` module
+name, causing import or plugin-registration conflicts. Put shared hooks in
+`pysail.testing` plugins loaded by the individual test suites instead.
 """

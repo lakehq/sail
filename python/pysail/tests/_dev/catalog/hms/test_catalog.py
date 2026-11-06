@@ -12,6 +12,9 @@ if TYPE_CHECKING:
     from pysail.testing._dev.containers.hms import HmsService
 
 
+# Allow time for container startup and catalog readiness before test execution.
+pytestmark = pytest.mark.timeout(600)
+
 _FORMATS = ["parquet", "csv", "delta", "textfile", "json", "orc", "avro"]
 _ID_COLUMN = [("id", "int64", True, None)]
 _ITEM_COLUMNS = [("id", "int64", True, None), ("value", "utf8", True, None)]
