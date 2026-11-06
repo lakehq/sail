@@ -16,7 +16,7 @@ on:
         type: string
         required: true
       suite_choices:
-        description: JSON array of enabled suite names
+        description: JSON array of enabled test suite names
         type: string
         required: true
       partial:
@@ -71,6 +71,7 @@ jobs:
           hatch run install-pysail
 
       - name: Install Kerberos client
+        if: ${{ contains(fromJSON(inputs.suite_choices), 'integration-hms') }}
         run: |
           sudo apt-get update
           sudo env DEBIAN_FRONTEND=noninteractive apt-get install --yes krb5-user
@@ -94,7 +95,7 @@ jobs:
       - name: Run Tests
         run: |
           # A version may have no assigned tests; pytest uses exit 5 for this case.
-          hatch run pytest --pyargs pysail.tests pysail.tests._dev -v || {
+          hatch run pytest --pyargs pysail.tests pysail.tests._dev -q --durations=20 || {
             status=$?
             test "$status" -eq 5
           }

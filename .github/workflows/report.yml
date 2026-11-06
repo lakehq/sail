@@ -32,7 +32,7 @@ jobs:
         continue-on-error: true
         with:
           workflow_run_id: ${{ github.event.workflow_run.id }}
-          artifact_name: python-test-report-${{ github.event.workflow_run.run_attempt }}
+          artifact_name: python-test-report
           report_name: sail-python-test-suites
 
       # The Spark tests are not always run,

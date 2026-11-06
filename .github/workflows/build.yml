@@ -108,22 +108,21 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write(f"versions={json.dumps(versions)}\n")
               output.write(f"matrix={json.dumps({'spark_version': versions})}\n")
-          with open(os.environ["GITHUB_ENV"], "a") as output:
-              output.write(f"HATCH_ENV=test.spark-{versions[-1]}\n")
           PYTHON
 
-      - name: Discover suites
+      - name: Discover test suites
         env:
+          HATCH_ENV: test-discovery
           PYTHONPATH: ${{ github.workspace }}/python
           PYSAIL_TEST_SUITE_MANIFEST: python-test-suites.json
         run: |
           # Exit 5 means no tests were collected.
-          hatch run pytest --collect-only -q --pyargs pysail.tests pysail.tests._dev || {
+          hatch run pytest --collect-only -qq --pyargs pysail.tests pysail.tests._dev || {
             status=$?
             test "$status" -eq 5
           }
 
-      - name: Resolve suite choices
+      - name: Resolve test suite choices
         uses: actions/github-script@v9
         id: choices
         with:
@@ -139,7 +138,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: github.event_name == 'pull_request'
         with:
-          name: python-test-report-${{ github.run_attempt }}
+          name: python-test-report
           path: python-test-report
           retention-days: 7
 

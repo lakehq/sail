@@ -209,7 +209,7 @@ test("setup resolves the inventory and writes the effective checklist", async (t
   assert.ok(body.includes("<!-- sail-python-test-suites-run:123:2 -->"));
   assert.equal(parseSuiteChoices(body).udf, false);
   assert.equal(Object.keys(parseSuiteChoices(body)).length, inventory.length);
-  assert.ok(body.includes("Edits made while a build is running will be lost"));
+  assert.ok(body.includes("it overwrites any edits made while it was running"));
   assert.deepEqual(parseSuiteChoices(body), overrides);
 });
 
