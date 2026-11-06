@@ -48,8 +48,8 @@ use crate::operations::bootstrap::{
 };
 use crate::operations::helpers::format_version_for_schema;
 use crate::operations::metadata_commit::{
-    MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome, PreviousMetadataFile,
-    apply_snapshot_updates,
+    BaseMetadataCodec, MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome,
+    PreviousMetadataFile, apply_snapshot_updates,
 };
 use crate::operations::{SnapshotProducer, SnapshotUpdateKind, Transaction};
 use crate::physical_plan::action_schema::{CommitMeta, decode_actions_and_meta_from_batch};
@@ -165,6 +165,7 @@ pub struct IcebergCommitExec {
     lakehouse_table: Option<LakehouseExecutionContext>,
     snapshot_update_kind: SnapshotUpdateKind,
     expected_snapshot_id: Option<Option<i64>>,
+    table_replacement: Option<crate::operations::replacement::IcebergTableReplacement>,
     removed_data_file_paths: Vec<String>,
     dynamic_partition_overwrite: bool,
     output: CommitOutput,
@@ -195,11 +196,26 @@ impl IcebergCommitExec {
             lakehouse_table,
             snapshot_update_kind,
             expected_snapshot_id: None,
+            table_replacement: None,
             removed_data_file_paths: Vec::new(),
             dynamic_partition_overwrite: false,
             output: CommitOutput::Command(CommandOutput::Count),
             cache,
         }
+    }
+
+    pub fn with_table_replacement(
+        mut self,
+        replacement: Option<crate::operations::replacement::IcebergTableReplacement>,
+    ) -> Self {
+        self.table_replacement = replacement;
+        self
+    }
+
+    pub fn table_replacement(
+        &self,
+    ) -> Option<&crate::operations::replacement::IcebergTableReplacement> {
+        self.table_replacement.as_ref()
     }
 
     pub fn with_output(mut self, output: CommandOutput) -> Self {
@@ -707,6 +723,7 @@ impl ExecutionPlan for IcebergCommitExec {
             self.snapshot_update_kind,
         )
         .with_expected_snapshot_id(self.expected_snapshot_id)
+        .with_table_replacement(self.table_replacement.clone())
         .with_removed_data_file_paths(self.removed_data_file_paths.clone())
         .with_dynamic_partition_overwrite(self.dynamic_partition_overwrite);
         if let CommitOutput::Command(output) = &self.output {
@@ -750,6 +767,7 @@ impl ExecutionPlan for IcebergCommitExec {
         let lakehouse_table = self.lakehouse_table.clone();
         let snapshot_update_kind = self.snapshot_update_kind;
         let expected_snapshot_id = self.expected_snapshot_id;
+        let table_replacement = self.table_replacement.clone();
         let planned_removed_data_file_paths = self.removed_data_file_paths.clone();
         let dynamic_partition_overwrite = self.dynamic_partition_overwrite;
         let output = self.output.clone();
@@ -813,6 +831,23 @@ impl ExecutionPlan for IcebergCommitExec {
                 schema: commit_meta.schema,
                 partition_spec: commit_meta.partition_spec,
             };
+            if let Some(replacement) = table_replacement {
+                crate::operations::replacement::commit_replacement(
+                    &context,
+                    &table_url,
+                    &store_ctx,
+                    replacement,
+                    &commit_info,
+                )
+                .await?;
+                return commit_output_batch(
+                    schema,
+                    &output,
+                    commit_info.row_count,
+                    added_data_files_count,
+                    0,
+                );
+            }
             if let Some(requirement) = expected_snapshot_requirement(expected_snapshot_id)
                 && !commit_info.requirements.contains(&requirement)
             {
@@ -884,6 +919,13 @@ impl ExecutionPlan for IcebergCommitExec {
                     }
                 })
             };
+            if let Some(Err(error)) = &latest_meta_res
+                && !error.to_string().contains("No metadata files found")
+            {
+                return Err(DataFusionError::Plan(format!(
+                    "cannot resolve Iceberg table metadata: {error}"
+                )));
+            }
             let catalog_metadata_table = catalog_table
                 .as_ref()
                 .filter(|_| catalog_commit_mode.uses_catalog_metadata());
@@ -984,6 +1026,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 let bytes = load_metadata_file_bytes(&object_store, &latest_meta).await?;
                 let mut table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let base_codec = BaseMetadataCodec::capture(Some(&table_meta))?;
                 Self::validate_requirements(Some(&table_meta), &commit_info.requirements)?;
                 if dynamic_partition_overwrite {
                     let default_spec = table_meta.default_partition_spec().ok_or_else(|| {
@@ -1409,7 +1452,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 let style = if catalog_metadata_update_table.is_some() {
                     MetadataFileStyle::Unique
                 } else {
-                    MetadataFileStyle::Versioned
+                    MetadataFileStyle::Versioned(base_codec)
                 };
                 let prepared_metadata = apply_snapshot_updates(
                     &table_url,
@@ -1488,7 +1531,16 @@ impl DisplayAs for IcebergCommitExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "IcebergCommitExec(table_path={})", self.table_url)
+                write!(
+                    f,
+                    "IcebergCommitExec(table_path={}{})",
+                    self.table_url,
+                    if self.table_replacement.is_some() {
+                        ", replacement=true"
+                    } else {
+                        ""
+                    }
+                )
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: iceberg")?;
@@ -2418,12 +2470,9 @@ mod tests {
                     .expect("first attempt")
                     .try_collect::<Vec<_>>()
                     .await;
-                if lose_acknowledgement {
-                    result.expect_err("publication succeeded but its acknowledgement was lost");
-                } else {
-                    let batches = result.expect("published first attempt");
-                    assert_eq!(batches[0].num_rows(), 1);
-                }
+                let batches =
+                    result.expect("published first attempt, reconciled by exact readback");
+                assert_eq!(batches[0].num_rows(), 1);
                 store_ctx
                     .prefixed
                     .head(&task_path)
@@ -2569,7 +2618,9 @@ mod tests {
                 &table_url,
                 &upgraded,
                 next_version,
-                MetadataFileStyle::Versioned,
+                MetadataFileStyle::Versioned(
+                    BaseMetadataCodec::capture(Some(&before)).expect("base codec"),
+                ),
             )
             .expect("upgrade metadata")
             .write(&store_ctx)

@@ -759,6 +759,7 @@ pub(crate) async fn plan_delta_write(
             }
         }
         SinkMode::OverwritePartitions => PhysicalSinkMode::OverwritePartitions,
+        SinkMode::ReplaceTable(_) => return plan_err!("staged table replacement requires Iceberg"),
     };
     let physical_sort = create_sort_order(ctx, sort_order, logical_input.schema())?;
     let requested_partition_columns = partition_by
