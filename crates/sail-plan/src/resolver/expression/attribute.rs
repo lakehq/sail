@@ -183,10 +183,8 @@ impl PlanResolver<'_> {
                 }
                 Ok(FieldResolution::Missing) => {}
                 Ok(FieldResolution::Unsupported) => {
-                    // Spark binds an array item or a map value before type checking, so this
-                    // output keeps its bindings. Do not fall back to an older attribute.
-                    // Spark then rejects the name as an array index. Map keys that Sail does
-                    // not cast yet are a TODO in `map_key_from_name`.
+                    // Spark binds the name to this output even if it cannot extract the value,
+                    // so do not fall back to an older attribute.
                     return Err(PlanError::analysis(format!(
                         "attribute {name:?} is missing from the schema: cannot resolve attribute"
                     )));
@@ -587,10 +585,8 @@ impl PlanResolver<'_> {
         }
     }
 
-    /// Returns the key that a name selects from a map. Spark casts the name to the key type
-    /// as it would a string literal, returning NULL for an invalid key unless ANSI mode is
-    /// enabled.
-    // TODO: Support the other key types that Spark casts a string to.
+    /// Casts a name to the map key type, as Spark does for a string literal.
+    // TODO: Support other key types that Spark casts a string to (timestamp, binary and boolean).
     fn map_key_from_name(&self, name: &str, key_type: &DataType) -> Option<expr::Expr> {
         let key = lit(name.to_string());
         let ansi_mode = self.config.ansi_mode;
