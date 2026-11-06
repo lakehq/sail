@@ -420,16 +420,17 @@ def test_rewrite_selected_files_preserves_shared_puffin_siblings(spark, tmp_path
         old_files = _data_entries(path)
         deletes = _delete_files(path)
         blobs = [_blob_identity(file) for file in deletes]
-        sizes_by_puffin = {}
-        for file, _, _, target in blobs:
-            sizes_by_puffin.setdefault(file, set()).add(old_files[target].data_file.file_size_in_bytes)
-        shared_sizes = next(sizes for sizes in sizes_by_puffin.values() if len(sizes) > 1)
-        cutoff = max(shared_sizes)
-        selected = {name for name, entry in old_files.items() if entry.data_file.file_size_in_bytes < cutoff}
-        assert selected
+        # An undersized singleton is not rewrite-eligible, even with min-input-files=1.
+        for cutoff in sorted({entry.data_file.file_size_in_bytes for entry in old_files.values()}):
+            selected = {name for name, entry in old_files.items() if entry.data_file.file_size_in_bytes < cutoff}
+            selected_puffins = {file for file, _, _, target in blobs if target in selected}
+            untouched_puffins = {file for file, _, _, target in blobs if target not in selected}
+            if len(selected) > 1 and selected < old_files.keys() and selected_puffins & untouched_puffins:
+                break
+        else:
+            pytest.fail("No size cutoff selects at least two files while retaining an untouched shared-Puffin sibling")
+        assert len(selected) > 1
         assert selected < old_files.keys()
-        selected_puffins = {file for file, _, _, target in blobs if target in selected}
-        untouched_puffins = {file for file, _, _, target in blobs if target not in selected}
         assert selected_puffins & untouched_puffins
         payloads = {file: _local_file_path(file).read_bytes() for file, _, _, _ in blobs}
         lineage = _current_row_lineage(path)
