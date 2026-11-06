@@ -171,8 +171,11 @@ message HigherOrderUdf {
     SparkRegexpInstrUdf regexp_instr = 10;
     SparkTransformValuesUdf transform_values = 11;
     SparkTransformKeysUdf transform_keys = 12;
+    CoalesceLazyUdf coalesce_lazy = 13;
   }
 }
+
+message CoalesceLazyUdf {}
 
 message SparkArrayAggregateUdf {
   bool element_first = 1;

@@ -9232,6 +9232,52 @@ mod tests {
         )
     }
 
+    #[test]
+    fn test_round_trip_distributed_coalesce_lazy_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::Int64Array;
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::conditional::coalesce_lazy::CoalesceLazy;
+
+        let fields = vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let logical = CoalesceLazy::call(vec![
+            datafusion::logical_expr::col("a"),
+            datafusion::logical_expr::col("b"),
+        ])?;
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, schema.as_ref())?;
+
+        let hof = as_hof(&decoded)?;
+        let udf_any = hof.fun().inner().as_ref() as &dyn std::any::Any;
+        if !udf_any.is::<CoalesceLazy>() {
+            return Err(plan_datafusion_err!("decoded HOF should be CoalesceLazy"));
+        }
+
+        assert_same_result(
+            &physical,
+            &decoded,
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), None, None])),
+                Arc::new(Int64Array::from(vec![Some(2), Some(3), None])),
+            ],
+        )
+    }
+
     /// A right-only comparator routed to `SparkArraySort::new_swapped()`. Proves
     /// the `swapped` flag survives encode/decode.
     #[test]

@@ -13,11 +13,12 @@ use arrow::array::{
     make_array, new_empty_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow::compute::{SortOptions, cast, filter, take as take_array};
+use arrow::compute::{SortOptions, cast, cast_with_options, filter, take as take_array};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use arrow::row::{OwnedRow, Row, RowConverter, Rows, SortField};
 use arrow_select::dictionary::garbage_collect_any_dictionary;
 use datafusion_common::cast::as_list_array;
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::scalar::copy_array_data;
 use datafusion_common::utils::SingleRowListArrayBuilder;
@@ -611,7 +612,8 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
-        let input = &values[0];
+        // Sail: store batches in the declared type; see `cast_to_declared`.
+        let input = &cast_to_declared(&values[0], &self.datatype)?;
 
         self.num_groups = self.num_groups.max(total_num_groups);
 
@@ -748,7 +750,8 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         self.num_groups = self.num_groups.max(total_num_groups);
 
         // Push the ListArray's backing values array as a single batch.
-        let list_values = input_list.values();
+        // Sail: store batches in the declared type; see `cast_to_declared`.
+        let list_values = &cast_to_declared(input_list.values(), &self.datatype)?;
         let list_offsets = input_list.offsets();
 
         // Without null rows, every value in the offset span becomes an entry
@@ -789,7 +792,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
             opt_filter,
             self.ignore_nulls,
             &self.datatype,
-        )])
+        )?])
     }
     fn size(&self) -> usize {
         self.batches
@@ -817,7 +820,9 @@ fn single_value_lists(
     opt_filter: Option<&BooleanArray>,
     ignore_nulls: bool,
     datatype: &DataType,
-) -> ArrayRef {
+) -> Result<ArrayRef> {
+    // Sail: use the declared type; see `cast_to_declared`.
+    let input = cast_to_declared(input, datatype)?;
     // Offsets are [0, 1, 2, ..., n].
     let offsets = OffsetBuffer::from_repeated_length(1, input.len());
     let filter_nulls = opt_filter.map(filter_to_nulls);
@@ -828,7 +833,27 @@ fn single_value_lists(
         filter_nulls
     };
     let field = Arc::new(Field::new_list_field(datatype.clone(), true));
-    Arc::new(ListArray::new(field, offsets, Arc::clone(input), nulls))
+    Ok(Arc::new(ListArray::new(field, offsets, input, nulls)))
+}
+
+/// Sail: casts `array` to the declared `datatype` if its runtime type differs.
+///
+/// The runtime type of an input array can differ from the declared argument
+/// type, e.g. in nested field nullability or metadata. The accumulators build
+/// `ListArray`s with the declared item field, and `ListArray::new` panics when
+/// the child type does not match it exactly. Mixing runtime types across
+/// batches also breaks `interleave` and the `RowConverter`. The cast is not
+/// "safe", so a value that cannot be converted is an error, never NULL.
+fn cast_to_declared(array: &ArrayRef, datatype: &DataType) -> Result<ArrayRef> {
+    if array.data_type() == datatype {
+        Ok(Arc::clone(array))
+    } else {
+        Ok(cast_with_options(
+            array.as_ref(),
+            datatype,
+            &DEFAULT_CAST_OPTIONS,
+        )?)
+    }
 }
 
 /// [`GroupsAccumulator`] for `ARRAY_AGG(DISTINCT x)`, optionally with
@@ -923,6 +948,9 @@ impl DistinctArrayAggGroupsAccumulator {
         input: &ArrayRef,
         rows: impl IntoIterator<Item = (usize, usize)>,
     ) -> Result<()> {
+        // Sail: encode values in the declared type, so the decoded rows match
+        // the declared list item field; see `cast_to_declared`.
+        let input = &cast_to_declared(input, &self.datatype)?;
         let encoded = self
             .converter(input.data_type())?
             .convert_columns(std::slice::from_ref(input))?;
@@ -1186,7 +1214,7 @@ impl GroupsAccumulator for DistinctArrayAggGroupsAccumulator {
             opt_filter,
             self.ignore_nulls,
             &self.datatype,
-        )])
+        )?])
     }
 
     // TODO: Uncomment after DataFusion 56
@@ -4991,5 +5019,297 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    // ---- Declared vs runtime type mismatches ----
+    //
+    // `AccumulatorArgs::expr_fields` gives the declared argument type. The
+    // runtime arrays can still differ from it in nested field nullability,
+    // names or metadata (`RecordBatch` only checks `equals_datatype`, which
+    // ignores nested names and metadata). The output list must always use
+    // the declared element type, because `ListArray::new` requires it.
+    mod declared_type_mismatch {
+        use std::collections::HashMap as StdHashMap;
+
+        use arrow::array::{Int32Array, ListArray, StructArray};
+        use arrow::buffer::OffsetBuffer;
+        use arrow::datatypes::{DataType, Field, Fields};
+
+        use super::*;
+
+        fn int_struct(
+            nullable: bool,
+            metadata: Option<(&str, &str)>,
+            values: Vec<i32>,
+        ) -> ArrayRef {
+            let mut field = Field::new("a", DataType::Int32, nullable);
+            if let Some((k, v)) = metadata {
+                field = field.with_metadata(StdHashMap::from([(k.to_string(), v.to_string())]));
+            }
+            Arc::new(StructArray::new(
+                Fields::from(vec![field]),
+                vec![Arc::new(Int32Array::from(values)) as ArrayRef],
+                None,
+            ))
+        }
+
+        fn int_struct_type(nullable: bool, metadata: Option<(&str, &str)>) -> DataType {
+            int_struct(nullable, metadata, vec![]).data_type().clone()
+        }
+
+        /// A `List<Int32>` with one element per row and the given item field.
+        fn int_list(item: Field, values: Vec<i32>) -> ArrayRef {
+            let len = values.len();
+            Arc::new(ListArray::new(
+                Arc::new(item),
+                OffsetBuffer::from_lengths(vec![1; len]),
+                Arc::new(Int32Array::from(values)),
+                None,
+            ))
+        }
+
+        fn nested_struct(inner_nullable: bool, values: Vec<i32>) -> ArrayRef {
+            let inner = int_struct(inner_nullable, None, values);
+            Arc::new(StructArray::new(
+                Fields::from(vec![Field::new("s", inner.data_type().clone(), true)]),
+                vec![inner],
+                None,
+            ))
+        }
+
+        /// Each case: (name, declared type, runtime input with groups [0, 0, 1]).
+        fn cases() -> Vec<(&'static str, DataType, ArrayRef)> {
+            vec![
+                (
+                    "struct child nullability",
+                    int_struct_type(true, None),
+                    int_struct(false, None, vec![1, 1, 2]),
+                ),
+                (
+                    "struct child metadata",
+                    int_struct_type(true, Some(("k", "v"))),
+                    int_struct(true, None, vec![1, 1, 2]),
+                ),
+                (
+                    "list item name",
+                    int_list(Field::new_list_field(DataType::Int32, true), vec![])
+                        .data_type()
+                        .clone(),
+                    int_list(Field::new("element", DataType::Int32, true), vec![1, 1, 2]),
+                ),
+                (
+                    "list item nullability",
+                    int_list(Field::new_list_field(DataType::Int32, true), vec![])
+                        .data_type()
+                        .clone(),
+                    int_list(Field::new_list_field(DataType::Int32, false), vec![1, 1, 2]),
+                ),
+                (
+                    "nested struct child nullability",
+                    nested_struct(true, vec![]).data_type().clone(),
+                    nested_struct(false, vec![1, 1, 2]),
+                ),
+            ]
+        }
+
+        fn assert_declared_lists(
+            name: &str,
+            declared: &DataType,
+            result: &ArrayRef,
+            expected_offsets: &[i32],
+        ) {
+            let lists = result.as_list::<i32>();
+            assert_eq!(
+                lists.values().data_type(),
+                declared,
+                "{name}: element type must be the declared type"
+            );
+            assert_eq!(
+                lists.value_offsets(),
+                expected_offsets,
+                "{name}: unexpected list offsets"
+            );
+        }
+
+        /// Runs `check` on every case and fails with the list of failing
+        /// cases (errors and panics), so one run reports every variant.
+        fn check_cases(check: impl Fn(&str, &DataType, ArrayRef) -> Result<()>) {
+            let failures: Vec<String> = cases()
+                .into_iter()
+                .filter_map(|(name, declared, input)| {
+                    assert_ne!(input.data_type(), &declared, "{name}: case must mismatch");
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        check(name, &declared, input)
+                    }));
+                    match outcome {
+                        Ok(Ok(())) => None,
+                        Ok(Err(e)) => Some(format!("{name}: error: {e}")),
+                        Err(panic) => {
+                            let message = panic
+                                .downcast_ref::<String>()
+                                .cloned()
+                                .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                                .unwrap_or_default();
+                            Some(format!("{name}: panic: {message}"))
+                        }
+                    }
+                })
+                .collect();
+            assert!(failures.is_empty(), "{failures:#?}");
+        }
+
+        #[test]
+        fn distinct_groups_accumulator_uses_declared_type() {
+            for sort_options in [None, Some(SortOptions::default())] {
+                check_cases(|name, declared, input| {
+                    let mut acc = DistinctArrayAggGroupsAccumulator::new(
+                        declared.clone(),
+                        sort_options,
+                        false,
+                    );
+                    acc.update_batch(&[input], &[0, 0, 1], None, 2)?;
+                    let result = acc.evaluate(EmitTo::All)?;
+                    // Group 0 has the distinct value 1, group 1 has 2.
+                    assert_declared_lists(name, declared, &result, &[0, 1, 2]);
+                    Ok(())
+                });
+            }
+        }
+
+        #[test]
+        fn distinct_groups_accumulator_state_uses_declared_type() {
+            check_cases(|name, declared, input| {
+                let mut partial =
+                    DistinctArrayAggGroupsAccumulator::new(declared.clone(), None, false);
+                partial.update_batch(&[input], &[0, 0, 1], None, 2)?;
+                let state = partial.state(EmitTo::All)?;
+                assert_declared_lists(name, declared, &state[0], &[0, 1, 2]);
+
+                let mut fin = DistinctArrayAggGroupsAccumulator::new(declared.clone(), None, false);
+                fin.merge_batch(&state, &[0, 1], 2)?;
+                let result = fin.evaluate(EmitTo::All)?;
+                assert_declared_lists(name, declared, &result, &[0, 1, 2]);
+                Ok(())
+            });
+        }
+
+        #[test]
+        fn distinct_groups_accumulator_emit_first_uses_declared_type() {
+            check_cases(|name, declared, input| {
+                let mut acc = DistinctArrayAggGroupsAccumulator::new(declared.clone(), None, false);
+                acc.update_batch(&[input], &[0, 0, 1], None, 2)?;
+                let first = acc.evaluate(EmitTo::First(1))?;
+                assert_declared_lists(name, declared, &first, &[0, 1]);
+                let rest = acc.evaluate(EmitTo::All)?;
+                assert_declared_lists(name, declared, &rest, &[0, 1]);
+                Ok(())
+            });
+        }
+
+        /// Batches with different runtime types for the same declared type
+        /// (one mismatching, then one matching) in one grouped DISTINCT
+        /// accumulator.
+        #[test]
+        fn distinct_groups_accumulator_mixed_runtime_types() {
+            check_cases(|name, declared, input| {
+                let mut acc = DistinctArrayAggGroupsAccumulator::new(declared.clone(), None, false);
+                acc.update_batch(&[input], &[0, 0, 1], None, 2)?;
+                acc.update_batch(&[acc_input_like(declared)], &[1], None, 2)?;
+                let result = acc.evaluate(EmitTo::All)?;
+                // Group 1 now has 2 and 3.
+                assert_declared_lists(name, declared, &result, &[0, 1, 3]);
+                Ok(())
+            });
+        }
+
+        #[test]
+        fn groups_accumulator_uses_declared_type() {
+            check_cases(|name, declared, input| {
+                let mut acc = ArrayAggGroupsAccumulator::new(declared.clone(), false);
+                acc.update_batch(&[input], &[0, 0, 1], None, 2)?;
+                let result = acc.evaluate(EmitTo::All)?;
+                assert_declared_lists(name, declared, &result, &[0, 2, 3]);
+                Ok(())
+            });
+        }
+
+        /// `convert_to_state` (skipped partial aggregation) wraps each input
+        /// row in a list of the declared element type.
+        #[test]
+        fn convert_to_state_uses_declared_type() {
+            check_cases(|name, declared, input| {
+                let distinct =
+                    DistinctArrayAggGroupsAccumulator::new(declared.clone(), None, false)
+                        .convert_to_state(&[Arc::clone(&input)], None)?;
+                assert_declared_lists(name, declared, &distinct[0], &[0, 1, 2, 3]);
+                let plain = ArrayAggGroupsAccumulator::new(declared.clone(), false)
+                    .convert_to_state(&[input], None)?;
+                assert_declared_lists(name, declared, &plain[0], &[0, 1, 2, 3]);
+                Ok(())
+            });
+        }
+
+        /// `merge_batch` receives list states whose element type follows the
+        /// runtime type of the partial input.
+        #[test]
+        fn groups_accumulator_merge_uses_declared_type() {
+            check_cases(|name, declared, input| {
+                let field = Arc::new(Field::new_list_field(input.data_type().clone(), true));
+                let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 3]));
+                let state = Arc::new(ListArray::new(field, offsets, input, None)) as ArrayRef;
+                let mut acc = ArrayAggGroupsAccumulator::new(declared.clone(), false);
+                acc.merge_batch(&[state], &[0, 1], 2)?;
+                let result = acc.evaluate(EmitTo::All)?;
+                assert_declared_lists(name, declared, &result, &[0, 2, 3]);
+                Ok(())
+            });
+        }
+
+        /// The row-based (non-grouped) DISTINCT accumulator returns a scalar
+        /// list; its element type must follow the declared type too.
+        #[test]
+        fn distinct_accumulator_uses_declared_type() {
+            check_cases(|name, declared, input| {
+                let mut acc = DistinctArrayAggAccumulator::try_new(declared, None, false)?;
+                acc.update_batch(&[input])?;
+                let result = acc.evaluate()?;
+                let ScalarValue::List(arr) = &result else {
+                    panic!("{name}: expected ScalarValue::List, got {result:?}");
+                };
+                assert_eq!(
+                    arr.values().data_type(),
+                    declared,
+                    "{name}: element type must be the declared type"
+                );
+                assert_eq!(arr.value(0).len(), 2, "{name}: two distinct values");
+                Ok(())
+            });
+        }
+
+        /// One row with value 3 of the declared type.
+        fn acc_input_like(declared: &DataType) -> ArrayRef {
+            match declared {
+                DataType::Struct(fields)
+                    if matches!(fields[0].data_type(), DataType::Struct(_)) =>
+                {
+                    let DataType::Struct(inner) = fields[0].data_type() else {
+                        unreachable!()
+                    };
+                    let inner = Arc::new(StructArray::new(
+                        inner.clone(),
+                        vec![Arc::new(Int32Array::from(vec![3])) as ArrayRef],
+                        None,
+                    )) as ArrayRef;
+                    Arc::new(StructArray::new(fields.clone(), vec![inner], None))
+                }
+                DataType::Struct(fields) => Arc::new(StructArray::new(
+                    fields.clone(),
+                    vec![Arc::new(Int32Array::from(vec![3])) as ArrayRef],
+                    None,
+                )),
+                DataType::List(item) => int_list(item.as_ref().clone(), vec![3]),
+                other => unreachable!("{other}"),
+            }
+        }
     }
 }

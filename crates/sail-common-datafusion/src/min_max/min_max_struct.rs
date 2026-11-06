@@ -299,9 +299,11 @@ impl MinMaxStructState {
             }
             EmitTo::First(n) => {
                 let first_min_maxes = split_vec_min_alloc(&mut self.min_max, n);
+                // Sail: subtract the same byte measure `set_value` charged,
+                // not the row count (each stored struct has length 1).
                 let first_data_capacity: usize = first_min_maxes
                     .iter()
-                    .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
+                    .map(|opt| opt.as_ref().map_or(0, |s| s.get_array_memory_size()))
                     .sum();
                 self.total_data_bytes -= first_data_capacity;
                 (first_data_capacity, first_min_maxes)
@@ -613,5 +615,56 @@ mod tests {
         let str_array = max_result.column(1).as_string::<i32>();
         assert_eq!(int_array.value(0), 4);
         assert_eq!(str_array.value(0), "d");
+    }
+
+    /// `set_value` charges `get_array_memory_size()` bytes
+    /// per group, so `EmitTo::First(n)` must release the same bytes for the
+    /// emitted groups (not their row counts).
+    #[test]
+    fn test_min_max_emit_first_releases_memory() {
+        let num_groups = 8;
+        let array = create_test_struct_array(
+            (0..num_groups as i32).map(Some).collect(),
+            (0..num_groups)
+                .map(|i| Some(["a", "bb", "ccc", "dddd"][i % 4]))
+                .collect(),
+        );
+        let group_indices: Vec<usize> = (0..num_groups).collect();
+        let values = vec![Arc::new(array) as ArrayRef];
+
+        for is_min in [true, false] {
+            let data_type = values[0].data_type().clone();
+            let mut acc = if is_min {
+                MinMaxStructAccumulator::new_min(data_type)
+            } else {
+                MinMaxStructAccumulator::new_max(data_type)
+            };
+            acc.update_batch(&values, &group_indices, None, num_groups)
+                .unwrap();
+            let slot = size_of::<Option<StructArray>>();
+            let per_group: Vec<usize> = acc
+                .inner
+                .min_max
+                .iter()
+                .map(|v| v.as_ref().unwrap().get_array_memory_size())
+                .collect();
+            let full = acc.size();
+            assert_eq!(full, per_group.iter().sum::<usize>() + num_groups * slot);
+
+            let emitted = acc.evaluate(EmitTo::First(3)).unwrap();
+            assert_eq!(emitted.len(), 3);
+            let expected = per_group[3..].iter().sum::<usize>() + (num_groups - 3) * slot;
+            assert_eq!(
+                acc.size(),
+                expected,
+                "size() after EmitTo::First(3): expected {expected}, got {} (before: {full})",
+                acc.size()
+            );
+
+            // Emitting the rest leaves only the empty state.
+            let rest = acc.evaluate(EmitTo::First(num_groups - 3)).unwrap();
+            assert_eq!(rest.len(), num_groups - 3);
+            assert_eq!(acc.size(), 0, "size() after emitting every group");
+        }
     }
 }

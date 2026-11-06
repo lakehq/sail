@@ -19,6 +19,8 @@ use itertools::Itertools;
 use sail_common_datafusion::metadata::coerced_fields_metadata;
 use sail_common_datafusion::utils::items::ItemTaker;
 
+use crate::scalar::conditional::coalesce_lazy::CoalesceLazy;
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CoalesceFunc {
     pub(super) signature: Signature,
@@ -149,6 +151,18 @@ impl ScalarUDFImpl for CoalesceFunc {
         let (init, last) = args.split_at(args.len() - 1);
         let (prefix, rest) = match init.iter().position(|arg| arg.is_volatile()) {
             None => (init, last[0].clone()),
+            // Sail: the kernel evaluates every argument eagerly, so an argument
+            // after a non-NULL volatile one would still be evaluated (and could
+            // fail), unlike Spark's lazy `Coalesce`. Use `CoalesceLazy` for the
+            // rest unless every later argument is a column or a literal, which
+            // is cheap and cannot fail (this also keeps the plan shape of
+            // `coalesce(input_file_name(), '')`).
+            Some(i) if !args[i + 1..].iter().all(is_column_or_literal) => {
+                if i == 0 {
+                    return Ok(ExprSimplifyResult::Simplified(CoalesceLazy::call(args)?));
+                }
+                (&init[..i], CoalesceLazy::call(args[i..].to_vec())?)
+            }
             Some(0) => return Ok(ExprSimplifyResult::Original(args)),
             Some(i) => (
                 &init[..i],
@@ -184,5 +198,183 @@ impl ScalarUDFImpl for CoalesceFunc {
         }
 
         try_type_union_resolution(arg_types)
+    }
+}
+
+// Sail: see `CoalesceFunc::simplify`.
+fn is_column_or_literal(expr: &Expr) -> bool {
+    matches!(expr, Expr::Column(_) | Expr::Literal(..))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::{
+        Array, ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray,
+    };
+    use datafusion::arrow::datatypes::DataType;
+    use datafusion::dataframe::DataFrame;
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{Expr, ScalarUDF, cast, col, lit, when};
+
+    use super::CoalesceFunc;
+    use crate::scalar::math::random::Random;
+    use crate::scalar::misc::raise_error::RaiseError;
+
+    fn coalesce(args: Vec<Expr>) -> Expr {
+        ScalarUDF::from(CoalesceFunc::new()).call(args)
+    }
+
+    fn rand() -> Expr {
+        ScalarUDF::from(Random::new()).call(vec![])
+    }
+
+    fn raise_error(message: Expr) -> Expr {
+        cast(
+            ScalarUDF::from(RaiseError::new()).call(vec![message]),
+            DataType::Float64,
+        )
+    }
+
+    fn table(columns: Vec<(&str, ArrayRef)>) -> Result<DataFrame> {
+        let batch = RecordBatch::try_from_iter(columns)?;
+        SessionContext::new().read_batch(batch)
+    }
+
+    fn nullable_doubles() -> Result<DataFrame> {
+        table(vec![(
+            "a",
+            Arc::new(Float64Array::from(vec![None, Some(1.0)])) as ArrayRef,
+        )])
+    }
+
+    /// Each probe: (name, dataframe with a single output column `v`).
+    fn probes() -> Result<Vec<(&'static str, DataFrame)>> {
+        let three = table(vec![(
+            "m",
+            Arc::new(StringArray::from(vec!["boom"; 3])) as ArrayRef,
+        )])?;
+        let many = table(vec![(
+            "x",
+            Arc::new(Int64Array::from_iter_values(0..10_000)) as ArrayRef,
+        )])?;
+        let sometimes_null =
+            when(rand().lt(lit(0.5)), lit(ScalarValue::Int64(None))).otherwise(lit(1_i64))?;
+        Ok(vec![
+            // Volatile first argument that is never null: later arguments
+            // must not be evaluated, so the error is never raised.
+            (
+                "volatile_first_literal_error",
+                three.clone().select(vec![
+                    coalesce(vec![rand(), raise_error(lit("boom"))]).alias("v"),
+                ])?,
+            ),
+            // The error message comes from a column.
+            (
+                "volatile_first_column_error",
+                three.select(vec![
+                    coalesce(vec![rand(), raise_error(col("m"))]).alias("v"),
+                ])?,
+            ),
+            // Volatile argument in the middle: only the rest after the
+            // non-volatile prefix stays a `coalesce` call.
+            (
+                "volatile_middle_error",
+                nullable_doubles()?.select(vec![
+                    coalesce(vec![col("a"), rand(), raise_error(lit("boom"))]).alias("v"),
+                ])?,
+            ),
+            // Volatile last argument: only evaluated where `a` is null.
+            (
+                "volatile_last",
+                nullable_doubles()?.select(vec![coalesce(vec![col("a"), rand()]).alias("v")])?,
+            ),
+            // A volatile, sometimes-null first argument must be evaluated once:
+            // the result is never null when the last argument is non-null.
+            (
+                "volatile_sometimes_null",
+                many.select(vec![coalesce(vec![sometimes_null, lit(2_i64)]).alias("v")])?,
+            ),
+        ])
+    }
+
+    /// Spark semantics: every probe succeeds and `v` is never null.
+    async fn null_count(df: DataFrame) -> Result<usize> {
+        let batches = df.collect().await?;
+        Ok(batches.iter().map(|b| b.column(0).null_count()).sum())
+    }
+
+    /// Later arguments of the lazy path are evaluated on the rows that are
+    /// still NULL, and each row takes the first non-NULL value.
+    #[tokio::test]
+    async fn coalesce_lazy_takes_the_first_non_null_value() -> Result<()> {
+        let x = || col("x");
+        let df = table(vec![(
+            "x",
+            Arc::new(Int64Array::from_iter_values(0..10)) as ArrayRef,
+        )])?
+        .select(vec![
+            coalesce(vec![
+                // Volatile, and NULL where x % 3 = 0.
+                when(
+                    rand().lt(lit(2.0)).and((x() % lit(3_i64)).eq(lit(0_i64))),
+                    lit(ScalarValue::Int64(None)),
+                )
+                .otherwise(x())?,
+                // NULL where x % 2 = 0.
+                when(
+                    (x() % lit(2_i64)).eq(lit(0_i64)),
+                    lit(ScalarValue::Int64(None)),
+                )
+                .otherwise(x() * lit(10_i64))?,
+                x() * lit(100_i64),
+            ])
+            .alias("v"),
+        ])?;
+        let plan = df
+            .clone()
+            .into_optimized_plan()?
+            .display_indent()
+            .to_string();
+        assert!(plan.contains("coalesce_lazy"), "{plan}");
+        let batches = df.collect().await?;
+        let values = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .map(|array| array.iter().collect::<Vec<_>>())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>();
+        let expected = (0..10_i64)
+            .map(|x| match (x % 3, x % 2) {
+                (0, 0) => Some(x * 100),
+                (0, _) => Some(x * 10),
+                _ => Some(x),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, expected);
+        Ok(())
+    }
+
+    /// Like Spark's `Coalesce`, arguments are evaluated lazily and at most
+    /// once per row, also when an argument is volatile.
+    #[tokio::test]
+    async fn coalesce_volatile_arguments_follow_spark_semantics() -> Result<()> {
+        let mut failures = vec![];
+        for (name, df) in probes()? {
+            match null_count(df).await {
+                Ok(0) => {}
+                Ok(n) => failures.push(format!("{name}: {n} null results")),
+                Err(e) => failures.push(format!("{name}: {e}")),
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+        Ok(())
     }
 }
