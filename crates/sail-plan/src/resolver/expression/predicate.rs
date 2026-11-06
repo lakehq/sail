@@ -10,10 +10,10 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::spark_struct_rename::SparkStructRename;
-use sail_function::scalar::spark_to_string::SparkToUtf8;
-use sail_function::scalar::update_struct_field::UpdateStructField;
+use sail_function::scalar::r#struct::spark_struct_rename::SparkStructRename;
+use sail_function::scalar::r#struct::update_struct_field::UpdateStructField;
 use sail_logical_optimizer::type_coercion::{
     case_result_type, cast_case_result_value, cast_nested_value,
 };

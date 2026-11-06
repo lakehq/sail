@@ -45,7 +45,7 @@ use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::vector::avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
-use sail_function::scalar::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{

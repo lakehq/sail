@@ -14,10 +14,10 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::drop_struct_field::DropStructField;
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::r#struct::drop_struct_field::DropStructField;
+use sail_function::scalar::r#struct::update_struct_field::UpdateStructField;
 use sail_function::scalar::table_input::TableInput;
-use sail_function::scalar::update_struct_field::UpdateStructField;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;

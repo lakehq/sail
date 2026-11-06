@@ -6,7 +6,7 @@ use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
 use datafusion_expr::{ExprSchemable, ScalarUDF, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
-use sail_function::scalar::array_struct_field::ArrayStructField;
+use sail_function::scalar::r#struct::array_struct_field::ArrayStructField;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunctionInput};

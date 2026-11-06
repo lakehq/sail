@@ -132,7 +132,7 @@ impl PlanResolver<'_> {
         use datafusion_expr::{LogicalPlanBuilder, ScalarUDF, lit};
         use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
         use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
-        use sail_function::scalar::struct_function::StructFunction;
+        use sail_function::scalar::r#struct::struct_function::StructFunction;
         if query.all_out_ref_exprs().is_empty() || query.schema().fields().len() != 1 {
             return Ok(expr_fn::scalar_subquery(Arc::new(query)));
         }
