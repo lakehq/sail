@@ -1717,14 +1717,22 @@ fn with_nested_field_metadata(data_type: DataType, source: &DataType) -> DataTyp
             )
         }
         (
-            DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _),
+            DataType::List(f)
+            | DataType::LargeList(f)
+            | DataType::FixedSizeList(f, _)
+            | DataType::ListView(f)
+            | DataType::LargeListView(f),
             DataType::List(source)
             | DataType::LargeList(source)
-            | DataType::FixedSizeList(source, _),
+            | DataType::FixedSizeList(source, _)
+            | DataType::ListView(source)
+            | DataType::LargeListView(source),
         ) => match &data_type {
             DataType::List(_) => DataType::List(field(f, source)),
             DataType::LargeList(_) => DataType::LargeList(field(f, source)),
             DataType::FixedSizeList(_, size) => DataType::FixedSizeList(field(f, source), *size),
+            DataType::ListView(_) => DataType::ListView(field(f, source)),
+            DataType::LargeListView(_) => DataType::LargeListView(field(f, source)),
             _ => data_type,
         },
         (DataType::Map(f, sorted), DataType::Map(source, _)) => {
