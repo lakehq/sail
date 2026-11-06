@@ -455,3 +455,27 @@ def test_pivot_nan_value_matches_in_general_path(spark):
         .toPandas()
     )
     assert actual.set_index("g")["NaN"].to_dict() == {"a": "z", "b": None}
+
+
+def test_pivot_grouped_by_column_and_its_cast(spark):
+    import pyspark.sql.functions as F  # noqa: N812
+
+    # A cast is invisible in DataFusion schema names, so grouping by a column and by a cast
+    # of the same column makes both grouping expressions claim one name. Spark keeps them as
+    # two columns. Pivot grouping goes through the same resolver path, but with the grouping
+    # columns also in the output projection.
+    df = (
+        spark.sql("SELECT * FROM VALUES ('x', 1), ('y', 1), ('x', 2) AS e(p, k)")
+        .groupBy("k", F.col("k").cast("bigint"))
+        .pivot("p", ["x", "y"])
+        .count()
+        .toDF("k", "kb", "x", "y")
+        .orderBy("k")
+    )
+    assert [field.dataType.simpleString() for field in df.schema.fields] == [
+        "int",
+        "bigint",
+        "bigint",
+        "bigint",
+    ]
+    assert [tuple(r) for r in df.collect()] == [(1, 1, 1, 1), (2, 2, 1, None)]

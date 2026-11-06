@@ -350,7 +350,12 @@ impl PlanResolver<'_> {
             nulls_first,
         } = sort;
         let has_grouping_set = Self::has_grouping_set(&aggregate.group_expr);
-        let grouping_exprs = Self::distinct_grouping_expressions_from_exprs(&aggregate.group_expr);
+        // A key of the aggregate can carry the alias that tells it apart from a column with the
+        // same name, while the argument of a grouping function is written without one.
+        let grouping_exprs = Self::distinct_grouping_expressions_from_exprs(&aggregate.group_expr)
+            .into_iter()
+            .map(Expr::unalias)
+            .collect::<Vec<_>>();
         let duplicate_sets = has_grouping_set
             && Self::correlation_keeps_grouping(&aggregate.input, &aggregate.group_expr)?
             && Self::has_duplicate_grouping_sets(&aggregate.group_expr)?;
