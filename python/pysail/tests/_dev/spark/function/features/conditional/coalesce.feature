@@ -58,6 +58,27 @@ Feature: coalesce returns the first non-null argument
         | result | result_type |
         | NULL   | string      |
 
+  Rule: Nested arguments
+
+    Scenario Outline: coalesce returns nested values of a conditional argument: <case>
+      When query
+        """
+        SELECT x, coalesce(<first_argument>, <second_argument>) AS v
+        FROM VALUES (<first_x>), (<second_x>) AS t(x)
+        ORDER BY x
+        """
+      Then query result ordered
+        | x          | v              |
+        | <first_x>  | <first_value>  |
+        | <second_x> | <second_value> |
+
+      Examples:
+        | case                                         | first_argument                                        | second_argument                             | first_x | second_x | first_value | second_value |
+        | NULL fields, every row takes the last value  | if(x = 1, array(named_struct('a', 1)), NULL)          | array(named_struct('a', CAST(NULL AS INT))) | 2       | 3        | [{NULL}]    | [{NULL}]     |
+        | NULL fields, rows take both values           | if(x = 1, array(named_struct('a', 1)), NULL)          | array(named_struct('a', CAST(NULL AS INT))) | 1       | 2        | [{1}]       | [{NULL}]     |
+        | NULL items, rows take both values            | if(x = 1, array(named_struct('a', 1)), NULL)          | array(CAST(NULL AS STRUCT<a: INT>))         | 1       | 2        | [{1}]       | [NULL]       |
+        | NULL items, every row takes the last value   | CASE WHEN x = 1 THEN array(named_struct('a', 1)) END  | array(CAST(NULL AS STRUCT<a: INT>))         | 2       | 3        | [NULL]      | [NULL]       |
+
   @function(nullability)
   Rule: Output schema
 
