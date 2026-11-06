@@ -811,8 +811,8 @@ impl PlanResolver<'_> {
         args: &[Expr],
         schema: &DFSchemaRef,
     ) -> PlanResult<bool> {
-        if udf == &AggregateUDF::from(Min::new())
-            || udf == &AggregateUDF::from(Max::new())
+        if udf.inner().is::<Min>()
+            || udf.inner().is::<Max>()
             || udf == count::count_udaf().as_ref()
             || udf == bit_and_or_xor::bit_and_udaf().as_ref()
             || udf == bit_and_or_xor::bit_or_udaf().as_ref()
