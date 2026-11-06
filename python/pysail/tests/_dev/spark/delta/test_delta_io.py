@@ -595,7 +595,8 @@ def test_delta_io_save_as_table_replace_where_completes_omitted_columns(
 def test_delta_io_replace_where_compatible_input(
     spark, tmp_path, merge_schema, case_sensitive, kind, row, input_schema, valid, expected_row
 ):
-    # Delta 4.4 GeneratedColumnSuite: explicit values, including NULL, must be null-safe equal.
+    # Generated-column NULL cases re-express Delta 4.4.0 GeneratedColumnSuite's null-safe check.
+    # [CREDIT]: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/GeneratedColumnSuite.scala#L815-L839
     previous = spark.conf.get("spark.sql.caseSensitive")
     path = tmp_path / "compatible_input"
     table = "delta_replace_where_compatible_input"
@@ -892,7 +893,8 @@ def test_delta_io_replace_where_check_switch(spark, tmp_path):
 )
 @pytest.mark.usefixtures("replace_where_check")
 def test_delta_io_save_as_table_replace_where_rejects_extra_columns(spark, tmp_path, not_null, row, input_schema):
-    # Delta 3.3.2 SchemaEnforcementSuite: reject schema merging with replaceWhere - overwrite option.
+    # Semantic port of Delta 3.3.2's overwriteSchema/replaceWhere rejection, via saveAsTable.
+    # [CREDIT]: https://github.com/delta-io/delta/blob/051aac5e0d4dee202e1a2172437337317b3180a1/spark/src/test/scala/org/apache/spark/sql/delta/schema/SchemaEnforcementSuite.scala#L555-L570
     path = tmp_path / "extra_columns"
     table = "delta_replace_where_extra_columns"
     nullability = "NOT NULL" if not_null else ""
@@ -963,7 +965,8 @@ def test_delta_io_save_as_table_overwrite_schema_evolution(spark, tmp_path, cond
 @pytest.mark.parametrize("overwrite_schema", [False, True], ids=["merge-only", "both-flags"])
 @pytest.mark.usefixtures("replace_where_check")
 def test_delta_io_replace_where_merge_preserves_field_metadata(spark, tmp_path, api, overwrite_schema):
-    # SchemaUtilsSuite: schema merging should pick current nullable and metadata.
+    # Re-expresses the top-level nullable/metadata invariant from Delta 4.4.0 SchemaUtilsSuite.
+    # [CREDIT]: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/schema/SchemaUtilsSuite.scala#L2382-L2399
     path = tmp_path / "merge_field_metadata"
     table = "delta_merge_field_metadata"
     spark.sql(
@@ -1039,7 +1042,8 @@ def test_delta_io_replace_where_late_failure_does_not_commit(spark, tmp_path, ap
 )
 @pytest.mark.usefixtures("replace_where_check")
 def test_delta_io_replace_where_change_data(spark, tmp_path, partitioned, mapping, predicate, incoming, deleted_values):
-    # DeltaSuite.testReplaceWhereWithCdf: CDF includes every deleted and inserted row.
+    # Re-expresses the replacement CDC assertions in Delta 4.4.0 DeltaSuite.testReplaceWhereWithCdf.
+    # [CREDIT]: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaSuite.scala#L469-L536
     path = tmp_path / "replace_where_cdf"
     table = "delta_replace_where_cdf"
     partition = "PARTITIONED BY (p)" if partitioned else ""
