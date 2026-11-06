@@ -5,6 +5,7 @@ use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_K
 use datafusion_common::DataFusionError;
 use datafusion_common::error::_plan_err;
 use datafusion_common::metadata::FieldMetadata;
+use sail_common::spec::{SAIL_SPARK_INTERVAL_METADATA_KEY, SAIL_SPARK_UDT_METADATA_KEY};
 
 // [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/common/src/metadata.rs#L108-L175
 /// Compute the field metadata to propagate for an expression whose result
@@ -74,6 +75,32 @@ pub fn coerced_fields_metadata<'a>(
     }
 
     Ok(FieldMetadata::from(merged))
+}
+
+/// Sail: keeps only the field metadata that describes the type of a value, such as an Arrow
+/// extension type, a Spark UDT or a Spark interval type.
+///
+/// Use it for expressions whose result takes its type from an argument (e.g. `min`, `max` and
+/// `coalesce`). The rest of the metadata describes the argument column itself, such as Spark
+/// column metadata or storage field ids. Like Spark, which only keeps column metadata for
+/// expressions that refer to a column or a struct field directly, the result must not inherit it.
+pub fn type_metadata(metadata: &FieldMetadata) -> FieldMetadata {
+    FieldMetadata::from(
+        metadata
+            .inner()
+            .iter()
+            .filter(|(key, _)| {
+                matches!(
+                    key.as_str(),
+                    EXTENSION_TYPE_NAME_KEY
+                        | EXTENSION_TYPE_METADATA_KEY
+                        | SAIL_SPARK_UDT_METADATA_KEY
+                        | SAIL_SPARK_INTERVAL_METADATA_KEY
+                )
+            })
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>(),
+    )
 }
 
 #[cfg(test)]
@@ -169,5 +196,45 @@ mod tests {
         // "a" supplied the extension name first and carried no parameters;
         // "b"'s parameters are not grafted onto it.
         assert_eq!(result.inner().get(EXTENSION_TYPE_METADATA_KEY), None);
+    }
+
+    // Sail: see `type_metadata`.
+    #[test]
+    fn type_metadata_keeps_only_type_keys() {
+        use sail_common::spec::SPARK_METADATA_JSON_KEY;
+
+        let field = Field::new("a", DataType::Binary, true).with_metadata(
+            std::collections::HashMap::from([
+                (EXTENSION_TYPE_NAME_KEY.to_string(), "ext.type".to_string()),
+                (EXTENSION_TYPE_METADATA_KEY.to_string(), "{}".to_string()),
+                (SAIL_SPARK_UDT_METADATA_KEY.to_string(), "udt".to_string()),
+                (
+                    SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    "interval".to_string(),
+                ),
+                (
+                    SPARK_METADATA_JSON_KEY.to_string(),
+                    "{\"comment\":\"c\"}".to_string(),
+                ),
+                ("PARQUET:field_id".to_string(), "1".to_string()),
+                ("delta.columnMapping.id".to_string(), "1".to_string()),
+            ]),
+        );
+        let result = type_metadata(&FieldMetadata::from(&field));
+        let mut keys = result
+            .inner()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                EXTENSION_TYPE_METADATA_KEY,
+                EXTENSION_TYPE_NAME_KEY,
+                SAIL_SPARK_INTERVAL_METADATA_KEY,
+                SAIL_SPARK_UDT_METADATA_KEY,
+            ]
+        );
     }
 }

@@ -2,7 +2,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::common::metadata::FieldMetadata;
 use datafusion::common::stats::{ColumnStatistics, Precision};
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{Column, DFSchema, Result, ScalarValue};
@@ -56,7 +57,7 @@ pub fn rewrite_aggregate(
         .zip(aggregate.schema.iter())
         .map(|(value, (qualifier, field))| {
             value.map(|value| {
-                Expr::Literal(value, None).alias_qualified(qualifier.cloned(), field.name())
+                output_literal(value, field).alias_qualified(qualifier.cloned(), field.name())
             })
         })
         .collect::<Option<Vec<_>>>()
@@ -288,7 +289,7 @@ fn build_residual_aggregate(
         .zip(aggregate.schema.fields())
         .map(|(value, field)| {
             let expression = match value {
-                Some(value) => Expr::Literal(value, None),
+                Some(value) => output_literal(value, field),
                 None => {
                     let column = Expr::Column(residual_columns[residual_index].clone());
                     residual_index += 1;
@@ -305,6 +306,15 @@ fn build_residual_aggregate(
         Arc::new(residual),
         Arc::clone(&aggregate.schema),
     )?))
+}
+
+/// A literal for an aggregate output field, with the field's metadata (for example, `min` and
+/// `max` keep the metadata of their argument). The projection declares the aggregate schema, so
+/// a literal without that metadata would override it, which keeps DataFusion from merging the
+/// projection with adjacent projections.
+fn output_literal(value: ScalarValue, field: &Field) -> Expr {
+    let metadata = FieldMetadata::from(field);
+    Expr::Literal(value, (!metadata.is_empty()).then_some(metadata))
 }
 
 fn project_residual_input(

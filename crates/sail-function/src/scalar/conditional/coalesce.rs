@@ -16,7 +16,7 @@ use datafusion_expr::{
     Volatility,
 };
 use itertools::Itertools;
-use sail_common_datafusion::metadata::coerced_fields_metadata;
+use sail_common_datafusion::metadata::{coerced_fields_metadata, type_metadata};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::scalar::conditional::coalesce_lazy::CoalesceLazy;
@@ -69,6 +69,8 @@ impl ScalarUDFImpl for CoalesceFunc {
         // Propagate field metadata (e.g. Arrow extension types) from the arguments that can
         // supply a value; see `coerced_fields_metadata` for the merge semantics.
         let metadata = coerced_fields_metadata(args.arg_fields.iter().map(|f| f.as_ref()))?;
+        // Sail: keep only the type metadata of the arguments; see `type_metadata`.
+        let metadata = type_metadata(&metadata);
         Ok(metadata
             .add_to_field(Field::new(self.name(), return_type, nullable))
             .into())
@@ -222,6 +224,34 @@ mod tests {
     use super::CoalesceFunc;
     use crate::scalar::math::random::Random;
     use crate::scalar::misc::raise_error::RaiseError;
+
+    // Sail: the result keeps only the type metadata of the arguments; see `type_metadata`.
+    #[test]
+    fn coalesce_return_field_keeps_only_type_metadata() -> Result<()> {
+        use datafusion::arrow::datatypes::Field;
+        use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+
+        let a = Arc::new(Field::new("a", DataType::Int32, true).with_metadata(
+            std::collections::HashMap::from([
+                ("ARROW:extension:name".to_string(), "ext.type".to_string()),
+                ("SPARK::metadata::json".to_string(), "{}".to_string()),
+            ]),
+        ));
+        let b = Arc::new(Field::new("b", DataType::Int32, true).with_metadata(
+            std::collections::HashMap::from([("PARQUET:field_id".to_string(), "2".to_string())]),
+        ));
+        let field = CoalesceFunc::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[a, b],
+            scalar_arguments: &[None, None],
+        })?;
+        let keys = field
+            .metadata()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(keys, vec!["ARROW:extension:name"]);
+        Ok(())
+    }
 
     fn coalesce(args: Vec<Expr>) -> Expr {
         ScalarUDF::from(CoalesceFunc::new()).call(args)

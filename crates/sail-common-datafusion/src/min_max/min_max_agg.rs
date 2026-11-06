@@ -23,6 +23,7 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_o
 use datafusion_physical_expr::expressions;
 
 use crate::float_semantics::{float_gt, float_lt};
+use crate::metadata::type_metadata;
 use crate::min_max::common::{MaxAccumulator, MinAccumulator};
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use crate::min_max::min_max_struct::MinMaxStructAccumulator;
@@ -179,7 +180,8 @@ impl FromColumnStatistics for Max {
 /// so it keeps the metadata of the argument field, such as an extension type.
 fn min_max_return_field(func: &impl AggregateUDFImpl, arg_fields: &[FieldRef]) -> Result<FieldRef> {
     let field = udaf_default_return_field(func, arg_fields)?;
-    Ok(FieldMetadata::from(arg_fields[0].as_ref()).add_to_field_ref(field))
+    // Sail: keep only the type metadata of the argument; see `type_metadata`.
+    Ok(type_metadata(&FieldMetadata::from(arg_fields[0].as_ref())).add_to_field_ref(field))
 }
 
 impl AggregateUDFImpl for Max {
@@ -831,6 +833,30 @@ mod tests {
     use datafusion_expr::EmitTo;
 
     use super::*;
+
+    // Sail: the result keeps only the type metadata of the argument; see `type_metadata`.
+    #[test]
+    fn min_max_return_field_keeps_only_type_metadata() -> Result<()> {
+        let arg = Arc::new(Field::new("a", DataType::Int32, true).with_metadata(
+            std::collections::HashMap::from([
+                ("ARROW:extension:name".to_string(), "ext.type".to_string()),
+                ("SPARK::metadata::json".to_string(), "{}".to_string()),
+                ("PARQUET:field_id".to_string(), "1".to_string()),
+            ]),
+        ));
+        for field in [
+            Max::new().return_field(&[Arc::clone(&arg)])?,
+            Min::new().return_field(&[Arc::clone(&arg)])?,
+        ] {
+            let keys = field
+                .metadata()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            assert_eq!(keys, vec!["ARROW:extension:name"]);
+        }
+        Ok(())
+    }
 
     #[test]
     fn grouped_float_min_max_total_order() -> Result<()> {
