@@ -535,10 +535,11 @@ def test_delta_io_replace_where_constraint_selection(spark, tmp_path, predicate,
         pytest.param("p INT, v INT NOT NULL", None, False, id="required"),
     ],
 )
+@pytest.mark.parametrize("merge_schema", [None, "false", "true"], ids=["default-option", "no-merge", "merge"])
 def test_delta_io_save_as_table_replace_where_completes_omitted_columns(
-    spark, tmp_path, columns, expected_v, omittable
+    spark, tmp_path, columns, expected_v, omittable, merge_schema
 ):
-    # Spark 4.2.0 / Delta 4.4.0 preserves the target schema and completes omitted columns.
+    # Spark 4.2.0 / Delta 4.4.0 completes omitted columns with either mergeSchema setting.
     path = tmp_path / "omitted_columns"
     table = "delta_replace_where_omitted_columns"
     properties = " TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')" if "DEFAULT" in columns else ""
@@ -555,6 +556,8 @@ def test_delta_io_save_as_table_replace_where_completes_omitted_columns(
             .mode("overwrite")
             .option("replaceWhere", "p = 1")
         )
+        if merge_schema is not None:
+            writer = writer.option("mergeSchema", merge_schema)
         if omittable:
             writer.saveAsTable(table)
             expected = [(1, expected_v), (2, 12)]
@@ -567,6 +570,84 @@ def test_delta_io_save_as_table_replace_where_completes_omitted_columns(
         assert spark.read.format("delta").load(str(path)).orderBy("p").collect() == expected
         assert _delta_metadata(path) == metadata
     finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize(
+    ("row", "input_schema"),
+    [
+        pytest.param((1, 99), "p INT, extra INT", id="extra-and-omitted"),
+        pytest.param((1, 11, 99), "p INT, v INT, extra INT", id="extra"),
+        pytest.param((1,), "p BIGINT", id="type-change-and-omitted"),
+        pytest.param((1, 11), "p BIGINT, v INT", id="type-change"),
+        pytest.param(("1",), "p STRING", id="string-and-omitted"),
+    ],
+)
+@pytest.mark.usefixtures("replace_where_check")
+def test_delta_io_replace_where_merge_does_not_discard_schema_changes(spark, tmp_path, row, input_schema):
+    path = tmp_path / "merge_schema_changes"
+    table = "delta_merge_schema_changes"
+    spark.sql(f"CREATE TABLE {table} (p INT, v INT) USING DELTA LOCATION '{escape_sql_string_literal(str(path))}'")
+    try:
+        spark.sql("INSERT INTO delta_merge_schema_changes VALUES (1, 11), (2, 12)")
+        before = {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()}
+        # Conditional schema evolution is unsupported; completion must not drop extra
+        # fields or cast away a type mismatch to make the write succeed.
+        with pytest.raises(Exception, match=r"(?i)(schema|field|type)"):
+            spark.createDataFrame([row], input_schema).write.format("delta").mode("overwrite").option(
+                "replaceWhere", "p = 1"
+            ).option("mergeSchema", "true").saveAsTable(table)
+        assert {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()} == before
+        assert spark.table(table).orderBy("p").collect() == [(1, 11), (2, 12)]
+        assert spark.read.format("delta").load(str(path)).orderBy("p").collect() == [(1, 11), (2, 12)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("case_sensitive", ["false", "true"])
+@pytest.mark.parametrize(
+    ("row", "input_schema", "ambiguous"),
+    [
+        pytest.param((1,), "P INT", False, id="case-match"),
+        pytest.param((1, 1), "p INT, p INT", True, id="duplicate"),
+        pytest.param((1, 1), "p INT, P INT", True, id="case-duplicate"),
+    ],
+)
+@pytest.mark.usefixtures("replace_where_check")
+def test_delta_io_replace_where_merge_omitted_column_names(
+    spark, tmp_path, case_sensitive, row, input_schema, ambiguous
+):
+    previous = spark.conf.get("spark.sql.caseSensitive")
+    path = tmp_path / "merge_column_names"
+    table = "delta_merge_column_names"
+    spark.sql(
+        f"CREATE TABLE {table} (p INT, v INT, w INT) USING DELTA LOCATION '{escape_sql_string_literal(str(path))}'"
+    )
+    try:
+        spark.conf.set("spark.sql.caseSensitive", case_sensitive)
+        spark.sql("INSERT INTO delta_merge_column_names VALUES (1, 11, 21), (2, 12, 22)")
+        metadata = _delta_metadata(path)
+        before = {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()}
+        writer = (
+            spark.createDataFrame([row], input_schema)
+            .write.format("delta")
+            .mode("overwrite")
+            .option("replaceWhere", "p = 1")
+            .option("mergeSchema", "true")
+        )
+        if ambiguous:
+            with pytest.raises(Exception, match=r"(?i)(schema|field|ambiguous|duplicate)"):
+                writer.saveAsTable(table)
+            assert {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()} == before
+            expected = [(1, 11, 21), (2, 12, 22)]
+        else:
+            writer.saveAsTable(table)
+            expected = [(1, None, None), (2, 12, 22)]
+        assert spark.table(table).orderBy("p").collect() == expected
+        assert spark.read.format("delta").load(str(path)).orderBy("p").collect() == expected
+        assert _delta_metadata(path) == metadata
+    finally:
+        spark.conf.set("spark.sql.caseSensitive", previous)
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 

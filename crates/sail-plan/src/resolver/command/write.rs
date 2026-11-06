@@ -409,10 +409,10 @@ impl PlanResolver<'_> {
                             &sink_info.options,
                             &["mergeSchema", "merge_schema"],
                         );
+                    let conditional_delta_by_name = info.format.eq_ignore_ascii_case("delta")
+                        && matches!(&mode, WriteMode::TruncateIf { .. })
+                        && matches!(&column_match, WriteColumnMatch::ByName);
                     if !lake_source_merge_schema {
-                        let conditional_delta_by_name = info.format.eq_ignore_ascii_case("delta")
-                            && matches!(&mode, WriteMode::TruncateIf { .. })
-                            && matches!(&column_match, WriteColumnMatch::ByName);
                         if conditional_delta_by_name {
                             // Name alignment can fill omitted columns, but must not discard
                             // unknown columns before Delta validates a conditional overwrite.
@@ -445,6 +445,19 @@ impl PlanResolver<'_> {
                             self.rewrite_write_input(input, column_match, info, state)
                                 .await?
                         };
+                    } else if conditional_delta_by_name
+                        && Self::has_missing_columns_without_schema_changes(input.schema(), info)
+                    {
+                        // Complete existing columns only: the helper must not discard new
+                        // fields or coerce supplied types before Delta validates evolution.
+                        input = self
+                            .rewrite_write_input_with_column_expressions(
+                                input,
+                                column_match,
+                                info,
+                                state,
+                            )
+                            .await?;
                     }
                     input = self
                         .apply_delta_table_constraints(input, info, state)
@@ -991,6 +1004,25 @@ impl PlanResolver<'_> {
             }
             _ => expr.cast_to(data_type, schema)?,
         })
+    }
+
+    fn has_missing_columns_without_schema_changes(schema: &DFSchema, info: &TableInfo) -> bool {
+        let mut supplied = HashSet::new();
+        for field in schema.fields() {
+            let matches = info
+                .columns
+                .iter()
+                .enumerate()
+                .filter(|(_, column)| column.name.eq_ignore_ascii_case(field.name()))
+                .collect::<Vec<_>>();
+            let Ok((index, column)) = matches.one() else {
+                return false;
+            };
+            if !supplied.insert(index) || field.data_type() != column.field().data_type() {
+                return false;
+            }
+        }
+        (0..info.columns.len()).any(|index| !supplied.contains(&index))
     }
 
     /// Fast path for tables without column-level expressions (no generated columns,
