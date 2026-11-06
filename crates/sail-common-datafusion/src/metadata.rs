@@ -5,7 +5,9 @@ use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_K
 use datafusion_common::DataFusionError;
 use datafusion_common::error::_plan_err;
 use datafusion_common::metadata::FieldMetadata;
-use sail_common::spec::{SAIL_SPARK_INTERVAL_METADATA_KEY, SAIL_SPARK_UDT_METADATA_KEY};
+use sail_common::spec::{
+    SAIL_SPARK_INTERVAL_METADATA_KEY, SAIL_SPARK_UDT_METADATA_KEY, SparkIntervalMetadata,
+};
 
 // [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/common/src/metadata.rs#L108-L175
 /// Compute the field metadata to propagate for an expression whose result
@@ -101,6 +103,35 @@ pub fn type_metadata(metadata: &FieldMetadata) -> FieldMetadata {
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect::<BTreeMap<_, _>>(),
     )
+}
+
+/// Sail: the Spark interval metadata of a value that may come from any one of the fields, such as
+/// the result of `coalesce`. Like Spark's type coercion for intervals, it is the widest interval
+/// range of the fields. Fields without interval metadata do not contribute.
+pub fn widest_interval_metadata<'a>(
+    fields: impl IntoIterator<Item = &'a Field>,
+) -> Result<Option<String>, DataFusionError> {
+    let mut widest = None::<SparkIntervalMetadata>;
+    for field in fields {
+        let Some(value) = field.metadata().get(SAIL_SPARK_INTERVAL_METADATA_KEY) else {
+            continue;
+        };
+        let candidate = SparkIntervalMetadata::from_json(value)
+            .map_err(|error| DataFusionError::Plan(error.to_string()))?;
+        widest = Some(match widest {
+            None => candidate,
+            Some(current) => current.wider(candidate).ok_or_else(|| {
+                DataFusionError::Plan("incompatible Spark interval metadata".to_string())
+            })?,
+        });
+    }
+    widest
+        .map(|metadata| {
+            metadata
+                .to_json()
+                .map_err(|error| DataFusionError::Internal(error.to_string()))
+        })
+        .transpose()
 }
 
 #[cfg(test)]
@@ -235,6 +266,44 @@ mod tests {
                 SAIL_SPARK_INTERVAL_METADATA_KEY,
                 SAIL_SPARK_UDT_METADATA_KEY,
             ]
+        );
+    }
+
+    // Sail: see `widest_interval_metadata`.
+    #[test]
+    fn widest_interval_metadata_widens_the_range() {
+        use sail_common::spec::{IntervalFieldType, IntervalUnit as SparkIntervalUnit};
+
+        let interval = |start: IntervalFieldType, end: IntervalFieldType| {
+            SparkIntervalMetadata::try_new(SparkIntervalUnit::YearMonth, Some(start), Some(end))
+                .unwrap()
+                .unwrap()
+        };
+        let field = |metadata: Option<SparkIntervalMetadata>| {
+            let field = Field::new(
+                "a",
+                DataType::Interval(arrow_schema::IntervalUnit::YearMonth),
+                true,
+            );
+            match metadata {
+                Some(metadata) => field.with_metadata(std::collections::HashMap::from([(
+                    SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata.to_json().unwrap(),
+                )])),
+                None => field,
+            }
+        };
+        let year = interval(IntervalFieldType::Year, IntervalFieldType::Year);
+        let month = interval(IntervalFieldType::Month, IntervalFieldType::Month);
+        let fields = [field(Some(year)), field(None), field(Some(month))];
+        let widest = widest_interval_metadata(fields.iter()).unwrap().unwrap();
+        assert_eq!(
+            SparkIntervalMetadata::from_json(&widest).unwrap(),
+            interval(IntervalFieldType::Year, IntervalFieldType::Month)
+        );
+        assert_eq!(
+            widest_interval_metadata([field(None)].iter()).unwrap(),
+            None
         );
     }
 }

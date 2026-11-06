@@ -6,6 +6,7 @@ use arrow::array::{BooleanArray, new_null_array};
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{Result, exec_err, internal_err, plan_err};
 use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::conditional_expressions::CaseBuilder;
@@ -16,7 +17,10 @@ use datafusion_expr::{
     Volatility,
 };
 use itertools::Itertools;
-use sail_common_datafusion::metadata::{coerced_fields_metadata, type_metadata};
+use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
+use sail_common_datafusion::metadata::{
+    coerced_fields_metadata, type_metadata, widest_interval_metadata,
+};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::scalar::conditional::coalesce_lazy::CoalesceLazy;
@@ -69,8 +73,16 @@ impl ScalarUDFImpl for CoalesceFunc {
         // Propagate field metadata (e.g. Arrow extension types) from the arguments that can
         // supply a value; see `coerced_fields_metadata` for the merge semantics.
         let metadata = coerced_fields_metadata(args.arg_fields.iter().map(|f| f.as_ref()))?;
-        // Sail: keep only the type metadata of the arguments; see `type_metadata`.
-        let metadata = type_metadata(&metadata);
+        // Sail: keep only the type metadata of the arguments; see `type_metadata`. The interval
+        // range of the result is the widest range of the arguments, not that of the first one.
+        let mut metadata = type_metadata(&metadata).inner().clone();
+        match widest_interval_metadata(args.arg_fields.iter().map(|f| f.as_ref()))? {
+            Some(interval) => {
+                metadata.insert(SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), interval)
+            }
+            None => metadata.remove(SAIL_SPARK_INTERVAL_METADATA_KEY),
+        };
+        let metadata = FieldMetadata::from(metadata);
         Ok(metadata
             .add_to_field(Field::new(self.name(), return_type, nullable))
             .into())

@@ -648,3 +648,30 @@ fn constant_scalar(expression: &Expr) -> Option<ScalarValue> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[expect(clippy::panic)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn output_literal_carries_the_field_metadata() {
+        let plain = Field::new("a", DataType::Int32, true);
+        assert!(matches!(
+            output_literal(ScalarValue::Int32(Some(1)), &plain),
+            Expr::Literal(_, None)
+        ));
+
+        let typed = plain.with_metadata(HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "ext.type".to_string(),
+        )]));
+        let Expr::Literal(_, Some(metadata)) = output_literal(ScalarValue::Int32(Some(1)), &typed)
+        else {
+            panic!("the literal must carry the field metadata");
+        };
+        assert_eq!(metadata, FieldMetadata::from(&typed));
+    }
+}
