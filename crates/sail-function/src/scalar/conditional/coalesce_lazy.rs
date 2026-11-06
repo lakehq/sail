@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef};
-use arrow::compute::kernels::zip::zip;
-use arrow::compute::{cast_with_options, is_not_null};
+use arrow::compute::{cast_with_options, interleave};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
@@ -14,7 +13,7 @@ use datafusion_expr::{
     ValueOrLambda, Volatility,
 };
 
-use crate::functions_nested_utils::{evaluate_lambda_rows, scatter_active_rows};
+use crate::functions_nested_utils::{evaluate_lambda_all_rows, evaluate_lambda_rows};
 use crate::scalar::conditional::coalesce::CoalesceFunc;
 
 /// `coalesce` that evaluates its arguments lazily, from left to right, and
@@ -121,10 +120,10 @@ impl HigherOrderUDFImpl for CoalesceLazy {
             Some(ValueOrLambda::Value(value)) => value.to_array(number_rows)?,
             _ => return exec_err!("coalesce expected a value as the first argument"),
         };
-        let mut result = cast_to(first, return_type)?;
+        let first = cast_to(first, return_type)?;
 
         // The rows that are still NULL, which the next argument is evaluated on.
-        let mut pending = match result.logical_nulls() {
+        let mut pending = match first.logical_nulls() {
             None => vec![],
             Some(nulls) => (0..number_rows)
                 .filter(|&row| nulls.is_null(row))
@@ -134,6 +133,14 @@ impl HigherOrderUDFImpl for CoalesceLazy {
                 })
                 .collect::<Result<Vec<_>>>()?,
         };
+        if pending.is_empty() {
+            return Ok(ColumnarValue::Array(first));
+        }
+
+        // For each output row, the (argument, position) to take its value from.
+        // Rows that stay NULL keep pointing at the (NULL) first argument.
+        let mut picks = (0..number_rows).map(|row| (0, row)).collect::<Vec<_>>();
+        let mut sources = vec![first];
         for arg in args {
             if pending.is_empty() {
                 break;
@@ -141,27 +148,42 @@ impl HigherOrderUDFImpl for CoalesceLazy {
             let ValueOrLambda::Lambda(lambda) = arg else {
                 return exec_err!("coalesce expected lambda arguments");
             };
-            let value = cast_to(evaluate_lambda_rows(lambda, &pending)?, return_type)?;
-            let next_pending = match value.logical_nulls() {
-                None => vec![],
-                Some(nulls) => pending
-                    .iter()
-                    .enumerate()
-                    .filter(|&(position, _)| nulls.is_null(position))
-                    .map(|(_, &row)| row)
-                    .collect(),
+            let value = if pending.len() == number_rows {
+                evaluate_lambda_all_rows(lambda, number_rows)?
+            } else {
+                evaluate_lambda_rows(lambda, &pending)?
             };
-            // `value` is NULL on every row that is not pending.
-            let value = scatter_active_rows(value, &pending, number_rows)?;
-            result = zip(&is_not_null(&value)?, &value, &result)?;
+            let value = cast_to(value, return_type)?;
+            let source = sources.len();
+            let nulls = value.logical_nulls();
+            let mut next_pending =
+                Vec::with_capacity(nulls.as_ref().map_or(0, |nulls| nulls.null_count()));
+            for (position, &row) in pending.iter().enumerate() {
+                if nulls.as_ref().is_some_and(|nulls| nulls.is_null(position)) {
+                    next_pending.push(row);
+                } else {
+                    let row = usize::try_from(row).map_err(|_| {
+                        exec_datafusion_err!("coalesce row index does not fit in usize")
+                    })?;
+                    let pick = picks.get_mut(row).ok_or_else(|| {
+                        exec_datafusion_err!("coalesce row index is out of bounds")
+                    })?;
+                    *pick = (source, position);
+                }
+            }
+            sources.push(value);
             pending = next_pending;
         }
-        Ok(ColumnarValue::Array(result))
+        let sources = sources
+            .iter()
+            .map(|array| array.as_ref())
+            .collect::<Vec<_>>();
+        Ok(ColumnarValue::Array(interleave(&sources, &picks)?))
     }
 }
 
 /// The arguments are coerced to a common type, but nested field nullability
-/// or metadata can still differ from the return type, which `zip` rejects.
+/// or metadata can still differ from the return type, which `interleave` rejects.
 /// The cast is not "safe", so a value that cannot be converted is an error.
 fn cast_to(array: ArrayRef, data_type: &DataType) -> Result<ArrayRef> {
     if array.data_type() == data_type {

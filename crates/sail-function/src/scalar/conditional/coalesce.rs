@@ -362,6 +362,46 @@ mod tests {
         Ok(())
     }
 
+    /// When the first argument is NULL on every row, the next argument is
+    /// evaluated on the whole batch.
+    #[tokio::test]
+    async fn coalesce_lazy_first_argument_null_on_every_row() -> Result<()> {
+        let df = table(vec![(
+            "x",
+            Arc::new(Int64Array::from_iter_values(0..10)) as ArrayRef,
+        )])?
+        .select(vec![
+            coalesce(vec![
+                when(rand().lt(lit(2.0)), lit(ScalarValue::Int64(None))).end()?,
+                col("x") * lit(10_i64),
+            ])
+            .alias("v"),
+        ])?;
+        let plan = df
+            .clone()
+            .into_optimized_plan()?
+            .display_indent()
+            .to_string();
+        assert!(plan.contains("coalesce_lazy"), "{plan}");
+        let batches = df.collect().await?;
+        let values = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .map(|array| array.iter().collect::<Vec<_>>())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            (0..10_i64).map(|x| Some(x * 10)).collect::<Vec<_>>()
+        );
+        Ok(())
+    }
+
     /// Like Spark's `Coalesce`, arguments are evaluated lazily and at most
     /// once per row, also when an argument is volatile.
     #[tokio::test]

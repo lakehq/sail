@@ -68,6 +68,17 @@ pub(crate) fn evaluate_lambda_rows(lambda: &LambdaArgument, rows: &[u64]) -> Res
         .into_array(rows.len())
 }
 
+/// Like [`evaluate_lambda_rows`] for every row, without gathering the captures.
+pub(crate) fn evaluate_lambda_all_rows(
+    lambda: &LambdaArgument,
+    number_rows: usize,
+) -> Result<ArrayRef> {
+    let dummy = || Ok(Arc::new(NullArray::new(number_rows)) as ArrayRef);
+    lambda
+        .evaluate(&[&dummy], |arrays| Ok(arrays.to_vec()))?
+        .into_array(number_rows)
+}
+
 pub(crate) fn evaluate_lambdas_until_null(
     lambdas: &[&LambdaArgument],
     number_rows: usize,
