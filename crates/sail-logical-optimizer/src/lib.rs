@@ -6,6 +6,7 @@ use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
 mod correlated_limit;
 mod deduplicate;
+mod eliminate_sorts;
 mod input_file_metadata;
 mod lateral_join;
 mod resolve_lambda_variables;
@@ -18,6 +19,8 @@ mod simplify_expressions;
 mod subquery_aliases;
 pub mod type_coercion;
 
+use eliminate_sorts::EliminateSorts;
+pub use eliminate_sorts::is_order_irrelevant_aggregate;
 use input_file_metadata::PushDownLimit;
 use lateral_join::DecorrelateLateralProjection;
 use resolve_lambda_variables::ResolveLambdaVariables;
@@ -90,6 +93,7 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
 
         custom.push(rule);
     }
+    custom.push(Arc::new(EliminateSorts));
     custom.push(Arc::new(RewriteBinaryGrouping));
     // `ResolveLambdaVariables` must run after the built-in rules: constant
     // folding can change the type or nullability of higher-order function

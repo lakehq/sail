@@ -16,22 +16,18 @@ impl Debug for LazyPyObject {
     }
 }
 
+/// The object is a cache of the deserialized payload of the UDF that owns it,
+/// and the UDF compares the payload itself, so all instances are equal.
 impl PartialEq for LazyPyObject {
-    fn eq(&self, other: &Self) -> bool {
-        // Here we use pointer equality as a conservative implementation.
-        // It does not take into account the case where two different
-        // Python objects are "semantically" equal.
-        std::ptr::eq(&self.0, &other.0)
+    fn eq(&self, _other: &Self) -> bool {
+        true
     }
 }
 
 impl Eq for LazyPyObject {}
 
 impl Hash for LazyPyObject {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        // Hash the address of the GILOnceCell itself.
-        std::ptr::addr_of!(self.0).hash(state)
-    }
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
 }
 
 impl LazyPyObject {

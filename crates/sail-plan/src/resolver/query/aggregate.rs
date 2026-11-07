@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::functions_aggregate::{average, bit_and_or_xor, bool_and_or, count, sum};
-use datafusion_common::arrow::datatypes::DataType;
+use datafusion::functions_aggregate::{average, sum};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Column, DFSchemaRef, DataFusionError, Result as DataFusionResult, ScalarValue,
@@ -10,19 +9,17 @@ use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::logical_plan::{FetchType, SkipType};
 use datafusion_expr::utils::find_aggregate_exprs;
 use datafusion_expr::{
-    Aggregate, AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
-    Projection, SortExpr, Volatility, bitwise_and, bitwise_shift_right, cast,
+    Aggregate, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr, Volatility,
+    bitwise_and, bitwise_shift_right, cast,
 };
-use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use sail_common::spec;
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
-use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::explode::Explode;
 use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
 use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
 use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
+use sail_logical_optimizer::is_order_irrelevant_aggregate;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
@@ -806,40 +803,6 @@ impl PlanResolver<'_> {
         derivable.then_some(rewritten)
     }
 
-    pub(crate) fn is_order_irrelevant_udaf(
-        udf: &AggregateUDF,
-        args: &[Expr],
-        schema: &DFSchemaRef,
-    ) -> PlanResult<bool> {
-        if udf.inner().is::<Min>()
-            || udf.inner().is::<Max>()
-            || udf == count::count_udaf().as_ref()
-            || udf == bit_and_or_xor::bit_and_udaf().as_ref()
-            || udf == bit_and_or_xor::bit_or_udaf().as_ref()
-            || udf == bit_and_or_xor::bit_xor_udaf().as_ref()
-            || udf == bool_and_or::bool_and_udaf().as_ref()
-            || udf == bool_and_or::bool_or_udaf().as_ref()
-        {
-            return Ok(true);
-        }
-
-        if udf == sum::sum_udaf().as_ref()
-            || udf == average::avg_udaf().as_ref()
-            || udf.inner().is::<SparkTrySum>()
-            || udf.inner().is::<TryAvgFunction>()
-        {
-            let Some(arg) = args.first() else {
-                return Ok(false);
-            };
-            return Ok(!matches!(
-                arg.get_type(schema.as_ref())?,
-                DataType::Float16 | DataType::Float32 | DataType::Float64
-            ));
-        }
-
-        Ok(false)
-    }
-
     fn requires_input_order(
         aggregates: &[Expr],
         schema: &DFSchemaRef,
@@ -855,7 +818,7 @@ impl PlanResolver<'_> {
             {
                 continue;
             }
-            if !Self::is_order_irrelevant_udaf(udf, &function.params.args, schema)? {
+            if !is_order_irrelevant_aggregate(udf, &function.params.args, schema)? {
                 return Ok(true);
             }
         }

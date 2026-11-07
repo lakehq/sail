@@ -660,13 +660,15 @@ mod tests {
     use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_common::{ScalarValue, ToDFSchema};
     use datafusion_expr::{
-        AggregateUDF, ColumnarValue, LogicalPlanBuilder, TableSource, Volatility, cast, col,
+        AggregateUDF, ColumnarValue, LogicalPlanBuilder, ScalarUDF, TableSource, Volatility, cast,
+        col,
         create_udf, lit, rollup, scalar_subquery, when,
     };
     use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
     use object_store::memory::InMemory;
     use sail_common::spec;
     use sail_common_datafusion::min_max::min_max_agg::Max;
+    use sail_function::scalar::math::random::Random;
     use sail_plan::config::PlanConfig;
 
     use super::*;
@@ -1179,8 +1181,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scalar_subqueries_over_monotonic_ids_are_not_shared() -> datafusion_common::Result<()>
-    {
+    async fn scalar_subqueries_over_monotonic_ids_are_shared() -> datafusion_common::Result<()> {
         let monotonic_id = |input: &str, output: &str| -> datafusion_common::Result<LogicalPlan> {
             Ok(LogicalPlan::Extension(datafusion_expr::Extension {
                 node: Arc::new(MonotonicIdNode::try_new(
@@ -1189,16 +1190,63 @@ mod tests {
                 )?),
             }))
         };
-        let (display, _) = plan_two_scalar_subqueries(
+        let (display, batch) = plan_two_scalar_subqueries(
             max_scalar_subquery(monotonic_id("#1", "#2")?, "#2", "#3")?,
-            max_scalar_subquery(monotonic_id("#1", "#2")?, "#2", "#4")?,
+            max_scalar_subquery(monotonic_id("#4", "#5")?, "#5", "#6")?,
         )
         .await?;
 
         assert!(
-            display.contains("ScalarSubqueryExec: subqueries=2"),
+            display.contains("ScalarSubqueryExec: subqueries=1"),
             "{display}"
         );
+        let values = int64_values(&batch);
+        assert_eq!(values[0], values[1]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_seeded_random_values_are_shared()
+    -> datafusion_common::Result<()> {
+        let random = ScalarUDF::from(Random::new());
+        let subquery = |seed: Vec<Expr>, name: &str| -> datafusion_common::Result<Expr> {
+            let subquery = LogicalPlanBuilder::empty(true)
+                .project(vec![random.call(seed).alias(name)])?
+                .build()?;
+            Ok(scalar_subquery(Arc::new(subquery)))
+        };
+
+        let (display, batch) = plan_two_scalar_subqueries(
+            subquery(vec![lit(42_i64)], "#1")?,
+            subquery(vec![lit(42_i64)], "#2")?,
+        )
+        .await?;
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=1"),
+            "{display}"
+        );
+        let values = batch
+            .columns()
+            .iter()
+            .map(|column| column.as_primitive::<Float64Type>().value(0))
+            .collect::<Vec<_>>();
+        assert_eq!(values[0], values[1]);
+
+        for (a, b) in [
+            (vec![lit(42_i64)], vec![lit(43_i64)]),
+            (vec![], vec![]),
+            (
+                vec![lit(ScalarValue::Int64(None))],
+                vec![lit(ScalarValue::Int64(None))],
+            ),
+        ] {
+            let (display, _) =
+                plan_two_scalar_subqueries(subquery(a, "#1")?, subquery(b, "#2")?).await?;
+            assert!(
+                display.contains("ScalarSubqueryExec: subqueries=2"),
+                "{display}"
+            );
+        }
         Ok(())
     }
 

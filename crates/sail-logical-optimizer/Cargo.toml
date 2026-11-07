@@ -19,6 +19,7 @@ chrono = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-spark = { workspace = true }
 itertools = { workspace = true }
 
 [dev-dependencies]

@@ -1,7 +1,8 @@
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_plan::ExecutionPlan;
@@ -10,14 +11,29 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, Tre
 use datafusion_common::{Column, TableReference, plan_err};
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::{
-    Expr, Extension, LogicalPlan, Projection, Subquery, TableSource, Union, UserDefinedLogicalNode,
-    Volatility,
+    AggregateUDFImpl, Expr, Extension, LogicalPlan, Projection, ScalarUDF, Subquery, TableSource,
+    Union, UserDefinedLogicalNode, Volatility, WindowFunctionDefinition,
 };
 use datafusion_physical_expr::projection::ProjectionExpr;
+use sail_common_datafusion::input_file::is_input_file_metadata_function;
+use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::reuse::is_reusable_source;
+use sail_function::scalar::math::rand_poisson::RandPoisson;
+use sail_function::scalar::math::randn::Randn;
+use sail_function::scalar::math::random::Random;
+use sail_function::scalar::math::spark_uniform::SparkUniform;
+use sail_function::scalar::string::randstr::Randstr;
+use sail_logical_plan::map_partitions::MapPartitionsNode;
+use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::range::{Range, RangeNode};
 use sail_logical_plan::repartition::ExplicitRepartitionNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
+use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
+use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
+use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
+use sail_python_udf::udf::pyspark_scalar_iter_udf::PySparkScalarPandasIterUDF;
+use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
+use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 /// The prefix of the canonical names and qualifiers in a normalized subquery body.
 const CANONICAL_PREFIX: &str = "#canonical:";
@@ -108,13 +124,27 @@ impl ScalarSubqueryKey {
                     if let Expr::Literal(value, _) = expr {
                         literal_types.push(value.data_type());
                     }
-                    let volatility = match expr {
-                        Expr::ScalarFunction(function) => function.func.signature().volatility,
-                        Expr::AggregateFunction(function) => function.func.signature().volatility,
-                        Expr::WindowFunction(function) => function.fun.signature().volatility,
-                        _ => Volatility::Immutable,
+                    let reusable = match expr {
+                        Expr::ScalarFunction(function) => {
+                            function.func.signature().volatility != Volatility::Volatile
+                                || is_reusable_volatile_scalar(&function.func, &function.args)
+                        }
+                        Expr::AggregateFunction(function) => {
+                            function.func.signature().volatility != Volatility::Volatile
+                                || is_reusable_volatile_aggregate(function.func.inner().as_ref())
+                        }
+                        Expr::WindowFunction(function) => match &function.fun {
+                            WindowFunctionDefinition::AggregateUDF(udaf) => {
+                                udaf.signature().volatility != Volatility::Volatile
+                                    || is_reusable_volatile_aggregate(udaf.inner().as_ref())
+                            }
+                            WindowFunctionDefinition::WindowUDF(udwf) => {
+                                udwf.signature().volatility != Volatility::Volatile
+                            }
+                        },
+                        _ => true,
                     };
-                    if volatility == Volatility::Volatile {
+                    if !reusable {
                         shareable = false;
                         return Ok(TreeNodeRecursion::Stop);
                     }
@@ -227,16 +257,6 @@ impl NameNormalizer {
             scan.table_name = table_name;
             return Ok(LogicalPlan::TableScan(scan));
         }
-        if let LogicalPlan::Extension(extension) = plan
-            && let Some(range) = extension.node.as_any().downcast_ref::<RangeNode>()
-        {
-            // Each range gets a generated output name.
-            let &Range { start, end, step } = range.range();
-            let node = RangeNode::try_new(self.fresh(), start, end, step, range.num_partitions())?;
-            return Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(node),
-            }));
-        }
         match plan {
             // Unnest refers to its columns by name outside its expressions.
             LogicalPlan::Unnest(_) => return plan_err!("unexpected unnest"),
@@ -254,6 +274,11 @@ impl NameNormalizer {
             if input.schema().fields().len() != new_input.schema().fields().len() {
                 return plan_err!("unexpected normalized schema");
             }
+        }
+        if let LogicalPlan::Extension(extension) = plan
+            && let Some(node) = self.extension(extension.node.as_ref(), &new_inputs)?
+        {
+            return Ok(LogicalPlan::Extension(Extension { node }));
         }
         // Replaces a column with the column at the same position of the normalized inputs.
         // The column must match exactly one input column, as DataFusion resolves it.
@@ -340,6 +365,65 @@ impl NameNormalizer {
         })
     }
 
+    /// Rebuilds an extension node that stores generated output names outside its
+    /// expressions, with canonical names. Returns `None` for other nodes.
+    fn extension(
+        &mut self,
+        node: &dyn UserDefinedLogicalNode,
+        inputs: &[LogicalPlan],
+    ) -> datafusion_common::Result<Option<Arc<dyn UserDefinedLogicalNode>>> {
+        let node = node.as_any();
+        if let Some(range) = node.downcast_ref::<RangeNode>() {
+            let &Range { start, end, step } = range.range();
+            let range = RangeNode::try_new(self.fresh(), start, end, step, range.num_partitions())?;
+            return Ok(Some(Arc::new(range)));
+        }
+        let [input] = inputs else {
+            return Ok(None);
+        };
+        let input = Arc::new(input.clone());
+        Ok(Some(if node.is::<MonotonicIdNode>() {
+            Arc::new(MonotonicIdNode::try_new(input, self.fresh())?)
+        } else if node.is::<SparkPartitionIdNode>() {
+            Arc::new(SparkPartitionIdNode::try_new(input, self.fresh())?)
+        } else if let Some(map) = node.downcast_ref::<MapPartitionsNode>() {
+            let width = map.udf().output_schema().fields().len();
+            let names = (0..width).map(|_| self.fresh()).collect();
+            Arc::new(MapPartitionsNode::try_new(
+                input,
+                names,
+                vec![None; width],
+                self.stream_udf(map.udf())?,
+            )?)
+        } else {
+            return Ok(None);
+        }))
+    }
+
+    /// Returns the UDF with canonical output names, since a scalar iterator UDF names its
+    /// output after the generated names of its input.
+    fn stream_udf(
+        &mut self,
+        udf: &Arc<dyn StreamUDF>,
+    ) -> datafusion_common::Result<Arc<dyn StreamUDF>> {
+        let any: &dyn Any = udf.as_ref();
+        let Some(iter) = any.downcast_ref::<PySparkScalarPandasIterUDF>() else {
+            return Ok(Arc::clone(udf));
+        };
+        let schema = iter.output_schema();
+        let fields = schema
+            .fields()
+            .iter()
+            .map(|field| field.as_ref().clone().with_name(self.fresh()))
+            .collect::<Vec<_>>();
+        Ok(Arc::new(PySparkScalarPandasIterUDF::try_new(
+            iter.name().to_string(),
+            iter.payload().to_vec(),
+            Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
+            Arc::clone(iter.config()),
+        )?))
+    }
+
     fn subquery(&mut self, subquery: Subquery) -> datafusion_common::Result<Subquery> {
         // The outer references of nested correlated subqueries are not normalized.
         if !subquery.outer_ref_columns.is_empty() {
@@ -352,15 +436,44 @@ impl NameNormalizer {
     }
 }
 
-/// Returns whether the extension node is deterministic, holds no source, and its equality
-/// compares everything that determines its output. Other extension nodes may ignore
-/// sources or nondeterminism (e.g. monotonically increasing IDs or Python UDFs).
+/// Returns whether the extension node holds no source or state, and its equality compares
+/// everything that determines its output. Such nodes are shared even when their output is
+/// nondeterministic (e.g. monotonically increasing IDs or Python UDFs), as Spark reuses
+/// equal subqueries regardless of determinism. Other extension nodes may hold sources or
+/// state (e.g. checkpoints or streams).
 fn is_shareable_extension(node: &dyn UserDefinedLogicalNode) -> bool {
     let node = node.as_any();
     node.is::<RangeNode>()
         || node.is::<RequiredSortNode>()
         || node.is::<SortWithinPartitionsNode>()
         || node.is::<ExplicitRepartitionNode>()
+        || node.is::<MonotonicIdNode>()
+        || node.is::<SparkPartitionIdNode>()
+        || node.is::<MapPartitionsNode>()
+}
+
+/// Returns whether calls to the volatile scalar function compute the same result for the
+/// same input, as Spark assumes when it reuses equal subqueries. Python UDFs are reused even
+/// when they are nondeterministic, and random functions only with an explicit seed, since
+/// Spark gives each random function call without a seed its own seed. Input file functions
+/// are reused as well.
+fn is_reusable_volatile_scalar(function: &ScalarUDF, args: &[Expr]) -> bool {
+    if is_input_file_metadata_function(function) {
+        return true;
+    }
+    let func = function.inner();
+    let seeded = |position: usize| matches!(args.get(position), Some(Expr::Literal(value, _)) if !value.is_null());
+    func.is::<PySparkUDF>()
+        || func.is::<PySparkCoGroupMapUDF>()
+        || ((func.is::<Random>() || func.is::<Randn>()) && seeded(0))
+        || ((func.is::<Randstr>() || func.is::<RandPoisson>()) && seeded(1))
+        || (func.is::<SparkUniform>() && seeded(2))
+}
+
+/// Returns whether calls to the volatile aggregate function may be reused, which holds for
+/// Python UDFs as for [`is_reusable_volatile_scalar`].
+fn is_reusable_volatile_aggregate(func: &dyn AggregateUDFImpl) -> bool {
+    func.is::<PySparkGroupAggregateUDF>() || func.is::<PySparkGroupMapUDF>()
 }
 
 /// Returns whether the projection only renames the columns of its input, in order.
