@@ -255,3 +255,22 @@ def test_collect_set_treats_nan_values_as_one_value(spark, data_type):
     values = "(-CAST('NaN' AS DOUBLE)), (CAST('NaN' AS DOUBLE)), (1.0D)"
     sql = f"SELECT size(collect_set(CAST(x AS {data_type}))) FROM VALUES {values} AS t(x)"  # noqa: S608
     assert rows(spark, sql) == [(2,)]
+
+
+@pytest.mark.parametrize(
+    "frame",
+    ["ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", "ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"],
+)
+def test_window_collect_set_respect_nulls_keeps_one_null(spark, frame):
+    actual = rows(
+        spark,
+        f"SELECT id, collect_set(v) RESPECT NULLS OVER (PARTITION BY k ORDER BY id {frame}) "  # noqa: S608
+        "FROM VALUES (1, 1, 1.0D), (2, 1, NULL), (3, 1, 1.0D), (4, 2, NULL) AS t(id, k, v) ORDER BY id",
+    )
+    # The order of the elements of `collect_set` is not defined.
+    assert [(i, sorted(s, key=lambda x: (x is not None, x))) for i, s in actual] == [
+        (1, [None, 1.0]),
+        (2, [None, 1.0]),
+        (3, [None, 1.0]),
+        (4, [None]),
+    ]
