@@ -25,7 +25,7 @@ def test_array_of_structs_field_by_name(spark):
     assert df.select(a[F.lit("q")]).collect() == [Row(**{"a.q": [1, 2]})]
     assert df.select(F.slice(a, -1, 1)["p"][0]).collect() == [Row(**{"slice(a, -1, 1).p[0]": "y"})]
     assert df.select(F.slice(a, -1, 1).getField("p")).collect() == [Row(**{"slice(a, -1, 1).p": ["y"]})]
-    assert df.where(a["q"][1] == 2).select(a["q"].alias("v")).collect() == [Row(v=[1, 2])]
+    assert df.where(a["q"][1] == F.lit(2)).select(a["q"].alias("v")).collect() == [Row(v=[1, 2])]
 
 
 @pytest.mark.parametrize("field", ["zz", "0"])
