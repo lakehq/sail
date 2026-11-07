@@ -719,11 +719,16 @@ fn duplicate_agnostic_extreme(
 fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     match input.arguments.len() {
         1 => {
-            let filter = input
+            let condition = input
                 .arguments
                 .first()
                 .ok_or_else(|| PlanError::invalid("`count_if` requires 1 argument"))?
                 .clone();
+            // A row is counted when both the FILTER clause and the condition are true.
+            let filter = match input.filter {
+                Some(filter) => filter.as_ref().clone().and(condition),
+                None => condition,
+            };
             Ok(expr::Expr::AggregateFunction(AggregateFunction {
                 func: count::count_udaf(),
                 params: AggregateFunctionParams {

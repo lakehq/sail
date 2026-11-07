@@ -245,12 +245,26 @@ fn replace(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(ScalarUDF::from(ReplaceFunc::new()).call(arguments))
 }
 
+/// Like Spark's `upper` and `lower`, binary input becomes a string with each invalid UTF-8
+/// sequence replaced by U+FFFD.
+fn case_conversion_argument(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
+    let arg = input.arguments.one()?;
+    match arg.get_type(schema)? {
+        DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_) => Ok(ScalarUDF::from(MakeValidUtf8::new()).call(vec![arg])),
+        _ => cast_to_logical_string_or_try(arg, schema, false),
+    }
+}
+
 fn lower(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    Ok(ScalarUDF::from(LowerFunc::new()).call(vec![validate_utf8(input)?]))
+    Ok(ScalarUDF::from(LowerFunc::new()).call(vec![case_conversion_argument(input)?]))
 }
 
 fn upper(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    Ok(ScalarUDF::from(UpperFunc::new()).call(vec![validate_utf8(input)?]))
+    Ok(ScalarUDF::from(UpperFunc::new()).call(vec![case_conversion_argument(input)?]))
 }
 
 fn startswith(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

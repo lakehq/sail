@@ -59,3 +59,14 @@ Feature: upper output schema
       Then query result collected
         | s      |
         | X1.CSV |
+
+  Rule: Binary input
+
+    Scenario: upper replaces invalid UTF-8 in binary input
+      When query
+        """
+        SELECT upper(X'C3416263') AS result
+        """
+      Then query result
+        | result |
+        | �ABC   |

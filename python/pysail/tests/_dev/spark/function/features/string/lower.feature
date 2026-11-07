@@ -35,3 +35,14 @@ Feature: lower output schema
         root
          |-- result: string (nullable = true)
         """
+
+  Rule: Binary input
+
+    Scenario: lower replaces invalid UTF-8 in binary input
+      When query
+        """
+        SELECT lower(X'C3416263') AS result
+        """
+      Then query result
+        | result |
+        | �abc   |
