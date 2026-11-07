@@ -230,8 +230,12 @@ mod tests {
         assert_eq!(compare_floats(1.0_f64, 2.0), Ordering::Less);
         assert_eq!(compare_floats(-0.0_f64, 0.0), Ordering::Less);
         assert_eq!(compare_floats(f64::NAN, f64::INFINITY), Ordering::Greater);
-        // FIXME: Spark orders every NaN greatest.
-        //  Coordinate changes with Arrow/DataFusion comparisons and aggregate filter/pruning paths to avoid incorrect results
+        // FIXME: Spark treats every NaN, including `-NaN`, as one value that is larger than any other
+        //  value, but this follows IEEE 754 totalOrder (as Arrow does), where `-NaN` sorts before
+        //  `-inf`. Do not change only this function: Arrow's sort and comparison kernels, its row
+        //  encoding, and DataFusion's statistics and pruning also use totalOrder, so a local change
+        //  would mix two orderings in one query and give incorrect results. A fix should instead
+        //  canonicalize NaN before values reach any comparison or sort, so that every path agrees.
         assert_eq!(compare_floats(neg_nan, f64::NEG_INFINITY), Ordering::Less);
         assert_eq!(compare_floats(f16::ONE, f16::ZERO), Ordering::Greater);
         assert!(float_lt(1.0_f64, 2.0) && !float_lt(2.0_f64, 1.0));
