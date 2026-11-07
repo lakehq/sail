@@ -73,10 +73,15 @@ impl ScalarUDFImpl for CoalesceFunc {
         // Propagate field metadata (e.g. Arrow extension types) from the arguments that can
         // supply a value; see `coerced_fields_metadata` for the merge semantics.
         let metadata = coerced_fields_metadata(args.arg_fields.iter().map(|f| f.as_ref()))?;
-        // Sail: keep only the type metadata of the arguments; see `type_metadata`. The interval
+        // Keep only the type metadata of the arguments; see `type_metadata`. The interval
         // range of the result is the widest range of the arguments, not that of the first one.
         let mut metadata = type_metadata(&metadata).inner().clone();
-        match widest_interval_metadata(args.arg_fields.iter().map(|f| f.as_ref()))? {
+        let fields = args
+            .arg_fields
+            .iter()
+            .map(|f| f.as_ref())
+            .zip(args.scalar_arguments.iter().copied());
+        match widest_interval_metadata(fields)? {
             Some(interval) => {
                 metadata.insert(SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), interval)
             }
@@ -165,7 +170,7 @@ impl ScalarUDFImpl for CoalesceFunc {
         let (init, last) = args.split_at(args.len() - 1);
         let (prefix, rest) = match init.iter().position(|arg| arg.is_volatile()) {
             None => (init, last[0].clone()),
-            // Sail: the kernel evaluates every argument eagerly, so an argument
+            // The kernel evaluates every argument eagerly, so an argument
             // after a non-NULL volatile one would still be evaluated (and could
             // fail), unlike Spark's lazy `Coalesce`. Use `CoalesceLazy` for the
             // rest unless every later argument is a column or a literal, which
@@ -215,7 +220,7 @@ impl ScalarUDFImpl for CoalesceFunc {
     }
 }
 
-// Sail: see `CoalesceFunc::simplify`.
+// See `CoalesceFunc::simplify`.
 fn is_column_or_literal(expr: &Expr) -> bool {
     matches!(expr, Expr::Column(_) | Expr::Literal(..))
 }
@@ -237,7 +242,7 @@ mod tests {
     use crate::scalar::math::random::Random;
     use crate::scalar::misc::raise_error::RaiseError;
 
-    // Sail: the result keeps only the type metadata of the arguments; see `type_metadata`.
+    // The result keeps only the type metadata of the arguments; see `type_metadata`.
     #[test]
     fn coalesce_return_field_keeps_only_type_metadata() -> Result<()> {
         use datafusion::arrow::datatypes::Field;

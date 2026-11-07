@@ -7,6 +7,13 @@ or `coalesce`) has no column metadata, while a grouping key keeps the metadata o
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
 
+from pysail.testing.spark.utils.common import is_jvm_spark
+
+# A column of the NULL type that is cast to an interval type has no interval fields.
+null_column_interval_bug = pytest.mark.xfail(
+    not is_jvm_spark(), reason="Known Sail bug: a NULL column cast to an interval has no interval fields", strict=True
+)
+
 
 @pytest.fixture
 def df(spark):
@@ -24,8 +31,27 @@ def df(spark):
         lambda: F.ifnull("a", "b"),
         lambda: F.nvl2("a", "a", "b"),
         lambda: F.when(F.col("a") > 0, F.col("a")).otherwise(F.col("b")),
+        lambda: F.first("a"),
+        lambda: F.last("a"),
+        lambda: F.any_value("a"),
+        lambda: F.max_by("a", "b"),
+        lambda: F.min_by("a", "b"),
     ],
-    ids=["min", "max", "count", "coalesce", "nvl", "ifnull", "nvl2", "case_when"],
+    ids=[
+        "min",
+        "max",
+        "count",
+        "coalesce",
+        "nvl",
+        "ifnull",
+        "nvl2",
+        "case_when",
+        "first",
+        "last",
+        "any_value",
+        "max_by",
+        "min_by",
+    ],
 )
 def test_expression_result_has_no_column_metadata(df, column):
     out = df.select(column().alias("x"))
@@ -71,6 +97,16 @@ def test_result_keeps_the_interval_type(spark, literal, expected):
         ("INTERVAL '2' MONTH", "INTERVAL '1' YEAR", "interval year to month"),
         ("INTERVAL '1' HOUR", "INTERVAL '2' MINUTE", "interval hour to minute"),
         ("INTERVAL '1' DAY", "INTERVAL '2' SECOND", "interval day to second"),
+        pytest.param("INTERVAL '1' HOUR", "NULL", "interval hour", marks=null_column_interval_bug),
+        pytest.param("NULL", "INTERVAL '1' HOUR", "interval hour", marks=null_column_interval_bug),
+        ("INTERVAL '1' HOUR", "CAST(NULL AS INTERVAL MINUTE)", "interval hour to minute"),
+        ("INTERVAL '1' HOUR", "make_dt_interval(0, 1)", "interval day to second"),
+        ("INTERVAL '1' YEAR", "make_ym_interval(0, 1)", "interval year to month"),
+        (
+            "INTERVAL '1' HOUR",
+            "TIMESTAMP'2020-01-01 01:02:03' - TIMESTAMP'2020-01-01 00:00:00'",
+            "interval day to second",
+        ),
     ],
 )
 def test_coalesce_widens_the_interval_type(spark, first, second, expected):

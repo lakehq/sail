@@ -5,7 +5,7 @@ use arrow::datatypes::{DataType, Field};
 use datafusion::functions::expr_fn::isnan;
 use datafusion::functions_aggregate::{
     approx_distinct, average, bit_and_or_xor, bool_and_or, correlation, count, covariance,
-    first_last, grouping, percentile_cont, stddev, sum, variance,
+    grouping, percentile_cont, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
@@ -28,6 +28,7 @@ use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
 use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
+use sail_function::aggregate::first_last::{FirstValue, LastValue};
 use sail_function::aggregate::grouping_id::GroupingIdFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
@@ -54,7 +55,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
     AggFunction, AggFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
     get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
-    theta_args_with_default_lg,
+    normalize_distinct_floats, theta_args_with_default_lg,
 };
 use crate::function::transform_count_star_wildcard_expr;
 
@@ -292,7 +293,7 @@ fn first_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let (args, null_treatment) =
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: first_last::first_value_udaf(),
+        func: Arc::new(AggregateUDF::from(FirstValue::new())),
         params: AggregateFunctionParams {
             args,
             // Spark's `EliminateDistinct` strips DISTINCT from `First` as duplicate-agnostic.
@@ -308,7 +309,7 @@ fn last_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let (args, null_treatment) =
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: first_last::last_value_udaf(),
+        func: Arc::new(AggregateUDF::from(LastValue::new())),
         params: AggregateFunctionParams {
             args,
             // Spark's `EliminateDistinct` strips DISTINCT from `Last` as duplicate-agnostic.
@@ -712,6 +713,12 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let ignore_nulls = input.ignore_nulls.or(Some(true));
     let arg = input.arguments.one()?;
     let element_type = arg.get_type(schema)?;
+    // DISTINCT with ORDER BY requires the ordering to be the argument itself.
+    let arg = if input.order_by.is_empty() {
+        normalize_distinct_floats(arg, &element_type)
+    } else {
+        arg
+    };
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs
@@ -746,6 +753,12 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let ignore_nulls = input.ignore_nulls.or(Some(true));
     let arg = input.arguments.one()?;
     let element_type = arg.get_type(schema)?;
+    // DISTINCT with ORDER BY requires the ordering to be the argument itself.
+    let arg = if input.distinct && input.order_by.is_empty() {
+        normalize_distinct_floats(arg, &element_type)
+    } else {
+        arg
+    };
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs when both distinct and ignore_nulls are true
@@ -795,7 +808,7 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         params: AggregateFunctionParams {
             args: vec![agg_col.clone()],
             distinct: input.distinct,
-            order_by: if input.distinct {
+            order_by: if input.distinct && input.order_by.is_empty() {
                 vec![agg_col.clone().sort(true, true)]
             } else {
                 input.order_by
@@ -805,6 +818,14 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         },
     });
 
+    // Spark joins the values without a delimiter when the delimiter is NULL.
+    // <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/collect.scala#L586-L600>
+    let delim = delim.cast_to(&DataType::Utf8, schema)?;
+    let delim = if delim.nullable(schema)? {
+        ScalarUDF::from(CoalesceFunc::new()).call(vec![delim, lit("")])
+    } else {
+        delim
+    };
     let string_agg = array_to_string(
         agg.cast_to(
             &DataType::List(Arc::new(Field::new(
@@ -814,7 +835,7 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             ))),
             schema,
         )?,
-        delim.cast_to(&DataType::Utf8, schema)?,
+        delim,
     );
 
     let casted_agg = match agg_col.get_type(schema)? {

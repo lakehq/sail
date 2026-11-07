@@ -243,8 +243,21 @@ impl ReadFormat for ParquetReadFormat {
             .with_file_metadata_cache(Some(metadata_cache))
             .fetch_metadata()
             .await?;
-        let statistics =
+        let mut statistics =
             DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &file_schema)?;
+        for (field, column) in file_schema
+            .fields()
+            .iter()
+            .zip(statistics.column_statistics.iter_mut())
+        {
+            // TODO: Row-group and page pruning still use the float maximum, which leaves out NaN.
+            if field.data_type().is_floating() {
+                // File statistics leave out NaN, so equal bounds do not make a constant column,
+                // and the bounds are not the extrema of the values.
+                column.min_value = column.min_value.clone().to_inexact();
+                column.max_value = column.max_value.clone().to_inexact();
+            }
+        }
         let ordering = ordering_from_parquet_metadata(&metadata, &file_schema)?;
         Ok(ListingFileMeta {
             statistics,

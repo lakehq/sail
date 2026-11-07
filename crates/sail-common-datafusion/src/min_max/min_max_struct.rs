@@ -8,11 +8,13 @@ use arrow::array::{
     new_empty_array,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::scalar::{copy_array_data, partial_cmp_struct};
+use datafusion_common::scalar::copy_array_data;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
+
+use crate::min_max::common::compare_nested;
 
 /// Accumulator for MIN/MAX operations on Struct data types.
 ///
@@ -86,12 +88,13 @@ impl GroupsAccumulator for MinMaxStructAccumulator {
         // apply filter if needed
         let array = apply_filter_as_nulls(array, opt_filter)?;
 
-        fn struct_min(a: &StructArray, b: &StructArray) -> bool {
-            matches!(partial_cmp_struct(a, b), Some(Ordering::Less))
+        // Compare like Spark; see `compare_nested`.
+        fn struct_min(a: &StructArray, b: &StructArray) -> Result<bool> {
+            Ok(compare_nested(a, 0, b, 0)? == Ordering::Less)
         }
 
-        fn struct_max(a: &StructArray, b: &StructArray) -> bool {
-            matches!(partial_cmp_struct(a, b), Some(Ordering::Greater))
+        fn struct_max(a: &StructArray, b: &StructArray) -> Result<bool> {
+            Ok(compare_nested(a, 0, b, 0)? == Ordering::Greater)
         }
 
         if self.is_min {
@@ -238,7 +241,7 @@ impl MinMaxStructState {
         mut cmp: F,
     ) -> Result<()>
     where
-        F: FnMut(&StructArray, &StructArray) -> bool + Send + Sync,
+        F: FnMut(&StructArray, &StructArray) -> Result<bool> + Send + Sync,
     {
         self.min_max.resize(total_num_groups, None);
         // Minimize value copies by calculating the new min/maxes for each group
@@ -268,7 +271,7 @@ impl MinMaxStructState {
             };
 
             // Compare the new value to the existing value, replacing if necessary
-            if cmp(&new_val, existing_val) {
+            if cmp(&new_val, existing_val)? {
                 locations[group_index] = MinMaxLocation::Input(new_val);
             }
         }
@@ -299,7 +302,7 @@ impl MinMaxStructState {
             }
             EmitTo::First(n) => {
                 let first_min_maxes = split_vec_min_alloc(&mut self.min_max, n);
-                // Sail: subtract the same byte measure `set_value` charged,
+                // Subtract the same byte measure `set_value` charged,
                 // not the row count (each stored struct has length 1).
                 let first_data_capacity: usize = first_min_maxes
                     .iter()
@@ -460,11 +463,12 @@ mod tests {
         let min_result = min_result.as_struct();
         let max_result = max_result.as_struct();
 
+        // Like Spark, NULL fields compare first, so the struct with NULL fields is the
+        // minimum.
         assert_eq!(min_result.len(), 1);
-        let int_array = min_result.column(0).as_primitive::<Int32Type>();
-        let str_array = min_result.column(1).as_string::<i32>();
-        assert_eq!(int_array.value(0), 1);
-        assert_eq!(str_array.value(0), "a");
+        assert!(min_result.is_valid(0));
+        assert!(min_result.column(0).is_null(0));
+        assert!(min_result.column(1).is_null(0));
 
         assert_eq!(max_result.len(), 1);
         let int_array = max_result.column(0).as_primitive::<Int32Type>();

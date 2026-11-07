@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, OffsetSizeTrait, StringArrayType};
 use arrow::buffer::NullBuffer;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::type_coercion::binary::{binary_to_string_coercion, string_coercion};
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass,
-    Volatility,
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
 };
 use memchr::memmem;
 
@@ -66,6 +66,17 @@ impl ScalarUDFImpl for ReplaceFunc {
         } else {
             exec_err!("Unsupported data types for replace. Expected Utf8, LargeUtf8 or Utf8View")
         }
+    }
+
+    // Like Spark, the result is nullable only if an argument is nullable.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
+        Ok(Field::new(self.name(), self.return_type(&arg_types)?, nullable).into())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

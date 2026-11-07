@@ -58,7 +58,7 @@ impl Default for ArrayAgg {
     }
 }
 
-// Sail: the distributed codec needs to construct and inspect the pre-ordered flag.
+// The distributed codec needs to construct and inspect the pre-ordered flag.
 impl ArrayAgg {
     pub fn new(is_input_pre_ordered: bool) -> Self {
         Self {
@@ -612,7 +612,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
-        // Sail: store batches in the declared type; see `cast_to_declared`.
+        // Store batches in the declared type; see `cast_to_declared`.
         let input = &cast_to_declared(&values[0], &self.datatype)?;
 
         self.num_groups = self.num_groups.max(total_num_groups);
@@ -750,7 +750,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         self.num_groups = self.num_groups.max(total_num_groups);
 
         // Push the ListArray's backing values array as a single batch.
-        // Sail: store batches in the declared type; see `cast_to_declared`.
+        // Store batches in the declared type; see `cast_to_declared`.
         let list_values = &cast_to_declared(input_list.values(), &self.datatype)?;
         let list_offsets = input_list.offsets();
 
@@ -821,7 +821,7 @@ fn single_value_lists(
     ignore_nulls: bool,
     datatype: &DataType,
 ) -> Result<ArrayRef> {
-    // Sail: use the declared type; see `cast_to_declared`.
+    // Use the declared type; see `cast_to_declared`.
     let input = cast_to_declared(input, datatype)?;
     // Offsets are [0, 1, 2, ..., n].
     let offsets = OffsetBuffer::from_repeated_length(1, input.len());
@@ -836,7 +836,7 @@ fn single_value_lists(
     Ok(Arc::new(ListArray::new(field, offsets, input, nulls)))
 }
 
-/// Sail: casts `array` to the declared `datatype` if its runtime type differs.
+/// Casts `array` to the declared `datatype` if its runtime type differs.
 ///
 /// The runtime type of an input array can differ from the declared argument
 /// type, e.g. in nested field nullability or metadata. The accumulators build
@@ -948,7 +948,7 @@ impl DistinctArrayAggGroupsAccumulator {
         input: &ArrayRef,
         rows: impl IntoIterator<Item = (usize, usize)>,
     ) -> Result<()> {
-        // Sail: encode values in the declared type, so the decoded rows match
+        // Encode values in the declared type, so the decoded rows match
         // the declared list item field; see `cast_to_declared`.
         let input = &cast_to_declared(input, &self.datatype)?;
         let encoded = self

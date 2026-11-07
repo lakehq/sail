@@ -13,7 +13,7 @@ use arrow::array::{ArrayRef, ArrowPrimitiveType, downcast_primitive};
 use arrow::datatypes::{DataType, FieldRef, Float16Type, Float32Type, Float64Type};
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::stats::Precision;
-use datafusion_common::{ColumnStatistics, Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{ColumnStatistics, Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, GroupsAccumulator, SetMonotonicity, Signature, StatisticsArgs,
@@ -24,7 +24,7 @@ use datafusion_physical_expr::expressions;
 
 use crate::float_semantics::{float_gt, float_lt};
 use crate::metadata::type_metadata;
-use crate::min_max::common::{MaxAccumulator, MinAccumulator};
+use crate::min_max::common::{MaxAccumulator, MinAccumulator, MinMaxValue};
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use crate::min_max::min_max_struct::MinMaxStructAccumulator;
 
@@ -46,9 +46,32 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
         DataType::RunEndEncoded(_, values) => {
             get_min_max_result_type(&[values.data_type().clone()])
         }
+        // Like Spark (`TypeUtils.checkForOrderingExpr`), a type that contains a map cannot be
+        // ordered.
+        data_type if contains_map(data_type) => {
+            plan_err!("min/max does not support ordering on type {data_type}")
+        }
         // TODO add checker for datatype which min and max supported
         // For example, the `Struct` and `Map` type are not supported in the MIN and MAX function
         _ => Ok(input_types.to_vec()),
+    }
+}
+
+fn contains_map(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Map(_, _) => true,
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field) => contains_map(field.data_type()),
+        DataType::Struct(fields) => fields.iter().any(|field| contains_map(field.data_type())),
+        DataType::Union(fields, _) => fields
+            .iter()
+            .any(|(_, field)| contains_map(field.data_type())),
+        DataType::Dictionary(_, value) => contains_map(value),
+        DataType::RunEndEncoded(_, values) => contains_map(values.data_type()),
+        _ => false,
     }
 }
 
@@ -94,11 +117,20 @@ macro_rules! primitive_max_accumulator {
     ($t:ty, $data_type:ident, total, $bits:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$t, _>::new($data_type, |cur, new| {
-                if float_gt(new, *cur) {
+                // Like Spark (`Greatest`/`Least` with `SQLOrderingUtil.compareDoubles`), all NaN
+                // values are the same value, which is larger than any other value, and a value
+                // only replaces a different one, so a tie of `-0.0` and `0.0` keeps the first
+                // value.
+                let new = if new.is_nan() {
+                    <$t as ArrowPrimitiveType>::Native::NAN
+                } else {
+                    new
+                };
+                if float_gt(new, *cur) && new != *cur {
                     *cur = new
                 }
             })
-            // Use the total-order minimum so negative NaNs replace the sentinel.
+            // Start from the total-order minimum, which any value replaces.
             .with_starting_value(<$t as ArrowPrimitiveType>::Native::from_bits($bits::MAX)),
         ))
     }};
@@ -128,7 +160,16 @@ macro_rules! primitive_min_accumulator {
     ($t:ty, $data_type:ident, total, $bits:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$t, _>::new(&$data_type, |cur, new| {
-                if float_lt(new, *cur) {
+                // Like Spark (`Greatest`/`Least` with `SQLOrderingUtil.compareDoubles`), all NaN
+                // values are the same value, which is larger than any other value, and a value
+                // only replaces a different one, so a tie of `-0.0` and `0.0` keeps the first
+                // value.
+                let new = if new.is_nan() {
+                    <$t as ArrowPrimitiveType>::Native::NAN
+                } else {
+                    new
+                };
+                if float_lt(new, *cur) && new != *cur {
                     *cur = new
                 }
             })
@@ -167,8 +208,10 @@ trait FromColumnStatistics {
 
 impl FromColumnStatistics for Max {
     fn value_from_column_statistics(&self, col_stats: &ColumnStatistics) -> Option<ScalarValue> {
+        // Float statistics (e.g. Parquet) leave out NaN, which is the largest value in Spark.
         if let Precision::Exact(ref val) = col_stats.max_value
             && !val.is_null()
+            && !val.data_type().is_floating()
         {
             return Some(val.clone());
         }
@@ -180,7 +223,7 @@ impl FromColumnStatistics for Max {
 /// so it keeps the metadata of the argument field, such as an extension type.
 fn min_max_return_field(func: &impl AggregateUDFImpl, arg_fields: &[FieldRef]) -> Result<FieldRef> {
     let field = udaf_default_return_field(func, arg_fields)?;
-    // Sail: keep only the type metadata of the argument; see `type_metadata`.
+    // Keep only the type metadata of the argument; see `type_metadata`.
     Ok(type_metadata(&FieldMetadata::from(arg_fields[0].as_ref())).add_to_field_ref(field))
 }
 
@@ -298,7 +341,8 @@ impl AggregateUDFImpl for Max {
 pub struct SlidingMaxAccumulator {
     /// Typed NULL returned when the window contains no non-null values
     empty_value: ScalarValue,
-    moving_max: MovingMax<ScalarValue>,
+    // Compare nested values like Spark; see `MinMaxValue`.
+    moving_max: MovingMax<MinMaxValue>,
 }
 
 impl SlidingMaxAccumulator {
@@ -306,13 +350,13 @@ impl SlidingMaxAccumulator {
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
             empty_value: ScalarValue::try_from(datatype)?,
-            moving_max: MovingMax::<ScalarValue>::new(),
+            moving_max: MovingMax::<MinMaxValue>::new(),
         })
     }
 
     fn current_max(&self) -> ScalarValue {
         match self.moving_max.max() {
-            Some(res) => res.clone(),
+            Some(res) => res.0.clone(),
             None => self.empty_value.clone(),
         }
     }
@@ -323,7 +367,7 @@ impl Accumulator for SlidingMaxAccumulator {
         for idx in 0..values[0].len() {
             let val = ScalarValue::try_from_array(&values[0], idx)?;
             if !val.is_null() {
-                self.moving_max.push(val);
+                self.moving_max.push(MinMaxValue(val));
             }
         }
         Ok(())
@@ -336,7 +380,9 @@ impl Accumulator for SlidingMaxAccumulator {
     fn size(&self) -> usize {
         size_of_val(self) - size_of_val(&self.empty_value)
             + self.empty_value.size()
-            + self.moving_max.heap_size(|sv| sv.size() - size_of_val(sv))
+            + self
+                .moving_max
+                .heap_size(|sv| sv.0.size() - size_of_val(&sv.0))
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -385,8 +431,10 @@ impl Default for Min {
 
 impl FromColumnStatistics for Min {
     fn value_from_column_statistics(&self, col_stats: &ColumnStatistics) -> Option<ScalarValue> {
+        // Float statistics (e.g. Parquet) leave out NaN, which is the largest value in Spark.
         if let Precision::Exact(ref val) = col_stats.min_value
             && !val.is_null()
+            && !val.data_type().is_floating()
         {
             return Some(val.clone());
         }
@@ -510,20 +558,21 @@ impl AggregateUDFImpl for Min {
 pub struct SlidingMinAccumulator {
     /// Typed NULL returned when the window contains no non-null values
     empty_value: ScalarValue,
-    moving_min: MovingMin<ScalarValue>,
+    // Compare nested values like Spark; see `MinMaxValue`.
+    moving_min: MovingMin<MinMaxValue>,
 }
 
 impl SlidingMinAccumulator {
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
             empty_value: ScalarValue::try_from(datatype)?,
-            moving_min: MovingMin::<ScalarValue>::new(),
+            moving_min: MovingMin::<MinMaxValue>::new(),
         })
     }
 
     fn current_min(&self) -> ScalarValue {
         match self.moving_min.min() {
-            Some(res) => res.clone(),
+            Some(res) => res.0.clone(),
             None => self.empty_value.clone(),
         }
     }
@@ -534,7 +583,7 @@ impl Accumulator for SlidingMinAccumulator {
         for idx in 0..values[0].len() {
             let val = ScalarValue::try_from_array(&values[0], idx)?;
             if !val.is_null() {
-                self.moving_min.push(val);
+                self.moving_min.push(MinMaxValue(val));
             }
         }
         Ok(())
@@ -547,7 +596,9 @@ impl Accumulator for SlidingMinAccumulator {
     fn size(&self) -> usize {
         size_of_val(self) - size_of_val(&self.empty_value)
             + self.empty_value.size()
-            + self.moving_min.heap_size(|sv| sv.size() - size_of_val(sv))
+            + self
+                .moving_min
+                .heap_size(|sv| sv.0.size() - size_of_val(&sv.0))
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -834,7 +885,7 @@ mod tests {
 
     use super::*;
 
-    // Sail: the result keeps only the type metadata of the argument; see `type_metadata`.
+    // The result keeps only the type metadata of the argument; see `type_metadata`.
     #[test]
     fn min_max_return_field_keeps_only_type_metadata() -> Result<()> {
         let arg = Arc::new(Field::new("a", DataType::Int32, true).with_metadata(
@@ -889,11 +940,15 @@ mod tests {
         let positive_nan = f32::NAN;
         let negative_nan = f32::from_bits(f32::NAN.to_bits() | (1 << 31));
 
+        // Like Spark, all NaN values are the same value, which is larger than any other value.
         let min_cases = [
             (vec![positive_nan, 1.0], 1.0),
-            (vec![1.0, negative_nan], negative_nan),
-            (vec![0.0, -0.0], -0.0),
+            (vec![1.0, negative_nan], 1.0),
+            (vec![negative_nan, 1.0], 1.0),
+            // Like Spark, a tie of `-0.0` and `0.0` keeps the first value.
+            (vec![0.0, -0.0], 0.0),
             (vec![positive_nan], positive_nan),
+            (vec![negative_nan], positive_nan),
         ];
         for (values, expected) in min_cases {
             let actual = evaluate_grouped_float32(grouped_float32_min()?, values);
@@ -902,9 +957,12 @@ mod tests {
 
         let max_cases = [
             (vec![positive_nan, 1.0], positive_nan),
-            (vec![1.0, negative_nan], 1.0),
-            (vec![-0.0, 0.0], 0.0),
-            (vec![negative_nan], negative_nan),
+            (vec![1.0, negative_nan], positive_nan),
+            (vec![negative_nan, 1.0], positive_nan),
+            (vec![negative_nan, positive_nan], positive_nan),
+            // Like Spark, a tie of `-0.0` and `0.0` keeps the first value.
+            (vec![-0.0, 0.0], -0.0),
+            (vec![negative_nan], positive_nan),
         ];
         for (values, expected) in max_cases {
             let actual = evaluate_grouped_float32(grouped_float32_max()?, values);
@@ -912,6 +970,28 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn min_max_reject_types_that_contain_a_map() {
+        let map = DataType::Map(
+            Arc::new(Field::new_struct(
+                "entries",
+                vec![
+                    Field::new("key", DataType::Int32, false),
+                    Field::new("value", DataType::Int32, true),
+                ],
+                false,
+            )),
+            false,
+        );
+        let list = DataType::List(Arc::new(Field::new_list_field(map.clone(), true)));
+        let structure = DataType::Struct(vec![Field::new("m", map.clone(), true)].into());
+        for data_type in [map, list, structure] {
+            assert!(get_min_max_result_type(&[data_type]).is_err());
+        }
+        let list = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        assert!(get_min_max_result_type(&[list]).is_ok());
     }
 
     #[test]

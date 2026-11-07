@@ -4,22 +4,25 @@
 
 use std::cmp::Ordering;
 use std::mem::size_of_val;
+use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array, Decimal32Array,
-    Decimal64Array, Decimal128Array, Decimal256Array, DurationMicrosecondArray,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+    Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array, DurationMicrosecondArray,
     DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
     Float16Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
     IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray,
     LargeStringArray, StringArray, StringViewArray, Time32MillisecondArray, Time32SecondArray,
     Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
-    UInt16Array, UInt32Array, UInt64Array,
+    UInt16Array, UInt32Array, UInt64Array, make_comparator,
 };
 use arrow::compute;
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::{DataFusionError, Result, ScalarValue, downcast_value, internal_err};
 use datafusion_expr_common::accumulator::Accumulator;
+use half::f16;
 
 use crate::float_semantics::{FloatSemantics, compare_floats};
 
@@ -80,25 +83,72 @@ fn ensure_decimal_compatibility(
     }
 }
 
-fn min_max_generic_scalar(lhs: &ScalarValue, rhs: &ScalarValue, ordering: Ordering) -> ScalarValue {
+/// Compares two values of a nested type (e.g. list or struct) like Spark: element by element
+/// (or field by field) with NULL elements and fields first, and then the shorter list first. This
+/// is the order of `ORDER BY ... ASC NULLS FIRST` and of `greatest`/`least`.
+pub fn compare_nested(
+    lhs: &dyn Array,
+    lhs_index: usize,
+    rhs: &dyn Array,
+    rhs_index: usize,
+) -> Result<Ordering> {
+    let options = SortOptions {
+        descending: false,
+        nulls_first: true,
+    };
+    Ok(make_comparator(lhs, rhs, options)?(lhs_index, rhs_index))
+}
+
+/// See [`compare_nested`].
+pub fn compare_nested_scalars(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<Ordering> {
+    compare_nested(lhs.to_array()?.as_ref(), 0, rhs.to_array()?.as_ref(), 0)
+}
+
+/// A value of a sliding window `min` or `max`, which compares nested values like
+/// [`compare_nested`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct MinMaxValue(pub ScalarValue);
+
+impl PartialOrd for MinMaxValue {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (&self.0, &other.0) {
+            (ScalarValue::Struct(_), ScalarValue::Struct(_))
+            | (ScalarValue::List(_), ScalarValue::List(_))
+            | (ScalarValue::LargeList(_), ScalarValue::LargeList(_))
+            | (ScalarValue::ListView(_), ScalarValue::ListView(_))
+            | (ScalarValue::LargeListView(_), ScalarValue::LargeListView(_))
+            | (ScalarValue::FixedSizeList(_), ScalarValue::FixedSizeList(_)) => {
+                compare_nested_scalars(&self.0, &other.0).ok()
+            }
+            (lhs, rhs) => lhs.partial_cmp(rhs),
+        }
+    }
+}
+
+fn min_max_generic_scalar(
+    lhs: &ScalarValue,
+    rhs: &ScalarValue,
+    ordering: Ordering,
+) -> Result<ScalarValue> {
     if lhs.is_null() {
         let mut rhs_copy = rhs.clone();
         // When the new value won we want to compact it to
         // avoid storing the entire input
         rhs_copy.compact();
-        rhs_copy
+        Ok(rhs_copy)
     } else if rhs.is_null() {
-        lhs.clone()
+        Ok(lhs.clone())
     } else {
-        match lhs.partial_cmp(rhs) {
-            Some(order) if order == ordering => {
+        // Compare like Spark; see `compare_nested`.
+        match compare_nested_scalars(lhs, rhs)? {
+            order if order == ordering => {
                 // When the new value won we want to compact it to
                 // avoid storing the entire input
                 let mut rhs_copy = rhs.clone();
                 rhs_copy.compact();
-                rhs_copy
+                Ok(rhs_copy)
             }
-            _ => lhs.clone(),
+            _ => Ok(lhs.clone()),
         }
     }
 }
@@ -348,8 +398,10 @@ fn min_max_scalar_same_variant(
         (ScalarValue::Struct(_), ScalarValue::Struct(_))
         | (ScalarValue::List(_), ScalarValue::List(_))
         | (ScalarValue::LargeList(_), ScalarValue::LargeList(_))
+        | (ScalarValue::ListView(_), ScalarValue::ListView(_))
+        | (ScalarValue::LargeListView(_), ScalarValue::LargeListView(_))
         | (ScalarValue::FixedSizeList(_), ScalarValue::FixedSizeList(_)) => {
-            min_max_generic_scalar(lhs, rhs, ordering)
+            min_max_generic_scalar(lhs, rhs, ordering)?
         }
         _ => {
             return internal_err!(
@@ -472,6 +524,28 @@ macro_rules! typed_min_max_batch {
     }};
 }
 
+// Spark treats all NaN values as the same value, which is larger than any other value
+// (`SQLOrderingUtil.compareDoubles`), but Arrow's kernels order a negative NaN before any other
+// value. Replaces negative NaN values with the positive NaN if there are any.
+macro_rules! positive_nans {
+    ($VALUES:expr, $ARRAYTYPE:ident, $NATIVE:ty) => {{
+        let array = downcast_value!($VALUES, $ARRAYTYPE);
+        // Only a negative NaN has larger bits than the negative infinity. The branch-free fold
+        // is vectorized.
+        let negative_infinity = <$NATIVE>::NEG_INFINITY.to_bits();
+        if array
+            .values()
+            .iter()
+            .fold(false, |found, v| found | (v.to_bits() > negative_infinity))
+        {
+            let array: $ARRAYTYPE = array.unary(|v| if v.is_nan() { <$NATIVE>::NAN } else { v });
+            Arc::new(array) as ArrayRef
+        } else {
+            Arc::clone($VALUES)
+        }
+    }};
+}
+
 // Statically-typed version of min/max(array) -> ScalarValue  for non-string types.
 // this is a macro to support both operations (min and max).
 macro_rules! min_max_batch {
@@ -492,13 +566,16 @@ macro_rules! min_max_batch {
             }
             // all types that have a natural order
             DataType::Float64 => {
-                typed_min_max_batch!($VALUES, Float64Array, Float64, $OP)
+                let values = positive_nans!($VALUES, Float64Array, f64);
+                typed_min_max_batch!(&values, Float64Array, Float64, $OP)
             }
             DataType::Float32 => {
-                typed_min_max_batch!($VALUES, Float32Array, Float32, $OP)
+                let values = positive_nans!($VALUES, Float32Array, f32);
+                typed_min_max_batch!(&values, Float32Array, Float32, $OP)
             }
             DataType::Float16 => {
-                typed_min_max_batch!($VALUES, Float16Array, Float16, $OP)
+                let values = positive_nans!($VALUES, Float16Array, f16);
+                typed_min_max_batch!(&values, Float16Array, Float16, $OP)
             }
             DataType::Int64 => typed_min_max_batch!($VALUES, Int64Array, Int64, $OP),
             DataType::Int32 => typed_min_max_batch!($VALUES, Int32Array, Int32, $OP),
@@ -616,6 +693,8 @@ pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::Struct(_)
         | DataType::List(_)
         | DataType::LargeList(_)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_)
         | DataType::FixedSizeList(_, _)
         | DataType::Dictionary(_, _) => min_max_batch_generic(values, Ordering::Greater)?,
         _ => min_max_batch!(values, min),
@@ -627,23 +706,27 @@ fn min_max_batch_generic(array: &ArrayRef, ordering: Ordering) -> Result<ScalarV
     if array.len() == array.null_count() {
         return ScalarValue::try_from(array.data_type());
     }
-    let mut extreme = ScalarValue::try_from_array(array, 0)?;
-    for i in 1..array.len() {
-        let current = ScalarValue::try_from_array(array, i)?;
-        if current.is_null() {
+    // Compare like Spark (see `compare_nested`), with one comparator for the batch.
+    let options = SortOptions {
+        descending: false,
+        nulls_first: true,
+    };
+    let comparator = make_comparator(array.as_ref(), array.as_ref(), options)?;
+    let nulls = array.logical_nulls();
+    let mut extreme = None::<usize>;
+    for i in 0..array.len() {
+        if nulls.as_ref().is_some_and(|nulls| nulls.is_null(i)) {
             continue;
         }
-        if extreme.is_null() {
-            extreme = current;
-            continue;
-        }
-        let cmp = extreme.try_cmp(&current)?;
-        if cmp == ordering {
-            extreme = current;
-        }
+        extreme = match extreme {
+            Some(e) if comparator(e, i) != ordering => Some(e),
+            _ => Some(i),
+        };
     }
-
-    Ok(extreme)
+    match extreme {
+        Some(i) => ScalarValue::try_from_array(array, i),
+        None => ScalarValue::try_from(array.data_type()),
+    }
 }
 
 /// dynamically-typed max(array) -> ScalarValue
@@ -679,6 +762,8 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::Struct(_)
         | DataType::List(_)
         | DataType::LargeList(_)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_)
         | DataType::FixedSizeList(_, _)
         | DataType::Dictionary(_, _) => min_max_batch_generic(values, Ordering::Less)?,
         _ => min_max_batch!(values, max),
@@ -689,6 +774,67 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    // Like Spark, all NaN values are the same value, which is larger than any other value.
+    #[test]
+    fn min_max_batch_treat_negative_nan_as_nan() -> Result<()> {
+        let negative_nan = f64::from_bits(f64::NAN.to_bits() | (1 << 63));
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![1.0, negative_nan, -3.0]));
+        assert_eq!(min_batch(&values)?, ScalarValue::Float64(Some(-3.0)));
+        assert!(matches!(max_batch(&values)?, ScalarValue::Float64(Some(v)) if v.is_nan()));
+        let values: ArrayRef = Arc::new(Float32Array::from(vec![-f32::NAN, f32::NEG_INFINITY]));
+        assert_eq!(
+            min_batch(&values)?,
+            ScalarValue::Float32(Some(f32::NEG_INFINITY))
+        );
+        assert!(matches!(max_batch(&values)?, ScalarValue::Float32(Some(v)) if v.is_nan()));
+        Ok(())
+    }
+
+    // Lists and list views compare like Spark: a NULL element first, then a shorter list
+    // first. Of `[1, 2]`, `[1, NULL]` and `[1]`, the minimum is `[1]` and the maximum `[1, 2]`.
+    #[test]
+    fn min_max_lists_and_list_views_compare_like_spark() -> Result<()> {
+        use arrow::array::{LargeListArray, LargeListViewArray, ListArray, ListViewArray};
+        use arrow::datatypes::Int32Type;
+
+        let values = || {
+            vec![
+                Some(vec![Some(1), Some(2)]),
+                Some(vec![Some(1), None]),
+                Some(vec![Some(1)]),
+            ]
+        };
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(values());
+        let large_list = LargeListArray::from_iter_primitive::<Int32Type, _, _>(values());
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(list.clone()),
+            Arc::new(large_list.clone()),
+            Arc::new(ListViewArray::from(list)),
+            Arc::new(LargeListViewArray::from(large_list)),
+        ];
+        for array in arrays {
+            let min = ScalarValue::try_from_array(&array, 2)?;
+            let max = ScalarValue::try_from_array(&array, 0)?;
+            // One batch.
+            assert_eq!(min_batch(&array)?, min, "{}", array.data_type());
+            assert_eq!(max_batch(&array)?, max, "{}", array.data_type());
+            // One value per batch, which compares scalars.
+            let mut min_accumulator = MinAccumulator::try_new(array.data_type())?;
+            let mut max_accumulator = MaxAccumulator::try_new(array.data_type())?;
+            for i in 0..array.len() {
+                min_accumulator.update_batch(&[array.slice(i, 1)])?;
+                max_accumulator.update_batch(&[array.slice(i, 1)])?;
+            }
+            assert_eq!(min_accumulator.evaluate()?, min, "{}", array.data_type());
+            assert_eq!(max_accumulator.evaluate()?, max, "{}", array.data_type());
+            // Sliding windows.
+            let value = |i| MinMaxValue(ScalarValue::try_from_array(&array, i).unwrap());
+            assert_eq!(value(2).partial_cmp(&value(1)), Some(Ordering::Less));
+            assert_eq!(value(1).partial_cmp(&value(0)), Some(Ordering::Less));
+        }
+        Ok(())
+    }
 
     #[test]
     fn min_max_scalar_preserves_core_behaviors() -> Result<()> {

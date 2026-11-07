@@ -473,6 +473,12 @@ impl<'a> SnapshotPruningStats<'a> {
             min_value = min_value.to_inexact();
             max_value = max_value.to_inexact();
         }
+        // TODO: Pruning still uses the float maximum, which leaves out NaN.
+        if !is_partition && data_type.is_floating() {
+            // File statistics leave out NaN and may record `-0.0` as the minimum of `0.0` values.
+            min_value = min_value.to_inexact();
+            max_value = max_value.to_inexact();
+        }
         let contains_timestamp = arrow_type_contains_timestamp(&data_type);
         if !is_partition && contains_timestamp {
             min_value = min_value.to_inexact();

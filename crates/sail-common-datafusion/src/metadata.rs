@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
-use arrow::datatypes::Field;
+use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
-use datafusion_common::DataFusionError;
 use datafusion_common::error::_plan_err;
 use datafusion_common::metadata::FieldMetadata;
+use datafusion_common::{DataFusionError, ScalarValue};
 use sail_common::spec::{
     SAIL_SPARK_INTERVAL_METADATA_KEY, SAIL_SPARK_UDT_METADATA_KEY, SparkIntervalMetadata,
 };
@@ -79,7 +79,7 @@ pub fn coerced_fields_metadata<'a>(
     Ok(FieldMetadata::from(merged))
 }
 
-/// Sail: keeps only the field metadata that describes the type of a value, such as an Arrow
+/// Keeps only the field metadata that describes the type of a value, such as an Arrow
 /// extension type, a Spark UDT or a Spark interval type.
 ///
 /// Use it for expressions whose result takes its type from an argument (e.g. `min`, `max` and
@@ -105,15 +105,27 @@ pub fn type_metadata(metadata: &FieldMetadata) -> FieldMetadata {
     )
 }
 
-/// Sail: the Spark interval metadata of a value that may come from any one of the fields, such as
+/// The Spark interval metadata of a value that may come from any one of the fields, such as
 /// the result of `coalesce`. Like Spark's type coercion for intervals, it is the widest interval
-/// range of the fields. Fields without interval metadata do not contribute.
+/// range of the fields. Each field comes with its value if it is a literal.
+///
+/// An interval without the metadata has the default range (`DAY TO SECOND` or
+/// `YEAR TO MONTH`), which is the widest range, so the result has it too. A NULL literal
+/// supplies no value, so it does not contribute unless it has the metadata.
 pub fn widest_interval_metadata<'a>(
-    fields: impl IntoIterator<Item = &'a Field>,
+    fields: impl IntoIterator<Item = (&'a Field, Option<&'a ScalarValue>)>,
 ) -> Result<Option<String>, DataFusionError> {
     let mut widest = None::<SparkIntervalMetadata>;
-    for field in fields {
+    for (field, value) in fields {
         let Some(value) = field.metadata().get(SAIL_SPARK_INTERVAL_METADATA_KEY) else {
+            let is_interval = matches!(
+                field.data_type(),
+                DataType::Duration(TimeUnit::Microsecond)
+                    | DataType::Interval(IntervalUnit::YearMonth)
+            );
+            if is_interval && !value.is_some_and(ScalarValue::is_null) {
+                return Ok(None);
+            }
             continue;
         };
         let candidate = SparkIntervalMetadata::from_json(value)
@@ -137,8 +149,6 @@ pub fn widest_interval_metadata<'a>(
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use arrow_schema::DataType;
-
     use super::*;
 
     #[test]
@@ -229,7 +239,6 @@ mod tests {
         assert_eq!(result.inner().get(EXTENSION_TYPE_METADATA_KEY), None);
     }
 
-    // Sail: see `type_metadata`.
     #[test]
     fn type_metadata_keeps_only_type_keys() {
         use sail_common::spec::SPARK_METADATA_JSON_KEY;
@@ -269,7 +278,6 @@ mod tests {
         );
     }
 
-    // Sail: see `widest_interval_metadata`.
     #[test]
     fn widest_interval_metadata_widens_the_range() {
         use sail_common::spec::{IntervalFieldType, IntervalUnit as SparkIntervalUnit};
@@ -295,14 +303,25 @@ mod tests {
         };
         let year = interval(IntervalFieldType::Year, IntervalFieldType::Year);
         let month = interval(IntervalFieldType::Month, IntervalFieldType::Month);
-        let fields = [field(Some(year)), field(None), field(Some(month))];
-        let widest = widest_interval_metadata(fields.iter()).unwrap().unwrap();
+        let null = ScalarValue::IntervalYearMonth(None);
+        let untyped_null = Field::new("a", DataType::Null, true);
+        let fields = [
+            (field(Some(year)), None),
+            (field(None), Some(&null)),
+            (untyped_null, Some(&ScalarValue::Null)),
+            (field(Some(month)), None),
+        ];
+        let widest = widest_interval_metadata(fields.iter().map(|(f, v)| (f, *v)))
+            .unwrap()
+            .unwrap();
         assert_eq!(
             SparkIntervalMetadata::from_json(&widest).unwrap(),
             interval(IntervalFieldType::Year, IntervalFieldType::Month)
         );
+        // An interval value without the metadata has the default range.
+        let fields = [(field(Some(year)), None), (field(None), None)];
         assert_eq!(
-            widest_interval_metadata([field(None)].iter()).unwrap(),
+            widest_interval_metadata(fields.iter().map(|(f, v)| (f, *v))).unwrap(),
             None
         );
     }

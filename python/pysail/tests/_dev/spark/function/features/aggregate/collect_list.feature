@@ -150,7 +150,7 @@ Feature: collect_list / collect_set
         | collect_set drops NULLs                       | collect_set(v)           | (1), (CAST(NULL AS INT)), (1) | [1]       |
         | collect_list with DISTINCT removes duplicates | collect_list(DISTINCT v) | (1), (2), (1)                 | [1, 2]    |
 
-  Rule: collect_set float equality diverges from Spark
+  Rule: collect_set float equality
 
     # Spark 4.2 deduplicates NaN against NaN and keeps a single one, matching Sail and its own
     # documented contract ("eliminating duplicates"). Measured: 4.0.1 and 4.1.1 both return
@@ -167,9 +167,7 @@ Feature: collect_list / collect_set
         | r          |
         | [1.0, NaN] |
 
-    # Spark's collect_set treats -0.0 and 0.0 as equal and keeps a single 0.0. Sail keeps both
-    # -> divergence.
-    @sail-bug
+    # Spark's collect_set treats -0.0 and 0.0 as equal and keeps a single 0.0.
     Scenario: collect_set deduplicates -0.0 and 0.0 to a single 0.0
       When query
         """

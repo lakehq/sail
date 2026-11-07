@@ -297,6 +297,8 @@ message ExtendedAggregateUdf {
     PySparkBatchCollectorUdaf py_spark_batch_collector = 4;
     PercentileDiscUdaf percentile_disc = 5;
     ArrayAggUdaf array_agg = 6;
+    FirstValueUdaf first_value = 7;
+    LastValueUdaf last_value = 8;
   }
 }
 
@@ -305,6 +307,14 @@ message PercentileDiscUdaf {
 }
 
 message ArrayAggUdaf {
+  bool is_input_pre_ordered = 1;
+}
+
+message FirstValueUdaf {
+  bool is_input_pre_ordered = 1;
+}
+
+message LastValueUdaf {
   bool is_input_pre_ordered = 1;
 }
 

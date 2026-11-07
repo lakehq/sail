@@ -15,7 +15,8 @@ use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{NullTreatment, WindowFunctionParams};
 use datafusion_expr::{
-    AggregateUDF, ExprSchemable, WindowFrame, WindowFunctionDefinition, cast, expr, lit, when,
+    AggregateUDF, ExprSchemable, ScalarUDF, WindowFrame, WindowFunctionDefinition, cast, expr, lit,
+    when,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
@@ -43,6 +44,7 @@ use sail_function::aggregate::theta_sketch::{
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::vector::avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::window::{spark_first_value_udwf, spark_last_value_udwf, spark_ntile_udwf};
 
 use crate::error::{PlanError, PlanResult};
@@ -50,7 +52,7 @@ use crate::function::aggregate::coerce_string_sum_arguments;
 use crate::function::common::{
     WinFunction, WinFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
     get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
-    theta_args_with_default_lg,
+    normalize_distinct_floats, theta_args_with_default_lg,
 };
 use crate::function::transform_count_star_wildcard_expr;
 
@@ -528,11 +530,13 @@ fn collect_set(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         window_frame,
         ignore_nulls: _,
         distinct: _,
-        function_context: _,
+        function_context,
     } = input;
     let arg = arguments.one()?;
+    let element_type = arg.get_type(function_context.schema)?;
+    let arg = normalize_distinct_floats(arg, &element_type);
     let null_filter = Some(Box::new(arg.clone().is_not_null()));
-    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+    let agg = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
             ArrayAgg::default(),
         ))),
@@ -545,7 +549,8 @@ fn collect_set(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment: get_null_treatment(Some(true)),
             distinct: true,
         },
-    })))
+    }));
+    Ok(coalesce_to_empty_array(agg, &element_type))
 }
 
 fn array_agg_compacted(input: WinFunctionInput) -> PlanResult<expr::Expr> {
@@ -554,24 +559,36 @@ fn array_agg_compacted(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         partition_by,
         order_by,
         window_frame,
-        ignore_nulls: _,
+        ignore_nulls,
         distinct,
-        function_context: _,
+        function_context,
     } = input;
-    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+    let arg = arguments.one()?;
+    let element_type = arg.get_type(function_context.schema)?;
+    // Spark's collect_list ignores NULLs by default.
+    let null_treatment = get_null_treatment(Some(ignore_nulls.unwrap_or(true)));
+    let agg = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
             ArrayAgg::default(),
         ))),
         params: WindowFunctionParams {
-            args: arguments,
+            args: vec![arg],
             partition_by,
             order_by,
             window_frame,
             filter: None,
-            null_treatment: get_null_treatment(Some(true)),
+            null_treatment,
             distinct,
         },
-    })))
+    }));
+    Ok(coalesce_to_empty_array(agg, &element_type))
+}
+
+/// Spark's `collect_list`/`collect_set` return an empty array for an empty window frame, but
+/// DataFusion's `array_agg` returns NULL over zero rows.
+fn coalesce_to_empty_array(agg: expr::Expr, element_type: &DataType) -> expr::Expr {
+    let empty = ScalarValue::List(ScalarValue::new_list_nullable(&[], element_type));
+    ScalarUDF::from(CoalesceFunc::new()).call(vec![agg, lit(empty)])
 }
 
 fn listagg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
@@ -611,6 +628,14 @@ fn listagg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         },
     }));
 
+    // Spark joins the values without a delimiter when the delimiter is NULL.
+    // <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/collect.scala#L586-L600>
+    let delim = delim.cast_to(&DataType::Utf8, schema)?;
+    let delim = if delim.nullable(schema)? {
+        ScalarUDF::from(CoalesceFunc::new()).call(vec![delim, lit("")])
+    } else {
+        delim
+    };
     let string_agg = array_to_string(
         agg.cast_to(
             &DataType::List(Arc::new(Field::new(
@@ -620,7 +645,7 @@ fn listagg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             ))),
             schema,
         )?,
-        delim.cast_to(&DataType::Utf8, schema)?,
+        delim,
     );
 
     let casted_agg = match agg_col.get_type(schema)? {
@@ -759,10 +784,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ),
         ("bool_and", F::aggregate(bool_and_or::bool_and_udaf)),
         ("bool_or", F::aggregate(bool_and_or::bool_or_udaf)),
-        (
-            "collect_list",
-            F::aggregate(|| Arc::new(AggregateUDF::from(ArrayAgg::default()))),
-        ),
+        ("collect_list", F::custom(array_agg_compacted)),
         ("collect_set", F::custom(collect_set)),
         ("corr", F::aggregate(correlation::corr_udaf)),
         ("count", F::custom(count)),

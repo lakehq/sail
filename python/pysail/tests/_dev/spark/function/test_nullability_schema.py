@@ -140,6 +140,24 @@ def test_pure_string_fn_of_non_null_is_non_nullable(spark, fn):
     assert _nullable(out, "result") is False
 
 
+@pytest.mark.parametrize(
+    "fn",
+    [
+        F.trim,
+        F.ltrim,
+        F.rtrim,
+        lambda c: F.expr(f"btrim({c})"),
+        lambda c: F.expr(f"trim(BOTH 'h' FROM {c})"),
+        lambda c: F.expr(f"replace({c}, 'l', 'L')"),
+    ],
+    ids=["trim", "ltrim", "rtrim", "btrim", "trim_both_chars", "replace"],
+)
+def test_trim_and_replace_nullability_follows_the_input(spark, fn):
+    df = _frame(spark)
+    assert _nullable(df.select(fn("nn").alias("result")), "result") is False
+    assert _nullable(df.select(fn("nl").alias("result")), "result") is True
+
+
 # --- the dangerous direction: Sail UNDER-nullable ---
 # round on a decimal can overflow, so Spark declares it nullable=True even for a
 # non-null input. Sail declares it non-nullable -> if a NULL ever appears an

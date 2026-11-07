@@ -144,6 +144,7 @@ use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
 use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
+use sail_function::aggregate::first_last::{FirstValue, LastValue};
 use sail_function::aggregate::grouping_id::GroupingIdFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
@@ -4619,6 +4620,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })) => Ok(Arc::new(AggregateUDF::from(ArrayAgg::new(
                 is_input_pre_ordered,
             )))),
+            Some(UdafKind::FirstValue(r#gen::FirstValueUdaf {
+                is_input_pre_ordered,
+            })) => Ok(Arc::new(AggregateUDF::from(
+                FirstValue::with_input_pre_ordered(is_input_pre_ordered),
+            ))),
+            Some(UdafKind::LastValue(r#gen::LastValueUdaf {
+                is_input_pre_ordered,
+            })) => Ok(Arc::new(AggregateUDF::from(
+                LastValue::with_input_pre_ordered(is_input_pre_ordered),
+            ))),
             None => plan_err!("ExtendedAggregateUdf: no UDF found for {name}"),
         }
     }
@@ -4713,6 +4724,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(func) = node.inner().downcast_ref::<ArrayAgg>() {
             UdafKind::ArrayAgg(r#gen::ArrayAggUdaf {
+                is_input_pre_ordered: func.is_input_pre_ordered(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<FirstValue>() {
+            UdafKind::FirstValue(r#gen::FirstValueUdaf {
+                is_input_pre_ordered: func.is_input_pre_ordered(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<LastValue>() {
+            UdafKind::LastValue(r#gen::LastValueUdaf {
                 is_input_pre_ordered: func.is_input_pre_ordered(),
             })
         } else {
@@ -6383,6 +6402,24 @@ mod tests {
                 .ok_or_else(|| plan_datafusion_err!("decoded UDAF is not ArrayAgg"))?;
             assert_eq!(array_agg.is_input_pre_ordered(), is_input_pre_ordered);
             assert_eq!(decoded.name(), "array_agg");
+            let decoded = round_trip_udaf(AggregateUDF::from(FirstValue::with_input_pre_ordered(
+                is_input_pre_ordered,
+            )))?;
+            let first_value = decoded
+                .inner()
+                .downcast_ref::<FirstValue>()
+                .ok_or_else(|| plan_datafusion_err!("decoded UDAF is not FirstValue"))?;
+            assert_eq!(first_value.is_input_pre_ordered(), is_input_pre_ordered);
+            assert_eq!(decoded.name(), "first_value");
+            let decoded = round_trip_udaf(AggregateUDF::from(LastValue::with_input_pre_ordered(
+                is_input_pre_ordered,
+            )))?;
+            let last_value = decoded
+                .inner()
+                .downcast_ref::<LastValue>()
+                .ok_or_else(|| plan_datafusion_err!("decoded UDAF is not LastValue"))?;
+            assert_eq!(last_value.is_input_pre_ordered(), is_input_pre_ordered);
+            assert_eq!(decoded.name(), "last_value");
         }
         Ok(())
     }

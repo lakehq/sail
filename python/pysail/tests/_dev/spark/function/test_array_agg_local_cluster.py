@@ -135,7 +135,7 @@ def test_grouped_collect_set(local_cluster_spark):
                 (4, ["a", "c"], ["a", "c"]),
             ],
         ),
-        pytest.param(
+        (
             [(1, 1, "a"), (1, 2, "b"), (1, 3, None), (1, 4, "b"), (1, 5, "c")],
             "g int, o int, x string",
             1,
@@ -146,10 +146,6 @@ def test_grouped_collect_set(local_cluster_spark):
                 (4, ["b"], ["b"]),
                 (5, ["b", "c"], ["b", "c"]),
             ],
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="window collect_list keeps NULLs in every mode (pre-existing); Spark skips them",
-            ),
         ),
         (
             [(2, 1, 1), (2, 2, 1), (2, 3, 2), (2, 4, 1), (2, 5, 3)],

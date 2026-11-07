@@ -3,13 +3,13 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::types::logical_string;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
-    Coercion, ColumnarValue, EncodingPreservation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, EncodingPreservation, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 
 use crate::functions_utils::make_scalar_function;
@@ -88,6 +88,17 @@ impl ScalarUDFImpl for BTrimFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
+    }
+
+    // Like Spark, the result is nullable only if an argument is nullable.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
+        Ok(Field::new(self.name(), self.return_type(&arg_types)?, nullable).into())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
