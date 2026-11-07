@@ -198,3 +198,17 @@ def test_float_column_with_nan_and_one_other_value_reads_back(spark, tmp_path: P
     [first, second] = spark.read.format("delta").load(str(table_path)).orderBy("id").collect()
     assert math.isnan(first.x)
     assert second.x == 1.0
+
+
+@pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
+def test_count_distinct_of_nan_values_read_back(spark, tmp_path: Path, data_type):
+    # All NaN values are one value for DISTINCT.
+    table_path = tmp_path / "delta_float_nan_distinct"
+    source = spark.sql(
+        f"SELECT f, CAST(x AS {data_type}) AS x FROM VALUES (0, -CAST('NaN' AS DOUBLE)), (0, 1.0D), "  # noqa: S608
+        "(1, CAST('NaN' AS DOUBLE)), (1, NULL) AS t(f, x)"
+    )
+    for f in (0, 1):
+        source.where(f"f = {f}").coalesce(1).write.format("delta").mode("append").save(str(table_path))
+    [row] = spark.read.format("delta").load(str(table_path)).selectExpr("count(DISTINCT x) AS n").collect()
+    assert row.n == 2  # noqa: PLR2004

@@ -228,3 +228,15 @@ def test_min_max_reject_types_that_contain_a_map(spark, function, values, mode):
     }[mode]
     with pytest.raises(Exception, match=r"(?i)ordering"):
         spark.sql(sql).collect()
+
+
+@pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
+@pytest.mark.parametrize("grouped", [True, False], ids=["grouped", "ungrouped"])
+def test_count_distinct_treats_nan_values_and_zeros_as_one_value(spark, data_type, grouped):
+    values = "(1, -CAST('NaN' AS DOUBLE)), (1, CAST('NaN' AS DOUBLE)), (1, -0.0D), (1, 0.0D), (1, 1.0D), (1, NULL)"
+    group = " GROUP BY k" if grouped else ""
+    sql = (
+        f"SELECT count(DISTINCT CAST(x AS {data_type})), count(DISTINCT CAST(x AS {data_type}), k) "  # noqa: S608
+        f"FROM VALUES {values} AS t(k, x){group}"
+    )
+    assert rows(spark, sql) == [(3, 3)]
