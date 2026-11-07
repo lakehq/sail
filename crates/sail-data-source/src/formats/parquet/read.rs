@@ -14,6 +14,7 @@ use datafusion::parquet::basic::Type as PhysicalType;
 use datafusion::parquet::schema::types::SchemaDescriptor;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::stats::Precision;
 use datafusion_common::{DataFusionError, Result, plan_err};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
@@ -246,6 +247,10 @@ impl ReadFormat for ParquetReadFormat {
             .await?;
         let mut statistics =
             DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &file_schema)?;
+        let num_rows = match statistics.num_rows {
+            Precision::Exact(num_rows) => Some(num_rows),
+            _ => None,
+        };
         for (field, column) in file_schema
             .fields()
             .iter()
@@ -253,9 +258,16 @@ impl ReadFormat for ParquetReadFormat {
         {
             // TODO: Row-group and page pruning still use the float maximum, which leaves out NaN.
             if field.data_type().is_floating() {
+                let non_null_count = match (num_rows, &column.null_count) {
+                    (Some(num_rows), Precision::Exact(null_count)) => {
+                        num_rows.checked_sub(*null_count)
+                    }
+                    _ => None,
+                };
                 (column.min_value, column.max_value) = float_file_statistics_bounds(
                     std::mem::take(&mut column.min_value),
                     std::mem::take(&mut column.max_value),
+                    non_null_count,
                 );
             }
         }

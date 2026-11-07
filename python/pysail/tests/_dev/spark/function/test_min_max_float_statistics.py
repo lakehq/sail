@@ -1,4 +1,4 @@
-"""`min` and `max` of floating point columns are not answered from Parquet statistics.
+"""`min` and `max` of floating point columns in Parquet files, which may be answered from file statistics.
 
 Parquet statistics leave out NaN, which is the largest floating point value in Spark.
 """

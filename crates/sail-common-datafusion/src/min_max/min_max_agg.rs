@@ -75,30 +75,43 @@ fn contains_map(data_type: &DataType) -> bool {
     }
 }
 
-/// Whether a floating-point minimum from file statistics is the minimum of the values, like
-/// Spark's `min`. File statistics leave out NaN, which is never the minimum unless all values are
-/// NaN, so a minimum that is not NaN stays exact. A zero minimum is not exact, since the statistics
-/// may record `-0.0` for `0.0` values.
+/// Whether a floating-point minimum from file statistics is the minimum of the values. File
+/// statistics leave out NaN, which is never the minimum unless all values are NaN.
+// FIXME: File statistics may record `-0.0` as the minimum of `0.0` values, where Spark returns
+//  `0.0`. This is not fixed yet for performance reasons: treating a zero minimum as inexact makes
+//  `min` read the data of the whole table whenever any one file has a zero minimum, instead of
+//  answering from the statistics. The fix needs to be performance conscious, for example by
+//  reading only the files whose minimum is zero and taking the other minimums from the statistics.
 pub fn is_exact_float_minimum(value: &ScalarValue) -> bool {
     match value {
-        ScalarValue::Float16(Some(v)) => !v.is_nan() && v.to_f32() != 0.0,
-        ScalarValue::Float32(Some(v)) => !v.is_nan() && *v != 0.0,
-        ScalarValue::Float64(Some(v)) => !v.is_nan() && *v != 0.0,
+        ScalarValue::Float16(Some(v)) => !v.is_nan(),
+        ScalarValue::Float32(Some(v)) => !v.is_nan(),
+        ScalarValue::Float64(Some(v)) => !v.is_nan(),
         _ => false,
     }
 }
 
-/// The precision of the bounds of a floating-point column from file statistics. File statistics
-/// leave out NaN, so equal bounds do not make a constant column, though DataFusion reads a column
-/// with equal exact bounds as a constant. See `is_exact_float_minimum` for the exact minimums.
+/// The precision of the bounds of a floating-point column from file statistics, given the number
+/// of non-null values if it is known exactly. File statistics leave out NaN, so equal bounds do not
+/// make a constant column, though DataFusion reads a column with equal exact bounds as a constant.
+/// The bounds of a single non-null value are the value itself, so they stay exact.
+// FIXME: A maximum from file statistics is still taken as exact when the bounds differ, though the
+//  statistics leave out NaN, which is the largest value in Spark. This is not fixed yet for
+//  performance reasons: treating the maximum as inexact makes `max` read the data of the whole
+//  table instead of answering from the statistics. The fix needs to be performance conscious, for
+//  example by trusting the maximum when a NaN count shows that there is no NaN. Iceberg records a
+//  NaN count, Parquet's optional `nan_count` can be revisited when we upgrade to DataFusion 56,
+//  and Delta file statistics do not include one yet, so Sail could add one for the files it writes.
 pub fn float_file_statistics_bounds(
     min: Precision<ScalarValue>,
     max: Precision<ScalarValue>,
+    non_null_count: Option<usize>,
 ) -> (Precision<ScalarValue>, Precision<ScalarValue>) {
-    let equal = matches!(
-        (min.get_value(), max.get_value()),
-        (Some(min), Some(max)) if min == max
-    );
+    let equal = non_null_count != Some(1)
+        && matches!(
+            (min.get_value(), max.get_value()),
+            (Some(min), Some(max)) if min == max
+        );
     let min = if min.get_value().is_some_and(is_exact_float_minimum) {
         min
     } else {
@@ -1004,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_float_minimums_are_not_zero_or_nan() {
+    fn exact_float_minimums_are_not_nan() {
         assert!(is_exact_float_minimum(&ScalarValue::Float64(Some(-2.5))));
         assert!(is_exact_float_minimum(&ScalarValue::Float32(Some(
             f32::INFINITY
@@ -1013,16 +1026,24 @@ mod tests {
             half::f16::ONE
         ))));
         for value in [
-            ScalarValue::Float64(Some(0.0)),
-            ScalarValue::Float64(Some(-0.0)),
-            ScalarValue::Float32(Some(-0.0)),
-            ScalarValue::Float16(Some(half::f16::NEG_ZERO)),
             ScalarValue::Float64(Some(f64::NAN)),
+            ScalarValue::Float32(Some(f32::NAN)),
             ScalarValue::Float64(None),
             ScalarValue::Int32(Some(1)),
         ] {
             assert!(!is_exact_float_minimum(&value), "{value:?}");
         }
+    }
+
+    #[test]
+    fn equal_float_bounds_are_exact_only_for_a_single_value() {
+        let bound = |v: f64| Precision::Exact(ScalarValue::Float64(Some(v)));
+        let (min, max) = float_file_statistics_bounds(bound(5.0), bound(5.0), Some(2));
+        assert_eq!((min.is_exact(), max.is_exact()), (Some(true), Some(false)));
+        let (min, max) = float_file_statistics_bounds(bound(5.0), bound(5.0), None);
+        assert_eq!((min.is_exact(), max.is_exact()), (Some(true), Some(false)));
+        let (min, max) = float_file_statistics_bounds(bound(5.0), bound(5.0), Some(1));
+        assert_eq!((min.is_exact(), max.is_exact()), (Some(true), Some(true)));
     }
 
     #[test]

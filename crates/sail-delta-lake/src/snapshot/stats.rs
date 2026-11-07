@@ -476,7 +476,7 @@ impl<'a> SnapshotPruningStats<'a> {
         }
         // TODO: Pruning still uses the float maximum, which leaves out NaN.
         if !is_partition && data_type.is_floating() {
-            (min_value, max_value) = float_file_statistics_bounds(min_value, max_value);
+            (min_value, max_value) = float_file_statistics_bounds(min_value, max_value, None);
         }
         let contains_timestamp = arrow_type_contains_timestamp(&data_type);
         if !is_partition && contains_timestamp {

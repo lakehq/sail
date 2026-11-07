@@ -797,7 +797,14 @@ fn stats_for_add(action: &Add, file_schema: &SchemaRef) -> Result<Option<Arc<Sta
 
         // TODO: Pruning still uses the float maximum, which leaves out NaN.
         if field.data_type().is_floating() {
-            (min_value, max_value) = float_file_statistics_bounds(min_value, max_value);
+            let non_null_count = match &null_count {
+                Precision::Exact(null_count) if stats.num_records >= 0 => {
+                    (stats.num_records as usize).checked_sub(*null_count)
+                }
+                _ => None,
+            };
+            (min_value, max_value) =
+                float_file_statistics_bounds(min_value, max_value, non_null_count);
         }
         if arrow_type_contains_timestamp(field.data_type()) {
             min_value = min_value.to_inexact();

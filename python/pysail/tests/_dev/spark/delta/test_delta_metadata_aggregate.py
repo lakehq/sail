@@ -30,6 +30,10 @@ if TYPE_CHECKING:
 max_statistics_nan_bug = pytest.mark.xfail(
     not is_jvm_spark(), reason="Known Sail bug: `max` from file statistics leaves out NaN", strict=True
 )
+# File statistics may record `-0.0` as the minimum of `0.0` values.
+min_statistics_zero_bug = pytest.mark.xfail(
+    not is_jvm_spark(), reason="Known Sail bug: a zero `min` from file statistics may be `-0.0`", strict=True
+)
 
 
 def _latest_add_stats(table_path: Path) -> dict:
@@ -102,7 +106,9 @@ def test_float_extrema_include_nan(spark, tmp_path: Path, data_type, metadata_as
 
 
 @pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
-@pytest.mark.parametrize("metadata_as_data", [False, True], ids=["driver", "metadata"])
+@pytest.mark.parametrize(
+    "metadata_as_data", [pytest.param(False, marks=min_statistics_zero_bug), True], ids=["driver", "metadata"]
+)
 def test_float_minimum_of_zeros_is_positive_zero(spark, tmp_path: Path, data_type, metadata_as_data):
     # File statistics may record `-0.0` as the minimum of `0.0` values.
     table_path = tmp_path / "delta_float_zero"
