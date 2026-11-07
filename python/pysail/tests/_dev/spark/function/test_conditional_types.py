@@ -12,16 +12,17 @@ def result(spark, sql):
 
 @pytest.mark.parametrize("function", ["coalesce", "nvl", "ifnull"])
 def test_date_and_timestamp_coerce_to_timestamp(spark, function):
+    # The values are compared as strings in the session time zone, since PySpark converts a
+    # TIMESTAMP value to a `datetime` in the local time zone of the Python process.
     spark.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
     try:
-        assert result(spark, f"SELECT {function}(CAST(NULL AS DATE), TIMESTAMP'2024-01-01 10:00:00')") == (
-            "timestamp",
-            [datetime.datetime(2024, 1, 1, 10, 0)],  # noqa: DTZ001
-        )
-        assert result(spark, f"SELECT {function}(DATE'2024-01-02', TIMESTAMP'2024-01-01 10:00:00')") == (
-            "timestamp",
-            [datetime.datetime(2024, 1, 2, 0, 0)],  # noqa: DTZ001
-        )
+        for arguments, expected in [
+            ("CAST(NULL AS DATE), TIMESTAMP'2024-01-01 10:00:00'", "2024-01-01 10:00:00"),
+            ("DATE'2024-01-02', TIMESTAMP'2024-01-01 10:00:00'", "2024-01-02 00:00:00"),
+        ]:
+            df = spark.sql(f"SELECT {function}({arguments}) AS v")
+            assert df.schema["v"].dataType.simpleString() == "timestamp"
+            assert [row[0] for row in df.selectExpr("CAST(v AS STRING)").collect()] == [expected]
     finally:
         spark.conf.unset("spark.sql.session.timeZone")
 
