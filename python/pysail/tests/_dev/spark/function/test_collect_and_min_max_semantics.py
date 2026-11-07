@@ -223,8 +223,8 @@ def test_min_max_reject_types_that_contain_a_map(spark, function, values, mode):
     sql = {
         "ungrouped": f"SELECT {function}(v) FROM VALUES {values} AS t(v)",  # noqa: S608
         "grouped": f"SELECT k, {function}(v) FROM (SELECT 1 AS k, v FROM VALUES {values} AS t(v)) GROUP BY k",  # noqa: S608
-        "window": f"SELECT {function}(v) OVER (ORDER BY 1 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) "
-        f"FROM VALUES {values} AS t(v)",  # noqa: S608
+        "window": f"""SELECT {function}(v) OVER (ORDER BY 1 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+                      FROM VALUES {values} AS t(v)""",  # noqa: S608
     }[mode]
     with pytest.raises(Exception, match=r"(?i)ordering"):
         spark.sql(sql).collect()
