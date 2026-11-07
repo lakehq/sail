@@ -230,7 +230,7 @@ mod tests {
         assert_eq!(compare_floats(1.0_f64, 2.0), Ordering::Less);
         assert_eq!(compare_floats(-0.0_f64, 0.0), Ordering::Less);
         assert_eq!(compare_floats(f64::NAN, f64::INFINITY), Ordering::Greater);
-        // FIXME: Spark treats every NaN, including `-NaN`, as one value that is larger than any other
+        // FIXME: Spark treats every NaN, including `-NaN`, as one value larger than any other
         //  value, but this follows IEEE 754 totalOrder (as Arrow does), where `-NaN` sorts before
         //  `-inf`. Do not change only this function: Arrow's sort and comparison kernels, its row
         //  encoding, and DataFusion's statistics and pruning also use totalOrder, so a local change
