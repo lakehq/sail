@@ -356,13 +356,88 @@ def test_dataframe_scalar_subquery_column_used_twice(spark, tables):
             "SELECT (SELECT max(m) FROM (SELECT monotonically_increasing_id() AS m FROM range(0, 10, 1, 2))) AS a, "
             "(SELECT max(m) FROM (SELECT monotonically_increasing_id() AS m FROM range(0, 10, 1, 2))) AS b",
             [(8589934596, 8589934596)],
-            [2],
+            [1],
             id="monotonically-increasing-id",
+        ),
+        pytest.param(
+            "SELECT (SELECT max(x) FROM (SELECT x FROM {t} ORDER BY x ASC)) AS a, "
+            "(SELECT max(x) FROM (SELECT x FROM {t} ORDER BY x DESC)) AS b",
+            [(20, 20)],
+            [1],
+            id="sort-direction-under-max",
+        ),
+        pytest.param(
+            "SELECT (SELECT count(x) FROM (SELECT x FROM {t} SORT BY x)) AS a, (SELECT count(x) FROM {t}) AS b",
+            [(3, 3)],
+            [1],
+            id="sort-by-under-count",
+        ),
+        pytest.param(
+            "SELECT (SELECT max(x) FROM {t} ORDER BY 1) AS a, (SELECT max(x) FROM {t}) AS b",
+            [(20, 20)],
+            [1],
+            id="top-level-sort",
+        ),
+        pytest.param(
+            "SELECT (SELECT max(a.x) FROM (SELECT g, x FROM {t} ORDER BY x ASC) a JOIN {u} b ON a.g = b.g) AS a, "
+            "(SELECT max(a.x) FROM (SELECT g, x FROM {t} ORDER BY x DESC) a JOIN {u} b ON a.g = b.g) AS b",
+            [(20, 20)],
+            [1],
+            id="sort-under-join",
+        ),
+        pytest.param(
+            "SELECT (SELECT sum(CAST(x AS DOUBLE)) FROM (SELECT x FROM {t} ORDER BY x ASC)) AS a, "
+            "(SELECT sum(CAST(x AS DOUBLE)) FROM (SELECT x FROM {t} ORDER BY x DESC)) AS b",
+            [(35.0, 35.0)],
+            [2],
+            id="sort-direction-under-double-sum",
+        ),
+        pytest.param(
+            "SELECT (SELECT max(x) FROM (SELECT x FROM {t} ORDER BY x ASC LIMIT 2)) AS a, "
+            "(SELECT max(x) FROM (SELECT x FROM {t} ORDER BY x DESC LIMIT 2)) AS b",
+            [(5, 20)],
+            [2],
+            id="sort-direction-under-limit",
+        ),
+        pytest.param(
+            "SELECT (SELECT max(x) + rand(42) FROM {t}) AS a, (SELECT max(x) + rand(42) FROM {t}) AS b",
+            None,
+            [1],
+            id="seeded-rand",
         ),
     ],
 )
 def test_repeated_scalar_subqueries_over_extension_nodes(spark, tables, query, expected, slots):
-    check(spark.sql(query.format(**tables)), expected, slots)
+    df = spark.sql(query.format(**tables))
+    if expected is None:
+        [(a, b)] = df.collect()
+        assert a == b
+        if not is_jvm_spark():
+            assert scalar_subquery_slots(df) == slots
+    else:
+        check(df, expected, slots)
+
+
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
+def test_repeated_python_udf_scalar_subqueries(spark, tables):
+    from pyspark.sql import functions as F  # noqa: N812
+    from pyspark.sql.types import DoubleType, LongType
+
+    plus_one = F.udf(lambda x: None if x is None else x + 1, LongType())
+    noise = F.udf(lambda x: None if x is None else x + __import__("random").random(), DoubleType()).asNondeterministic()
+    t = spark.table(tables["t"])
+    df = spark.range(1).select(
+        t.select(F.max(plus_one("x"))).scalar().alias("a"),
+        t.select(F.max(plus_one("x"))).scalar().alias("b"),
+        t.select(noise("x").alias("n")).select(F.max("n")).scalar().alias("c"),
+        t.select(noise("x").alias("n")).select(F.max("n")).scalar().alias("d"),
+    )
+    [(a, b, c, d)] = df.collect()
+    assert (a, b) == (MAX_X + 1, MAX_X + 1)
+    # As in Spark, nondeterministic Python UDF bodies are evaluated once.
+    assert c == d
+    if not is_jvm_spark():
+        assert scalar_subquery_slots(df) == [2]
 
 
 @pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")

@@ -115,6 +115,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 

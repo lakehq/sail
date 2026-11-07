@@ -266,13 +266,15 @@ mod tests {
 
     fn sort_within_partitions(name: &str) -> Result<LogicalPlanBuilder> {
         let input = scan(name)?.build()?;
-        Ok(LogicalPlanBuilder::from(LogicalPlan::Extension(Extension {
-            node: Arc::new(SortWithinPartitionsNode::new(
-                Arc::new(input),
-                vec![col("v").sort(true, true)],
-                None,
-            )),
-        })))
+        Ok(LogicalPlanBuilder::from(LogicalPlan::Extension(
+            Extension {
+                node: Arc::new(SortWithinPartitionsNode::new(
+                    Arc::new(input),
+                    vec![col("v").sort(true, true)],
+                    None,
+                )),
+            },
+        )))
     }
 
     fn optimize(plan: LogicalPlanBuilder) -> Result<String> {
@@ -297,10 +299,10 @@ mod tests {
                 .aggregate(vec![col("v")], vec![max(col("v"))])?,
         )?;
         assert_eq!(sorts(&plan), 0, "{plan}");
-        let plan = optimize(sort_within_partitions("t")?.aggregate(
-            Vec::<Expr>::new(),
-            vec![max(col("v")), sum(col("v"))],
-        )?)?;
+        let plan = optimize(
+            sort_within_partitions("t")?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("v")), sum(col("v"))])?,
+        )?;
         assert_eq!(sorts(&plan), 0, "{plan}");
         Ok(())
     }

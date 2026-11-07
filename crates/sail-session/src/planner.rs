@@ -661,8 +661,7 @@ mod tests {
     use datafusion_common::{ScalarValue, ToDFSchema};
     use datafusion_expr::{
         AggregateUDF, ColumnarValue, LogicalPlanBuilder, ScalarUDF, TableSource, Volatility, cast,
-        col,
-        create_udf, lit, rollup, scalar_subquery, when,
+        col, create_udf, lit, rollup, scalar_subquery, when,
     };
     use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
     use object_store::memory::InMemory;
