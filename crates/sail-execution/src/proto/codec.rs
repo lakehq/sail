@@ -3858,6 +3858,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "length" => Ok(Arc::new(ScalarUDF::from(SparkLengthFunc::new()))),
             "levenshtein" => Ok(Arc::new(ScalarUDF::from(Levenshtein::new()))),
             "make_valid_utf8" => Ok(Arc::new(ScalarUDF::from(MakeValidUtf8::new()))),
+            "make_valid_utf8_preserving_nullability" => Ok(Arc::new(ScalarUDF::from(
+                MakeValidUtf8::preserving_nullability(),
+            ))),
             "spark_bit_length" => Ok(Arc::new(ScalarUDF::from(SparkBitLength::new()))),
             "spark_octet_length" => Ok(Arc::new(ScalarUDF::from(SparkOctetLength::new()))),
             "map_entries" => Ok(Arc::new(ScalarUDF::from(SparkMapEntries::new()))),

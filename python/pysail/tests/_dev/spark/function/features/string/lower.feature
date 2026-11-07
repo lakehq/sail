@@ -46,3 +46,15 @@ Feature: lower output schema
       Then query result
         | result |
         | �abc   |
+
+    @function(nullability)
+    Scenario: lower of a non-null binary column stays non-null
+      When query
+        """
+        SELECT lower(CAST(CAST(id AS STRING) AS BINARY)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """

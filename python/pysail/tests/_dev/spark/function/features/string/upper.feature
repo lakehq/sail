@@ -70,3 +70,15 @@ Feature: upper output schema
       Then query result
         | result |
         | �ABC   |
+
+    @function(nullability)
+    Scenario: upper of a non-null binary column stays non-null
+      When query
+        """
+        SELECT upper(CAST(CAST(id AS STRING) AS BINARY)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """

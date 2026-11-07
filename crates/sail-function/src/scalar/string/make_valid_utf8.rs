@@ -15,6 +15,7 @@ use datafusion_functions::utils::make_scalar_function;
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MakeValidUtf8 {
     signature: Signature,
+    preserve_nullability: bool,
 }
 
 impl Default for MakeValidUtf8 {
@@ -27,13 +28,27 @@ impl MakeValidUtf8 {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
+            preserve_nullability: false,
+        }
+    }
+
+    /// The same conversion, but the result is nullable only when the input is. Spark's `upper`
+    /// and `lower` convert binary input like this.
+    pub fn preserving_nullability() -> Self {
+        Self {
+            signature: Signature::any(1, Volatility::Immutable),
+            preserve_nullability: true,
         }
     }
 }
 
 impl ScalarUDFImpl for MakeValidUtf8 {
     fn name(&self) -> &str {
-        "make_valid_utf8"
+        if self.preserve_nullability {
+            "make_valid_utf8_preserving_nullability"
+        } else {
+            "make_valid_utf8"
+        }
     }
 
     fn signature(&self) -> &Signature {
@@ -47,20 +62,22 @@ impl ScalarUDFImpl for MakeValidUtf8 {
     }
 
     /// Spark: `MakeValidUTF8.nullable = true`, unconditional (class body, beats `RuntimeReplaceable`).
+    /// The variant for `upper` and `lower` follows the input instead.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/stringExpressions.scala#L813>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_type = match args.arg_fields.first().map(|f| f.data_type()) {
-            Some(data_type) => match data_type {
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => data_type.clone(),
-                DataType::Binary | DataType::BinaryView | DataType::FixedSizeBinary(_) => {
-                    DataType::Utf8
-                }
-                DataType::LargeBinary => DataType::LargeUtf8,
-                _ => return exec_err!("expected string array for `make_valid_utf8`"),
-            },
-            None => return exec_err!("expected single argument for `make_valid_utf8`"),
+        let Some(input) = args.arg_fields.first() else {
+            return exec_err!("expected single argument for `make_valid_utf8`");
         };
-        Ok(Arc::new(Field::new(self.name(), data_type, true)))
+        let data_type = match input.data_type() {
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => input.data_type().clone(),
+            DataType::Binary | DataType::BinaryView | DataType::FixedSizeBinary(_) => {
+                DataType::Utf8
+            }
+            DataType::LargeBinary => DataType::LargeUtf8,
+            _ => return exec_err!("expected string array for `make_valid_utf8`"),
+        };
+        let nullable = !self.preserve_nullability || input.is_nullable();
+        Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -101,5 +118,36 @@ fn make_valid_utf8_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             _ => exec_err!("expected string array for `make_valid_utf8`"),
         },
         None => exec_err!("expected single argument for `make_valid_utf8`"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn return_nullability(func: &MakeValidUtf8, nullable: bool) -> Result<bool> {
+        let input = Field::new("input", DataType::Binary, nullable);
+        let result = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[input.into()],
+            scalar_arguments: &[None],
+        })?;
+        assert_eq!(result.data_type(), &DataType::Utf8);
+        Ok(result.is_nullable())
+    }
+
+    #[test]
+    fn make_valid_utf8_is_always_nullable() -> Result<()> {
+        let func = MakeValidUtf8::new();
+        assert!(return_nullability(&func, false)?);
+        assert!(return_nullability(&func, true)?);
+        Ok(())
+    }
+
+    #[test]
+    fn preserving_nullability_follows_input() -> Result<()> {
+        let func = MakeValidUtf8::preserving_nullability();
+        assert!(!return_nullability(&func, false)?);
+        assert!(return_nullability(&func, true)?);
+        Ok(())
     }
 }

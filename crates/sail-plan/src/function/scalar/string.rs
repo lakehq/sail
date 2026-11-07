@@ -246,7 +246,7 @@ fn replace(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 /// Like Spark's `upper` and `lower`, binary input becomes a string with each invalid UTF-8
-/// sequence replaced by U+FFFD.
+/// sequence replaced by U+FFFD, and non-null input stays non-null.
 fn case_conversion_argument(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let schema = input.function_context.schema;
     let arg = input.arguments.one()?;
@@ -254,7 +254,9 @@ fn case_conversion_argument(input: ScalarFunctionInput) -> PlanResult<expr::Expr
         DataType::Binary
         | DataType::LargeBinary
         | DataType::BinaryView
-        | DataType::FixedSizeBinary(_) => Ok(ScalarUDF::from(MakeValidUtf8::new()).call(vec![arg])),
+        | DataType::FixedSizeBinary(_) => {
+            Ok(ScalarUDF::from(MakeValidUtf8::preserving_nullability()).call(vec![arg]))
+        }
         _ => cast_to_logical_string_or_try(arg, schema, false),
     }
 }
