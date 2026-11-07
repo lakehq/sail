@@ -75,6 +75,19 @@ fn contains_map(data_type: &DataType) -> bool {
     }
 }
 
+/// Whether a floating-point minimum from file statistics is the minimum of the values, like
+/// Spark's `min`. File statistics leave out NaN, which is never the minimum unless all values are
+/// NaN, so a minimum that is not NaN stays exact. A zero minimum is not exact, since the statistics
+/// may record `-0.0` for `0.0` values.
+pub fn is_exact_float_minimum(value: &ScalarValue) -> bool {
+    match value {
+        ScalarValue::Float16(Some(v)) => !v.is_nan() && v.to_f32() != 0.0,
+        ScalarValue::Float32(Some(v)) => !v.is_nan() && *v != 0.0,
+        ScalarValue::Float64(Some(v)) => !v.is_nan() && *v != 0.0,
+        _ => false,
+    }
+}
+
 // MAX aggregate UDF
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Max {
@@ -431,10 +444,10 @@ impl Default for Min {
 
 impl FromColumnStatistics for Min {
     fn value_from_column_statistics(&self, col_stats: &ColumnStatistics) -> Option<ScalarValue> {
-        // Float statistics (e.g. Parquet) leave out NaN, which is the largest value in Spark.
+        // See `is_exact_float_minimum` for the floating-point minimums that are exact.
         if let Precision::Exact(ref val) = col_stats.min_value
             && !val.is_null()
-            && !val.data_type().is_floating()
+            && (!val.data_type().is_floating() || is_exact_float_minimum(val))
         {
             return Some(val.clone());
         }
@@ -970,6 +983,28 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn exact_float_minimums_are_not_zero_or_nan() {
+        assert!(is_exact_float_minimum(&ScalarValue::Float64(Some(-2.5))));
+        assert!(is_exact_float_minimum(&ScalarValue::Float32(Some(
+            f32::INFINITY
+        ))));
+        assert!(is_exact_float_minimum(&ScalarValue::Float16(Some(
+            half::f16::ONE
+        ))));
+        for value in [
+            ScalarValue::Float64(Some(0.0)),
+            ScalarValue::Float64(Some(-0.0)),
+            ScalarValue::Float32(Some(-0.0)),
+            ScalarValue::Float16(Some(half::f16::NEG_ZERO)),
+            ScalarValue::Float64(Some(f64::NAN)),
+            ScalarValue::Float64(None),
+            ScalarValue::Int32(Some(1)),
+        ] {
+            assert!(!is_exact_float_minimum(&value), "{value:?}");
+        }
     }
 
     #[test]
