@@ -240,3 +240,18 @@ def test_count_distinct_treats_nan_values_and_zeros_as_one_value(spark, data_typ
         f"FROM VALUES {values} AS t(k, x){group}"
     )
     assert rows(spark, sql) == [(3, 3)]
+
+
+@pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
+@pytest.mark.parametrize("wrap", ["named_struct('d', {})", "array({})"], ids=["struct", "array"])
+def test_count_distinct_treats_nested_nan_values_and_zeros_as_one_value(spark, data_type, wrap):
+    value = wrap.format(f"CAST(x AS {data_type})")
+    values = "(-CAST('NaN' AS DOUBLE)), (CAST('NaN' AS DOUBLE)), (-0.0D), (0.0D), (1.0D)"
+    assert rows(spark, f"SELECT count(DISTINCT {value}) FROM VALUES {values} AS t(x)") == [(3,)]  # noqa: S608
+
+
+@pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
+def test_collect_set_treats_nan_values_as_one_value(spark, data_type):
+    values = "(-CAST('NaN' AS DOUBLE)), (CAST('NaN' AS DOUBLE)), (1.0D)"
+    sql = f"SELECT size(collect_set(CAST(x AS {data_type}))) FROM VALUES {values} AS t(x)"  # noqa: S608
+    assert rows(spark, sql) == [(2,)]

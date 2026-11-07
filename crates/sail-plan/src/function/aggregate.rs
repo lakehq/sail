@@ -505,30 +505,6 @@ fn try_avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-/// Makes all NaN values one value and `-0.0` the same as `0.0` in a floating-point argument, like
-/// Spark's `NormalizeNaNAndZero` for the arguments of DISTINCT aggregates.
-/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/optimizer/NormalizeFloatingNumbers.scala#L194-L215>
-fn normalize_nan_and_zero(arg: expr::Expr, schema: &DFSchema) -> PlanResult<expr::Expr> {
-    let (nan, zero) = match arg.get_type(schema)? {
-        DataType::Float16 => (
-            ScalarValue::Float16(Some(half::f16::NAN)),
-            ScalarValue::Float16(Some(half::f16::ZERO)),
-        ),
-        DataType::Float32 => (
-            ScalarValue::Float32(Some(f32::NAN)),
-            ScalarValue::Float32(Some(0.0)),
-        ),
-        DataType::Float64 => (
-            ScalarValue::Float64(Some(f64::NAN)),
-            ScalarValue::Float64(Some(0.0)),
-        ),
-        _ => return Ok(arg),
-    };
-    Ok(when(isnan(arg.clone()), lit(nan))
-        .when(arg.clone().eq(lit(zero.clone())), lit(zero))
-        .otherwise(arg)?)
-}
-
 fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let AggFunctionInput {
         arguments,
@@ -627,7 +603,10 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // Like Spark, DISTINCT treats all NaN values as one value and `-0.0` as `0.0`.
     let args = if distinct {
         args.into_iter()
-            .map(|arg| normalize_nan_and_zero(arg, function_context.schema))
+            .map(|arg| {
+                let data_type = arg.get_type(function_context.schema)?;
+                Ok(normalize_distinct_floats(arg, &data_type))
+            })
             .collect::<PlanResult<Vec<_>>>()?
     } else {
         args
