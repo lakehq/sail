@@ -659,12 +659,13 @@ mod tests {
     use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_common::{ScalarValue, ToDFSchema};
     use datafusion_expr::{
-        ColumnarValue, LogicalPlanBuilder, TableSource, Volatility, cast, col, create_udf, lit,
-        rollup, scalar_subquery, when,
+        AggregateUDF, ColumnarValue, LogicalPlanBuilder, TableSource, Volatility, cast, col,
+        create_udf, lit, rollup, scalar_subquery, when,
     };
     use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
     use object_store::memory::InMemory;
     use sail_common::spec;
+    use sail_common_datafusion::min_max::min_max_agg::Max;
     use sail_plan::config::PlanConfig;
 
     use super::*;
@@ -769,7 +770,7 @@ mod tests {
         input_name: &str,
         output_name: &str,
     ) -> datafusion_common::Result<Expr> {
-        let max = datafusion::functions_aggregate::min_max::max(col(input_name));
+        let max = AggregateUDF::from(Max::new()).call(vec![col(input_name)]);
         let subquery = scan
             .project(vec![column.alias(input_name)])?
             .aggregate(Vec::<Expr>::new(), vec![max.clone()])?

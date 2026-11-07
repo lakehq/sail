@@ -42,3 +42,28 @@ Feature: count_if function
         | 3  | false | 1      |
         | 4  | NULL  | 1      |
         | 5  | true  | 1      |
+
+  Rule: count_if with FILTER
+
+    Scenario: count_if counts rows where both the FILTER clause and the condition are true
+      When query
+        """
+        SELECT count_if(x > 1) FILTER (WHERE y) AS result
+        FROM VALUES (1, true), (2, true), (3, false), (4, CAST(NULL AS BOOLEAN)) AS t(x, y)
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: count_if with FILTER per group
+      When query
+        """
+        SELECT k, count_if(x > 1) FILTER (WHERE y) AS result
+        FROM VALUES (1, 1, true), (1, 2, true), (2, 3, false), (2, 4, true) AS t(k, x, y)
+        GROUP BY k
+        ORDER BY k
+        """
+      Then query result ordered
+        | k | result |
+        | 1 | 1      |
+        | 2 | 1      |

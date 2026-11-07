@@ -1,12 +1,12 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
-use datafusion_functions::core::expr_fn::coalesce;
 use datafusion_functions::math::expr_fn::abs;
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::error::{PlanError, PlanResult};
@@ -29,7 +29,7 @@ fn size(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
     let config = input.function_context.plan_config;
     if config.legacy_size_of_null && !config.ansi_mode {
-        Ok(coalesce(vec![result, lit(-1_i32)]))
+        Ok(ScalarUDF::from(CoalesceFunc::new()).call(vec![result, lit(-1_i32)]))
     } else {
         // TODO: Preserve input nullability in nonlegacy mode; see the size/cardinality schema tests.
         Ok(result)

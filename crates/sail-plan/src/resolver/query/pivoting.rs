@@ -14,7 +14,7 @@ use sail_common::spec;
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_function::scalar::explode;
-use sail_function::scalar::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;

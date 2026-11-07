@@ -861,13 +861,14 @@ impl PlanResolver<'_> {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::functions::expr_fn::{coalesce, input_file_name};
+    use datafusion::functions::expr_fn::input_file_name;
     use datafusion::functions_aggregate::sum::sum_udaf;
     use datafusion::functions_window::row_number::row_number_udwf;
     use datafusion::prelude::SessionContext;
     use datafusion_expr::expr::{Lambda, WindowFunction};
     use datafusion_expr::{LogicalPlanBuilder, ScalarUDF, col, lit, scalar_subquery};
     use sail_common_datafusion::input_file::{InputFileBlockLengthFunc, InputFileBlockStartFunc};
+    use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 
     use super::*;
     use crate::config::PlanConfig;
@@ -892,7 +893,7 @@ mod tests {
         let resolver = PlanResolver::new(&context, Arc::new(PlanConfig::new()?));
         let mut state = PlanResolverState::new();
         let input = input(&mut state)?;
-        let name = coalesce(vec![input_file_name(), lit("")]);
+        let name = ScalarUDF::from(CoalesceFunc::new()).call(vec![input_file_name(), lit("")]);
         let start = ScalarUDF::from(InputFileBlockStartFunc::new()).call(vec![]);
         let length = ScalarUDF::from(InputFileBlockLengthFunc::new()).call(vec![]);
         let mut window = WindowFunction::new(sum_udaf(), vec![start.clone()]);
