@@ -230,6 +230,8 @@ mod tests {
         assert_eq!(compare_floats(1.0_f64, 2.0), Ordering::Less);
         assert_eq!(compare_floats(-0.0_f64, 0.0), Ordering::Less);
         assert_eq!(compare_floats(f64::NAN, f64::INFINITY), Ordering::Greater);
+        // FIXME: Spark orders every NaN greatest.
+        //  Coordinate changes with Arrow/DataFusion comparisons and aggregate filter/pruning paths to avoid incorrect results
         assert_eq!(compare_floats(neg_nan, f64::NEG_INFINITY), Ordering::Less);
         assert_eq!(compare_floats(f16::ONE, f16::ZERO), Ordering::Greater);
         assert!(float_lt(1.0_f64, 2.0) && !float_lt(2.0_f64, 1.0));
