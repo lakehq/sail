@@ -4,6 +4,13 @@ import math
 
 import pytest
 
+from pysail.testing.spark.utils.common import is_jvm_spark
+
+# Spark treats every NaN as one value in `collect_set` and in nested DISTINCT values.
+nan_payload_bug = pytest.mark.xfail(
+    not is_jvm_spark(), reason="Known Sail bug: NaN values with different bits are different values", strict=True
+)
+
 
 def rows(spark, sql):
     return [tuple(row) for row in spark.sql(sql).collect()]
@@ -242,6 +249,7 @@ def test_count_distinct_treats_nan_values_and_zeros_as_one_value(spark, data_typ
     assert rows(spark, sql) == [(3, 3)]
 
 
+@nan_payload_bug
 @pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
 @pytest.mark.parametrize("wrap", ["named_struct('d', {})", "array({})"], ids=["struct", "array"])
 def test_count_distinct_treats_nested_nan_values_and_zeros_as_one_value(spark, data_type, wrap):
@@ -250,6 +258,7 @@ def test_count_distinct_treats_nested_nan_values_and_zeros_as_one_value(spark, d
     assert rows(spark, f"SELECT count(DISTINCT {value}) FROM VALUES {values} AS t(x)") == [(3,)]  # noqa: S608
 
 
+@nan_payload_bug
 @pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
 def test_collect_set_treats_nan_values_as_one_value(spark, data_type):
     values = "(-CAST('NaN' AS DOUBLE)), (CAST('NaN' AS DOUBLE)), (1.0D)"

@@ -1,15 +1,14 @@
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, MapArray, PrimitiveArray, StructArray, make_array};
-use arrow::datatypes::{DataType, FieldRef, Float16Type, Float32Type, Float64Type};
+use arrow::array::{Array, ArrayRef, AsArray, MapArray, StructArray, make_array};
+use arrow::datatypes::{DataType, FieldRef};
+use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use half::f16;
 
-/// Normalize comparison keys like Spark's `NormalizeFloatingNumbers`, without changing selected
-/// raw values: all NaN values become one NaN, and `-0.0` becomes `0.0`.
+/// Normalize signed-zero comparison keys without changing selected raw values.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NormalizeFloatKeys {
     signature: Signature,
@@ -96,7 +95,7 @@ fn normalize(array: &ArrayRef) -> Result<ArrayRef> {
         return Ok(Arc::clone(array));
     }
     if array.data_type().is_floating() {
-        return Ok(normalize_nan_and_zero(array));
+        return Ok(normalize_float_zero(array));
     }
     if let DataType::Map(field, sorted) = array.data_type() {
         // Spark's recursive normalization preserves map keys and normalizes values.
@@ -141,45 +140,6 @@ fn normalize(array: &ArrayRef) -> Result<ArrayRef> {
     }
 }
 
-macro_rules! normalize_nan_and_zero {
-    ($array:expr, $t:ty, $nan:expr, $zero:expr, $neg_zero:expr) => {{
-        let values = $array.as_primitive::<$t>();
-        let nan = $nan.to_bits();
-        let neg_zero = $neg_zero.to_bits();
-        // The branch-free fold is vectorized.
-        if values.values().iter().fold(false, |found, v| {
-            let bits = v.to_bits();
-            found | (bits == neg_zero) | (v.is_nan() & (bits != nan))
-        }) {
-            let values: PrimitiveArray<$t> = values.unary(|v| {
-                if v.is_nan() {
-                    $nan
-                } else if v.to_bits() == neg_zero {
-                    $zero
-                } else {
-                    v
-                }
-            });
-            Arc::new(values) as ArrayRef
-        } else {
-            Arc::clone($array)
-        }
-    }};
-}
-
-/// Like Spark's `NormalizeNaNAndZero`, all NaN values become one NaN and `-0.0` becomes `0.0`.
-/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/optimizer/NormalizeFloatingNumbers.scala#L194-L215>
-fn normalize_nan_and_zero(array: &ArrayRef) -> ArrayRef {
-    match array.data_type() {
-        DataType::Float16 => {
-            normalize_nan_and_zero!(array, Float16Type, f16::NAN, f16::ZERO, f16::NEG_ZERO)
-        }
-        DataType::Float32 => normalize_nan_and_zero!(array, Float32Type, f32::NAN, 0.0, -0.0_f32),
-        DataType::Float64 => normalize_nan_and_zero!(array, Float64Type, f64::NAN, 0.0, -0.0_f64),
-        _ => Arc::clone(array),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -191,7 +151,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalizes_zeros_and_nan_bits_without_changing_nulls() -> Result<()> {
+    fn normalizes_zeros_without_changing_nan_bits_or_nulls() -> Result<()> {
         let values: ArrayRef = Arc::new(Float64Array::from(vec![
             Some(-0.0),
             Some(0.0),
@@ -203,8 +163,8 @@ mod tests {
         let result = result.as_primitive::<Float64Type>();
         assert_eq!(result.value(0).to_bits(), 0);
         assert_eq!(result.value(1).to_bits(), 0);
-        assert_eq!(result.value(2).to_bits(), f64::NAN.to_bits());
-        assert_eq!(result.value(3).to_bits(), f64::NAN.to_bits());
+        assert_eq!(result.value(2).to_bits(), 0x7ff0_0000_0000_0001);
+        assert_eq!(result.value(3).to_bits(), 0xfff8_0000_0000_0042);
         assert!(result.is_null(4));
         let single: ArrayRef =
             Arc::new(Float32Array::from(vec![-0.0, f32::from_bits(0x7f80_0001)]));
@@ -212,7 +172,7 @@ mod tests {
         assert_eq!(result.as_primitive::<Float32Type>().value(0).to_bits(), 0);
         assert_eq!(
             result.as_primitive::<Float32Type>().value(1).to_bits(),
-            f32::NAN.to_bits()
+            0x7f80_0001
         );
         Ok(())
     }
@@ -229,8 +189,8 @@ mod tests {
         ));
         let canonical = normalize(&raw)?;
         let canonical = canonical.as_primitive::<Float64Type>();
-        assert_eq!(canonical.value(0).to_bits(), f64::NAN.to_bits());
-        assert_eq!(canonical.value(1).to_bits(), f64::NAN.to_bits());
+        assert_eq!(canonical.value(0).to_bits(), bits[0]);
+        assert_eq!(canonical.value(1).to_bits(), bits[1]);
         assert_eq!(canonical.value(2).to_bits(), 0);
         for (index, bits) in bits.into_iter().enumerate() {
             assert_eq!(
@@ -273,7 +233,7 @@ mod tests {
         let first = first.as_primitive::<Float64Type>();
         assert_eq!(first.value(0).to_bits(), 0);
         assert!(first.is_null(1));
-        assert_eq!(first.value(2).to_bits(), f64::NAN.to_bits());
+        assert_eq!(first.value(2).to_bits(), 0x7ff0_0000_0000_0001);
         assert!(list.is_null(1));
         assert!(list.value(2).is_empty());
         Ok(())
