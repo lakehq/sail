@@ -130,7 +130,7 @@ def spelled(value):
 @pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
 @pytest.mark.parametrize("grouped", [True, False], ids=["grouped", "ungrouped"])
 def test_distinct_collect_normalizes_negative_zero(spark, aggregate, data_type, grouped):
-    table = f"(SELECT k, CAST(v AS {data_type}) AS v FROM {FLOAT_VALUES})"
+    table = f"(SELECT k, CAST(v AS {data_type}) AS v FROM {FLOAT_VALUES})"  # noqa: S608
     if grouped:
         sql = f"SELECT k, {aggregate} FROM {table} GROUP BY k ORDER BY k"  # noqa: S608
         expected = [(1, ["0.0", "nan"]), (2, ["0.0"])]
@@ -221,10 +221,10 @@ def test_window_collect_list_respect_nulls_keeps_nulls(spark, frame, expected):
 def test_min_max_reject_types_that_contain_a_map(spark, function, values, mode):
     # Spark cannot order a map.
     sql = {
-        "ungrouped": f"SELECT {function}(v) FROM VALUES {values} AS t(v)",
-        "grouped": f"SELECT k, {function}(v) FROM (SELECT 1 AS k, v FROM VALUES {values} AS t(v)) GROUP BY k",
+        "ungrouped": f"SELECT {function}(v) FROM VALUES {values} AS t(v)",  # noqa: S608
+        "grouped": f"SELECT k, {function}(v) FROM (SELECT 1 AS k, v FROM VALUES {values} AS t(v)) GROUP BY k",  # noqa: S608
         "window": f"SELECT {function}(v) OVER (ORDER BY 1 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) "
-        f"FROM VALUES {values} AS t(v)",
+        f"FROM VALUES {values} AS t(v)",  # noqa: S608
     }[mode]
-    with pytest.raises(Exception, match="(?i)ordering"):
+    with pytest.raises(Exception, match=r"(?i)ordering"):
         spark.sql(sql).collect()

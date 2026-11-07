@@ -15,7 +15,7 @@ def test_min_max_of_parquet_floats_with_nan(spark, tmp_path, data_type):
         f"SELECT CAST(x AS {data_type}) AS x FROM VALUES (1.0D), (CAST('NaN' AS DOUBLE)), (-2.0D) AS t(x)"  # noqa: S608
     ).coalesce(1).write.parquet(path)
     row = spark.read.parquet(path).selectExpr("min(x)", "max(x)").first()
-    assert row[0] == -2.0
+    assert row[0] == -2.0  # noqa: PLR2004
     assert math.isnan(row[1])
 
 

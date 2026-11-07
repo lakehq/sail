@@ -14,11 +14,11 @@ def result(spark, sql):
 def test_date_and_timestamp_coerce_to_timestamp(spark, function):
     spark.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
     try:
-        assert result(spark, f"SELECT {function}(CAST(NULL AS DATE), TIMESTAMP'2024-01-01 10:00:00')") == (  # noqa: S608
+        assert result(spark, f"SELECT {function}(CAST(NULL AS DATE), TIMESTAMP'2024-01-01 10:00:00')") == (
             "timestamp",
             [datetime.datetime(2024, 1, 1, 10, 0)],  # noqa: DTZ001
         )
-        assert result(spark, f"SELECT {function}(DATE'2024-01-02', TIMESTAMP'2024-01-01 10:00:00')") == (  # noqa: S608
+        assert result(spark, f"SELECT {function}(DATE'2024-01-02', TIMESTAMP'2024-01-01 10:00:00')") == (
             "timestamp",
             [datetime.datetime(2024, 1, 2, 0, 0)],  # noqa: DTZ001
         )
