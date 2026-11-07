@@ -4,10 +4,14 @@ use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
+use sail_common_datafusion::type_coercion::binary_type_coercion::string_promotion_type;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
+use sail_function::scalar::conditional::nullif::NullIfFunc;
 use sail_function::scalar::conversion::spark_cast_string_to_int32::SparkCastStringToInt32;
-use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
+use sail_function::scalar::conversion::spark_to_string::{
+    SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View,
+};
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 
@@ -83,7 +87,54 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     };
     let arguments = coerce_date_timestamp_values(arguments, &function_context)?;
     let arguments = coerce_string_temporal_values(arguments, &function_context)?;
+    let arguments = coerce_string_promotion_values(arguments, &function_context)?;
     Ok(ScalarUDF::from(CoalesceFunc::new()).call(arguments))
+}
+
+/// Casts STRING values mixed with numeric, boolean, or binary values to their common type,
+/// following Spark's string promotion (see `string_promotion_type`). Other values are left to the
+/// type coercion of the function.
+fn coerce_string_promotion_values(
+    arguments: Vec<expr::Expr>,
+    function_context: &FunctionContextInput<'_>,
+) -> PlanResult<Vec<expr::Expr>> {
+    let schema = function_context.schema;
+    let data_types = arguments
+        .iter()
+        .map(|arg| arg.get_type(schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Values of other types keep the type coercion of the function, and temporal values with
+    // STRING values are coerced by `coerce_string_temporal_values` already.
+    let is_string = |t: &DataType| match t {
+        DataType::Dictionary(_, value) => value.is_string(),
+        t => t.is_string(),
+    };
+    if !data_types.iter().any(is_string)
+        || !data_types.iter().any(|t| !t.is_null() && !is_string(t))
+    {
+        return Ok(arguments);
+    }
+    let Some(common_type) =
+        string_promotion_type(&data_types, function_context.plan_config.ansi_mode)
+    else {
+        return Ok(arguments);
+    };
+    arguments
+        .into_iter()
+        .zip(data_types)
+        .map(|(arg, data_type)| -> PlanResult<expr::Expr> {
+            if data_type == common_type || data_type.is_null() {
+                return Ok(arg);
+            }
+            // Like Spark's cast, numeric values are formatted as Spark does.
+            Ok(match &common_type {
+                DataType::Utf8 => ScalarUDF::from(SparkToUtf8::new()).call(vec![arg]),
+                DataType::LargeUtf8 => ScalarUDF::from(SparkToLargeUtf8::new()).call(vec![arg]),
+                DataType::Utf8View => ScalarUDF::from(SparkToUtf8View::new()).call(vec![arg]),
+                _ => arg.cast_to(&common_type, schema)?,
+            })
+        })
+        .collect()
 }
 
 /// Spark defines `nvl2` as `if` on whether the first argument is not null.
@@ -100,6 +151,7 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 /// Spark's `nullif` returns its first argument's type, comparing the arguments in their common type.
+/// Like Spark's `=`, the comparison treats `-0.0` and `0.0` as equal.
 fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
@@ -111,7 +163,7 @@ fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     // The first argument is evaluated twice, so a volatile one keeps the native function.
     // TODO: The native function returns the common type rather than the first argument's type.
     if left.is_volatile() {
-        return Ok(expr_fn::nullif(left, right));
+        return Ok(ScalarUDF::from(NullIfFunc::new()).call(vec![left, right]));
     }
     let timezone = &function_context.plan_config.session_timezone_label();
     // TODO: `date_trunc` returns TIMESTAMP_NTZ for a TIMESTAMP_NTZ value, where Spark returns
@@ -132,7 +184,7 @@ fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     // first argument here. Unlike a CASE expression, it is always nullable, as in Spark.
     let right_type = right.get_type(schema)?;
     if right_type == left_type || right_type.is_null() {
-        return Ok(expr_fn::nullif(left, right));
+        return Ok(ScalarUDF::from(NullIfFunc::new()).call(vec![left, right]));
     }
     // Like Spark's comparison, a DATE compares to a TIMESTAMP at the start of its day in the
     // session time zone, and a TIMESTAMP_NTZ compares to a TIMESTAMP in the session time zone.

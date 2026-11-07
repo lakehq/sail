@@ -40,7 +40,7 @@ use std::borrow::Cow;
 use std::sync::{Arc, LazyLock};
 
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit};
+use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion::optimizer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
@@ -64,17 +64,19 @@ use datafusion_expr::utils::merge_schema;
 // DataFusion's MERGE statement is coerced as in DataFusion, though Sail does not create it.
 #[expect(clippy::disallowed_types)]
 use datafusion_expr::{
-    Cast, DmlStatement, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
-    ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, WriteOp, is_false,
-    is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
+    Cast, DmlStatement, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection,
+    ScalarUDF, Union, ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, WriteOp,
+    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
 use itertools::{Itertools as _, izip};
 use sail_common_datafusion::type_coercion::binary_type_coercion::{
     BinaryTypeCoercer, comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
     type_union_coercion,
 };
+use sail_common_datafusion::type_coercion::nested::with_nested_field_metadata;
 use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
+use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 
 use crate::session_timestamp::convert_session_timestamp_casts;
 
@@ -917,6 +919,20 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let (left, right) =
                     self.coerce_binary_op(*left, self.schema, op, *right, self.schema)?;
+                let (left, right) = if matches!(
+                    op,
+                    Operator::Eq
+                        | Operator::NotEq
+                        | Operator::IsDistinctFrom
+                        | Operator::IsNotDistinctFrom
+                ) {
+                    (
+                        normalize_nested_float_operand(left, self.schema)?,
+                        normalize_nested_float_operand(right, self.schema)?,
+                    )
+                } else {
+                    (left, right)
+                };
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
                     Box::new(left),
                     op,
@@ -986,11 +1002,21 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     ),
                     Some(coerced_type) => {
                         // find the coerced type
-                        let cast_expr = expr.cast_to(&coerced_type, self.schema)?;
+                        let cast_expr = normalize_nested_float_operand(
+                            expr.cast_to(&coerced_type, self.schema)?,
+                            self.schema,
+                        )?;
                         let cast_list_expr = list
                             .into_iter()
-                            .map(|list_expr| list_expr.cast_to(&coerced_type, self.schema))
+                            .map(|list_expr| {
+                                normalize_nested_float_operand(
+                                    list_expr.cast_to(&coerced_type, self.schema)?,
+                                    self.schema,
+                                )
+                            })
                             .collect::<Result<Vec<_>>>()?;
+                        let (cast_expr, cast_list_expr) =
+                            normalize_float_in_list(cast_expr, cast_list_expr, &coerced_type);
                         Ok(Transformed::yes(Expr::InList(InList::new(
                             Box::new(cast_expr),
                             cast_list_expr,
@@ -1630,8 +1656,8 @@ fn coerce_case_expression(
 /// resolved (see `coerce_conditional_values` in `sail-plan`), so that the resolved expression has
 /// this type, which DataFusion would otherwise type by its first non-null value.
 // TODO: Unlike Spark, the common type keeps the scale of DECIMAL values that exceed the maximum
-//  precision instead of their integral digits, and it is DECIMAL rather than DOUBLE for FLOAT or
-//  DOUBLE with DECIMAL values. The type coercion of `coalesce` and UNION shares this.
+//  precision instead of their integral digits. The type coercion of `coalesce` and UNION shares
+//  this.
 pub fn case_result_type(then_types: &[DataType], else_type: Option<&DataType>) -> Option<DataType> {
     let (first_type, other_types) = match else_type {
         Some(else_type) => (else_type, then_types),
@@ -1673,72 +1699,86 @@ pub fn cast_case_result_value(
     }
 }
 
+/// Normalizes `-0.0` to `0.0` in an operand of a nested type with floats that is compared for
+/// equality, since Spark treats them as equal. DataFusion normalizes top-level floats when it
+/// compares them, but not floats nested in lists, structs or maps.
+// TODO: Remove after DataFusion 56 (apache/datafusion#26595).
+fn normalize_nested_float_operand(expr: Expr, schema: &DFSchema) -> Result<Expr> {
+    let data_type = expr.get_type(schema)?;
+    if data_type.is_nested()
+        && NormalizeFloatKeys::has_float(&data_type)
+        && !is_normalized_float_operand(&expr)
+    {
+        Ok(ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![expr]))
+    } else {
+        Ok(expr)
+    }
+}
+
+fn is_normalized_float_operand(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::ScalarFunction(ScalarFunction { func, .. }) if func.inner().is::<NormalizeFloatKeys>()
+    )
+}
+
+/// Makes an IN list of floating-point values treat `-0.0` and `0.0` as equal, as Spark does.
+/// DataFusion compares the values of an IN list by their bits, unlike its `=` operator.
+///
+/// A list of literals gets the zero of the other sign for each zero, so that the value is
+/// compared as it is (which keeps the predicate usable for pruning). Otherwise the value and
+/// the list are normalized, where literals are folded at planning time.
+// TODO: Remove after DataFusion 56 (apache/datafusion#26595) if its IN list does the same.
+fn normalize_float_in_list(expr: Expr, list: Vec<Expr>, data_type: &DataType) -> (Expr, Vec<Expr>) {
+    if !matches!(
+        data_type,
+        DataType::Float16 | DataType::Float32 | DataType::Float64
+    ) {
+        return (expr, list);
+    }
+    let zero = |value: f64| ScalarValue::Float64(Some(value)).cast_to(data_type).ok();
+    let (Some(positive_zero), Some(negative_zero)) = (zero(0.0), zero(-0.0)) else {
+        return (expr, list);
+    };
+    let literal = |e: &Expr| match e {
+        Expr::Literal(value, _) => Some(value.clone()),
+        Expr::Cast(Cast { expr, field }) => match expr.as_ref() {
+            Expr::Literal(value, _) => value.cast_to(field.data_type()).ok(),
+            _ => None,
+        },
+        _ => None,
+    };
+    let values = list.iter().map(literal).collect::<Vec<_>>();
+    if literal(&expr).is_none() && values.iter().all(Option::is_some) {
+        let mut list = list;
+        for (value, other) in [
+            (&positive_zero, &negative_zero),
+            (&negative_zero, &positive_zero),
+        ] {
+            if values.iter().flatten().any(|v| v == value)
+                && !values.iter().flatten().any(|v| v == other)
+            {
+                list.push(lit(other.clone()));
+            }
+        }
+        return (expr, list);
+    }
+    let normalize = |e: Expr| {
+        if is_normalized_float_operand(&e) {
+            e
+        } else {
+            ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![e])
+        }
+    };
+    (normalize(expr), list.into_iter().map(normalize).collect())
+}
+
 /// Casts a value of a nested type to the type explicitly, unless it is a cast already.
 pub fn cast_nested_value(value: Expr, data_type: &DataType) -> Expr {
     if data_type.is_nested() && !matches!(value, Expr::Cast(_) | Expr::TryCast(_)) {
         Expr::Cast(Cast::new(Box::new(value), data_type.clone()))
     } else {
         value
-    }
-}
-
-/// Fills in missing field metadata of a nested data type from a data type of the same shape, and
-/// makes its nested fields nullable if the corresponding fields are nullable.
-fn with_nested_field_metadata(data_type: DataType, source: &DataType) -> DataType {
-    let field = |field: &FieldRef, source: &FieldRef| {
-        let data_type = with_nested_field_metadata(field.data_type().clone(), source.data_type());
-        let mut field = field
-            .as_ref()
-            .clone()
-            .with_data_type(data_type)
-            .with_nullable(field.is_nullable() || source.is_nullable());
-        if field.metadata().is_empty() {
-            field.set_metadata(source.metadata().clone());
-        }
-        Arc::new(field)
-    };
-    match (&data_type, source) {
-        (DataType::Struct(fields), DataType::Struct(sources)) => {
-            let sources = match fields
-                .iter()
-                .map(|field| sources.find(field.name()).map(|(_, source)| source))
-                .collect::<Option<Vec<_>>>()
-            {
-                Some(sources) => sources,
-                None if fields.len() == sources.len() => sources.iter().collect(),
-                None => return data_type,
-            };
-            DataType::Struct(
-                fields
-                    .iter()
-                    .zip(sources)
-                    .map(|(f, source)| field(f, source))
-                    .collect(),
-            )
-        }
-        (
-            DataType::List(f)
-            | DataType::LargeList(f)
-            | DataType::FixedSizeList(f, _)
-            | DataType::ListView(f)
-            | DataType::LargeListView(f),
-            DataType::List(source)
-            | DataType::LargeList(source)
-            | DataType::FixedSizeList(source, _)
-            | DataType::ListView(source)
-            | DataType::LargeListView(source),
-        ) => match &data_type {
-            DataType::List(_) => DataType::List(field(f, source)),
-            DataType::LargeList(_) => DataType::LargeList(field(f, source)),
-            DataType::FixedSizeList(_, size) => DataType::FixedSizeList(field(f, source), *size),
-            DataType::ListView(_) => DataType::ListView(field(f, source)),
-            DataType::LargeListView(_) => DataType::LargeListView(field(f, source)),
-            _ => data_type,
-        },
-        (DataType::Map(f, sorted), DataType::Map(source, _)) => {
-            DataType::Map(field(f, source), *sorted)
-        }
-        _ => data_type,
     }
 }
 
@@ -2106,7 +2146,10 @@ mod test {
     };
     use insta::assert_snapshot;
 
-    use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter, coerce_case_expression};
+    use crate::type_coercion::{
+        TypeCoercion, TypeCoercionRewriter, coerce_case_expression, is_normalized_float_operand,
+        normalize_float_in_list,
+    };
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -3397,7 +3440,8 @@ mod test {
     }
 
     /// The common type of CASE values is the same as in DataFusion, except for DECIMAL types whose
-    /// common precision overflows `i8` in DataFusion (e.g. with negative scales), which are excluded.
+    /// common precision overflows `i8` in DataFusion (e.g. with negative scales), which are excluded,
+    /// and for DECIMAL with floating point values, which is DOUBLE like in Spark.
     #[test]
     fn test_case_result_type_matches_datafusion() {
         use arrow::datatypes::{Fields, IntervalUnit};
@@ -3478,9 +3522,16 @@ mod test {
                         Some(_) => vec![first.clone()],
                         None => vec![first.clone(), second.clone()],
                     };
+                    let expected = if (first.is_decimal() && second.is_floating())
+                        || (first.is_floating() && second.is_decimal())
+                    {
+                        Some(DataType::Float64)
+                    } else {
+                        get_coerce_type_for_case_expression(&then_types, else_type)
+                    };
                     assert_eq!(
                         case_result_type(&then_types, else_type),
-                        get_coerce_type_for_case_expression(&then_types, else_type),
+                        expected,
                         "{first} and {second}"
                     );
                 }
@@ -3940,7 +3991,100 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r#"
-        Projection: a = CAST(CAST(a AS Map("key_value": non-null Struct("key": non-null Utf8, "value": Float64), unsorted)) AS Map("entries": non-null Struct("key": non-null Utf8, "value": Float64), unsorted))
+        Projection: normalize_float_keys(a) = normalize_float_keys(CAST(CAST(a AS Map("key_value": non-null Struct("key": non-null Utf8, "value": Float64), unsorted)) AS Map("entries": non-null Struct("key": non-null Utf8, "value": Float64), unsorted))) AS a = a
+          EmptyRelation: rows=0
+        "#
+        )
+    }
+
+    /// IN lists of floats treat `-0.0` and `0.0` as equal, as in Spark.
+    #[test]
+    fn float_in_list_treats_zeros_as_equal() {
+        // A list of literals gets the zero of the other sign.
+        let (expr, list) = normalize_float_in_list(
+            col("a"),
+            vec![lit(0.0_f64), lit(1.5_f64)],
+            &DataType::Float64,
+        );
+        assert_eq!(expr, col("a"));
+        assert_eq!(list, vec![lit(0.0_f64), lit(1.5_f64), lit(-0.0_f64)]);
+        let (_, list) = normalize_float_in_list(
+            col("a"),
+            vec![cast(lit(0_i32), DataType::Float32)],
+            &DataType::Float32,
+        );
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[1], lit(-0.0_f32));
+        let (_, list) = normalize_float_in_list(
+            col("a"),
+            vec![lit(-0.0_f64), lit(0.0_f64)],
+            &DataType::Float64,
+        );
+        assert_eq!(list, vec![lit(-0.0_f64), lit(0.0_f64)]);
+        let (expr, list) =
+            normalize_float_in_list(col("a"), vec![lit(1.5_f64)], &DataType::Float64);
+        assert_eq!((expr, list), (col("a"), vec![lit(1.5_f64)]));
+        // Other values and lists are normalized.
+        let (expr, list) =
+            normalize_float_in_list(col("a"), vec![col("b"), lit(0.0_f64)], &DataType::Float64);
+        assert!(is_normalized_float_operand(&expr));
+        assert!(list.iter().all(is_normalized_float_operand));
+        let (expr, list) =
+            normalize_float_in_list(lit(0.0_f64), vec![col("b")], &DataType::Float64);
+        assert!(is_normalized_float_operand(&expr) && is_normalized_float_operand(&list[0]));
+        // Other types are unchanged.
+        let (expr, list) = normalize_float_in_list(col("a"), vec![col("b")], &DataType::Int32);
+        assert_eq!((expr, list), (col("a"), vec![col("b")]));
+    }
+
+    /// Equality of nested values with floats treats `-0.0` and `0.0` as equal, as in Spark.
+    #[test]
+    fn nested_float_equality_normalizes_operands() -> Result<()> {
+        let struct_type = DataType::Struct(vec![Field::new("f", DataType::Float64, true)].into());
+        let empty = empty_with_type(struct_type);
+        let not_distinct = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col("a")),
+            Operator::IsNotDistinctFrom,
+            Box::new(col("a")),
+        ));
+        let exprs = vec![
+            col("a").eq(col("a")).alias("eq"),
+            not_distinct.alias("not_distinct"),
+            col("a").lt(col("a")).alias("lt"),
+            col("a").in_list(vec![col("a")], false).alias("in_list"),
+        ];
+        let plan = LogicalPlan::Projection(Projection::try_new(exprs, empty)?);
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: normalize_float_keys(a) = normalize_float_keys(a) AS eq, normalize_float_keys(a) IS NOT DISTINCT FROM normalize_float_keys(a) AS not_distinct, a < a AS lt, normalize_float_keys(a) IN ([normalize_float_keys(a)]) AS in_list
+          EmptyRelation: rows=0
+        "#
+        )?;
+
+        // Nested values without floats and top-level floats are compared as they are.
+        let struct_type = DataType::Struct(vec![Field::new("f", DataType::Int32, true)].into());
+        let expr = col("a").eq(col("a")).alias("eq");
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![expr],
+            empty_with_type(struct_type),
+        )?);
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: a = a AS eq
+          EmptyRelation: rows=0
+        "#
+        )?;
+        let expr = col("a").eq(col("a")).alias("eq");
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![expr],
+            empty_with_type(DataType::Float64),
+        )?);
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: a = a AS eq
           EmptyRelation: rows=0
         "#
         )

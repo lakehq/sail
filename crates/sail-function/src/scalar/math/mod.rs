@@ -1,4 +1,5 @@
 pub mod java_random;
+pub mod modulus;
 pub mod rand_poisson;
 pub mod randn;
 pub mod random;

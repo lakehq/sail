@@ -3,6 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::{ExprSchemable, Operator, ScalarUDF, cast, expr, lit, when};
 use datafusion_spark::function::bitmap::expr_fn as bitmap_fn;
 use sail_catalog::manager::CatalogManager;
@@ -23,6 +24,7 @@ use sail_function::scalar::misc::theta_sketch::{
     ThetaDifferenceFunction, ThetaIntersectionFunction, ThetaSketchEstimateFunction,
     ThetaUnionFunction,
 };
+use sail_function::scalar::misc::type_of::SparkTypeOf;
 use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::sketch::DEFAULT_THETA_LG_NOM_ENTRIES;
 
@@ -120,7 +122,14 @@ fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let type_of = service
         .plan_formatter()
         .data_type_to_simple_string(&data_type)?;
-    Ok(lit(type_of))
+    // Aggregate functions in the argument make the query an aggregation, so they must be
+    // kept for planning. The function call is simplified to the type string afterward.
+    let has_aggregate = expr.exists(|e| Ok(matches!(e, expr::Expr::AggregateFunction(_))))?;
+    if has_aggregate {
+        Ok(ScalarUDF::from(SparkTypeOf::new(type_of)).call(vec![expr]))
+    } else {
+        Ok(lit(type_of))
+    }
 }
 
 fn bitmap_bit_position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

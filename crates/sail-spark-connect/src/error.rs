@@ -477,6 +477,8 @@ impl From<CommonErrorCause> for SparkThrowable {
                     SparkThrowable::DateTimeException(x)
                 } else if is_array_index_out_of_bounds_error(&x) {
                     SparkThrowable::ArrayIndexOutOfBoundsException(x)
+                } else if is_division_by_zero_error(&x) {
+                    SparkThrowable::ArithmeticException(x)
                 } else {
                     // TODO: handle situations where a different exception type is more appropriate.
                     SparkThrowable::AnalysisException(x)
@@ -493,6 +495,10 @@ fn is_timestamp_parse_error(message: &str) -> bool {
 
 fn is_array_index_out_of_bounds_error(message: &str) -> bool {
     message.contains("[INVALID_ARRAY_INDEX]")
+}
+
+fn is_division_by_zero_error(message: &str) -> bool {
+    message.contains("[DIVIDE_BY_ZERO]") || message.contains("[REMAINDER_BY_ZERO]")
 }
 
 fn cast_error_to_throwable(message: String) -> SparkThrowable {
@@ -612,5 +618,31 @@ mod tests {
 
         assert!(matches!(&throwable, SparkThrowable::DateTimeException(_)));
         assert_eq!(throwable.class_name(), "java.time.DateTimeException");
+    }
+
+    /// The interval arithmetic functions return their Arrow errors as external errors.
+    #[test]
+    fn external_arrow_arithmetic_error_maps_to_arithmetic_exception() {
+        let error = DataFusionError::External(Box::new(ArrowError::ArithmeticOverflow(
+            "[INTERVAL_DIVIDED_BY_ZERO] Division by zero.".to_string(),
+        )));
+        let throwable = SparkThrowable::from(CommonErrorCause::new::<PyErrExtractor>(&error));
+        assert!(matches!(&throwable, SparkThrowable::ArithmeticException(_)));
+        assert_eq!(
+            throwable.message(),
+            "[INTERVAL_DIVIDED_BY_ZERO] Division by zero."
+        );
+    }
+
+    #[test]
+    fn execution_division_by_zero_error_maps_to_arithmetic_exception() {
+        for message in [
+            "[DIVIDE_BY_ZERO] Division by zero.",
+            "[REMAINDER_BY_ZERO] Remainder by zero.",
+        ] {
+            let throwable = SparkThrowable::from(CommonErrorCause::Execution(message.to_string()));
+            assert!(matches!(&throwable, SparkThrowable::ArithmeticException(_)));
+            assert_eq!(throwable.class_name(), "java.lang.ArithmeticException");
+        }
     }
 }

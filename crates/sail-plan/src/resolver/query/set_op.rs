@@ -15,6 +15,7 @@ use datafusion_expr::{
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_common_datafusion::type_coercion::binary_type_coercion::set_operation_coercion;
+use sail_common_datafusion::type_coercion::nested::widen_list_nullability;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -194,6 +195,7 @@ impl PlanResolver<'_> {
                     (left, right)
                 };
                 let (left, right) = self.coerce_set_operation_timestamps(left, right)?;
+                let (left, right) = Self::widen_set_operation_nullability(left, right)?;
                 // Spark Connect treats Union as a leaf for DataFrame plan IDs.
                 // WithCTE restores separately reachable definition bindings.
                 for field in left.schema().fields() {
@@ -481,6 +483,63 @@ impl PlanResolver<'_> {
             _ => return Ok(None),
         };
         Ok(Some(rewritten))
+    }
+
+    /// Casts the columns of UNION inputs that differ only in the nullability of nested fields
+    /// (or where an input has a nested field of the NULL type, e.g. `array(NULL)`) to their
+    /// common type, which is nullable wherever an input is nullable, as in Spark. The output
+    /// schema of a UNION follows its first input, so without this the output declares nested
+    /// fields as non-nullable when only the first input has non-nullable nested fields.
+    /// INTERSECT and EXCEPT compare their inputs on the common type from `set_operation_coercion`,
+    /// whose list and struct coercion merges nested nullability, so they need no handling here.
+    fn widen_set_operation_nullability(
+        left: LogicalPlan,
+        right: LogicalPlan,
+    ) -> PlanResult<(LogicalPlan, LogicalPlan)> {
+        let left_schema = Arc::clone(left.schema());
+        let right_schema = Arc::clone(right.schema());
+        if left_schema.fields().len() != right_schema.fields().len() {
+            return Ok((left, right));
+        }
+        let targets = left_schema
+            .fields()
+            .iter()
+            .zip(right_schema.fields())
+            .map(|(left, right)| {
+                let (left, right) = (left.data_type(), right.data_type());
+                if left == right || !left.is_nested() || !right.is_nested() {
+                    return None;
+                }
+                widen_list_nullability(&[left.clone(), right.clone()])
+            })
+            .collect::<Vec<_>>();
+        if targets.iter().all(Option::is_none) {
+            return Ok((left, right));
+        }
+        let widen = |plan: LogicalPlan, schema: &DFSchema| -> PlanResult<LogicalPlan> {
+            if schema
+                .fields()
+                .iter()
+                .zip(&targets)
+                .all(|(field, target)| target.as_ref().is_none_or(|t| t == field.data_type()))
+            {
+                return Ok(plan);
+            }
+            let exprs = schema
+                .iter()
+                .zip(&targets)
+                .map(|((qualifier, field), target)| {
+                    let column = Expr::Column(Column::from((qualifier, field.as_ref())));
+                    match target {
+                        Some(target) if target != field.data_type() => cast(column, target.clone())
+                            .alias_qualified(qualifier.cloned(), field.name()),
+                        _ => column,
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(project(plan, exprs)?)
+        };
+        Ok((widen(left, &left_schema)?, widen(right, &right_schema)?))
     }
 
     /// Spark's common type for TIMESTAMP_NTZ and TIMESTAMP columns of a set operation.

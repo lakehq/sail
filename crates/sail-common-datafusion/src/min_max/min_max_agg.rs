@@ -782,7 +782,7 @@ impl<T: PartialOrd> MovingMin<T> {
     /// Heap bytes owned by the deque plus each stored `T`'s
     /// heap payload as reported by `elem_heap`. Excludes `size_of::<Self>()`.
     #[inline]
-    fn heap_size(&self, elem_heap: impl Fn(&T) -> usize) -> usize {
+    pub fn heap_size(&self, elem_heap: impl Fn(&T) -> usize) -> usize {
         moving_deque_heap_size(&self.deque, elem_heap)
     }
 }
@@ -907,7 +907,7 @@ impl<T: PartialOrd> MovingMax<T> {
     /// Heap bytes owned by the deque plus each stored `T`'s
     /// heap payload as reported by `elem_heap`. Excludes `size_of::<Self>()`.
     #[inline]
-    fn heap_size(&self, elem_heap: impl Fn(&T) -> usize) -> usize {
+    pub fn heap_size(&self, elem_heap: impl Fn(&T) -> usize) -> usize {
         moving_deque_heap_size(&self.deque, elem_heap)
     }
 }

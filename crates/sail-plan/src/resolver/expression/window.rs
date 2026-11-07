@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::simplify::SimplifyContextBuilder;
@@ -15,6 +16,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::window_aggregate::WindowAggregate;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::{
@@ -86,10 +88,8 @@ impl PlanResolver<'_> {
                 is_internal: _,
                 is_distinct,
                 ignore_nulls,
-                filter: None,
-                // TODO: `window` and `window_function` both have an `order_by` field.
-                //  Check: Which one should we use? Are they the same? Is one of them empty?
-                order_by: None,
+                filter,
+                order_by: within_group,
             }) => {
                 let Ok(function_name) = <Vec<String>>::from(function_name).one() else {
                     return Err(PlanError::unsupported("qualified window function name"));
@@ -98,6 +98,65 @@ impl PlanResolver<'_> {
                     return Err(PlanError::todo("named window function arguments"));
                 }
                 let canonical_function_name = function_name.to_ascii_lowercase();
+                // `mode() WITHIN GROUP (ORDER BY ...)` takes the ordering as its arguments, as in
+                // an aggregate, and supports any window.
+                let (arguments, within_group) = Self::convert_mode_within_group(
+                    &canonical_function_name,
+                    arguments,
+                    within_group,
+                )?;
+                // Spark supports `WITHIN GROUP` in a window for `listagg`, `percentile_cont` and
+                // `percentile_disc` when the window has no ORDER BY and covers the whole partition.
+                // The values of the partition are then ordered by the `WITHIN GROUP` ordering.
+                // <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/WindowResolution.scala#L142-L164>
+                let ordered_set_function = matches!(
+                    canonical_function_name.as_str(),
+                    "listagg" | "string_agg" | "percentile_cont" | "percentile_disc"
+                );
+                let sorts = match within_group {
+                    None if matches!(
+                        canonical_function_name.as_str(),
+                        "percentile_cont" | "percentile_disc"
+                    ) =>
+                    {
+                        return Err(PlanError::analysis(format!(
+                            "[INVALID_WITHIN_GROUP_EXPRESSION.WITHIN_GROUP_MISSING] Invalid function `{function_name}` with WITHIN GROUP. WITHIN GROUP is required for the function."
+                        )));
+                    }
+                    None => sorts,
+                    Some(within_group) if ordered_set_function => {
+                        if is_distinct {
+                            return Err(PlanError::analysis(
+                                "[DISTINCT_WINDOW_FUNCTION_UNSUPPORTED] Distinct window functions are not supported",
+                            ));
+                        }
+                        let whole_partition = window_frame.units == WindowFrameUnits::Rows
+                            && matches!(window_frame.start_bound, WindowFrameBound::Preceding(_))
+                            && window_frame.start_bound.is_unbounded()
+                            && matches!(window_frame.end_bound, WindowFrameBound::Following(_))
+                            && window_frame.end_bound.is_unbounded();
+                        if !sorts.is_empty() || !whole_partition {
+                            return Err(PlanError::analysis(format!(
+                                "[INVALID_WINDOW_SPEC_FOR_AGGREGATION_FUNC] Cannot specify ORDER BY or a window frame for {function_name} with WITHIN GROUP"
+                            )));
+                        }
+                        self.resolve_sort_orders(within_group, true, schema, state)
+                            .await?
+                    }
+                    Some(_) => {
+                        return Err(PlanError::unsupported(format!(
+                            "WITHIN GROUP in window function {function_name}"
+                        )));
+                    }
+                };
+                let filter = match filter {
+                    Some(filter) => {
+                        let filter = self.resolve_expression(*filter, schema, state).await?;
+                        validate_window_filter(&filter, is_distinct, schema)?;
+                        Some(filter)
+                    }
+                    None => None,
+                };
                 // `is_user_defined_function` is always false on the wire, so a registered
                 // Python UDAF arrives here as `UnresolvedFunction`. Look it up in the
                 // catalog before falling back to the built-in window function registry.
@@ -121,6 +180,11 @@ impl PlanResolver<'_> {
                         })
                 });
                 if let Some(udaf) = registered_udaf {
+                    if filter.is_some() {
+                        return Err(PlanError::unsupported(format!(
+                            "FILTER in user-defined window function {function_name}"
+                        )));
+                    }
                     let (udaf, arguments, argument_display_names) = self
                         .resolve_registered_pyspark_udaf(
                             udaf,
@@ -162,12 +226,14 @@ impl PlanResolver<'_> {
                             schema,
                         },
                     };
-                    (
-                        function(input)?,
-                        function_name,
-                        argument_display_names,
-                        is_distinct,
-                    )
+                    let window = function(input)?;
+                    let window = match filter {
+                        Some(filter) => {
+                            with_window_filter(window, filter, &canonical_function_name)?
+                        }
+                        None => window,
+                    };
+                    (window, function_name, argument_display_names, is_distinct)
                 }
             }
             spec::Expr::CommonInlineUserDefinedFunction(function) => {
@@ -530,4 +596,95 @@ impl PlanResolver<'_> {
             }
         }
     }
+}
+
+/// Validates the FILTER clause of an aggregate function over a window as Spark does.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/FunctionResolution.scala#L479-L560>
+fn validate_window_filter(
+    filter: &expr::Expr,
+    is_distinct: bool,
+    schema: &DFSchemaRef,
+) -> PlanResult<()> {
+    if is_distinct {
+        return Err(PlanError::analysis(
+            "[DISTINCT_WINDOW_FUNCTION_UNSUPPORTED] Distinct window functions are not supported",
+        ));
+    }
+    if filter.is_volatile() {
+        return Err(PlanError::analysis(format!(
+            "[INVALID_AGGREGATE_FILTER.NON_DETERMINISTIC] The FILTER expression {filter} in an aggregate function is invalid. Expected a FILTER expression to be deterministic."
+        )));
+    }
+    let data_type = filter.get_type(schema)?;
+    if data_type != DataType::Boolean {
+        return Err(PlanError::analysis(format!(
+            "[INVALID_AGGREGATE_FILTER.NOT_BOOLEAN] The FILTER expression {filter} in an aggregate function is invalid. Expected a FILTER expression to be of BOOLEAN type, got {data_type}."
+        )));
+    }
+    Ok(())
+}
+
+/// Applies the FILTER clause of an aggregate function over a window, so that rows where the
+/// filter is not true are not aggregated but still count toward the window frame, as in Spark.
+/// The filter is an argument of a [`WindowAggregate`] wrapping the aggregate function, rather
+/// than the filter of the window function, since DataFusion does not serialize the latter for
+/// distributed execution.
+fn with_window_filter(
+    window: expr::Expr,
+    filter: expr::Expr,
+    function_name: &str,
+) -> PlanResult<expr::Expr> {
+    let unsupported = window.exists(|e| {
+        Ok(matches!(
+            e,
+            expr::Expr::WindowFunction(window)
+                if !matches!(window.fun, expr::WindowFunctionDefinition::AggregateUDF(_))
+        ))
+    })?;
+    if unsupported {
+        return if matches!(
+            function_name,
+            "row_number"
+                | "rank"
+                | "dense_rank"
+                | "percent_rank"
+                | "cume_dist"
+                | "ntile"
+                | "lag"
+                | "lead"
+                | "nth_value"
+        ) {
+            Err(PlanError::analysis(format!(
+                "[INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX] Invalid SQL syntax: The function `{function_name}` does not support FILTER."
+            )))
+        } else {
+            Err(PlanError::unsupported(format!(
+                "FILTER in window function {function_name}"
+            )))
+        };
+    }
+    Ok(window
+        .transform(|e| match e {
+            expr::Expr::WindowFunction(mut window) => {
+                if let expr::WindowFunctionDefinition::AggregateUDF(function) = &window.fun {
+                    // A function that is wrapped already (e.g. for its WITHIN GROUP ordering)
+                    // gets the filter in the same wrapper.
+                    let function = match function.inner().downcast_ref::<WindowAggregate>() {
+                        Some(wrapped) if !wrapped.filter() => WindowAggregate::new(
+                            Arc::clone(wrapped.inner()),
+                            true,
+                            wrapped.ordering(),
+                        ),
+                        _ => WindowAggregate::new(Arc::clone(function), true, None),
+                    };
+                    window.fun = expr::WindowFunctionDefinition::AggregateUDF(Arc::new(
+                        AggregateUDF::from(function),
+                    ));
+                    window.params.args.push(filter.clone());
+                }
+                Ok(Transformed::yes(expr::Expr::WindowFunction(window)))
+            }
+            e => Ok(Transformed::no(e)),
+        })
+        .data()?)
 }

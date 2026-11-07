@@ -478,7 +478,7 @@ impl PlanResolver<'_> {
     /// ascending order and the highest for descending order, so this canonicalizes
     /// the WITHIN GROUP syntax to the same argument form as `mode(col, deterministic)`
     /// for both the aggregate function and the output column name formatter.
-    fn convert_mode_within_group(
+    pub(super) fn convert_mode_within_group(
         function_name: &str,
         arguments: Vec<spec::Expr>,
         order_by: Option<Vec<spec::SortOrder>>,

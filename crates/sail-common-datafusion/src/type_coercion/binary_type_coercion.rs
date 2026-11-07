@@ -601,6 +601,7 @@ enum TypeCategory {
     // String, well-defined type, but are considered as unknown type.
     DateTime,
     Composite,
+    Binary,
     Unknown,
     NotSupported,
 }
@@ -658,6 +659,17 @@ impl From<&DataType> for TypeCategory {
                     return TypeCategory::Composite;
                 }
 
+                // The binary types can be coerced with each other.
+                if matches!(
+                    data_type,
+                    DataType::Binary
+                        | DataType::LargeBinary
+                        | DataType::BinaryView
+                        | DataType::FixedSizeBinary(_)
+                ) {
+                    return TypeCategory::Binary;
+                }
+
                 TypeCategory::NotSupported
             }
         }
@@ -701,6 +713,13 @@ pub fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
     if data_types_category
         .iter()
         .any(|t| t == &TypeCategory::NotSupported)
+    {
+        return None;
+    }
+
+    // Spark coerces STRING values with BINARY values only in ANSI mode, which the plan resolver
+    // handles (see `string_promotion_type`).
+    if data_types_category.contains(&TypeCategory::Binary) && data_types.iter().any(is_string_like)
     {
         return None;
     }
@@ -828,6 +847,10 @@ fn type_union_resolution_coercion(lhs_type: &DataType, rhs_type: &DataType) -> O
                 .collect();
             Some(DataType::Struct(fields.into()))
         }
+        // The other binary types are coerced to the binary type of variable size.
+        (DataType::FixedSizeBinary(_), DataType::FixedSizeBinary(_)) => Some(DataType::Binary),
+        (DataType::FixedSizeBinary(_), DataType::LargeBinary)
+        | (DataType::LargeBinary, DataType::FixedSizeBinary(_)) => Some(DataType::LargeBinary),
         _ => binary_numeric_coercion(lhs_type, rhs_type)
             .or_else(|| list_coercion(lhs_type, rhs_type, type_union_resolution_coercion))
             .or_else(|| map_coercion(lhs_type, rhs_type, type_union_resolution_coercion))
@@ -981,6 +1004,97 @@ pub fn set_operation_coercion(
             set_operation_coercion(left, right, ansi_mode, session_timezone)
         }),
     }
+}
+
+/// Returns the common type of values that mix STRING values with values of other types,
+/// following Spark's string promotion when it finds the common type of the values of `coalesce`,
+/// `array`, or `map` (`findWiderCommonType`). Returns `None` if there is no common type.
+///
+/// With ANSI mode, a STRING value is promoted to the type of the other value
+/// (`AnsiStringPromotionTypeCoercion.findWiderTypeForString`): BIGINT for an integral value,
+/// DOUBLE for a fractional value, no common type for an interval or a nested value, and the type
+/// of the other value otherwise. Values of other types have their usual common type, where
+/// integral and floating point values are DOUBLE.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/AnsiStringPromotionTypeCoercion.scala#L92-L109>
+///
+/// Without ANSI mode, numeric values are promoted to STRING (`TypeCoercion.stringPromotion`).
+/// Other values with STRING values return `None`, and keep their existing coercion.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercion.scala#L113-L120>
+///
+/// The value type of a dictionary of string or binary values takes part in the promotion, and
+/// FixedSizeBinary is promoted like Binary.
+pub fn string_promotion_type(data_types: &[DataType], ansi_mode: bool) -> Option<DataType> {
+    use DataType::*;
+
+    let mut data_types = data_types.iter().map(|t| match t {
+        Dictionary(_, value) if is_string_like(value) || is_binary_like(value) => {
+            value.as_ref().clone()
+        }
+        FixedSizeBinary(_) => Binary,
+        t => t.clone(),
+    });
+    if ansi_mode {
+        return data_types.try_fold(Null, |common, data_type| {
+            ansi_string_promotion_coercion(&common, &data_type)
+        });
+    }
+    let mut strings = Vec::new();
+    for data_type in data_types {
+        if data_type.is_string() {
+            strings.push(data_type);
+        } else if !data_type.is_null() && !data_type.is_numeric() {
+            return None;
+        }
+    }
+    let (first, rest) = strings.split_first()?;
+    rest.iter().try_fold(first.clone(), |common, data_type| {
+        string_coercion(&common, data_type)
+    })
+}
+
+/// The common type of two values with Spark's ANSI string promotion. See [`string_promotion_type`].
+fn ansi_string_promotion_coercion(left: &DataType, right: &DataType) -> Option<DataType> {
+    if left == right || right.is_null() {
+        return Some(left.clone());
+    }
+    if left.is_null() {
+        return Some(right.clone());
+    }
+    if left.is_string() != right.is_string() {
+        let atomic = if left.is_string() { right } else { left };
+        return if atomic.is_integer() {
+            Some(DataType::Int64)
+        } else if atomic.is_numeric() {
+            Some(DataType::Float64)
+        } else if atomic.is_nested()
+            || matches!(atomic, DataType::Interval(_) | DataType::Duration(_))
+        {
+            None
+        } else {
+            Some(atomic.clone())
+        };
+    }
+    // Spark ANSI widens integral and floating point values to DOUBLE, like
+    // `coerce_ansi_float_widening` in the plan resolver, which applies the general rule.
+    if left.is_numeric() && right.is_numeric() && (left.is_floating() || right.is_floating()) {
+        return Some(DataType::Float64);
+    }
+    comparison_coercion(left, right)
+}
+
+fn is_string_like(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => true,
+        DataType::Dictionary(_, value) => is_string_like(value),
+        _ => false,
+    }
+}
+
+fn is_binary_like(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+    )
 }
 
 fn type_union_coercion_inner<F>(
@@ -1182,7 +1296,6 @@ pub fn binary_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Opti
 pub fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
-    // Prefer decimal data type over floating point for comparison operation
     match (lhs_type, rhs_type) {
         // Same decimal types
         (lhs_type, rhs_type)
@@ -1200,6 +1313,18 @@ pub fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Data
         {
             get_wider_decimal_type_cross_variant(lhs_type, rhs_type)
         }
+        // Like Spark, DECIMAL with FLOAT or DOUBLE is DOUBLE, since floating point values such as
+        // NaN, infinity, or 1e20 may not fit in a DECIMAL.
+        // https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercionHelper.scala#L186-L199
+        // https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/DecimalPrecisionTypeCoercion.scala#L182-L185
+        (
+            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
+            Float16 | Float32 | Float64,
+        )
+        | (
+            Float16 | Float32 | Float64,
+            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
+        ) => Some(Float64),
         // Decimal + non-decimal types
         (Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _), _) => {
             get_common_decimal_type(lhs_type, rhs_type)
@@ -2239,5 +2364,162 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
             }
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::DataType::*;
+
+    use super::*;
+
+    #[test]
+    fn test_decimal_with_floating_point_is_double() {
+        let decimals = [
+            Decimal32(9, 2),
+            Decimal64(18, 4),
+            Decimal128(10, 2),
+            Decimal128(38, 38),
+            Decimal256(76, 0),
+        ];
+        for decimal in &decimals {
+            for float in [Float16, Float32, Float64] {
+                for (lhs, rhs) in [(decimal, &float), (&float, decimal)] {
+                    assert_eq!(binary_numeric_coercion(lhs, rhs), Some(Float64));
+                    assert_eq!(comparison_coercion(lhs, rhs), Some(Float64));
+                    assert_eq!(type_union_coercion(lhs, rhs), Some(Float64));
+                    assert_eq!(
+                        try_type_union_resolution(&[lhs.clone(), Null, rhs.clone()]).ok(),
+                        Some(vec![Float64; 3])
+                    );
+                }
+            }
+        }
+        // Integral values with decimals keep the existing rule.
+        assert_eq!(
+            comparison_coercion(&Decimal128(10, 2), &Int64),
+            Some(Decimal128(22, 2))
+        );
+    }
+
+    #[test]
+    fn test_type_union_coercion_widens_nested_nullability() {
+        let list = |nullable| List(Arc::new(Field::new_list_field(Int32, nullable)));
+        let r#struct = |nullable| Struct(vec![Field::new("a", list(nullable), true)].into());
+        for (non_nullable, nullable) in
+            [(list(false), list(true)), (r#struct(false), r#struct(true))]
+        {
+            assert_eq!(
+                type_union_coercion(&non_nullable, &nullable).as_ref(),
+                Some(&nullable)
+            );
+            assert_eq!(
+                type_union_coercion(&nullable, &non_nullable).as_ref(),
+                Some(&nullable)
+            );
+            assert_eq!(
+                type_union_coercion(&non_nullable, &non_nullable).as_ref(),
+                Some(&non_nullable)
+            );
+        }
+    }
+
+    #[test]
+    fn test_type_union_resolution_of_binary_types() {
+        let cases = [
+            (vec![Binary, LargeBinary], LargeBinary),
+            (vec![BinaryView, Binary], BinaryView),
+            (vec![FixedSizeBinary(3), Binary], Binary),
+            (vec![FixedSizeBinary(3), FixedSizeBinary(4)], Binary),
+            (vec![FixedSizeBinary(3), LargeBinary], LargeBinary),
+            (vec![FixedSizeBinary(3), BinaryView], BinaryView),
+            (vec![FixedSizeBinary(3), Null], FixedSizeBinary(3)),
+            (
+                vec![Dictionary(Box::new(Int32), Box::new(Binary)), LargeBinary],
+                Dictionary(Box::new(Int32), Box::new(LargeBinary)),
+            ),
+        ];
+        for (types, expected) in cases {
+            assert_eq!(
+                try_type_union_resolution(&types).ok(),
+                Some(vec![expected.clone(); types.len()]),
+                "{types:?}"
+            );
+            for t in &types {
+                assert!(
+                    t.is_null() || can_cast_types(t, &expected),
+                    "{t} to {expected}"
+                );
+            }
+        }
+        // BINARY with STRING values depends on ANSI mode (see `string_promotion_type`), and
+        // BINARY with other types has no common type, like in Spark.
+        for other in [
+            Utf8,
+            LargeUtf8,
+            Int32,
+            Boolean,
+            Date32,
+            Struct(Fields::empty()),
+        ] {
+            assert!(try_type_union_resolution(&[Binary, other]).is_err());
+        }
+        // FixedSizeBinary is not coerced with string types in comparisons.
+        assert_eq!(comparison_coercion(&FixedSizeBinary(3), &Utf8), None);
+    }
+
+    #[test]
+    fn test_string_promotion_type() {
+        let dictionary = |value: DataType| Dictionary(Box::new(Int32), Box::new(value));
+        let timestamp = Timestamp(Microsecond, Some("UTC".into()));
+        let ansi = [
+            (vec![Utf8, Int32], Some(Int64)),
+            (vec![Int64, Null, Utf8], Some(Int64)),
+            (vec![Utf8, Decimal128(10, 2)], Some(Float64)),
+            (vec![Float32, Utf8], Some(Float64)),
+            (vec![Utf8, Int32, Float32], Some(Float64)),
+            (vec![Int32, Float32, Utf8], Some(Float64)),
+            (vec![Int32, Decimal128(10, 2), Utf8], Some(Float64)),
+            (vec![Int8, Int16, Utf8], Some(Int64)),
+            (vec![Utf8, Boolean], Some(Boolean)),
+            (vec![Binary, Utf8], Some(Binary)),
+            (vec![LargeUtf8, Binary], Some(Binary)),
+            (vec![Utf8, LargeBinary], Some(LargeBinary)),
+            (vec![FixedSizeBinary(2), Utf8], Some(Binary)),
+            (vec![Utf8View, BinaryView], Some(BinaryView)),
+            (vec![dictionary(Utf8), Int32], Some(Int64)),
+            (vec![Utf8, Date32], Some(Date32)),
+            (vec![timestamp.clone(), Utf8], Some(timestamp)),
+            (vec![Utf8, Time64(Microsecond)], Some(Time64(Microsecond))),
+            (vec![Utf8, LargeUtf8], Some(LargeUtf8)),
+            (vec![Utf8, Utf8View, Int32], Some(Int64)),
+            (vec![Null, Utf8], Some(Utf8)),
+            (vec![Utf8, Binary, Int32], None),
+            (vec![Utf8, Boolean, Int32], None),
+            (
+                vec![Utf8, Interval(arrow::datatypes::IntervalUnit::YearMonth)],
+                None,
+            ),
+            (vec![Utf8, Duration(Microsecond)], None),
+            (
+                vec![Utf8, List(Arc::new(Field::new_list_field(Int32, true)))],
+                None,
+            ),
+        ];
+        for (types, expected) in ansi {
+            assert_eq!(string_promotion_type(&types, true), expected, "{types:?}");
+        }
+        let non_ansi = [
+            (vec![Utf8, Int32], Some(Utf8)),
+            (vec![Decimal128(10, 2), LargeUtf8], Some(LargeUtf8)),
+            (vec![Utf8, Float64, Utf8View], Some(Utf8View)),
+            (vec![Utf8, Boolean], None),
+            (vec![Binary, Utf8], None),
+            (vec![Utf8, Date32], None),
+            (vec![Int32, Int64], None),
+        ];
+        for (types, expected) in non_ansi {
+            assert_eq!(string_promotion_type(&types, false), expected, "{types:?}");
+        }
     }
 }

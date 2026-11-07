@@ -15,6 +15,7 @@ use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::length::SparkLengthFunc;
 use regex_syntax::hir::Look;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::conditional::greatest::GreatestFunc;
 use sail_function::scalar::conversion::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
 use sail_function::scalar::string::btrim::BTrimFunc;
@@ -168,7 +169,7 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         | expr::Expr::Literal(ScalarValue::Int32(Some(0)), _) => lit(1i64),
         _ => when(position.clone().gt(lit(0i64)), position.clone())
             .when(position.clone().eq(lit(0i64)), lit(1i64))
-            .otherwise(expr_fn::greatest(vec![
+            .otherwise(ScalarUDF::from(GreatestFunc::new()).call(vec![
                 cast(expr_fn::char_length(string.clone()), DataType::Int64)
                     + position.clone()
                     + lit(1i64),

@@ -6,15 +6,14 @@ use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, Tre
 use datafusion_common::{DFSchema, ScalarValue, plan_err};
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
 use datafusion_expr::{
-    ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit,
+    ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ScalarUDF, ValueOrLambda, expr, lit,
 };
-use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::array_sort::{ArraySort, ArraySortLambda};
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
 use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
-use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
 use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
@@ -76,10 +75,10 @@ static SPARK_ARRAY_TRANSFORM_INDEX_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> = La
 });
 
 static SPARK_ARRAY_SORT_UDF: LazyLock<Arc<HigherOrderUDF>> =
-    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new())));
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(ArraySortLambda::new())));
 
 static SPARK_ARRAY_SORT_SWAPPED_UDF: LazyLock<Arc<HigherOrderUDF>> =
-    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped())));
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(ArraySortLambda::new_swapped())));
 
 pub(crate) fn is_higher_order_function(name: &str) -> bool {
     matches!(
@@ -475,27 +474,6 @@ fn aggregate(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     )))
 }
 
-/// Spark's array_sort always puts NULLs last, regardless of sort direction
-/// https://spark.apache.org/docs/latest/api/sql/index.html#array_sort
-fn array_sort_spark(array: expr::Expr, asc: expr::Expr) -> PlanResult<expr::Expr> {
-    let (sort, nulls) = match asc {
-        expr::Expr::Literal(ScalarValue::Boolean(Some(true)), _metadata) => (
-            lit(ScalarValue::Utf8(Some("ASC".to_string()))),
-            lit(ScalarValue::Utf8(Some("NULLS LAST".to_string()))),
-        ),
-        expr::Expr::Literal(ScalarValue::Boolean(Some(false)), _metadata) => (
-            lit(ScalarValue::Utf8(Some("DESC".to_string()))),
-            lit(ScalarValue::Utf8(Some("NULLS LAST".to_string()))),
-        ),
-        _ => {
-            return Err(PlanError::invalid(format!(
-                "Invalid asc value for array_sort_spark: {asc}"
-            )));
-        }
-    };
-    Ok(expr_fn::array_sort(array, sort, nulls))
-}
-
 /// Builds `array_sort(array)` (no comparator) and the comparator form
 /// `array_sort(array, (left, right) -> int)`.
 ///
@@ -516,7 +494,11 @@ fn array_sort(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
     if rest.is_empty() {
         // array_sort(array) without lambda - ascending order, NULLs last (Spark behavior).
-        return array_sort_spark(array, lit(true));
+        return Ok(ScalarUDF::from(ArraySort::new()).call(vec![
+            array,
+            lit("ASC"),
+            lit("NULLS LAST"),
+        ]));
     }
 
     let comparator = rest.one()?;

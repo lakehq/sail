@@ -5,4 +5,5 @@ pub mod scalar_subquery_result;
 pub mod spark_aes;
 pub mod spark_partition_id;
 pub mod theta_sketch;
+pub mod type_of;
 pub mod version;

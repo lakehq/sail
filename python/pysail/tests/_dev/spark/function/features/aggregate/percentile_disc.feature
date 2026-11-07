@@ -263,13 +263,6 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
 
   Rule: percentile_disc works as a window function (OVER)
 
-    # @sail-bug: Spark supports percentile_disc as a window function; Sail's window
-    # resolver has no branch for ordered-set (WITHIN GROUP) aggregates, and
-    # percentile_disc is registered as F::unknown in the window registry. Fixing it
-    # needs: (1) a WITHIN-GROUP branch in resolver/expression/window.rs that routes
-    # the WITHIN GROUP ORDER BY into the aggregate's order_bys, and (2) a real
-    # handler in function/window.rs (replacing F::unknown). Deferred — separate work.
-    @sail-bug
     Scenario: percentile_disc OVER () broadcasts to every row
       When query
         """
@@ -284,7 +277,6 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
         | 3 | 2.0 |
         | 4 | 2.0 |
 
-    @sail-bug
     Scenario: percentile_disc OVER (PARTITION BY)
       When query
         """

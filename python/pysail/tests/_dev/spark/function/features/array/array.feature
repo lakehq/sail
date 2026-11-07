@@ -209,3 +209,71 @@ Feature: array output schema
         | NULL   |
         | NULL   |
         | NULL   |
+
+  Rule: Arguments that differ in nested nullability
+
+    # Spark's CreateArray merges the nullability of nested fields across the arguments.
+    # These queries used to panic in Sail ("Arrays with inconsistent types passed to
+    # MutableArrayData").
+    Scenario: array of arrays whose elements differ in nullability
+      When query
+        """
+        SELECT array(array(id % 2), array(id, NULL)) AS a FROM VALUES (0), (1), (2) AS t(id)
+        """
+      Then query schema
+        """
+        root
+         |-- a: array (nullable = false)
+         |    |-- element: array (containsNull = false)
+         |    |    |-- element: integer (containsNull = true)
+        """
+      Then query result
+        | a                |
+        | [[0], [0, NULL]] |
+        | [[1], [1, NULL]] |
+        | [[0], [2, NULL]] |
+
+    Scenario Outline: array of nested values that differ in nullability (<case>)
+      When query
+        """
+        SELECT array(<arguments>) AS a FROM VALUES (0), (1) AS t(id)
+        """
+      Then query result
+        | a          |
+        | <result_0> |
+        | <result_1> |
+
+      Examples:
+        | case                 | arguments                                                            | result_0                       | result_1                       |
+        | nullable list first  | array(id, NULL), array(id % 2), NULL                                 | [[0, NULL], [0], NULL]         | [[1, NULL], [1], NULL]         |
+        | no NULL literal      | array(id % 2), array(id + 1)                                         | [[0], [1]]                     | [[1], [2]]                     |
+        | list of lists        | array(array(id % 2)), array(array(id, NULL))                         | [[[0]], [[0, NULL]]]           | [[[1]], [[1, NULL]]]           |
+        | struct with a list   | named_struct('x', array(id % 2)), named_struct('x', array(id, NULL)) | [{[0]}, {[0, NULL]}]           | [{[1]}, {[1, NULL]}]           |
+        | map with list values | map('k', array(id % 2)), map('k', array(id, NULL))                   | [{k -> [0]}, {k -> [0, NULL]}] | [{k -> [1]}, {k -> [1, NULL]}] |
+        | double list          | array(CAST(id % 2 AS DOUBLE)), array(1.5D, NULL)                     | [[0.0], [1.5, NULL]]           | [[1.0], [1.5, NULL]]           |
+        | string list          | array(CAST(id % 2 AS STRING)), array('x', NULL)                      | [[0], [x, NULL]]               | [[1], [x, NULL]]               |
+
+    Scenario: min and max of arrays built from arguments that differ in nullability
+      When query
+        """
+        SELECT min(a) AS mn, max(a) AS mx
+        FROM (SELECT array(array(id % 2), array(id, NULL)) AS a FROM VALUES (0), (1), (2) AS t(id))
+        """
+      Then query result
+        | mn               | mx               |
+        | [[0], [0, NULL]] | [[1], [1, NULL]] |
+
+    Scenario: max of arrays built from arguments that differ in nullability in a correlated subquery
+      When query
+        """
+        SELECT
+          id,
+          (SELECT max(array(array(t2.id % 2), array(t2.id, NULL))) FROM VALUES (0), (1), (2) AS t2(id) WHERE t2.id <= t1.id) AS m
+        FROM VALUES (0), (1), (2) AS t1(id)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | m                |
+        | 0  | [[0], [0, NULL]] |
+        | 1  | [[1], [1, NULL]] |
+        | 2  | [[1], [1, NULL]] |

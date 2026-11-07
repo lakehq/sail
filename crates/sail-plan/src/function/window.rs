@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field};
+use arrow::compute::SortOptions;
+use arrow::datatypes::DataType;
 use datafusion::functions_aggregate::{
     approx_distinct, average, bit_and_or_xor, bool_and_or, correlation, count, covariance,
-    grouping, median, stddev, sum, variance,
+    grouping, median, percentile_cont, stddev, sum, variance,
 };
-use datafusion::functions_nested::string::array_to_string;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
 use datafusion::functions_window::lead_lag::{lag_udwf, lead_udwf};
 use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf, nth_value_udwf};
@@ -20,7 +20,6 @@ use datafusion_expr::{
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
-use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::approx_percentile::ApproxPercentileCont;
@@ -35,6 +34,7 @@ use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
+use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
 use sail_function::aggregate::product::ProductFunction;
 use sail_function::aggregate::regr::{Regr, RegrType};
 use sail_function::aggregate::skewness::SkewnessFunc;
@@ -44,15 +44,18 @@ use sail_function::aggregate::theta_sketch::{
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::vector::avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
+use sail_function::aggregate::window_aggregate::WindowAggregate;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::window::{spark_first_value_udwf, spark_last_value_udwf, spark_ntile_udwf};
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::aggregate::coerce_string_sum_arguments;
+use crate::function::aggregate::{
+    coerce_string_sum_arguments, count_min_sketch_args, hll_args_with_default_lg,
+    hll_union_args_with_default_allow_different_lg, join_listagg_values, normalize_distinct_floats,
+    theta_args_with_default_lg, with_non_nullable_elements,
+};
 use crate::function::common::{
-    WinFunction, WinFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
-    get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
-    normalize_distinct_floats, theta_args_with_default_lg,
+    WinFunction, WinFunctionInput, get_arguments_and_null_treatment, get_null_treatment,
 };
 use crate::function::transform_count_star_wildcard_expr;
 
@@ -533,7 +536,8 @@ fn collect_set(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     let arg = arguments.one()?;
     let element_type = arg.get_type(function_context.schema)?;
     let arg = normalize_distinct_floats(arg, &element_type);
-    let null_treatment = get_null_treatment(Some(ignore_nulls.unwrap_or(true)));
+    let ignore_nulls = ignore_nulls.unwrap_or(true);
+    let null_treatment = get_null_treatment(Some(ignore_nulls));
     let agg = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
             ArrayAgg::default(),
@@ -548,7 +552,12 @@ fn collect_set(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             distinct: true,
         },
     }));
-    Ok(coalesce_to_empty_array(agg, &element_type))
+    let result = coalesce_to_empty_array(agg, &element_type);
+    if ignore_nulls {
+        with_non_nullable_elements(result, function_context.schema)
+    } else {
+        Ok(result)
+    }
 }
 
 fn array_agg_compacted(input: WinFunctionInput) -> PlanResult<expr::Expr> {
@@ -631,35 +640,61 @@ fn listagg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         },
     }));
 
-    // Spark joins the values without a delimiter when the delimiter is NULL.
-    // <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/collect.scala#L586-L600>
-    let delim = delim.cast_to(&DataType::Utf8, schema)?;
-    let delim = if delim.nullable(schema)? {
-        ScalarUDF::from(CoalesceFunc::new()).call(vec![delim, lit("")])
-    } else {
-        delim
-    };
-    let string_agg = array_to_string(
-        agg.cast_to(
-            &DataType::List(Arc::new(Field::new(
-                SAIL_LIST_FIELD_NAME,
-                DataType::Utf8,
-                true,
-            ))),
-            schema,
-        )?,
-        delim,
-    );
+    join_listagg_values(agg, &agg_col.get_type(schema)?, delim, schema)
+}
 
-    let casted_agg = match agg_col.get_type(schema)? {
-        DataType::Binary | DataType::BinaryView => string_agg.cast_to(&DataType::Binary, schema)?,
-        DataType::LargeBinary => string_agg.cast_to(&DataType::LargeBinary, schema)?,
-        _ => string_agg,
-    };
+/// Builds `percentile_cont(p) WITHIN GROUP (ORDER BY x)` over a window. The resolver passes the
+/// WITHIN GROUP ordering as the window ordering, where the window covers the whole partition.
+fn percentile_cont(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    percentile_within_group(input, percentile_cont::percentile_cont_udaf())
+}
 
-    Ok(when(casted_agg.clone().is_not_null(), casted_agg)
-        .when(lit(true), lit(ScalarValue::Null))
-        .end()?)
+/// Builds `percentile_disc(p) WITHIN GROUP (ORDER BY x)` over a window, like `percentile_cont`.
+fn percentile_disc(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    percentile_within_group(input, percentile_disc_udaf(ansi_mode))
+}
+
+fn percentile_within_group(
+    input: WinFunctionInput,
+    function: Arc<AggregateUDF>,
+) -> PlanResult<expr::Expr> {
+    let WinFunctionInput {
+        arguments,
+        partition_by,
+        order_by,
+        window_frame,
+        ignore_nulls,
+        distinct,
+        function_context: _,
+    } = input;
+    // The aggregate function takes the column and the percentile, and the ordering tells
+    // whether the column is sorted in descending order. DataFusion does not pass the ordering
+    // of a window to its aggregate function, so the function is wrapped to receive it.
+    let sort = order_by.clone().one()?;
+    let ordering = SortOptions {
+        descending: !sort.asc,
+        nulls_first: sort.nulls_first,
+    };
+    let column = sort.expr;
+    let percentile = arguments.one()?;
+    let function = Arc::new(AggregateUDF::from(WindowAggregate::new(
+        function,
+        false,
+        Some(ordering),
+    )));
+    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+        fun: WindowFunctionDefinition::AggregateUDF(function),
+        params: WindowFunctionParams {
+            args: vec![column, percentile],
+            partition_by,
+            order_by,
+            window_frame,
+            filter: None,
+            null_treatment: get_null_treatment(ignore_nulls),
+            distinct,
+        },
+    })))
 }
 
 fn median(input: WinFunctionInput) -> PlanResult<expr::Expr> {
@@ -843,8 +878,8 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
             "percentile_approx",
             F::aggregate(|| Arc::new(AggregateUDF::from(ApproxPercentileCont::new()))),
         ),
-        ("percentile_cont", F::unknown("percentile_cont")),
-        ("percentile_disc", F::unknown("percentile_disc")),
+        ("percentile_cont", F::custom(percentile_cont)),
+        ("percentile_disc", F::custom(percentile_disc)),
         ("product", F::custom(product)),
         (
             "regr_avgx",
@@ -929,7 +964,7 @@ pub(crate) fn list_built_in_window_function_names() -> impl Iterator<Item = &'st
 mod tests {
     use std::sync::Arc;
 
-    use arrow::datatypes::Schema;
+    use arrow::datatypes::{Field, Schema};
     use datafusion::prelude::SessionContext;
     use datafusion_common::DFSchema;
     use datafusion_expr::{ExprSchemable, col, try_cast};

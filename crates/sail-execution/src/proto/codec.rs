@@ -23,9 +23,7 @@ use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::execution::{SessionStateDefaults, TaskContext};
-use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::input_file_name::InputFileNameFunc;
-use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::core::with_metadata::WithMetadataFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::functions::string::repeat::RepeatFunc;
@@ -163,9 +161,13 @@ use sail_function::aggregate::theta_sketch::{
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::vector::avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
+use sail_function::aggregate::window_aggregate::WindowAggregate;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::array_position::SparkArrayPosition;
+use sail_function::scalar::array::array_sort::ArraySort;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
+use sail_function::scalar::array::binary_array_join::SparkBinaryArrayJoin;
+use sail_function::scalar::array::non_null_elements::NonNullElements;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
@@ -174,6 +176,9 @@ use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
+use sail_function::scalar::conditional::greatest::GreatestFunc;
+use sail_function::scalar::conditional::least::LeastFunc;
+use sail_function::scalar::conditional::nullif::NullIfFunc;
 use sail_function::scalar::conversion::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::conversion::spark_to_string::{
     SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View,
@@ -191,6 +196,9 @@ use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalToCalendarInterval,
     SparkYearMonthInterval, YearMonthIntervalMonths,
+};
+use sail_function::scalar::datetime::spark_interval_arithmetic::{
+    IntervalArithmeticOp, SparkIntervalArithmetic,
 };
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
@@ -247,6 +255,7 @@ use sail_function::scalar::misc::theta_sketch::{
     ThetaDifferenceFunction, ThetaIntersectionFunction, ThetaSketchEstimateFunction,
     ThetaUnionFunction,
 };
+use sail_function::scalar::misc::type_of::SparkTypeOf;
 use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::scalar::mixed_numeric::MixedNumeric;
 use sail_function::scalar::multi_expr::MultiExpr;
@@ -3681,6 +3690,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkDateFormat::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkTypeOf(r#gen::SparkTypeOfUdf { type_name }) => {
+                let udf = SparkTypeOf::new(type_name);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf { last_value_wins }) => {
                 let udf = SparkMapFromArrays::new(last_value_wins);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -3830,6 +3843,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "array_intersect" | "list_intersect" => {
                 Ok(Arc::new(ScalarUDF::from(ArrayIntersect::new())))
             }
+            "array_sort" | "list_sort" => Ok(Arc::new(ScalarUDF::from(ArraySort::new()))),
             "spark_array_position" | "array_position" => {
                 Ok(Arc::new(ScalarUDF::from(SparkArrayPosition::new())))
             }
@@ -3846,6 +3860,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "vector_normalize" => Ok(Arc::new(ScalarUDF::from(VectorNormalize::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "coalesce" => Ok(Arc::new(ScalarUDF::from(CoalesceFunc::new()))),
+            "nullif" => Ok(Arc::new(ScalarUDF::from(NullIfFunc::new()))),
+            "spark_binary_array_join" => Ok(Arc::new(ScalarUDF::from(SparkBinaryArrayJoin::new()))),
+            "spark_non_null_elements" => Ok(Arc::new(ScalarUDF::from(NonNullElements::new()))),
             "upper" => Ok(Arc::new(ScalarUDF::from(UpperFunc::new()))),
             "lower" => Ok(Arc::new(ScalarUDF::from(LowerFunc::new()))),
             "btrim" | "trim" => Ok(Arc::new(ScalarUDF::from(BTrimFunc::new()))),
@@ -3994,6 +4011,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_make_ym_interval" | "make_ym_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
+            SparkIntervalArithmetic::MULTIPLY_NAME => Ok(Arc::new(ScalarUDF::from(
+                SparkIntervalArithmetic::new(IntervalArithmeticOp::Multiply),
+            ))),
+            SparkIntervalArithmetic::DIVIDE_NAME => Ok(Arc::new(ScalarUDF::from(
+                SparkIntervalArithmetic::new(IntervalArithmeticOp::Divide),
+            ))),
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
             "date_trunc" | "datetrunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
@@ -4071,6 +4094,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ArrayMax>()
             || node_inner.is::<ArrayMin>()
             || node_inner.is::<ArrayIntersect>()
+            || node_inner.is::<ArraySort>()
             || node_inner.is::<SparkArrayPosition>()
             || node_inner.is::<SparkArrayCompact>()
             || node_inner.is::<SparkCastStringToInt32>()
@@ -4081,6 +4105,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<VectorNormalize>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<CoalesceFunc>()
+            || node_inner.is::<NullIfFunc>()
+            || node_inner.is::<SparkBinaryArrayJoin>()
+            || node_inner.is::<NonNullElements>()
             || node_inner.is::<UpperFunc>()
             || node_inner.is::<LowerFunc>()
             || node_inner.is::<BTrimFunc>()
@@ -4157,6 +4184,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkTimeDiff>()
             || node_inner.is::<SparkTimeTrunc>()
             || node_inner.is::<SparkMakeYmInterval>()
+            || node_inner.is::<SparkIntervalArithmetic>()
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()
             || node_inner.is::<SparkMurmur3Hash>()
@@ -4315,6 +4343,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkDateFormat>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkDateFormat(r#gen::SparkDateFormatUdf { session_timezone })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkTypeOf>() {
+            let type_name = func.type_name().to_string();
+            UdfKind::SparkTypeOf(r#gen::SparkTypeOfUdf { type_name })
         } else if let Some(func) = node.inner().downcast_ref::<StructFunction>() {
             let field_names = func.field_names().to_vec();
             UdfKind::StructFunction(r#gen::StructFunctionUdf { field_names })
@@ -4633,6 +4664,21 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })) => Ok(Arc::new(AggregateUDF::from(
                 LastValue::with_input_pre_ordered(is_input_pre_ordered),
             ))),
+            Some(UdafKind::WindowAggregate(r#gen::WindowAggregateUdaf {
+                inner_name,
+                inner,
+                filter,
+                ordering,
+            })) => {
+                let inner = self.try_decode_udaf(&inner_name, &inner)?;
+                let ordering = ordering.map(|options| SortOptions {
+                    descending: options.descending,
+                    nulls_first: options.nulls_first,
+                });
+                Ok(Arc::new(AggregateUDF::from(WindowAggregate::new(
+                    inner, filter, ordering,
+                ))))
+            }
             None => plan_err!("ExtendedAggregateUdf: no UDF found for {name}"),
         }
     }
@@ -4736,6 +4782,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<LastValue>() {
             UdafKind::LastValue(r#gen::LastValueUdaf {
                 is_input_pre_ordered: func.is_input_pre_ordered(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<WindowAggregate>() {
+            let mut inner = vec![];
+            self.try_encode_udaf(func.inner(), &mut inner)?;
+            UdafKind::WindowAggregate(r#gen::WindowAggregateUdaf {
+                inner_name: func.inner().name().to_string(),
+                inner,
+                filter: func.filter(),
+                ordering: func.ordering().map(|options| r#gen::SortOptions {
+                    descending: options.descending,
+                    nulls_first: options.nulls_first,
+                }),
             })
         } else {
             return Ok(());
@@ -6382,6 +6440,42 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_window_aggregate_udaf() -> Result<()> {
+        // A DataFusion function and a Sail function with a payload as the inner function.
+        let ordering = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        for (inner, filter, ordering) in [
+            (datafusion::functions_aggregate::sum::sum_udaf(), true, None),
+            (
+                Arc::new(AggregateUDF::from(ArrayAgg::new(true))),
+                true,
+                Some(ordering),
+            ),
+            (
+                datafusion::functions_aggregate::percentile_cont::percentile_cont_udaf(),
+                false,
+                Some(ordering),
+            ),
+        ] {
+            let decoded = round_trip_udaf(AggregateUDF::from(WindowAggregate::new(
+                Arc::clone(&inner),
+                filter,
+                ordering,
+            )))?;
+            let window = decoded
+                .inner()
+                .downcast_ref::<WindowAggregate>()
+                .ok_or_else(|| plan_datafusion_err!("decoded UDAF is not WindowAggregate"))?;
+            assert_eq!(window.inner().as_ref(), inner.as_ref());
+            assert_eq!(window.filter(), filter);
+            assert_eq!(window.ordering(), ordering);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_approx_percentile_udaf() -> Result<()> {
         let decoded = round_trip_udaf(AggregateUDF::from(ApproxPercentileCont::new()))?;
         assert!(decoded.inner().is::<ApproxPercentileCont>());
@@ -6430,8 +6524,26 @@ mod tests {
     #[test]
     fn test_round_trip_ported_datafusion_udfs() -> Result<()> {
         // `CoalesceFunc` is covered by `test_round_trip_input_file_name_expression_udfs`.
+        let decoded = round_trip_udf(ScalarUDF::from(GreatestFunc::new()))?;
+        downcast_udf::<GreatestFunc>(&decoded, "GreatestFunc")?;
+        let decoded = round_trip_udf(ScalarUDF::from(LeastFunc::new()))?;
+        downcast_udf::<LeastFunc>(&decoded, "LeastFunc")?;
+        let decoded = round_trip_udf(ScalarUDF::from(NullIfFunc::new()))?;
+        downcast_udf::<NullIfFunc>(&decoded, "NullIfFunc")?;
+        let decoded = round_trip_udf(ScalarUDF::from(SparkBinaryArrayJoin::new()))?;
+        downcast_udf::<SparkBinaryArrayJoin>(&decoded, "SparkBinaryArrayJoin")?;
+        let decoded = round_trip_udf(ScalarUDF::from(NonNullElements::new()))?;
+        downcast_udf::<NonNullElements>(&decoded, "NonNullElements")?;
+        // DataFusion's function of the same name is still decoded as itself.
+        let decoded = round_trip_udf(datafusion::functions::core::nullif().as_ref().clone())?;
+        downcast_udf::<datafusion::functions::core::nullif::NullIfFunc>(
+            &decoded,
+            "DataFusion NullIfFunc",
+        )?;
         let decoded = round_trip_udf(ScalarUDF::from(UpperFunc::new()))?;
         downcast_udf::<UpperFunc>(&decoded, "UpperFunc")?;
+        let decoded = round_trip_udf(ScalarUDF::from(ArraySort::new()))?;
+        downcast_udf::<ArraySort>(&decoded, "ArraySort")?;
         let decoded = round_trip_udf(ScalarUDF::from(LowerFunc::new()))?;
         downcast_udf::<LowerFunc>(&decoded, "LowerFunc")?;
         let decoded = round_trip_udf(ScalarUDF::from(BTrimFunc::new()))?;
@@ -9115,7 +9227,7 @@ mod tests {
         use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
         use datafusion::logical_expr::{Case, Expr, HigherOrderUDF, col, lambda, lit};
         use datafusion::physical_expr::create_physical_expr;
-        use sail_function::scalar::array::spark_array_sort::SparkArraySort;
+        use sail_function::scalar::array::array_sort::ArraySortLambda;
 
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let list = ListArray::new(
@@ -9146,7 +9258,7 @@ mod tests {
             ],
             Some(Box::new(lit(0i32))),
         ));
-        let func = Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new()));
+        let func = Arc::new(HigherOrderUDF::new_from_impl(ArraySortLambda::new()));
         let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
             func,
             vec![col("arr"), lambda(["l", "r"], body)],
@@ -9327,7 +9439,7 @@ mod tests {
         )
     }
 
-    /// A right-only comparator routed to `SparkArraySort::new_swapped()`. Proves
+    /// A right-only comparator routed to `ArraySortLambda::new_swapped()`. Proves
     /// the `swapped` flag survives encode/decode.
     #[test]
     fn test_round_trip_distributed_array_sort_swapped() -> Result<()> {
@@ -9341,7 +9453,7 @@ mod tests {
         use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
         use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda};
         use datafusion::physical_expr::create_physical_expr;
-        use sail_function::scalar::array::spark_array_sort::SparkArraySort;
+        use sail_function::scalar::array::array_sort::ArraySortLambda;
 
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let list = ListArray::new(
@@ -9360,7 +9472,7 @@ mod tests {
             "r".to_string(),
             Some(Arc::new(Field::new("r", DataType::Int32, true))),
         ));
-        let func = Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped()));
+        let func = Arc::new(HigherOrderUDF::new_from_impl(ArraySortLambda::new_swapped()));
         let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
             func,
             vec![col("arr"), lambda(["r"], r)],
@@ -9379,8 +9491,8 @@ mod tests {
         // Strongest check: the decoded inner UDF is still swapped.
         let udf_any = decoded_hof.fun().inner().as_ref() as &dyn std::any::Any;
         let sort = udf_any
-            .downcast_ref::<SparkArraySort>()
-            .ok_or_else(|| plan_datafusion_err!("inner UDF is not a SparkArraySort"))?;
+            .downcast_ref::<ArraySortLambda>()
+            .ok_or_else(|| plan_datafusion_err!("inner UDF is not a ArraySortLambda"))?;
         assert!(sort.is_swapped());
 
         assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
@@ -9708,6 +9820,18 @@ mod tests {
         let decoded = downcast_udf::<SparkSequence>(&decoded, "SparkSequence")?;
         assert_eq!(decoded.session_timezone(), "America/Los_Angeles");
         assert!(decoded.ansi_mode());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_type_of_preserves_type_name() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkTypeOf::new(
+            "array<struct<a:bigint>>".to_string(),
+        )))?;
+
+        let decoded = downcast_udf::<SparkTypeOf>(&decoded, "SparkTypeOf")?;
+        assert_eq!(decoded.type_name(), "array<struct<a:bigint>>");
 
         Ok(())
     }

@@ -9,7 +9,7 @@ use datafusion::functions_aggregate::{
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
-use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, HigherOrderFunction, Lambda, LambdaVariable,
 };
@@ -47,15 +47,17 @@ use sail_function::aggregate::theta_sketch::{
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::vector::avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
+use sail_function::scalar::array::binary_array_join::SparkBinaryArrayJoin;
+use sail_function::scalar::array::non_null_elements::NonNullElements;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
+use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 use sail_function::scalar::r#struct::struct_function::StructFunction;
+use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
-    AggFunction, AggFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
-    get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
-    normalize_distinct_floats, theta_args_with_default_lg,
+    AggFunction, AggFunctionInput, get_arguments_and_null_treatment, get_null_treatment,
 };
 use crate::function::transform_count_star_wildcard_expr;
 
@@ -261,6 +263,110 @@ fn signed_integer_bounds(data_type: &DataType) -> Option<(i64, i64)> {
         DataType::Int16 => Some((i64::from(i16::MIN), i64::from(i16::MAX))),
         DataType::Int32 => Some((i64::from(i32::MIN), i64::from(i32::MAX))),
         _ => None,
+    }
+}
+
+/// Normalizes `-0.0` to `0.0` in the floating-point values of an argument that is deduplicated,
+/// as in `collect_set` and DISTINCT `collect_list`/`array_agg`, so that `-0.0` and `0.0` are one
+/// value and the result holds `0.0`. Spark normalizes the elements of `collect_set` and the
+/// arguments of DISTINCT aggregates before comparing them.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/collect.scala#L236-L255>
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/core/src/main/scala/org/apache/spark/sql/execution/SparkStrategies.scala#L632-L645>
+pub(crate) fn normalize_distinct_floats(argument: expr::Expr, data_type: &DataType) -> expr::Expr {
+    if NormalizeFloatKeys::has_float(data_type) {
+        ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![argument])
+    } else {
+        argument
+    }
+}
+
+/// Declares that the elements of a `collect_set` result are never NULL, as in Spark, where
+/// `collect_set` ignores NULL values unless it respects them.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/collect.scala#L205-L206>
+pub(crate) fn with_non_nullable_elements(
+    array: expr::Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<expr::Expr> {
+    match array.get_type(schema)? {
+        DataType::List(field) | DataType::LargeList(field) if field.is_nullable() => {
+            Ok(ScalarUDF::from(NonNullElements::new()).call(vec![array]))
+        }
+        _ => Ok(array),
+    }
+}
+
+pub(crate) fn hll_args_with_default_lg(
+    arguments: Vec<expr::Expr>,
+    function_name: &str,
+) -> PlanResult<Vec<expr::Expr>> {
+    match arguments.len() {
+        1 => {
+            let value = arguments.one()?;
+            Ok(vec![value, lit(DEFAULT_HLL_LG_CONFIG_K)])
+        }
+        2 => {
+            let (value, lg_config_k) = arguments.two()?;
+            Ok(vec![value, cast(lg_config_k, DataType::Int32)])
+        }
+        count => Err(PlanError::invalid(format!(
+            "{function_name} requires 1 or 2 arguments, got {count}"
+        ))),
+    }
+}
+
+pub(crate) fn hll_union_args_with_default_allow_different_lg(
+    arguments: Vec<expr::Expr>,
+) -> PlanResult<Vec<expr::Expr>> {
+    match arguments.len() {
+        1 => {
+            let value = arguments.one()?;
+            Ok(vec![value, lit(false)])
+        }
+        2 => {
+            let (value, allow_different_lg_config_k) = arguments.two()?;
+            Ok(vec![
+                value,
+                cast(allow_different_lg_config_k, DataType::Boolean),
+            ])
+        }
+        count => Err(PlanError::invalid(format!(
+            "hll_union_agg requires 1 or 2 arguments, got {count}"
+        ))),
+    }
+}
+
+pub(crate) fn count_min_sketch_args(arguments: Vec<expr::Expr>) -> PlanResult<Vec<expr::Expr>> {
+    match arguments.len() {
+        4 => {
+            let (value, eps, confidence, seed) = arguments.four()?;
+            // Spark requires `eps` and `confidence` to be DOUBLE literals and rejects
+            // other types (including DECIMAL/FLOAT). Pass them through unchanged so the
+            // aggregate's type validation enforces the same rule, instead of casting and
+            // silently accepting types Spark rejects.
+            Ok(vec![value, eps, confidence, seed])
+        }
+        count => Err(PlanError::invalid(format!(
+            "count_min_sketch requires 4 arguments, got {count}"
+        ))),
+    }
+}
+
+pub(crate) fn theta_args_with_default_lg(
+    arguments: Vec<expr::Expr>,
+    function_name: &str,
+) -> PlanResult<Vec<expr::Expr>> {
+    match arguments.len() {
+        1 => {
+            let value = arguments.one()?;
+            Ok(vec![value, lit(DEFAULT_THETA_LG_NOM_ENTRIES)])
+        }
+        2 => {
+            let (value, lg_nom_entries) = arguments.two()?;
+            Ok(vec![value, cast(lg_nom_entries, DataType::Int32)])
+        }
+        count => Err(PlanError::invalid(format!(
+            "{function_name} requires 1 or 2 arguments, got {count}"
+        ))),
     }
 }
 
@@ -781,7 +887,12 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment,
         },
     });
-    Ok(coalesce_to_empty_array(agg, &element_type))
+    let result = coalesce_to_empty_array(agg, &element_type);
+    if ignore_nulls == Some(true) {
+        with_non_nullable_elements(result, schema)
+    } else {
+        Ok(result)
+    }
 }
 
 fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -855,33 +966,68 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         },
     });
 
-    // Spark joins the values without a delimiter when the delimiter is NULL.
-    // <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/collect.scala#L586-L600>
-    let delim = delim.cast_to(&DataType::Utf8, schema)?;
-    let delim = if delim.nullable(schema)? {
-        ScalarUDF::from(CoalesceFunc::new()).call(vec![delim, lit("")])
-    } else {
-        delim
-    };
-    let string_agg = array_to_string(
-        agg.cast_to(
-            &DataType::List(Arc::new(Field::new(
-                SAIL_LIST_FIELD_NAME,
-                DataType::Utf8,
-                true,
-            ))),
-            schema,
-        )?,
-        delim,
-    );
+    join_listagg_values(agg, &agg_col.get_type(schema)?, delim, schema)
+}
 
-    let casted_agg = match agg_col.get_type(schema)? {
-        DataType::Binary | DataType::BinaryView => string_agg.cast_to(&DataType::Binary, schema)?,
-        DataType::LargeBinary => string_agg.cast_to(&DataType::LargeBinary, schema)?,
-        _ => string_agg,
+/// Joins the values collected by `listagg` with the delimiter, as Spark does.
+///
+/// Spark joins the values without a delimiter when the delimiter is NULL. Binary values are
+/// joined as bytes, which do not have to be valid UTF-8, and the result is binary.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/collect.scala#L572-L600>
+pub(super) fn join_listagg_values(
+    agg: expr::Expr,
+    value_type: &DataType,
+    delim: expr::Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<expr::Expr> {
+    let joined = match value_type {
+        DataType::Binary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_)
+        | DataType::LargeBinary => {
+            let list_value_type = if matches!(value_type, DataType::LargeBinary) {
+                DataType::LargeBinary
+            } else {
+                DataType::Binary
+            };
+            let delim = delim.cast_to(&DataType::Binary, schema)?;
+            let delim = if delim.nullable(schema)? {
+                ScalarUDF::from(CoalesceFunc::new())
+                    .call(vec![delim, lit(ScalarValue::Binary(Some(vec![])))])
+            } else {
+                delim
+            };
+            let values = agg.cast_to(
+                &DataType::List(Arc::new(Field::new(
+                    SAIL_LIST_FIELD_NAME,
+                    list_value_type,
+                    true,
+                ))),
+                schema,
+            )?;
+            ScalarUDF::from(SparkBinaryArrayJoin::new()).call(vec![values, delim])
+        }
+        _ => {
+            let delim = delim.cast_to(&DataType::Utf8, schema)?;
+            let delim = if delim.nullable(schema)? {
+                ScalarUDF::from(CoalesceFunc::new()).call(vec![delim, lit("")])
+            } else {
+                delim
+            };
+            array_to_string(
+                agg.cast_to(
+                    &DataType::List(Arc::new(Field::new(
+                        SAIL_LIST_FIELD_NAME,
+                        DataType::Utf8,
+                        true,
+                    ))),
+                    schema,
+                )?,
+                delim,
+            )
+        }
     };
-
-    Ok(when(casted_agg.clone().is_not_null(), casted_agg)
+    Ok(when(joined.clone().is_not_null(), joined)
         .when(lit(true), lit(ScalarValue::Null))
         .end()?)
 }
