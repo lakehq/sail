@@ -82,11 +82,15 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::datasource::empty::EmptyTable;
     use datafusion::datasource::provider_as_source;
-    use datafusion::functions_aggregate::expr_fn::max;
     use datafusion_common::TableReference;
-    use datafusion_expr::{JoinType, LogicalPlanBuilder, cast, col, lit};
+    use datafusion_expr::{AggregateUDF, JoinType, LogicalPlanBuilder, cast, col, lit};
+    use sail_common_datafusion::min_max::min_max_agg::Max;
 
     use super::*;
+
+    fn max(expr: Expr) -> Expr {
+        AggregateUDF::from(Max::new()).call(vec![expr])
+    }
 
     fn scan(name: impl Into<TableReference>, fields: Vec<Field>) -> Result<LogicalPlanBuilder> {
         let table = EmptyTable::new(Arc::new(Schema::new(fields)));

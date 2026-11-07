@@ -9,5 +9,6 @@ pub mod sketch {
     pub use crate::hll_sketch::DEFAULT_LG_CONFIG_K as DEFAULT_HLL_LG_CONFIG_K;
     pub use crate::theta_sketch::DEFAULT_LG_NOM_ENTRIES as DEFAULT_THETA_LG_NOM_ENTRIES;
 }
+pub mod functions_strings;
 mod theta_sketch;
 pub mod window;

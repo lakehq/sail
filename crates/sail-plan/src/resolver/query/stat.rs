@@ -7,16 +7,16 @@ use datafusion::functions_aggregate::approx_median::approx_median_udaf;
 use datafusion::functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion::functions_aggregate::average::avg_udaf;
 use datafusion::functions_aggregate::count::count_udaf;
-use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion::functions_aggregate::stddev::stddev_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion_common::{Column, ExprSchema, ScalarValue};
 use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction};
 use datafusion_expr::{
-    Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF, and, col, expr, lit, or,
-    try_cast,
+    AggregateUDF, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF, and, col, expr,
+    lit, or, try_cast,
 };
 use sail_common::spec;
+use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::math::random::Random;
 
@@ -203,7 +203,7 @@ impl PlanResolver<'_> {
 
             if statistics.contains("min") {
                 let min = Expr::AggregateFunction(expr::AggregateFunction {
-                    func: min_udaf(),
+                    func: Arc::new(AggregateUDF::from(Min::new())),
                     params: AggregateFunctionParams {
                         args: vec![Expr::Column(column.clone())],
                         distinct: false,
@@ -218,7 +218,7 @@ impl PlanResolver<'_> {
 
             if statistics.contains("max") {
                 let max = Expr::AggregateFunction(expr::AggregateFunction {
-                    func: max_udaf(),
+                    func: Arc::new(AggregateUDF::from(Max::new())),
                     params: AggregateFunctionParams {
                         args: vec![Expr::Column(column.clone())],
                         distinct: false,

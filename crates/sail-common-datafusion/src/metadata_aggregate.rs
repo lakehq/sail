@@ -2,15 +2,17 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::common::metadata::FieldMetadata;
 use datafusion::common::stats::{ColumnStatistics, Precision};
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::functions_aggregate::count::Count;
-use datafusion::functions_aggregate::min_max::{Max, Min};
 use datafusion::logical_expr::logical_plan::{Aggregate, EmptyRelation, Projection, TableScan};
 use datafusion::logical_expr::{Expr, LogicalPlan, TableScanBuilder, TableSource};
+
+use crate::min_max::min_max_agg::{Max, Min};
 
 /// The format validates row selection, deletion effects, and metric precision before
 /// exposing statistics. These are source facts, not propagated physical estimates.
@@ -55,7 +57,7 @@ pub fn rewrite_aggregate(
         .zip(aggregate.schema.iter())
         .map(|(value, (qualifier, field))| {
             value.map(|value| {
-                Expr::Literal(value, None).alias_qualified(qualifier.cloned(), field.name())
+                output_literal(value, field).alias_qualified(qualifier.cloned(), field.name())
             })
         })
         .collect::<Option<Vec<_>>>()
@@ -287,7 +289,7 @@ fn build_residual_aggregate(
         .zip(aggregate.schema.fields())
         .map(|(value, field)| {
             let expression = match value {
-                Some(value) => Expr::Literal(value, None),
+                Some(value) => output_literal(value, field),
                 None => {
                     let column = Expr::Column(residual_columns[residual_index].clone());
                     residual_index += 1;
@@ -304,6 +306,15 @@ fn build_residual_aggregate(
         Arc::new(residual),
         Arc::clone(&aggregate.schema),
     )?))
+}
+
+/// A literal for an aggregate output field, with the field's metadata (for example, `min` and
+/// `max` keep the metadata of their argument). The projection declares the aggregate schema, so
+/// a literal without that metadata would override it, which keeps DataFusion from merging the
+/// projection with adjacent projections.
+fn output_literal(value: ScalarValue, field: &Field) -> Expr {
+    let metadata = FieldMetadata::from(field);
+    Expr::Literal(value, (!metadata.is_empty()).then_some(metadata))
 }
 
 fn project_residual_input(
@@ -635,5 +646,32 @@ fn constant_scalar(expression: &Expr) -> Option<ScalarValue> {
         Expr::TryCast(cast) => constant_scalar(cast.expr.as_ref())
             .and_then(|value| value.cast_to(cast.field.data_type()).ok()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::panic)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn output_literal_carries_the_field_metadata() {
+        let plain = Field::new("a", DataType::Int32, true);
+        assert!(matches!(
+            output_literal(ScalarValue::Int32(Some(1)), &plain),
+            Expr::Literal(_, None)
+        ));
+
+        let typed = plain.with_metadata(HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "ext.type".to_string(),
+        )]));
+        let Expr::Literal(_, Some(metadata)) = output_literal(ScalarValue::Int32(Some(1)), &typed)
+        else {
+            panic!("the literal must carry the field metadata");
+        };
+        assert_eq!(metadata, FieldMetadata::from(&typed));
     }
 }

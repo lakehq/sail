@@ -125,12 +125,37 @@ def test_pure_string_fn_of_nullable_is_nullable(spark, fn):
     assert _nullable(out, "result") is True
 
 
-@pytest.mark.parametrize("fn", [F.upper, F.lower, F.ascii, F.initcap])
-@sail_bug
+@pytest.mark.parametrize(
+    "fn",
+    [
+        F.upper,
+        F.lower,
+        pytest.param(F.ascii, marks=sail_bug),
+        pytest.param(F.initcap, marks=sail_bug),
+    ],
+)
 def test_pure_string_fn_of_non_null_is_non_nullable(spark, fn):
-    # non-null input -> non-nullable output: Sail diverges (says nullable=True)
+    # non-null input -> non-nullable output: Sail diverges for ascii and initcap (says nullable=True)
     out = _frame(spark).select(fn("nn").alias("result"))
     assert _nullable(out, "result") is False
+
+
+@pytest.mark.parametrize(
+    "fn",
+    [
+        F.trim,
+        F.ltrim,
+        F.rtrim,
+        lambda c: F.expr(f"btrim({c})"),
+        lambda c: F.expr(f"trim(BOTH 'h' FROM {c})"),
+        lambda c: F.expr(f"replace({c}, 'l', 'L')"),
+    ],
+    ids=["trim", "ltrim", "rtrim", "btrim", "trim_both_chars", "replace"],
+)
+def test_trim_and_replace_nullability_follows_the_input(spark, fn):
+    df = _frame(spark)
+    assert _nullable(df.select(fn("nn").alias("result")), "result") is False
+    assert _nullable(df.select(fn("nl").alias("result")), "result") is True
 
 
 # --- the dangerous direction: Sail UNDER-nullable ---

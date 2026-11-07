@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::mem;
 use std::sync::Arc;
 
-use datafusion::functions::core::expr_fn::coalesce;
 use datafusion::functions_aggregate::expr_fn::count;
 use datafusion::functions_nested::expr_fn::{array_element, make_array};
 use datafusion::optimizer::decorrelate::PullUpCorrelatedExpr;
@@ -12,8 +11,11 @@ use datafusion_common::tree_node::{
 use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err};
 use datafusion_expr::logical_plan::{FetchType, SkipType};
 use datafusion_expr::utils::{conjunction, split_conjunction};
-use datafusion_expr::{Expr, JoinType, LogicalPlan, LogicalPlanBuilder, expr_fn, ident, lit};
+use datafusion_expr::{
+    Expr, JoinType, LogicalPlan, LogicalPlanBuilder, ScalarUDF, expr_fn, ident, lit,
+};
 use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
@@ -76,10 +78,9 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
                 // correlated input is empty. Let scalar decorrelation preserve
                 // that row before applying the membership comparison.
                 let equal = (*query.expr).eq(expr_fn::scalar_subquery(inner));
-                return Ok(Transformed::yes(coalesce(vec![
-                    if query.negated { !equal } else { equal },
-                    lit(false),
-                ])));
+                return Ok(Transformed::yes(ScalarUDF::from(CoalesceFunc::new()).call(
+                    vec![if query.negated { !equal } else { equal }, lit(false)],
+                )));
             }
             if Self::scalar_aggregate_has_filter(&inner) == Some(true) {
                 // A scalar subquery uses NULL both for a missing row and for
@@ -109,7 +110,8 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
                 let equal = (*query.expr).eq(value);
                 return Ok(Transformed::yes(
                     datafusion_expr::when(packed.is_null(), lit(query.negated)).otherwise(
-                        coalesce(vec![if query.negated { !equal } else { equal }, lit(false)]),
+                        ScalarUDF::from(CoalesceFunc::new())
+                            .call(vec![if query.negated { !equal } else { equal }, lit(false)]),
                     )?,
                 ));
             }
@@ -173,10 +175,8 @@ impl ExistsRewriter<'_> {
             .project(vec![ident(output).gt(lit(skip))])?
             .build()?;
         Self::validate_correlated_operators(&query)?;
-        Ok(coalesce(vec![
-            expr_fn::scalar_subquery(Arc::new(query)),
-            lit(false),
-        ]))
+        Ok(ScalarUDF::from(CoalesceFunc::new())
+            .call(vec![expr_fn::scalar_subquery(Arc::new(query)), lit(false)]))
     }
 
     fn correlated_exists(&mut self, query: LogicalPlan) -> Result<Expr> {
@@ -278,7 +278,7 @@ impl ExistsRewriter<'_> {
         self.plan = LogicalPlanBuilder::from(input)
             .join_on(query, JoinType::LeftMark, Some(predicate))?
             .build()?;
-        Ok(coalesce(vec![
+        Ok(ScalarUDF::from(CoalesceFunc::new()).call(vec![
             Expr::Column(Column::new(Some(alias), "mark")),
             lit(false),
         ]))

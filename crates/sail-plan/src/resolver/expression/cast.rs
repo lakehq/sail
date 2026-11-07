@@ -10,6 +10,10 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
+use sail_function::scalar::conversion::spark_cast_string_to_int32::SparkCastStringToInt32;
+use sail_function::scalar::conversion::spark_to_string::{
+    SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View,
+};
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval, YearMonthIntervalMonths,
@@ -18,9 +22,7 @@ use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::timestamp_cast::{
     cast_timestamp_ltz_to_ntz, cast_timestamp_ntz_to_ltz,
 };
-use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
-use sail_function::scalar::spark_struct_rename::SparkStructRename;
-use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
+use sail_function::scalar::r#struct::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;

@@ -2421,11 +2421,14 @@ mod tests {
     #[tokio::test]
     #[expect(clippy::expect_used)]
     async fn ineligible_metadata_aggregates_do_not_read_manifests() -> Result<()> {
-        use datafusion::functions_aggregate::expr_fn::{count, min, sum};
+        use datafusion::functions_aggregate::expr_fn::{count, sum};
         use datafusion::logical_expr::expr::NullTreatment;
-        use datafusion::logical_expr::{ExprFunctionExt, LogicalPlan, LogicalPlanBuilder};
+        use datafusion::logical_expr::{
+            AggregateUDF, ExprFunctionExt, LogicalPlan, LogicalPlanBuilder,
+        };
         use datafusion::prelude::{SessionContext, col, lit};
         use sail_common_datafusion::logical_rewriter::LogicalRewriter;
+        use sail_common_datafusion::min_max::min_max_agg::Min;
 
         use crate::logical::{IcebergMetadataAggregateRewriter, IcebergTableSource};
         use crate::spec::snapshots::{Operation, SnapshotBuilder, Summary};
@@ -2462,7 +2465,8 @@ mod tests {
                 "ordered aggregate",
                 vec![],
                 vec![
-                    min(col("id"))
+                    AggregateUDF::from(Min::new())
+                        .call(vec![col("id")])
                         .order_by(vec![col("id").sort(true, true)])
                         .build()?,
                 ],
@@ -2471,7 +2475,8 @@ mod tests {
                 "null treatment",
                 vec![],
                 vec![
-                    min(col("id"))
+                    AggregateUDF::from(Min::new())
+                        .call(vec![col("id")])
                         .null_treatment(NullTreatment::IgnoreNulls)
                         .build()?,
                 ],
@@ -2540,14 +2545,15 @@ mod tests {
     async fn metadata_aggregate_reuses_file_plan_for_partial_and_fallback() -> Result<()> {
         use datafusion::arrow::array::{Float64Array, Int32Array};
         use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-        use datafusion::functions_aggregate::expr_fn::{count, min, sum};
-        use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
+        use datafusion::functions_aggregate::expr_fn::{count, sum};
+        use datafusion::logical_expr::{AggregateUDF, LogicalPlan, LogicalPlanBuilder};
         use datafusion::prelude::{SessionContext, col, lit};
         use object_store::ObjectStoreExt;
         use object_store::path::Path;
         use parquet::arrow::ArrowWriter;
         use sail_common_datafusion::datasource::MergeCapableSource;
         use sail_common_datafusion::logical_rewriter::LogicalRewriter;
+        use sail_common_datafusion::min_max::min_max_agg::Min;
 
         use crate::logical::{IcebergMetadataAggregateRewriter, IcebergTableSource};
 
@@ -2579,7 +2585,7 @@ mod tests {
         let mut rewritten_scans = vec![];
         for expressions in [
             vec![count(lit(1)), sum(col("score"))],
-            vec![min(col("score"))],
+            vec![AggregateUDF::from(Min::new()).call(vec![col("score")])],
         ] {
             let plan = LogicalPlanBuilder::scan("t", source.clone(), None)?
                 .aggregate(Vec::<Expr>::new(), expressions)?
@@ -2596,7 +2602,10 @@ mod tests {
         }
         assert_eq!(rewritten_scans.len(), 2);
         let aggregate = LogicalPlanBuilder::scan("t", source, None)?
-            .aggregate(Vec::<Expr>::new(), vec![min(col("score"))])?
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![AggregateUDF::from(Min::new()).call(vec![col("score")])],
+            )?
             .build()?;
         let repeated = LogicalPlanBuilder::from(aggregate.clone())
             .union(aggregate)?

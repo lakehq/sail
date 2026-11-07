@@ -14,7 +14,9 @@ sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
+arrow-select = { workspace = true }
 async-trait = { workspace = true }
+arrow-buffer = { workspace = true }
 bytes = { workspace = true }
 chumsky = { workspace = true }
 datafusion = { workspace = true }
@@ -60,3 +62,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 xee-xpath = { workspace = true }
 xot = { workspace = true }
+itertools = { workspace = true }
+hashbrown = { workspace = true }
+memchr = { workspace = true }

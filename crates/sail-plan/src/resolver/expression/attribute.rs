@@ -10,6 +10,7 @@ use sail_common::spec;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
+use sail_function::scalar::r#struct::array_struct_field::ArrayStructField;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunctionInput};
