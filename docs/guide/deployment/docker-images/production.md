@@ -8,6 +8,7 @@ rank: 2
 <!--@include: ../_common/support.md-->
 
 Building the Sail Docker image from source is recommended for production deployments where performance is critical.
+To deploy Sail with the [production Kubernetes resources](../kubernetes.md#production-deployment), build the image in [Setting Target Inputs](../kubernetes.md#setting-target-inputs) instead.
 
 In an empty directory, create a `Dockerfile` with the following content.
 

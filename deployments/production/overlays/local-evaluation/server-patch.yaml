@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sail-spark-server
+spec:
+  template:
+    spec:
+      containers:
+        - name: server
+          imagePullPolicy: Never
+          env:
+            - name: SAIL_CLUSTER__WORKER_INITIAL_COUNT
+              value: "0"
+            - name: SAIL_CLUSTER__WORKER_MAX_COUNT
+              value: "1"
+            - name: SAIL_CLUSTER__WORKER_MAX_IDLE_TIME_SECS
+              value: "60"
+            - name: SAIL_CLUSTER__WORKER_TASK_SLOTS
+              value: "2"
+            - name: SAIL_EXECUTION__DEFAULT_PARALLELISM
+              value: "2"
+            - name: SAIL_KUBERNETES__IMAGE_PULL_POLICY
+              value: Never
+            - name: SAIL_RUNTIME__TEMPORARY_FILES__MAX_SIZE
+              value: "2147483648"
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+              ephemeral-storage: 3Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+              ephemeral-storage: 3Gi
+      volumes:
+        - name: scratch
+          emptyDir:
+            sizeLimit: 3Gi

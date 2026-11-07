@@ -70,8 +70,8 @@ Here we recommend some practices to help you adopt Sail in your production envir
 
 1. Sail has a different way to configure external data storage. The configuration options for Hadoop file systems (e.g. `s3a`) will not have effects in Sail. Instead, refer to the [Data Storage](/guide/storage/) guide for how to configure data storage in Sail.
 1. Error messages returned by Sail may differ from those in Spark.
-1. Many Spark configuration options do not have effects in Sail. They are either unsupported or irrelevant to Sail.
-1. The `pyspark.sql.DataFrame.explain` method and the `EXPLAIN` SQL statement show the Sail logical and physical plans.
+1. Many Spark configuration options do not have effects in Sail. They are either unsupported or irrelevant to Sail. Refer to the [Performance Tuning](/guide/performance/#differences-from-spark) guide for the Spark tuning options that work differently in Sail.
+1. The `pyspark.sql.DataFrame.explain` method and the `EXPLAIN` SQL statement show the Sail logical and physical plans. Refer to the [Query Plans](/guide/performance/query-plans) page for the available explain modes.
 
 ## Supported Features
 
