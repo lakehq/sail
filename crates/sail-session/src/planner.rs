@@ -646,6 +646,7 @@ mod tests {
     use datafusion::arrow::array::{AsArray, Int64Array};
     use datafusion::arrow::compute::concat_batches;
     use datafusion::arrow::datatypes::{DataType, Field, Float64Type, Int64Type, Schema};
+    use datafusion::catalog::TableFunctionArgs;
     use datafusion::datasource::{MemTable, provider_as_source};
     use datafusion::execution::SessionStateBuilder;
     use datafusion::execution::runtime_env::RuntimeEnv;
@@ -982,23 +983,217 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn scalar_subqueries_over_extension_nodes_are_not_shared() -> datafusion_common::Result<()>
-    {
-        let range = LogicalPlan::Extension(datafusion_expr::Extension {
-            node: Arc::new(RangeNode::try_new("id".to_string(), 0, 1, 1, 1)?),
-        });
-        let subquery = |name: &str| -> datafusion_common::Result<Expr> {
-            let subquery = LogicalPlanBuilder::from(range.clone())
-                .project(vec![col("id").alias(name)])?
-                .build()?;
-            Ok(scalar_subquery(Arc::new(subquery)))
-        };
-        let plan = LogicalPlanBuilder::empty(true)
-            .project(vec![subquery("#1")?.alias("a"), subquery("#2")?.alias("b")])?
-            .build()?;
+    /// Builds a range the way Sail resolves `spark.range`, which gives each reference a
+    /// generated output name.
+    fn range(name: &str, end: i64) -> datafusion_common::Result<LogicalPlan> {
+        Ok(LogicalPlan::Extension(datafusion_expr::Extension {
+            node: Arc::new(RangeNode::try_new(name.to_string(), 0, end, 1, 2)?),
+        }))
+    }
 
-        let (display, _) = plan_and_collect(plan).await?;
+    /// Builds `(SELECT max(<input>) FROM <input>)` with the aggregate aliased above it.
+    fn max_scalar_subquery(
+        input: LogicalPlan,
+        input_name: &str,
+        output_name: &str,
+    ) -> datafusion_common::Result<Expr> {
+        let max = Arc::new(AggregateUDF::new_from_impl(Max::new()));
+        let subquery = LogicalPlanBuilder::from(input)
+            .aggregate(Vec::<Expr>::new(), vec![max.call(vec![col(input_name)])])?
+            .build()?;
+        let aggregate = subquery.schema().field(0).name().clone();
+        let subquery = LogicalPlanBuilder::from(subquery)
+            .project(vec![col(aggregate).alias(output_name)])?
+            .build()?;
+        Ok(scalar_subquery(Arc::new(subquery)))
+    }
+
+    async fn plan_two_scalar_subqueries(
+        a: Expr,
+        b: Expr,
+    ) -> datafusion_common::Result<(String, RecordBatch)> {
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(vec![a.alias("a"), b.alias("b")])?
+            .build()?;
+        plan_and_collect(plan).await
+    }
+
+    fn int64_values(batch: &RecordBatch) -> Vec<i64> {
+        batch
+            .columns()
+            .iter()
+            .map(|column| column.as_primitive::<Int64Type>().value(0))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_ranges_are_shared() -> datafusion_common::Result<()> {
+        let (display, batch) = plan_two_scalar_subqueries(
+            max_scalar_subquery(range("#1", 10)?, "#1", "#2")?,
+            max_scalar_subquery(range("#3", 10)?, "#3", "#4")?,
+        )
+        .await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=1"),
+            "{display}"
+        );
+        assert_eq!(int64_values(&batch), vec![9, 9]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_different_ranges_are_not_shared()
+    -> datafusion_common::Result<()> {
+        let (display, batch) = plan_two_scalar_subqueries(
+            max_scalar_subquery(range("#1", 10)?, "#1", "#2")?,
+            max_scalar_subquery(range("#3", 20)?, "#3", "#4")?,
+        )
+        .await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=2"),
+            "{display}"
+        );
+        assert_eq!(int64_values(&batch), vec![9, 19]);
+        Ok(())
+    }
+
+    /// Builds a scan of the `range` table function the way Sail resolves `range(<args>)` in
+    /// SQL, which creates a new table source for every reference.
+    fn range_table_scan(name: &str, args: &[i64]) -> datafusion_common::Result<LogicalPlan> {
+        let function = sail_plan::function::get_built_in_table_function("range")
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        let state = SessionContext::new().state();
+        let args = args.iter().map(|arg| lit(*arg)).collect::<Vec<_>>();
+        let provider =
+            function.create_table_provider_with_args(TableFunctionArgs::new(&args, &state))?;
+        LogicalPlanBuilder::scan("range", provider_as_source(provider), None)?
+            .project(vec![col("id").alias(name)])?
+            .build()
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_range_table_functions_are_shared()
+    -> datafusion_common::Result<()> {
+        let (display, batch) = plan_two_scalar_subqueries(
+            max_scalar_subquery(range_table_scan("#1", &[10])?, "#1", "#2")?,
+            max_scalar_subquery(range_table_scan("#3", &[10])?, "#3", "#4")?,
+        )
+        .await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=1"),
+            "{display}"
+        );
+        assert_eq!(int64_values(&batch), vec![9, 9]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_different_range_table_functions_are_not_shared()
+    -> datafusion_common::Result<()> {
+        let (display, batch) = plan_two_scalar_subqueries(
+            max_scalar_subquery(range_table_scan("#1", &[10])?, "#1", "#2")?,
+            max_scalar_subquery(range_table_scan("#3", &[20])?, "#3", "#4")?,
+        )
+        .await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=2"),
+            "{display}"
+        );
+        assert_eq!(int64_values(&batch), vec![9, 19]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_range_table_functions_with_different_partitions_are_not_shared()
+    -> datafusion_common::Result<()> {
+        let (display, batch) = plan_two_scalar_subqueries(
+            max_scalar_subquery(range_table_scan("#1", &[0, 10, 1, 2])?, "#1", "#2")?,
+            max_scalar_subquery(range_table_scan("#3", &[0, 10, 1, 3])?, "#3", "#4")?,
+        )
+        .await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=2"),
+            "{display}"
+        );
+        assert_eq!(int64_values(&batch), vec![9, 9]);
+        Ok(())
+    }
+
+    /// Builds `SELECT <name> FROM range(10) SORT BY <name>` with a required sort and a
+    /// fetch above it, the way Sail keeps the sort below an ordered aggregate.
+    fn sorted_range(name: &str, asc: bool) -> datafusion_common::Result<LogicalPlan> {
+        let sort = vec![col(name).sort(asc, true)];
+        let sort_within_partitions = LogicalPlan::Extension(datafusion_expr::Extension {
+            node: Arc::new(SortWithinPartitionsNode::new(
+                Arc::new(range(name, 10)?),
+                sort.clone(),
+                None,
+            )),
+        });
+        Ok(LogicalPlan::Extension(datafusion_expr::Extension {
+            node: Arc::new(RequiredSortNode::new(
+                Arc::new(sort_within_partitions),
+                sort,
+                Some(1),
+                false,
+            )),
+        }))
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_sorts_are_shared() -> datafusion_common::Result<()> {
+        let (display, batch) = plan_two_scalar_subqueries(
+            max_scalar_subquery(sorted_range("#1", false)?, "#1", "#2")?,
+            max_scalar_subquery(sorted_range("#3", false)?, "#3", "#4")?,
+        )
+        .await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=1"),
+            "{display}"
+        );
+        assert_eq!(int64_values(&batch), vec![9, 9]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_different_sorts_are_not_shared() -> datafusion_common::Result<()>
+    {
+        let (display, batch) = plan_two_scalar_subqueries(
+            max_scalar_subquery(sorted_range("#1", false)?, "#1", "#2")?,
+            max_scalar_subquery(sorted_range("#3", true)?, "#3", "#4")?,
+        )
+        .await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=2"),
+            "{display}"
+        );
+        assert_eq!(int64_values(&batch), vec![9, 0]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_monotonic_ids_are_not_shared() -> datafusion_common::Result<()>
+    {
+        let monotonic_id = |input: &str, output: &str| -> datafusion_common::Result<LogicalPlan> {
+            Ok(LogicalPlan::Extension(datafusion_expr::Extension {
+                node: Arc::new(MonotonicIdNode::try_new(
+                    Arc::new(range(input, 10)?),
+                    output.to_string(),
+                )?),
+            }))
+        };
+        let (display, _) = plan_two_scalar_subqueries(
+            max_scalar_subquery(monotonic_id("#1", "#2")?, "#2", "#3")?,
+            max_scalar_subquery(monotonic_id("#1", "#2")?, "#2", "#4")?,
+        )
+        .await?;
 
         assert!(
             display.contains("ScalarSubqueryExec: subqueries=2"),

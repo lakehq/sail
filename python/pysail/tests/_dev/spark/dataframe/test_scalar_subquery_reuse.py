@@ -289,6 +289,100 @@ def test_dataframe_scalar_subquery_column_used_twice(spark, tables):
         assert scalar_subquery_slots(df) == [1]
 
 
+@pytest.mark.parametrize(
+    ("query", "expected", "slots"),
+    [
+        pytest.param(
+            "SELECT (SELECT sum(id) FROM range(10)) AS a, (SELECT sum(id) FROM range(10)) AS b",
+            [(45, 45)],
+            [1],
+            id="range",
+        ),
+        pytest.param(
+            "SELECT (SELECT max(x) FROM (SELECT x FROM {t} SORT BY x)) AS a, "
+            "(SELECT max(x) FROM (SELECT x FROM {t} SORT BY x)) AS b",
+            [(20, 20)],
+            [1],
+            id="sort-by",
+        ),
+        pytest.param(
+            "SELECT (SELECT max(x) FROM (SELECT /*+ REPARTITION(3) */ x FROM {t})) AS a, "
+            "(SELECT max(x) FROM (SELECT /*+ REPARTITION(3) */ x FROM {t})) AS b",
+            [(20, 20)],
+            [1],
+            id="repartition-hint",
+        ),
+        pytest.param(
+            "SELECT (SELECT first(x) FROM (SELECT x FROM {t} ORDER BY x DESC NULLS LAST)) AS a, "
+            "(SELECT first(x) FROM (SELECT x FROM {t} ORDER BY x DESC NULLS LAST)) AS b",
+            [(20, 20)],
+            [1],
+            id="ordered-first",
+        ),
+        pytest.param(
+            "SELECT (SELECT collect_list(x) FROM (SELECT x FROM {t} ORDER BY x)) AS a, "
+            "(SELECT collect_list(x) FROM (SELECT x FROM {t} ORDER BY x)) AS b",
+            [([5, 10, 20], [5, 10, 20])],
+            [1],
+            id="ordered-collect-list",
+        ),
+        pytest.param(
+            "SELECT (SELECT sum(id) FROM range(10)) AS a, (SELECT sum(id) FROM range(11)) AS b",
+            [(45, 55)],
+            [2],
+            id="other-range",
+        ),
+        pytest.param(
+            "SELECT (SELECT sum(id) FROM range(0, 10, 1, 2)) AS a, (SELECT sum(id) FROM range(0, 10, 1, 3)) AS b",
+            [(45, 45)],
+            [2],
+            id="other-range-partitions",
+        ),
+        pytest.param(
+            "SELECT (SELECT first(x) FROM (SELECT x FROM {t} ORDER BY x ASC NULLS LAST)) AS a, "
+            "(SELECT first(x) FROM (SELECT x FROM {t} ORDER BY x DESC NULLS LAST)) AS b",
+            [(5, 20)],
+            [2],
+            id="other-sort-direction",
+        ),
+        pytest.param(
+            "SELECT (SELECT first(x) FROM (SELECT x FROM {t} ORDER BY x ASC NULLS FIRST)) AS a, "
+            "(SELECT first(x) FROM (SELECT x FROM {t} ORDER BY x ASC NULLS LAST)) AS b",
+            [(None, 5)],
+            [2],
+            id="other-nulls-ordering",
+        ),
+        pytest.param(
+            "SELECT (SELECT max(m) FROM (SELECT monotonically_increasing_id() AS m FROM range(0, 10, 1, 2))) AS a, "
+            "(SELECT max(m) FROM (SELECT monotonically_increasing_id() AS m FROM range(0, 10, 1, 2))) AS b",
+            [(8589934596, 8589934596)],
+            [2],
+            id="monotonically-increasing-id",
+        ),
+    ],
+)
+def test_repeated_scalar_subqueries_over_extension_nodes(spark, tables, query, expected, slots):
+    check(spark.sql(query.format(**tables)), expected, slots)
+
+
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
+def test_repeated_dataframe_scalar_subqueries_over_extension_nodes(spark, tables):
+    from pyspark.sql import functions as F  # noqa: N812
+
+    t = spark.table(tables["t"])
+    df = spark.range(1).select(
+        spark.range(10).select(F.sum("id")).scalar().alias("a"),
+        spark.range(10).select(F.sum("id")).scalar().alias("b"),
+        t.repartition(3).select(F.max("x")).scalar().alias("c"),
+        t.repartition(3).select(F.max("x")).scalar().alias("d"),
+        t.sortWithinPartitions("x").select(F.max("x")).scalar().alias("e"),
+        t.sortWithinPartitions("x").select(F.max("x")).scalar().alias("f"),
+    )
+    assert [tuple(row) for row in df.collect()] == [(45, 45, MAX_X, MAX_X, MAX_X, MAX_X)]
+    if not is_jvm_spark():
+        assert scalar_subquery_slots(df) == [3]
+
+
 @pytest.fixture(scope="module")
 def self_join_table(spark, tmp_path_factory):
     name = f"aggregate_reuse_sj_{uuid.uuid4().hex[:8]}"

@@ -9,9 +9,15 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, TableReference, plan_err};
 use datafusion_expr::expr_rewriter::NamePreserver;
-use datafusion_expr::{Expr, LogicalPlan, Projection, Subquery, Union, Volatility};
+use datafusion_expr::{
+    Expr, Extension, LogicalPlan, Projection, Subquery, TableSource, Union, UserDefinedLogicalNode,
+    Volatility,
+};
 use datafusion_physical_expr::projection::ProjectionExpr;
 use sail_data_source::reuse::is_reusable_source;
+use sail_logical_plan::range::{Range, RangeNode};
+use sail_logical_plan::repartition::ExplicitRepartitionNode;
+use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 
 /// The prefix of the canonical names and qualifiers in a normalized subquery body.
 const CANONICAL_PREFIX: &str = "#canonical:";
@@ -38,15 +44,37 @@ pub struct ScalarSubqueryKey {
     input: Arc<LogicalPlan>,
     /// Whether the generated names of the plan are normalized.
     normalized: bool,
-    /// The scanned sources by identity, since `TableScan` equality ignores the
-    /// source, and scans of different data can share a table name such as `?table?`.
-    sources: Vec<*const ()>,
+    /// The scanned sources, since `TableScan` equality ignores the source, and scans
+    /// of different data can share a table name such as `?table?`.
+    sources: Vec<SourceKey>,
     /// The types of the literals, since literal equality ignores some type
     /// properties (e.g. the time zone of a timestamp).
     literal_types: Vec<DataType>,
     /// The output fields without their names, so that the shared body keeps the
     /// output types and metadata of every reference.
     fields: Vec<Field>,
+}
+
+/// Identifies the data of a scanned source.
+#[derive(PartialEq, Eq, Hash)]
+enum SourceKey {
+    /// The source by identity.
+    Identity(*const ()),
+    /// A source that is equivalent to a range, by its range, since the `range` table
+    /// function creates a new source for every reference.
+    Range(RangeNode),
+}
+
+impl SourceKey {
+    fn new(source: &Arc<dyn TableSource>) -> Self {
+        if let Some(plan) = source.get_logical_plan()
+            && let LogicalPlan::Extension(extension) = plan.as_ref()
+            && let Some(range) = extension.node.as_any().downcast_ref::<RangeNode>()
+        {
+            return Self::Range(range.clone());
+        }
+        Self::Identity(Arc::as_ptr(source).cast::<()>())
+    }
 }
 
 impl ScalarSubqueryKey {
@@ -65,11 +93,11 @@ impl ScalarSubqueryKey {
                         shareable = false;
                         return Ok(TreeNodeRecursion::Stop);
                     }
-                    sources.push(Arc::as_ptr(&scan.source).cast::<()>());
+                    sources.push(SourceKey::new(&scan.source));
                 }
-                // Extension node equality may ignore sources or nondeterminism.
-                // TODO: share bodies with extension nodes whose equality is known to be exact.
-                LogicalPlan::Extension(_) => {
+                LogicalPlan::Extension(extension)
+                    if !is_shareable_extension(extension.node.as_ref()) =>
+                {
                     shareable = false;
                     return Ok(TreeNodeRecursion::Stop);
                 }
@@ -199,6 +227,16 @@ impl NameNormalizer {
             scan.table_name = table_name;
             return Ok(LogicalPlan::TableScan(scan));
         }
+        if let LogicalPlan::Extension(extension) = plan
+            && let Some(range) = extension.node.as_any().downcast_ref::<RangeNode>()
+        {
+            // Each range gets a generated output name.
+            let &Range { start, end, step } = range.range();
+            let node = RangeNode::try_new(self.fresh(), start, end, step, range.num_partitions())?;
+            return Ok(LogicalPlan::Extension(Extension {
+                node: Arc::new(node),
+            }));
+        }
         match plan {
             // Unnest refers to its columns by name outside its expressions.
             LogicalPlan::Unnest(_) => return plan_err!("unexpected unnest"),
@@ -312,6 +350,17 @@ impl NameNormalizer {
             ..subquery
         })
     }
+}
+
+/// Returns whether the extension node is deterministic, holds no source, and its equality
+/// compares everything that determines its output. Other extension nodes may ignore
+/// sources or nondeterminism (e.g. monotonically increasing IDs or Python UDFs).
+fn is_shareable_extension(node: &dyn UserDefinedLogicalNode) -> bool {
+    let node = node.as_any();
+    node.is::<RangeNode>()
+        || node.is::<RequiredSortNode>()
+        || node.is::<SortWithinPartitionsNode>()
+        || node.is::<ExplicitRepartitionNode>()
 }
 
 /// Returns whether the projection only renames the columns of its input, in order.

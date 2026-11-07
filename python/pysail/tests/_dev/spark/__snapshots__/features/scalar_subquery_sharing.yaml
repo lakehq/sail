@@ -36,6 +36,25 @@ data:
             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
               DataSourceExec: file_groups={1 group: [[<tmp>/scalar_sharing_dates/<id>_0.zst.parquet]]}, projection=[d, w], file_type=parquet, predicate=d@0 = 2000-01-08, pruning_predicate=d_null_count@2 != row_count@3 AND d_min@0 <= 2000-01-08 AND 2000-01-08 <= d_max@1, required_guarantees=[d in (2000-01-08)]
 ---
+name: "test_repeated_scalar_subqueries_over_ranges_and_sorts_share_one_result"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#10@0 as a, #11@1 as b, #12@2 as c, #13@3 as d]
+      ScalarSubqueryExec: subqueries=2
+        ProjectionExec: expr=[scalar_subquery(<pending>) as #10, scalar_subquery(<pending>) as #11, scalar_subquery(<pending>) as #12, scalar_subquery(<pending>) as #13]
+          PlaceholderRowExec
+        ProjectionExec: expr=[sum(range.#0)@0 as #1]
+          AggregateExec: mode=Single, gby=[], aggr=[sum(range.#0)]
+            ProjectionExec: expr=[id@0 as #0]
+              CooperativeExec
+                RangeExec: start=0, end=10, step=1, num_partitions=1, projection=[0]
+        ProjectionExec: expr=[max(__auto_generated_subquery_name.#5)@0 as #6]
+          AggregateExec: mode=Single, gby=[], aggr=[max(__auto_generated_subquery_name.#5)]
+            ProjectionExec: expr=[id@0 as #5]
+              CooperativeExec
+                RangeExec: start=0, end=5, step=1, num_partitions=1, projection=[0]
+---
 name: "test_scalar_subqueries_over_different_catalog_tables_with_the_same_schema_are_not_shared"
 data:
   |-
