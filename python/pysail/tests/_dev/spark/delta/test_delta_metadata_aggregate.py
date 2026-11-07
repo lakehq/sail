@@ -79,9 +79,10 @@ def test_count_non_null_containers_does_not_count_null_elements(spark, tmp_path:
     assert _latest_add_stats(table_path)["nullCount"] == {"items": 0, "attributes": 0}
 
 
-@max_statistics_nan_bug
 @pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
-@pytest.mark.parametrize("metadata_as_data", [False, True], ids=["driver", "metadata"])
+@pytest.mark.parametrize(
+    "metadata_as_data", [pytest.param(False, marks=max_statistics_nan_bug), True], ids=["driver", "metadata"]
+)
 def test_float_extrema_include_nan(spark, tmp_path: Path, data_type, metadata_as_data):
     # File statistics leave out NaN, which is larger than any other value in Spark.
     table_path = tmp_path / "delta_float_nan"
