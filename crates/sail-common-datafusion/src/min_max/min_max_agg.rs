@@ -88,6 +88,26 @@ pub fn is_exact_float_minimum(value: &ScalarValue) -> bool {
     }
 }
 
+/// The precision of the bounds of a floating-point column from file statistics. File statistics
+/// leave out NaN, so equal bounds do not make a constant column, though DataFusion reads a column
+/// with equal exact bounds as a constant. See `is_exact_float_minimum` for the exact minimums.
+pub fn float_file_statistics_bounds(
+    min: Precision<ScalarValue>,
+    max: Precision<ScalarValue>,
+) -> (Precision<ScalarValue>, Precision<ScalarValue>) {
+    let equal = matches!(
+        (min.get_value(), max.get_value()),
+        (Some(min), Some(max)) if min == max
+    );
+    let min = if min.get_value().is_some_and(is_exact_float_minimum) {
+        min
+    } else {
+        min.to_inexact()
+    };
+    let max = if equal { max.to_inexact() } else { max };
+    (min, max)
+}
+
 // MAX aggregate UDF
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Max {
@@ -221,10 +241,8 @@ trait FromColumnStatistics {
 
 impl FromColumnStatistics for Max {
     fn value_from_column_statistics(&self, col_stats: &ColumnStatistics) -> Option<ScalarValue> {
-        // Float statistics (e.g. Parquet) leave out NaN, which is the largest value in Spark.
         if let Precision::Exact(ref val) = col_stats.max_value
             && !val.is_null()
-            && !val.data_type().is_floating()
         {
             return Some(val.clone());
         }

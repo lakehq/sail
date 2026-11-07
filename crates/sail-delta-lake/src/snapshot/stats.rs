@@ -32,7 +32,7 @@ use datafusion::physical_optimizer::pruning::PruningStatistics;
 use datafusion::physical_plan::Accumulator;
 use log::warn;
 use sail_common_datafusion::min_max::common::{MaxAccumulator, MinAccumulator};
-use sail_common_datafusion::min_max::min_max_agg::is_exact_float_minimum;
+use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 
 use super::DeltaSnapshot;
 use crate::datasource::pruning::{
@@ -476,12 +476,7 @@ impl<'a> SnapshotPruningStats<'a> {
         }
         // TODO: Pruning still uses the float maximum, which leaves out NaN.
         if !is_partition && data_type.is_floating() {
-            // File statistics leave out NaN, so the maximum is not exact. See
-            // `is_exact_float_minimum` for the minimums that are exact.
-            if !min_value.get_value().is_some_and(is_exact_float_minimum) {
-                min_value = min_value.to_inexact();
-            }
-            max_value = max_value.to_inexact();
+            (min_value, max_value) = float_file_statistics_bounds(min_value, max_value);
         }
         let contains_timestamp = arrow_type_contains_timestamp(&data_type);
         if !is_partition && contains_timestamp {

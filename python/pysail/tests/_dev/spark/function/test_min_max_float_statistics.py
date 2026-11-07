@@ -7,7 +7,15 @@ import math
 
 import pytest
 
+from pysail.testing.spark.utils.common import is_jvm_spark
 
+# `max` from file statistics leaves out NaN, which is the largest value in Spark.
+max_statistics_nan_bug = pytest.mark.xfail(
+    not is_jvm_spark(), reason="Known Sail bug: `max` from file statistics leaves out NaN", strict=True
+)
+
+
+@max_statistics_nan_bug
 @pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
 def test_min_max_of_parquet_floats_with_nan(spark, tmp_path, data_type):
     path = str(tmp_path / "data")

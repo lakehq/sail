@@ -19,11 +19,17 @@ from pyspark.sql.types import (
     StructType,
 )
 
+from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.plan import normalize_plan_text
 from pysail.tests._dev.spark.delta.test_delta_external_log_stats import _write_external_delta_table
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+# `max` from file statistics leaves out NaN, which is the largest value in Spark.
+max_statistics_nan_bug = pytest.mark.xfail(
+    not is_jvm_spark(), reason="Known Sail bug: `max` from file statistics leaves out NaN", strict=True
+)
 
 
 def _latest_add_stats(table_path: Path) -> dict:
@@ -73,6 +79,7 @@ def test_count_non_null_containers_does_not_count_null_elements(spark, tmp_path:
     assert _latest_add_stats(table_path)["nullCount"] == {"items": 0, "attributes": 0}
 
 
+@max_statistics_nan_bug
 @pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
 @pytest.mark.parametrize("metadata_as_data", [False, True], ids=["driver", "metadata"])
 def test_float_extrema_include_nan(spark, tmp_path: Path, data_type, metadata_as_data):

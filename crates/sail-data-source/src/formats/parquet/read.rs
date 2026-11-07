@@ -18,7 +18,7 @@ use datafusion_common::{DataFusionError, Result, plan_err};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
-use sail_common_datafusion::min_max::min_max_agg::is_exact_float_minimum;
+use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 use sail_common_datafusion::scan::load_parquet_scan_metadata;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
@@ -253,17 +253,10 @@ impl ReadFormat for ParquetReadFormat {
         {
             // TODO: Row-group and page pruning still use the float maximum, which leaves out NaN.
             if field.data_type().is_floating() {
-                // File statistics leave out NaN, so the maximum is not exact and equal bounds do
-                // not make a constant column. See `is_exact_float_minimum` for the minimums that
-                // are exact.
-                if !column
-                    .min_value
-                    .get_value()
-                    .is_some_and(is_exact_float_minimum)
-                {
-                    column.min_value = column.min_value.clone().to_inexact();
-                }
-                column.max_value = column.max_value.clone().to_inexact();
+                (column.min_value, column.max_value) = float_file_statistics_bounds(
+                    std::mem::take(&mut column.min_value),
+                    std::mem::take(&mut column.max_value),
+                );
             }
         }
         let ordering = ordering_from_parquet_metadata(&metadata, &file_schema)?;
