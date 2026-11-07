@@ -7,9 +7,7 @@ from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 from pyspark.sql.window import Window
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail local-cluster mode only")
 
 
 def _partition_count(df):
@@ -349,6 +347,7 @@ def test_coalesce_plan_contains_dedicated_exec_in_cluster_mode(spark):
         (10, 2, 1, 1),
     ],
 )
+@pytest.mark.spark(cross_version=True)
 def test_coalesce_partition_count_in_cluster_mode(
     spark,
     row_count,
@@ -360,6 +359,7 @@ def test_coalesce_partition_count_in_cluster_mode(
     assert _partition_count(df) == expected_partition_count
 
 
+@pytest.mark.spark(cross_version=True)
 def test_coalesce_spark_parity_in_cluster_mode(spark):
     row_count = 48
     input_partition_count = 4
@@ -454,6 +454,7 @@ def test_coalesce_hint_in_cluster_mode(spark):
         (6, 4),
     ],
 )
+@pytest.mark.spark(cross_version=True)
 def test_coalesce_hint_partition_count_in_cluster_mode(
     spark,
     output_partition_count,

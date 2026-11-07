@@ -1,5 +1,7 @@
 import pysail
 
+pytest_plugins = ["pysail.testing.fixtures"]
+
 
 def test_version():
     from pysail import _native
@@ -9,7 +11,3 @@ def test_version():
     assert v1 == major
     assert v2 == minor
     assert v3 == patch or v3.startswith((f"{patch}a", f"{patch}b", f"{patch}rc"))
-
-
-def test_pytest_timeout_plugin_is_active(pytestconfig):
-    assert pytestconfig.pluginmanager.hasplugin("timeout")

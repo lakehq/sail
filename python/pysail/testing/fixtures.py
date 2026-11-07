@@ -5,8 +5,18 @@ import sys
 import pytest
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addini(
+        "strict_markers",
+        "Raise an error for unregistered markers",
+        type="bool",
+        default=True,
+    )
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Configure both installed sanity tests and development tests."""
+    config.pluginmanager.import_plugin("pysail.testing.suites")
     # Note: configuration set via `config.inicfg` may not have an effect due to the cache used
     # in `config.getini()`. In such a case, we may have to clear the INI cache in `config`.
     # Since clearing the cache requires access to the private attribute of `config`, we do not
@@ -30,14 +40,14 @@ def pytest_configure(config: pytest.Config) -> None:
         "yamlsnapshot: add metadata to customize the YAML snapshot",
     )
 
-    configure_sail_environment()
 
-
-def configure_sail_environment():
+@pytest.fixture(scope="session", autouse=True)
+def sail_environment() -> None:
     """Configure environment variables for PySail tests.
 
     The runtime configuration options cannot be changed, so we must ensure that
     the configuration is in place before the first server is created.
+    Native imports are deferred to test execution so collection needs no Sail build.
     """
 
     module = "pysail._native"
@@ -55,7 +65,7 @@ def configure_sail_environment():
     os.environ["SAIL_RUNTIME__STACK_SIZE"] = "16777216"
 
     # Ensure the native module can be imported successfully.
-    # This allows this function to be future-proof in case we ever change the native module name.
+    # This allows this fixture to be future-proof in case we ever change the native module name.
     # If the native module fails to load, an exception will be raised here, so that we can
-    # remember to change the module name used in this function accordingly.
+    # remember to change the module name used in this fixture accordingly.
     importlib.import_module(module)

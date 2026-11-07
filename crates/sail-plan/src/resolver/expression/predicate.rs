@@ -2,17 +2,21 @@ use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{DFSchemaRef, Result as DataFusionResult, ScalarValue};
+use datafusion_common::{DFSchema, DFSchemaRef, Result as DataFusionResult, ScalarValue};
+use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, LambdaVariable};
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::spark_struct_rename::SparkStructRename;
-use sail_function::scalar::spark_to_string::SparkToUtf8;
-use sail_function::scalar::update_struct_field::UpdateStructField;
+use sail_function::scalar::r#struct::spark_struct_rename::SparkStructRename;
+use sail_function::scalar::r#struct::update_struct_field::UpdateStructField;
+use sail_logical_optimizer::type_coercion::{
+    case_result_type, cast_case_result_value, cast_nested_value,
+};
 
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
@@ -579,6 +583,116 @@ pub(super) fn coerce_ansi_float_widening(
         }
         expression => expression,
     })
+}
+
+/// Casts the values of a conditional expression to their common type.
+///
+/// DataFusion types a CASE expression by its first non-null result value, and the analyzer
+/// casts the values to their common type only after the expression is resolved. Casting the
+/// values to the same common type here gives the resolved expression its final type, which
+/// enclosing expressions (e.g. `typeof` or the arguments of a function) depend on.
+///
+/// A value of a nested type is cast even if it already has the common type. Constant folding
+/// can make nested fields of the value non-nullable later (e.g. `array(named_struct('a', 1))`),
+/// but CASE evaluation requires every value to have exactly the type of the expression.
+/// This also applies to the arguments of `coalesce`, which is evaluated as a CASE expression.
+pub(super) fn coerce_conditional_values(
+    expression: expr::Expr,
+    schema: &DFSchemaRef,
+) -> DataFusionResult<expr::Expr> {
+    match expression {
+        expr::Expr::Case(case) => coerce_case_result_values(case, schema.as_ref()),
+        // DataFusion simplifies its `coalesce` function to a CASE expression.
+        expr::Expr::ScalarFunction(function) if function.name() == "coalesce" => {
+            Ok(cast_nested_coalesce_arguments(function, schema.as_ref()))
+        }
+        expression => Ok(expression),
+    }
+}
+
+fn coerce_case_result_values(
+    mut case: expr::Case,
+    schema: &DFSchema,
+) -> DataFusionResult<expr::Expr> {
+    // Leave values that are not typed yet, such as `grouping_id()`, to the analyzer.
+    let Ok(then_types) = case
+        .when_then_expr
+        .iter()
+        .map(|(_, then)| then.get_type(schema))
+        .collect::<DataFusionResult<Vec<_>>>()
+    else {
+        return Ok(expr::Expr::Case(case));
+    };
+    let Ok(else_type) = case
+        .else_expr
+        .as_ref()
+        .map(|value| value.get_type(schema))
+        .transpose()
+    else {
+        return Ok(expr::Expr::Case(case));
+    };
+    // The analyzer reports the error if there is no common type.
+    let Some(common_type) = case_result_type(&then_types, else_type.as_ref()) else {
+        return Ok(expr::Expr::Case(case));
+    };
+    let coerce =
+        |value: Box<expr::Expr>, data_type: &DataType| -> DataFusionResult<Box<expr::Expr>> {
+            if data_type.is_null() {
+                // The analyzer casts NULL values, including parameters that are not bound yet.
+                Ok(value)
+            } else {
+                Ok(Box::new(cast_case_result_value(
+                    *value,
+                    data_type,
+                    &common_type,
+                    schema,
+                )?))
+            }
+        };
+    case.when_then_expr = case
+        .when_then_expr
+        .into_iter()
+        .zip(&then_types)
+        .map(|((when, then), data_type)| Ok((when, coerce(then, data_type)?)))
+        .collect::<DataFusionResult<_>>()?;
+    case.else_expr = case
+        .else_expr
+        .zip(else_type.as_ref())
+        .map(|(value, data_type)| coerce(value, data_type))
+        .transpose()?;
+    Ok(expr::Expr::Case(case))
+}
+
+/// Casts the nested arguments of `coalesce` that already have the type that the analyzer
+/// coerces them to. The analyzer casts the other arguments.
+fn cast_nested_coalesce_arguments(
+    mut function: expr::ScalarFunction,
+    schema: &DFSchema,
+) -> expr::Expr {
+    let Ok(data_types) = function
+        .args
+        .iter()
+        .map(|arg| arg.get_type(schema))
+        .collect::<DataFusionResult<Vec<_>>>()
+    else {
+        return expr::Expr::ScalarFunction(function);
+    };
+    let Ok(coerced_types) = try_type_union_resolution(&data_types) else {
+        return expr::Expr::ScalarFunction(function);
+    };
+    function.args = function
+        .args
+        .into_iter()
+        .zip(data_types.iter().zip(&coerced_types))
+        .map(|(arg, (data_type, coerced_type))| {
+            if data_type == coerced_type {
+                cast_nested_value(arg, data_type)
+            } else {
+                arg
+            }
+        })
+        .collect();
+    expr::Expr::ScalarFunction(function)
 }
 
 /// Whether to compare FLOAT and integral operands as DOUBLE, like Spark ANSI. Integral
@@ -1233,5 +1347,182 @@ impl PlanResolver<'_> {
                 case_insensitive,
             )),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use datafusion::arrow::compute::can_cast_types;
+    use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema};
+    use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue, internal_err};
+    use datafusion_expr::{Expr, ExprSchemable, ScalarUDF, col, lit, when};
+    use sail_function::scalar::conditional::coalesce::CoalesceFunc;
+    use sail_logical_optimizer::type_coercion::case_result_type;
+
+    use super::coerce_conditional_values;
+
+    fn schema(fields: Vec<Field>) -> Result<DFSchemaRef> {
+        let fields = std::iter::once(Field::new("c", DataType::Boolean, true)).chain(fields);
+        Ok(Arc::new(DFSchema::try_from(Schema::new(
+            fields.collect::<Vec<_>>(),
+        ))?))
+    }
+
+    fn values(case: &Expr) -> Result<Vec<&Expr>> {
+        let Expr::Case(case) = case else {
+            return internal_err!("not a CASE expression: {case}");
+        };
+        Ok(case
+            .when_then_expr
+            .iter()
+            .map(|(_, then)| then.as_ref())
+            .chain(case.else_expr.as_deref())
+            .collect())
+    }
+
+    fn list(field: Field) -> DataType {
+        DataType::List(Arc::new(field))
+    }
+
+    #[test]
+    fn case_result_values_have_the_common_type() -> Result<()> {
+        let item = |data_type: DataType, nullable: bool| Field::new_list_field(data_type, nullable);
+        let types = [
+            DataType::Int8,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Int64,
+            DataType::Float16,
+            DataType::Float32,
+            DataType::Decimal32(9, 2),
+            DataType::Decimal64(18, 4),
+            DataType::Decimal128(38, 0),
+            DataType::Decimal256(50, 2),
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+            DataType::Date32,
+            list(item(DataType::Int32, false)),
+            list(item(DataType::Int32, true)),
+            list(item(DataType::Int64, true)),
+            DataType::LargeList(Arc::new(item(DataType::Int32, false))),
+            DataType::LargeList(Arc::new(item(DataType::Int32, true))),
+            DataType::FixedSizeList(Arc::new(item(DataType::Int32, false)), 2),
+            DataType::FixedSizeList(Arc::new(item(DataType::Int32, true)), 2),
+            DataType::Struct(Fields::from(vec![Field::new("n", DataType::Int32, false)])),
+            DataType::Struct(Fields::from(vec![Field::new("n", DataType::Int64, true)])),
+        ];
+        let schema = schema(
+            types
+                .iter()
+                .enumerate()
+                .map(|(i, data_type)| Field::new(format!("v{i}"), data_type.clone(), true))
+                .collect(),
+        )?;
+        for (i, first) in types.iter().enumerate() {
+            for (j, second) in types.iter().enumerate() {
+                let case = when(col("c"), col(format!("v{i}"))).otherwise(col(format!("v{j}")))?;
+                let Some(common_type) = case_result_type(std::slice::from_ref(first), Some(second))
+                else {
+                    // The analyzer reports the error for values without a common type.
+                    assert_eq!(coerce_conditional_values(case.clone(), &schema)?, case);
+                    continue;
+                };
+                if !can_cast_types(first, &common_type) || !can_cast_types(second, &common_type) {
+                    // The analyzer reports the same error for values that cannot be cast.
+                    assert!(coerce_conditional_values(case, &schema).is_err());
+                    continue;
+                }
+                let case = coerce_conditional_values(case, &schema)?;
+                assert_eq!(
+                    case.get_type(schema.as_ref())?,
+                    common_type,
+                    "{first} and {second}"
+                );
+                for (value, data_type) in values(&case)?.into_iter().zip([first, second]) {
+                    assert_eq!(value.get_type(schema.as_ref())?, common_type);
+                    let cast = *data_type != common_type || common_type.is_nested();
+                    assert_eq!(matches!(value, Expr::Cast(_)), cast, "{value}");
+                }
+                assert_eq!(coerce_conditional_values(case.clone(), &schema)?, case);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn case_result_values_keep_nested_field_metadata() -> Result<()> {
+        let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+        let fields = |n: DataType| {
+            Fields::from(vec![
+                Field::new("v", DataType::Int32, true).with_metadata(metadata.clone()),
+                Field::new("n", n, true),
+            ])
+        };
+        let schema = schema(vec![
+            Field::new(
+                "a",
+                list(Field::new_list_field(
+                    DataType::Struct(fields(DataType::Int32)),
+                    false,
+                )),
+                true,
+            ),
+            Field::new(
+                "b",
+                list(Field::new_list_field(
+                    DataType::Struct(fields(DataType::Int64)),
+                    true,
+                )),
+                true,
+            ),
+        ])?;
+        let case =
+            coerce_conditional_values(when(col("c"), col("a")).otherwise(col("b"))?, &schema)?;
+        let DataType::List(item) = case.get_type(schema.as_ref())? else {
+            return internal_err!("not a list");
+        };
+        assert!(item.is_nullable());
+        let DataType::Struct(fields) = item.data_type() else {
+            return internal_err!("not a struct");
+        };
+        assert_eq!(fields[0].metadata(), &metadata);
+        assert_eq!(fields[1].data_type(), &DataType::Int64);
+        // NULL values are cast to the common type by the analyzer.
+        let case = when(col("c"), lit(ScalarValue::Null)).otherwise(col("b"))?;
+        let case = coerce_conditional_values(case, &schema)?;
+        assert_eq!(values(&case)?[0], &lit(ScalarValue::Null));
+        Ok(())
+    }
+
+    #[test]
+    fn coalesce_nested_arguments_of_the_coerced_type_are_cast() -> Result<()> {
+        let item = |nullable: bool| Field::new_list_field(DataType::Int32, nullable);
+        let schema = schema(vec![
+            Field::new("a", list(item(true)), true),
+            Field::new("b", list(item(true)), true),
+            Field::new("c2", list(item(false)), true),
+            Field::new("d", DataType::Int32, true),
+        ])?;
+        let arguments = |expr: &Expr| match expr {
+            Expr::ScalarFunction(function) => Ok(function.args.clone()),
+            _ => internal_err!("not a function: {expr}"),
+        };
+        let expr = ScalarUDF::from(CoalesceFunc::new()).call(vec![col("a"), col("b"), col("c2")]);
+        let expr = coerce_conditional_values(expr, &schema)?;
+        let args = arguments(&expr)?;
+        // The analyzer casts the argument whose type differs from the coerced type.
+        assert!(matches!(args[0], Expr::Cast(_)));
+        assert!(matches!(args[1], Expr::Cast(_)));
+        assert_eq!(args[2], col("c2"));
+        assert_eq!(coerce_conditional_values(expr.clone(), &schema)?, expr);
+        let expr = ScalarUDF::from(CoalesceFunc::new()).call(vec![col("d"), lit(1)]);
+        assert_eq!(coerce_conditional_values(expr.clone(), &schema)?, expr);
+        Ok(())
     }
 }

@@ -635,7 +635,6 @@ mod tests {
     use datafusion::common::{DFSchema, JoinSide, NullEquality, ScalarValue};
     use datafusion::datasource::physical_plan::ParquetSource;
     use datafusion::execution::object_store::ObjectStoreUrl;
-    use datafusion::functions::core::coalesce::CoalesceFunc;
     use datafusion::functions::core::input_file_name::InputFileNameFunc;
     use datafusion::functions::expr_fn;
     use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
@@ -655,6 +654,7 @@ mod tests {
     use datafusion::physical_plan::sorts::sort::SortExec;
     use datafusion_physical_expr::create_physical_exprs;
     use sail_common_datafusion::input_file::{InputFileBlockLengthFunc, InputFileBlockStartFunc};
+    use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 
     use super::*;
 
@@ -667,10 +667,11 @@ mod tests {
 
     fn metadata_expressions(schema: &Schema) -> Vec<ProjectionExpr> {
         let expressions = [
-            expr_fn::coalesce(vec![expr_fn::input_file_name(), lit("")]),
+            ScalarUDF::from(CoalesceFunc::new()).call(vec![expr_fn::input_file_name(), lit("")]),
             ScalarUDF::from(InputFileBlockStartFunc::new()).call(vec![]),
             ScalarUDF::from(InputFileBlockLengthFunc::new()).call(vec![]),
-            expr_fn::coalesce(vec![expr_fn::input_file_name(), lit("alias")]),
+            ScalarUDF::from(CoalesceFunc::new())
+                .call(vec![expr_fn::input_file_name(), lit("alias")]),
         ];
         create_physical_exprs(
             &expressions,
@@ -1234,7 +1235,7 @@ mod tests {
             ),
         );
         let expressions = [
-            expr_fn::coalesce(vec![expr_fn::input_file_name(), lit("")]),
+            ScalarUDF::from(CoalesceFunc::new()).call(vec![expr_fn::input_file_name(), lit("")]),
             block_start,
             block_length,
         ];

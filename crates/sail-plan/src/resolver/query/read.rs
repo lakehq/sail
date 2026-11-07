@@ -25,6 +25,7 @@ use sail_common_datafusion::rename::logical_plan::{
 };
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_data_source::reuse::is_reusable_source;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use super::sample::SAMPLE_ROUNDING_EPSILON;
@@ -32,7 +33,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
 use crate::resolver::function::PythonUdtf;
-use crate::resolver::state::PlanResolverState;
+use crate::resolver::state::{PlanResolverState, TableSourceKey};
 
 impl PlanResolver<'_> {
     /// Resolves a named table or view reference into a logical plan node.
@@ -181,53 +182,85 @@ impl PlanResolver<'_> {
                 let temporal_options = self
                     .resolve_time_travel_options(&format, temporal, state)
                     .await?;
-                let lakehouse_table = if let Some((_, relation)) = lake_relation.as_ref() {
-                    self.resolve_lakehouse_table_context_for_access(
-                        &catalog_reference,
-                        LakehouseOperation::Read,
-                        Some(&format),
-                        vec![],
-                        lake_relation_access_purpose(relation.access()),
-                    )
-                    .await?
-                } else {
-                    self.resolve_lakehouse_table_context(
-                        &catalog_reference,
-                        LakehouseOperation::Read,
-                        Some(&format),
-                        vec![],
-                    )
-                    .await?
-                };
-                let info = SourceInfo {
-                    paths: location.map(|x| vec![x]).unwrap_or_default(),
-                    lakehouse_table: Some(lakehouse_table),
-                    schema: Some(schema),
-                    constraints,
-                    partition_by: partition_by.into_iter().map(|field| field.column).collect(),
-                    bucket_by: bucket_by.map(|x| x.into()),
-                    sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
-                    // TODO: detect duplicated keys in each set of options
-                    options: vec![
-                        OptionLayer::TablePropertyList { items: properties },
-                        OptionLayer::OptionList { items: options },
-                        OptionLayer::OptionList {
-                            items: temporal_options,
-                        },
-                    ],
-                    read_case_sensitive: self.config.case_sensitive,
-                };
-                let table_source = match lake_relation {
-                    Some((relation_provider, relation)) => {
-                        relation_provider
-                            .create_relation(&self.ctx.state(), info, relation)
-                            .await?
-                    }
+                // Repeated references to the same table within a query share its source,
+                // so that they can share scalar subqueries. Delta Lake and Iceberg sources
+                // also pin one table snapshot, while file tables still list files for each scan.
+                let data_source = data_source_registry.get_data_source(&format)?;
+                let source_key = lake_relation.is_none().then(|| TableSourceKey {
+                    catalog: status.catalog,
+                    database: status.database,
+                    name: status.name,
+                    format: format.clone(),
+                    location: location.clone(),
+                    // The properties of a table have unique keys, but some catalogs
+                    // return them in an arbitrary order.
+                    properties: {
+                        let mut properties = properties.clone();
+                        properties.sort_by(|a, b| a.0.cmp(&b.0));
+                        properties
+                    },
+                    options: options.clone(),
+                    temporal_options: temporal_options.clone(),
+                });
+                let table_source = match source_key
+                    .as_ref()
+                    .and_then(|key| state.get_table_source(key))
+                {
+                    Some(table_source) => table_source,
                     None => {
-                        data_source_registry
-                            .get_data_source(&format)?
-                            .create_source(&self.ctx.state(), info)
+                        let lakehouse_table = if let Some((_, relation)) = lake_relation.as_ref() {
+                            self.resolve_lakehouse_table_context_for_access(
+                                &catalog_reference,
+                                LakehouseOperation::Read,
+                                Some(&format),
+                                vec![],
+                                lake_relation_access_purpose(relation.access()),
+                            )
                             .await?
+                        } else {
+                            self.resolve_lakehouse_table_context(
+                                &catalog_reference,
+                                LakehouseOperation::Read,
+                                Some(&format),
+                                vec![],
+                            )
+                            .await?
+                        };
+                        let info = SourceInfo {
+                            paths: location.map(|x| vec![x]).unwrap_or_default(),
+                            lakehouse_table: Some(lakehouse_table),
+                            schema: Some(schema),
+                            constraints,
+                            partition_by: partition_by
+                                .into_iter()
+                                .map(|field| field.column)
+                                .collect(),
+                            bucket_by: bucket_by.map(|x| x.into()),
+                            sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
+                            // TODO: detect duplicated keys in each set of options
+                            options: vec![
+                                OptionLayer::TablePropertyList { items: properties },
+                                OptionLayer::OptionList { items: options },
+                                OptionLayer::OptionList {
+                                    items: temporal_options,
+                                },
+                            ],
+                            read_case_sensitive: self.config.case_sensitive,
+                        };
+                        let table_source = match lake_relation {
+                            Some((relation_provider, relation)) => {
+                                relation_provider
+                                    .create_relation(&self.ctx.state(), info, relation)
+                                    .await?
+                            }
+                            None => data_source.create_source(&self.ctx.state(), info).await?,
+                        };
+                        if let Some(key) = source_key
+                            && is_reusable_source(&table_source)
+                        {
+                            state.insert_table_source(key, Arc::clone(&table_source));
+                        }
+                        table_source
                     }
                 };
                 self.resolve_table_source_with_rename(

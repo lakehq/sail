@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import contextlib
 import uuid
+from typing import TYPE_CHECKING
 
 import pytest
 
-from pysail import _native
+if TYPE_CHECKING:
+    from pysail import _native
 
-GlueCatalogProvider = _native._catalog._glue.GlueCatalogProvider  # noqa: SLF001
-DatabaseNotFoundError = _native._catalog.DatabaseNotFoundError  # noqa: SLF001
-TableNotFoundError = _native._catalog.TableNotFoundError  # noqa: SLF001
-ViewNotFoundError = _native._catalog.ViewNotFoundError  # noqa: SLF001
 
 _ID_COLUMN = [("id", "int32", True, None)]
 _PRODUCT_COLUMNS = [
@@ -71,7 +69,9 @@ def _columns(status: object) -> dict[str, object]:
     return {column.name: column for column in status.columns}
 
 
-def _database_names_with_prefix(catalog: GlueCatalogProvider, prefix: str) -> list[tuple[str, ...]]:
+def _database_names_with_prefix(
+    catalog: _native._catalog._glue.GlueCatalogProvider, prefix: str
+) -> list[tuple[str, ...]]:
     return [tuple(status.database) for status in catalog.list_databases() if status.database[0].startswith(prefix)]
 
 
@@ -86,8 +86,10 @@ def _location(database: list[str], table: str) -> str:
     return f"s3://bucket/{database[0]}/{table}"
 
 
-def _cleanup_database(catalog: GlueCatalogProvider, database: list[str]) -> None:
-    with contextlib.suppress(DatabaseNotFoundError, RuntimeError):
+def _cleanup_database(catalog: _native._catalog._glue.GlueCatalogProvider, database: list[str]) -> None:
+    from pysail import _native
+
+    with contextlib.suppress(_native._catalog.DatabaseNotFoundError, RuntimeError):  # noqa: SLF001
         for status in catalog.list_views(database):
             catalog.drop_view(database, status.name, if_exists=True)
         for status in catalog.list_tables(database):
@@ -95,7 +97,7 @@ def _cleanup_database(catalog: GlueCatalogProvider, database: list[str]) -> None
         catalog.drop_database(database, if_exists=True)
 
 
-def test_create_database(glue_catalog: GlueCatalogProvider) -> None:
+def test_create_database(glue_catalog: _native._catalog._glue.GlueCatalogProvider) -> None:
     database = _database("create_database")
     second_database = _database("create_database_if_not_exists")
     try:
@@ -133,11 +135,13 @@ def test_create_database(glue_catalog: GlueCatalogProvider) -> None:
         _cleanup_database(glue_catalog, second_database)
 
 
-def test_get_database(glue_catalog: GlueCatalogProvider) -> None:
+def test_get_database(glue_catalog: _native._catalog._glue.GlueCatalogProvider) -> None:
+    from pysail import _native
+
     database = _database("get_database")
     properties = [("owner", "test_user"), ("team", "data_eng")]
     try:
-        with pytest.raises(DatabaseNotFoundError):
+        with pytest.raises(_native._catalog.DatabaseNotFoundError):  # noqa: SLF001
             glue_catalog.get_database(database)
 
         created = glue_catalog.create_database(
@@ -157,10 +161,12 @@ def test_get_database(glue_catalog: GlueCatalogProvider) -> None:
         _cleanup_database(glue_catalog, database)
 
 
-def test_drop_database(glue_catalog: GlueCatalogProvider) -> None:
+def test_drop_database(glue_catalog: _native._catalog._glue.GlueCatalogProvider) -> None:
+    from pysail import _native
+
     database = _database("drop_database")
     try:
-        with pytest.raises(DatabaseNotFoundError):
+        with pytest.raises(_native._catalog.DatabaseNotFoundError):  # noqa: SLF001
             glue_catalog.drop_database(database)
         glue_catalog.drop_database(database, if_exists=True)
 
@@ -168,13 +174,13 @@ def test_drop_database(glue_catalog: GlueCatalogProvider) -> None:
         assert glue_catalog.get_database(database).database == database
 
         glue_catalog.drop_database(database)
-        with pytest.raises(DatabaseNotFoundError):
+        with pytest.raises(_native._catalog.DatabaseNotFoundError):  # noqa: SLF001
             glue_catalog.get_database(database)
     finally:
         _cleanup_database(glue_catalog, database)
 
 
-def test_list_databases(glue_catalog: GlueCatalogProvider) -> None:
+def test_list_databases(glue_catalog: _native._catalog._glue.GlueCatalogProvider) -> None:
     prefix = f"list_databases_{uuid.uuid4().hex}"
     databases = [[f"{prefix}_{suffix}"] for suffix in ("one", "two", "other")]
     try:
@@ -191,7 +197,7 @@ def test_list_databases(glue_catalog: GlueCatalogProvider) -> None:
             _cleanup_database(glue_catalog, database)
 
 
-def test_create_table(glue_catalog: GlueCatalogProvider, glue_database: list[str]) -> None:
+def test_create_table(glue_catalog: _native._catalog._glue.GlueCatalogProvider, glue_database: list[str]) -> None:
     created = glue_catalog.create_table(
         glue_database,
         "products",
@@ -237,8 +243,10 @@ def test_create_table(glue_catalog: GlueCatalogProvider, glue_database: list[str
     assert {column.name for column in existing.columns} == {"id", "name", "price", "category"}
 
 
-def test_get_table(glue_catalog: GlueCatalogProvider, glue_database: list[str]) -> None:
-    with pytest.raises(TableNotFoundError):
+def test_get_table(glue_catalog: _native._catalog._glue.GlueCatalogProvider, glue_database: list[str]) -> None:
+    from pysail import _native
+
+    with pytest.raises(_native._catalog.TableNotFoundError):  # noqa: SLF001
         glue_catalog.get_table(glue_database, "nonexistent")
 
     glue_catalog.create_table(
@@ -272,7 +280,7 @@ def test_get_table(glue_catalog: GlueCatalogProvider, glue_database: list[str]) 
     ids=[type_name for type_name, _, _ in _COLUMN_TYPES],
 )
 def test_column_type(
-    glue_catalog: GlueCatalogProvider,
+    glue_catalog: _native._catalog._glue.GlueCatalogProvider,
     glue_database: list[str],
     type_name: str,
     data_type: str,
@@ -293,7 +301,7 @@ def test_column_type(
     _assert_column_data_type(table.columns[0].data_type, expected_type)
 
 
-def test_column_types(glue_catalog: GlueCatalogProvider, glue_database: list[str]) -> None:
+def test_column_types(glue_catalog: _native._catalog._glue.GlueCatalogProvider, glue_database: list[str]) -> None:
     column_options = [(f"col_{type_name}", data_type, True, None) for type_name, data_type, _ in _COLUMN_TYPES]
     table = glue_catalog.create_table(
         glue_database,
@@ -313,7 +321,9 @@ def test_column_types(glue_catalog: GlueCatalogProvider, glue_database: list[str
         _assert_column_data_type(columns[f"col_{type_name}"].data_type, expected_type)
 
 
-def test_unsupported_column_types(glue_catalog: GlueCatalogProvider, glue_database: list[str]) -> None:
+def test_unsupported_column_types(
+    glue_catalog: _native._catalog._glue.GlueCatalogProvider, glue_database: list[str]
+) -> None:
     union_type = 'Union(Sparse, 0: ("int_field": Int32), 1: ("str_field": Utf8))'
     with pytest.raises(RuntimeError, match="Union types are not supported by Glue"):
         glue_catalog.create_table(
@@ -326,7 +336,7 @@ def test_unsupported_column_types(glue_catalog: GlueCatalogProvider, glue_databa
 
 @pytest.mark.parametrize("table_format", _FORMATS)
 def test_storage_formats(
-    glue_catalog: GlueCatalogProvider,
+    glue_catalog: _native._catalog._glue.GlueCatalogProvider,
     glue_database: list[str],
     table_format: str,
 ) -> None:
@@ -343,7 +353,7 @@ def test_storage_formats(
     assert glue_catalog.get_table(glue_database, table_name).format == table_format
 
 
-def test_list_tables(glue_catalog: GlueCatalogProvider, glue_database: list[str]) -> None:
+def test_list_tables(glue_catalog: _native._catalog._glue.GlueCatalogProvider, glue_database: list[str]) -> None:
     table_names = ("table_alpha", "table_beta", "table_gamma")
     for table_name in table_names:
         glue_catalog.create_table(
@@ -357,7 +367,9 @@ def test_list_tables(glue_catalog: GlueCatalogProvider, glue_database: list[str]
     assert sorted(listed) == sorted(table_names)
 
 
-def test_drop_table(glue_catalog: GlueCatalogProvider, glue_database: list[str]) -> None:
+def test_drop_table(glue_catalog: _native._catalog._glue.GlueCatalogProvider, glue_database: list[str]) -> None:
+    from pysail import _native
+
     glue_catalog.create_table(
         glue_database,
         "drop_me",
@@ -367,14 +379,16 @@ def test_drop_table(glue_catalog: GlueCatalogProvider, glue_database: list[str])
     assert glue_catalog.get_table(glue_database, "drop_me").name == "drop_me"
 
     glue_catalog.drop_table(glue_database, "drop_me")
-    with pytest.raises(TableNotFoundError):
+    with pytest.raises(_native._catalog.TableNotFoundError):  # noqa: SLF001
         glue_catalog.get_table(glue_database, "drop_me")
-    with pytest.raises(TableNotFoundError):
+    with pytest.raises(_native._catalog.TableNotFoundError):  # noqa: SLF001
         glue_catalog.drop_table(glue_database, "nonexistent")
     glue_catalog.drop_table(glue_database, "nonexistent", if_exists=True)
 
 
-def test_hive_rejects_transforms(glue_catalog: GlueCatalogProvider, glue_database: list[str]) -> None:
+def test_hive_rejects_transforms(
+    glue_catalog: _native._catalog._glue.GlueCatalogProvider, glue_database: list[str]
+) -> None:
     with pytest.raises(RuntimeError, match="Partition transforms are only supported for Iceberg tables"):
         glue_catalog.create_table(
             glue_database,
@@ -385,7 +399,9 @@ def test_hive_rejects_transforms(glue_catalog: GlueCatalogProvider, glue_databas
         )
 
 
-def test_iceberg_requires_location(glue_catalog: GlueCatalogProvider, glue_database: list[str]) -> None:
+def test_iceberg_requires_location(
+    glue_catalog: _native._catalog._glue.GlueCatalogProvider, glue_database: list[str]
+) -> None:
     with pytest.raises(ValueError, match=r"(?i)location"):
         glue_catalog.create_table(
             glue_database,
@@ -395,7 +411,7 @@ def test_iceberg_requires_location(glue_catalog: GlueCatalogProvider, glue_datab
         )
 
 
-def test_create_view(glue_catalog: GlueCatalogProvider, glue_database: list[str]) -> None:
+def test_create_view(glue_catalog: _native._catalog._glue.GlueCatalogProvider, glue_database: list[str]) -> None:
     created = glue_catalog.create_view(
         glue_database,
         "product_view",
@@ -433,8 +449,10 @@ def test_create_view(glue_catalog: GlueCatalogProvider, glue_database: list[str]
     assert existing.view_definition == "SELECT id, name, price FROM products"
 
 
-def test_get_view(glue_catalog: GlueCatalogProvider, glue_database: list[str]) -> None:
-    with pytest.raises(ViewNotFoundError):
+def test_get_view(glue_catalog: _native._catalog._glue.GlueCatalogProvider, glue_database: list[str]) -> None:
+    from pysail import _native
+
+    with pytest.raises(_native._catalog.ViewNotFoundError):  # noqa: SLF001
         glue_catalog.get_view(glue_database, "nonexistent")
 
     glue_catalog.create_view(
@@ -461,18 +479,22 @@ def test_get_view(glue_catalog: GlueCatalogProvider, glue_database: list[str]) -
     assert columns["value"].data_type == "Utf8"
 
 
-def test_get_view_not_found_for_table(glue_catalog: GlueCatalogProvider, glue_database: list[str]) -> None:
+def test_get_view_not_found_for_table(
+    glue_catalog: _native._catalog._glue.GlueCatalogProvider, glue_database: list[str]
+) -> None:
+    from pysail import _native
+
     glue_catalog.create_table(
         glue_database,
         "actual_table",
         _ID_COLUMN,
         location=_location(glue_database, "actual_table"),
     )
-    with pytest.raises(ViewNotFoundError):
+    with pytest.raises(_native._catalog.ViewNotFoundError):  # noqa: SLF001
         glue_catalog.get_view(glue_database, "actual_table")
 
 
-def test_list_views(glue_catalog: GlueCatalogProvider, glue_database: list[str]) -> None:
+def test_list_views(glue_catalog: _native._catalog._glue.GlueCatalogProvider, glue_database: list[str]) -> None:
     assert glue_catalog.list_views(glue_database) == []
     view_names = ("view_alpha", "view_beta", "view_gamma")
     for view_name in view_names:
@@ -493,7 +515,9 @@ def test_list_views(glue_catalog: GlueCatalogProvider, glue_database: list[str])
     assert sorted(listed) == sorted(view_names)
 
 
-def test_drop_view(glue_catalog: GlueCatalogProvider, glue_database: list[str]) -> None:
+def test_drop_view(glue_catalog: _native._catalog._glue.GlueCatalogProvider, glue_database: list[str]) -> None:
+    from pysail import _native
+
     glue_catalog.create_view(
         glue_database,
         "drop_me",
@@ -503,8 +527,8 @@ def test_drop_view(glue_catalog: GlueCatalogProvider, glue_database: list[str]) 
     assert glue_catalog.get_view(glue_database, "drop_me").name == "drop_me"
 
     glue_catalog.drop_view(glue_database, "drop_me")
-    with pytest.raises(ViewNotFoundError):
+    with pytest.raises(_native._catalog.ViewNotFoundError):  # noqa: SLF001
         glue_catalog.get_view(glue_database, "drop_me")
-    with pytest.raises(ViewNotFoundError):
+    with pytest.raises(_native._catalog.ViewNotFoundError):  # noqa: SLF001
         glue_catalog.drop_view(glue_database, "nonexistent")
     glue_catalog.drop_view(glue_database, "nonexistent", if_exists=True)

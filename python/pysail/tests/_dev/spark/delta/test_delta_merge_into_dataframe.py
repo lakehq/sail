@@ -2,13 +2,10 @@ import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import functions as F  # noqa: N812
-from pyspark.sql.dataframe import DataFrame as SparkDataFrame
 
-from pysail.testing.spark.utils.common import pyspark_version
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
-if not hasattr(SparkDataFrame, "mergeInto"):
-    pytest.skip("DataFrame.mergeInto requires Spark 4.0+ (missing in this PySpark)", allow_module_level=True)
+pytestmark = pytest.mark.spark(version=">=4", reason="Uses DataFrame.mergeInto")
 
 
 def test_dataframe_merge_into_basic(spark, tmp_path):
@@ -72,10 +69,7 @@ def test_dataframe_merge_into_insert_all_and_delete(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
-@pytest.mark.skipif(
-    pyspark_version() < (4,),
-    reason="DataFrame arguments in spark.sql() require Spark 4+",
-)
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame arguments in spark.sql()")
 def test_merge_into_path_target_with_dataframe_source(spark, tmp_path):
     table_path = tmp_path / "delta_merge_df_arg_target"
     table_path_str = str(table_path)

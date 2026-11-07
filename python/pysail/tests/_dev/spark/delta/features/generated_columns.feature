@@ -421,6 +421,51 @@ Feature: Delta Lake Generated Columns
         | id | event_time          | event_date |
         | 1  | 2024-09-01 00:00:00 | 2024-09-01 |
 
+    Scenario: MERGE preserves uppercase generated and ordinary column names
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_merge (
+          ID INT,
+          Amount INT,
+          Doubled INT GENERATED ALWAYS AS (Amount * 2)
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_merge_src (
+          ID INT,
+          Amount INT
+        )
+        USING DELTA
+        LOCATION {{ location2.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_merge (ID, Amount) VALUES (1, 10)
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_merge_src VALUES (1, 20), (2, 30)
+        """
+      Given statement
+        """
+        MERGE INTO delta_gen_col_merge AS t
+        USING delta_gen_col_merge_src AS s
+        ON t.ID = s.ID
+        WHEN MATCHED THEN UPDATE SET t.Amount = s.Amount
+        WHEN NOT MATCHED THEN INSERT (ID, Amount) VALUES (s.ID, s.Amount)
+        """
+      When query
+        """
+        SELECT ID, Amount, Doubled FROM delta_gen_col_merge ORDER BY ID
+        """
+      Then query result ordered
+        | ID | Amount | Doubled |
+        | 1  | 20     | 40      |
+        | 2  | 30     | 60      |
+
     Scenario: MERGE matched update validates an explicitly assigned generated column
       Given statement template
         """

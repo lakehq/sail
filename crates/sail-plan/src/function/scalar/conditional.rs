@@ -5,11 +5,11 @@ use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
+use sail_function::scalar::conversion::spark_cast_string_to_int32::SparkCastStringToInt32;
+use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ntz_to_ltz;
-use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
-use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
@@ -38,6 +38,7 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             }
         }
     }
+    let branch_values = coerce_date_timestamp_values(branch_values, &function_context)?;
     let branch_values = coerce_string_temporal_values(branch_values, &function_context)?;
     let when_then_expr = conditions
         .into_iter()
@@ -57,8 +58,8 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let (when_expr, then_expr, else_expr) = arguments.three()?;
-    let (then_expr, else_expr) =
-        coerce_string_temporal_values(vec![then_expr, else_expr], &function_context)?.two()?;
+    let values = coerce_date_timestamp_values(vec![then_expr, else_expr], &function_context)?;
+    let (then_expr, else_expr) = coerce_string_temporal_values(values, &function_context)?.two()?;
     Ok(expr::Expr::Case(expr::Case {
         expr: None,
         when_then_expr: vec![(Box::new(when_expr), Box::new(then_expr))],
@@ -71,8 +72,18 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         arguments,
         function_context,
     } = input;
+    // Like Spark's `NullPropagation`, drop the NULL literals, which never supply a value. After
+    // type coercion, such an argument would be a cast without the interval range of the other
+    // arguments. A typed NULL literal is kept since its type takes part in the result type.
+    let is_null = |x: &expr::Expr| matches!(x, expr::Expr::Literal(ScalarValue::Null, _));
+    let arguments = if arguments.iter().all(is_null) {
+        arguments
+    } else {
+        arguments.into_iter().filter(|x| !is_null(x)).collect()
+    };
+    let arguments = coerce_date_timestamp_values(arguments, &function_context)?;
     let arguments = coerce_string_temporal_values(arguments, &function_context)?;
-    Ok(expr_fn::coalesce(arguments))
+    Ok(ScalarUDF::from(CoalesceFunc::new()).call(arguments))
 }
 
 /// Spark defines `nvl2` as `if` on whether the first argument is not null.
@@ -82,33 +93,6 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let (value, then_value, else_value) = arguments.three()?;
-    let schema = function_context.schema;
-    let then_type = then_value.get_type(schema)?;
-    let else_type = else_value.get_type(schema)?;
-    let is_timestamp = |data_type: &DataType| matches!(data_type, DataType::Timestamp(_, Some(_)));
-    let date_timestamp_mix = (is_date_type(&then_type) && is_timestamp(&else_type))
-        || (is_timestamp(&then_type) && is_date_type(&else_type));
-    // TODO: Use `if` for all types once it returns the common type of its branches.
-    if !date_timestamp_mix && !is_timestamp_ntz_mix(&[then_type.clone(), else_type.clone()]) {
-        return Ok(expr_fn::nvl2(value, then_value, else_value));
-    }
-    // Spark casts a DATE to TIMESTAMP at the start of its day in the session time zone, whatever
-    // zone labels the other value.
-    let timezone = &function_context.plan_config.session_timezone_label();
-    // The cast of midnight converts like Spark in a DST gap or overlap, where Arrow's cast fails.
-    let session_date = |value: expr::Expr, data_type: &DataType| {
-        if is_date_type(data_type) {
-            cast_timestamp_ntz_to_ltz(
-                cast(value, DataType::Timestamp(TimeUnit::Microsecond, None)),
-                timezone,
-                false,
-            )
-        } else {
-            value
-        }
-    };
-    let then_value = session_date(then_value, &then_type);
-    let else_value = session_date(else_value, &else_type);
     if_expr(ScalarFunctionInput {
         arguments: vec![value.is_not_null(), then_value, else_value],
         function_context,
@@ -124,10 +108,9 @@ fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (left, right) = arguments.two()?;
     let schema = function_context.schema;
     let left_type = left.get_type(schema)?;
-    let right_type = right.get_type(schema)?;
     // The first argument is evaluated twice, so a volatile one keeps the native function.
     // TODO: The native function returns the common type rather than the first argument's type.
-    if left.is_volatile() || !is_timestamp_ntz_mix(&[left_type.clone(), right_type.clone()]) {
+    if left.is_volatile() {
         return Ok(expr_fn::nullif(left, right));
     }
     let timezone = &function_context.plan_config.session_timezone_label();
@@ -145,8 +128,26 @@ fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
         _ => (left, left_type),
     };
-    let condition = cast_to_session_timestamp(left.clone(), &left_type, timezone)
-        .eq(cast_to_session_timestamp(right, &right_type, timezone));
+    // The native function returns the common type of the arguments, which is the type of the
+    // first argument here. Unlike a CASE expression, it is always nullable, as in Spark.
+    let right_type = right.get_type(schema)?;
+    if right_type == left_type || right_type.is_null() {
+        return Ok(expr_fn::nullif(left, right));
+    }
+    // Like Spark's comparison, a DATE compares to a TIMESTAMP at the start of its day in the
+    // session time zone, and a TIMESTAMP_NTZ compares to a TIMESTAMP in the session time zone.
+    // Other values compare as they are, without a time zone.
+    let (left_value, right_value) =
+        coerce_date_timestamp_values(vec![left.clone(), right], &function_context)?.two()?;
+    let left_value_type = left_value.get_type(schema)?;
+    let right_value_type = right_value.get_type(schema)?;
+    let condition = if is_timestamp_ntz_mix(&[left_value_type.clone(), right_value_type.clone()]) {
+        cast_to_session_timestamp(left_value, &left_value_type, timezone).eq(
+            cast_to_session_timestamp(right_value, &right_value_type, timezone),
+        )
+    } else {
+        left_value.eq(right_value)
+    };
     Ok(when(condition, lit(ScalarValue::try_from(&left_type)?)).otherwise(left)?)
 }
 
@@ -161,6 +162,57 @@ fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         arguments: vec![left, right],
         function_context,
     })
+}
+
+/// Casts DATE values to TIMESTAMP if other values are timestamps without string values.
+///
+/// Spark casts a DATE to TIMESTAMP at the start of its day in the session time zone, whatever
+/// zone labels the other values, but the common type of DATE and TIMESTAMP in type coercion
+/// does not keep the time zone. The other values are cast to TIMESTAMP in the session time zone
+/// as well, so that the common type is TIMESTAMP in the session time zone.
+// TODO: Cast DATE values nested in arrays, maps, and structs as well.
+fn coerce_date_timestamp_values(
+    values: Vec<expr::Expr>,
+    function_context: &FunctionContextInput<'_>,
+) -> PlanResult<Vec<expr::Expr>> {
+    let data_types = values
+        .iter()
+        .map(|value| value.get_type(function_context.schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    if data_types.iter().any(is_string_type) || !data_types.iter().any(is_date_type) {
+        return Ok(values);
+    }
+    let local = if data_types
+        .iter()
+        .any(|data_type| matches!(data_type, DataType::Timestamp(_, Some(_))))
+    {
+        true
+    } else if data_types
+        .iter()
+        .any(|data_type| matches!(data_type, DataType::Timestamp(_, None)))
+    {
+        false
+    } else {
+        return Ok(values);
+    };
+    let timezone = &function_context.plan_config.session_timezone_label();
+    Ok(values
+        .into_iter()
+        .zip(data_types)
+        .map(|(value, data_type)| {
+            let (value, data_type) = if is_date_type(&data_type) {
+                let data_type = DataType::Timestamp(TimeUnit::Microsecond, None);
+                (cast(value, data_type.clone()), data_type)
+            } else {
+                (value, data_type)
+            };
+            if local {
+                cast_to_session_timestamp(value, &data_type, timezone)
+            } else {
+                value
+            }
+        })
+        .collect())
 }
 
 fn coerce_string_temporal_values(
@@ -354,5 +406,5 @@ fn zeroifnull(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             )));
         }
     };
-    Ok(expr_fn::coalesce(vec![arg, zero]))
+    Ok(ScalarUDF::from(CoalesceFunc::new()).call(vec![arg, zero]))
 }

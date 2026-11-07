@@ -552,7 +552,7 @@ impl ExecutionPlan for IcebergWriterExec {
             }
 
             let data_location = write_context.data_location()?;
-            let preserve_lineage = row_level_mode.is_some()
+            let preserve_lineage = (row_level_mode.is_some() || write_context.rewrite_lineage)
                 && write_context
                     .base_table
                     .as_ref()
@@ -696,6 +696,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 action_summary,
                 requirements: write_context.requirements.clone(),
                 table_properties: options.table_properties,
+                snapshot_properties: options.snapshot_properties,
                 lakehouse_table: options.lakehouse_table,
                 schema: write_context
                     .commit_writer_schema

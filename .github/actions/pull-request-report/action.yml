@@ -27,16 +27,22 @@ runs:
 
     - name: Get pull request number
       id: number
+      uses: actions/github-script@v9
       env:
-        DOWNLOAD_PATH: ${{ steps.download.outputs.download-path }}
-      run: |
-        file="$DOWNLOAD_PATH/pull-request.txt"
-        if [[ -f "$file" ]]; then
-          echo "value=$(cat "$file")" >> "$GITHUB_OUTPUT"
-        else
-          echo "value=" >> "$GITHUB_OUTPUT"
-        fi
-      shell: bash
+        REPORT_PATH: ${{ steps.download.outputs.download-path }}
+        REPORT_NAME: ${{ inputs.report_name }}
+        REPORT_SCRIPT: ${{ github.action_path }}/../../scripts/pull-request-report.cjs
+      with:
+        script: |
+          const { validateReport } = require(process.env.REPORT_SCRIPT);
+          const number = await validateReport({
+            github,
+            context,
+            core,
+            reportPath: process.env.REPORT_PATH,
+            reportName: process.env.REPORT_NAME,
+          });
+          core.setOutput('value', number);
 
     - name: Publish report
       if: steps.number.outputs.value != ''

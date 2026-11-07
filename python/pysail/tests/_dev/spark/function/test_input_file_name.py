@@ -198,6 +198,7 @@ def test_input_file_metadata_filename_filter_limit(parquet_metadata):
 # test_udf.test_udf_with_input_file_name; extended to all three metadata functions.
 @pytest.mark.parametrize("receiving", [False, True])
 @pytest.mark.parametrize("limited", [False, True])
+@pytest.mark.spark(cross_version=True)
 def test_input_file_metadata_python_udf(parquet_metadata, receiving, limited):
     dataframe, files = parquet_metadata
     if receiving:

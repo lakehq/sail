@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pyspark
@@ -7,16 +8,17 @@ import pytest
 from pyspark.sql import SparkSession
 
 from pysail.testing._dev.spark.utils.jvm import classic_spark_mode, delta_spark_maven_coordinate
-from pysail.testing.spark.utils.common import is_jvm_spark
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-@pytest.fixture(scope="session", autouse=True)
-def skip_if_jvm_spark():
-    if is_jvm_spark():
-        pytest.skip("Delta Lake tests for JVM Spark")
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    root = Path(__file__).parent
+    for item in items:
+        if item.path.is_relative_to(root):
+            item.add_marker(pytest.mark.spark(skip_if_jvm=True, reason="Tests Sail's Delta Lake integration"))
 
 
 @pytest.fixture(scope="session")

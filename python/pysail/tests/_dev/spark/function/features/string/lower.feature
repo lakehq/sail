@@ -3,7 +3,6 @@ Feature: lower output schema
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to lower yields the schema Spark declares
       When query
         """
@@ -15,7 +14,6 @@ Feature: lower output schema
          |-- result: string (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null column input to lower yields the schema Spark declares
       When query
         """
@@ -36,4 +34,27 @@ Feature: lower output schema
         """
         root
          |-- result: string (nullable = true)
+        """
+
+  Rule: Binary input
+
+    Scenario: lower replaces invalid UTF-8 in binary input
+      When query
+        """
+        SELECT lower(X'C3416263') AS result
+        """
+      Then query result
+        | result |
+        | �abc   |
+
+    @function(nullability)
+    Scenario: lower of a non-null binary column stays non-null
+      When query
+        """
+        SELECT lower(CAST(CAST(id AS STRING) AS BINARY)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
         """

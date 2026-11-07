@@ -23,7 +23,7 @@ use sail_common_datafusion::datasource::{
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
-use sail_function::scalar::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_function::StructFunction;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
 
@@ -935,13 +935,21 @@ pub fn expand_update(
     )?;
 
     let change_data = if requirements.change_data {
-        let mut before = normalized.field_names.iter().map(col).collect::<Vec<_>>();
+        let mut before = normalized
+            .field_names
+            .iter()
+            .map(|name| Expr::Column(Column::from_name(name)))
+            .collect::<Vec<_>>();
         before.push(lit("update_preimage").alias("_change_type"));
         let before = LogicalPlanBuilder::from(normalized.plan.clone())
             .filter(predicate.clone())?
             .project(before)?
             .build()?;
-        let mut after = normalized.field_names.iter().map(col).collect::<Vec<_>>();
+        let mut after = normalized
+            .field_names
+            .iter()
+            .map(|name| Expr::Column(Column::from_name(name)))
+            .collect::<Vec<_>>();
         after.push(lit("update_postimage").alias("_change_type"));
         let after = LogicalPlanBuilder::from(write_rows.clone())
             .filter(col(OPERATION_COLUMN).eq(lit(RowLevelOperationType::Update.as_i32())))?

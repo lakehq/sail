@@ -14,11 +14,10 @@ from pyiceberg.typedef import Record
 from pyiceberg.types import LongType, NestedField, StringType
 
 from pysail.testing.spark.session import spark_connect_server
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.plan import normalize_plan_text
 from pysail.tests._dev.spark.iceberg.utils import create_sql_catalog
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail scan and distributed planning")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail scan and distributed planning")
 
 
 @pytest.fixture(scope="module", params=[("local", 64), ("local-cluster", 64), ("local-cluster", 256)])
@@ -123,6 +122,8 @@ def test_scan_rewrite_preserves_sort_and_limit(spark, tmp_path):
 @pytest.mark.parametrize("sizes", [[20_000], [12_000, 9_000, 20_000]])
 @pytest.mark.parametrize("table_format", ["delta", "iceberg", "iceberg_identity"])
 @pytest.mark.parametrize("metadata_as_data", [False, True])
+@pytest.mark.suite(name="slow")
+@pytest.mark.timeout(120)
 def test_lake_scan_row_groups(spark, tmp_path, sizes, table_format, metadata_as_data, scan_settings):
     path = tmp_path / "groups.parquet"
     write_row_groups(

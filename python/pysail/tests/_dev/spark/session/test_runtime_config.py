@@ -4,7 +4,6 @@ from pyspark.sql.functions import udtf
 from pyspark.sql.types import StringType, StructField, StructType
 
 from pysail.testing.spark.session import spark_session_factory
-from pysail.testing.spark.utils.common import is_jvm_spark
 
 try:
     from pyspark.util import PythonEvalType
@@ -37,6 +36,7 @@ def test_sql_set_preserves_config_value(spark, value):
     assert spark.conf.get(key, None) is None
 
 
+@pytest.mark.spark(cross_version=True)
 def test_sql_set_controls_arrow_udtf(spark):
     class TestUDTF:
         def eval(self):
@@ -97,7 +97,7 @@ def test_sql_set_timezone_changes_planning(spark):
         spark.conf.set(key, original)
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="DataFusion configuration is specific to Sail")
+@pytest.mark.spark(skip_if_jvm=True, reason="DataFusion configuration is specific to Sail")
 @pytest.mark.parametrize(
     ("key", "value"),
     [
@@ -115,7 +115,7 @@ def test_datafusion_set_value(config_sessions, key, value):
     assert session.range(3).collect() == [Row(id=0), Row(id=1), Row(id=2)]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="DataFusion configuration is specific to Sail")
+@pytest.mark.spark(skip_if_jvm=True, reason="DataFusion configuration is specific to Sail")
 def test_datafusion_reset_rejects_unknown_config(config_sessions):
     session = config_sessions.create()
     for statement in [

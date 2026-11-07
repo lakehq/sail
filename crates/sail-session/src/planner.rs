@@ -9,12 +9,10 @@ use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_expr::{
     LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
-use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
@@ -81,8 +79,18 @@ use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_plan::catalog::CatalogCommandNode;
 use sail_plan::procedure::LakeProcedureNode;
 
+use crate::scalar_subquery::{
+    ensure_scalar_subquery_nullability, share_equivalent_scalar_subqueries,
+};
+
 #[derive(Debug)]
 pub struct ExtensionQueryPlanner {}
+
+pub struct ExtensionPhysicalPlanner;
+
+pub fn new_query_planner() -> Arc<dyn QueryPlanner + Send + Sync> {
+    Arc::new(ExtensionQueryPlanner {})
+}
 
 #[async_trait]
 impl QueryPlanner for ExtensionQueryPlanner {
@@ -96,7 +104,10 @@ impl QueryPlanner for ExtensionQueryPlanner {
             Box::new(DeltaMetadataAggregateRewriter),
             Box::new(sail_iceberg::logical::IcebergMetadataAggregateRewriter),
         ];
-        let mut logical_plan = logical_plan.clone();
+        // Equivalent scalar subqueries are shared before the rewriters, which give each
+        // rewritten scan its own source. The rewritten bodies remain equal, so DataFusion
+        // still executes them once.
+        let mut logical_plan = share_equivalent_scalar_subqueries(logical_plan.clone())?;
         for rewriter in rewriters {
             logical_plan = rewriter.rewrite(logical_plan, session).await?.data;
         }
@@ -116,57 +127,6 @@ impl QueryPlanner for ExtensionQueryPlanner {
         ensure_scalar_subquery_nullability(plan)
     }
 }
-
-#[expect(deprecated)]
-fn ensure_scalar_subquery_nullability(
-    plan: Arc<dyn ExecutionPlan>,
-) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-    plan.transform_up(|plan| {
-        let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
-            return Ok(Transformed::no(plan));
-        };
-
-        let mut changed = false;
-        let expressions = projection
-            .expr()
-            .iter()
-            .map(|projection_expr| {
-                let transformed = Arc::clone(&projection_expr.expr).transform_up(|expression| {
-                    let Some(scalar) = expression.downcast_ref::<ScalarSubqueryExpr>() else {
-                        return Ok(Transformed::no(expression));
-                    };
-                    if scalar.nullable() {
-                        return Ok(Transformed::no(expression));
-                    }
-                    Ok(Transformed::yes(Arc::new(ScalarSubqueryExpr::new(
-                        scalar.data_type().clone(),
-                        true,
-                        scalar.index(),
-                        scalar.results().clone(),
-                    ))
-                        as Arc<dyn PhysicalExpr>))
-                })?;
-                changed |= transformed.transformed;
-                Ok(ProjectionExpr::new(
-                    transformed.data,
-                    projection_expr.alias.clone(),
-                ))
-            })
-            .collect::<datafusion_common::Result<Vec<_>>>()?;
-
-        if changed {
-            Ok(Transformed::yes(Arc::new(ProjectionExec::try_new(
-                expressions,
-                Arc::clone(projection.input()),
-            )?) as Arc<dyn ExecutionPlan>))
-        } else {
-            Ok(Transformed::no(plan))
-        }
-    })
-    .data()
-}
-
-pub struct ExtensionPhysicalPlanner;
 
 #[async_trait]
 impl ExtensionPlanner for ExtensionPhysicalPlanner {
@@ -677,29 +637,35 @@ fn plan_explicit_partitioning(
     }
 }
 
-pub fn new_query_planner() -> Arc<dyn QueryPlanner + Send + Sync> {
-    Arc::new(ExtensionQueryPlanner {})
-}
-
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::panic)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::array::{AsArray, Int64Array};
+    use datafusion::arrow::compute::concat_batches;
+    use datafusion::arrow::datatypes::{DataType, Field, Float64Type, Int64Type, Schema};
+    use datafusion::datasource::{MemTable, provider_as_source};
     use datafusion::execution::SessionStateBuilder;
     use datafusion::execution::runtime_env::RuntimeEnv;
     use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_expr::{PhysicalExpr, PhysicalSortExpr};
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-    use datafusion::physical_plan::collect;
     use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::projection::ProjectionExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
+    use datafusion::physical_plan::{collect, displayable};
     use datafusion::prelude::{SessionConfig, SessionContext};
-    use datafusion_common::ToDFSchema;
-    use datafusion_expr::{LogicalPlanBuilder, col};
+    use datafusion_common::{ScalarValue, ToDFSchema};
+    use datafusion_expr::{
+        AggregateUDF, ColumnarValue, LogicalPlanBuilder, TableSource, Volatility, cast, col,
+        create_udf, lit, rollup, scalar_subquery, when,
+    };
+    use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
     use object_store::memory::InMemory;
     use sail_common::spec;
+    use sail_common_datafusion::min_max::min_max_agg::Max;
     use sail_plan::config::PlanConfig;
 
     use super::*;
@@ -736,6 +702,340 @@ mod tests {
         assert!(!projection.schema().field(0).is_nullable());
         let projection = ensure_scalar_subquery_nullability(projection)?;
         assert!(projection.schema().field(0).is_nullable());
+        Ok(())
+    }
+
+    fn memory_source(values: Vec<i64>) -> datafusion_common::Result<Arc<dyn TableSource>> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, true),
+            Field::new("v", DataType::Int64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(Int64Array::from(values)),
+            ],
+        )?;
+        Ok(provider_as_source(Arc::new(MemTable::try_new(
+            schema,
+            vec![vec![batch]],
+        )?)))
+    }
+
+    /// Builds `(SELECT <column> FROM scan WHERE k = 2)` the way Sail resolves a CTE
+    /// reference, where both the CTE body and the reference get fresh output names.
+    fn renamed_scalar_subquery(
+        scan: &LogicalPlan,
+        column: &str,
+        body_name: &str,
+        reference_name: &str,
+    ) -> datafusion_common::Result<Expr> {
+        let subquery = LogicalPlanBuilder::from(scan.clone())
+            .filter(col("k").eq(lit(2_i64)))?
+            .project(vec![col(column).alias(body_name)])?
+            .alias("cte")?
+            .project(vec![
+                Expr::Column(datafusion_common::Column::new(Some("cte"), body_name))
+                    .alias(reference_name),
+            ])?
+            .build()?;
+        Ok(scalar_subquery(Arc::new(subquery)))
+    }
+
+    async fn plan_and_collect(
+        plan: LogicalPlan,
+    ) -> datafusion_common::Result<(String, RecordBatch)> {
+        let state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_query_planner(new_query_planner())
+            .build();
+        let context = SessionContext::new_with_state(state);
+        let state = context.state();
+        let physical = state
+            .query_planner()
+            .create_physical_plan(&plan, &state)
+            .await?;
+        let display = displayable(physical.as_ref()).indent(false).to_string();
+        let schema = physical.schema();
+        let batches = collect(physical, context.task_ctx()).await?;
+        Ok((display, concat_batches(&schema, &batches)?))
+    }
+
+    /// Builds `(SELECT max(<column>) FROM <scan>)` the way Sail resolves a table reference,
+    /// where each reference gets fresh column names and the aggregate is aliased above it.
+    fn aggregate_scalar_subquery(
+        scan: LogicalPlanBuilder,
+        column: Expr,
+        input_name: &str,
+        output_name: &str,
+    ) -> datafusion_common::Result<Expr> {
+        let max = AggregateUDF::from(Max::new()).call(vec![col(input_name)]);
+        let subquery = scan
+            .project(vec![column.alias(input_name)])?
+            .aggregate(Vec::<Expr>::new(), vec![max.clone()])?
+            .project(vec![max.alias(output_name)])?
+            .build()?;
+        Ok(scalar_subquery(Arc::new(subquery)))
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_differing_in_generated_names_share_one_execution()
+    -> datafusion_common::Result<()> {
+        let left = memory_source(vec![10, 20])?;
+        let right = memory_source(vec![100, 200])?;
+        let scan = |name: &str, source: &Arc<dyn TableSource>| {
+            LogicalPlanBuilder::scan(name, Arc::clone(source), None)
+        };
+        let join = || scan("a", &left)?.cross_join(scan("b", &right)?.build()?);
+        // A CTE whose first reference reads the body directly, while later references
+        // rename its columns. Both compute the same as reading the table directly.
+        let cte = || {
+            scan("t", &left)?
+                .project(vec![col("t.v").alias("#20")])?
+                .alias("cte")
+        };
+        let renamed_cte = || cte()?.project(vec![col("cte.#20").alias("#30")]);
+        // A projection that only renames the columns, and one that also sets field metadata.
+        let renamed = |metadata: Option<BTreeMap<String, String>>| {
+            scan("t", &left)?.project(vec![
+                col("t.k").alias("#40"),
+                col("t.v").alias_with_metadata("#41", metadata.map(Into::into)),
+            ])
+        };
+        let metadata = BTreeMap::from([("key".to_string(), "value".to_string())]);
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(vec![
+                aggregate_scalar_subquery(scan("t", &left)?, col("t.v"), "#1", "#2")?.alias("a"),
+                // Fresh names and another spelling of the table name are the same computation.
+                aggregate_scalar_subquery(scan("T", &left)?, col("T.v"), "#3", "#4")?.alias("b"),
+                // A different column is a different computation.
+                aggregate_scalar_subquery(scan("t", &left)?, col("t.k"), "#5", "#6")?.alias("c"),
+                // The same column of different relations is a different computation.
+                aggregate_scalar_subquery(join()?, col("a.v"), "#7", "#8")?.alias("d"),
+                aggregate_scalar_subquery(join()?, col("b.v"), "#9", "#10")?.alias("e"),
+                aggregate_scalar_subquery(cte()?, col("cte.#20"), "#21", "#22")?.alias("f"),
+                aggregate_scalar_subquery(renamed_cte()?, col("#30"), "#31", "#32")?.alias("g"),
+                aggregate_scalar_subquery(renamed(None)?, col("#41"), "#42", "#43")?.alias("h"),
+                aggregate_scalar_subquery(renamed(Some(metadata))?, col("#41"), "#44", "#45")?
+                    .alias("i"),
+            ])?
+            .build()?;
+
+        let (display, batch) = plan_and_collect(plan).await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=5"),
+            "{display}"
+        );
+        let values = batch
+            .columns()
+            .iter()
+            .map(|column| column.as_primitive::<Int64Type>().value(0))
+            .collect::<Vec<_>>();
+        assert_eq!(values, [20, 20, 2, 20, 200, 20, 20, 20, 20]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn equivalent_scalar_subqueries_share_one_execution() -> datafusion_common::Result<()> {
+        let first = LogicalPlanBuilder::scan("t", memory_source(vec![10, 20])?, None)?.build()?;
+        // The same table name and schema with different data: only the source differs.
+        let second =
+            LogicalPlanBuilder::scan("t", memory_source(vec![100, 200])?, None)?.build()?;
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(vec![
+                renamed_scalar_subquery(&first, "v", "#1", "#11")?.alias("a"),
+                // The name of an unaliased subquery must survive sharing its body.
+                renamed_scalar_subquery(&first, "v", "#2", "#12")?,
+                renamed_scalar_subquery(&second, "v", "#3", "#13")?.alias("c"),
+                // A different column of the same input is a different computation.
+                renamed_scalar_subquery(&first, "k", "#4", "#14")?.alias("d"),
+            ])?
+            .build()?;
+
+        let (display, batch) = plan_and_collect(plan).await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=3"),
+            "{display}"
+        );
+        let names = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["a", "#12", "c", "d"]);
+        let values = batch
+            .columns()
+            .iter()
+            .map(|column| column.as_primitive::<Int64Type>().value(0))
+            .collect::<Vec<_>>();
+        assert_eq!(values, [20, 20, 200, 2]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_with_literals_of_different_time_zones_are_not_shared()
+    -> datafusion_common::Result<()> {
+        let scan = LogicalPlanBuilder::scan("t", memory_source(vec![10, 20])?, None)?.build()?;
+        // Literal equality ignores the time zone, but the formatted values differ.
+        let subquery = |time_zone: Option<&str>, name: &str| -> datafusion_common::Result<Expr> {
+            let timestamp = lit(ScalarValue::TimestampMicrosecond(
+                Some(1_704_087_000_000_000),
+                time_zone.map(Into::into),
+            ));
+            let subquery = LogicalPlanBuilder::from(scan.clone())
+                .filter(col("k").eq(lit(2_i64)))?
+                .project(vec![
+                    cast(
+                        when(col("v").gt(lit(0_i64)), timestamp).end()?,
+                        DataType::Utf8,
+                    )
+                    .alias(name),
+                ])?
+                .build()?;
+            Ok(scalar_subquery(Arc::new(subquery)))
+        };
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(vec![
+                subquery(None, "#1")?.alias("a"),
+                subquery(Some("+05:30"), "#2")?.alias("b"),
+            ])?
+            .build()?;
+
+        let (display, batch) = plan_and_collect(plan).await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=2"),
+            "{display}"
+        );
+        let values = batch
+            .columns()
+            .iter()
+            .map(|column| column.as_string::<i32>().value(0).to_string())
+            .collect::<Vec<_>>();
+        assert_ne!(values[0], values[1]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn coerced_scalar_subqueries_share_one_execution() -> datafusion_common::Result<()> {
+        let scan = LogicalPlanBuilder::scan("t", memory_source(vec![10, 20])?, None)?.build()?;
+        // Type coercion casts the renamed output of each reference.
+        let subquery = |body_name: &str, reference_name: &str| -> datafusion_common::Result<Expr> {
+            let subquery = LogicalPlanBuilder::from(scan.clone())
+                .filter(col("k").eq(lit(2_i64)))?
+                .project(vec![col("v").alias(body_name)])?
+                .alias("cte")?
+                .project(vec![cast(
+                    Expr::Column(datafusion_common::Column::new(Some("cte"), body_name))
+                        .alias(reference_name),
+                    DataType::Float64,
+                )])?
+                .build()?;
+            Ok(scalar_subquery(Arc::new(subquery)))
+        };
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(vec![
+                subquery("#1", "#11")?.alias("a"),
+                subquery("#2", "#12")?.alias("b"),
+            ])?
+            .build()?;
+
+        let (display, batch) = plan_and_collect(plan).await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=1"),
+            "{display}"
+        );
+        let values = batch
+            .columns()
+            .iter()
+            .map(|column| column.as_primitive::<Float64Type>().value(0))
+            .collect::<Vec<_>>();
+        assert_eq!(values, [20.0, 20.0]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_in_grouping_sets_are_not_rewritten() -> datafusion_common::Result<()>
+    {
+        let scan = LogicalPlanBuilder::scan("t", memory_source(vec![10, 20])?, None)?.build()?;
+        let plan = LogicalPlanBuilder::empty(true)
+            .aggregate(
+                vec![rollup(vec![
+                    renamed_scalar_subquery(&scan, "v", "#1", "#11")?,
+                    renamed_scalar_subquery(&scan, "v", "#2", "#12")?,
+                ])],
+                Vec::<Expr>::new(),
+            )?
+            .build()?;
+
+        let (display, _) = plan_and_collect(plan).await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=2"),
+            "{display}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_extension_nodes_are_not_shared() -> datafusion_common::Result<()>
+    {
+        let range = LogicalPlan::Extension(datafusion_expr::Extension {
+            node: Arc::new(RangeNode::try_new("id".to_string(), 0, 1, 1, 1)?),
+        });
+        let subquery = |name: &str| -> datafusion_common::Result<Expr> {
+            let subquery = LogicalPlanBuilder::from(range.clone())
+                .project(vec![col("id").alias(name)])?
+                .build()?;
+            Ok(scalar_subquery(Arc::new(subquery)))
+        };
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(vec![subquery("#1")?.alias("a"), subquery("#2")?.alias("b")])?
+            .build()?;
+
+        let (display, _) = plan_and_collect(plan).await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=2"),
+            "{display}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn volatile_scalar_subqueries_are_not_shared() -> datafusion_common::Result<()> {
+        let volatile = create_udf(
+            "volatile",
+            vec![DataType::Int64],
+            DataType::Int64,
+            Volatility::Volatile,
+            Arc::new(
+                |args: &[ColumnarValue]| -> datafusion_common::Result<ColumnarValue> {
+                    Ok(args[0].clone())
+                },
+            ),
+        );
+        let subquery = |name: &str| -> datafusion_common::Result<Expr> {
+            let subquery = LogicalPlanBuilder::empty(true)
+                .project(vec![volatile.call(vec![lit(1_i64)]).alias(name)])?
+                .build()?;
+            Ok(scalar_subquery(Arc::new(subquery)))
+        };
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(vec![subquery("#1")?.alias("a"), subquery("#2")?.alias("b")])?
+            .build()?;
+
+        let (display, _) = plan_and_collect(plan).await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=2"),
+            "{display}"
+        );
         Ok(())
     }
 

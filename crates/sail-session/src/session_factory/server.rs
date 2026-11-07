@@ -31,6 +31,7 @@ use crate::session_manager::SessionManagerActor;
 
 pub struct ServerSessionInfo {
     pub session_id: String,
+    pub client_session_id: String,
     pub user_id: String,
     pub session_manager: ActorHandle<SessionManagerActor>,
     pub job_runner: Option<Box<dyn JobRunner>>,

@@ -13,7 +13,6 @@ from pyspark.sql.connect import proto
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.session import spark_session_factory
-from pysail.testing.spark.utils.common import pyspark_version
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -201,6 +200,7 @@ def test_session_user_metadata_after_concurrent_config_updates(spark, tmp_path):
 
 
 @pytest.mark.parametrize("next_metadata", ["next-operation", None])
+@pytest.mark.spark(cross_version=True)
 def test_session_user_metadata_is_captured_before_execution(spark, tmp_path, next_metadata):
     started = tmp_path / "started"
     released = tmp_path / "released"
@@ -340,7 +340,7 @@ def test_session_user_metadata_alter_table(spark, tmp_path, alteration):
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.mergeInto requires Spark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.mergeInto")
 def test_session_user_metadata_dataframe_merge_into(spark, tmp_path):
     path = tmp_path / "dataframe_merge"
     table = "delta_metadata_dataframe_merge"

@@ -1,3 +1,4 @@
+import struct
 import time
 import uuid
 from pathlib import Path
@@ -7,6 +8,7 @@ from urllib.request import url2pathname
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from pyiceberg.avro.file import AvroFile
 from pyiceberg.manifest import (
     DataFile,
     DataFileContent,
@@ -23,7 +25,7 @@ from pyiceberg.schema import Schema
 from pyiceberg.table import StaticTable
 from pyiceberg.transforms import IdentityTransform, TruncateTransform
 from pyiceberg.typedef import Record
-from pyiceberg.types import BinaryType, LongType, NestedField, StringType, StructType
+from pyiceberg.types import BinaryType, DoubleType, IntegerType, ListType, LongType, NestedField, StringType, StructType
 
 from pysail.testing._dev.spark.steps.iceberg import (
     _assert_noop_snapshot,
@@ -78,6 +80,23 @@ def _drop_table(spark, name: str) -> None:
 
 
 class _EqualityDeleteManifestWriter(ManifestWriterV2):
+    def _with_partition(self, format_version):
+        # Iceberg requires list<int>; PyIceberg 0.11.1 uses list<long> for equality_ids.
+        schema = super()._with_partition(format_version)
+        data_file = schema.find_field("data_file")
+        fields = [
+            field.model_copy(update={"field_type": ListType(136, IntegerType(), element_required=True)})
+            if field.name == "equality_ids"
+            else field
+            for field in data_file.field_type.fields
+        ]
+        return Schema(
+            *[
+                field.model_copy(update={"field_type": StructType(*fields)}) if field.name == "data_file" else field
+                for field in schema.fields
+            ]
+        )
+
     def content(self) -> ManifestContent:
         return ManifestContent.DELETES
 
@@ -103,11 +122,12 @@ def _append_equality_delete_snapshot(
     equality_ids: list[int],
     *,
     partition: Record | None = None,
+    partition_spec: PartitionSpec | None = None,
+    data_sequence_number: int | None = None,
     assign_root_ids: bool = True,
     metrics: dict | None = None,
 ) -> Path:
     table_path = _local_table_path(table.location())
-    metadata_dir = table_path / "metadata"
     data_dir = table_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -122,12 +142,6 @@ def _append_equality_delete_snapshot(
         delete_rows = pa.Table.from_arrays(delete_rows.columns, schema=pa.schema(fields))
     pq.write_table(delete_rows, delete_file_path)
 
-    metadata = _find_latest_metadata(table_path)
-    parent_snapshot = _current_snapshot(metadata)
-    snapshot_id = _new_snapshot_id()
-    sequence_number = metadata.get("last-sequence-number", 0) + 1
-
-    io = WindowsLocalPyArrowFileIO()
     delete_data_file = DataFile.from_args(
         content=DataFileContent.EQUALITY_DELETES,
         file_path=delete_file_path.as_uri(),
@@ -139,9 +153,32 @@ def _append_equality_delete_snapshot(
         **(metrics or {}),
     )
 
+    return _append_delete_snapshot(
+        table, delete_data_file, partition_spec=partition_spec, data_sequence_number=data_sequence_number
+    )
+
+
+def _append_delete_snapshot(
+    table,
+    delete_data_file: DataFile,
+    *,
+    partition_spec: PartitionSpec | None = None,
+    data_sequence_number: int | None = None,
+) -> Path:
+    table_path = _local_table_path(table.location())
+    metadata_dir = table_path / "metadata"
+    metadata = _find_latest_metadata(table_path)
+    parent_snapshot = _current_snapshot(metadata)
+    snapshot_id = _new_snapshot_id()
+    sequence_number = metadata.get("last-sequence-number", 0) + 1
+    delete_kind = {
+        DataFileContent.EQUALITY_DELETES: "equality",
+        DataFileContent.POSITION_DELETES: "position",
+    }[delete_data_file.content]
+    io = WindowsLocalPyArrowFileIO()
     manifest_path = metadata_dir / f"manifest-{uuid.uuid4()}.avro"
     with _EqualityDeleteManifestWriter(
-        table.spec(),
+        partition_spec or table.spec(),
         table.schema(),
         io.new_output(manifest_path.as_uri()),
         snapshot_id,
@@ -151,10 +188,17 @@ def _append_equality_delete_snapshot(
             ManifestEntry.from_args(
                 status=ManifestEntryStatus.ADDED,
                 snapshot_id=snapshot_id,
+                sequence_number=data_sequence_number,
                 data_file=delete_data_file,
             )
         )
-        delete_manifest = writer.to_manifest_file()
+    delete_manifest = writer.to_manifest_file()
+    assert delete_manifest.manifest_length == manifest_path.stat().st_size
+    assert delete_manifest.manifest_length > 0
+    with AvroFile(io.new_input(manifest_path.as_uri())) as reader:
+        assert reader.schema.find_field("data_file.equality_ids").field_type == ListType(
+            136, IntegerType(), element_required=True
+        )
 
     existing_manifests = list(read_manifest_list(_pyarrow_input_file(io, parent_snapshot["manifest-list"])))
     manifest_list_path = metadata_dir / f"snap-{snapshot_id}-0-{uuid.uuid4()}.avro"
@@ -187,8 +231,8 @@ def _append_equality_delete_snapshot(
             "summary": {
                 "operation": "delete",
                 "added-delete-files": "1",
-                "added-equality-delete-files": "1",
-                "added-equality-deletes": str(delete_rows.num_rows),
+                f"added-{delete_kind}-delete-files": "1",
+                f"added-{delete_kind}-deletes": str(delete_data_file.record_count),
             },
             "schema-id": metadata.get("current-schema-id", 0),
         }
@@ -202,6 +246,52 @@ def _append_equality_delete_snapshot(
     new_metadata_path = metadata_dir / f"{latest_metadata_version + 1:05d}-{uuid.uuid4()}.metadata.json"
     _write_metadata_file(new_metadata_path, metadata)
     return table_path
+
+
+def _create_nonfinite_nonkey_equality_delete_table(sql_catalog, identifier, value, *, with_bounds=True):
+    # Iceberg 1.11.0 permits non-key columns in equality deletes; only the integral key is matched.
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(
+            NestedField(1, "id", LongType()), NestedField(2, "key", LongType()), NestedField(3, "payload", DoubleType())
+        ),
+    )
+    table.append(pa.table({"id": [1, 2], "key": [7, 8], "payload": [value, 1.0]}))
+    delete_rows = pa.Table.from_arrays(
+        [pa.array([7], pa.int64()), pa.array([value], pa.float64())],
+        schema=pa.schema(
+            [
+                pa.field("key", pa.int64(), metadata={b"PARQUET:field_id": b"2"}),
+                pa.field("payload", pa.float64(), metadata={b"PARQUET:field_id": b"3"}),
+            ]
+        ),
+    )
+    metrics = {"lower_bounds": {3: struct.pack("<d", value)}, "upper_bounds": {3: struct.pack("<d", value)}}
+    return _append_equality_delete_snapshot(
+        table, delete_rows, [2], assign_root_ids=False, metrics=metrics if with_bounds else None
+    )
+
+
+@pytest.mark.parametrize("value", [float("inf"), -float("inf")], ids=["positive-infinity", "negative-infinity"])
+def test_select_equality_deletes_with_nonfinite_nonkey_bounds(spark, sql_catalog, value):
+    name = "select_equality_extra_bounds"
+    identifier = f"default.{name}"
+    try:
+        path = _create_nonfinite_nonkey_equality_delete_table(sql_catalog, identifier, value)
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{escape_sql_string_literal(str(path))}'")
+        before = _find_latest_metadata(path)
+        schema = spark.table(name).schema
+        assert [(field.name, field.dataType.simpleString()) for field in schema] == [
+            ("id", "bigint"),
+            ("key", "bigint"),
+            ("payload", "double"),
+        ]
+        assert [tuple(row) for row in spark.table(name).collect()] == [(2, 8, 1.0)]
+        assert [row.id for row in spark.table(name).where("payload > 0").select("id").collect()] == [2]
+        assert _find_latest_metadata(path) == before
+    finally:
+        _drop_table(spark, name)
+        sql_catalog.drop_table(identifier)
 
 
 def _current_delete_entries(table_path: Path) -> list[ManifestEntry]:

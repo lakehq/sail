@@ -23,7 +23,6 @@ use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::execution::{SessionStateDefaults, TaskContext};
-use datafusion::functions::core::coalesce::CoalesceFunc;
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::input_file_name::InputFileNameFunc;
 use datafusion::functions::core::least::LeastFunc;
@@ -32,11 +31,13 @@ use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::functions::string::repeat::RepeatFunc;
 use datafusion::functions_nested::extract::ArrayElement;
 use datafusion::functions_nested::map_extract::MapExtract;
-use datafusion::functions_window::cume_dist::cume_dist_udwf;
-use datafusion::functions_window::lead_lag::{lag_udwf, lead_udwf};
-use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf, nth_value_udwf};
+use datafusion::functions_window::cume_dist::{CumeDist, cume_dist_udwf};
+use datafusion::functions_window::lead_lag::{WindowShift, lag_udwf, lead_udwf};
+use datafusion::functions_window::nth_value::{
+    NthValue, first_value_udwf, last_value_udwf, nth_value_udwf,
+};
 use datafusion::functions_window::rank::{dense_rank_udwf, percent_rank_udwf, rank_udwf};
-use datafusion::functions_window::row_number::row_number_udwf;
+use datafusion::functions_window::row_number::{RowNumber, row_number_udwf};
 use datafusion::logical_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
 };
@@ -106,6 +107,7 @@ use sail_common_datafusion::input_file::{
     InputFileBlockLengthFunc, InputFileBlockStartFunc, InputFileMetadataSource,
 };
 use sail_common_datafusion::lakeprocedure::LakeProcedureRootPlacement;
+use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionDefaultExpr,
     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, SchemaEvolutionTimezoneMode,
@@ -136,10 +138,13 @@ use sail_delta_lake::schema::PhysicalPartitionColumn;
 use sail_delta_lake::spec::{
     Action, ColumnMappingMode, ColumnMetadataKey, DeltaOperation, StructType,
 };
+use sail_function::aggregate::approx_percentile::ApproxPercentileCont;
+use sail_function::aggregate::array_agg::ArrayAgg;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
 use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
+use sail_function::aggregate::first_last::{FirstValue, LastValue};
 use sail_function::aggregate::grouping_id::GroupingIdFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
@@ -166,9 +171,13 @@ use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
-use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
+use sail_function::scalar::conversion::spark_cast_string_to_int32::SparkCastStringToInt32;
+use sail_function::scalar::conversion::spark_to_string::{
+    SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View,
+};
 use sail_function::scalar::correlation_cast::CorrelationCast;
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
@@ -177,7 +186,7 @@ use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzMode};
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
-use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
+use sail_function::scalar::datetime::spark_date_part::{SparkDatePart, SparkIntegerDatePart};
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalToCalendarInterval,
@@ -197,13 +206,14 @@ use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
-use sail_function::scalar::drop_struct_field::DropStructField;
 use sail_function::scalar::explode::{Explode, explode_name_to_kind};
 use sail_function::scalar::geo::st_asbinary::StAsBinary;
 use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
 use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
-use sail_function::scalar::json::{JsonObjectKeys, SparkFromJson, SparkSchemaOfJson, SparkToJson};
+use sail_function::scalar::json::{
+    JsonAsText, JsonLength, JsonObjectKeys, SparkFromJson, SparkSchemaOfJson, SparkToJson,
+};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
@@ -242,13 +252,15 @@ use sail_function::scalar::mixed_numeric::MixedNumeric;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
-use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
-use sail_function::scalar::spark_struct_rename::SparkStructRename;
-use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
+use sail_function::scalar::string::btrim::BTrimFunc;
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
+use sail_function::scalar::string::lower::LowerFunc;
+use sail_function::scalar::string::ltrim::LtrimFunc;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::randstr::Randstr;
+use sail_function::scalar::string::replace::ReplaceFunc;
+use sail_function::scalar::string::rtrim::RtrimFunc;
 use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
@@ -264,8 +276,12 @@ use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_function::scalar::string::spark_to_char::SparkToChar;
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
-use sail_function::scalar::struct_function::StructFunction;
-use sail_function::scalar::update_struct_field::UpdateStructField;
+use sail_function::scalar::string::upper::UpperFunc;
+use sail_function::scalar::r#struct::array_struct_field::ArrayStructField;
+use sail_function::scalar::r#struct::drop_struct_field::DropStructField;
+use sail_function::scalar::r#struct::spark_struct_rename::SparkStructRename;
+use sail_function::scalar::r#struct::struct_function::StructFunction;
+use sail_function::scalar::r#struct::update_struct_field::UpdateStructField;
 use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
@@ -1680,6 +1696,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             Arc::new(try_decode_schema(&output.schema)?),
                             output.rewritten_data_files_count,
                             output.rewritten_bytes_count,
+                            output.starting_sequence_number,
                         ),
                     None => return plan_err!("Missing output for IcebergCommitExec"),
                 };
@@ -1854,13 +1871,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
-                let positional_deletes: Vec<sail_iceberg::spec::delete_index::DeleteFileRef> =
+                let positional_deletes: Vec<sail_iceberg::spec::delete_index::PositionDeleteFile> =
                     serde_json::from_str(&positional_deletes_json).map_err(|e| {
-                        plan_datafusion_err!("failed to decode positional delete refs: {e}")
+                        plan_datafusion_err!("failed to decode positional delete descriptors: {e}")
                     })?;
-                let equality_deletes: Vec<sail_iceberg::spec::delete_index::DeleteFileRef> =
+                let equality_deletes: Vec<sail_iceberg::spec::delete_index::EqualityDeleteFile> =
                     serde_json::from_str(&equality_deletes_json).map_err(|e| {
-                        plan_datafusion_err!("failed to decode equality delete refs: {e}")
+                        plan_datafusion_err!("failed to decode equality delete descriptors: {e}")
                     })?;
                 let iceberg_schema: sail_iceberg::spec::Schema =
                     serde_json::from_str(&iceberg_schema_json).map_err(|e| {
@@ -3134,11 +3151,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sail_iceberg::physical_plan::commit::commit_exec::CommitOutput::Command(output) =>
                         r#gen::iceberg_commit_exec_node::Output::CommandOutput(Self::encode_command_output(*output)),
                     sail_iceberg::physical_plan::commit::commit_exec::CommitOutput::RewriteDataFiles {
-                        rewritten_data_files_count, rewritten_bytes_count,
+                        rewritten_data_files_count, rewritten_bytes_count, starting_sequence_number,
                     } => r#gen::iceberg_commit_exec_node::Output::RewriteDataFilesOutput(r#gen::IcebergRewriteDataFilesOutput {
                         schema: try_encode_schema(&iceberg_commit_exec.schema())?,
                         rewritten_data_files_count: *rewritten_data_files_count,
                         rewritten_bytes_count: *rewritten_bytes_count,
+                        starting_sequence_number: *starting_sequence_number,
                     }),
                 }),
             })
@@ -3249,10 +3267,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             )?;
             let positional_deletes_json = serde_json::to_string(delete_apply.positional_deletes())
                 .map_err(|e| {
-                    plan_datafusion_err!("failed to encode positional delete refs: {e}")
+                    plan_datafusion_err!("failed to encode positional delete descriptors: {e}")
                 })?;
             let equality_deletes_json = serde_json::to_string(delete_apply.equality_deletes())
-                .map_err(|e| plan_datafusion_err!("failed to encode equality delete refs: {e}"))?;
+                .map_err(|e| {
+                    plan_datafusion_err!("failed to encode equality delete descriptors: {e}")
+                })?;
             let iceberg_schema_json = serde_json::to_string(delete_apply.iceberg_schema())
                 .map_err(|e| plan_datafusion_err!("failed to encode Iceberg schema: {e}"))?;
             let input_file_projection = self.try_encode_physical_projection_exprs(
@@ -3826,12 +3846,21 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "vector_normalize" => Ok(Arc::new(ScalarUDF::from(VectorNormalize::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "coalesce" => Ok(Arc::new(ScalarUDF::from(CoalesceFunc::new()))),
+            "upper" => Ok(Arc::new(ScalarUDF::from(UpperFunc::new()))),
+            "lower" => Ok(Arc::new(ScalarUDF::from(LowerFunc::new()))),
+            "btrim" | "trim" => Ok(Arc::new(ScalarUDF::from(BTrimFunc::new()))),
+            "ltrim" => Ok(Arc::new(ScalarUDF::from(LtrimFunc::new()))),
+            "rtrim" => Ok(Arc::new(ScalarUDF::from(RtrimFunc::new()))),
+            "replace" => Ok(Arc::new(ScalarUDF::from(ReplaceFunc::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(GreatestFunc::new()))),
             "least" => Ok(Arc::new(ScalarUDF::from(LeastFunc::new()))),
             "length" => Ok(Arc::new(ScalarUDF::from(SparkLengthFunc::new()))),
             "levenshtein" => Ok(Arc::new(ScalarUDF::from(Levenshtein::new()))),
             "make_valid_utf8" => Ok(Arc::new(ScalarUDF::from(MakeValidUtf8::new()))),
+            "make_valid_utf8_preserving_nullability" => Ok(Arc::new(ScalarUDF::from(
+                MakeValidUtf8::preserving_nullability(),
+            ))),
             "spark_bit_length" => Ok(Arc::new(ScalarUDF::from(SparkBitLength::new()))),
             "spark_octet_length" => Ok(Arc::new(ScalarUDF::from(SparkOctetLength::new()))),
             "map_entries" => Ok(Arc::new(ScalarUDF::from(SparkMapEntries::new()))),
@@ -3947,6 +3976,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_date_part" | "date_part" | "datepart" | "extract" => {
                 Ok(Arc::new(ScalarUDF::from(SparkDatePart::new())))
             }
+            "spark_integer_date_part" => Ok(Arc::new(ScalarUDF::from(SparkIntegerDatePart::new()))),
             "spark_year" | "year" => Ok(Arc::new(ScalarUDF::from(SparkYear::new()))),
             "spark_luhn_check" | "luhn_check" => {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
@@ -3965,7 +3995,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
-            "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
+            "date_trunc" | "datetrunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
             "spark_time_trunc" | "time_trunc" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTimeTrunc::new())))
@@ -4051,14 +4081,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<VectorNormalize>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<CoalesceFunc>()
+            || node_inner.is::<UpperFunc>()
+            || node_inner.is::<LowerFunc>()
+            || node_inner.is::<BTrimFunc>()
+            || node_inner.is::<LtrimFunc>()
+            || node_inner.is::<RtrimFunc>()
+            || node_inner.is::<ReplaceFunc>()
             || node_inner.is::<NormalizeFloatKeys>()
             || node_inner.is::<MixedNumeric>()
             || node_inner.is::<CorrelationCast>()
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
             || node_inner.is::<LeastFunc>()
-            || node_inner.is::<JsonObjectKeys>()
-            || node_inner.is::<JsonTuple>()
             || node_inner.is::<FormatNumber>()
             || node_inner.is::<Levenshtein>()
             || node_inner.is::<Randstr>()
@@ -4099,6 +4133,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
             || node_inner.is::<SparkDatePart>()
+            || node_inner.is::<SparkIntegerDatePart>()
             || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDayTimeIntervalToCalendarInterval>()
@@ -4170,10 +4205,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
             || node_inner.is::<Xpath>()
-            || matches!(node.name(), "date_part" | "datepart" | "extract")
-            || node.name() == "json_as_text"
-            || node.name() == "json_len"
-            || node.name() == "json_length"
+            || node_inner.is::<JsonAsText>()
+            || node_inner.is::<JsonLength>()
+            || node_inner.is::<JsonObjectKeys>()
+            || node_inner.is::<JsonTuple>()
         {
             UdfKind::Standard(r#gen::StandardUdf {})
         } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromArrays>() {
@@ -4429,11 +4464,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "hll_sketch_agg" => Ok(Arc::new(AggregateUDF::from(HllSketchAggFunction::new()))),
                 "hll_union_agg" => Ok(Arc::new(AggregateUDF::from(HllUnionAggFunction::new()))),
                 "kurtosis" => Ok(Arc::new(AggregateUDF::from(KurtosisFunction::new()))),
-                "max" => Ok(datafusion::functions_aggregate::min_max::max_udaf()),
+                "max" => Ok(Arc::new(AggregateUDF::from(Max::new()))),
+                "min" => Ok(Arc::new(AggregateUDF::from(Min::new()))),
                 "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
                 "percentile" => Ok(Arc::new(AggregateUDF::from(PercentileFunction::new()))),
+                "percentile_approx" | "approx_percentile" => {
+                    Ok(Arc::new(AggregateUDF::from(ApproxPercentileCont::new())))
+                }
                 "product" => Ok(Arc::new(AggregateUDF::from(ProductFunction::new()))),
                 "regr_avgx" => Ok(Arc::new(AggregateUDF::from(Regr::new(
                     RegrType::AvgX,
@@ -4579,14 +4618,28 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             Some(UdafKind::PercentileDisc(r#gen::PercentileDiscUdaf { ansi_mode })) => {
                 Ok(Arc::new(AggregateUDF::from(PercentileDisc::new(ansi_mode))))
             }
+            Some(UdafKind::ArrayAgg(r#gen::ArrayAggUdaf {
+                is_input_pre_ordered,
+            })) => Ok(Arc::new(AggregateUDF::from(ArrayAgg::new(
+                is_input_pre_ordered,
+            )))),
+            Some(UdafKind::FirstValue(r#gen::FirstValueUdaf {
+                is_input_pre_ordered,
+            })) => Ok(Arc::new(AggregateUDF::from(
+                FirstValue::with_input_pre_ordered(is_input_pre_ordered),
+            ))),
+            Some(UdafKind::LastValue(r#gen::LastValueUdaf {
+                is_input_pre_ordered,
+            })) => Ok(Arc::new(AggregateUDF::from(
+                LastValue::with_input_pre_ordered(is_input_pre_ordered),
+            ))),
             None => plan_err!("ExtendedAggregateUdf: no UDF found for {name}"),
         }
     }
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
-        let udaf_kind = if node
-            .inner()
-            .is::<datafusion::functions_aggregate::min_max::Max>()
+        let udaf_kind = if node.inner().is::<Max>()
+            || node.inner().is::<Min>()
             || node.inner().is::<BitmapAndAggFunction>()
             || node.inner().is::<BitmapConstructAggFunction>()
             || node.inner().is::<BitmapOrAggFunction>()
@@ -4600,6 +4653,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().is::<MinByFunction>()
             || node.inner().is::<ModeFunction>()
             || node.inner().is::<PercentileFunction>()
+            || node.inner().is::<ApproxPercentileCont>()
             || node.inner().is::<ProductFunction>()
             || node.inner().is::<Regr>()
             || node.inner().is::<SchemaOfVariantAggFunction>()
@@ -4671,6 +4725,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdafKind::PercentileDisc(r#gen::PercentileDiscUdaf {
                 ansi_mode: func.ansi_mode(),
             })
+        } else if let Some(func) = node.inner().downcast_ref::<ArrayAgg>() {
+            UdafKind::ArrayAgg(r#gen::ArrayAggUdaf {
+                is_input_pre_ordered: func.is_input_pre_ordered(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<FirstValue>() {
+            UdafKind::FirstValue(r#gen::FirstValueUdaf {
+                is_input_pre_ordered: func.is_input_pre_ordered(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<LastValue>() {
+            UdafKind::LastValue(r#gen::LastValueUdaf {
+                is_input_pre_ordered: func.is_input_pre_ordered(),
+            })
         } else {
             return Ok(());
         };
@@ -4716,14 +4782,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
-        let udwf_kind = if node.inner().is::<SparkNtile>() {
-            UdwfKind::Standard(r#gen::StandardUdwf {})
-        } else if let Some(func) = node.inner().downcast_ref::<SparkFirstLastValue>() {
+        let udwf_kind = if let Some(func) = node.inner().downcast_ref::<SparkFirstLastValue>() {
             UdwfKind::SparkFirstLastValue(r#gen::SparkFirstLastValueUdwf {
                 first: matches!(func.kind(), SparkFirstLastValueKind::First),
                 ignore_nulls: func.ignore_nulls(),
             })
-        } else if matches!(
+        } else if node.inner().is::<SparkNtile>()
+            || node.inner().is::<CumeDist>()
+            // Rank::new accepts custom names. Matching every Rank by type would bypass
+            // the function registry and send unknown names to the built-in decoder.
+            // Keep rank, dense_rank, and percent_rank covered by the name checks below.
+            // || node.inner().is::<Rank>()
+            // NthValue implements first_value, last_value, and nth_value.
+            || node.inner().is::<NthValue>()
+            // WindowShift implements lag and lead.
+            || node.inner().is::<WindowShift>()
+            || node.inner().is::<RowNumber>()
+            || matches!(
+            // Keep name matching as a fallback if upstream splits these into separate implementations.
             node.name(),
             "cume_dist"
                 | "dense_rank"
@@ -6261,6 +6337,8 @@ mod tests {
     use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
     use datafusion::arrow::datatypes::{Schema, SchemaRef};
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion::functions::datetime::date_part::DatePartFunc;
+    use datafusion::functions::datetime::date_trunc::DateTruncFunc;
     use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
     use datafusion::physical_expr::HigherOrderFunctionExpr;
     use datafusion::physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode;
@@ -6301,6 +6379,70 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udaf(&udaf, &mut buf)?;
         codec.try_decode_udaf(&name, &buf)
+    }
+
+    #[test]
+    fn test_round_trip_approx_percentile_udaf() -> Result<()> {
+        let decoded = round_trip_udaf(AggregateUDF::from(ApproxPercentileCont::new()))?;
+        assert!(decoded.inner().is::<ApproxPercentileCont>());
+        assert_eq!(decoded.name(), "percentile_approx");
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_ported_datafusion_udafs() -> Result<()> {
+        let decoded = round_trip_udaf(AggregateUDF::from(Max::new()))?;
+        assert!(decoded.inner().is::<Max>());
+        assert_eq!(decoded.name(), "max");
+        let decoded = round_trip_udaf(AggregateUDF::from(Min::new()))?;
+        assert!(decoded.inner().is::<Min>());
+        assert_eq!(decoded.name(), "min");
+        for is_input_pre_ordered in [false, true] {
+            let decoded = round_trip_udaf(AggregateUDF::from(ArrayAgg::new(is_input_pre_ordered)))?;
+            let array_agg = decoded
+                .inner()
+                .downcast_ref::<ArrayAgg>()
+                .ok_or_else(|| plan_datafusion_err!("decoded UDAF is not ArrayAgg"))?;
+            assert_eq!(array_agg.is_input_pre_ordered(), is_input_pre_ordered);
+            assert_eq!(decoded.name(), "array_agg");
+            let decoded = round_trip_udaf(AggregateUDF::from(FirstValue::with_input_pre_ordered(
+                is_input_pre_ordered,
+            )))?;
+            let first_value = decoded
+                .inner()
+                .downcast_ref::<FirstValue>()
+                .ok_or_else(|| plan_datafusion_err!("decoded UDAF is not FirstValue"))?;
+            assert_eq!(first_value.is_input_pre_ordered(), is_input_pre_ordered);
+            assert_eq!(decoded.name(), "first_value");
+            let decoded = round_trip_udaf(AggregateUDF::from(LastValue::with_input_pre_ordered(
+                is_input_pre_ordered,
+            )))?;
+            let last_value = decoded
+                .inner()
+                .downcast_ref::<LastValue>()
+                .ok_or_else(|| plan_datafusion_err!("decoded UDAF is not LastValue"))?;
+            assert_eq!(last_value.is_input_pre_ordered(), is_input_pre_ordered);
+            assert_eq!(decoded.name(), "last_value");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_ported_datafusion_udfs() -> Result<()> {
+        // `CoalesceFunc` is covered by `test_round_trip_input_file_name_expression_udfs`.
+        let decoded = round_trip_udf(ScalarUDF::from(UpperFunc::new()))?;
+        downcast_udf::<UpperFunc>(&decoded, "UpperFunc")?;
+        let decoded = round_trip_udf(ScalarUDF::from(LowerFunc::new()))?;
+        downcast_udf::<LowerFunc>(&decoded, "LowerFunc")?;
+        let decoded = round_trip_udf(ScalarUDF::from(BTrimFunc::new()))?;
+        downcast_udf::<BTrimFunc>(&decoded, "BTrimFunc")?;
+        let decoded = round_trip_udf(ScalarUDF::from(LtrimFunc::new()))?;
+        downcast_udf::<LtrimFunc>(&decoded, "LtrimFunc")?;
+        let decoded = round_trip_udf(ScalarUDF::from(RtrimFunc::new()))?;
+        downcast_udf::<RtrimFunc>(&decoded, "RtrimFunc")?;
+        let decoded = round_trip_udf(ScalarUDF::from(ReplaceFunc::new()))?;
+        downcast_udf::<ReplaceFunc>(&decoded, "ReplaceFunc")?;
+        Ok(())
     }
 
     #[test]
@@ -6374,6 +6516,74 @@ mod tests {
     }
 
     #[test]
+    fn round_trip_iceberg_delete_descriptors_preserves_keys_and_puffin_ranges() -> Result<()> {
+        use sail_iceberg::spec::delete_index::{EqualityDeleteFile, PositionDeleteFile};
+        use sail_iceberg::spec::{DataFileFormat, NestedField, PrimitiveType, Type};
+
+        let iceberg_schema = sail_iceberg::spec::Schema::builder()
+            .with_fields([Arc::new(NestedField::optional(
+                2,
+                "key",
+                Type::Primitive(PrimitiveType::Long),
+            ))])
+            .build()
+            .map_err(|error| plan_datafusion_err!("{error}"))?;
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, true)]));
+        let mut positional = vec![
+            PositionDeleteFile::DeletionVector {
+                path: "data/shared.puffin".into(),
+                range: 4..36,
+                cardinality: 1,
+            },
+            PositionDeleteFile::DeletionVector {
+                path: "data/shared.puffin".into(),
+                range: 36..100,
+                cardinality: 3,
+            },
+        ];
+        let formats = [
+            DataFileFormat::Parquet,
+            DataFileFormat::Avro,
+            DataFileFormat::Orc,
+        ];
+        positional.extend(formats.map(|file_format| PositionDeleteFile::File {
+            path: format!("data/positions.{file_format:?}"),
+            size: 123,
+            file_format,
+        }));
+        let equality = formats
+            .map(|file_format| EqualityDeleteFile {
+                path: format!("data/equality.{file_format:?}"),
+                size: 456,
+                file_format,
+                equality_ids: vec![2],
+            })
+            .to_vec();
+        let input = MemorySourceConfig::try_new_exec(&[vec![]], schema.clone(), None)?;
+        let plan = IcebergDeleteApplyExec::new(
+            input,
+            "data/input.parquet".into(),
+            positional.clone(),
+            equality.clone(),
+            "s3://bucket/table".into(),
+            iceberg_schema.clone(),
+        );
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(plan))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<IcebergDeleteApplyExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected delete apply"))?;
+        assert_eq!(decoded.positional_deletes(), positional);
+        assert_eq!(decoded.equality_deletes(), equality);
+        assert_eq!(decoded.iceberg_schema(), &iceberg_schema);
+        assert_eq!(decoded.schema(), schema);
+        assert_eq!(decoded.data_file_path(), "data/input.parquet");
+        assert_eq!(decoded.table_url(), "s3://bucket/table");
+        Ok(())
+    }
+
+    #[test]
     fn round_trip_iceberg_metadata_and_file_tasks_preserves_work_assignment() -> Result<()> {
         use sail_iceberg::physical_plan::file_tasks_exec::{
             IcebergFileTask, IdentityPartitionDefaults,
@@ -6422,6 +6632,7 @@ mod tests {
                         records: 10,
                         spec_id: group,
                         identity_partition_defaults: partition_defaults.clone(),
+                        rewrite_scan_context: None,
                     }]
                 })
                 .collect(),
@@ -6910,6 +7121,10 @@ mod tests {
             .map_err(|error| plan_datafusion_err!("{error}"))?;
         let options = IcebergWriterExecOptions {
             write_data_path: Some("pinned-data".to_string()),
+            snapshot_properties: std::collections::BTreeMap::from([
+                ("run.id".to_string(), "CaseValue".to_string()),
+                ("empty".to_string(), "".to_string()),
+            ]),
             ..Default::default()
         };
         let write_context = sail_iceberg::physical_plan::prepare_iceberg_write_context(
@@ -6921,6 +7136,7 @@ mod tests {
             input_schema.as_ref(),
         )?;
         let expected_data_location = write_context.data_location.clone();
+        let expected_snapshot_properties = options.snapshot_properties.clone();
         let plan: Arc<dyn ExecutionPlan> = Arc::new(IcebergWriterExec::new(
             Arc::new(EmptyExec::new(input_schema)),
             table_url,
@@ -6938,6 +7154,10 @@ mod tests {
             .downcast_ref::<IcebergWriterExec>()
             .ok_or_else(|| plan_datafusion_err!("decoded plan is not an IcebergWriterExec"))?;
 
+        assert_eq!(
+            writer.options().snapshot_properties,
+            expected_snapshot_properties
+        );
         assert!(writer.write_context().base_table.is_none());
         assert_eq!(writer.write_context().data_location, expected_data_location);
         assert!(writer.write_context().commit_writer_schema);
@@ -7150,7 +7370,7 @@ mod tests {
                 None,
                 SnapshotUpdateKind::RewriteDataFiles,
             )
-            .with_rewrite_data_files_output(input.schema(), 3, 42),
+            .with_rewrite_data_files_output(input.schema(), 3, 42, Some(7)),
         );
         let rebuilt = rewrite.replace_children(
             vec![input],
@@ -7165,7 +7385,8 @@ mod tests {
                 .output(),
             &CommitOutput::RewriteDataFiles {
                 rewritten_data_files_count: 3,
-                rewritten_bytes_count: 42
+                rewritten_bytes_count: 42,
+                starting_sequence_number: Some(7),
             }
         );
         assert!(RemoteExecutionCodec::try_decode_command_output(0).is_err());
@@ -7881,11 +8102,37 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_spark_date_part_udf() -> Result<()> {
-        let decoded = round_trip_udf(ScalarUDF::from(SparkDatePart::new()))?;
-
-        assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
-        assert_eq!(decoded.name(), "date_part");
+    fn test_round_trip_datetime_udfs_preserves_implementation() -> Result<()> {
+        for udf in [
+            ScalarUDF::from(SparkDatePart::new()),
+            ScalarUDF::from(DatePartFunc::new()),
+            ScalarUDF::from(SparkIntegerDatePart::new()),
+            ScalarUDF::from(SparkDateTrunc::new()),
+            ScalarUDF::from(DateTruncFunc::new()),
+        ] {
+            let decoded = round_trip_udf(udf.clone())?;
+            assert_eq!(decoded.name(), udf.name());
+            assert_eq!(
+                decoded.inner().is::<SparkDatePart>(),
+                udf.inner().is::<SparkDatePart>()
+            );
+            assert_eq!(
+                decoded.inner().is::<DatePartFunc>(),
+                udf.inner().is::<DatePartFunc>()
+            );
+            assert_eq!(
+                decoded.inner().is::<SparkIntegerDatePart>(),
+                udf.inner().is::<SparkIntegerDatePart>()
+            );
+            assert_eq!(
+                decoded.inner().is::<SparkDateTrunc>(),
+                udf.inner().is::<SparkDateTrunc>()
+            );
+            assert_eq!(
+                decoded.inner().is::<DateTruncFunc>(),
+                udf.inner().is::<DateTruncFunc>()
+            );
+        }
 
         Ok(())
     }
@@ -7910,6 +8157,60 @@ mod tests {
         assert_eq!(func.kind(), SparkFirstLastValueKind::Last);
         assert!(func.ignore_nulls());
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_custom_named_rank_udwfs() -> Result<()> {
+        use datafusion::functions_window::rank::{Rank, RankType};
+        use datafusion::logical_expr::registry::FunctionRegistry;
+        use datafusion::logical_expr::{WindowFrame, WindowFunctionDefinition};
+        use datafusion::physical_expr::window::StandardWindowExpr;
+        use datafusion::physical_plan::windows::{WindowUDFExpr, create_window_expr};
+        use datafusion_proto::physical_plan::DefaultPhysicalProtoConverter;
+        use datafusion_proto::physical_plan::from_proto::parse_physical_window_expr;
+        use datafusion_proto::physical_plan::to_proto::serialize_physical_window_expr;
+
+        for rank_type in [RankType::Basic, RankType::Dense, RankType::Percent] {
+            let udwf = Arc::new(WindowUDF::from(Rank::new(
+                "custom_rank".to_string(),
+                rank_type,
+            )));
+            let schema = Arc::new(Schema::empty());
+            let expr = create_window_expr(
+                &WindowFunctionDefinition::WindowUDF(Arc::clone(&udwf)),
+                "result".to_string(),
+                &[],
+                &[],
+                &[],
+                Arc::new(WindowFrame::new(None)),
+                Arc::clone(&schema),
+                false,
+                false,
+                None,
+            )?;
+            let codec = RemoteExecutionCodec;
+            let converter = DefaultPhysicalProtoConverter {};
+            let proto = serialize_physical_window_expr(&expr, &codec, &converter)?;
+            let mut task_context = TaskContext::default();
+            task_context.register_udwf(Arc::clone(&udwf))?;
+            let decode_context = PhysicalPlanDecodeContext::new(&task_context, &codec);
+            let decoded =
+                parse_physical_window_expr(&proto, &decode_context, schema.as_ref(), &converter)?;
+            let decoded = decoded
+                .as_any()
+                .downcast_ref::<StandardWindowExpr>()
+                .ok_or_else(|| plan_datafusion_err!("expected a standard window expression"))?;
+            let decoded = decoded
+                .get_standard_func_expr()
+                .as_any()
+                .downcast_ref::<WindowUDFExpr>()
+                .ok_or_else(|| plan_datafusion_err!("expected a window UDF expression"))?;
+            assert!(
+                Arc::ptr_eq(decoded.fun(), &udwf),
+                "rank type: {rank_type:?}"
+            );
+        }
         Ok(())
     }
 
@@ -8976,6 +9277,52 @@ mod tests {
                 Arc::new(StringArray::from(vec![Some("UTC"), None])),
                 Arc::new(StringArray::from(vec![Some("UTC"), Some("Not/AZone")])),
                 Arc::new(TimestampMicrosecondArray::from(vec![Some(0), Some(0)])),
+            ],
+        )
+    }
+
+    #[test]
+    fn test_round_trip_distributed_coalesce_lazy_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::Int64Array;
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::conditional::coalesce_lazy::CoalesceLazy;
+
+        let fields = vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let logical = CoalesceLazy::call(vec![
+            datafusion::logical_expr::col("a"),
+            datafusion::logical_expr::col("b"),
+        ])?;
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, schema.as_ref())?;
+
+        let hof = as_hof(&decoded)?;
+        let udf_any = hof.fun().inner().as_ref() as &dyn std::any::Any;
+        if !udf_any.is::<CoalesceLazy>() {
+            return Err(plan_datafusion_err!("decoded HOF should be CoalesceLazy"));
+        }
+
+        assert_same_result(
+            &physical,
+            &decoded,
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), None, None])),
+                Arc::new(Int64Array::from(vec![Some(2), Some(3), None])),
             ],
         )
     }

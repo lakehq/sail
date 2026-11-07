@@ -3,9 +3,8 @@ import re
 import pytest
 
 from pysail.testing.spark.session import spark_connect_server
-from pysail.testing.spark.utils.common import is_jvm_spark
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail spill configuration")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail spill configuration")
 
 
 @pytest.fixture(scope="module", params=["local", "local-cluster"])
@@ -28,6 +27,7 @@ def remote(request, execution_mode):
         yield server.remote
 
 
+@pytest.mark.suite(name="slow")
 def test_sort_temporary_file_compression(spark):
     rows = 120_000
     # Retain the padded keys in buffered rows; row ranks verify merge order after spilling.

@@ -1,9 +1,7 @@
 import pytest
 from pyspark.sql import Row
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail local-cluster mode only")
 
 
 def test_csv_read_uses_sail_source_on_worker(spark, tmp_path):

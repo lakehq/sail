@@ -5,10 +5,8 @@ import pytest
 from pyspark.sql import Window
 from pyspark.sql import functions as F  # noqa: N812
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
-
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.scalar requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
 @pytest.mark.parametrize(
     ("boundary", "counts", "bad"),
     [
@@ -51,7 +49,7 @@ def test_cast_correlation_through_alias_and_join(spark, boundary, counts, bad):
     assert [tuple(row) for row in result.collect()] == [(0, counts[0]), (0, counts[0]), (1, counts[1]), (2, counts[2])]
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.scalar requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
 @pytest.mark.parametrize("cast_below_window", [True, False])
 def test_cast_correlation_keeps_aliased_window_partition_keys(spark, cast_below_window):
     outer = spark.sql("SELECT * FROM VALUES (0L, 10), (0L, 20), (1L, 10), (2L, 10) AS o(id, g)").alias("o")
@@ -73,7 +71,7 @@ def test_cast_correlation_keeps_aliased_window_partition_keys(spark, cast_below_
     ]
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.scalar requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
 def test_cast_correlation_keeps_shared_dataframe_aliases_distinct(spark):
     source = spark.sql("SELECT * FROM VALUES ('0', 1), ('00', 2), ('1', 3) AS t(k, v)")
     outer = source.select(F.col("k").cast("long").alias("id")).alias("o")
@@ -84,7 +82,7 @@ def test_cast_correlation_keeps_shared_dataframe_aliases_distinct(spark):
     assert [tuple(row) for row in result.collect()] == [(0, 2), (0, 2), (1, 1)]
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.scalar requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
 @pytest.mark.parametrize("ansi", [True, False])
 @pytest.mark.parametrize("boundary", ["filter", "renamed_semi", "replaced_semi", "filtered_generator"])
 def test_cast_correlation_evaluates_keys_after_row_elimination(spark, boundary, ansi):
@@ -118,7 +116,7 @@ def test_cast_correlation_evaluates_keys_after_row_elimination(spark, boundary, 
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.scalar requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
 def test_cast_correlation_still_validates_rows_kept_by_a_semi_join(spark):
     previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
     spark.conf.set("spark.sql.ansi.enabled", "true")
@@ -135,9 +133,9 @@ def test_cast_correlation_still_validates_rows_kept_by_a_semi_join(spark):
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
 
 
-@pytest.mark.skipif(
-    is_jvm_spark(),
-    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected flags",
+@pytest.mark.spark(
+    skip_if_jvm=True,
+    reason="JVM Spark rejects this correlated grouping-set shape; per-outer references validate the expected flags",
 )
 @pytest.mark.parametrize(
     ("width", "kind", "key_count", "floating"),
@@ -214,9 +212,9 @@ def test_cast_correlation_preserves_grouping_mask_width_and_capacity(spark, widt
     assert [tuple(row) for row in spark.sql(query).collect()] == expected
 
 
-@pytest.mark.skipif(
-    is_jvm_spark(),
-    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
+@pytest.mark.spark(
+    skip_if_jvm=True,
+    reason="JVM Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
 )
 def test_cast_correlation_keeps_grouping_id_within_bigint(spark):
     columns = ["k", *[f"g{i}" for i in range(1, 62)]]
@@ -239,9 +237,9 @@ def test_cast_correlation_keeps_grouping_id_within_bigint(spark):
     assert [tuple(row) for row in spark.sql(query).collect()] == [("1.0", 0), ("3.0", None)]
 
 
-@pytest.mark.skipif(
-    is_jvm_spark(),
-    reason="Spark's correlated cast grouping can duplicate outer rows; per-outer references validate scalar results",
+@pytest.mark.spark(
+    skip_if_jvm=True,
+    reason="JVM Spark's correlated cast grouping can duplicate outer rows; per-outer references validate scalar results",
 )
 @pytest.mark.parametrize("kind", ["single", "duplicate", "grouping_id", "permuted"])
 def test_cast_correlation_combines_lossy_keys_with_grouping_functions(spark, kind):
@@ -284,9 +282,9 @@ def test_cast_correlation_combines_lossy_keys_with_grouping_functions(spark, kin
     ]
 
 
-@pytest.mark.skipif(
-    is_jvm_spark(),
-    reason="Spark's correlated cast grouping can duplicate outer rows; per-outer references validate scalar results",
+@pytest.mark.spark(
+    skip_if_jvm=True,
+    reason="JVM Spark's correlated cast grouping can duplicate outer rows; per-outer references validate scalar results",
 )
 @pytest.mark.parametrize(("width", "duplicate"), [(7, True), (8, False)])
 def test_cast_correlation_combines_lossy_keys_at_grouping_id_width_boundaries(spark, width, duplicate):
@@ -313,9 +311,9 @@ def test_cast_correlation_combines_lossy_keys_at_grouping_id_width_boundaries(sp
     ]
 
 
-@pytest.mark.skipif(
-    is_jvm_spark(),
-    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected flags",
+@pytest.mark.spark(
+    skip_if_jvm=True,
+    reason="JVM Spark rejects this correlated grouping-set shape; per-outer references validate the expected flags",
 )
 def test_injective_cast_correlation_keeps_grouping_flags(spark):
     # The raw input of an injective cast is prefixed to every grouping set like any
@@ -334,7 +332,7 @@ def test_injective_cast_correlation_keeps_grouping_flags(spark):
     assert [tuple(row) for row in spark.sql(query).collect()] == [(None, None), ("1", 41), ("2", 21), ("3", None)]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific plan shape")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail-specific plan shape")
 def test_injective_cast_correlation_groups_by_raw_key(spark):
     def cast_key(query):
         plan = spark.sql(f"EXPLAIN {query}").first()[0]
@@ -605,7 +603,7 @@ def test_nan_correlation_keeps_window_partitions_and_order_peers_consistent(spar
 # TODO: Sail keeps NaN payloads apart in GROUP BY, joins and equality, so windows keep them
 #  apart too. Spark merges every NaN; that needs one shared fix for all of them.
 @pytest.mark.skip(reason="Windows keep NaN payloads apart, like GROUP BY")
-@pytest.mark.skipif(pyspark_version() < (4,), reason="Arrow table ingestion requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses Arrow table input")
 @pytest.mark.parametrize(
     ("data_type", "bits"),
     [
@@ -647,8 +645,8 @@ def test_correlated_window_normalizes_keys_without_changing_nan_values(spark, da
         spark.catalog.dropTempView("scalar_window_payload_values")
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="Arrow table ingestion requires PySpark 4+")
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark merges NaN payloads in window partitions")
+@pytest.mark.spark(version=">=4", reason="Uses Arrow table input")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark merges NaN payloads in window partitions")
 @pytest.mark.parametrize(
     ("data_type", "bits"),
     [
@@ -843,9 +841,9 @@ def test_window_domains_preserve_outer_only_key_expressions(spark, outer_key):
         "o.x + CAST(rand() < 2.0 AS INT) - 1",
         pytest.param(
             "o.x + (SELECT max(id) FROM range(1))",
-            marks=pytest.mark.skipif(
-                is_jvm_spark(),
-                reason="Spark fails an uncorrelated scalar in this correlated join condition; per-outer evaluation returns 2",
+            marks=pytest.mark.spark(
+                skip_if_jvm=True,
+                reason="JVM Spark fails an uncorrelated scalar in this correlated join condition; per-outer evaluation returns 2",
             ),
         ),
     ],
@@ -881,9 +879,9 @@ def test_window_cast_domains_keep_collisions_with_outer_expressions(spark, outer
         True,
         pytest.param(
             False,
-            marks=pytest.mark.skipif(
-                is_jvm_spark(),
-                reason="Spark's lossy correlated INT/FLOAT grouping duplicates rows; per-outer queries confirm count 2",
+            marks=pytest.mark.spark(
+                skip_if_jvm=True,
+                reason="JVM Spark's lossy correlated INT/FLOAT grouping duplicates rows; per-outer queries confirm count 2",
             ),
         ),
     ],
@@ -1128,7 +1126,7 @@ def test_ansi_arithmetic_on_grouping_id_resolves(spark):
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="Arrow table ingestion requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses Arrow table input")
 def test_float_to_double_correlation_keeps_signaling_nan_twins_in_one_row(spark):
     # Widening quiets the signaling NaN into its twin's DOUBLE, so both rows form one group.
     raw = b"".join(value.to_bytes(4, "little") for value in [0x7F800001, 0x7FC00001])
@@ -1145,9 +1143,9 @@ def test_float_to_double_correlation_keeps_signaling_nan_twins_in_one_row(spark)
         spark.catalog.dropTempView("scalar_snan_twin_values")
 
 
-@pytest.mark.skipif(
-    is_jvm_spark(),
-    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
+@pytest.mark.spark(
+    skip_if_jvm=True,
+    reason="JVM Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
 )
 def test_cast_correlation_keeps_grouping_id_for_duplicate_grouping_sets(spark):
     # A hidden key would shift the duplicate set's ordinal in the public GROUPING_ID.
@@ -1178,7 +1176,7 @@ def test_duplicate_grouping_sets_keep_public_grouping_id_literal_reference(spark
     assert row.n == 14  # noqa: PLR2004
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark rejects this correlated grouping-set shape")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark rejects this correlated grouping-set shape")
 def test_correlated_duplicate_grouping_flags_equal_ordinary_flags(spark):
     row = spark.sql("""
         SELECT
@@ -1195,9 +1193,9 @@ def test_correlated_duplicate_grouping_flags_equal_ordinary_flags(spark):
     assert row.same is True
 
 
-@pytest.mark.skipif(
-    is_jvm_spark(),
-    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
+@pytest.mark.spark(
+    skip_if_jvm=True,
+    reason="JVM Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
 )
 def test_direct_correlation_on_grouping_column_keeps_grouping_id_for_duplicate_grouping_sets(spark):
     # Native pull-up would also group every set by k, including the set that omits it.
@@ -1215,9 +1213,9 @@ def test_direct_correlation_on_grouping_column_keeps_grouping_id_for_duplicate_g
     assert [tuple(row) for row in spark.sql(query).collect()] == [(2, 14)]
 
 
-@pytest.mark.skipif(
-    is_jvm_spark(),
-    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
+@pytest.mark.spark(
+    skip_if_jvm=True,
+    reason="JVM Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
 )
 def test_direct_correlation_on_grouping_column_keeps_grouping_of_subtotal(spark):
     query = """
@@ -1247,7 +1245,7 @@ def test_grouping_functions_over_permuted_duplicate_sets_of_eight_columns(spark,
     assert [tuple(row) for row in spark.sql(query).collect()] == [(0, 1), (0, 1)]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark rejects this correlated grouping-set shape")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark rejects this correlated grouping-set shape")
 def test_cast_correlation_with_grouping_id_and_outer_value_in_having_plans(spark):
     # TODO: the values are not Spark's yet; the rule declines rather than mask a grouping
     #  ID that native pull-up compares with the outer query, which it cannot decorrelate.
@@ -1264,9 +1262,9 @@ def test_cast_correlation_with_grouping_id_and_outer_value_in_having_plans(spark
     spark.sql(query).collect()
 
 
-@pytest.mark.skipif(
-    is_jvm_spark(),
-    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
+@pytest.mark.spark(
+    skip_if_jvm=True,
+    reason="JVM Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
 )
 def test_cast_correlation_keeps_grouping_id_of_stacked_grouping_sets(spark):
     # The upper grouping sets take the carried key first too, keeping both grouping IDs.
@@ -1288,9 +1286,9 @@ def test_cast_correlation_keeps_grouping_id_of_stacked_grouping_sets(spark):
     assert [tuple(row) for row in spark.sql(query).collect()] == [(2, 105), (3, 103), (4, None)]
 
 
-@pytest.mark.skipif(
-    is_jvm_spark(),
-    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
+@pytest.mark.spark(
+    skip_if_jvm=True,
+    reason="JVM Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
 )
 def test_cast_correlation_keeps_stacked_grouping_set_totals(spark):
     query = """
@@ -1311,9 +1309,9 @@ def test_cast_correlation_keeps_stacked_grouping_set_totals(spark):
     assert [tuple(row) for row in spark.sql(query).collect()] == [(2, 12002), (3, 28002), (4, None)]
 
 
-@pytest.mark.skipif(
-    is_jvm_spark(),
-    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
+@pytest.mark.spark(
+    skip_if_jvm=True,
+    reason="JVM Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
 )
 def test_cast_correlation_keeps_grouping_id_through_a_grouped_aggregate_between_grouping_sets(spark):
     query = """
@@ -1337,9 +1335,9 @@ def test_cast_correlation_keeps_grouping_id_through_a_grouped_aggregate_between_
     assert [tuple(row) for row in spark.sql(query).collect()] == [(2, 105), (3, 103), (4, None)]
 
 
-@pytest.mark.skipif(
-    is_jvm_spark(),
-    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
+@pytest.mark.spark(
+    skip_if_jvm=True,
+    reason="JVM Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
 )
 def test_direct_correlation_on_columns_of_every_set_keeps_grouping_id_for_duplicate_grouping_sets(spark):
     # Native pull-up groups by columns every set already groups, so only the duplicate
@@ -1402,7 +1400,7 @@ def test_float_string_correlation_uses_spark_numeric_keys(spark, data_type, wind
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
 
 
-@pytest.mark.skipif(pyspark_version() < (4,), reason="Arrow table ingestion requires PySpark 4+")
+@pytest.mark.spark(version=">=4", reason="Uses Arrow table input")
 @pytest.mark.parametrize(
     ("data_type", "bits"),
     [

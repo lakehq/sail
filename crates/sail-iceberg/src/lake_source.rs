@@ -120,6 +120,7 @@ impl DataSource for IcebergLakeSource {
     }
 
     async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
+        crate::options::snapshot_properties_from_options(&info.options)?;
         let Some(path) = find_path_in_options(&info.options) else {
             return plan_err!("missing path in Iceberg table options");
         };
@@ -157,6 +158,7 @@ impl DataSource for IcebergLakeSource {
                     defer_commit: false,
                     target_file_size: None,
                     preserve_input_partitions: false,
+                    rewrite_lineage: false,
                 },
             )?),
         }))
@@ -545,6 +547,8 @@ pub struct IcebergWriteNodeOptions {
     pub target_file_size: Option<u64>,
     /// Keep independently planned file groups together through their writers.
     pub preserve_input_partitions: bool,
+    /// Carry reserved lineage columns physically, excluding them from schema evolution.
+    pub rewrite_lineage: bool,
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -777,6 +781,7 @@ pub(crate) async fn plan_iceberg_write(
         defer_commit,
         target_file_size,
         preserve_input_partitions,
+        rewrite_lineage,
     } = node.options().clone();
 
     let mut mode = match mode {
@@ -948,6 +953,23 @@ pub(crate) async fn plan_iceberg_write(
     let logical_input_schema = Arc::new(logical_input.schema().as_arrow().clone());
     let writer_input_schema =
         input_schema_with_logical_metadata(physical_input.schema(), Some(&logical_input_schema));
+    let writer_input_schema = if rewrite_lineage {
+        Arc::new(
+            writer_input_schema.project(
+                &writer_input_schema
+                    .fields()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, field)| {
+                        !crate::row_lineage::LINEAGE_COLUMNS.contains(&field.name().as_str())
+                    })
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>(),
+            )?,
+        )
+    } else {
+        writer_input_schema
+    };
     let mut write_context = prepare_iceberg_write_context(
         &table_url,
         table.as_ref().map(Table::metadata),
@@ -956,6 +978,7 @@ pub(crate) async fn plan_iceberg_write(
         &mode,
         writer_input_schema.as_ref(),
     )?;
+    write_context.rewrite_lineage = rewrite_lineage;
     if !defer_commit && matches!(mode, PhysicalSinkMode::Append) {
         write_context.operation = Some(crate::operation_metrics::IcebergOperation::Insert);
     }
@@ -1581,6 +1604,7 @@ mod tests {
                         defer_commit,
                         target_file_size: None,
                         preserve_input_partitions: false,
+                        rewrite_lineage: false,
                     },
                 )?;
                 let expected = if defer_commit {

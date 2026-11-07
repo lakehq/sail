@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::functions_aggregate::{average, bit_and_or_xor, bool_and_or, count, min_max, sum};
+use datafusion::functions_aggregate::{average, bit_and_or_xor, bool_and_or, count, sum};
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
@@ -16,6 +16,7 @@ use datafusion_expr::{
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use sail_common::spec;
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
+use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::explode::Explode;
@@ -505,7 +506,10 @@ impl PlanResolver<'_> {
         if let Some(having) = having.as_ref() {
             aggregate_candidates.push(having.clone());
         }
-        let aggregate_exprs = find_aggregate_exprs(&aggregate_candidates);
+        let aggregate_exprs = Self::disambiguate_aggregate_expressions(
+            find_aggregate_exprs(&aggregate_candidates),
+            state,
+        );
         let plan = LogicalPlanBuilder::from(input)
             .aggregate(group_exprs, aggregate_exprs.clone())?
             .build()?;
@@ -538,10 +542,30 @@ impl PlanResolver<'_> {
         };
         let projections = if with_grouping_expressions {
             if !lateral_columns.is_empty() {
+                // The lateral aliases are staged in a projection above the aggregate, and the
+                // grouping columns are carried along it. A fresh unqualified field would drop
+                // the qualifier and the attribute identity of the aggregate's grouping column,
+                // so stage it under a field that keeps both.
                 let mut columns = grouping_exprs
                     .iter()
-                    .map(|_| Column::new_unqualified(state.register_field_name("")))
-                    .collect::<Vec<_>>();
+                    .map(|x| {
+                        let source = match &x.expr {
+                            Expr::Column(column) => state
+                                .get_field_info(&column.name)
+                                .is_ok()
+                                .then(|| (column.name.clone(), column.relation.clone())),
+                            _ => None,
+                        };
+                        match source {
+                            Some((field_id, relation)) => {
+                                let field_id =
+                                    state.register_identity_field(String::new(), &field_id)?;
+                                Ok(Column::new(relation, field_id))
+                            }
+                            None => Ok(Column::new_unqualified(state.register_field_name(""))),
+                        }
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
                 columns.extend(lateral_columns);
                 lateral_columns = columns;
             }
@@ -597,7 +621,33 @@ impl PlanResolver<'_> {
                     expr,
                     metadata: _,
                 } = x;
-                Ok(expr.alias(state.register_field_name(name.one()?)))
+                let name = name.one()?;
+                // A grouping column stays the aggregate's own attribute, so it keeps the
+                // qualifier and the field identity. An aggregate value is named after its
+                // DataFusion schema name, which is not a registered field.
+                let source = match &expr {
+                    Expr::Column(column) => state
+                        .get_field_info(&column.name)
+                        .is_ok()
+                        .then(|| (column.name.clone(), column.relation.clone())),
+                    _ => None,
+                };
+                match source {
+                    Some((field_id, relation)) => {
+                        // Spark expands a grouping set into `Expand`, whose grouping column is a
+                        // new nullable attribute: the qualifier survives, but a reference to the
+                        // input column no longer resolves against it.
+                        let field_id = if has_grouping_set {
+                            state.register_field_name(name)
+                        } else {
+                            state.register_identity_field(name, &field_id)?
+                        };
+                        let qualifier = relation
+                            .filter(|relation| relation.table() != datafusion_expr::UNNAMED_TABLE);
+                        Ok(expr.alias_qualified(qualifier, field_id))
+                    }
+                    None => Ok(expr.alias(state.register_field_name(name))),
+                }
             })
             .collect::<PlanResult<Vec<_>>>()?;
         Ok(LogicalPlanBuilder::from(plan)
@@ -761,8 +811,8 @@ impl PlanResolver<'_> {
         args: &[Expr],
         schema: &DFSchemaRef,
     ) -> PlanResult<bool> {
-        if udf == min_max::min_udaf().as_ref()
-            || udf == min_max::max_udaf().as_ref()
+        if udf.inner().is::<Min>()
+            || udf.inner().is::<Max>()
             || udf == count::count_udaf().as_ref()
             || udf == bit_and_or_xor::bit_and_udaf().as_ref()
             || udf == bit_and_or_xor::bit_or_udaf().as_ref()
@@ -1437,6 +1487,26 @@ impl PlanResolver<'_> {
             .data()?)
     }
 
+    /// Casts are invisible in DataFusion schema names, so distinct aggregate expressions
+    /// can claim the same output name: `min(x)` and `min(to_date(x))` are both `min(x)`.
+    /// Such expressions get an internal alias, which keeps the aggregate schema unique.
+    fn disambiguate_aggregate_expressions(
+        expressions: Vec<Expr>,
+        state: &mut PlanResolverState,
+    ) -> Vec<Expr> {
+        let mut names = std::collections::HashSet::new();
+        expressions
+            .into_iter()
+            .map(|expr| {
+                if names.insert(expr.schema_name().to_string()) {
+                    expr
+                } else {
+                    expr.alias(state.register_field_name(""))
+                }
+            })
+            .collect()
+    }
+
     /// Reference: [datafusion_sql::utils::rebase_expr]
     pub(super) fn rebase_expression(
         expr: Expr,
@@ -1445,9 +1515,9 @@ impl PlanResolver<'_> {
     ) -> PlanResult<Expr> {
         Ok(expr
             .transform_down(|e| {
-                if base.contains(&e) {
+                if let Some(base) = base.iter().find(|base| Self::is_rebase_target(base, &e)) {
                     Ok(Transformed::yes(
-                        Self::expr_as_column_expr(&e, plan)
+                        Self::expr_as_column_expr(base, plan)
                             .map_err(|e| DataFusionError::External(Box::new(e)))?,
                     ))
                 } else {
@@ -1455,6 +1525,10 @@ impl PlanResolver<'_> {
                 }
             })
             .data()?)
+    }
+
+    fn is_rebase_target(base: &Expr, expr: &Expr) -> bool {
+        base == expr || matches!(base, Expr::Alias(alias) if alias.expr.as_ref() == expr)
     }
 
     // Modification of DataFusion's `expr_as_column_expr`
