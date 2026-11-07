@@ -22,10 +22,16 @@ def test_array_of_structs_field_by_name(spark):
     assert df.select(a["P"]).collect() == [Row(**{"a.P": ["x", "y"]})]
     assert df.select(a.getField("q")).collect() == [Row(**{"a.q": [1, 2]})]
     assert df.select(a.getItem("q")).collect() == [Row(**{"a.q": [1, 2]})]
-    assert df.select(a[F.lit("q")]).collect() == [Row(**{"a.q": [1, 2]})]
     assert df.select(F.slice(a, -1, 1)["p"][0]).collect() == [Row(**{"slice(a, -1, 1).p[0]": "y"})]
     assert df.select(F.slice(a, -1, 1).getField("p")).collect() == [Row(**{"slice(a, -1, 1).p": ["y"]})]
     assert df.where(a["q"][1] == F.lit(2)).select(a["q"].alias("v")).collect() == [Row(v=[1, 2])]
+
+
+@pytest.mark.spark(version=">=4", reason="The PySpark 3.5 client cannot subscript with a column")
+def test_array_of_structs_field_by_literal_column(spark):
+    df = spark.sql("SELECT array(named_struct('q', 1), named_struct('q', 2)) AS a")
+
+    assert df.select(F.col("a")[F.lit("q")]).collect() == [Row(**{"a.q": [1, 2]})]
 
 
 @pytest.mark.parametrize("field", ["zz", "0"])
