@@ -201,3 +201,20 @@ Feature: collect_list / collect_set
       Then query result
         | r      |
         | [2, 3] |
+
+  Rule: DISTINCT window collect_list
+
+    # Spark rejects DISTINCT window functions (DISTINCT_WINDOW_FUNCTION_UNSUPPORTED). Sail
+    # accepts them and deduplicates -0.0 and 0.0 like the grouped collect_list(DISTINCT v).
+    @sail-only
+    Scenario: collect_list(DISTINCT v) OVER deduplicates -0.0 and 0.0 to a single 0.0
+      When query
+        """
+        SELECT collect_list(DISTINCT v) OVER (PARTITION BY k) AS r FROM VALUES
+          (1, CAST('0.0' AS DOUBLE)), (1, CAST('-0.0' AS DOUBLE))
+        AS t(k, v)
+        """
+      Then query result
+        | r     |
+        | [0.0] |
+        | [0.0] |

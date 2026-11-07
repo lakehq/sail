@@ -563,6 +563,11 @@ fn array_agg_compacted(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let arg = arguments.one()?;
     let element_type = arg.get_type(function_context.schema)?;
+    let arg = if distinct {
+        normalize_distinct_floats(arg, &element_type)
+    } else {
+        arg
+    };
     // Spark's collect_list ignores NULLs by default.
     let null_treatment = get_null_treatment(Some(ignore_nulls.unwrap_or(true)));
     let agg = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
