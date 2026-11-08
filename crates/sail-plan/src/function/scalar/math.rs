@@ -1,21 +1,25 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit, i256};
-use datafusion::arrow::error::ArrowError;
+use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when,
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
-use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
+use sail_function::scalar::conditional::greatest::GreatestFunc;
+use sail_function::scalar::conditional::least::LeastFunc;
+use sail_function::scalar::conditional::nullif::NullIfFunc;
 use sail_function::scalar::conversion::spark_to_string::{
     SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View,
 };
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_interval::SparkDayTimeIntervalToCalendarInterval;
+use sail_function::scalar::datetime::spark_interval_arithmetic::{
+    IntervalArithmeticOp, SparkIntervalArithmetic,
+};
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -251,76 +255,79 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
         left.get_type(function_context.schema),
         right.get_type(function_context.schema),
     );
-    Ok(match (left_type, right_type) {
-        // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
-        //  Seems to be a bug in DataFusion.
-        (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(_)) => {
-            // Match duration because we cast Spark's DayTime interval to Duration.
-            cast(
-                cast(left, DataType::Int64) * right,
-                DataType::Duration(TimeUnit::Microsecond),
-            )
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type) {
+        if is_interval_arithmetic(left_type, right_type) {
+            return Ok(interval_arithmetic(
+                IntervalArithmeticOp::Multiply,
+                left,
+                right,
+                right_type,
+                ansi_mode,
+            ));
         }
-        (Ok(_), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
-            // Match duration because we cast Spark's DayTime interval to Duration.
-            cast(
-                left * cast(right, DataType::Int64),
-                DataType::Duration(TimeUnit::Microsecond),
-            )
-        }
-        // TODO: In case getting the type fails, we don't want to fail the query.
-        //  Future work is needed here, ideally we create something like `Operator::SparkMultiply`.
-        (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => left * right,
-    })
-}
-
-/// Check if an expression represents a zero literal value.
-/// Handles both direct literals and CAST expressions wrapping literals.
-fn is_zero_literal(expr: &Expr) -> bool {
-    // Helper to check if a ScalarValue is zero
-    fn is_scalar_zero(scalar: &ScalarValue) -> bool {
-        match scalar {
-            ScalarValue::Int8(Some(0))
-            | ScalarValue::Int16(Some(0))
-            | ScalarValue::Int32(Some(0))
-            | ScalarValue::Int64(Some(0))
-            | ScalarValue::UInt8(Some(0))
-            | ScalarValue::UInt16(Some(0))
-            | ScalarValue::UInt32(Some(0))
-            | ScalarValue::UInt64(Some(0))
-            | ScalarValue::Decimal128(Some(0), _, _) => true,
-            ScalarValue::Float32(Some(v)) if *v == 0.0 => true,
-            ScalarValue::Float64(Some(v)) if *v == 0.0 => true,
-            ScalarValue::Float16(Some(f)) if *f == f16::from_f32(0.0) => true,
-            ScalarValue::Decimal256(Some(v), _, _) if *v == i256::ZERO => true,
-            _ => false,
+        if is_interval_arithmetic(right_type, left_type) {
+            return Ok(interval_arithmetic(
+                IntervalArithmeticOp::Multiply,
+                right,
+                left,
+                left_type,
+                ansi_mode,
+            ));
         }
     }
-
-    match expr {
-        // Direct literal
-        Expr::Literal(scalar, _) => is_scalar_zero(scalar),
-        // CAST(literal AS type) - unwrap the cast and check the inner literal
-        Expr::Cast(cast_expr) => {
-            if let Expr::Literal(scalar, _) = cast_expr.expr.as_ref() {
-                is_scalar_zero(scalar)
-            } else {
-                false
-            }
-        }
-        // TryCast is similar to Cast
-        Expr::TryCast(try_cast_expr) => {
-            if let Expr::Literal(scalar, _) = try_cast_expr.expr.as_ref() {
-                is_scalar_zero(scalar)
-            } else {
-                false
-            }
-        }
-        _ => false,
-    }
+    // TODO: In case getting the type fails, we don't want to fail the query.
+    //  Future work is needed here, ideally we create something like `Operator::SparkMultiply`.
+    Ok(left * right)
 }
+
+/// Whether Spark multiplies or divides a value of `interval_type` by a value of `num_type` as a
+/// year-month (`MultiplyYMInterval`, `DivideYMInterval`) or day-time (`MultiplyDTInterval`,
+/// `DivideDTInterval`) interval and a numeric value. A STRING value is cast to a numeric value.
+fn is_interval_arithmetic(interval_type: &DataType, num_type: &DataType) -> bool {
+    matches!(
+        interval_type,
+        DataType::Interval(IntervalUnit::YearMonth) | DataType::Duration(TimeUnit::Microsecond)
+    ) && (num_type.is_numeric()
+        || num_type.is_null()
+        || num_type.is_string()
+        || matches!(num_type, DataType::Dictionary(_, value) if value.is_numeric()))
+}
+
+/// Returns the year-month or day-time interval multiplied or divided by a numeric value.
+/// See [`is_interval_arithmetic`].
+///
+/// Like Spark's implicit cast of a STRING value for a numeric parameter, a STRING value is cast
+/// to DOUBLE, which gives NULL for an invalid value when ANSI mode is disabled.
+fn interval_arithmetic(
+    op: IntervalArithmeticOp,
+    interval: Expr,
+    num: Expr,
+    num_type: &DataType,
+    ansi_mode: bool,
+) -> Expr {
+    let num = if !num_type.is_string() {
+        num
+    } else if ansi_mode {
+        cast(num, DataType::Float64)
+    } else {
+        try_cast(num, DataType::Float64)
+    };
+    ScalarUDF::from(SparkIntervalArithmetic::new(op)).call(vec![interval, num])
+}
+
+/// Spark's error for a division by zero in ANSI mode.
+/// <https://github.com/apache/spark/blob/v4.2.0/common/utils/src/main/resources/error/error-conditions.json#L2105-L2110>
+const DIVIDE_BY_ZERO_MESSAGE: &str = "[DIVIDE_BY_ZERO] Division by zero. Use `try_divide` to tolerate divisor being 0 and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error.";
+
+/// Spark's error for a remainder by zero in ANSI mode.
+/// <https://github.com/apache/spark/blob/v4.2.0/common/utils/src/main/resources/error/error-conditions.json#L6195-L6200>
+const REMAINDER_BY_ZERO_MESSAGE: &str = "[REMAINDER_BY_ZERO] Remainder by zero. Use `try_mod` to tolerate divisor being 0 and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error.";
 
 /// Returns a guarded divisor expression that handles division by zero at runtime.
+///
+/// Like any other divisor, a literal zero divisor only raises an error (or gives NULL) for the rows
+/// that evaluate the division, e.g. not for `coalesce(x, 1 div 0)` when `x` is not NULL.
 ///
 /// In non-ANSI mode: returns `nullif(divisor, 0)` — evaluates to NULL when divisor is zero.
 /// In ANSI mode: returns `CASE WHEN divisor = 0 THEN raise_error(msg) ELSE divisor END`.
@@ -350,7 +357,8 @@ fn make_safe_divisor(
             else_expr: Some(Box::new(divisor)),
         })
     } else {
-        expr_fn::nullif(divisor, lit(0))
+        // The owned `nullif` treats `-0.0` as zero, as Spark does.
+        ScalarUDF::from(NullIfFunc::new()).call(vec![divisor, lit(0)])
     }
 }
 
@@ -375,18 +383,22 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    // Plan-time check for literal zero divisors (fast path, better error UX).
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
-    }
-
     let ansi_mode = function_context.plan_config.ansi_mode;
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
+
+    // An interval divided by zero raises an error whether or not ANSI mode is enabled.
+    if let (Ok(dividend_type), Ok(divisor_type)) = (&dividend_type, &divisor_type)
+        && is_interval_arithmetic(dividend_type, divisor_type)
+    {
+        return Ok(interval_arithmetic(
+            IntervalArithmeticOp::Divide,
+            dividend,
+            divisor,
+            divisor_type,
+            ansi_mode,
+        ));
+    }
 
     // Apply runtime zero-divisor guard to the divisor before building the division expression.
     let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
@@ -394,27 +406,25 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor,
         &effective_divisor_type,
         ansi_mode,
-        "Division by zero",
+        DIVIDE_BY_ZERO_MESSAGE,
     );
 
     let div_expr = match (&dividend_type, &divisor_type) {
-        // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
-        //  Seems to be a bug in DataFusion.
         // TODO: Cast the precision and scale that matches the Spark's behavior after the division.
         //  See `test_divide` in python/pysail/tests/spark/test_math.py
         (Ok(DataType::Decimal128(_, _)), Ok(_))
         | (Ok(_), Ok(DataType::Decimal128(_, _)))
         | (Ok(DataType::Decimal256(_, _)), Ok(_))
         | (Ok(_), Ok(DataType::Decimal256(_, _)))
-        | (Ok(DataType::Interval(IntervalUnit::YearMonth)), Ok(_))
-        | (Ok(DataType::Interval(IntervalUnit::DayTime)), Ok(_)) => dividend / divisor,
-        (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(_)) => {
-            // Match duration because we cast Spark's DayTime interval to Duration.
-            cast(
-                cast(dividend, DataType::Int64) / divisor,
-                DataType::Duration(TimeUnit::Microsecond),
-            )
-        }
+        // Intervals divided by numeric values are handled above, and other divisors are not
+        // supported.
+        | (
+            Ok(
+                DataType::Interval(IntervalUnit::YearMonth | IntervalUnit::DayTime)
+                | DataType::Duration(TimeUnit::Microsecond),
+            ),
+            Ok(_),
+        ) => dividend / divisor,
         (Ok(_), Ok(_)) => cast(dividend, DataType::Float64) / cast(divisor, DataType::Float64),
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
@@ -441,15 +451,6 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    // Plan-time check for literal zero divisors.
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
-    }
-
     let ansi_mode = function_context.plan_config.ansi_mode;
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
@@ -460,7 +461,7 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor,
         &effective_divisor_type,
         ansi_mode,
-        "Division by zero",
+        DIVIDE_BY_ZERO_MESSAGE,
     );
 
     let div_expr = match (&dividend_type, &divisor_type) {
@@ -630,17 +631,6 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    // Plan-time check for literal zero divisors.
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::ArithmeticOverflow(
-                "Remainder by zero".to_string(),
-            )));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
-    }
-
     let ansi_mode = function_context.plan_config.ansi_mode;
     let divisor_type = divisor.get_type(function_context.schema);
 
@@ -650,7 +640,7 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor,
         &effective_divisor_type,
         ansi_mode,
-        "Remainder by zero",
+        REMAINDER_BY_ZERO_MESSAGE,
     );
 
     Ok(Expr::BinaryExpr(BinaryExpr {
@@ -820,13 +810,17 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
         (
             "greatest",
-            F::custom(with_timestamp_ntz_coercion(expr_fn::greatest)),
+            F::custom(with_timestamp_ntz_coercion(|args| {
+                ScalarUDF::from(GreatestFunc::new()).call(args)
+            })),
         ),
         ("hex", F::unary(math_fn::hex)),
         ("hypot", F::binary(hypot)),
         (
             "least",
-            F::custom(with_timestamp_ntz_coercion(expr_fn::least)),
+            F::custom(with_timestamp_ntz_coercion(|args| {
+                ScalarUDF::from(LeastFunc::new()).call(args)
+            })),
         ),
         ("ln", F::unary(double(ln))),
         ("log", F::binary(double2(log))),

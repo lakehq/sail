@@ -8,12 +8,10 @@ use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, WindowFunctionParams};
 use datafusion_expr::{
     AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl, WindowFrame,
-    WindowFunctionDefinition, WindowUDF, cast, expr, lit,
+    WindowFunctionDefinition, WindowUDF, cast, expr,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
-use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
 
 use crate::config::PlanConfig;
 use crate::error::{IntoPlanResult, PlanError, PlanResult};
@@ -365,20 +363,6 @@ impl WinFunctionBuilder {
     }
 }
 
-/// Normalizes `-0.0` to `0.0` in the floating-point values of an argument that is deduplicated,
-/// as in `collect_set` and DISTINCT `collect_list`/`array_agg`, so that `-0.0` and `0.0` are one
-/// value and the result holds `0.0`. Spark normalizes the elements of `collect_set` and the
-/// arguments of DISTINCT aggregates before comparing them.
-/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/collect.scala#L236-L255>
-/// <https://github.com/apache/spark/blob/v4.2.0/sql/core/src/main/scala/org/apache/spark/sql/execution/SparkStrategies.scala#L632-L645>
-pub(crate) fn normalize_distinct_floats(argument: expr::Expr, data_type: &DataType) -> expr::Expr {
-    if NormalizeFloatKeys::has_float(data_type) {
-        ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![argument])
-    } else {
-        argument
-    }
-}
-
 pub(crate) fn get_null_treatment(ignore_nulls: Option<bool>) -> Option<NullTreatment> {
     match ignore_nulls {
         Some(true) => Some(NullTreatment::IgnoreNulls),
@@ -418,81 +402,6 @@ pub(crate) fn get_arguments_and_null_treatment(
         Ok((vec![expr], null_treatment))
     } else {
         Err(PlanError::invalid("requires 1 or 2 arguments"))
-    }
-}
-
-pub(crate) fn hll_args_with_default_lg(
-    arguments: Vec<expr::Expr>,
-    function_name: &str,
-) -> PlanResult<Vec<expr::Expr>> {
-    match arguments.len() {
-        1 => {
-            let value = arguments.one()?;
-            Ok(vec![value, lit(DEFAULT_HLL_LG_CONFIG_K)])
-        }
-        2 => {
-            let (value, lg_config_k) = arguments.two()?;
-            Ok(vec![value, cast(lg_config_k, DataType::Int32)])
-        }
-        count => Err(PlanError::invalid(format!(
-            "{function_name} requires 1 or 2 arguments, got {count}"
-        ))),
-    }
-}
-
-pub(crate) fn hll_union_args_with_default_allow_different_lg(
-    arguments: Vec<expr::Expr>,
-) -> PlanResult<Vec<expr::Expr>> {
-    match arguments.len() {
-        1 => {
-            let value = arguments.one()?;
-            Ok(vec![value, lit(false)])
-        }
-        2 => {
-            let (value, allow_different_lg_config_k) = arguments.two()?;
-            Ok(vec![
-                value,
-                cast(allow_different_lg_config_k, DataType::Boolean),
-            ])
-        }
-        count => Err(PlanError::invalid(format!(
-            "hll_union_agg requires 1 or 2 arguments, got {count}"
-        ))),
-    }
-}
-
-pub(crate) fn count_min_sketch_args(arguments: Vec<expr::Expr>) -> PlanResult<Vec<expr::Expr>> {
-    match arguments.len() {
-        4 => {
-            let (value, eps, confidence, seed) = arguments.four()?;
-            // Spark requires `eps` and `confidence` to be DOUBLE literals and rejects
-            // other types (including DECIMAL/FLOAT). Pass them through unchanged so the
-            // aggregate's type validation enforces the same rule, instead of casting and
-            // silently accepting types Spark rejects.
-            Ok(vec![value, eps, confidence, seed])
-        }
-        count => Err(PlanError::invalid(format!(
-            "count_min_sketch requires 4 arguments, got {count}"
-        ))),
-    }
-}
-
-pub(crate) fn theta_args_with_default_lg(
-    arguments: Vec<expr::Expr>,
-    function_name: &str,
-) -> PlanResult<Vec<expr::Expr>> {
-    match arguments.len() {
-        1 => {
-            let value = arguments.one()?;
-            Ok(vec![value, lit(DEFAULT_THETA_LG_NOM_ENTRIES)])
-        }
-        2 => {
-            let (value, lg_nom_entries) = arguments.two()?;
-            Ok(vec![value, cast(lg_nom_entries, DataType::Int32)])
-        }
-        count => Err(PlanError::invalid(format!(
-            "{function_name} requires 1 or 2 arguments, got {count}"
-        ))),
     }
 }
 

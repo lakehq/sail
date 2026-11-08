@@ -14,7 +14,7 @@
 /// the result preserves the input array type.
 ///
 /// The one-argument form `array_sort(array)` is handled by the planner via
-/// DataFusion's built-in `array_sort`; only the comparator form reaches this UDF.
+/// [`super::ArraySort`]; only the comparator form reaches this UDF.
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -39,22 +39,22 @@ use crate::scalar::array::lambda_utils::{
 /// when the used parameters form a prefix of the declared ones. A comparator that
 /// uses only its second parameter (`(l, r) -> f(r)`, `l` unused) breaks that
 /// alignment, so the planner rewrites it to a single-parameter lambda over a
-/// [`SparkArraySort::new_swapped`] instance, which feeds the lambda the columns in
-/// `[right, left]` order. See [`super::spark_array_filter::SparkArrayFilter`] for
+/// [`ArraySortLambda::new_swapped`] instance, which feeds the lambda the columns in
+/// `[right, left]` order. See [`crate::scalar::array::spark_array_filter::SparkArrayFilter`] for
 /// the identical `index_first` workaround.
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkArraySort {
+pub struct ArraySortLambda {
     signature: HigherOrderSignature,
     swapped: bool,
 }
 
-impl Default for SparkArraySort {
+impl Default for ArraySortLambda {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkArraySort {
+impl ArraySortLambda {
     pub fn new() -> Self {
         Self {
             signature: HigherOrderSignature::exact(
@@ -83,7 +83,7 @@ impl SparkArraySort {
     }
 }
 
-impl HigherOrderUDFImpl for SparkArraySort {
+impl HigherOrderUDFImpl for ArraySortLambda {
     fn name(&self) -> &str {
         "array_sort"
     }
@@ -304,7 +304,7 @@ mod tests {
     }
 
     fn eval_with_func(
-        func: SparkArraySort,
+        func: ArraySortLambda,
         list: impl Array + Clone + 'static,
         params: &[&str],
         lambda_body: Expr,
@@ -366,7 +366,7 @@ mod tests {
             None,
         );
 
-        let res = eval_with_func(SparkArraySort::new(), list, &["l", "r"], asc_comparator())?;
+        let res = eval_with_func(ArraySortLambda::new(), list, &["l", "r"], asc_comparator())?;
         let actual = res.as_list::<i32>();
 
         let expected = create_i32_list(
@@ -391,7 +391,7 @@ mod tests {
             None,
         );
 
-        let res = eval_with_func(SparkArraySort::new(), list, &["l", "r"], body)?;
+        let res = eval_with_func(ArraySortLambda::new(), list, &["l", "r"], body)?;
         let actual = res.as_list::<i32>();
 
         let expected = create_i32_list(
@@ -412,7 +412,7 @@ mod tests {
             None,
         );
 
-        let res = eval_with_func(SparkArraySort::new(), list, &["l", "r"], asc_comparator())?;
+        let res = eval_with_func(ArraySortLambda::new(), list, &["l", "r"], asc_comparator())?;
         let actual = res.as_list::<i32>();
 
         let expected = create_i32_list(
@@ -433,7 +433,7 @@ mod tests {
             Some(NullBuffer::from(vec![true, false, true])),
         );
 
-        let res = eval_with_func(SparkArraySort::new(), list, &["l", "r"], asc_comparator())?;
+        let res = eval_with_func(ArraySortLambda::new(), list, &["l", "r"], asc_comparator())?;
         let actual = res.as_list::<i32>();
 
         let expected = create_i32_list(
@@ -455,7 +455,7 @@ mod tests {
             None,
         );
 
-        let res = eval_with_func(SparkArraySort::new(), list, &["l", "r"], asc_comparator())?;
+        let res = eval_with_func(ArraySortLambda::new(), list, &["l", "r"], asc_comparator())?;
         let actual = res.as_list::<i32>();
 
         let expected = create_i32_list(
@@ -474,7 +474,7 @@ mod tests {
         let comparator = Expr::Literal(ScalarValue::Int32(None), None);
         let list = create_i32_list(vec![2, 1], OffsetBuffer::<i32>::from_lengths(vec![2]), None);
 
-        let result = eval_with_func(SparkArraySort::new(), list, &["l", "r"], comparator);
+        let result = eval_with_func(ArraySortLambda::new(), list, &["l", "r"], comparator);
         assert!(result.is_err(), "null comparator result should error");
         if let Err(err) = result {
             assert!(err.to_string().contains("comparator returned NULL"));
@@ -493,7 +493,7 @@ mod tests {
         );
 
         // Single param bound to the right element (swapped feeds `[right, left]`).
-        let res = eval_with_func(SparkArraySort::new_swapped(), list, &["r"], lvar("r"))?;
+        let res = eval_with_func(ArraySortLambda::new_swapped(), list, &["r"], lvar("r"))?;
         // cmp(a, b) = value(b); the resulting order is implementation-defined but
         // must be a valid permutation of the input.
         let actual = res.as_list::<i32>();

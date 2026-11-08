@@ -336,3 +336,14 @@ Feature: concat function
         root
          |-- result: string (nullable = true)
         """
+
+  Rule: Arrays of NULL values
+
+    Scenario: concat of an array and an array of NULL values
+      When query
+        """
+        SELECT concat(array(1), array(NULL)) AS a, array(1) || array_repeat(NULL, 1) AS b
+        """
+      Then query result
+        | a         | b         |
+        | [1, NULL] | [1, NULL] |

@@ -40,9 +40,10 @@ use std::borrow::Cow;
 use std::sync::{Arc, LazyLock};
 
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit};
+use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion::optimizer::AnalyzerRule;
+use datafusion::physical_optimizer::pruning::MAX_IN_LIST_SIZE;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
@@ -64,17 +65,19 @@ use datafusion_expr::utils::merge_schema;
 // DataFusion's MERGE statement is coerced as in DataFusion, though Sail does not create it.
 #[expect(clippy::disallowed_types)]
 use datafusion_expr::{
-    Cast, DmlStatement, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
-    ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, WriteOp, is_false,
-    is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
+    Cast, DmlStatement, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection,
+    ScalarUDF, TryCast, Union, ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WriteOp, is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
 use itertools::{Itertools as _, izip};
 use sail_common_datafusion::type_coercion::binary_type_coercion::{
     BinaryTypeCoercer, comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
     type_union_coercion,
 };
+use sail_common_datafusion::type_coercion::nested::with_nested_field_metadata;
 use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
+use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 
 use crate::session_timestamp::convert_session_timestamp_casts;
 
@@ -917,6 +920,20 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let (left, right) =
                     self.coerce_binary_op(*left, self.schema, op, *right, self.schema)?;
+                let (left, right) = if matches!(
+                    op,
+                    Operator::Eq
+                        | Operator::NotEq
+                        | Operator::IsDistinctFrom
+                        | Operator::IsNotDistinctFrom
+                ) {
+                    (
+                        normalize_nested_float_operand(left, self.schema)?,
+                        normalize_nested_float_operand(right, self.schema)?,
+                    )
+                } else {
+                    (left, right)
+                };
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
                     Box::new(left),
                     op,
@@ -986,16 +1003,25 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     ),
                     Some(coerced_type) => {
                         // find the coerced type
-                        let cast_expr = expr.cast_to(&coerced_type, self.schema)?;
+                        let cast_expr = normalize_nested_float_operand(
+                            expr.cast_to(&coerced_type, self.schema)?,
+                            self.schema,
+                        )?;
                         let cast_list_expr = list
                             .into_iter()
-                            .map(|list_expr| list_expr.cast_to(&coerced_type, self.schema))
+                            .map(|list_expr| {
+                                normalize_nested_float_operand(
+                                    list_expr.cast_to(&coerced_type, self.schema)?,
+                                    self.schema,
+                                )
+                            })
                             .collect::<Result<Vec<_>>>()?;
-                        Ok(Transformed::yes(Expr::InList(InList::new(
-                            Box::new(cast_expr),
+                        Ok(Transformed::yes(normalize_float_in_list(
+                            cast_expr,
                             cast_list_expr,
                             negated,
-                        ))))
+                            &coerced_type,
+                        )))
                     }
                 }
             }
@@ -1630,8 +1656,8 @@ fn coerce_case_expression(
 /// resolved (see `coerce_conditional_values` in `sail-plan`), so that the resolved expression has
 /// this type, which DataFusion would otherwise type by its first non-null value.
 // TODO: Unlike Spark, the common type keeps the scale of DECIMAL values that exceed the maximum
-//  precision instead of their integral digits, and it is DECIMAL rather than DOUBLE for FLOAT or
-//  DOUBLE with DECIMAL values. The type coercion of `coalesce` and UNION shares this.
+//  precision instead of their integral digits. The type coercion of `coalesce` and UNION shares
+//  this.
 pub fn case_result_type(then_types: &[DataType], else_type: Option<&DataType>) -> Option<DataType> {
     let (first_type, other_types) = match else_type {
         Some(else_type) => (else_type, then_types),
@@ -1673,72 +1699,166 @@ pub fn cast_case_result_value(
     }
 }
 
+/// Normalizes `-0.0` to `0.0` in an operand of a nested type with floats that is compared for
+/// equality, since Spark treats them as equal. DataFusion normalizes top-level floats when it
+/// compares them, but not floats nested in lists, structs or maps.
+// TODO: Remove after DataFusion 56 (apache/datafusion#26595).
+fn normalize_nested_float_operand(expr: Expr, schema: &DFSchema) -> Result<Expr> {
+    let data_type = expr.get_type(schema)?;
+    if data_type.is_nested()
+        && NormalizeFloatKeys::has_float(&data_type)
+        && !is_normalized_float_operand(&expr)
+    {
+        Ok(ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![expr]))
+    } else {
+        Ok(expr)
+    }
+}
+
+fn is_normalized_float_operand(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::ScalarFunction(ScalarFunction { func, .. }) if func.inner().is::<NormalizeFloatKeys>()
+    )
+}
+
+/// Makes an IN list of floating-point values treat `-0.0` and `0.0` as equal, as Spark does.
+/// DataFusion compares the values of an IN list by their bits.
+///
+/// For a column (possibly cast) and a list of literals, the zero of the other sign is added to the
+/// list for each zero, so that the column is compared as it is, which keeps the predicate usable
+/// for pruning. If the list would then exceed the size that pruning supports, the zeros are
+/// replaced by a range that matches both zeros instead. Otherwise the value and the list are
+/// normalized, so that the value is evaluated once, where literals are folded at planning time.
+// TODO: Remove after DataFusion 56 (apache/datafusion#26595) if its IN list does the same.
+fn normalize_float_in_list(
+    expr: Expr,
+    list: Vec<Expr>,
+    negated: bool,
+    data_type: &DataType,
+) -> Expr {
+    let in_list =
+        |expr: Expr, list: Vec<Expr>| Expr::InList(InList::new(Box::new(expr), list, negated));
+    if !matches!(
+        data_type,
+        DataType::Float16 | DataType::Float32 | DataType::Float64
+    ) {
+        return in_list(expr, list);
+    }
+    let zero = |value: f64| ScalarValue::Float64(Some(value)).cast_to(data_type).ok();
+    let (Some(positive_zero), Some(negative_zero)) = (zero(0.0), zero(-0.0)) else {
+        return in_list(expr, list);
+    };
+    fn literal(e: &Expr) -> Option<ScalarValue> {
+        match e {
+            Expr::Literal(value, _) => Some(value.clone()),
+            Expr::Cast(Cast { expr, field }) => literal(expr)?.cast_to(field.data_type()).ok(),
+            Expr::Negative(expr) => literal(expr)?.arithmetic_negate().ok(),
+            _ => None,
+        }
+    }
+    // The value may be compared more than once, so it must be a column, which is also what
+    // pruning can use.
+    fn column(e: &Expr) -> bool {
+        match e {
+            Expr::Column(_) => true,
+            Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => column(expr),
+            _ => false,
+        }
+    }
+    let values = list.iter().map(literal).collect::<Vec<_>>();
+    if column(&expr) && values.iter().all(Option::is_some) {
+        let is_zero = |value: &Option<ScalarValue>| {
+            value
+                .as_ref()
+                .is_some_and(|v| v == &positive_zero || v == &negative_zero)
+        };
+        if !values.iter().any(is_zero) {
+            return in_list(expr, list);
+        }
+        let has = |zero: &ScalarValue| values.iter().flatten().any(|v| v == zero);
+        let missing = [
+            (&positive_zero, &negative_zero),
+            (&negative_zero, &positive_zero),
+        ]
+        .into_iter()
+        .filter(|(present, absent)| has(present) && !has(absent))
+        .map(|(_, absent)| lit(absent.clone()))
+        .collect::<Vec<_>>();
+        if list.len() > MAX_IN_LIST_SIZE || list.len() + missing.len() <= MAX_IN_LIST_SIZE {
+            let mut list = list;
+            list.extend(missing);
+            return in_list(expr, list);
+        }
+        // `-0.0 <= x <= 0.0` holds exactly for both zeros, in IEEE 754 and in total order.
+        let zeros = expr
+            .clone()
+            .gt_eq(lit(negative_zero.clone()))
+            .and(expr.clone().lt_eq(lit(positive_zero.clone())));
+        let list = list
+            .into_iter()
+            .zip(&values)
+            .filter(|(_, value)| !is_zero(value))
+            .map(|(e, _)| e)
+            .collect::<Vec<_>>();
+        return match (list.is_empty(), negated) {
+            (true, false) => zeros,
+            (true, true) => !zeros,
+            (false, false) => in_list(expr, list).or(zeros),
+            (false, true) => in_list(expr, list).and(!zeros),
+        };
+    }
+    // A literal compared with a list of columns (and literals) keeps the columns as they are, which
+    // keeps the predicate usable for pruning. A literal other than a zero or NaN cannot equal a
+    // zero of either sign, so it is compared as it is. A zero is compared with each column by a
+    // range that matches both zeros, and with each literal at planning time. NaN is normalized
+    // below, since NaN values may differ in their bits.
+    let is_nan = |value: &ScalarValue| match value {
+        ScalarValue::Float16(Some(v)) => v.is_nan(),
+        ScalarValue::Float32(Some(v)) => v.is_nan(),
+        ScalarValue::Float64(Some(v)) => v.is_nan(),
+        _ => false,
+    };
+    if let Some(value) = literal(&expr).filter(|value| !is_nan(value))
+        && list.iter().any(column)
+        && list.iter().all(|e| column(e) || literal(e).is_some())
+    {
+        if value != positive_zero && value != negative_zero {
+            return in_list(expr, list);
+        }
+        let zeros = list
+            .into_iter()
+            .map(|e| match literal(&e) {
+                Some(v) if v.is_null() => lit(ScalarValue::Boolean(None)),
+                Some(v) => lit(v == positive_zero || v == negative_zero),
+                None => e
+                    .clone()
+                    .gt_eq(lit(negative_zero.clone()))
+                    .and(e.lt_eq(lit(positive_zero.clone()))),
+            })
+            .reduce(Expr::or);
+        return match zeros {
+            Some(zeros) if negated => !zeros,
+            Some(zeros) => zeros,
+            None => in_list(expr, vec![]),
+        };
+    }
+    let normalize = |e: Expr| {
+        if is_normalized_float_operand(&e) {
+            e
+        } else {
+            ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![e])
+        }
+    };
+    in_list(normalize(expr), list.into_iter().map(normalize).collect())
+}
+
 /// Casts a value of a nested type to the type explicitly, unless it is a cast already.
 pub fn cast_nested_value(value: Expr, data_type: &DataType) -> Expr {
     if data_type.is_nested() && !matches!(value, Expr::Cast(_) | Expr::TryCast(_)) {
         Expr::Cast(Cast::new(Box::new(value), data_type.clone()))
     } else {
         value
-    }
-}
-
-/// Fills in missing field metadata of a nested data type from a data type of the same shape, and
-/// makes its nested fields nullable if the corresponding fields are nullable.
-fn with_nested_field_metadata(data_type: DataType, source: &DataType) -> DataType {
-    let field = |field: &FieldRef, source: &FieldRef| {
-        let data_type = with_nested_field_metadata(field.data_type().clone(), source.data_type());
-        let mut field = field
-            .as_ref()
-            .clone()
-            .with_data_type(data_type)
-            .with_nullable(field.is_nullable() || source.is_nullable());
-        if field.metadata().is_empty() {
-            field.set_metadata(source.metadata().clone());
-        }
-        Arc::new(field)
-    };
-    match (&data_type, source) {
-        (DataType::Struct(fields), DataType::Struct(sources)) => {
-            let sources = match fields
-                .iter()
-                .map(|field| sources.find(field.name()).map(|(_, source)| source))
-                .collect::<Option<Vec<_>>>()
-            {
-                Some(sources) => sources,
-                None if fields.len() == sources.len() => sources.iter().collect(),
-                None => return data_type,
-            };
-            DataType::Struct(
-                fields
-                    .iter()
-                    .zip(sources)
-                    .map(|(f, source)| field(f, source))
-                    .collect(),
-            )
-        }
-        (
-            DataType::List(f)
-            | DataType::LargeList(f)
-            | DataType::FixedSizeList(f, _)
-            | DataType::ListView(f)
-            | DataType::LargeListView(f),
-            DataType::List(source)
-            | DataType::LargeList(source)
-            | DataType::FixedSizeList(source, _)
-            | DataType::ListView(source)
-            | DataType::LargeListView(source),
-        ) => match &data_type {
-            DataType::List(_) => DataType::List(field(f, source)),
-            DataType::LargeList(_) => DataType::LargeList(field(f, source)),
-            DataType::FixedSizeList(_, size) => DataType::FixedSizeList(field(f, source), *size),
-            DataType::ListView(_) => DataType::ListView(field(f, source)),
-            DataType::LargeListView(_) => DataType::LargeListView(field(f, source)),
-            _ => data_type,
-        },
-        (DataType::Map(f, sorted), DataType::Map(source, _)) => {
-            DataType::Map(field(f, source), *sorted)
-        }
-        _ => data_type,
     }
 }
 
@@ -2094,7 +2214,7 @@ mod test {
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue, Spans, TableReference};
     use datafusion_expr::expr::{
-        self, InSubquery, Like, ScalarFunction, SetComparison, SetQuantifier,
+        self, InList, InSubquery, Like, ScalarFunction, SetComparison, SetQuantifier,
     };
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort, table_scan};
     use datafusion_expr::test::function_stub::avg_udaf;
@@ -2106,7 +2226,10 @@ mod test {
     };
     use insta::assert_snapshot;
 
-    use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter, coerce_case_expression};
+    use crate::type_coercion::{
+        TypeCoercion, TypeCoercionRewriter, coerce_case_expression, is_normalized_float_operand,
+        normalize_float_in_list,
+    };
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -3397,7 +3520,8 @@ mod test {
     }
 
     /// The common type of CASE values is the same as in DataFusion, except for DECIMAL types whose
-    /// common precision overflows `i8` in DataFusion (e.g. with negative scales), which are excluded.
+    /// common precision overflows `i8` in DataFusion (e.g. with negative scales), which are excluded,
+    /// and for DECIMAL with floating point values, which is DOUBLE like in Spark.
     #[test]
     fn test_case_result_type_matches_datafusion() {
         use arrow::datatypes::{Fields, IntervalUnit};
@@ -3478,9 +3602,16 @@ mod test {
                         Some(_) => vec![first.clone()],
                         None => vec![first.clone(), second.clone()],
                     };
+                    let expected = if (first.is_decimal() && second.is_floating())
+                        || (first.is_floating() && second.is_decimal())
+                    {
+                        Some(DataType::Float64)
+                    } else {
+                        get_coerce_type_for_case_expression(&then_types, else_type)
+                    };
                     assert_eq!(
                         case_result_type(&then_types, else_type),
-                        get_coerce_type_for_case_expression(&then_types, else_type),
+                        expected,
                         "{first} and {second}"
                     );
                 }
@@ -3940,7 +4071,289 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r#"
-        Projection: a = CAST(CAST(a AS Map("key_value": non-null Struct("key": non-null Utf8, "value": Float64), unsorted)) AS Map("entries": non-null Struct("key": non-null Utf8, "value": Float64), unsorted))
+        Projection: normalize_float_keys(a) = normalize_float_keys(CAST(CAST(a AS Map("key_value": non-null Struct("key": non-null Utf8, "value": Float64), unsorted)) AS Map("entries": non-null Struct("key": non-null Utf8, "value": Float64), unsorted))) AS a = a
+          EmptyRelation: rows=0
+        "#
+        )
+    }
+
+    /// IN lists of floats treat `-0.0` and `0.0` as equal, as in Spark.
+    #[test]
+    fn float_in_list_treats_zeros_as_equal() {
+        let in_list = |expr: Expr, list: Vec<Expr>, negated: bool| {
+            Expr::InList(InList::new(Box::new(expr), list, negated))
+        };
+        let zeros = |a: Expr, negative: Expr, positive: Expr| {
+            a.clone().gt_eq(negative).and(a.lt_eq(positive))
+        };
+        let zeros_f64 = zeros(col("a"), lit(-0.0_f64), lit(0.0_f64));
+        // A list of literals gets the zero of the other sign for each zero.
+        for (zero, other) in [
+            (lit(0.0_f64), lit(-0.0_f64)),
+            (Expr::Negative(Box::new(lit(0.0_f64))), lit(0.0_f64)),
+            (lit(-0.0_f64), lit(0.0_f64)),
+        ] {
+            for negated in [false, true] {
+                assert_eq!(
+                    normalize_float_in_list(
+                        col("a"),
+                        vec![zero.clone(), lit(1.5_f64)],
+                        negated,
+                        &DataType::Float64
+                    ),
+                    in_list(
+                        col("a"),
+                        vec![zero.clone(), lit(1.5_f64), other.clone()],
+                        negated
+                    )
+                );
+            }
+        }
+        assert_eq!(
+            normalize_float_in_list(
+                col("a"),
+                vec![lit(-0.0_f64), lit(0.0_f64)],
+                false,
+                &DataType::Float64
+            ),
+            in_list(col("a"), vec![lit(-0.0_f64), lit(0.0_f64)], false)
+        );
+        assert_eq!(
+            normalize_float_in_list(
+                col("a"),
+                vec![cast(lit(0_i32), DataType::Float32)],
+                true,
+                &DataType::Float32
+            ),
+            in_list(
+                col("a"),
+                vec![cast(lit(0_i32), DataType::Float32), lit(-0.0_f32)],
+                true
+            )
+        );
+        let a_f64 = cast(col("a"), DataType::Float64);
+        assert_eq!(
+            normalize_float_in_list(
+                a_f64.clone(),
+                vec![lit(1.5_f64), lit(0.0_f64)],
+                false,
+                &DataType::Float64
+            ),
+            in_list(
+                a_f64,
+                vec![lit(1.5_f64), lit(0.0_f64), lit(-0.0_f64)],
+                false
+            )
+        );
+        // A list that would exceed the size that pruning supports gets a range that matches both
+        // zeros instead, which does not grow the list.
+        let values = |n: i32| (1..n).map(|i| lit(f64::from(i))).collect::<Vec<_>>();
+        for (size, negated) in [(20, false), (20, true), (19, false), (22, false)] {
+            let mut list = values(size);
+            list.push(lit(0.0_f64));
+            let actual =
+                normalize_float_in_list(col("a"), list.clone(), negated, &DataType::Float64);
+            if size == 20 {
+                let rest = in_list(col("a"), values(size), negated);
+                let expected = if negated {
+                    rest.and(!zeros_f64.clone())
+                } else {
+                    rest.or(zeros_f64.clone())
+                };
+                assert_eq!(actual, expected);
+            } else {
+                list.push(lit(-0.0_f64));
+                assert_eq!(actual, in_list(col("a"), list, negated));
+            }
+        }
+        assert_eq!(
+            normalize_float_in_list(
+                col("a"),
+                values(20)
+                    .into_iter()
+                    .chain([lit(-0.0_f64), lit(0.0_f64)])
+                    .collect(),
+                false,
+                &DataType::Float64
+            ),
+            in_list(
+                col("a"),
+                values(20)
+                    .into_iter()
+                    .chain([lit(-0.0_f64), lit(0.0_f64)])
+                    .collect(),
+                false
+            )
+        );
+        // Any other value is normalized, so that it is evaluated once.
+        let random = cast(
+            Expr::ScalarFunction(ScalarFunction::new_udf(
+                datafusion::functions::math::random(),
+                vec![],
+            )),
+            DataType::Float64,
+        );
+        let Expr::InList(InList { expr, list, .. }) = normalize_float_in_list(
+            random,
+            vec![lit(0.0_f64), lit(1.0_f64)],
+            false,
+            &DataType::Float64,
+        ) else {
+            panic!("expected an IN list");
+        };
+        assert!(is_normalized_float_operand(&expr));
+        assert!(list.iter().all(is_normalized_float_operand));
+        // A list of literals without zeros is unchanged.
+        assert_eq!(
+            normalize_float_in_list(col("a"), vec![lit(1.5_f64)], false, &DataType::Float64),
+            in_list(col("a"), vec![lit(1.5_f64)], false)
+        );
+        // Other values and lists are normalized.
+        let Expr::InList(InList { expr, list, .. }) = normalize_float_in_list(
+            col("a"),
+            vec![col("b"), lit(0.0_f64)],
+            false,
+            &DataType::Float64,
+        ) else {
+            panic!("expected an IN list");
+        };
+        assert!(is_normalized_float_operand(&expr));
+        assert!(list.iter().all(is_normalized_float_operand));
+        // A literal other than a zero or NaN compared with columns is unchanged.
+        let columns = vec![col("b"), cast(col("c"), DataType::Float64)];
+        assert_eq!(
+            normalize_float_in_list(lit(1.5_f64), columns.clone(), true, &DataType::Float64),
+            in_list(lit(1.5_f64), columns.clone(), true)
+        );
+        // A zero is compared with each column by a range that matches both zeros.
+        let any_zero = zeros(col("b"), lit(-0.0_f64), lit(0.0_f64)).or(zeros(
+            cast(col("c"), DataType::Float64),
+            lit(-0.0_f64),
+            lit(0.0_f64),
+        ));
+        for value in [
+            lit(0.0_f64),
+            lit(-0.0_f64),
+            Expr::Negative(Box::new(lit(0.0_f64))),
+        ] {
+            assert_eq!(
+                normalize_float_in_list(value.clone(), columns.clone(), false, &DataType::Float64),
+                any_zero.clone()
+            );
+            assert_eq!(
+                normalize_float_in_list(value, columns.clone(), true, &DataType::Float64),
+                !any_zero.clone()
+            );
+        }
+        // Literals in the list are compared at planning time.
+        let mixed = vec![col("b"), lit(2.0_f64)];
+        assert_eq!(
+            normalize_float_in_list(lit(1.5_f64), mixed.clone(), false, &DataType::Float64),
+            in_list(lit(1.5_f64), mixed, false)
+        );
+        let b_zero = zeros(col("b"), lit(-0.0_f64), lit(0.0_f64));
+        for (element, constant) in [
+            (lit(-0.0_f64), lit(true)),
+            (lit(1.0_f64), lit(false)),
+            (lit(f64::NAN), lit(false)),
+            (
+                lit(ScalarValue::Float64(None)),
+                lit(ScalarValue::Boolean(None)),
+            ),
+        ] {
+            for negated in [false, true] {
+                let expected = b_zero.clone().or(constant.clone());
+                assert_eq!(
+                    normalize_float_in_list(
+                        lit(0.0_f64),
+                        vec![col("b"), element.clone()],
+                        negated,
+                        &DataType::Float64
+                    ),
+                    if negated { !expected } else { expected }
+                );
+            }
+        }
+        // A literal compared with only literals is normalized, so that the result keeps its
+        // nullability.
+        let Expr::InList(InList { expr, list, .. }) = normalize_float_in_list(
+            lit(0.0_f64),
+            vec![lit(-0.0_f64), lit(1.0_f64)],
+            false,
+            &DataType::Float64,
+        ) else {
+            panic!("expected an IN list");
+        };
+        assert!(is_normalized_float_operand(&expr));
+        assert!(list.iter().all(is_normalized_float_operand));
+        // NaN, or a value that is not a column, is normalized.
+        for (value, list) in [
+            (lit(f64::NAN), vec![col("b")]),
+            (lit(f64::NAN), vec![col("b"), lit(1.0_f64)]),
+            (lit(0.0_f64), vec![col("b") + lit(1.0_f64)]),
+        ] {
+            let Expr::InList(InList { expr, list, .. }) =
+                normalize_float_in_list(value, list, false, &DataType::Float64)
+            else {
+                panic!("expected an IN list");
+            };
+            assert!(is_normalized_float_operand(&expr) && is_normalized_float_operand(&list[0]));
+        }
+        // Other types are unchanged.
+        assert_eq!(
+            normalize_float_in_list(col("a"), vec![col("b")], false, &DataType::Int32),
+            in_list(col("a"), vec![col("b")], false)
+        );
+    }
+
+    /// Equality of nested values with floats treats `-0.0` and `0.0` as equal, as in Spark.
+    #[test]
+    fn nested_float_equality_normalizes_operands() -> Result<()> {
+        let struct_type = DataType::Struct(vec![Field::new("f", DataType::Float64, true)].into());
+        let empty = empty_with_type(struct_type);
+        let not_distinct = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col("a")),
+            Operator::IsNotDistinctFrom,
+            Box::new(col("a")),
+        ));
+        let exprs = vec![
+            col("a").eq(col("a")).alias("eq"),
+            not_distinct.alias("not_distinct"),
+            col("a").lt(col("a")).alias("lt"),
+            col("a").in_list(vec![col("a")], false).alias("in_list"),
+        ];
+        let plan = LogicalPlan::Projection(Projection::try_new(exprs, empty)?);
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: normalize_float_keys(a) = normalize_float_keys(a) AS eq, normalize_float_keys(a) IS NOT DISTINCT FROM normalize_float_keys(a) AS not_distinct, a < a AS lt, normalize_float_keys(a) IN ([normalize_float_keys(a)]) AS in_list
+          EmptyRelation: rows=0
+        "#
+        )?;
+
+        // Nested values without floats and top-level floats are compared as they are.
+        let struct_type = DataType::Struct(vec![Field::new("f", DataType::Int32, true)].into());
+        let expr = col("a").eq(col("a")).alias("eq");
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![expr],
+            empty_with_type(struct_type),
+        )?);
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: a = a AS eq
+          EmptyRelation: rows=0
+        "#
+        )?;
+        let expr = col("a").eq(col("a")).alias("eq");
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![expr],
+            empty_with_type(DataType::Float64),
+        )?);
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: a = a AS eq
           EmptyRelation: rows=0
         "#
         )

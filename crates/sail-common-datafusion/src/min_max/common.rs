@@ -25,6 +25,7 @@ use datafusion_expr_common::accumulator::Accumulator;
 use half::f16;
 
 use crate::float_semantics::{FloatSemantics, compare_floats};
+use crate::ordering::{compare_nested_scalars_with_options, spark_nested_sort_options};
 
 macro_rules! choose_min_max {
     (min) => {
@@ -92,16 +93,13 @@ pub fn compare_nested(
     rhs: &dyn Array,
     rhs_index: usize,
 ) -> Result<Ordering> {
-    let options = SortOptions {
-        descending: false,
-        nulls_first: true,
-    };
+    let options = spark_nested_sort_options(false);
     Ok(make_comparator(lhs, rhs, options)?(lhs_index, rhs_index))
 }
 
 /// See [`compare_nested`].
 pub fn compare_nested_scalars(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<Ordering> {
-    compare_nested(lhs.to_array()?.as_ref(), 0, rhs.to_array()?.as_ref(), 0)
+    compare_nested_scalars_with_options(lhs, rhs, spark_nested_sort_options(false))
 }
 
 /// A value of a sliding window `min` or `max`, which compares nested values like

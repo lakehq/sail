@@ -184,3 +184,111 @@ Feature: Division by zero behavior
       Then query result
         | result |
         | 5.0    |
+
+  Rule: A literal zero divisor only raises an error for the rows that evaluate the division
+    Scenario Outline: ANSI on, the division is not evaluated: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, <expr> AS result
+        FROM VALUES (0, 5, 5.0D), (1, 7, 7.0D) AS t(id, i, d)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result     |
+        | 0  | <result_0> |
+        | 1  | <result_1> |
+
+      Examples:
+        | case                     | expr                                            | result_0 | result_1 |
+        | coalesce with div        | coalesce(i, 1 div 0)                            | 5        | 7        |
+        | coalesce with divide     | coalesce(d, 1 / 0)                              | 5.0      | 7.0      |
+        | coalesce with modulo     | coalesce(i, 1 % 0)                              | 5        | 7        |
+        | nvl with column dividend | nvl(i, i div 0)                                 | 5        | 7        |
+        | CASE ELSE branch         | CASE WHEN i IS NOT NULL THEN i ELSE 1 div 0 END | 5        | 7        |
+        | if false branch          | if(i > 0, i, 1 div 0)                           | 5        | 7        |
+        | try_divide alternative   | coalesce(d, try_divide(1, 0))                   | 5.0      | 7.0      |
+
+    Scenario Outline: ANSI on, a row evaluates the division: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, <expr> AS result
+        FROM VALUES (0, 5), (1, CAST(NULL AS INT)) AS t(id, i)
+        ORDER BY id
+        """
+      Then query error <error>
+
+      Examples:
+        | case                 | expr                 | error             |
+        | coalesce with div    | coalesce(i, 1 div 0) | DIVIDE_BY_ZERO    |
+        | coalesce with divide | coalesce(i, 1 / 0)   | DIVIDE_BY_ZERO    |
+        | coalesce with modulo | coalesce(i, 1 % 0)   | REMAINDER_BY_ZERO |
+
+    Scenario Outline: ANSI on, a literal division by zero raises the Spark error: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <expr> AS result
+        """
+      Then query error <error>
+
+      Examples:
+        | case   | expr      | error             |
+        | divide | 1 / 0     | DIVIDE_BY_ZERO    |
+        | div    | 1 div 0   | DIVIDE_BY_ZERO    |
+        | modulo | 1 % 0     | REMAINDER_BY_ZERO |
+        | mod    | mod(1, 0) | REMAINDER_BY_ZERO |
+
+    Scenario: ANSI on, a filter that is always false does not evaluate the division
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id FROM range(3) WHERE false AND 1 div 0 = 1
+        """
+      Then query result
+        | id |
+
+    # Spark folds constant expressions outside of conditional expressions when the query is planned,
+    # so it raises the error even if no row is evaluated. This is an optimizer artifact.
+    @sail-only
+    Scenario: ANSI on, a division by zero in a query without rows is not evaluated
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT 1 / 0 AS result FROM range(0)
+        """
+      Then query result
+        | result |
+
+    Scenario Outline: ANSI off, a literal division by zero has the type of the division: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT <expr> AS result, typeof(<expr>) AS result_type
+        """
+      Then query result
+        | result | result_type |
+        | NULL   | <type>      |
+
+      Examples:
+        | case            | expr      | type   |
+        | integer divide  | 1 / 0     | double |
+        | double divide   | 1.5D / 0  | double |
+        | div             | 1 div 0   | bigint |
+        | integer modulo  | 1 % 0     | int    |
+        | double modulo   | 1.5D % 0D | double |
+        | bigint div      | 10L div 0 | bigint |
+
+    Scenario: ANSI off, coalesce with a literal division by zero
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT id, coalesce(i, 1 div 0) AS result, typeof(coalesce(i, 1 div 0)) AS result_type
+        FROM VALUES (0, 5), (1, CAST(NULL AS INT)) AS t(id, i)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result | result_type |
+        | 0  | 5      | bigint      |
+        | 1  | NULL   | bigint      |

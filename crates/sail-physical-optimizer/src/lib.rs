@@ -37,6 +37,7 @@ mod collect_left;
 mod correlation_cast;
 mod explicit_repartition;
 mod filter_pushdown;
+mod float_zero_in_list;
 mod input_file_name;
 mod join_reorder;
 mod mixed_numeric;

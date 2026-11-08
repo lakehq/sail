@@ -4,13 +4,14 @@ use datafusion::arrow::datatypes::{DataType, FieldRef, Fields};
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
-use sail_common_datafusion::type_coercion::binary_type_coercion::comparison_coercion;
+use sail_common_datafusion::type_coercion::binary_type_coercion::string_promotion_type;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
 
+use super::conditional::coerce_string_promotion_values;
 use crate::config::MapKeyDedupPolicy;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -41,7 +42,10 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             coerce_ansi_map_strings(values, schema)?,
         )
     } else {
-        (keys, values)
+        (
+            coerce_string_promotion_values(keys, &input.function_context)?,
+            coerce_string_promotion_values(values, &input.function_context)?,
+        )
     };
     let timezone = &input.function_context.plan_config.session_timezone_label();
     let keys = coerce_timestamp_ntz_values(keys, schema, timezone)?;
@@ -67,19 +71,27 @@ fn coerce_ansi_map_strings(
     arguments: Vec<expr::Expr>,
     schema: &DFSchemaRef,
 ) -> PlanResult<Vec<expr::Expr>> {
+    coerce_ansi_string_values(arguments, schema)?
+        .ok_or_else(|| PlanError::analysis("map arguments have incompatible types"))
+}
+
+/// Casts values that mix strings with values of another atomic type to their common type in
+/// ANSI mode, where Spark promotes a string to the type of the other values. Returns `None` if
+/// the values have no common type.
+pub(super) fn coerce_ansi_string_values(
+    arguments: Vec<expr::Expr>,
+    schema: &DFSchemaRef,
+) -> PlanResult<Option<Vec<expr::Expr>>> {
     let types = arguments
         .iter()
         .map(|argument| argument.get_type(schema.as_ref()))
         .collect::<Result<Vec<_>, _>>()?;
     if !types.iter().any(DataType::is_string) {
-        return Ok(arguments);
+        return Ok(Some(arguments));
     }
-    let target = types
-        .iter()
-        .try_fold(DataType::Null, |previous, data_type| {
-            ansi_map_common_type(&previous, data_type)
-        })
-        .ok_or_else(|| PlanError::analysis("map arguments have incompatible types"))?;
+    let Some(target) = string_promotion_type(&types, true) else {
+        return Ok(None);
+    };
     arguments
         .into_iter()
         .zip(types)
@@ -95,34 +107,8 @@ fn coerce_ansi_map_strings(
                 Ok(converted)
             }
         })
-        .collect()
-}
-
-fn ansi_map_common_type(left: &DataType, right: &DataType) -> Option<DataType> {
-    if left == right || right.is_null() {
-        return Some(left.clone());
-    }
-    if left.is_null() {
-        return Some(right.clone());
-    }
-    if left.is_string() != right.is_string() {
-        let atomic = if left.is_string() { right } else { left };
-        return if atomic.is_integer() {
-            Some(DataType::Int64)
-        } else if atomic.is_numeric() {
-            Some(DataType::Float64)
-        } else if atomic.is_nested()
-            || matches!(atomic, DataType::Interval(_) | DataType::Duration(_))
-        {
-            None
-        } else {
-            Some(atomic.clone())
-        };
-    }
-    if left.is_numeric() && right.is_numeric() && (left.is_floating() || right.is_floating()) {
-        return Some(DataType::Float64);
-    }
-    comparison_coercion(left, right)
+        .collect::<PlanResult<Vec<_>>>()
+        .map(Some)
 }
 
 fn map_from_arrays(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -299,6 +285,23 @@ fn with_nullable(field: &FieldRef, nullable: bool) -> FieldRef {
     Arc::new(field.as_ref().clone().with_nullable(nullable))
 }
 
+/// Concatenates arrays that can differ in the nullability of nested fields. Each array is cast to
+/// the return type of `array_concat`, which requires its arguments to have exactly that type.
+fn concat_arrays(arrays: Vec<expr::Expr>, schema: &DFSchemaRef) -> PlanResult<expr::Expr> {
+    let data_type = expr_fn::array_concat(arrays.clone()).get_type(schema.as_ref())?;
+    let arrays = arrays
+        .into_iter()
+        .map(|array| {
+            if array.get_type(schema.as_ref())? == data_type {
+                Ok(array)
+            } else {
+                Ok(cast(array, data_type.clone()))
+            }
+        })
+        .collect::<PlanResult<Vec<_>>>()?;
+    Ok(expr_fn::array_concat(arrays))
+}
+
 fn map_concat(mut input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     use datafusion_expr::Expr;
 
@@ -327,8 +330,8 @@ fn map_concat(mut input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         })
         .unzip();
 
-    let keys = expr_fn::array_concat(keys);
-    let values = expr_fn::array_concat(values);
+    let keys = concat_arrays(keys, input.function_context.schema)?;
+    let values = concat_arrays(values, input.function_context.schema)?;
     let last_value_wins =
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
     let result = F::udf(SparkMapFromArrays::new(last_value_wins))(ScalarFunctionInput {

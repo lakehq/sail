@@ -16,6 +16,9 @@ use datafusion_expr::{
     TypeSignature, Volatility,
 };
 use datafusion_functions_nested::concat::ArrayConcat;
+use sail_common_datafusion::type_coercion::nested::{
+    widen_list_nullability, with_nested_field_metadata,
+};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -433,6 +436,20 @@ fn concat_return_type(arg_types: &[DataType]) -> Result<DataType> {
                 }
             }
         }
+        // An array with Null elements (e.g. `array(NULL)`) adds NULL elements to the result.
+        let expr_type = match expr_type {
+            Some(DataType::List(field))
+                if !field.is_nullable()
+                    && arg_types.iter().any(
+                        |arg_type| matches!(arg_type, DataType::List(f) if f.data_type().is_null()),
+                    ) =>
+            {
+                Some(DataType::List(Arc::new(
+                    field.as_ref().clone().with_nullable(true),
+                )))
+            }
+            expr_type => expr_type,
+        };
         // All arrays had Null element type (e.g. array() + array()) — keep as List(Null)
         Ok(expr_type.unwrap_or_else(|| arg_types[0].clone()))
     } else if arg_types
@@ -464,10 +481,20 @@ fn merge_list_types(left: &DataType, right: &DataType) -> Option<DataType> {
         (DataType::List(left), DataType::List(right)) => {
             let data_type =
                 merge_list_types(left.data_type(), right.data_type()).or_else(|| {
-                    // Leaf list item types may only differ by field/nullability metadata.
+                    // Leaf list item types may only differ by field/nullability metadata, where
+                    // a nested field is nullable if it is nullable in either type.
                     left.data_type()
                         .equals_datatype(right.data_type())
-                        .then(|| left.data_type().clone())
+                        .then(|| {
+                            with_nested_field_metadata(left.data_type().clone(), right.data_type())
+                        })
+                        // A list of NULL values (e.g. `array(NULL)`) fits a list of any type.
+                        .or_else(|| {
+                            widen_list_nullability(&[
+                                left.data_type().clone(),
+                                right.data_type().clone(),
+                            ])
+                        })
                 })?;
             Some(DataType::List(Arc::new(
                 left.as_ref()

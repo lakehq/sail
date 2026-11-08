@@ -3,12 +3,12 @@ use std::sync::{Arc, LazyLock};
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchema, DFSchemaRef, Result as DataFusionResult, ScalarValue};
-use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, LambdaVariable};
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::get_field;
 use sail_common::spec;
+use sail_common_datafusion::type_coercion::binary_type_coercion::try_type_union_resolution;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -498,8 +498,8 @@ fn recursive_list_in_as_comparisons(
 
 /// Spark ANSI computes arithmetic and conditionals over integral and FLOAT values as DOUBLE,
 /// where native coercion keeps FLOAT.
-// TODO: Spark also widens map(), map_concat(), concat() of arrays, set operations, nested
-//  array and struct leaves, and FLOAT with DECIMAL to DOUBLE.
+// TODO: Spark also widens map(), map_concat(), concat() of arrays, set operations, and nested
+//  array and struct leaves.
 pub(super) fn coerce_ansi_float_widening(
     expression: expr::Expr,
     schema: &DFSchemaRef,

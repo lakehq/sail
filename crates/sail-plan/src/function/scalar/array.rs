@@ -12,9 +12,11 @@ use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
 use datafusion_spark::function::array::expr_fn as array_fn;
 use sail_common::utils::string::SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS;
+use sail_common_datafusion::type_coercion::nested::widen_list_nullability;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::array_position::SparkArrayPosition;
+use sail_function::scalar::array::array_sort::ArraySort;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
@@ -28,13 +30,50 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::string::btrim::BTrimFunc;
 use sail_python_udf::udf::expr_contains_python_udf;
 
+use super::conditional::coerce_string_promotion_values;
 use super::lambda::lambda_with_fresh_parameter;
+use super::map::coerce_ansi_string_values;
 use crate::error::{PlanError, PlanResult};
+use crate::function::aggregate::with_non_nullable_elements;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::function::datetime_utils::{
     coerce_timestamp_ntz_array_element, coerce_timestamp_ntz_arrays, with_timestamp_ntz_coercion,
 };
 use crate::function::is_spark_compatible_arrow_fixed_offset;
+
+/// Casts values of nested types that differ only in the nullability of nested fields to their
+/// common type, which is nullable wherever one of them is nullable. A list of NULL values (e.g.
+/// `array(NULL)`) is cast to the common list type with nullable elements. Some DataFusion
+/// functions require their list arguments to have exactly the same type, while Spark accepts
+/// them.
+fn cast_to_widened_nested_nullability(
+    values: Vec<expr::Expr>,
+    schema: &datafusion_common::DFSchemaRef,
+) -> PlanResult<Vec<expr::Expr>> {
+    let data_types = values
+        .iter()
+        .map(|value| value.get_type(schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    if !data_types.iter().all(DataType::is_nested)
+        || data_types.windows(2).all(|pair| pair[0] == pair[1])
+    {
+        return Ok(values);
+    }
+    let Some(widened) = widen_list_nullability(&data_types) else {
+        return Ok(values);
+    };
+    Ok(values
+        .into_iter()
+        .zip(data_types)
+        .map(|(value, data_type)| {
+            if data_type == widened {
+                value
+            } else {
+                cast(value, widened.clone())
+            }
+        })
+        .collect())
+}
 
 fn array_repeat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let schema = input.function_context.schema;
@@ -133,7 +172,7 @@ fn sort_array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             )));
         }
     };
-    Ok(expr_fn::array_sort(array, sort, nulls))
+    Ok(ScalarUDF::from(ArraySort::new()).call(vec![array, sort, nulls]))
 }
 
 fn array_append(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -279,6 +318,8 @@ fn arrays_overlap(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context.schema,
         &function_context.plan_config.session_timezone_label(),
     )?;
+    let (left, right) =
+        cast_to_widened_nested_nullability(vec![left, right], function_context.schema)?.two()?;
 
     let nullable_array_type =
         with_list_value_nullability(&left.get_type(function_context.schema.as_ref())?, true);
@@ -549,35 +590,71 @@ where
 }
 
 /// A function of two arrays, which are cast to their common type when their elements mix
-/// TIMESTAMP_NTZ and TIMESTAMP values.
+/// TIMESTAMP_NTZ and TIMESTAMP values, or when they differ only in nested nullability.
+/// It also sets whether the elements of the result can be NULL, from the element nullability of
+/// the arrays by `result_elements_nullable` if given, since the common type can make them
+/// nullable.
 fn with_arrays_timestamp_ntz_coercion<F>(
     f: F,
+    result_elements_nullable: Option<fn(bool, bool) -> bool>,
 ) -> impl Fn(ScalarFunctionInput) -> PlanResult<expr::Expr> + Send + Sync + 'static
 where
     F: Fn(expr::Expr, expr::Expr) -> PlanResult<expr::Expr> + Send + Sync + 'static,
 {
     move |input| {
+        let schema = input.function_context.schema;
         let (left, right) = input.arguments.two()?;
         let (left, right) = coerce_timestamp_ntz_arrays(
             left,
             right,
-            input.function_context.schema,
+            schema,
             &input.function_context.plan_config.session_timezone_label(),
         )?;
-        f(left, right)
+        let elements_nullable = |array: &expr::Expr| -> PlanResult<bool> {
+            Ok(match array.get_type(schema)? {
+                DataType::List(field) | DataType::LargeList(field) => field.is_nullable(),
+                _ => true,
+            })
+        };
+        let nullable = match result_elements_nullable {
+            Some(f) => f(elements_nullable(&left)?, elements_nullable(&right)?),
+            None => true,
+        };
+        let (left, right) = cast_to_widened_nested_nullability(vec![left, right], schema)?.two()?;
+        let result = f(left, right)?;
+        if nullable {
+            Ok(result)
+        } else {
+            with_non_nullable_elements(result, schema)
+        }
     }
+}
+
+/// Spark's `array` promotes strings to the type of the other atomic values in ANSI mode, e.g.
+/// `array('1', 2)` is an array of BIGINT values, while strings win otherwise.
+fn array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arguments = if function_context.plan_config.ansi_mode {
+        coerce_ansi_string_values(arguments.clone(), function_context.schema)?.unwrap_or(arguments)
+    } else {
+        coerce_string_promotion_values(arguments, &function_context)?
+    };
+    with_timestamp_ntz_coercion(|arguments| ScalarUDF::from(SparkArray::new()).call(arguments))(
+        ScalarFunctionInput {
+            arguments,
+            function_context,
+        },
+    )
 }
 
 pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        (
-            "array",
-            F::custom(with_timestamp_ntz_coercion(|arguments| {
-                ScalarUDF::from(SparkArray::new()).call(arguments)
-            })),
-        ),
+        ("array", F::custom(array)),
         ("array_append", F::custom(array_append)),
         ("array_compact", F::unary(array_compact)),
         (
@@ -588,16 +665,20 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("array_distinct", F::unary(expr_fn::array_distinct)),
         (
             "array_except",
-            F::custom(with_arrays_timestamp_ntz_coercion(|left, right| {
-                Ok(expr_fn::array_except(left, right))
-            })),
+            // Spark's result has the type of the first array, which contains no other elements.
+            F::custom(with_arrays_timestamp_ntz_coercion(
+                |left, right| Ok(expr_fn::array_except(left, right)),
+                Some(|left, _| left),
+            )),
         ),
         ("array_insert", F::custom(array_insert)),
         (
             "array_intersect",
-            F::custom(with_arrays_timestamp_ntz_coercion(|left, right| {
-                Ok(ScalarUDF::from(ArrayIntersect::new()).call(vec![left, right]))
-            })),
+            // The result contains NULL only if both arrays contain NULL.
+            F::custom(with_arrays_timestamp_ntz_coercion(
+                |left, right| Ok(ScalarUDF::from(ArrayIntersect::new()).call(vec![left, right])),
+                Some(|left, right| left && right),
+            )),
         ),
         ("array_join", F::udf(ArrayToString::new())),
         ("array_max", F::udf(ArrayMax::new())),
@@ -624,9 +705,10 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ),
         (
             "array_union",
-            F::custom(with_arrays_timestamp_ntz_coercion(|left, right| {
-                Ok(expr_fn::array_union(left, right))
-            })),
+            F::custom(with_arrays_timestamp_ntz_coercion(
+                |left, right| Ok(expr_fn::array_union(left, right)),
+                None,
+            )),
         ),
         ("arrays_overlap", F::custom(arrays_overlap)),
         ("arrays_zip", F::custom(arrays_zip)),

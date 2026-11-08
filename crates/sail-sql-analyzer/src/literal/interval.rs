@@ -200,18 +200,13 @@ fn parse_interval_year_month_string(
     let error = || SqlError::invalid(format!("interval: {s}"));
     let captures = interval_regex.captures(s).ok_or_else(error)?;
     let negated = negated ^ (captures.name("sign").map(|s| s.as_str()) == Some("-"));
-    let years: i32 = extract_match(&captures, "year", error)?.unwrap_or(0);
-    let months: i32 = extract_match(&captures, "month", error)?.unwrap_or(0);
+    let years: i128 = extract_match(&captures, "year", error)?.unwrap_or(0);
+    let months: i128 = extract_match(&captures, "month", error)?.unwrap_or(0);
     let n = years
         .checked_mul(12)
-        .ok_or_else(error)?
-        .checked_add(months)
+        .and_then(|x| x.checked_add(months))
+        .and_then(|x| apply_interval_sign(x, negated))
         .ok_or_else(error)?;
-    let n = if negated {
-        n.checked_mul(-1).ok_or_else(error)?
-    } else {
-        n
-    };
     Ok(IntervalValue::YearMonth {
         months: n,
         start_field,
@@ -229,32 +224,37 @@ fn parse_interval_day_time_string(
     let error = || SqlError::invalid(format!("interval: {s}"));
     let captures = interval_regex.captures(s).ok_or_else(error)?;
     let negated = negated ^ (captures.name("sign").map(|s| s.as_str()) == Some("-"));
-    let days: i64 = extract_match(&captures, "day", error)?.unwrap_or(0);
-    let hours: i64 = extract_match(&captures, "hour", error)?.unwrap_or(0);
-    let minutes: i64 = extract_match(&captures, "minute", error)?.unwrap_or(0);
-    let seconds: i64 = extract_match(&captures, "second", error)?.unwrap_or(0);
-    let microseconds: i64 = extract_fraction_match(&captures, "fraction", 6, error)?.unwrap_or(0);
-    let delta = TimeDelta::try_days(days)
-        .ok_or_else(error)?
-        .checked_add(&TimeDelta::try_hours(hours).ok_or_else(error)?)
-        .ok_or_else(error)?
-        .checked_add(&TimeDelta::try_minutes(minutes).ok_or_else(error)?)
-        .ok_or_else(error)?
-        .checked_add(&TimeDelta::try_seconds(seconds).ok_or_else(error)?)
-        .ok_or_else(error)?
-        .checked_add(&TimeDelta::microseconds(microseconds))
-        .ok_or_else(error)?;
-    let microseconds = delta.num_microseconds().ok_or_else(error)?;
-    let n = if negated {
-        microseconds.checked_mul(-1).ok_or_else(error)?
-    } else {
-        microseconds
-    };
+    let days: i128 = extract_match(&captures, "day", error)?.unwrap_or(0);
+    let hours: i128 = extract_match(&captures, "hour", error)?.unwrap_or(0);
+    let minutes: i128 = extract_match(&captures, "minute", error)?.unwrap_or(0);
+    let seconds: i128 = extract_match(&captures, "second", error)?.unwrap_or(0);
+    let microseconds: i128 = extract_fraction_match(&captures, "fraction", 6, error)?.unwrap_or(0);
+    let n = [
+        (days, 86_400_000_000),
+        (hours, 3_600_000_000),
+        (minutes, 60_000_000),
+        (seconds, 1_000_000),
+        (microseconds, 1),
+    ]
+    .into_iter()
+    .try_fold(0i128, |total, (value, unit)| {
+        value.checked_mul(unit)?.checked_add(total)
+    })
+    .and_then(|x| apply_interval_sign(x, negated))
+    .ok_or_else(error)?;
     Ok(IntervalValue::Microsecond {
         microseconds: n,
         start_field,
         end_field,
     })
+}
+
+/// Applies the sign to the magnitude of an interval and converts it to the target type.
+/// The magnitude is computed in a wider type, since the minimum value of the target type
+/// has no positive counterpart.
+fn apply_interval_sign<T: TryFrom<i128>>(magnitude: i128, negated: bool) -> Option<T> {
+    let value = if negated { -magnitude } else { magnitude };
+    T::try_from(value).ok()
 }
 
 enum StandardIntervalKind {
@@ -640,8 +640,8 @@ mod tests {
         assert!(parse("'178956970-7' year to month", false).is_ok());
         assert!(parse("'178956970-7' year to month", true).is_ok());
         assert!(parse("'178956970-8' year to month", false).is_err());
-        assert!(parse("'178956970-8' year to month", true).is_err());
-        assert!(parse("-'178956970-8' year to month", false).is_err());
+        assert!(parse("'178956970-8' year to month", true).is_ok());
+        assert!(parse("-'178956970-8' year to month", false).is_ok());
         assert!(parse("-'178956970-8' year to month", true).is_err());
         assert!(parse("-'178956970-9' year to month", false).is_err());
         assert!(parse("-'178956970-9' year to month", true).is_err());
@@ -671,8 +671,8 @@ mod tests {
         assert!(parse("'106751991 04:00:54.775807' day to second", false).is_ok());
         assert!(parse("'106751991 04:00:54.775807' day to second", true).is_ok());
         assert!(parse("'106751991 04:00:54.775808' day to second", false).is_err());
-        assert!(parse("'106751991 04:00:54.775808' day to second", true).is_err());
-        assert!(parse("-'106751991 04:00:54.775808' day to second", false).is_err());
+        assert!(parse("'106751991 04:00:54.775808' day to second", true).is_ok());
+        assert!(parse("-'106751991 04:00:54.775808' day to second", false).is_ok());
         assert!(parse("-'106751991 04:00:54.775808' day to second", true).is_err());
         assert!(parse("-'106751991 04:00:54.775809' day to second", false).is_err());
         assert!(parse("-'106751991 04:00:54.775809' day to second", true).is_err());
@@ -691,6 +691,152 @@ mod tests {
                 "-1 day -2 hour -3 minute -4 second -567 millisecond -890 microsecond",
                 false
             )?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_interval_bounds() -> SqlResult<()> {
+        let parse = parse_unqualified_interval_string;
+        let months = |s: &str, negated: bool| -> SqlResult<i32> {
+            match parse(s, negated)? {
+                IntervalValue::YearMonth { months, .. } => Ok(months),
+                other => Err(SqlError::invalid(format!("{other:?}"))),
+            }
+        };
+        let microseconds = |s: &str, negated: bool| -> SqlResult<i64> {
+            match parse(s, negated)? {
+                IntervalValue::Microsecond { microseconds, .. } => Ok(microseconds),
+                other => Err(SqlError::invalid(format!("{other:?}"))),
+            }
+        };
+
+        // (interval, minimum magnitude, maximum, minimum - 1 magnitude, maximum + 1)
+        let year_month = [
+            ("year", "178956970", "178956970", "178956971", "178956971"),
+            (
+                "year to month",
+                "178956970-8",
+                "178956970-7",
+                "178956970-9",
+                "178956970-8",
+            ),
+            (
+                "month",
+                "2147483648",
+                "2147483647",
+                "2147483649",
+                "2147483648",
+            ),
+        ];
+        for (unit, min, max, below, above) in year_month {
+            let expected_min = if unit == "year" {
+                -2147483640
+            } else {
+                i32::MIN
+            };
+            let expected_max = if unit == "year" { 2147483640 } else { i32::MAX };
+            assert_eq!(months(&format!("'-{min}' {unit}"), false)?, expected_min);
+            assert_eq!(months(&format!("-'{min}' {unit}"), false)?, expected_min);
+            assert_eq!(months(&format!("'{min}' {unit}"), true)?, expected_min);
+            assert_eq!(months(&format!("'{max}' {unit}"), false)?, expected_max);
+            assert!(parse(&format!("'-{below}' {unit}"), false).is_err());
+            assert!(parse(&format!("-'{below}' {unit}"), false).is_err());
+            assert!(parse(&format!("'{above}' {unit}"), false).is_err());
+        }
+
+        let day_time = [
+            ("day", "106751991", "106751991", "106751992", "106751992"),
+            (
+                "day to hour",
+                "106751991 04",
+                "106751991 04",
+                "106751991 05",
+                "106751991 05",
+            ),
+            (
+                "day to minute",
+                "106751991 04:00",
+                "106751991 04:00",
+                "106751991 04:01",
+                "106751991 04:01",
+            ),
+            (
+                "day to second",
+                "106751991 04:00:54.775808",
+                "106751991 04:00:54.775807",
+                "106751991 04:00:54.775809",
+                "106751991 04:00:54.775808",
+            ),
+            (
+                "hour",
+                "2562047788",
+                "2562047788",
+                "2562047789",
+                "2562047789",
+            ),
+            (
+                "hour to minute",
+                "2562047788:00",
+                "2562047788:00",
+                "2562047788:01",
+                "2562047788:01",
+            ),
+            (
+                "hour to second",
+                "2562047788:00:54.775808",
+                "2562047788:00:54.775807",
+                "2562047788:00:54.775809",
+                "2562047788:00:54.775808",
+            ),
+            (
+                "minute",
+                "153722867280",
+                "153722867280",
+                "153722867281",
+                "153722867281",
+            ),
+            (
+                "minute to second",
+                "153722867280:54.775808",
+                "153722867280:54.775807",
+                "153722867280:54.775809",
+                "153722867280:54.775808",
+            ),
+            (
+                "second",
+                "9223372036854.775808",
+                "9223372036854.775807",
+                "9223372036854.775809",
+                "9223372036854.775808",
+            ),
+        ];
+        for (unit, min, max, below, above) in day_time {
+            let min_value = microseconds(&format!("'-{min}' {unit}"), false)?;
+            assert_eq!(microseconds(&format!("-'{min}' {unit}"), false)?, min_value);
+            assert_eq!(microseconds(&format!("'{min}' {unit}"), true)?, min_value);
+            let max_value = microseconds(&format!("'{max}' {unit}"), false)?;
+            if unit.ends_with("second") {
+                assert_eq!(min_value, i64::MIN);
+                assert_eq!(max_value, i64::MAX);
+            } else {
+                assert_eq!(min_value, -max_value);
+            }
+            assert!(parse(&format!("'-{below}' {unit}"), false).is_err());
+            assert!(parse(&format!("-'{below}' {unit}"), false).is_err());
+            assert!(parse(&format!("'{above}' {unit}"), false).is_err());
+        }
+
+        assert_eq!(months("-'-178956970' year", false)?, 2147483640);
+        assert!(parse("-'-178956970-8' year to month", false).is_err());
+        assert!(parse("-'-2147483648' month", false).is_err());
+        assert!(parse("-'-106751991 04:00:54.775808' day to second", false).is_err());
+        assert!(parse("-'-9223372036854.775808' second", false).is_err());
+        assert_eq!(months("-2147483648 month", false)?, i32::MIN);
+        assert_eq!(months("'-2147483648' months", false)?, i32::MIN);
+        assert_eq!(
+            microseconds("'-9223372036854.775808' seconds", false)?,
+            i64::MIN
         );
         Ok(())
     }

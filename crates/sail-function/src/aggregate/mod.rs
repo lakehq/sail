@@ -99,3 +99,4 @@ pub mod try_avg;
 pub mod utils;
 pub mod vector;
 pub mod vector_sum;
+pub mod window_aggregate;

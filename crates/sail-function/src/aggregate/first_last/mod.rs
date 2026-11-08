@@ -2,12 +2,13 @@
 
 //! Defines the FIRST_VALUE/LAST_VALUE aggregations.
 
+use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder, make_comparator};
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::{self, LexicographicalComparator, SortColumn, SortOptions};
 use arrow::datatypes::{
@@ -19,7 +20,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::metadata::FieldMetadata;
-use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, get_row_at_idx};
+use datafusion_common::utils::{extract_row_at_idx_to_buf, get_row_at_idx};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, arrow_datafusion_err, internal_datafusion_err,
     internal_err, not_impl_err,
@@ -36,6 +37,7 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate_common::utils::get_sort_options;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use sail_common_datafusion::ordering::compare_nested_scalars_with_options;
 
 mod state;
 
@@ -494,6 +496,81 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         })
     }
 
+    /// Updates each group in `groups`, given as `(group_idx, idx)`, with the row `idx` of
+    /// `vals` and `order_cols` when the row comes before (or after) the current state of the group.
+    fn update_groups(
+        &mut self,
+        groups: Vec<(usize, usize)>,
+        order_cols: &[ArrayRef],
+        vals: &ArrayRef,
+        ordering_buf: &mut Vec<ScalarValue>,
+    ) -> Result<()> {
+        let nested = self.should_update_nested_states(&groups, order_cols)?;
+        for (k, (group_idx, idx)) in groups.into_iter().enumerate() {
+            let should_update = match &nested {
+                Some(nested) => nested[k],
+                None => {
+                    extract_row_at_idx_to_buf(order_cols, idx, ordering_buf)?;
+                    self.should_update_state(group_idx, ordering_buf)?
+                }
+            };
+            if should_update {
+                if nested.is_some() {
+                    extract_row_at_idx_to_buf(order_cols, idx, ordering_buf)?;
+                }
+                self.update_state(group_idx, ordering_buf, vals, idx)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns whether each group in `groups`, given as `(group_idx, idx)`, should take the row
+    /// `idx` of `order_cols`, like [`Self::should_update_state`], when an ordering is of a nested
+    /// type, or `None` otherwise. The current orderings of the groups are compared with the rows
+    /// at once, since building a comparator for nested values for each row is expensive.
+    fn should_update_nested_states(
+        &self,
+        groups: &[(usize, usize)],
+        order_cols: &[ArrayRef],
+    ) -> Result<Option<Vec<bool>>> {
+        if !order_cols.iter().any(|col| col.data_type().is_nested()) {
+            return Ok(None);
+        }
+        let mut result = vec![true; groups.len()];
+        let set = (0..groups.len())
+            .filter(|&k| self.is_sets.get_bit(groups[k].0))
+            .collect::<Vec<_>>();
+        if set.is_empty() {
+            return Ok(Some(result));
+        }
+        let comparators = order_cols
+            .iter()
+            .zip(self.sort_options.iter())
+            .enumerate()
+            .map(|(col_idx, (col, options))| {
+                let current = ScalarValue::iter_to_array(
+                    set.iter()
+                        .map(|&k| self.orderings[groups[k].0][col_idx].clone()),
+                )?;
+                Ok(make_comparator(current.as_ref(), col.as_ref(), *options)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (current_idx, &k) in set.iter().enumerate() {
+            let idx = groups[k].1;
+            let ordering = comparators
+                .iter()
+                .map(|cmp| cmp(current_idx, idx))
+                .find(|ordering| ordering.is_ne())
+                .unwrap_or(Ordering::Equal);
+            result[k] = if self.pick_first_in_group {
+                ordering.is_gt()
+            } else {
+                ordering.is_lt()
+            };
+        }
+        Ok(Some(result))
+    }
+
     fn take_orderings(&mut self, emit_to: EmitTo) -> Vec<Vec<ScalarValue>> {
         let result = emit_to.take_needed(&mut self.orderings);
 
@@ -780,24 +857,14 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         let mut ordering_buf = Vec::with_capacity(self.ordering_req.len());
 
         // The overhead of calling `extract_row_at_idx_to_buf` is somewhat high, so we need to minimize its calls as much as possible.
-        for (group_idx, idx) in self
-            .get_filtered_extreme_of_each_group(
-                &values_and_order_cols[1..],
-                group_indices,
-                opt_filter,
-                vals,
-                None,
-            )?
-            .into_iter()
-        {
-            extract_row_at_idx_to_buf(&values_and_order_cols[1..], idx, &mut ordering_buf)?;
-
-            if self.should_update_state(group_idx, &ordering_buf)? {
-                self.update_state(group_idx, &ordering_buf, vals, idx)?;
-            }
-        }
-
-        Ok(())
+        let groups = self.get_filtered_extreme_of_each_group(
+            &values_and_order_cols[1..],
+            group_indices,
+            opt_filter,
+            vals,
+            None,
+        )?;
+        self.update_groups(groups, &values_and_order_cols[1..], vals, &mut ordering_buf)
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
@@ -859,15 +926,7 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
             Some(is_set_arr),
         )?;
 
-        for (group_idx, idx) in groups.into_iter() {
-            extract_row_at_idx_to_buf(&val_and_order_cols[1..], idx, &mut ordering_buf)?;
-
-            if self.should_update_state(group_idx, &ordering_buf)? {
-                self.update_state(group_idx, &ordering_buf, vals, idx)?;
-            }
-        }
-
-        Ok(())
+        self.update_groups(groups, &val_and_order_cols[1..], vals, &mut ordering_buf)
     }
 
     fn size(&self) -> usize {
@@ -1566,6 +1625,43 @@ fn filter_states_according_to_is_set(
         .iter()
         .map(|state| compute::filter(state, flags).map_err(|e| arrow_datafusion_err!(e)))
         .collect()
+}
+
+/// Compares two orderings like [`datafusion_common::utils::compare_rows`], but compares
+/// nested values (e.g. structs and lists) with Arrow's comparator, which is also how the rows of
+/// a batch are compared. (Comparing nested `ScalarValue`s ignores NULL struct fields and orders
+/// NULL list elements last.) With [`spark_nested_sort_options`] (the options of the `max_by` and
+/// `min_by` rewrites), this orders nested values like Spark; with other options, it keeps Arrow's
+/// placement of NULL fields and elements, like `ORDER BY`.
+///
+/// [`spark_nested_sort_options`]: sail_common_datafusion::ordering::spark_nested_sort_options
+fn compare_rows(
+    x: &[ScalarValue],
+    y: &[ScalarValue],
+    sort_options: &[SortOptions],
+) -> Result<Ordering> {
+    let zip_it = x.iter().zip(y.iter()).zip(sort_options.iter());
+    for ((lhs, rhs), options) in zip_it {
+        let result = match (lhs.is_null(), rhs.is_null(), options.nulls_first) {
+            (true, false, false) | (false, true, true) => Ordering::Greater,
+            (true, false, true) | (false, true, false) => Ordering::Less,
+            (false, false, _) if lhs.data_type().is_nested() => {
+                compare_nested_scalars_with_options(lhs, rhs, *options)?
+            }
+            (false, false, _) => {
+                if options.descending {
+                    rhs.try_cmp(lhs)?
+                } else {
+                    lhs.try_cmp(rhs)?
+                }
+            }
+            (true, true, _) => continue,
+        };
+        if result != Ordering::Equal {
+            return Ok(result);
+        }
+    }
+    Ok(Ordering::Equal)
 }
 
 /// Combines array refs and their corresponding orderings to construct `SortColumn`s.
@@ -2955,6 +3051,150 @@ mod tests {
 
         assert_eq!(merged.evaluate()?, updated.evaluate()?);
         assert_eq!(merged.size(), updated.size());
+        Ok(())
+    }
+
+    #[test]
+    fn test_group_acc_nested_orderings_across_batches() -> Result<()> {
+        use arrow::array::{Int32Array, StructArray};
+        use arrow::datatypes::Fields;
+
+        let fields = Fields::from(vec![Field::new("a", DataType::Int32, true)]);
+        let ordering_type = DataType::Struct(fields.clone());
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "k",
+            ordering_type.clone(),
+            true,
+        )]));
+        let structs = |a: Vec<Option<i32>>| -> Result<ArrayRef> {
+            Ok(Arc::new(StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(Int32Array::from(a)) as ArrayRef],
+                None,
+            )?))
+        };
+        // Two groups, with `{a: 1}` and `{a: NULL}` and then `{a: NULL}` and `{a: 0}`.
+        let batch1 = vec![
+            Arc::new(Int64Array::from(vec![10, 20])) as ArrayRef,
+            structs(vec![Some(1), None])?,
+        ];
+        let batch2 = vec![
+            Arc::new(Int64Array::from(vec![11, 21])) as ArrayRef,
+            structs(vec![None, Some(0)])?,
+        ];
+        // `max_by` is `last_value` ordered ASC NULLS FIRST and `min_by` is `last_value` ordered
+        // DESC NULLS LAST, where a NULL field is the smallest like in Spark.
+        for (descending, expected) in [(false, vec![10, 21]), (true, vec![11, 20])] {
+            let options = sail_common_datafusion::ordering::spark_nested_sort_options(descending);
+            let new_acc = || {
+                FirstLastGroupsAccumulator::try_new(
+                    PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+                    [PhysicalSortExpr {
+                        expr: col("k", &schema)?,
+                        options,
+                    }]
+                    .into(),
+                    false,
+                    std::slice::from_ref(&ordering_type),
+                    false,
+                    false,
+                )
+            };
+
+            let mut acc = new_acc()?;
+            acc.update_batch(&batch1, &[0, 1], None, 2)?;
+            acc.update_batch(&batch2, &[0, 1], None, 2)?;
+            assert_eq!(
+                acc.evaluate(EmitTo::All)?.to_data(),
+                Int64Array::from(expected.clone()).to_data()
+            );
+
+            let mut partial = new_acc()?;
+            partial.update_batch(&batch1, &[0, 1], None, 2)?;
+            let state = partial.state(EmitTo::All)?;
+            let mut acc = new_acc()?;
+            acc.update_batch(&batch2, &[0, 1], None, 2)?;
+            acc.merge_batch(&state, &[0, 1], 2)?;
+            assert_eq!(
+                acc.evaluate(EmitTo::All)?.to_data(),
+                Int64Array::from(expected).to_data()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_compare_rows_nested_like_within_batch() -> Result<()> {
+        use arrow::array::{Int32Array, StructArray};
+        use arrow::datatypes::{Fields, Int32Type};
+
+        // `{a: NULL, b: 5}`, `{a: 1, b: 1}`, `{a: 1, b: NULL}`, and `{a: 2, b: 0}`
+        let structs: ArrayRef = Arc::new(StructArray::try_new(
+            Fields::from(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Int32, true),
+            ]),
+            vec![
+                Arc::new(Int32Array::from(vec![None, Some(1), Some(1), Some(2)])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![Some(5), Some(1), None, Some(0)])) as ArrayRef,
+            ],
+            None,
+        )?);
+        // `[NULL, 5]`, `[1, 1]`, `[1]`, `[1, NULL]`, and `[]`
+        let lists: ArrayRef = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![None, Some(5)]),
+            Some(vec![Some(1), Some(1)]),
+            Some(vec![Some(1)]),
+            Some(vec![Some(1), None]),
+            Some(vec![]),
+        ]));
+        for array in [structs, lists] {
+            for (descending, nulls_first) in
+                [(false, true), (false, false), (true, true), (true, false)]
+            {
+                let options = SortOptions {
+                    descending,
+                    nulls_first,
+                };
+                let cmp = make_comparator(array.as_ref(), array.as_ref(), options)?;
+                for i in 0..array.len() {
+                    for j in 0..array.len() {
+                        let lhs = [ScalarValue::try_from_array(&array, i)?];
+                        let rhs = [ScalarValue::try_from_array(&array, j)?];
+                        assert_eq!(compare_rows(&lhs, &rhs, &[options])?, cmp(i, j));
+                    }
+                }
+            }
+        }
+
+        // With ASC NULLS FIRST (and DESC NULLS LAST), NULL fields and elements are the smallest
+        // like in Spark.
+        let row = |v: Vec<Option<i32>>| {
+            ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+                vec![Some(v)],
+            )))
+        };
+        let asc = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+        let desc = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let (null_first, one) = ([row(vec![None, Some(5)])], [row(vec![Some(1), Some(1)])]);
+        assert_eq!(compare_rows(&null_first, &one, &[asc])?, Ordering::Less);
+        assert_eq!(compare_rows(&null_first, &one, &[desc])?, Ordering::Greater);
+        // A NULL value is still placed by NULLS FIRST or NULLS LAST.
+        let null = [ScalarValue::List(Arc::new(ListArray::new_null(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            1,
+        )))];
+        assert_eq!(compare_rows(&null, &null_first, &[asc])?, Ordering::Less);
+        assert_eq!(
+            compare_rows(&null, &null_first, &[desc])?,
+            Ordering::Greater
+        );
         Ok(())
     }
 }

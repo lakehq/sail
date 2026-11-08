@@ -271,6 +271,7 @@ message ExtendedScalarUdf {
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
     SparkToStringUdf spark_to_string = 40;
+    SparkTypeOfUdf spark_type_of = 41;
   }
 }
 
@@ -299,7 +300,17 @@ message ExtendedAggregateUdf {
     ArrayAggUdaf array_agg = 6;
     FirstValueUdaf first_value = 7;
     LastValueUdaf last_value = 8;
+    WindowAggregateUdaf window_aggregate = 9;
   }
+}
+
+// An aggregate function over a window, which aggregates only the rows where its last argument
+// is true if `filter` is set, and passes the ordering of its first argument if `ordering` is set.
+message WindowAggregateUdaf {
+  string inner_name = 1;
+  bytes inner = 2;
+  bool filter = 3;
+  optional SortOptions ordering = 4;
 }
 
 message PercentileDiscUdaf {
@@ -375,6 +386,10 @@ message SparkSequenceUdf {
 
 message SparkToStringUdf {
   optional string timezone = 1;
+}
+
+message SparkTypeOfUdf {
+  string type_name = 1;
 }
 
 message SparkDateFormatUdf {

@@ -7,6 +7,7 @@ use datafusion::arrow::array::{
     OffsetSizeTrait, make_array, new_empty_array, new_null_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
+use datafusion::arrow::compute::{CastOptions, cast_with_options};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, plan_datafusion_err, plan_err};
@@ -15,6 +16,7 @@ use datafusion_expr::{
     Volatility,
 };
 use sail_common_datafusion::type_coercion::binary_type_coercion::comparison_coercion;
+use sail_common_datafusion::type_coercion::nested::with_nested_field_metadata;
 
 use crate::functions_nested_utils::make_scalar_function;
 
@@ -55,11 +57,7 @@ impl ScalarUDFImpl for SparkArray {
         match arg_types.len() {
             0 => Ok(empty_array_type()),
             _ => {
-                let expr_type = arg_types
-                    .iter()
-                    .find(|f| !f.is_null())
-                    .cloned()
-                    .unwrap_or(DataType::Null);
+                let expr_type = element_type(arg_types);
 
                 Ok(DataType::List(Arc::new(Field::new_list_field(
                     expr_type, true,
@@ -146,16 +144,6 @@ impl ScalarUDFImpl for SparkArray {
                     plan_err!("Coercion from {acc:?} to {x:?} failed.")
                 }
             })?;
-        // When any input is a floating-point type (Double/Float), keep it as Double
-        // instead of promoting to Decimal128. Floats support NaN/Infinity which
-        // Decimal128 cannot represent, causing runtime overflow errors.
-        let new_type = if matches!(new_type, DataType::Decimal128(_, _))
-            && arg_types.iter().any(|dt| dt.is_floating())
-        {
-            DataType::Float64
-        } else {
-            new_type
-        };
         Ok(vec![new_type; arg_types.len()])
     }
 }
@@ -163,6 +151,21 @@ impl ScalarUDFImpl for SparkArray {
 // Empty array is a special case that is useful for many other array functions
 pub(crate) fn empty_array_type() -> DataType {
     DataType::List(Arc::new(Field::new_list_field(DataType::Null, false)))
+}
+
+/// The type of the array elements, which is the type of the first non-null argument.
+///
+/// As in Spark's `CreateArray`, the arguments can differ in the nullability of nested fields,
+/// and a nested field of the element type is nullable if it is nullable in any argument.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/complexTypeCreator.scala#L90-L95>
+fn element_type<'a>(data_types: impl IntoIterator<Item = &'a DataType>) -> DataType {
+    let mut data_types = data_types
+        .into_iter()
+        .filter(|data_type| !data_type.is_null());
+    match data_types.next() {
+        Some(first) => data_types.fold(first.clone(), with_nested_field_metadata),
+        None => DataType::Null,
+    }
 }
 
 /// `make_array_inner` is the implementation of the `make_array` function.
@@ -182,12 +185,7 @@ fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> 
         ));
     }
 
-    let data_type = arrays
-        .iter()
-        .map(|arr| arr.data_type())
-        .find(|arr_type| !arr_type.is_null())
-        .unwrap_or(&DataType::Null)
-        .clone();
+    let data_type = element_type(arrays.iter().map(|arr| arr.data_type()));
 
     match data_type {
         // Array or all nulls:
@@ -203,7 +201,7 @@ fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> 
                 None,
             )?))
         }
-        DataType::LargeList(..) => array_array::<i64>(arrays, data_type, value_nullable),
+        // The result is a list whatever the element type, as the return type says.
         _ => array_array::<i32>(arrays, data_type, value_nullable),
     }
 }
@@ -263,6 +261,13 @@ fn array_array<O: OffsetSizeTrait>(
     for arg in args {
         let arg_data = if arg.as_any().is::<NullArray>() {
             ArrayData::new_empty(&data_type)
+        } else if arg.data_type() != &data_type {
+            // The arguments can differ in the nullability of nested fields.
+            let options = CastOptions {
+                safe: false,
+                ..Default::default()
+            };
+            cast_with_options(arg.as_ref(), &data_type, &options)?.to_data()
         } else {
             arg.to_data()
         };
@@ -296,4 +301,232 @@ fn array_array<O: OffsetSizeTrait>(
         make_array(data),
         None,
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{
+        AsArray, FixedSizeListArray, Int32Array, LargeListArray, ListArray, MapArray, StructArray,
+    };
+    use datafusion::arrow::buffer::NullBuffer;
+    use datafusion::arrow::compute::cast;
+    use datafusion::arrow::datatypes::Int32Type;
+
+    use super::*;
+
+    fn int_field(name: &str, nullable: bool) -> FieldRef {
+        Arc::new(Field::new(name, DataType::Int32, nullable))
+    }
+
+    fn list_type(nullable: bool) -> DataType {
+        DataType::List(int_field("item", nullable))
+    }
+
+    fn map_type(nullable: bool) -> DataType {
+        DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![int_field("key", false), int_field("value", nullable)].into(),
+                ),
+                false,
+            )),
+            false,
+        )
+    }
+
+    #[test]
+    fn test_element_type_widens_nested_nullability() {
+        let struct_type = |nullable: bool| {
+            DataType::Struct(vec![int_field("a", nullable), int_field("b", false)].into())
+        };
+        let nested = |nullable: bool| {
+            DataType::LargeList(Arc::new(Field::new(
+                "element",
+                DataType::Struct(
+                    vec![Arc::new(Field::new(
+                        "a",
+                        DataType::FixedSizeList(int_field("item", nullable), 2),
+                        false,
+                    ))]
+                    .into(),
+                ),
+                true,
+            )))
+        };
+        let cases = [
+            (list_type(false), list_type(true)),
+            (
+                DataType::LargeList(int_field("item", false)),
+                DataType::LargeList(int_field("item", true)),
+            ),
+            (
+                DataType::ListView(int_field("item", false)),
+                DataType::ListView(int_field("item", true)),
+            ),
+            (
+                DataType::LargeListView(int_field("item", false)),
+                DataType::LargeListView(int_field("item", true)),
+            ),
+            (
+                DataType::FixedSizeList(int_field("item", false), 3),
+                DataType::FixedSizeList(int_field("item", true), 3),
+            ),
+            (map_type(false), map_type(true)),
+            (struct_type(false), struct_type(true)),
+            (nested(false), nested(true)),
+        ];
+        for (non_nullable, nullable) in cases {
+            for data_types in [
+                [non_nullable.clone(), nullable.clone()],
+                [nullable.clone(), non_nullable.clone()],
+                [nullable.clone(), nullable.clone()],
+            ] {
+                assert_eq!(element_type(&data_types), nullable);
+            }
+            assert_eq!(
+                element_type(&[non_nullable.clone(), non_nullable.clone()]),
+                non_nullable
+            );
+        }
+    }
+
+    #[test]
+    fn test_element_type_merges_nested_nullability() {
+        assert_eq!(
+            element_type(&[DataType::Null, list_type(false), list_type(true)]),
+            list_type(true)
+        );
+        assert_eq!(
+            element_type(&[list_type(true), list_type(false)]),
+            list_type(true)
+        );
+        assert_eq!(element_type(&[DataType::Null]), DataType::Null);
+        let spark_array = SparkArray::new();
+        assert_eq!(
+            spark_array
+                .return_type(&[list_type(false), DataType::Null, list_type(true)])
+                .ok(),
+            Some(DataType::List(Arc::new(Field::new_list_field(
+                list_type(true),
+                true
+            ))))
+        );
+    }
+
+    /// `array(array(id % 2), array(id, NULL))` used to panic in `MutableArrayData` because the
+    /// arguments differ in the nullability of the list elements.
+    #[test]
+    fn test_make_array_of_lists_with_different_nullability() -> Result<()> {
+        let non_nullable = ListArray::new(
+            int_field("item", false),
+            OffsetBuffer::from_lengths([1, 1]),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            None,
+        );
+        let nullable = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(0), None]),
+            None,
+        ]);
+        for arrays in [
+            vec![
+                Arc::new(non_nullable.clone()) as ArrayRef,
+                Arc::new(nullable.clone()),
+            ],
+            vec![
+                Arc::new(nullable.clone()) as ArrayRef,
+                Arc::new(non_nullable.clone()),
+            ],
+        ] {
+            let result = make_array_inner(&arrays)?;
+            assert_eq!(
+                result.data_type(),
+                &DataType::List(Arc::new(Field::new_list_field(list_type(true), true)))
+            );
+            let result = result.as_list::<i32>();
+            let values = result.values().as_list::<i32>();
+            assert_eq!(values.len(), 4);
+            for (index, arg) in arrays.iter().enumerate() {
+                assert_eq!(
+                    values.value(index).as_ref(),
+                    arg.as_list::<i32>().value(0).as_ref()
+                );
+                assert_eq!(values.is_null(2 + index), arg.is_null(1));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_make_array_of_nested_types_with_different_nullability() -> Result<()> {
+        let values = |nulls: Option<Vec<bool>>| -> ArrayRef {
+            Arc::new(Int32Array::new(
+                vec![1, 2].into(),
+                nulls.map(NullBuffer::from),
+            ))
+        };
+        let large_list = |nullable: bool, nulls| -> ArrayRef {
+            Arc::new(LargeListArray::new(
+                int_field("item", nullable),
+                OffsetBuffer::from_lengths([2]),
+                values(nulls),
+                None,
+            ))
+        };
+        let fixed_size_list = |nullable: bool, nulls| -> ArrayRef {
+            Arc::new(FixedSizeListArray::new(
+                int_field("item", nullable),
+                2,
+                values(nulls),
+                None,
+            ))
+        };
+        let r#struct = |nullable: bool, nulls| -> ArrayRef {
+            Arc::new(StructArray::new(
+                vec![int_field("a", nullable)].into(),
+                vec![values(nulls)],
+                None,
+            ))
+        };
+        let map = |nullable: bool, nulls| -> ArrayRef {
+            let entries = StructArray::new(
+                vec![int_field("key", false), int_field("value", nullable)].into(),
+                vec![values(None), values(nulls)],
+                None,
+            );
+            let DataType::Map(field, _) = map_type(nullable) else {
+                unreachable!()
+            };
+            Arc::new(MapArray::new(
+                field,
+                OffsetBuffer::from_lengths([2]),
+                entries,
+                None,
+                false,
+            ))
+        };
+        let constructors: [&dyn Fn(bool, Option<Vec<bool>>) -> ArrayRef; 4] =
+            [&large_list, &fixed_size_list, &r#struct, &map];
+        for constructor in constructors {
+            let non_nullable = constructor(false, None);
+            let nullable = constructor(true, Some(vec![true, false]));
+            let result = make_array_inner(&[Arc::clone(&non_nullable), Arc::clone(&nullable)])?;
+            let DataType::List(field) = result.data_type() else {
+                unreachable!("{}", result.data_type())
+            };
+            let elements = result.as_list::<i32>().value(0);
+            assert_eq!(field.data_type(), nullable.data_type());
+            assert_eq!(elements.len(), 2);
+            let expected = cast(&non_nullable, nullable.data_type())?;
+            assert_eq!(
+                elements.slice(0, 1).to_data(),
+                expected.slice(0, 1).to_data()
+            );
+            assert_eq!(
+                elements.slice(1, 1).to_data(),
+                nullable.slice(0, 1).to_data()
+            );
+        }
+        Ok(())
+    }
 }

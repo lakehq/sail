@@ -8,7 +8,6 @@ use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{Result, exec_err, internal_err, plan_err};
-use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::conditional_expressions::CaseBuilder;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
@@ -21,6 +20,7 @@ use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
 use sail_common_datafusion::metadata::{
     coerced_fields_metadata, type_metadata, widest_interval_metadata,
 };
+use sail_common_datafusion::type_coercion::binary_type_coercion::try_type_union_resolution;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::scalar::conditional::coalesce_lazy::CoalesceLazy;

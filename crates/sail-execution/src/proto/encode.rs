@@ -13,11 +13,11 @@ use datafusion_proto::physical_plan::{
 };
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
+use sail_function::scalar::array::array_sort::ArraySortLambda;
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
 use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
-use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_sequence::SparkSequenceLazy;
 use sail_function::scalar::conditional::coalesce_lazy::CoalesceLazy;
@@ -184,7 +184,7 @@ pub(super) fn try_encode_higher_order_udf(
         HigherOrderUdfKind::Exists(r#gen::SparkArrayExistsUdf {})
     } else if udf_inner.is::<SparkArrayForall>() {
         HigherOrderUdfKind::Forall(r#gen::SparkArrayForallUdf {})
-    } else if let Some(sort) = udf_inner.downcast_ref::<SparkArraySort>() {
+    } else if let Some(sort) = udf_inner.downcast_ref::<ArraySortLambda>() {
         HigherOrderUdfKind::Sort(r#gen::SparkArraySortUdf {
             swapped: sort.is_swapped(),
         })

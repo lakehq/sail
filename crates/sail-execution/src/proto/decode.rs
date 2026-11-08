@@ -16,11 +16,11 @@ use datafusion_proto::protobuf::{
     Partitioning as ProtoPartitioning, PhysicalExprNode, PhysicalPlanNode,
 };
 use prost::Message;
+use sail_function::scalar::array::array_sort::ArraySortLambda;
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
 use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
-use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
 use sail_function::scalar::conditional::coalesce_lazy::CoalesceLazy;
@@ -233,9 +233,9 @@ pub(super) fn try_decode_higher_order_udf(
         ),
         HigherOrderUdfKind::Sort(r#gen::SparkArraySortUdf { swapped }) => {
             if swapped {
-                Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped()))
+                Arc::new(HigherOrderUDF::new_from_impl(ArraySortLambda::new_swapped()))
             } else {
-                Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new()))
+                Arc::new(HigherOrderUDF::new_from_impl(ArraySortLambda::new()))
             }
         }
         HigherOrderUdfKind::SparkSequenceLazy(r#gen::SparkSequenceUdf {

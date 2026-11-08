@@ -5,7 +5,8 @@ use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
-use datafusion_spark::function::math::modulus::{SparkPmod as DataFusionPmod, spark_pmod};
+
+use crate::scalar::math::modulus::{SparkPmod as DataFusionPmod, spark_pmod};
 
 /// Spark `pmod(a, b)` (positive modulo) that honors `spark.sql.ansi.enabled`.
 ///
@@ -63,6 +64,6 @@ impl ScalarUDFImpl for SparkPmod {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        spark_pmod(&args.args, self.ansi_mode)
+        spark_pmod(&args.args, self.ansi_mode, args.return_type())
     }
 }
