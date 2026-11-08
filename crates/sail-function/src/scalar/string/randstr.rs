@@ -68,9 +68,10 @@ impl ScalarUDFImpl for Randstr {
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(v))) => Some(*v as i64),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) => Some(*v),
                 ColumnarValue::Scalar(ScalarValue::Int16(Some(v))) => Some(*v as i64),
+                // A null seed is zero, as in Spark.
                 ColumnarValue::Scalar(ScalarValue::Null)
                 | ColumnarValue::Scalar(ScalarValue::Int32(None))
-                | ColumnarValue::Scalar(ScalarValue::Int64(None)) => None,
+                | ColumnarValue::Scalar(ScalarValue::Int64(None)) => Some(0),
                 other => {
                     return exec_err!(
                         "`randstr` expects an integer seed, got {:?}",
@@ -137,7 +138,7 @@ impl ScalarUDFImpl for Randstr {
 }
 
 /// Generates a random alphanumeric string (0-9, a-z, A-Z) of the specified length.
-fn generate_random_string(rng: &mut SparkXorShiftRandom, length: usize) -> String {
+pub(crate) fn generate_random_string(rng: &mut SparkXorShiftRandom, length: usize) -> String {
     let mut result = String::with_capacity(length);
     for _ in 0..length {
         let v = (rng.next_int() % 62).unsigned_abs() as u8;

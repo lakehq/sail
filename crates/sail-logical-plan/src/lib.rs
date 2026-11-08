@@ -8,6 +8,7 @@ pub mod remote_checkpoint;
 pub mod repartition;
 pub mod row_level;
 pub mod schema_pivot;
+pub mod seeded_random;
 pub mod show_string;
 pub mod sort;
 pub mod spark_partition_id;

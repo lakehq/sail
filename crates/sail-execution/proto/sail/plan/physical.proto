@@ -79,6 +79,7 @@ message ExtendedPhysicalPlanNode {
     InputFileMetadataExecNode input_file_metadata = 64;
     DeltaMaintenanceExecNode delta_maintenance = 65;
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
+    SeededRandomExecNode seeded_random = 67;
   }
 }
 
@@ -1024,6 +1025,23 @@ message SparkPartitionIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;
+}
+
+message SeededRandomExecNode {
+  bytes input = 1;
+  repeated SeededRandomColumn columns = 2;
+  bytes schema = 3;
+}
+
+message SeededRandomColumn {
+  string name = 1;
+  bytes expr = 2;
+  PartitionSeed seed = 3;
+}
+
+enum PartitionSeed {
+  PARTITION_SEED_OFFSET = 0;
+  PARTITION_SEED_JAVA_RANDOM = 1;
 }
 
 message CoalesceExecNode {

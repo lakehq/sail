@@ -61,9 +61,8 @@ impl ScalarUDFImpl for Random {
                 let seed = match scalar {
                     ScalarValue::Int64(Some(value)) => *value,
                     ScalarValue::UInt64(Some(value)) => *value as i64,
-                    ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => {
-                        return invoke_no_seed(number_rows);
-                    }
+                    // A null seed is zero, as in Spark.
+                    ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => 0,
                     _ => return exec_err!("`random` expects an integer seed, got {scalar}"),
                 };
                 let mut rng = SparkXorShiftRandom::new(seed);

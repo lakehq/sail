@@ -50,6 +50,7 @@ use sail_logical_plan::remote_checkpoint::{
 };
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
+use sail_logical_plan::seeded_random::SeededRandomNode;
 use sail_logical_plan::show_string::ShowStringNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
@@ -70,6 +71,7 @@ use sail_physical_plan::remote_checkpoint::{
 };
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
+use sail_physical_plan::seeded_random::{SeededRandomExec, SeededRandomExprColumn};
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
@@ -369,6 +371,34 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             Arc::new(SparkPartitionIdExec::try_new(
                 input.clone(),
                 node.column_name().to_string(),
+                UserDefinedLogicalNode::schema(node).inner().clone(),
+            )?)
+        } else if let Some(node) = node.as_any().downcast_ref::<SeededRandomNode>() {
+            let [logical_input] = logical_inputs else {
+                return internal_err!("SeededRandomExec requires exactly one logical input");
+            };
+            let [input] = physical_inputs else {
+                return internal_err!("SeededRandomExec requires exactly one physical input");
+            };
+            let columns = node
+                .columns()
+                .iter()
+                .map(|column| {
+                    Ok(SeededRandomExprColumn {
+                        name: column.name.clone(),
+                        expr: planner.create_physical_expr(
+                            &column.expr,
+                            logical_input.schema(),
+                            session,
+                            planning_ctx,
+                        )?,
+                        seed: column.seed,
+                    })
+                })
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
+            Arc::new(SeededRandomExec::try_new(
+                input.clone(),
+                columns,
                 UserDefinedLogicalNode::schema(node).inner().clone(),
             )?)
         } else if let Some(node) = node.as_any().downcast_ref::<SortWithinPartitionsNode>() {
@@ -1215,30 +1245,26 @@ mod tests {
             Ok(scalar_subquery(Arc::new(subquery)))
         };
 
-        let (display, batch) = plan_two_scalar_subqueries(
-            subquery(vec![lit(42_i64)], "#1")?,
-            subquery(vec![lit(42_i64)], "#2")?,
-        )
-        .await?;
-        assert!(
-            display.contains("ScalarSubqueryExec: subqueries=1"),
-            "{display}"
-        );
-        let values = batch
-            .columns()
-            .iter()
-            .map(|column| column.as_primitive::<Float64Type>().value(0))
-            .collect::<Vec<_>>();
-        assert_eq!(values[0], values[1]);
+        // A null seed is zero, as in Spark.
+        for seed in [lit(42_i64), lit(ScalarValue::Int64(None))] {
+            let (display, batch) = plan_two_scalar_subqueries(
+                subquery(vec![seed.clone()], "#1")?,
+                subquery(vec![seed], "#2")?,
+            )
+            .await?;
+            assert!(
+                display.contains("ScalarSubqueryExec: subqueries=1"),
+                "{display}"
+            );
+            let values = batch
+                .columns()
+                .iter()
+                .map(|column| column.as_primitive::<Float64Type>().value(0))
+                .collect::<Vec<_>>();
+            assert_eq!(values[0], values[1]);
+        }
 
-        for (a, b) in [
-            (vec![lit(42_i64)], vec![lit(43_i64)]),
-            (vec![], vec![]),
-            (
-                vec![lit(ScalarValue::Int64(None))],
-                vec![lit(ScalarValue::Int64(None))],
-            ),
-        ] {
+        for (a, b) in [(vec![lit(42_i64)], vec![lit(43_i64)]), (vec![], vec![])] {
             let (display, _) =
                 plan_two_scalar_subqueries(subquery(a, "#1")?, subquery(b, "#2")?).await?;
             assert!(

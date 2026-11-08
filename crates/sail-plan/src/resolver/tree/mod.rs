@@ -8,6 +8,7 @@ use crate::resolver::state::PlanResolverState;
 pub(crate) mod exists;
 pub(crate) mod explode;
 pub(crate) mod monotonic_id;
+pub(crate) mod seeded_random;
 pub(crate) mod spark_partition_id;
 pub(crate) mod table_input;
 pub(crate) mod window;

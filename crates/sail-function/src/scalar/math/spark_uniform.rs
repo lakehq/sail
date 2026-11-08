@@ -31,16 +31,15 @@ use crate::error::{
 /// `org.apache.spark.util.random.XORShiftRandom` (MurmurHash3-hashed seed +
 /// XORShift with shifts 21/35/4 and a `Random.nextDouble()`-compatible output).
 ///
-/// Scaling mirrors Spark's `Uniform` expression:
-/// - **Integer**: `min + floor(nextDouble() * (max - min))` in `i64` space.
-/// - **Float / Double**: `min + nextDouble() * (max - min)` in `f64`, cast
-///   to the target type (so `FLOAT + FLOAT` yields an `f32` whose bits match
-///   Spark's `Float.intBitsToFloat` output).
-/// - **Decimal**: double-space interpolation — the scaled `i128` bounds are
-///   converted to `f64` via `value / 10^scale`, interpolated with
-///   `nextDouble`, then `(result * 10^scale).round() as i128`. The rounding
-///   step is what makes `uniform(5.5, 10.5, 123)` round to `6.3` rather than
-///   truncating to `6.2`, matching Spark.
+/// Scaling mirrors Spark's `Uniform` expression, which is replaced with
+/// `CAST(CAST(min AS DOUBLE) + (CAST(max AS DOUBLE) - CAST(min AS DOUBLE)) * rand(seed) AS <type>)`:
+/// each bound is converted to `f64` from its own type, the value is computed in
+/// `f64`, and then cast to the output type.
+/// - **Integer**: the cast truncates toward zero and saturates.
+/// - **Float / Double**: the cast rounds to the nearest value.
+/// - **Decimal**: the cast rounds the shortest decimal representation of the
+///   value half up, which is what makes `uniform(5.5, 10.5, 123)` round to `6.3`
+///   rather than truncating to `6.2`, matching Spark.
 ///
 /// With a fixed seed the generated values match Spark JVM exactly.
 ///
@@ -83,15 +82,13 @@ impl SparkUniform {
     }
 
     /// Helper to calculate the output decimal precision and scale
-    /// Follows Spark's behavior: use the complete type (precision AND scale) of the larger precision
+    /// Follows Spark's behavior: the type of `min` if it is wider than the type of `max`
+    /// (more integral digits and at least the same scale), and the type of `max` otherwise.
     fn calculate_decimal_output(p1: u8, s1: i8, p2: u8, s2: i8) -> (u8, i8) {
-        if p1 > p2 {
+        if p1 as i16 - s1 as i16 >= p2 as i16 - s2 as i16 && s1 >= s2 {
             (p1, s1)
-        } else if p2 > p1 {
-            (p2, s2)
         } else {
-            // Same precision → use max scale
-            (p1, s1.max(s2))
+            (p2, s2)
         }
     }
 
@@ -130,9 +127,8 @@ impl SparkUniform {
 
         match (decimal_min, decimal_max) {
             (Some((p1, s1)), Some((p2, s2))) => {
-                // When one decimal has significantly larger precision, use that decimal's
-                // type completely (both precision AND scale): e.g. Decimal(2,1) + Decimal(20,0)
-                // → Decimal(20,0), not Decimal(20,1).
+                // Spark uses one of the two types completely (both precision AND scale): e.g.
+                // Decimal(2,1) + Decimal(20,0) → Decimal(20,0), not Decimal(20,1).
                 let (precision, scale) = Self::calculate_decimal_output(p1, s1, p2, s2);
                 Decimal128(precision, scale)
             }
@@ -238,9 +234,8 @@ impl ScalarUDFImpl for SparkUniform {
             ));
         }
 
-        let output_type: DataType = Self::calculate_output_type(t_min, t_max);
-
-        let mut coerced_types = vec![output_type.clone(), output_type];
+        // Each bound keeps its own type, since Spark casts it to `DOUBLE` directly.
+        let mut coerced_types = vec![t_min.clone(), t_max.clone()];
 
         if arg_types.len() == 3 {
             // Spark accepts only INT or BIGINT for the seed. Both are coerced to
@@ -294,61 +289,15 @@ fn is_valid_bound_type(dt: &DataType) -> bool {
 /// same value repeated. When the caller did not supply a seed we draw a
 /// random `i64` from the thread RNG so different invocations still differ.
 ///
-/// NOTE: Spark also adds `partitionIndex` to the seed to decorrelate
-/// partitions at runtime. DataFusion does not expose a per-partition index
-/// to scalar UDFs today, so we use the user-supplied seed verbatim. Within
-/// a single batch (one `invoke_with_args` call) the sequence is bit-exact
-/// vs Spark JVM; across batches of the same logical partition the sequence
-/// restarts (tracked separately in #1266).
+/// A call with a seed is usually evaluated by a per-partition generator instead
+/// (see `partition_random`), which adds the partition index to the seed and
+/// continues across batches as Spark does.
 fn build_rng(seed: Option<u64>) -> SparkXorShiftRandom {
     let s: i64 = match seed {
         Some(v) => v as i64,
         None => rng().random(),
     };
     SparkXorShiftRandom::new(s)
-}
-
-/// Compute Spark's uniform integer scaling: `min + floor(nextDouble * (max - min))`.
-///
-/// The formula is applied verbatim — Spark does NOT normalize bounds. For
-/// `uniform(20, 10, 0)` the span `max - min = -10` is negative, so
-/// `floor(nextDouble * -10)` is negative and the result stays in `(max, min]`.
-/// When `min == max` we short-circuit to skip the RNG advance; the scaled
-/// offset would be zero anyway.
-macro_rules! generate_uniform_int_fn {
-    ($fn_name:ident, $type:ty) => {
-        #[inline]
-        fn $fn_name(min: $type, max: $type, rng: &mut SparkXorShiftRandom) -> $type {
-            if min == max {
-                return min;
-            }
-            let span = (max as f64) - (min as f64);
-            let scaled = (rng.next_double() * span).floor() as i64;
-            ((min as i64) + scaled) as $type
-        }
-    };
-}
-
-generate_uniform_int_fn!(generate_uniform_int8_single, i8);
-generate_uniform_int_fn!(generate_uniform_int16_single, i16);
-generate_uniform_int_fn!(generate_uniform_int32_single, i32);
-generate_uniform_int_fn!(generate_uniform_int64_single, i64);
-
-/// Spark's uniform float scaling computes in `f64` and casts to the target
-/// float type at the end, so `FLOAT + FLOAT` produces `f32` values whose exact
-/// bits match Spark's `Float.intBitsToFloat(...)` output. Bounds are NOT
-/// normalized — swapped bounds yield a negative span, matching Spark.
-#[inline]
-fn generate_uniform_float_single(min: f64, max: f64, rng: &mut SparkXorShiftRandom) -> f64 {
-    if min == max {
-        return min;
-    }
-    min + rng.next_double() * (max - min)
-}
-
-#[inline]
-fn generate_uniform_float32_single(min: f32, max: f32, rng: &mut SparkXorShiftRandom) -> f32 {
-    generate_uniform_float_single(min as f64, max as f64, rng) as f32
 }
 
 #[inline]
@@ -358,7 +307,8 @@ fn extract_seed(seed_array: Option<&ArrayRef>, i: usize) -> Option<u64> {
 
     seed_array.and_then(|arr| {
         if arr.is_null(i) {
-            None
+            // A null seed is zero, as in Spark.
+            Some(0)
         } else {
             match arr.data_type() {
                 DataType::Int64 => Some(arr.as_primitive::<Int64Type>().value(i) as u64),
@@ -370,182 +320,282 @@ fn extract_seed(seed_array: Option<&ArrayRef>, i: usize) -> Option<u64> {
 }
 
 fn uniform(args: &[ArrayRef], number_rows: usize, output_type: &DataType) -> Result<ArrayRef> {
-    use datafusion::arrow::array::AsArray;
-
-    let min_array = &args[0];
-    let max_array = &args[1];
-    let seed_array = args.get(2);
-
     // Empty batch: return an empty typed array. We also skip seed extraction,
     // which would otherwise index row 0 of a zero-length array and panic.
     if number_rows == 0 {
         return Ok(new_null_array(output_type, 0));
     }
 
-    // Fast path: if either bound is fully null, the result is all-null — every
-    // per-row branch would fall through to `append_null()` anyway. Skip the
-    // type dispatch entirely and allocate the null array directly.
-    if min_array.null_count() == min_array.len() || max_array.null_count() == max_array.len() {
+    // The seed is required to be foldable, so it is invariant across rows; we
+    // build a single RNG here and advance it as we generate each row.
+    let seed_val = extract_seed(args.get(2), 0);
+    let mut rng = build_rng(seed_val);
+
+    uniform_with_rng(&args[0], &args[1], number_rows, output_type, &mut rng)
+}
+
+/// Generates the uniform values for one batch, as Spark replaces `uniform` with
+/// `CAST(CAST(min AS DOUBLE) + (CAST(max AS DOUBLE) - CAST(min AS DOUBLE)) * rand(seed) AS <type>)`.
+/// The bounds keep their own types, since each of them is cast to `DOUBLE` directly.
+pub(crate) fn uniform_with_rng(
+    min_array: &ArrayRef,
+    max_array: &ArrayRef,
+    number_rows: usize,
+    output_type: &DataType,
+    rng: &mut SparkXorShiftRandom,
+) -> Result<ArrayRef> {
+    // Fast path: if either bound is fully null, the result is all-null and the RNG
+    // does not advance, as Spark does not evaluate `rand` for a null bound.
+    if min_array.null_count() == number_rows || max_array.null_count() == number_rows {
         return Ok(new_null_array(output_type, number_rows));
     }
 
-    // The seed is required to be foldable, so it is invariant across rows; we
-    // build a single RNG here and advance it as we generate each row.
-    let seed_val = extract_seed(seed_array, 0);
-    let mut rng = build_rng(seed_val);
-
-    match *output_type {
-        DataType::Int8 => {
-            let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Int8Type>();
-            let max_arr = max_array.as_primitive::<datafusion::arrow::datatypes::Int8Type>();
-
-            let mut builder = Int8Array::builder(number_rows);
-            for i in 0..number_rows {
-                if min_arr.is_null(i) || max_arr.is_null(i) {
-                    builder.append_null();
-                } else {
-                    let min_val = min_arr.value(i);
-                    let max_val = max_arr.value(i);
-                    builder.append_value(generate_uniform_int8_single(min_val, max_val, &mut rng));
-                }
-            }
-
-            Ok(Arc::new(builder.finish()))
+    let min_values = bound_values(min_array)?;
+    let max_values = bound_values(max_array)?;
+    let values = (0..number_rows).map(|i| match (min_values[i], max_values[i]) {
+        (Some(min), Some(max)) => Some(min + (max - min) * rng.next_double()),
+        _ => None,
+    });
+    // The casts from `f64` to integers truncate toward zero and saturate, as in Spark.
+    let array: ArrayRef = match *output_type {
+        DataType::Int8 => Arc::new(values.map(|v| v.map(|v| v as i8)).collect::<Int8Array>()),
+        DataType::Int16 => Arc::new(values.map(|v| v.map(|v| v as i16)).collect::<Int16Array>()),
+        DataType::Int32 => Arc::new(values.map(|v| v.map(|v| v as i32)).collect::<Int32Array>()),
+        DataType::Int64 => Arc::new(values.map(|v| v.map(|v| v as i64)).collect::<Int64Array>()),
+        DataType::Float32 => Arc::new(
+            values
+                .map(|v| v.map(|v| v as f32))
+                .collect::<Float32Array>(),
+        ),
+        DataType::Float64 => Arc::new(values.collect::<Float64Array>()),
+        DataType::Decimal128(precision, scale) => Arc::new(
+            values
+                .map(|v| v.map(|v| decimal_from_f64(v, precision, scale)).transpose())
+                .collect::<Result<Decimal128Array>>()?
+                .with_precision_and_scale(precision, scale)?,
+        ),
+        _ => {
+            return Err(unsupported_data_type_exec_err(
+                "uniform",
+                "Integer, Float, or Decimal",
+                output_type,
+            ));
         }
-        DataType::Int16 => {
-            let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Int16Type>();
-            let max_arr = max_array.as_primitive::<datafusion::arrow::datatypes::Int16Type>();
+    };
+    Ok(array)
+}
 
-            let mut builder = Int16Array::builder(number_rows);
-            for i in 0..number_rows {
-                if min_arr.is_null(i) || max_arr.is_null(i) {
-                    builder.append_null();
-                } else {
-                    let min_val = min_arr.value(i);
-                    let max_val = max_arr.value(i);
-                    builder.append_value(generate_uniform_int16_single(min_val, max_val, &mut rng));
-                }
-            }
+/// Returns the bound values as `f64`, as Spark casts them to `DOUBLE`.
+fn bound_values(array: &ArrayRef) -> Result<Vec<Option<f64>>> {
+    use datafusion::arrow::array::AsArray;
+    use datafusion::arrow::compute::cast;
+    use datafusion::arrow::datatypes::{Decimal128Type, Float64Type};
 
-            Ok(Arc::new(builder.finish()))
+    match array.data_type() {
+        DataType::Null => Ok(vec![None; array.len()]),
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
+            let (precision, scale) = (*precision, *scale);
+            let values = cast(array, &DataType::Decimal128(precision, scale))?;
+            values
+                .as_primitive::<Decimal128Type>()
+                .iter()
+                .map(|value| value.map(|value| decimal_to_f64(value, scale)).transpose())
+                .collect()
         }
-        DataType::Int32 => {
-            let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Int32Type>();
-            let max_arr = max_array.as_primitive::<datafusion::arrow::datatypes::Int32Type>();
-
-            let mut builder = Int32Array::builder(number_rows);
-            for i in 0..number_rows {
-                if min_arr.is_null(i) || max_arr.is_null(i) {
-                    builder.append_null();
-                } else {
-                    let min_val = min_arr.value(i);
-                    let max_val = max_arr.value(i);
-                    builder.append_value(generate_uniform_int32_single(min_val, max_val, &mut rng));
-                }
-            }
-
-            Ok(Arc::new(builder.finish()))
+        _ => {
+            let values = cast(array, &DataType::Float64)?;
+            Ok(values.as_primitive::<Float64Type>().iter().collect())
         }
-        DataType::Int64 => {
-            let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Int64Type>();
-            let max_arr = max_array.as_primitive::<datafusion::arrow::datatypes::Int64Type>();
-
-            let mut builder = Int64Array::builder(number_rows);
-            for i in 0..number_rows {
-                if min_arr.is_null(i) || max_arr.is_null(i) {
-                    builder.append_null();
-                } else {
-                    let min_val = min_arr.value(i);
-                    let max_val = max_arr.value(i);
-                    builder.append_value(generate_uniform_int64_single(min_val, max_val, &mut rng));
-                }
-            }
-
-            Ok(Arc::new(builder.finish()))
-        }
-        DataType::Float32 => {
-            let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Float32Type>();
-            let max_arr = max_array.as_primitive::<datafusion::arrow::datatypes::Float32Type>();
-
-            let mut builder = Float32Array::builder(number_rows);
-            for i in 0..number_rows {
-                if min_arr.is_null(i) || max_arr.is_null(i) {
-                    builder.append_null();
-                } else {
-                    let min_val = min_arr.value(i);
-                    let max_val = max_arr.value(i);
-                    builder
-                        .append_value(generate_uniform_float32_single(min_val, max_val, &mut rng));
-                }
-            }
-
-            Ok(Arc::new(builder.finish()))
-        }
-        DataType::Float64 => {
-            let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Float64Type>();
-            let max_arr = max_array.as_primitive::<datafusion::arrow::datatypes::Float64Type>();
-
-            let mut builder = Float64Array::builder(number_rows);
-            for i in 0..number_rows {
-                if min_arr.is_null(i) || max_arr.is_null(i) {
-                    builder.append_null();
-                } else {
-                    let min_val = min_arr.value(i);
-                    let max_val = max_arr.value(i);
-                    builder.append_value(generate_uniform_float_single(min_val, max_val, &mut rng));
-                }
-            }
-
-            Ok(Arc::new(builder.finish()))
-        }
-        DataType::Decimal128(precision, scale) => {
-            let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Decimal128Type>();
-            let max_arr = max_array.as_primitive::<datafusion::arrow::datatypes::Decimal128Type>();
-
-            let mut builder =
-                Decimal128Array::builder(number_rows).with_precision_and_scale(precision, scale)?;
-
-            for i in 0..number_rows {
-                if min_arr.is_null(i) || max_arr.is_null(i) {
-                    builder.append_null();
-                    continue;
-                }
-
-                let min_val = min_arr.value(i);
-                let max_val = max_arr.value(i);
-
-                // Spark routes decimal through double-space: convert bounds to
-                // `double`, interpolate with `nextDouble`, cast back to scaled
-                // `i128`. The `.round()` (not `.floor()`) step is what makes
-                // `uniform(5.5, 10.5, 123) → 6.3` match Spark rather than
-                // truncating to `6.2`. Bounds are NOT normalized — swapped
-                // bounds yield a negative span, matching Spark.
-                let decimal_val = if min_val == max_val {
-                    min_val
-                } else {
-                    let scale_factor = 10f64.powi(scale as i32);
-                    let min_f = (min_val as f64) / scale_factor;
-                    let max_f = (max_val as f64) / scale_factor;
-                    let result_f = min_f + rng.next_double() * (max_f - min_f);
-                    (result_f * scale_factor).round() as i128
-                };
-
-                builder.append_value(decimal_val);
-            }
-
-            Ok(Arc::new(builder.finish()))
-        }
-        _ => Err(unsupported_data_type_exec_err(
-            "uniform",
-            "Integer, Float, or Decimal array",
-            output_type,
-        )),
     }
+}
+
+/// Converts a decimal to `f64` as Spark's `Decimal.toDouble`, which rounds the exact
+/// value to the nearest `f64`.
+fn decimal_to_f64(unscaled: i128, scale: i8) -> Result<f64> {
+    if (0..=18).contains(&scale) && unscaled.unsigned_abs() < 1 << f64::MANTISSA_DIGITS {
+        // Both operands are exact, so the division is correctly rounded.
+        Ok(unscaled as f64 / 10_i64.pow(scale as u32) as f64)
+    } else {
+        format!("{unscaled}e{}", -scale)
+            .parse::<f64>()
+            .map_err(|e| generic_exec_err("uniform", &e.to_string()))
+    }
+}
+
+/// Converts a value to a decimal as Spark's `CAST(<double> AS DECIMAL)`, which rounds the
+/// decimal representation of `Double.toString` half up.
+fn decimal_from_f64(value: f64, precision: u8, scale: i8) -> Result<i128> {
+    let overflow = || {
+        generic_exec_err(
+            "uniform",
+            &format!("{value} cannot be represented as Decimal({precision}, {scale})."),
+        )
+    };
+    if !value.is_finite() {
+        return Err(overflow());
+    }
+    let (digits, exponent) = java_double_digits(value.abs());
+    // The value is `0.d1d2...dn * 10^(exponent + 1)`, and the first `kept` digits have a
+    // weight of at least `10^(-scale)`.
+    let kept = exponent + 1 + scale as i32;
+    let mut unscaled: i128 = 0;
+    for digit in digits.iter().take(kept.max(0) as usize) {
+        unscaled = unscaled
+            .checked_mul(10)
+            .and_then(|v| v.checked_add(*digit as i128))
+            .ok_or_else(overflow)?;
+    }
+    if let Some(zeros) = kept.checked_sub(digits.len() as i32).filter(|n| *n > 0) {
+        unscaled = 10_i128
+            .checked_pow(zeros as u32)
+            .and_then(|v| unscaled.checked_mul(v))
+            .ok_or_else(overflow)?;
+    }
+    if kept >= 0 && digits.get(kept as usize).is_some_and(|digit| *digit >= 5) {
+        unscaled += 1;
+    }
+    if unscaled >= 10_i128.pow(precision as u32) {
+        return Err(overflow());
+    }
+    Ok(if value < 0.0 { -unscaled } else { unscaled })
+}
+
+/// Returns the decimal digits and the exponent of a non-negative finite value as printed by
+/// `Double.toString` since Java 19: the decimal closest to the value (with ties to an even
+/// last digit) among the shortest ones with at least two digits that round to the value.
+/// Java 17 prints all the digits of some integers of at least 2^53 in magnitude instead
+/// (JDK-4511638).
+fn java_double_digits(value: f64) -> (Vec<u8>, i32) {
+    // The shortest representation from `Display` is not always the closest one.
+    let shortest = format!("{value:e}");
+    let length = shortest
+        .split('e')
+        .next()
+        .unwrap_or_default()
+        .bytes()
+        .filter(u8::is_ascii_digit)
+        .count()
+        .max(2);
+    // Exact formatting rounds the value to the nearest, with ties to even.
+    let text = format!("{value:.*e}", length - 1);
+    let (mantissa, exponent) = text.split_once('e').unwrap_or((&text, "0"));
+    let digits = mantissa
+        .bytes()
+        .filter(u8::is_ascii_digit)
+        .map(|digit| digit - b'0')
+        .collect();
+    (digits, exponent.parse().unwrap_or_default())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_uniform_integer_truncates_toward_zero() -> Result<()> {
+        // `SELECT uniform(-5000000000L, 5000000000L, 42) FROM range(0, 23, 1, 1)` in Spark 4.2.
+        let expected: [i64; 23] = [
+            1191893702,
+            96018842,
+            3325259388,
+            -2367719095,
+            1702867696,
+            173283545,
+            4991441647,
+            -4300676627,
+            4696695610,
+            2959575617,
+            -515749415,
+            1793959570,
+            -1275886137,
+            3326094725,
+            2479557402,
+            2216183163,
+            -4839487789,
+            1307120027,
+            -4246291762,
+            3389305582,
+            -186663888,
+            2310762213,
+            413617395,
+        ];
+        let min: ArrayRef = Arc::new(Int64Array::from_value(-5_000_000_000, expected.len()));
+        let max: ArrayRef = Arc::new(Int64Array::from_value(5_000_000_000, expected.len()));
+        let mut rng = SparkXorShiftRandom::new(42);
+        let actual = uniform_with_rng(&min, &max, expected.len(), &DataType::Int64, &mut rng)?;
+        assert_eq!(
+            actual.as_ref(),
+            &Int64Array::from(expected.to_vec()) as &dyn Array
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_uniform_converts_each_bound_to_double() -> Result<()> {
+        // `SELECT uniform(16777217, CAST(16777219 AS FLOAT), 0) FROM range(0, 8, 1, 1)` in
+        // Spark 4.2, where the integer bound is not converted to `FLOAT`.
+        let min: ArrayRef = Arc::new(Int32Array::from_value(16777217, 8));
+        // `CAST(16777219 AS FLOAT)` rounds to 16777220.
+        let max: ArrayRef = Arc::new(Float32Array::from_value(16777220.0, 8));
+        let mut rng = SparkXorShiftRandom::new(0);
+        let actual = uniform_with_rng(&min, &max, 8, &DataType::Float32, &mut rng)?;
+        let expected = Float32Array::from(vec![
+            16777220.0, 16777218.0, 16777218.0, 16777218.0, 16777220.0, 16777218.0, 16777218.0,
+            16777218.0,
+        ]);
+        assert_eq!(actual.as_ref(), &expected as &dyn Array);
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal_from_f64_rounds_shortest_representation_half_up() -> Result<()> {
+        // `CAST(<double> AS DECIMAL(38, 18))` in Spark 4.2 uses the shortest representation.
+        assert_eq!(
+            decimal_from_f64(1.7145670158242736, 38, 18)?,
+            1_714_567_015_824_273_600
+        );
+        assert_eq!(decimal_from_f64(2.5, 2, 0)?, 3);
+        assert_eq!(decimal_from_f64(-2.5, 2, 0)?, -3);
+        assert_eq!(decimal_from_f64(-4.404, 4, 2)?, -440);
+        assert!(decimal_from_f64(240.6453672351514, 2, 1).is_err());
+        // Spark on Java 19 or later (Java 17 gives 99208681397455808).
+        assert_eq!(
+            decimal_from_f64(9.92086813974558e16, 38, 18)?,
+            99_208_681_397_455_800 * 10_i128.pow(18)
+        );
+        // The closest shortest representation, not 1131761090849672.3 from `Display`.
+        assert_eq!(
+            decimal_from_f64(1131761090849672.2, 38, 18)?,
+            11_317_610_908_496_722 * 10_i128.pow(17)
+        );
+        assert_eq!(decimal_from_f64(0.0005, 4, 3)?, 1);
+        assert_eq!(decimal_from_f64(0.0004, 4, 3)?, 0);
+        assert_eq!(decimal_from_f64(1234.5, 4, -1)?, 123);
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal_to_f64_rounds_exact_value() -> Result<()> {
+        // `CAST(CAST(61822791393531.8852 AS DECIMAL(18, 4)) AS DOUBLE)` in Spark 4.2.
+        assert_eq!(
+            decimal_to_f64(618_227_913_935_318_852, 4)?,
+            61822791393531.88
+        );
+        assert_eq!(decimal_to_f64(-55, 1)?, -5.5);
+        assert_eq!(decimal_to_f64(10_i128.pow(37), 18)?, 1e19);
+        Ok(())
+    }
+
+    #[test]
+    fn test_output_decimal_type_follows_spark() {
+        // `typeof(uniform(CAST(1.1 AS DECIMAL(5,4)), CAST(9.9 AS DECIMAL(4,1)), 7))` in Spark 4.2.
+        assert_eq!(SparkUniform::calculate_decimal_output(5, 4, 4, 1), (4, 1));
+        assert_eq!(SparkUniform::calculate_decimal_output(4, 1, 5, 4), (5, 4));
+        assert_eq!(SparkUniform::calculate_decimal_output(3, 2, 5, 1), (5, 1));
+    }
 
     #[test]
     fn test_return_field_rejects_invalid_arity() {

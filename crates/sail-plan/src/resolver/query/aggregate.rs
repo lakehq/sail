@@ -21,6 +21,7 @@ use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
 use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
 use sail_logical_optimizer::{is_order_irrelevant_aggregate, push_down_left_semi_anti_join};
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
+use sail_logical_plan::seeded_random::SeededRandomNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 use sail_python_udf::get_udf_display_name;
@@ -33,6 +34,9 @@ use crate::resolver::state::{AggregateState, PlanResolverState};
 use crate::resolver::tree::exists::ExistsRewriter;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::seeded_random::{
+    SeededRandomRewriter, unconditional_seeded_random_calls,
+};
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 
 /// Projections resolved by index, with typed columns for lateral dependencies.
@@ -426,9 +430,15 @@ impl PlanResolver<'_> {
                 }
                 Ok(TreeNodeRecursion::Continue)
             })?;
+            for call in unconditional_seeded_random_calls(&group.expr) {
+                if !partition_expressions.contains(call) {
+                    partition_expressions.push(call.clone());
+                }
+            }
         }
         let (input, columns) =
             self.rewrite_partition_expressions(input, partition_expressions.clone(), state)?;
+        let (input, columns) = self.rewrite_seeded_random_expressions(input, columns, state)?;
         let replacements = partition_expressions
             .into_iter()
             .zip(columns.into_iter().map(Expr::unalias))
@@ -595,6 +605,7 @@ impl PlanResolver<'_> {
             Some(having) => {
                 let (plan, having) =
                     self.rewrite_partition_expressions(plan, vec![having], state)?;
+                let (plan, having) = self.rewrite_seeded_random_expressions(plan, having, state)?;
                 let having =
                     Self::rebase_expression(having.one()?, &aggregate_or_grouping_exprs, &plan)?;
                 LogicalPlanBuilder::from(plan).having(having)?.build()?
@@ -605,6 +616,8 @@ impl PlanResolver<'_> {
             self.rewrite_projection::<MonotonicIdRewriter>(plan, projections, state)?;
         let (plan, projections) =
             self.rewrite_projection::<SparkPartitionIdRewriter>(plan, projections, state)?;
+        let (plan, projections) =
+            self.rewrite_projection::<SeededRandomRewriter>(plan, projections, state)?;
         let (plan, projections) =
             self.rewrite_projection::<ExplodeRewriter>(plan, projections, state)?;
         let (plan, projections) = self.rewrite_window_projection(plan, projections, state)?;
@@ -757,6 +770,8 @@ impl PlanResolver<'_> {
                 } else if let Some(node) = node.downcast_ref::<MonotonicIdNode>() {
                     Self::find_input_sort_ordering(node.input().as_ref())
                 } else if let Some(node) = node.downcast_ref::<SparkPartitionIdNode>() {
+                    Self::find_input_sort_ordering(node.input().as_ref())
+                } else if let Some(node) = node.downcast_ref::<SeededRandomNode>() {
                     Self::find_input_sort_ordering(node.input().as_ref())
                 } else {
                     None
@@ -914,6 +929,7 @@ impl PlanResolver<'_> {
                 }
                 if !extension.node.as_any().is::<MonotonicIdNode>()
                     && !extension.node.as_any().is::<SparkPartitionIdNode>()
+                    && !extension.node.as_any().is::<SeededRandomNode>()
                 {
                     return Ok((LogicalPlan::Extension(extension), false, false));
                 }

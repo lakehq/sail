@@ -10,6 +10,7 @@ pub mod range;
 pub mod remote_checkpoint;
 pub mod repartition;
 pub mod schema_pivot;
+pub mod seeded_random;
 pub mod show_string;
 pub mod spark_partition_id;
 pub mod streaming;

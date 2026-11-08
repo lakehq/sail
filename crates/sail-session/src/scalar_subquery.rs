@@ -27,6 +27,7 @@ use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::range::{Range, RangeNode};
 use sail_logical_plan::repartition::ExplicitRepartitionNode;
+use sail_logical_plan::seeded_random::{SeededRandomColumn, SeededRandomNode};
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
@@ -386,6 +387,16 @@ impl NameNormalizer {
             Arc::new(MonotonicIdNode::try_new(input(), self.fresh())?)
         } else if node.is::<SparkPartitionIdNode>() {
             Arc::new(SparkPartitionIdNode::try_new(input(), self.fresh())?)
+        } else if let Some(random) = node.downcast_ref::<SeededRandomNode>() {
+            let columns = random
+                .columns()
+                .iter()
+                .map(|column| SeededRandomColumn {
+                    name: self.fresh(),
+                    ..column.clone()
+                })
+                .collect();
+            Arc::new(SeededRandomNode::try_new(input(), columns)?)
         } else if let Some(map) = node.downcast_ref::<MapPartitionsNode>() {
             let width = map.udf().output_schema().fields().len();
             let names = (0..width).map(|_| self.fresh()).collect();
@@ -449,20 +460,21 @@ fn is_shareable_extension(node: &dyn UserDefinedLogicalNode) -> bool {
         || node.is::<ExplicitRepartitionNode>()
         || node.is::<MonotonicIdNode>()
         || node.is::<SparkPartitionIdNode>()
+        || node.is::<SeededRandomNode>()
         || node.is::<MapPartitionsNode>()
 }
 
 /// Returns whether calls to the volatile scalar function compute the same result for the
 /// same input, as Spark assumes when it reuses equal subqueries. Python UDFs are reused even
-/// when they are nondeterministic, and random functions only with an explicit seed, since
-/// Spark gives each random function call without a seed its own seed. Input file functions
-/// are reused as well.
+/// when they are nondeterministic, and random functions only with an explicit seed (where a
+/// null seed is zero), since Spark gives each random function call without a seed its own
+/// seed. Input file functions are reused as well.
 fn is_reusable_volatile_scalar(function: &ScalarUDF, args: &[Expr]) -> bool {
     if is_input_file_metadata_function(function) {
         return true;
     }
     let func = function.inner();
-    let seeded = |position: usize| matches!(args.get(position), Some(Expr::Literal(value, _)) if !value.is_null());
+    let seeded = |position: usize| matches!(args.get(position), Some(Expr::Literal(_, _)));
     func.is::<PySparkUDF>()
         || func.is::<PySparkCoGroupMapUDF>()
         || ((func.is::<Random>() || func.is::<Randn>()) && seeded(0))

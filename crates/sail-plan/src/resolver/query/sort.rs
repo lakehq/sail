@@ -91,6 +91,8 @@ impl PlanResolver<'_> {
             sorts.iter().map(|sort| sort.expr.clone()).collect(),
             state,
         )?;
+        let (input, expressions) =
+            self.rewrite_seeded_random_expressions(input, expressions, state)?;
         let sorts = sorts
             .into_iter()
             .zip(expressions)

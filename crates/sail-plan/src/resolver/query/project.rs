@@ -21,6 +21,7 @@ use crate::resolver::tree::PlanRewriter;
 use crate::resolver::tree::exists::ExistsRewriter;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::seeded_random::SeededRandomRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 
@@ -48,6 +49,7 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
         let (input, expr) =
             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
+        let (input, expr) = self.rewrite_projection::<SeededRandomRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_window_projection(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
@@ -392,6 +394,8 @@ impl PlanResolver<'_> {
                 self.rewrite_projection::<MonotonicIdRewriter>(input, vec![named], state)?;
             let (next, named) =
                 self.rewrite_projection::<SparkPartitionIdRewriter>(next, named, state)?;
+            let (next, named) =
+                self.rewrite_projection::<SeededRandomRewriter>(next, named, state)?;
             let (next, named) = self.rewrite_projection::<ExplodeRewriter>(next, named, state)?;
             let (next, named) = self.rewrite_projection::<WindowRewriter>(next, named, state)?;
             let (next, named) = self.rewrite_projection::<ExistsRewriter>(next, named, state)?;
@@ -706,6 +710,22 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
         let input = rewriter.into_plan();
         let mut rewriter = SparkPartitionIdRewriter::new_from_plan(input, state);
+        let expressions = expressions
+            .into_iter()
+            .map(|expr| Ok(expr.rewrite(&mut rewriter)?.data))
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok((rewriter.into_plan(), expressions))
+    }
+
+    /// Materializes the calls of random functions with a seed before evaluating an operator's
+    /// expressions, so that each call is seeded once per partition.
+    pub(super) fn rewrite_seeded_random_expressions(
+        &self,
+        input: LogicalPlan,
+        expressions: Vec<Expr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<Expr>)> {
+        let mut rewriter = SeededRandomRewriter::new_from_plan(input, state);
         let expressions = expressions
             .into_iter()
             .map(|expr| Ok(expr.rewrite(&mut rewriter)?.data))
