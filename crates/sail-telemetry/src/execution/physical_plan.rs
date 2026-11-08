@@ -36,7 +36,7 @@ use pin_project_lite::pin_project;
 use sail_common::telemetry::{KeyValue, SpanAttribute};
 use sail_common_datafusion::utils::items::ItemTaker;
 
-use crate::execution::metrics::MetricEmitter;
+use crate::execution::metrics::{MetricEmitter, MetricsSetExt};
 use crate::metrics::{MetricAttribute, MetricManager, MetricRegistry};
 
 #[derive(Debug, Clone, Default)]
@@ -402,7 +402,7 @@ impl Stream for MetricEmitterStream {
                 is_done || this.last_emit.is_none_or(|t| t.elapsed() >= *this.interval);
             if should_emit {
                 if let Some(metrics) = this.plan.metrics() {
-                    for metric in metrics.iter() {
+                    for metric in metrics.aggregate_duplicates().iter() {
                         let _ = this
                             .emitter
                             .try_emit(metric, this.attributes, this.registry);

@@ -7,6 +7,7 @@ use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
 use opentelemetry::metrics::MeterProvider;
+use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};
 
 use crate::TracingExecOptions;
@@ -24,6 +25,8 @@ fn format_raw_metrics(plan: &dyn ExecutionPlan) -> String {
     format!("[{}]", out.join(", "))
 }
 
+type ValueCheck = Box<dyn Fn(u64) -> bool>;
+
 /// A utility for metric emitter unit tests.
 /// This tester executes a given plan and examines the emitted metrics
 /// collected by an in-memory exporter.
@@ -34,6 +37,7 @@ pub struct MetricEmitterTester {
     plan: Option<Arc<dyn ExecutionPlan>>,
     task_context: Option<Arc<TaskContext>>,
     expected_metrics: Vec<Cow<'static, str>>,
+    expected_values: Vec<(Cow<'static, str>, ValueCheck)>,
 }
 
 impl MetricEmitterTester {
@@ -51,6 +55,7 @@ impl MetricEmitterTester {
             plan: None,
             task_context: None,
             expected_metrics: vec![],
+            expected_values: vec![],
         }
     }
 
@@ -80,11 +85,30 @@ impl MetricEmitterTester {
         self
     }
 
+    /// Expect the counter for metrics that no emitter handles.
+    pub fn with_unknown_metrics(mut self) -> Self {
+        #[cfg(debug_assertions)]
+        self.expected_metrics
+            .push(self.registry.execution_unknown_metric_count.name());
+        self
+    }
+
     pub fn with_expected_metrics<F: FnOnce(&MetricRegistry) -> Vec<Cow<'static, str>>>(
         mut self,
         metrics: F,
     ) -> Self {
         self.expected_metrics.extend(metrics(&self.registry));
+        self
+    }
+
+    /// Expect the last exported value of a `u64` gauge to pass the given check.
+    pub fn with_expected_value<F, C>(mut self, metric: F, check: C) -> Self
+    where
+        F: FnOnce(&MetricRegistry) -> Cow<'static, str>,
+        C: Fn(u64) -> bool + 'static,
+    {
+        self.expected_values
+            .push((metric(&self.registry), Box::new(check)));
         self
     }
 
@@ -137,6 +161,23 @@ impl MetricEmitterTester {
                 "found unexpected metrics: {unexpected_metrics:?} (raw metrics: {})",
                 format_raw_metrics(plan.as_ref())
             );
+        }
+        for (name, check) in &self.expected_values {
+            let value = metrics
+                .iter()
+                .flat_map(|m| m.scope_metrics())
+                .flat_map(|m| m.metrics())
+                .filter(|m| m.name() == name.as_ref())
+                .filter_map(|m| match m.data() {
+                    AggregatedMetrics::U64(MetricData::Gauge(gauge)) => {
+                        gauge.data_points().last().map(|p| p.value())
+                    }
+                    _ => None,
+                })
+                .last();
+            if !value.is_some_and(check) {
+                return plan_err!("unexpected value for metric {name}: {value:?}");
+            }
         }
         Ok(())
     }

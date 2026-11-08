@@ -5,6 +5,7 @@ mod buffer;
 mod default;
 mod filter;
 mod join;
+mod merge;
 mod projection;
 #[cfg(test)]
 pub(super) mod testing;
@@ -21,6 +22,7 @@ use datafusion::physical_plan::{ExecutionPlan, Metric};
 use paste::paste;
 use sail_common::telemetry::KeyValue;
 
+pub use self::merge::MetricsSetExt;
 use crate::metrics::MetricRegistry;
 
 /// A flag indicating whether the metric was handled by a metric emitter.
