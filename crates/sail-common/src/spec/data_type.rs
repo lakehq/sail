@@ -184,6 +184,8 @@ pub enum DataType {
     /// A single Binary array can store up to [`i32::MAX`] bytes of binary data in total.
     /// Corresponds to [`arrow_schema::DataType::Binary`].
     Binary,
+    /// UUID stored as 16 bytes in network byte order, with UUID field metadata.
+    Uuid,
     /// Opaque binary data of fixed size.
     /// Enum parameter specifies the number of bytes per value.
     /// Corresponds to [`arrow_schema::DataType::FixedSizeBinary`].

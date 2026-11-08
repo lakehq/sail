@@ -88,6 +88,11 @@ impl MemoryCatalogProvider {
                     let inherited = previous.filter(|_| !replace_schema);
                     let features = ColumnFeatures::from_field(field);
                     TableColumnStatus {
+                        metadata: field
+                            .metadata()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
                         name: field.name().clone(),
                         data_type: field.data_type().clone(),
                         nullable: field.is_nullable(),
@@ -428,6 +433,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             .into_iter()
             .map(|x| {
                 let CreateTableColumnOptions {
+                    metadata,
                     name,
                     data_type,
                     nullable,
@@ -443,6 +449,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     .as_ref()
                     .is_some_and(|b| b.columns.iter().any(|x| x.eq_ignore_ascii_case(&name)));
                 TableColumnStatus {
+                    metadata,
                     name,
                     data_type,
                     nullable,
@@ -645,6 +652,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     comment,
                 } = x;
                 TableColumnStatus {
+                    metadata: Default::default(),
                     name,
                     data_type,
                     nullable,

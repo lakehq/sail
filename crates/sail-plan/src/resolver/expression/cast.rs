@@ -76,6 +76,46 @@ impl PlanResolver<'_> {
             }
         }
 
+        let target = self.resolve_field(
+            &spec::Field {
+                name: "uuid".to_string(),
+                data_type: cast_to_type.clone(),
+                nullable: true,
+                metadata: vec![],
+            },
+            state,
+        )?;
+        if sail_common_datafusion::uuid::contains_uuid(&target) {
+            let NamedExpr { expr, name, .. } =
+                self.resolve_named_expression(expr, schema, state).await?;
+            let metadata = target
+                .metadata()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            let data_type = target.data_type().clone();
+            // UUID conversion matches fields by name, just like Arrow casts. Apply
+            // the ordinary Spark positional rename before either conversion.
+            let source_type = expr.get_type(schema)?;
+            let renamed_type = build_rename_target_type(&source_type, &data_type);
+            let expr = if renamed_type != source_type {
+                ScalarUDF::new_from_impl(SparkStructRename::new(renamed_type)).call(vec![expr])
+            } else {
+                expr
+            };
+            let expr = ScalarUDF::from(sail_common_datafusion::uuid::UuidCast::new(
+                Arc::new(target),
+                is_try,
+            ))
+            .call(vec![expr]);
+            let expr = if is_try && expr.get_type(schema)? != data_type {
+                try_cast(expr, data_type)
+            } else {
+                expr.cast_to(&data_type, schema)?
+            };
+            return Ok(NamedExpr::new(name, expr).with_metadata(metadata));
+        }
+
         // CAST(expr AS VARIANT) → rewrite to SparkCastToVariant UDF
         // Must intercept before resolve_data_type converts Variant to Struct.
         if matches!(cast_to_type, spec::DataType::Variant) {

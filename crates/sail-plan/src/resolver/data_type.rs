@@ -149,6 +149,7 @@ impl PlanResolver<'_> {
                     Ok(adt::DataType::Interval(adt::IntervalUnit::MonthDayNano))
                 }
             },
+            DataType::Uuid => Ok(adt::DataType::FixedSizeBinary(16)),
             DataType::Binary => Ok(adt::DataType::Binary),
             DataType::FixedSizeBinary { size } => Ok(adt::DataType::FixedSizeBinary(*size)),
             DataType::LargeBinary => Ok(adt::DataType::LargeBinary),
@@ -370,6 +371,10 @@ impl PlanResolver<'_> {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
                 metadata.insert(EXTENSION_TYPE_METADATA_KEY.to_string(), ext.to_string());
+                data_type
+            }
+            spec::DataType::Uuid => {
+                metadata.insert("iceberg.type".to_string(), "uuid".to_string());
                 data_type
             }
             spec::DataType::Variant => {

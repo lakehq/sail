@@ -272,6 +272,7 @@ impl UnityCatalogProvider {
                     partition_by.push(col_name.to_string());
                 }
                 Ok(TableColumnStatus {
+                    metadata: Default::default(),
                     name: name.unwrap_or_default(),
                     data_type: unity_type_to_data_type(
                         type_name.map(|type_name| *type_name),

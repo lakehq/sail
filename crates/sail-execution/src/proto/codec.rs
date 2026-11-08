@@ -3811,6 +3811,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkParseJson(r#gen::SparkParseJsonUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkParseJson::new(safe))));
             }
+            UdfKind::UuidCast(r#gen::UuidCastUdf { target, safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(
+                    sail_common_datafusion::uuid::UuidCast::new(
+                        try_decode_field_ref(&target)?,
+                        safe,
+                    ),
+                )));
+            }
             UdfKind::SparkStructRename(r#gen::SparkStructRenameUdf { target_type }) => {
                 let target_type = self.try_decode_data_type(&target_type)?;
                 return Ok(Arc::new(ScalarUDF::from(SparkStructRename::new(
@@ -4411,6 +4419,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 null_short_circuit,
                 mode,
                 output_timezone: func.output_timezone().map(|timezone| timezone.to_string()),
+            })
+        } else if let Some(func) = node
+            .inner()
+            .downcast_ref::<sail_common_datafusion::uuid::UuidCast>()
+        {
+            UdfKind::UuidCast(r#gen::UuidCastUdf {
+                target: try_encode_field_ref(func.target())?,
+                safe: func.safe(),
             })
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
@@ -6344,6 +6360,7 @@ mod tests {
     use datafusion::physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode;
     use datafusion::physical_expr_common::physical_expr::proto_encode::PhysicalExprEncode;
     use datafusion_proto::protobuf::PhysicalExprNode;
+    use sail_common_datafusion::uuid::UuidCast;
 
     use super::*;
 
@@ -6379,6 +6396,35 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udaf(&udaf, &mut buf)?;
         codec.try_decode_udaf(&name, &buf)
+    }
+
+    #[test]
+    fn uuid_codec_preserves_nested_metadata_and_error_mode() -> Result<()> {
+        let uuid = Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata(
+            [
+                (
+                    sail_common_datafusion::uuid::UUID_METADATA_KEY.to_string(),
+                    "uuid".to_string(),
+                ),
+                ("PARQUET:field_id".to_string(), "17".to_string()),
+            ]
+            .into(),
+        );
+        let target = Arc::new(Field::new(
+            "s",
+            DataType::Struct(vec![Arc::new(uuid)].into()),
+            true,
+        ));
+        for safe in [false, true] {
+            let decoded = round_trip_udf(ScalarUDF::from(UuidCast::new(target.clone(), safe)))?;
+            let decoded = decoded
+                .inner()
+                .downcast_ref::<UuidCast>()
+                .ok_or_else(|| plan_datafusion_err!("expected UuidCast"))?;
+            assert_eq!(decoded.target(), &target);
+            assert_eq!(decoded.safe(), safe);
+        }
+        Ok(())
     }
 
     #[test]

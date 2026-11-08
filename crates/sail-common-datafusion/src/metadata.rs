@@ -98,6 +98,7 @@ pub fn type_metadata(metadata: &FieldMetadata) -> FieldMetadata {
                         | EXTENSION_TYPE_METADATA_KEY
                         | SAIL_SPARK_UDT_METADATA_KEY
                         | SAIL_SPARK_INTERVAL_METADATA_KEY
+                        | crate::uuid::UUID_METADATA_KEY
                 )
             })
             .map(|(key, value)| (key.clone(), value.clone()))

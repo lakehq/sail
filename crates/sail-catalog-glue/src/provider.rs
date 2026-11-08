@@ -176,6 +176,7 @@ impl GlueCatalogProvider {
                 let type_str = col.r#type()?;
                 let data_type = glue_type_to_arrow(type_str).ok()?;
                 Some(TableColumnStatus {
+                    metadata: Default::default(),
                     name,
                     data_type,
                     nullable: true, // Glue doesn't track nullability
@@ -206,6 +207,7 @@ impl GlueCatalogProvider {
                 && let Ok(data_type) = glue_type_to_arrow(type_str)
             {
                 columns.push(TableColumnStatus {
+                    metadata: Default::default(),
                     name: pk.name().to_string(),
                     data_type,
                     nullable: true,
@@ -273,6 +275,7 @@ impl GlueCatalogProvider {
                 let type_str = col.r#type()?;
                 let data_type = glue_type_to_arrow(type_str).ok()?;
                 Some(TableColumnStatus {
+                    metadata: Default::default(),
                     name,
                     data_type,
                     nullable: true,

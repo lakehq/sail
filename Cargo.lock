@@ -7255,6 +7255,7 @@ dependencies = [
  "tonic",
  "tonic-prost-build",
  "url",
+ "uuid",
 ]
 
 [[package]]

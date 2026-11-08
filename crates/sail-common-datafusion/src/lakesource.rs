@@ -29,6 +29,7 @@ pub struct LakeSourceMetadata {
 /// storage metadata before registering the catalog object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LakeSourceCreateTableColumn {
+    pub metadata: std::collections::BTreeMap<String, String>,
     pub name: String,
     pub data_type: DataType,
     pub nullable: bool,

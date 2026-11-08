@@ -340,7 +340,16 @@ impl PlanResolver<'_> {
                     generated_always_as,
                     identity,
                 } = x;
-                let data_type = self.resolve_data_type(&data_type, state)?;
+                let field = self.resolve_field(
+                    &spec::Field {
+                        name: name.clone(),
+                        data_type,
+                        nullable,
+                        metadata: vec![],
+                    },
+                    state,
+                )?;
+                let data_type = field.data_type().clone();
                 let identity = Self::resolve_table_column_identity(&name, identity)?;
                 if identity.is_some() && data_type != datafusion::arrow::datatypes::DataType::Int64
                 {
@@ -349,6 +358,11 @@ impl PlanResolver<'_> {
                     )));
                 }
                 Ok(CreateTableColumnOptions {
+                    metadata: field
+                        .metadata()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
                     name,
                     data_type,
                     nullable,

@@ -271,6 +271,7 @@ message ExtendedScalarUdf {
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
     SparkToStringUdf spark_to_string = 40;
+    UuidCastUdf uuid_cast = 41;
   }
 }
 
@@ -464,6 +465,11 @@ message SparkNegativeUdf {
 
 message SparkFromCsvUdf {
   string session_timezone = 1;
+}
+
+message UuidCastUdf {
+  bytes target = 1;
+  bool safe = 2;
 }
 
 message SparkStructRenameUdf {

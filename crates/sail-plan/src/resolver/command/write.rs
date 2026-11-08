@@ -456,6 +456,11 @@ impl PlanResolver<'_> {
                         .fields()
                         .iter()
                         .map(|f| CreateTableColumnOptions {
+                            metadata: f
+                                .metadata()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect(),
                             name: f.name().clone(),
                             data_type: f.data_type().clone(),
                             nullable: f.is_nullable(),
@@ -831,6 +836,11 @@ impl PlanResolver<'_> {
         // writers store them as JSON-encoded strings.
         let features = ColumnFeatures::from_field(field);
         TableColumnStatus {
+            metadata: field
+                .metadata()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             name: field.name().clone(),
             data_type: field.data_type().clone(),
             nullable: field.is_nullable(),
@@ -860,6 +870,11 @@ impl PlanResolver<'_> {
                 continue;
             };
             let features = ColumnFeatures::from_field(field);
+            column.metadata = field
+                .metadata()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
             column.data_type = field.data_type().clone();
             column.nullable = field.is_nullable();
             column.default = features.current_default();
@@ -912,9 +927,19 @@ impl PlanResolver<'_> {
     fn cast_to_column(
         &self,
         expr: Expr,
-        data_type: &DataType,
+        field: &datafusion::arrow::datatypes::Field,
         schema: &DFSchema,
     ) -> PlanResult<Expr> {
+        let data_type = field.data_type();
+        let expr = if sail_common_datafusion::uuid::contains_uuid(field) {
+            datafusion_expr::ScalarUDF::from(sail_common_datafusion::uuid::UuidCast::new(
+                Arc::new(field.clone()),
+                false,
+            ))
+            .call(vec![expr])
+        } else {
+            expr
+        };
         Ok(match (expr.get_type(schema)?, data_type) {
             (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None)) => {
                 session_wall_clock(expr, data_type, &self.config.session_timezone_label())
@@ -947,8 +972,7 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .zip(table_schema.fields().iter())
                     .map(|(column, field)| {
-                        let expr =
-                            self.cast_to_column(col(column), field.data_type(), input.schema())?;
+                        let expr = self.cast_to_column(col(column), field, input.schema())?;
                         Ok(Self::make_nullable_if_needed(expr, field, input.schema())?
                             .alias(field.name()))
                     })
@@ -969,7 +993,7 @@ impl PlanResolver<'_> {
                             .map(|f| {
                                 let expr = self.cast_to_column(
                                     col(Column::from_name(f.name())),
-                                    field.data_type(),
+                                    field,
                                     input.schema(),
                                 )?;
                                 Self::make_nullable_if_needed(expr, field, input.schema())
@@ -1091,11 +1115,8 @@ impl PlanResolver<'_> {
             if col.generated_always_as.is_some() {
                 if let Some(user_expr) = provided {
                     let check_id = state.register_hidden_field_name(format!("{}__user", col.name));
-                    let cast_expr = self.cast_to_column(
-                        user_expr.clone(),
-                        col.field().data_type(),
-                        input.schema(),
-                    )?;
+                    let cast_expr =
+                        self.cast_to_column(user_expr.clone(), &col.field(), input.schema())?;
                     intermediate_aliases.push(cast_expr.alias(check_id.clone()));
                     gen_check_field_ids[idx] = Some(check_id);
                 }
@@ -1109,11 +1130,8 @@ impl PlanResolver<'_> {
                             col.name
                         )));
                     }
-                    let cast_expr = self.cast_to_column(
-                        user_expr.clone(),
-                        col.field().data_type(),
-                        input.schema(),
-                    )?;
+                    let cast_expr =
+                        self.cast_to_column(user_expr.clone(), &col.field(), input.schema())?;
                     intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
                 }
                 continue;
@@ -1128,8 +1146,7 @@ impl PlanResolver<'_> {
                     col.name
                 )));
             };
-            let cast_expr =
-                self.cast_to_column(input_expr, col.field().data_type(), input.schema())?;
+            let cast_expr = self.cast_to_column(input_expr, &col.field(), input.schema())?;
             intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
         }
         let intermediate = LogicalPlanBuilder::new(input)

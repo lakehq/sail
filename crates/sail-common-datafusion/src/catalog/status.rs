@@ -322,6 +322,7 @@ impl TableStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableColumnStatus {
+    pub metadata: std::collections::BTreeMap<String, String>,
     pub name: String,
     pub data_type: DataType,
     pub nullable: bool,
@@ -336,7 +337,11 @@ pub struct TableColumnStatus {
 
 impl TableColumnStatus {
     pub fn field(&self) -> Field {
-        let mut metadata = std::collections::HashMap::new();
+        let mut metadata = self
+            .metadata
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<std::collections::HashMap<_, _>>();
         if let Some(expr) = &self.generated_always_as {
             let builder = ColumnFeaturesBuilder::new().with_generation_expression(expr.clone());
             metadata.extend(builder.build());
@@ -529,6 +534,11 @@ pub fn replace_columns(
             let features = crate::column_features::ColumnFeatures::from_field(field);
             let previous = columns.iter().find(|column| column.name == *field.name());
             TableColumnStatus {
+                metadata: field
+                    .metadata()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
                 name: field.name().clone(),
                 data_type: field.data_type().clone(),
                 nullable: field.is_nullable(),

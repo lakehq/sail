@@ -695,6 +695,52 @@ fn relabel_timestamps_as_utc(
     Ok(Arc::new(ProjectionExec::try_new(expressions, input)?))
 }
 
+/// Validate and convert UUID leaves before schema validation, distribution and partition transforms.
+fn convert_uuid_write_input(
+    input: Arc<dyn ExecutionPlan>,
+    table: Option<&ArrowSchema>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    use datafusion::physical_expr::expressions::Column;
+    use datafusion::physical_expr::{PhysicalExpr, create_physical_expr};
+    use datafusion::physical_plan::projection::ProjectionExec;
+    use datafusion_common::ToDFSchema;
+    use sail_common_datafusion::uuid::{UuidCast, contains_uuid};
+
+    let Some(table) = table else {
+        return Ok(input);
+    };
+    let schema = input.schema();
+    if !table.fields().iter().any(|field| contains_uuid(field)) {
+        return Ok(input);
+    }
+    let df_schema = schema.as_ref().clone().to_dfschema()?;
+    let expressions = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let target = table
+                .field_with_name(field.name())
+                .ok()
+                .filter(|field| contains_uuid(field));
+            let expression: Arc<dyn PhysicalExpr> = if let Some(target) = target {
+                let expr = datafusion_expr::ScalarUDF::from(UuidCast::new(
+                    Arc::new(target.clone()),
+                    false,
+                ))
+                .call(vec![datafusion_expr::Expr::Column(
+                    datafusion_common::Column::from_name(field.name()),
+                )]);
+                create_physical_expr(&expr, &df_schema, &Default::default(), &Default::default())?
+            } else {
+                Arc::new(Column::new(field.name(), index))
+            };
+            Ok((expression, field.name().clone()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(ProjectionExec::try_new(expressions, input)?))
+}
+
 /// Relabels TIMESTAMP values with UTC, including in nested fields, like Delta's schema
 /// normalization, except where `target`, the type of the existing column, is TIMESTAMP_NTZ.
 fn relabel_timestamp_field(field: &ArrowField, target: Option<&DataType>) -> ArrowField {
@@ -950,6 +996,7 @@ pub(crate) async fn plan_iceberg_write(
         .map(iceberg_schema_to_arrow)
         .transpose()?;
     let physical_input = relabel_timestamps_as_utc(physical_input, table_schema.as_ref())?;
+    let physical_input = convert_uuid_write_input(physical_input, table_schema.as_ref())?;
     let logical_input_schema = Arc::new(logical_input.schema().as_arrow().clone());
     let writer_input_schema =
         input_schema_with_logical_metadata(physical_input.schema(), Some(&logical_input_schema));
@@ -1375,6 +1422,7 @@ fn create_table_arrow_schema(columns: Vec<LakeSourceCreateTableColumn>) -> Resul
         .into_iter()
         .map(
             |LakeSourceCreateTableColumn {
+                 mut metadata,
                  name,
                  data_type,
                  nullable,
@@ -1392,13 +1440,11 @@ fn create_table_arrow_schema(columns: Vec<LakeSourceCreateTableColumn>) -> Resul
                 if identity.is_some() {
                     return not_impl_err!("identity columns in Iceberg CREATE TABLE");
                 }
-                let mut field = ArrowField::new(name, data_type, nullable);
                 if let Some(comment) = comment {
-                    field = field.with_metadata(std::collections::HashMap::from([(
-                        ICEBERG_ARROW_FIELD_DOC_KEY.to_string(),
-                        comment,
-                    )]));
+                    metadata.insert(ICEBERG_ARROW_FIELD_DOC_KEY.to_string(), comment);
                 }
+                let mut field = ArrowField::new(name, data_type, nullable)
+                    .with_metadata(metadata.into_iter().collect());
                 field = with_variant_extension_if_marked_storage(field);
                 Ok(field)
             },

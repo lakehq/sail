@@ -30,6 +30,7 @@ pub mod streaming;
 pub mod type_coercion;
 pub mod udf;
 pub mod utils;
+pub mod uuid;
 pub mod variant;
 
 pub const OPTIMIZER_CORRELATION_KEY_PREFIX: &str = "__sail_correlation_key";

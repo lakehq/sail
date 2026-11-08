@@ -20,7 +20,7 @@ use sail_common_datafusion::catalog::iceberg::{
 };
 
 use crate::GlueCatalogProvider;
-use crate::data_type::{arrow_to_glue_type, arrow_to_iceberg_type};
+use crate::data_type::{arrow_field_to_iceberg_type, arrow_to_glue_type};
 
 /// Default Iceberg table spec version for new tables (v2 is the modern standard).
 const DEFAULT_ICEBERG_FORMAT_VERSION: &str = "2";
@@ -325,7 +325,15 @@ fn build_iceberg_schema(columns: &[CreateTableColumnOptions]) -> CatalogResult<I
         .iter()
         .enumerate()
         .map(|(idx, col)| {
-            let type_doc = arrow_to_iceberg_type(&col.data_type)?;
+            let field =
+                arrow::datatypes::Field::new(&col.name, col.data_type.clone(), col.nullable)
+                    .with_metadata(
+                        col.metadata
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
+                    );
+            let type_doc = arrow_field_to_iceberg_type(&field)?;
             let mut builder = IcebergStructField::builder()
                 .id((idx + 1) as i32)
                 .name(&col.name)

@@ -74,6 +74,9 @@ pub fn plain_lakehouse_create_table_metadata_requirement(
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CreateTableColumnOptions {
+    /// Arrow field metadata, including logical type identity.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub metadata: std::collections::BTreeMap<String, String>,
     pub name: String,
     pub data_type: DataType,
     pub nullable: bool,
