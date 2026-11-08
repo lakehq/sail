@@ -201,8 +201,12 @@ fn unwrap_decimal_comparison(binary: &BinaryExpr, schema: &DFSchema) -> Option<E
         Operator::NotEq if greater == not_less + 1 => {
             Some(value.clone().not_eq(literal(not_less)?))
         }
-        Operator::Eq => Some(not_less_than(not_less)?.and(less(greater)?)),
-        Operator::NotEq => Some(less(not_less)?.or(not_less_than(greater)?)),
+        // The two-sided forms evaluate the value twice, so they are only used for a value that
+        // is the same each time.
+        Operator::Eq if !value.is_volatile() => Some(not_less_than(not_less)?.and(less(greater)?)),
+        Operator::NotEq if !value.is_volatile() => {
+            Some(less(not_less)?.or(not_less_than(greater)?))
+        }
         _ => None,
     }
 }
@@ -532,6 +536,48 @@ mod tests {
             }
         }
         assert!(comparisons > 1_000_000, "{comparisons}");
+        Ok(())
+    }
+
+    #[test]
+    fn decimal_double_comparisons_evaluate_volatile_values_once() -> Result<()> {
+        use datafusion_expr::ScalarUDF;
+        use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
+
+        let schema = schema(DataType::Decimal128(38, 20))?;
+        // Many DECIMAL(38,20) values cast to 0.5, so `=` and `<>` need two comparisons.
+        let volatile = ScalarUDF::from(SparkPartitionId::new()).call(vec![]);
+        let volatile = cast(
+            cast(volatile, DataType::Decimal128(38, 20)),
+            DataType::Float64,
+        );
+        let stable = cast(col("x"), DataType::Float64);
+        for op in [Operator::Eq, Operator::NotEq] {
+            let comparison = |value: &Expr| {
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(value.clone()),
+                    op,
+                    Box::new(lit(0.5_f64)),
+                ))
+            };
+            assert!(!unwrap_comparison(comparison(&volatile), &schema)?.transformed);
+            let optimized = unwrap_comparison(comparison(&stable), &schema)?;
+            assert!(matches!(
+                optimized.data,
+                Expr::BinaryExpr(BinaryExpr {
+                    op: Operator::And | Operator::Or,
+                    ..
+                })
+            ));
+        }
+        for op in [Operator::Lt, Operator::GtEq] {
+            let expr = Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(volatile.clone()),
+                op,
+                Box::new(lit(0.5_f64)),
+            ));
+            assert!(unwrap_comparison(expr, &schema)?.transformed);
+        }
         Ok(())
     }
 

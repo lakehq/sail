@@ -1808,7 +1808,7 @@ fn normalize_float_in_list(
             (false, true) => in_list(expr, list).and(!zeros),
         };
     }
-    // A literal compared with a list of columns and literals keeps the columns as they are, which
+    // A literal compared with a list of columns (and literals) keeps the columns as they are, which
     // keeps the predicate usable for pruning. A literal other than a zero or NaN cannot equal a
     // zero of either sign, so it is compared as it is. A zero is compared with each column by a
     // range that matches both zeros, and with each literal at planning time. NaN is normalized
@@ -1820,6 +1820,7 @@ fn normalize_float_in_list(
         _ => false,
     };
     if let Some(value) = literal(&expr).filter(|value| !is_nan(value))
+        && list.iter().any(column)
         && list.iter().all(|e| column(e) || literal(e).is_some())
     {
         if value != positive_zero && value != negative_zero {
@@ -4273,6 +4274,18 @@ mod test {
                 );
             }
         }
+        // A literal compared with only literals is normalized, so that the result keeps its
+        // nullability.
+        let Expr::InList(InList { expr, list, .. }) = normalize_float_in_list(
+            lit(0.0_f64),
+            vec![lit(-0.0_f64), lit(1.0_f64)],
+            false,
+            &DataType::Float64,
+        ) else {
+            panic!("expected an IN list");
+        };
+        assert!(is_normalized_float_operand(&expr));
+        assert!(list.iter().all(is_normalized_float_operand));
         // NaN, or a value that is not a column, is normalized.
         for (value, list) in [
             (lit(f64::NAN), vec![col("b")]),
