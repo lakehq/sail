@@ -460,8 +460,12 @@ def test_repeated_python_udf_scalar_subqueries(spark, tables):
     from pyspark.sql import functions as F  # noqa: N812
     from pyspark.sql.types import DoubleType, LongType
 
-    plus_one = F.udf(lambda x: None if x is None else x + 1, LongType())
-    noise = F.udf(lambda x: None if x is None else x + __import__("random").random(), DoubleType()).asNondeterministic()
+    # Pickled (non-Arrow) UDFs: on JVM Spark 4.2, an Arrow-optimized Python UDF over the nullable INT
+    # column `x` never returns (the tasks wait on the Python worker).
+    plus_one = F.udf(lambda x: None if x is None else x + 1, LongType(), useArrow=False)
+    noise = F.udf(
+        lambda x: None if x is None else x + __import__("random").random(), DoubleType(), useArrow=False
+    ).asNondeterministic()
     t = spark.table(tables["t"])
     df = spark.range(1).select(
         t.select(F.max(plus_one("x"))).scalar().alias("a"),
