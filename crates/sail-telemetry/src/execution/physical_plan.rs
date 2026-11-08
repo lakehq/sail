@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::fmt;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -87,11 +87,16 @@ pub fn trace_execution_plan(
 pub struct TracingExec {
     inner: Arc<dyn ExecutionPlan>,
     options: TracingExecOptions,
+    emit_lock: Arc<Mutex<()>>,
 }
 
 impl TracingExec {
     pub fn new(inner: Arc<dyn ExecutionPlan>, options: TracingExecOptions) -> Self {
-        Self { inner, options }
+        Self {
+            inner,
+            options,
+            emit_lock: Arc::new(Mutex::new(())),
+        }
     }
 }
 
@@ -229,6 +234,7 @@ impl ExecutionPlan for TracingExec {
                 registry: manager.registry.clone(),
                 interval: manager.collection_interval,
                 last_emit: None,
+                emit_lock: Arc::clone(&self.emit_lock),
             };
             Ok(Box::pin(RecordBatchStreamAdapter::new(
                 schema,
@@ -385,6 +391,7 @@ pin_project! {
         registry: Arc<MetricRegistry>,
         interval: Duration,
         last_emit: Option<Instant>,
+        emit_lock: Arc<Mutex<()>>,
     }
 }
 
@@ -401,6 +408,13 @@ impl Stream for MetricEmitterStream {
             let should_emit =
                 is_done || this.last_emit.is_none_or(|t| t.elapsed() >= *this.interval);
             if should_emit {
+                // Guard here covers both reading and recording, to ensure the last emission
+                // carries the latest values.
+                let _guard = this
+                    .emit_lock
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+
                 if let Some(metrics) = this.plan.metrics() {
                     for metric in metrics.aggregate_duplicates().iter() {
                         let _ = this
@@ -416,5 +430,220 @@ impl Stream for MetricEmitterStream {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.inner.size_hint()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Mutex, mpsc};
+
+    use datafusion::arrow::datatypes::Schema;
+    use datafusion::common::{DataFusionError, internal_err};
+    use datafusion::physical_plan::Metric;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
+    use futures::TryStreamExt;
+    use opentelemetry::metrics::MeterProvider;
+    use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
+    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};
+
+    use super::*;
+    use crate::execution::metrics::{MetricHandled, build_metric_emitter};
+
+    /// A plan without data whose metrics are set by the test.
+    #[derive(Debug)]
+    struct MetricsOnlyExec {
+        metrics: ExecutionPlanMetricsSet,
+        properties: Arc<PlanProperties>,
+    }
+
+    impl DisplayAs for MetricsOnlyExec {
+        fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "MetricsOnlyExec")
+        }
+    }
+
+    impl ExecutionPlan for MetricsOnlyExec {
+        fn name(&self) -> &str {
+            "MetricsOnlyExec"
+        }
+
+        fn properties(&self) -> &Arc<PlanProperties> {
+            &self.properties
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(self)
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            internal_err!("MetricsOnlyExec cannot be executed")
+        }
+
+        fn metrics(&self) -> Option<MetricsSet> {
+            Some(self.metrics.clone_inner())
+        }
+    }
+
+    /// Runs a hook before emitting the first metric.
+    struct PausingEmitter {
+        inner: Box<dyn MetricEmitter>,
+        hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    }
+
+    impl MetricEmitter for PausingEmitter {
+        fn try_emit(
+            &self,
+            metric: &Metric,
+            attributes: &[KeyValue],
+            registry: &MetricRegistry,
+        ) -> MetricHandled {
+            let hook = self.hook.lock().ok().and_then(|mut hook| hook.take());
+            if let Some(hook) = hook {
+                hook();
+            }
+            self.inner.try_emit(metric, attributes, registry)
+        }
+    }
+
+    fn emitter_stream(
+        plan: Arc<dyn ExecutionPlan>,
+        emitter: Box<dyn MetricEmitter>,
+        registry: Arc<MetricRegistry>,
+        emit_lock: Arc<Mutex<()>>,
+    ) -> MetricEmitterStream {
+        MetricEmitterStream {
+            inner: Box::pin(RecordBatchStreamAdapter::new(
+                plan.schema(),
+                futures::stream::empty(),
+            )),
+            plan,
+            emitter,
+            attributes: vec![],
+            registry,
+            interval: Duration::ZERO,
+            last_emit: None,
+            emit_lock,
+        }
+    }
+
+    fn drain(stream: MetricEmitterStream) -> Result<()> {
+        futures::executor::block_on(stream.try_collect::<Vec<_>>()).map(|_| ())
+    }
+
+    /// Returns the last exported value of a `u64` gauge for a partition.
+    fn exported_gauge(
+        exporter: &InMemoryMetricExporter,
+        name: &str,
+        partition: &str,
+    ) -> Result<Option<u64>> {
+        let metrics = exporter
+            .get_finished_metrics()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Ok(metrics
+            .iter()
+            .flat_map(|m| m.scope_metrics())
+            .flat_map(|m| m.metrics())
+            .filter(|m| m.name() == name)
+            .filter_map(|m| match m.data() {
+                AggregatedMetrics::U64(MetricData::Gauge(gauge)) => gauge
+                    .data_points()
+                    .filter(|p| {
+                        p.attributes().any(|kv| {
+                            kv.key.as_str() == MetricAttribute::EXECUTION_PARTITION
+                                && kv.value.as_str() == partition
+                        })
+                    })
+                    .last()
+                    .map(|p| p.value()),
+                _ => None,
+            })
+            .last())
+    }
+
+    #[test]
+    fn test_concurrent_streams_emit_latest_metric_values() -> Result<()> {
+        let metrics = ExecutionPlanMetricsSet::new();
+        let rows = MetricBuilder::new(&metrics).output_rows(1);
+        MetricBuilder::new(&metrics).output_rows(1);
+        rows.add(100);
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(MetricsOnlyExec {
+            metrics,
+            properties: Arc::clone(EmptyExec::new(Arc::new(Schema::empty())).properties()),
+        });
+
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_periodic_exporter(exporter.clone())
+            .build();
+        let registry = Arc::new(MetricRegistry::new(&provider.meter("test")));
+
+        let (paused_tx, paused_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel::<()>();
+        let hook: Box<dyn FnOnce() + Send> = Box::new(move || {
+            let _ = paused_tx.send(());
+            // Times out if the other stream cannot emit while this one is emitting.
+            let _ = resume_rx.recv_timeout(Duration::from_secs(1));
+        });
+        let emit_lock = Arc::new(Mutex::new(()));
+        let paused = emitter_stream(
+            Arc::clone(&plan),
+            Box::new(PausingEmitter {
+                inner: build_metric_emitter(plan.as_ref()),
+                hook: Mutex::new(Some(hook)),
+            }),
+            Arc::clone(&registry),
+            Arc::clone(&emit_lock),
+        );
+        let finishing = emitter_stream(
+            Arc::clone(&plan),
+            build_metric_emitter(plan.as_ref()),
+            Arc::clone(&registry),
+            emit_lock,
+        );
+
+        std::thread::scope(|s| {
+            let paused = s.spawn(move || drain(paused));
+            let finishing = s.spawn(move || -> Result<()> {
+                paused_rx
+                    .recv()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                rows.add(50);
+                drain(finishing)?;
+                let _ = resume_tx.send(());
+                Ok(())
+            });
+            for handle in [paused, finishing] {
+                handle
+                    .join()
+                    .map_err(|_| DataFusionError::Internal("stream thread panicked".into()))??;
+            }
+            Ok::<_, DataFusionError>(())
+        })?;
+        provider
+            .force_flush()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let rows = exported_gauge(&exporter, &registry.execution_output_row_count.name(), "1")?;
+        assert_eq!(rows, Some(150));
+        Ok(())
     }
 }
