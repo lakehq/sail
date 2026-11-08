@@ -841,8 +841,11 @@
       parser: crate::options::parsers::parse_u64
 
 - key: commit_manifest_target_size_bytes
-  description: Iceberg table property controlling manifest target size.
-  supported: false
+  description: Target manifest size for rewrite_manifests (not automatic write-time merging).
+  default:
+    value: "8388608"
+    parser: crate::options::parsers::parse_u64
+  supported: true
   rust_type: u64
   scopes: [write]
   origins:

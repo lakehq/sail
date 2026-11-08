@@ -517,6 +517,15 @@ impl Manifest {
     pub(crate) fn try_from_avro_bytes(
         bs: &[u8],
     ) -> Result<(ManifestMetadata, Vec<ManifestEntry>), String> {
+        Self::decode_avro_entries(bs, |entry, _| Ok(entry))
+    }
+
+    /// Decode additional entry fields through the same partition codec and typed validation
+    /// as normal manifest reads, including the standard-Avro fallback for fixed partitions.
+    pub(crate) fn decode_avro_entries<T>(
+        bs: &[u8],
+        decode: impl Fn(ManifestEntry, &AvroValue) -> Result<T, String>,
+    ) -> Result<(ManifestMetadata, Vec<T>), String> {
         // Parse manifest metadata from avro user metadata
         let header = parse_avro_object_header(bs)?;
         let metadata = ManifestMetadata::parse_from_avro_meta(&header.metadata)?;
@@ -547,7 +556,7 @@ impl Manifest {
                     )?
                 }
             };
-            Ok(entry)
+            decode(entry, &value)
         })?;
 
         Ok((metadata, entries))

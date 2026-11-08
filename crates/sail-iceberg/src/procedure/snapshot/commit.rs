@@ -3,7 +3,7 @@ use datafusion::common::{DataFusionError, Result, plan_err};
 use datafusion::execution::TaskContext;
 use object_store::ObjectStoreExt;
 
-use super::operation::SnapshotOperation;
+use super::operation::{PreparedSnapshotOperation, SnapshotOperation};
 use crate::catalog_support::commit::{
     CatalogCommitOutcome, CatalogTableInfo, IcebergCatalogCommitCoordinator,
     IcebergCatalogCommitMode, catalog_requirements,
@@ -17,6 +17,7 @@ use crate::operations::metadata_commit::{
     MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome, PreviousMetadataFile,
     apply_snapshot_updates,
 };
+use crate::procedure::rewrite_manifests::RewriteManifests;
 use crate::spec::TableMetadata;
 use crate::table::metadata_loader::{
     load_metadata_file_bytes, metadata_file_version_from_path,
@@ -26,14 +27,32 @@ use crate::utils::metadata::metadata_files_for_version;
 
 const MAX_PROCEDURE_COMMIT_RETRIES: usize = 5;
 
+pub(crate) enum ProcedureCommitOperation {
+    Snapshot(SnapshotOperation),
+    RewriteManifests(RewriteManifests),
+}
+
+impl From<SnapshotOperation> for ProcedureCommitOperation {
+    fn from(operation: SnapshotOperation) -> Self {
+        Self::Snapshot(operation)
+    }
+}
+
+impl From<RewriteManifests> for ProcedureCommitOperation {
+    fn from(operation: RewriteManifests) -> Self {
+        Self::RewriteManifests(operation)
+    }
+}
+
 pub(crate) async fn commit_snapshot_operation(
     ctx: &TaskContext,
     table_url: &url::Url,
     table_properties: &[(String, String)],
     lakehouse_table: Option<&sail_common_datafusion::catalog::LakehouseExecutionContext>,
-    operation: SnapshotOperation,
+    operation: impl Into<ProcedureCommitOperation>,
     output_schema: datafusion::arrow::datatypes::SchemaRef,
 ) -> Result<RecordBatch> {
+    let operation = operation.into();
     let object_store = ctx
         .runtime_env()
         .object_store_registry
@@ -53,12 +72,18 @@ pub(crate) async fn commit_snapshot_operation(
             .metadata_location
             .clone()
             .or_else(|| metadata_location_from_properties(table_properties));
-        let metadata_location = resolve_iceberg_metadata_location(
-            lakehouse_table,
-            recorded_metadata_location.clone(),
-            catalog_info.is_catalog_managed_iceberg_table
-                || catalog_managed_iceberg_from_properties(table_properties),
-        )?;
+        let metadata_location = if commit_mode.uses_catalog_metadata() {
+            resolve_iceberg_metadata_location(
+                lakehouse_table,
+                recorded_metadata_location.clone(),
+                catalog_info.is_catalog_managed_iceberg_table
+                    || catalog_managed_iceberg_from_properties(table_properties),
+            )?
+        } else {
+            // A filesystem catalog's pointer is a hint, not the publication authority.
+            // In particular, retries must discover the winning metadata version.
+            None
+        };
         let metadata_file = match metadata_location.as_deref() {
             Some(location) => metadata_location_to_object_path_string(location)?,
             None => crate::table::find_latest_metadata_file(&object_store, table_url).await?,
@@ -66,7 +91,23 @@ pub(crate) async fn commit_snapshot_operation(
         let bytes = load_metadata_file_bytes(&object_store, &metadata_file).await?;
         let mut metadata = TableMetadata::from_json(&bytes)
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        let prepared = operation.prepare(&metadata, output_schema.clone())?;
+        let prepared = match &operation {
+            ProcedureCommitOperation::Snapshot(operation) => {
+                operation.prepare(&metadata, output_schema.clone())?
+            }
+            ProcedureCommitOperation::RewriteManifests(operation) => {
+                let prepared = operation
+                    .prepare(&store_context, table_url, &metadata, output_schema.clone())
+                    .await?;
+                PreparedSnapshotOperation {
+                    changed: !prepared.updates.is_empty(),
+                    requirements: prepared.requirements,
+                    updates: prepared.updates,
+                    manifests: prepared.manifests,
+                    output: prepared.output,
+                }
+            }
+        };
         if !prepared.changed {
             return Ok(prepared.output);
         }
@@ -169,18 +210,38 @@ pub(crate) async fn commit_snapshot_operation(
             && (use_metadata_location_fallback
                 || matches!(commit_mode, IcebergCatalogCommitMode::Filesystem))
         {
-            IcebergCatalogCommitCoordinator::new(ctx, table)
+            if let Err(error) = IcebergCatalogCommitCoordinator::new(ctx, table)
                 .update_metadata_location(
                     table_properties,
                     recorded_metadata_location.as_deref(),
                     prepared_metadata.location(),
                 )
-                .await?;
+                .await
+            {
+                // A unique metadata file is not published until its pointer CAS succeeds.
+                // All other errors (including unknown commit state) preserve every artifact.
+                if use_metadata_location_fallback && is_catalog_conflict(&error) {
+                    let (store, path) = store_context.resolve(prepared_metadata.location())?;
+                    store.delete(&path).await?;
+                    remove_uncommitted_manifests(&store_context, &prepared.manifests).await?;
+                    if attempt < MAX_PROCEDURE_COMMIT_RETRIES {
+                        continue;
+                    }
+                    return Err(procedure_commit_conflict());
+                }
+                return Err(error);
+            }
         }
         prepared_metadata.write_hint(&store_context).await;
         return Ok(prepared.output);
     }
     Err(procedure_commit_conflict())
+}
+
+fn is_catalog_conflict(error: &DataFusionError) -> bool {
+    matches!(error, DataFusionError::External(error)
+        if matches!(error.downcast_ref::<sail_catalog::error::CatalogError>(),
+            Some(sail_catalog::error::CatalogError::Conflict(_))))
 }
 
 fn procedure_commit_conflict() -> DataFusionError {

@@ -3,8 +3,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, StringArray};
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::{Extension, LogicalPlan};
+use datafusion_expr::{ExprSchemable, Extension, LogicalPlan};
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{
     BeginTableAccessRequest, ResolveLakehouseTableRequest, TableAccessPurpose,
@@ -430,6 +431,12 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LakeProcedureValue> {
         let schema = Arc::new(DFSchema::empty());
+        if data_type == LakeProcedureDataType::Boolean {
+            let expression = self
+                .resolve_expression(argument.clone(), &schema, state)
+                .await?;
+            validate_procedure_boolean_argument_type(&expression.get_type(&schema)?)?;
+        }
         let target = match data_type {
             LakeProcedureDataType::Boolean => spec::DataType::Boolean,
             LakeProcedureDataType::Int32 => spec::DataType::Int32,
@@ -469,6 +476,18 @@ impl PlanResolver<'_> {
             })?;
         scalar_to_procedure_value(value)
     }
+}
+
+fn validate_procedure_boolean_argument_type(source: &DataType) -> PlanResult<()> {
+    // Spark's ProcedureArgumentCoercion permits implicit casts, not every explicit CAST.
+    // Check the expression type before folding: even CAST(NULL AS INT) is not BOOLEAN.
+    // Explicit Boolean casts and Boolean-valued expressions remain valid arguments.
+    if source.is_numeric() {
+        return Err(PlanError::invalid(format!(
+            "Procedure argument cannot be implicitly cast from {source} to Boolean"
+        )));
+    }
+    Ok(())
 }
 
 struct ProcedureTablePlanning {
@@ -668,5 +687,47 @@ fn procedure_path_source(path: String) -> SourceInfo {
         sort_order: vec![],
         options: vec![],
         read_case_sensitive: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn procedure_booleans_reject_numeric_implicit_casts() {
+        for source in [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float16,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Decimal128(10, 2),
+            DataType::Decimal256(40, 2),
+        ] {
+            assert!(
+                validate_procedure_boolean_argument_type(&source).is_err(),
+                "{source}"
+            );
+        }
+        // Preserve the existing valid inputs and string-conversion behavior.
+        for source in [
+            DataType::Boolean,
+            DataType::Null,
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+        ] {
+            assert!(
+                validate_procedure_boolean_argument_type(&source).is_ok(),
+                "{source}"
+            );
+        }
     }
 }
