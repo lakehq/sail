@@ -437,7 +437,8 @@ fn decimal_from_f64(value: f64, precision: u8, scale: i8) -> Result<i128> {
     if !value.is_finite() {
         return Err(overflow());
     }
-    let (digits, exponent) = java_double_digits(value.abs());
+    let (digits, length, exponent) = java_double_digits(value.abs());
+    let digits = &digits[..length];
     // The value is `0.d1d2...dn * 10^(exponent + 1)`, and the first `kept` digits have a
     // weight of at least `10^(-scale)`.
     let kept = exponent + 1 + scale as i32;
@@ -468,26 +469,63 @@ fn decimal_from_f64(value: f64, precision: u8, scale: i8) -> Result<i128> {
 /// last digit) among the shortest ones with at least two digits that round to the value.
 /// Java 17 prints all the digits of some integers of at least 2^53 in magnitude instead
 /// (JDK-4511638).
-fn java_double_digits(value: f64) -> (Vec<u8>, i32) {
+fn java_double_digits(value: f64) -> ([u8; 17], usize, i32) {
+    use std::fmt::Write;
+
     // The shortest representation from `Display` is not always the closest one.
-    let shortest = format!("{value:e}");
+    let mut shortest = FormatBuffer::new();
+    let _ = write!(shortest, "{value:e}");
     let length = shortest
+        .as_str()
         .split('e')
         .next()
         .unwrap_or_default()
         .bytes()
         .filter(u8::is_ascii_digit)
         .count()
-        .max(2);
+        .clamp(2, 17);
     // Exact formatting rounds the value to the nearest, with ties to even.
-    let text = format!("{value:.*e}", length - 1);
-    let (mantissa, exponent) = text.split_once('e').unwrap_or((&text, "0"));
-    let digits = mantissa
-        .bytes()
-        .filter(u8::is_ascii_digit)
-        .map(|digit| digit - b'0')
-        .collect();
-    (digits, exponent.parse().unwrap_or_default())
+    let mut text = FormatBuffer::new();
+    let _ = write!(text, "{value:.*e}", length - 1);
+    let text = text.as_str();
+    let (mantissa, exponent) = text.split_once('e').unwrap_or((text, "0"));
+    let mut digits = [0; 17];
+    let mut count = 0;
+    for digit in mantissa.bytes().filter(u8::is_ascii_digit) {
+        digits[count] = digit - b'0';
+        count += 1;
+    }
+    (digits, count, exponent.parse().unwrap_or_default())
+}
+
+/// A stack buffer for formatting a finite `f64` without allocating. Scientific notation
+/// with at most 17 significant digits fits in 32 bytes.
+struct FormatBuffer {
+    bytes: [u8; 32],
+    len: usize,
+}
+
+impl FormatBuffer {
+    fn new() -> Self {
+        Self {
+            bytes: [0; 32],
+            len: 0,
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.len]).unwrap_or_default()
+    }
+}
+
+impl std::fmt::Write for FormatBuffer {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        let end = self.len + s.len();
+        let dest = self.bytes.get_mut(self.len..end).ok_or(std::fmt::Error)?;
+        dest.copy_from_slice(s.as_bytes());
+        self.len = end;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
