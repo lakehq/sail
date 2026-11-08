@@ -29,6 +29,7 @@ use datafusion_common::{DataFusionError, Result as DataFusionResult};
 use log::{debug, error};
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStore, ObjectStoreExt, PutMode, PutOptions};
+use sail_common_datafusion::error::CommitStateUnknownError;
 use serde_json::Deserializer as JsonDeserializer;
 use url::Url;
 use uuid::Uuid;
@@ -202,21 +203,40 @@ impl LogStore for DefaultLogStore {
         _: Uuid,
     ) -> Result<(), TransactionError> {
         match commit_or_bytes {
-            CommitOrBytes::LogBytes(log_bytes) => self
-                .object_store(None)
-                .put_opts(
-                    &commit_path(version),
-                    log_bytes.into(),
-                    put_options().clone(),
-                )
-                .await
-                .map(|_| ())
-                .map_err(|err| match err {
-                    ObjectStoreError::AlreadyExists { .. } => {
-                        TransactionError::VersionAlreadyExists(version)
+            CommitOrBytes::LogBytes(log_bytes) => {
+                let store = self.object_store(None);
+                let path = commit_path(version);
+                match store
+                    .put_opts(&path, log_bytes.clone().into(), put_options().clone())
+                    .await
+                {
+                    Ok(_) => Ok(()),
+                    Err(ObjectStoreError::AlreadyExists { .. }) => {
+                        // A conditional PUT retry may collide with its own durable write.
+                        let existing = async { store.get(&path).await?.bytes().await }
+                            .await
+                            .map_err(|source| {
+                                let msg = format!(
+                                    "Failed to verify Delta commit at version {version} ({path}): \
+                                     commit outcome unknown; commit may have succeeded"
+                                );
+                                TransactionError::LogStoreError {
+                                    source: Box::new(CommitStateUnknownError::with_source(
+                                        msg.clone(),
+                                        source,
+                                    )),
+                                    msg,
+                                }
+                            })?;
+                        if existing == log_bytes {
+                            Ok(())
+                        } else {
+                            Err(TransactionError::VersionAlreadyExists(version))
+                        }
                     }
-                    _ => TransactionError::from(err),
-                }),
+                    Err(err) => Err(TransactionError::from(err)),
+                }
+            }
             CommitOrBytes::TmpCommit(_) => {
                 unreachable!("DefaultLogStore should not receive temporary commits")
             }

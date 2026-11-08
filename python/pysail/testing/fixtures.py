@@ -5,8 +5,18 @@ import sys
 import pytest
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addini(
+        "strict_markers",
+        "Raise an error for unregistered markers",
+        type="bool",
+        default=True,
+    )
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Configure both installed sanity tests and development tests."""
+    config.pluginmanager.import_plugin("pysail.testing.suites")
     # Note: configuration set via `config.inicfg` may not have an effect due to the cache used
     # in `config.getini()`. In such a case, we may have to clear the INI cache in `config`.
     # Since clearing the cache requires access to the private attribute of `config`, we do not

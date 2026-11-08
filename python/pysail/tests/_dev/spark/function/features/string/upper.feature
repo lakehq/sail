@@ -3,7 +3,6 @@ Feature: upper output schema
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to upper yields the schema Spark declares
       When query
         """
@@ -15,7 +14,6 @@ Feature: upper output schema
          |-- result: string (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null column input to upper yields the schema Spark declares
       When query
         """
@@ -38,7 +36,6 @@ Feature: upper output schema
          |-- result: string (nullable = true)
         """
 
-    @sail-bug
     Scenario: distinct upper results remain non-nullable for non-null input
       When query
         """
@@ -62,3 +59,26 @@ Feature: upper output schema
       Then query result collected
         | s      |
         | X1.CSV |
+
+  Rule: Binary input
+
+    Scenario: upper replaces invalid UTF-8 in binary input
+      When query
+        """
+        SELECT upper(X'C3416263') AS result
+        """
+      Then query result
+        | result |
+        | �ABC   |
+
+    @function(nullability)
+    Scenario: upper of a non-null binary column stays non-null
+      When query
+        """
+        SELECT upper(CAST(CAST(id AS STRING) AS BINARY)) AS result FROM range(3)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """

@@ -3,7 +3,6 @@ Feature: ucase output schema
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to ucase yields the schema Spark declares
       When query
         """
@@ -15,7 +14,6 @@ Feature: ucase output schema
          |-- result: string (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null column input to ucase yields the schema Spark declares
       When query
         """

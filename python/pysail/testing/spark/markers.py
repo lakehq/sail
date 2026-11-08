@@ -3,7 +3,7 @@
 Use ``@pytest.mark.spark(version=">=4.1,<4.2", cross_version=True)`` for a UDF
 that needs PySpark 4.1, or ``@pytest.mark.spark(skip_if_jvm=True, reason="...")``
 for a Sail extension. ``version`` always refers to the installed PySpark client.
-``cross_version`` records eligibility for a future matrix covering all versions.
+``cross_version`` runs a test on every compatible version when matrix selection is enabled.
 Reasons describe the feature or backend difference. Each requirement gets its
 own skip marker and reason, with a default reason when none is supplied.
 """
@@ -34,7 +34,7 @@ def resolve_spark_markers(markers: Iterable[pytest.Mark]) -> list[SparkSupport]:
     """Preserve individual requirements and reject contradictory explicit flags.
 
     All version requirements must be met. Omitted flags do not override inherited
-    values. ``cross_version`` is metadata for future test matrix selection.
+    values. ``cross_version`` enables every compatible matrix version.
     """
     supports = []
     flags = {}

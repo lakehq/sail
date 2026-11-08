@@ -4,18 +4,18 @@ import pytest
 from pyspark.errors.exceptions.connect import SparkConnectGrpcException
 from pyspark.sql import SparkSession
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+from pysail.testing.spark.session import patch_spark_connect_session
 
 pytestmark = [
-    pytest.mark.skipif(pyspark_version() < (4,), reason="Server-side session tracking requires PySpark 4+"),
-    pytest.mark.skipif(is_jvm_spark(), reason="PySpark allows only one remote per process in local mode"),
+    pytest.mark.spark(version=">=4", reason="Server-side session tracking requires PySpark 4+"),
+    pytest.mark.spark(skip_if_jvm=True, reason="PySpark allows only one remote per process in local mode"),
 ]
 
 
 def test_same_user_same_session_id(remote: str) -> None:
     sid = str(uuid4())
-    spark1 = SparkSession.builder.remote(_url(remote, "user1", sid)).create()
-    spark2 = SparkSession.builder.remote(_url(remote, "user1", sid)).create()
+    spark1 = _create_session(_url(remote, "user1", sid))
+    spark2 = _create_session(_url(remote, "user1", sid))
     try:
         spark1.conf.set("key", "1")
         assert spark1.conf.get("key") == "1"
@@ -41,8 +41,8 @@ def test_same_user_same_session_id(remote: str) -> None:
 
 def test_different_users_same_session_id(remote: str) -> None:
     sid = str(uuid4())
-    spark1 = SparkSession.builder.remote(_url(remote, "user1", sid)).create()
-    spark2 = SparkSession.builder.remote(_url(remote, "user2", sid)).create()
+    spark1 = _create_session(_url(remote, "user1", sid))
+    spark2 = _create_session(_url(remote, "user2", sid))
     try:
         spark1.conf.set("key", "1")
         assert spark1.conf.get("key") == "1"
@@ -66,7 +66,7 @@ def test_different_users_same_session_id(remote: str) -> None:
 
 
 def test_server_restart_detection(remote: str) -> None:
-    spark = SparkSession.builder.remote(remote).create()
+    spark = _create_session(remote)
     try:
         assert spark.sql("SELECT 1 VAL").first()["VAL"] == 1
         # simulate a server restart: the server now has a different ID than the client observed
@@ -78,6 +78,14 @@ def test_server_restart_detection(remote: str) -> None:
         assert spark._client._closed  # noqa: SLF001
     finally:
         spark.stop()
+
+
+def _create_session(remote: str) -> SparkSession:
+    session = SparkSession.builder.remote(remote).create()
+    # These tests need custom user/session IDs, but still need the same cleanup
+    # guard as sessions created by the shared test factory.
+    patch_spark_connect_session(session)
+    return session
 
 
 def _url(remote: str, user_id: str, session_id: str) -> str:
