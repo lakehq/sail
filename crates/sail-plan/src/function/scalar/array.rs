@@ -30,6 +30,7 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::string::btrim::BTrimFunc;
 use sail_python_udf::udf::expr_contains_python_udf;
 
+use super::conditional::coerce_string_promotion_values;
 use super::lambda::lambda_with_fresh_parameter;
 use super::map::coerce_ansi_string_values;
 use crate::error::{PlanError, PlanResult};
@@ -590,8 +591,9 @@ where
 
 /// A function of two arrays, which are cast to their common type when their elements mix
 /// TIMESTAMP_NTZ and TIMESTAMP values, or when they differ only in nested nullability.
-/// If given, `result_elements_nullable` derives from the element nullability of the arrays
-/// whether the elements of the result can be NULL, since the common type can make them nullable.
+/// It also sets whether the elements of the result can be NULL, from the element nullability of
+/// the arrays by `result_elements_nullable` if given, since the common type can make them
+/// nullable.
 fn with_arrays_timestamp_ntz_coercion<F>(
     f: F,
     result_elements_nullable: Option<fn(bool, bool) -> bool>,
@@ -638,7 +640,7 @@ fn array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let arguments = if function_context.plan_config.ansi_mode {
         coerce_ansi_string_values(arguments.clone(), function_context.schema)?.unwrap_or(arguments)
     } else {
-        arguments
+        coerce_string_promotion_values(arguments, &function_context)?
     };
     with_timestamp_ntz_coercion(|arguments| ScalarUDF::from(SparkArray::new()).call(arguments))(
         ScalarFunctionInput {

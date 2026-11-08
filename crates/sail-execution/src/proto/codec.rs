@@ -9492,7 +9492,7 @@ mod tests {
         let udf_any = decoded_hof.fun().inner().as_ref() as &dyn std::any::Any;
         let sort = udf_any
             .downcast_ref::<ArraySortLambda>()
-            .ok_or_else(|| plan_datafusion_err!("inner UDF is not a ArraySortLambda"))?;
+            .ok_or_else(|| plan_datafusion_err!("inner UDF is not an ArraySortLambda"))?;
         assert!(sort.is_swapped());
 
         assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])

@@ -1017,8 +1017,9 @@ pub fn set_operation_coercion(
 /// integral and floating point values are DOUBLE.
 /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/AnsiStringPromotionTypeCoercion.scala#L92-L109>
 ///
-/// Without ANSI mode, numeric values are promoted to STRING (`TypeCoercion.stringPromotion`).
-/// Other values with STRING values return `None`, and keep their existing coercion.
+/// Without ANSI mode, atomic values other than BOOLEAN and BINARY values (i.e. numeric, datetime,
+/// and ANSI interval values) are promoted to STRING (`TypeCoercion.stringPromotion`). Other values
+/// with STRING values return `None`, and keep their existing coercion.
 /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercion.scala#L113-L120>
 ///
 /// The value type of a dictionary of string or binary values takes part in the promotion, and
@@ -1042,7 +1043,19 @@ pub fn string_promotion_type(data_types: &[DataType], ansi_mode: bool) -> Option
     for data_type in data_types {
         if data_type.is_string() {
             strings.push(data_type);
-        } else if !data_type.is_null() && !data_type.is_numeric() {
+        } else if !data_type.is_null()
+            && !data_type.is_numeric()
+            && !matches!(
+                data_type,
+                Date32
+                    | Date64
+                    | Timestamp(_, _)
+                    | Time32(_)
+                    | Time64(_)
+                    | Interval(arrow::datatypes::IntervalUnit::YearMonth)
+                    | Duration(_)
+            )
+        {
             return None;
         }
     }
@@ -2515,7 +2528,22 @@ mod tests {
             (vec![Utf8, Float64, Utf8View], Some(Utf8View)),
             (vec![Utf8, Boolean], None),
             (vec![Binary, Utf8], None),
-            (vec![Utf8, Date32], None),
+            (vec![Utf8, Date32], Some(Utf8)),
+            (
+                vec![Timestamp(Microsecond, None), LargeUtf8],
+                Some(LargeUtf8),
+            ),
+            (vec![Utf8, Time64(Microsecond)], Some(Utf8)),
+            (
+                vec![Utf8, Interval(arrow::datatypes::IntervalUnit::YearMonth)],
+                Some(Utf8),
+            ),
+            (vec![Utf8, Duration(Microsecond)], Some(Utf8)),
+            (vec![Utf8, Interval(MonthDayNano)], None),
+            (
+                vec![Utf8, List(Arc::new(Field::new_list_field(Int32, true)))],
+                None,
+            ),
             (vec![Int32, Int64], None),
         ];
         for (types, expected) in non_ansi {

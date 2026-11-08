@@ -81,14 +81,18 @@ pub fn widen_nested_nullability(data_types: &[DataType]) -> Option<DataType> {
 /// [`widen_nested_nullability`] where, in addition, a nested field of the NULL type (e.g. the
 /// elements of `array(NULL)`, at any depth) fits a field of any type and becomes nullable, as in
 /// Spark's `findTightestCommonType` and `findTypeForComplex` (`Cast.forceNullable` from
-/// `NullType`). Returns `None` if there are no data types or if they differ otherwise.
+/// `NullType`). The names of list elements and map entries do not matter (e.g. `element` in
+/// Parquet and `item` in Arrow), as in Spark, where they have no names; the first name is kept.
+/// A list and a large list have the large list type in common.
+/// Returns `None` if there are no data types or if they differ otherwise.
 /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercion.scala#L76-L79>
 /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercionHelper.scala#L137-L179>
 pub fn widen_list_nullability(data_types: &[DataType]) -> Option<DataType> {
     fn widen(left: &DataType, right: &DataType) -> Option<DataType> {
-        let field = |left: &FieldRef, right: &FieldRef| -> Option<FieldRef> {
+        let field = |left: &FieldRef, right: &FieldRef, named: bool| -> Option<FieldRef> {
             let (l, r) = (left.metadata(), right.metadata());
-            if left.name() != right.name() || (!l.is_empty() && !r.is_empty() && l != r) {
+            if (named && left.name() != right.name()) || (!l.is_empty() && !r.is_empty() && l != r)
+            {
                 return None;
             }
             let data_type = match (left.data_type(), right.data_type()) {
@@ -109,27 +113,30 @@ pub fn widen_list_nullability(data_types: &[DataType]) -> Option<DataType> {
             ))
         };
         match (left, right) {
-            (DataType::List(l), DataType::List(r)) => Some(DataType::List(field(l, r)?)),
-            (DataType::LargeList(l), DataType::LargeList(r)) => {
-                Some(DataType::LargeList(field(l, r)?))
+            (DataType::List(l), DataType::List(r)) => Some(DataType::List(field(l, r, false)?)),
+            // A list and a large list have the large list type in common.
+            (DataType::LargeList(l), DataType::LargeList(r))
+            | (DataType::List(l), DataType::LargeList(r))
+            | (DataType::LargeList(l), DataType::List(r)) => {
+                Some(DataType::LargeList(field(l, r, false)?))
             }
             (DataType::ListView(l), DataType::ListView(r)) => {
-                Some(DataType::ListView(field(l, r)?))
+                Some(DataType::ListView(field(l, r, false)?))
             }
             (DataType::LargeListView(l), DataType::LargeListView(r)) => {
-                Some(DataType::LargeListView(field(l, r)?))
+                Some(DataType::LargeListView(field(l, r, false)?))
             }
             (DataType::FixedSizeList(l, ls), DataType::FixedSizeList(r, rs)) if ls == rs => {
-                Some(DataType::FixedSizeList(field(l, r)?, *ls))
+                Some(DataType::FixedSizeList(field(l, r, false)?, *ls))
             }
             (DataType::Map(l, ls), DataType::Map(r, rs)) if ls == rs => {
-                Some(DataType::Map(field(l, r)?, *ls))
+                Some(DataType::Map(field(l, r, false)?, *ls))
             }
             (DataType::Struct(l), DataType::Struct(r)) if l.len() == r.len() => {
                 let fields = l
                     .iter()
                     .zip(r.iter())
-                    .map(|(l, r)| field(l, r))
+                    .map(|(l, r)| field(l, r, true))
                     .collect::<Option<Vec<_>>>()?;
                 Some(DataType::Struct(fields.into()))
             }
@@ -220,6 +227,71 @@ mod tests {
                 vec![Field::new("a", DataType::Int64, true)].into()
             ))
         );
+        // The names of list elements do not matter, e.g. `element` in Parquet.
+        let element_list = DataType::List(Arc::new(Field::new("element", DataType::Int32, true)));
+        assert_eq!(
+            widen_list_nullability(&[element_list.clone(), list(false)]),
+            Some(element_list.clone())
+        );
+        assert_eq!(
+            widen_list_nullability(&[list(false), element_list]),
+            Some(list(true))
+        );
+        // A list and a large list have the large list type in common.
+        let large_list =
+            DataType::LargeList(Arc::new(Field::new("element", DataType::Int32, true)));
+        assert_eq!(
+            widen_list_nullability(&[list(false), large_list.clone()]),
+            Some(DataType::LargeList(Arc::new(Field::new_list_field(
+                DataType::Int32,
+                true
+            ))))
+        );
+        assert_eq!(
+            widen_list_nullability(&[large_list.clone(), list(false)]),
+            Some(large_list)
+        );
+        // The names of the elements of every list type and of map entries do not matter.
+        let element =
+            |name: &str, nullable: bool| Arc::new(Field::new(name, DataType::Int32, nullable));
+        let kinds: [fn(FieldRef) -> DataType; 5] = [
+            DataType::List,
+            DataType::LargeList,
+            DataType::ListView,
+            DataType::LargeListView,
+            |field| DataType::FixedSizeList(field, 2),
+        ];
+        for kind in kinds {
+            assert_eq!(
+                widen_list_nullability(&[
+                    kind(element("element", true)),
+                    kind(element("item", false))
+                ]),
+                Some(kind(element("element", true)))
+            );
+            assert_eq!(
+                widen_list_nullability(&[
+                    kind(element("item", false)),
+                    kind(element("element", true))
+                ]),
+                Some(kind(element("item", true)))
+            );
+        }
+        let map = |name: &str, nullable: bool| {
+            let entries = vec![
+                Field::new("key", DataType::Int32, false),
+                Field::new("value", DataType::Int32, nullable),
+            ];
+            DataType::Map(
+                Arc::new(Field::new(name, DataType::Struct(entries.into()), false)),
+                false,
+            )
+        };
+        assert_eq!(
+            widen_list_nullability(&[map("key_value", false), map("entries", true)]),
+            Some(map("key_value", true))
+        );
+
         let b_struct = DataType::Struct(vec![Field::new("b", list(false), false)].into());
         assert_eq!(
             widen_list_nullability(&[r#struct(null_list(true)), b_struct]),

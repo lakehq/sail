@@ -8,12 +8,14 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-/// Declares that the elements of a list are never NULL.
+/// Declares that the elements of a list are never NULL, for elements the caller guarantees are
+/// never NULL.
 ///
-/// This is used for results such as `collect_set` that never hold NULL elements, where Spark
-/// declares the elements as never NULL. The list is returned as it is with the element field
-/// changed, so no data is copied. DataFusion does not support a CAST to a list with non-nullable
-/// elements of a struct type, so a CAST cannot be used for this.
+/// This is used for results such as `collect_set`, `array_intersect` and `array_except` that
+/// cannot hold NULL elements, where Spark declares the elements as never NULL. The list is
+/// returned as it is with the element field changed, so no data is copied. DataFusion does not
+/// support a CAST to a list with non-nullable elements of a struct type, so a CAST cannot be used
+/// for this.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NonNullElements {
     signature: Signature,

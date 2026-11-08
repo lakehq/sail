@@ -4,6 +4,7 @@ use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
+use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
 use sail_common_datafusion::type_coercion::binary_type_coercion::string_promotion_type;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
@@ -91,10 +92,10 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(ScalarUDF::from(CoalesceFunc::new()).call(arguments))
 }
 
-/// Casts STRING values mixed with numeric, boolean, or binary values to their common type,
-/// following Spark's string promotion (see `string_promotion_type`). Other values are left to the
-/// type coercion of the function.
-fn coerce_string_promotion_values(
+/// Casts STRING values mixed with values of other atomic types to their common type, following
+/// Spark's string promotion (see `string_promotion_type`). Other values are left to the type
+/// coercion of the function.
+pub(super) fn coerce_string_promotion_values(
     arguments: Vec<expr::Expr>,
     function_context: &FunctionContextInput<'_>,
 ) -> PlanResult<Vec<expr::Expr>> {
@@ -126,15 +127,37 @@ fn coerce_string_promotion_values(
             if data_type == common_type || data_type.is_null() {
                 return Ok(arg);
             }
-            // Like Spark's cast, numeric values are formatted as Spark does.
-            Ok(match &common_type {
-                DataType::Utf8 => ScalarUDF::from(SparkToUtf8::new()).call(vec![arg]),
-                DataType::LargeUtf8 => ScalarUDF::from(SparkToLargeUtf8::new()).call(vec![arg]),
-                DataType::Utf8View => ScalarUDF::from(SparkToUtf8View::new()).call(vec![arg]),
-                _ => arg.cast_to(&common_type, schema)?,
-            })
+            if common_type.is_string() {
+                return cast_to_spark_string(arg, &common_type, function_context);
+            }
+            Ok(arg.cast_to(&common_type, schema)?)
         })
         .collect()
+}
+
+/// Casts a value to a string type like Spark's `CAST(value AS STRING)`, which formats numeric,
+/// datetime (in the session time zone), and interval values as Spark does.
+fn cast_to_spark_string(
+    arg: expr::Expr,
+    data_type: &DataType,
+    function_context: &FunctionContextInput<'_>,
+) -> PlanResult<expr::Expr> {
+    let (_, field) = arg.to_field(function_context.schema)?;
+    let mut arguments = vec![arg];
+    if let Some(interval) = field.metadata().get(SAIL_SPARK_INTERVAL_METADATA_KEY) {
+        // Physical expression serialization does not preserve intermediate field metadata.
+        arguments.push(lit(interval.clone()));
+    }
+    let timezone = Some(function_context.plan_config.session_timezone_label());
+    Ok(match data_type {
+        DataType::LargeUtf8 => {
+            ScalarUDF::from(SparkToLargeUtf8::new().with_timezone(timezone)).call(arguments)
+        }
+        DataType::Utf8View => {
+            ScalarUDF::from(SparkToUtf8View::new().with_timezone(timezone)).call(arguments)
+        }
+        _ => ScalarUDF::from(SparkToUtf8::new().with_timezone(timezone)).call(arguments),
+    })
 }
 
 /// Spark defines `nvl2` as `if` on whether the first argument is not null.

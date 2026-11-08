@@ -43,6 +43,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion::optimizer::AnalyzerRule;
+use datafusion::physical_optimizer::pruning::MAX_IN_LIST_SIZE;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
@@ -65,8 +66,8 @@ use datafusion_expr::utils::merge_schema;
 #[expect(clippy::disallowed_types)]
 use datafusion_expr::{
     Cast, DmlStatement, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection,
-    ScalarUDF, Union, ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, WriteOp,
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
+    ScalarUDF, TryCast, Union, ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WriteOp, is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
 use itertools::{Itertools as _, izip};
 use sail_common_datafusion::type_coercion::binary_type_coercion::{
@@ -1015,13 +1016,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                                 )
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        let (cast_expr, cast_list_expr) =
-                            normalize_float_in_list(cast_expr, cast_list_expr, &coerced_type);
-                        Ok(Transformed::yes(Expr::InList(InList::new(
-                            Box::new(cast_expr),
+                        Ok(Transformed::yes(normalize_float_in_list(
+                            cast_expr,
                             cast_list_expr,
                             negated,
-                        ))))
+                            &coerced_type,
+                        )))
                     }
                 }
             }
@@ -1723,45 +1723,90 @@ fn is_normalized_float_operand(expr: &Expr) -> bool {
 }
 
 /// Makes an IN list of floating-point values treat `-0.0` and `0.0` as equal, as Spark does.
-/// DataFusion compares the values of an IN list by their bits, unlike its `=` operator.
+/// DataFusion compares the values of an IN list by their bits.
 ///
-/// A list of literals gets the zero of the other sign for each zero, so that the value is
-/// compared as it is (which keeps the predicate usable for pruning). Otherwise the value and
-/// the list are normalized, where literals are folded at planning time.
+/// For a column (possibly cast) and a list of literals, the zero of the other sign is added to the
+/// list for each zero, so that the column is compared as it is, which keeps the predicate usable
+/// for pruning. If the list would then exceed the size that pruning supports, the zeros are
+/// replaced by a range that matches both zeros instead. Otherwise the value and the list are
+/// normalized, so that the value is evaluated once, where literals are folded at planning time.
 // TODO: Remove after DataFusion 56 (apache/datafusion#26595) if its IN list does the same.
-fn normalize_float_in_list(expr: Expr, list: Vec<Expr>, data_type: &DataType) -> (Expr, Vec<Expr>) {
+fn normalize_float_in_list(
+    expr: Expr,
+    list: Vec<Expr>,
+    negated: bool,
+    data_type: &DataType,
+) -> Expr {
+    let in_list =
+        |expr: Expr, list: Vec<Expr>| Expr::InList(InList::new(Box::new(expr), list, negated));
     if !matches!(
         data_type,
         DataType::Float16 | DataType::Float32 | DataType::Float64
     ) {
-        return (expr, list);
+        return in_list(expr, list);
     }
     let zero = |value: f64| ScalarValue::Float64(Some(value)).cast_to(data_type).ok();
     let (Some(positive_zero), Some(negative_zero)) = (zero(0.0), zero(-0.0)) else {
-        return (expr, list);
+        return in_list(expr, list);
     };
-    let literal = |e: &Expr| match e {
-        Expr::Literal(value, _) => Some(value.clone()),
-        Expr::Cast(Cast { expr, field }) => match expr.as_ref() {
-            Expr::Literal(value, _) => value.cast_to(field.data_type()).ok(),
+    fn literal(e: &Expr) -> Option<ScalarValue> {
+        match e {
+            Expr::Literal(value, _) => Some(value.clone()),
+            Expr::Cast(Cast { expr, field }) => literal(expr)?.cast_to(field.data_type()).ok(),
+            Expr::Negative(expr) => literal(expr)?.arithmetic_negate().ok(),
             _ => None,
-        },
-        _ => None,
-    };
+        }
+    }
+    // The value may be compared more than once, so it must be a column, which is also what
+    // pruning can use.
+    fn column(e: &Expr) -> bool {
+        match e {
+            Expr::Column(_) => true,
+            Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => column(expr),
+            _ => false,
+        }
+    }
     let values = list.iter().map(literal).collect::<Vec<_>>();
-    if literal(&expr).is_none() && values.iter().all(Option::is_some) {
-        let mut list = list;
-        for (value, other) in [
+    if column(&expr) && values.iter().all(Option::is_some) {
+        let is_zero = |value: &Option<ScalarValue>| {
+            value
+                .as_ref()
+                .is_some_and(|v| v == &positive_zero || v == &negative_zero)
+        };
+        if !values.iter().any(is_zero) {
+            return in_list(expr, list);
+        }
+        let has = |zero: &ScalarValue| values.iter().flatten().any(|v| v == zero);
+        let missing = [
             (&positive_zero, &negative_zero),
             (&negative_zero, &positive_zero),
-        ] {
-            if values.iter().flatten().any(|v| v == value)
-                && !values.iter().flatten().any(|v| v == other)
-            {
-                list.push(lit(other.clone()));
-            }
+        ]
+        .into_iter()
+        .filter(|(present, absent)| has(present) && !has(absent))
+        .map(|(_, absent)| lit(absent.clone()))
+        .collect::<Vec<_>>();
+        if list.len() > MAX_IN_LIST_SIZE || list.len() + missing.len() <= MAX_IN_LIST_SIZE {
+            let mut list = list;
+            list.extend(missing);
+            return in_list(expr, list);
         }
-        return (expr, list);
+        // `-0.0 <= x <= 0.0` holds exactly for both zeros, in IEEE 754 and in total order.
+        let zeros = expr
+            .clone()
+            .gt_eq(lit(negative_zero.clone()))
+            .and(expr.clone().lt_eq(lit(positive_zero.clone())));
+        let list = list
+            .into_iter()
+            .zip(&values)
+            .filter(|(_, value)| !is_zero(value))
+            .map(|(e, _)| e)
+            .collect::<Vec<_>>();
+        return match (list.is_empty(), negated) {
+            (true, false) => zeros,
+            (true, true) => !zeros,
+            (false, false) => in_list(expr, list).or(zeros),
+            (false, true) => in_list(expr, list).and(!zeros),
+        };
     }
     let normalize = |e: Expr| {
         if is_normalized_float_operand(&e) {
@@ -1770,7 +1815,7 @@ fn normalize_float_in_list(expr: Expr, list: Vec<Expr>, data_type: &DataType) ->
             ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![e])
         }
     };
-    (normalize(expr), list.into_iter().map(normalize).collect())
+    in_list(normalize(expr), list.into_iter().map(normalize).collect())
 }
 
 /// Casts a value of a nested type to the type explicitly, unless it is a cast already.
@@ -2134,7 +2179,7 @@ mod test {
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue, Spans, TableReference};
     use datafusion_expr::expr::{
-        self, InSubquery, Like, ScalarFunction, SetComparison, SetQuantifier,
+        self, InList, InSubquery, Like, ScalarFunction, SetComparison, SetQuantifier,
     };
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort, table_scan};
     use datafusion_expr::test::function_stub::avg_udaf;
@@ -4000,41 +4045,156 @@ mod test {
     /// IN lists of floats treat `-0.0` and `0.0` as equal, as in Spark.
     #[test]
     fn float_in_list_treats_zeros_as_equal() {
-        // A list of literals gets the zero of the other sign.
-        let (expr, list) = normalize_float_in_list(
-            col("a"),
-            vec![lit(0.0_f64), lit(1.5_f64)],
+        let in_list = |expr: Expr, list: Vec<Expr>, negated: bool| {
+            Expr::InList(InList::new(Box::new(expr), list, negated))
+        };
+        let zeros = |a: Expr, negative: Expr, positive: Expr| {
+            a.clone().gt_eq(negative).and(a.lt_eq(positive))
+        };
+        let zeros_f64 = zeros(col("a"), lit(-0.0_f64), lit(0.0_f64));
+        // A list of literals gets the zero of the other sign for each zero.
+        for (zero, other) in [
+            (lit(0.0_f64), lit(-0.0_f64)),
+            (Expr::Negative(Box::new(lit(0.0_f64))), lit(0.0_f64)),
+            (lit(-0.0_f64), lit(0.0_f64)),
+        ] {
+            for negated in [false, true] {
+                assert_eq!(
+                    normalize_float_in_list(
+                        col("a"),
+                        vec![zero.clone(), lit(1.5_f64)],
+                        negated,
+                        &DataType::Float64
+                    ),
+                    in_list(
+                        col("a"),
+                        vec![zero.clone(), lit(1.5_f64), other.clone()],
+                        negated
+                    )
+                );
+            }
+        }
+        assert_eq!(
+            normalize_float_in_list(
+                col("a"),
+                vec![lit(-0.0_f64), lit(0.0_f64)],
+                false,
+                &DataType::Float64
+            ),
+            in_list(col("a"), vec![lit(-0.0_f64), lit(0.0_f64)], false)
+        );
+        assert_eq!(
+            normalize_float_in_list(
+                col("a"),
+                vec![cast(lit(0_i32), DataType::Float32)],
+                true,
+                &DataType::Float32
+            ),
+            in_list(
+                col("a"),
+                vec![cast(lit(0_i32), DataType::Float32), lit(-0.0_f32)],
+                true
+            )
+        );
+        let a_f64 = cast(col("a"), DataType::Float64);
+        assert_eq!(
+            normalize_float_in_list(
+                a_f64.clone(),
+                vec![lit(1.5_f64), lit(0.0_f64)],
+                false,
+                &DataType::Float64
+            ),
+            in_list(
+                a_f64,
+                vec![lit(1.5_f64), lit(0.0_f64), lit(-0.0_f64)],
+                false
+            )
+        );
+        // A list that would exceed the size that pruning supports gets a range that matches both
+        // zeros instead, which does not grow the list.
+        let values = |n: i32| (1..n).map(|i| lit(f64::from(i))).collect::<Vec<_>>();
+        for (size, negated) in [(20, false), (20, true), (19, false), (22, false)] {
+            let mut list = values(size);
+            list.push(lit(0.0_f64));
+            let actual =
+                normalize_float_in_list(col("a"), list.clone(), negated, &DataType::Float64);
+            if size == 20 {
+                let rest = in_list(col("a"), values(size), negated);
+                let expected = if negated {
+                    rest.and(!zeros_f64.clone())
+                } else {
+                    rest.or(zeros_f64.clone())
+                };
+                assert_eq!(actual, expected);
+            } else {
+                list.push(lit(-0.0_f64));
+                assert_eq!(actual, in_list(col("a"), list, negated));
+            }
+        }
+        assert_eq!(
+            normalize_float_in_list(
+                col("a"),
+                values(20)
+                    .into_iter()
+                    .chain([lit(-0.0_f64), lit(0.0_f64)])
+                    .collect(),
+                false,
+                &DataType::Float64
+            ),
+            in_list(
+                col("a"),
+                values(20)
+                    .into_iter()
+                    .chain([lit(-0.0_f64), lit(0.0_f64)])
+                    .collect(),
+                false
+            )
+        );
+        // Any other value is normalized, so that it is evaluated once.
+        let random = cast(
+            Expr::ScalarFunction(ScalarFunction::new_udf(
+                datafusion::functions::math::random(),
+                vec![],
+            )),
+            DataType::Float64,
+        );
+        let Expr::InList(InList { expr, list, .. }) = normalize_float_in_list(
+            random,
+            vec![lit(0.0_f64), lit(1.0_f64)],
+            false,
             &DataType::Float64,
-        );
-        assert_eq!(expr, col("a"));
-        assert_eq!(list, vec![lit(0.0_f64), lit(1.5_f64), lit(-0.0_f64)]);
-        let (_, list) = normalize_float_in_list(
-            col("a"),
-            vec![cast(lit(0_i32), DataType::Float32)],
-            &DataType::Float32,
-        );
-        assert_eq!(list.len(), 2);
-        assert_eq!(list[1], lit(-0.0_f32));
-        let (_, list) = normalize_float_in_list(
-            col("a"),
-            vec![lit(-0.0_f64), lit(0.0_f64)],
-            &DataType::Float64,
-        );
-        assert_eq!(list, vec![lit(-0.0_f64), lit(0.0_f64)]);
-        let (expr, list) =
-            normalize_float_in_list(col("a"), vec![lit(1.5_f64)], &DataType::Float64);
-        assert_eq!((expr, list), (col("a"), vec![lit(1.5_f64)]));
-        // Other values and lists are normalized.
-        let (expr, list) =
-            normalize_float_in_list(col("a"), vec![col("b"), lit(0.0_f64)], &DataType::Float64);
+        ) else {
+            panic!("expected an IN list");
+        };
         assert!(is_normalized_float_operand(&expr));
         assert!(list.iter().all(is_normalized_float_operand));
-        let (expr, list) =
-            normalize_float_in_list(lit(0.0_f64), vec![col("b")], &DataType::Float64);
+        // A list of literals without zeros is unchanged.
+        assert_eq!(
+            normalize_float_in_list(col("a"), vec![lit(1.5_f64)], false, &DataType::Float64),
+            in_list(col("a"), vec![lit(1.5_f64)], false)
+        );
+        // Other values and lists are normalized.
+        let Expr::InList(InList { expr, list, .. }) = normalize_float_in_list(
+            col("a"),
+            vec![col("b"), lit(0.0_f64)],
+            false,
+            &DataType::Float64,
+        ) else {
+            panic!("expected an IN list");
+        };
+        assert!(is_normalized_float_operand(&expr));
+        assert!(list.iter().all(is_normalized_float_operand));
+        let Expr::InList(InList { expr, list, .. }) =
+            normalize_float_in_list(lit(0.0_f64), vec![col("b")], false, &DataType::Float64)
+        else {
+            panic!("expected an IN list");
+        };
         assert!(is_normalized_float_operand(&expr) && is_normalized_float_operand(&list[0]));
         // Other types are unchanged.
-        let (expr, list) = normalize_float_in_list(col("a"), vec![col("b")], &DataType::Int32);
-        assert_eq!((expr, list), (col("a"), vec![col("b")]));
+        assert_eq!(
+            normalize_float_in_list(col("a"), vec![col("b")], false, &DataType::Int32),
+            in_list(col("a"), vec![col("b")], false)
+        );
     }
 
     /// Equality of nested values with floats treats `-0.0` and `0.0` as equal, as in Spark.

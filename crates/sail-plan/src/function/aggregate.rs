@@ -280,8 +280,9 @@ pub(crate) fn normalize_distinct_floats(argument: expr::Expr, data_type: &DataTy
     }
 }
 
-/// Declares that the elements of a `collect_set` result are never NULL, as in Spark, where
-/// `collect_set` ignores NULL values unless it respects them.
+/// Declares that the elements of a list are never NULL, where the caller guarantees that the
+/// list holds no NULL elements, e.g. a `collect_set` result that ignores NULL values, or an
+/// `array_intersect` or `array_except` result whose inputs cannot hold NULL elements.
 /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/collect.scala#L205-L206>
 pub(crate) fn with_non_nullable_elements(
     array: expr::Expr,

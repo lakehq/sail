@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, PrimitiveArray};
-use datafusion::arrow::compute::{try_binary, try_unary};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, PrimitiveArray, Scalar};
+use datafusion::arrow::compute::kernels::numeric::mul;
+use datafusion::arrow::compute::{cast, try_binary, try_unary};
 use datafusion::arrow::datatypes::{
     ArrowPrimitiveType, DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
     DurationMicrosecondType, Field, FieldRef, Float16Type, Float32Type, Float64Type, Int8Type,
@@ -142,13 +143,13 @@ impl ScalarUDFImpl for SparkIntervalArithmetic {
                 &num,
                 scalar,
             )?),
-            DataType::Duration(TimeUnit::Microsecond) => Arc::new(evaluate(
-                Kind::DayTime,
-                self.op,
-                interval.as_primitive::<DurationMicrosecondType>(),
-                &num,
-                scalar,
-            )?),
+            DataType::Duration(TimeUnit::Microsecond) => {
+                let interval = interval.as_primitive::<DurationMicrosecondType>();
+                match day_time_integral(self.op, interval, &num, scalar)? {
+                    Some(result) => result,
+                    None => Arc::new(evaluate(Kind::DayTime, self.op, interval, &num, scalar)?),
+                }
+            }
             other => {
                 return exec_err!(
                     "{} expects a year-month or day-time interval, got {other}",
@@ -352,6 +353,74 @@ where
     })
 }
 
+/// Multiplies or divides day-time interval values by integral values (other than unsigned 64-bit
+/// values) with Arrow's kernels, which avoid the per-row overhead of [`evaluate`]. The result is
+/// the same as with [`integral`]. Returns `None` for values that are evaluated row by row: a
+/// divisor that is not a scalar, or a scalar divisor that is NULL, zero, or -1 (where the errors
+/// depend on the rows).
+fn day_time_integral(
+    op: IntervalArithmeticOp,
+    interval: &PrimitiveArray<DurationMicrosecondType>,
+    num: &ArrayRef,
+    scalar: bool,
+) -> Result<Option<ArrayRef>> {
+    use DataType::*;
+
+    if !matches!(
+        num.data_type(),
+        Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32
+    ) {
+        return Ok(None);
+    }
+    let num = cast(num, &Int64)?;
+    let num = num.as_primitive::<Int64Type>();
+    let micros = interval.reinterpret_cast::<Int64Type>();
+    let result: PrimitiveArray<Int64Type> = match op {
+        IntervalArithmeticOp::Multiply => {
+            // Like `Math.multiplyExact`, Arrow's multiplication is checked.
+            let product = if scalar {
+                mul(&micros, &Scalar::new(num))
+            } else {
+                mul(&micros, num)
+            };
+            let product = product.map_err(|e| match e {
+                ArrowError::ArithmeticOverflow(_) => {
+                    DataFusionError::External(Box::new(overflow("long overflow")))
+                }
+                e => e.into(),
+            })?;
+            product.as_primitive::<Int64Type>().clone()
+        }
+        IntervalArithmeticOp::Divide => {
+            if !scalar || num.is_null(0) {
+                return Ok(None);
+            }
+            let divisor = num.value(0);
+            if divisor == 0 || divisor == -1 {
+                return Ok(None);
+            }
+            micros.unary(|value| half_up_divide(value, divisor))
+        }
+    };
+    Ok(Some(Arc::new(
+        result.reinterpret_cast::<DurationMicrosecondType>(),
+    )))
+}
+
+/// Divides `value` by `divisor` and rounds the quotient half away from zero (`HALF_UP`), for a
+/// divisor that is neither zero nor -1 with the minimum value.
+fn half_up_divide(value: i64, divisor: i64) -> i64 {
+    let quotient = value / divisor;
+    let remainder = (value % divisor).unsigned_abs();
+    // The adjustment cannot overflow, since the divisor is at least 2 in magnitude if the
+    // remainder is not zero.
+    if remainder != 0 && remainder >= divisor.unsigned_abs() - remainder {
+        quotient + value.signum() * divisor.signum()
+    } else {
+        quotient
+    }
+}
+
 /// Spark multiplies with `Math.multiplyExact` and divides with `IntMath.divide` or
 /// `LongMath.divide` (`HALF_UP`). For a year-month interval, a long value is multiplied as a
 /// long before the product is converted to an integer, and a smaller integral value cannot
@@ -377,14 +446,7 @@ fn integral(
                 return Err(overflow(DIVIDED_BY_ZERO));
             }
             // `i64::MIN / -1` is excluded above, since the value is the minimum of its kind.
-            let quotient = value / num;
-            let remainder = (value % num).unsigned_abs();
-            let quotient = if remainder != 0 && remainder >= num.unsigned_abs() - remainder {
-                quotient + value.signum() * num.signum()
-            } else {
-                quotient
-            };
-            kind.exact(i128::from(quotient))
+            kind.exact(i128::from(half_up_divide(value, num)))
         }
     }
 }
@@ -816,6 +878,104 @@ mod tests {
         let array = ColumnarValue::Array(ym(vec![Some(1)]));
         let e = error_message(invoke_scalar(array, ScalarValue::Int64(Some(0)), 1));
         assert!(e.contains("INTERVAL_DIVIDED_BY_ZERO"), "{e}");
+        Ok(())
+    }
+
+    /// Day-time intervals with integral values use Arrow's kernels.
+    #[test]
+    fn test_day_time_interval_integral_kernels() -> Result<()> {
+        let invoke_dt = |op: IntervalArithmeticOp, micros: Vec<Option<i64>>, num: ColumnarValue| {
+            let rows = micros.len();
+            let num_type = match &num {
+                ColumnarValue::Scalar(value) => value.data_type(),
+                ColumnarValue::Array(array) => array.data_type().clone(),
+            };
+            let arg_fields = vec![
+                Arc::new(Field::new("a", DAY_TIME, true)),
+                Arc::new(Field::new("b", num_type, true)),
+            ];
+            let result = SparkIntervalArithmetic::new(op).invoke_with_args(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Array(dt(micros)), num],
+                arg_fields,
+                number_rows: rows,
+                return_field: Arc::new(Field::new("r", DAY_TIME, true)),
+                config_options: Arc::new(ConfigOptions::default()),
+            })?;
+            Ok::<_, DataFusionError>(
+                result
+                    .to_array(rows)?
+                    .as_primitive::<DurationMicrosecondType>()
+                    .iter()
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let values = vec![Some(1), None, Some(-3), Some(86_400_000_000)];
+        let multiply = IntervalArithmeticOp::Multiply;
+        let divide = IntervalArithmeticOp::Divide;
+        let scalar = |value: ScalarValue| ColumnarValue::Scalar(value);
+        assert_eq!(
+            invoke_dt(
+                multiply,
+                values.clone(),
+                scalar(ScalarValue::Int32(Some(2)))
+            )?,
+            vec![Some(2), None, Some(-6), Some(172_800_000_000)]
+        );
+        assert_eq!(
+            invoke_dt(
+                multiply,
+                values.clone(),
+                ColumnarValue::Array(Arc::new(Int8Array::from(vec![
+                    Some(-1),
+                    Some(5),
+                    None,
+                    Some(3)
+                ])))
+            )?,
+            vec![Some(-1), None, None, Some(259_200_000_000)]
+        );
+        assert_eq!(
+            invoke_dt(divide, values.clone(), scalar(ScalarValue::Int32(Some(2))))?,
+            vec![Some(1), None, Some(-2), Some(43_200_000_000)]
+        );
+        assert_eq!(
+            invoke_dt(divide, values.clone(), scalar(ScalarValue::Int64(Some(7))))?,
+            vec![Some(0), None, Some(0), Some(12_342_857_143)]
+        );
+        assert_eq!(
+            invoke_dt(divide, values.clone(), scalar(ScalarValue::Int16(Some(-2))))?,
+            vec![Some(-1), None, Some(2), Some(-43_200_000_000)]
+        );
+        assert_eq!(
+            invoke_dt(divide, values, scalar(ScalarValue::Int32(None)))?,
+            vec![None, None, None, None]
+        );
+        let error = |result: Result<Vec<Option<i64>>>| match result {
+            Ok(v) => format!("unexpected success: {v:?}"),
+            Err(e) => e.to_string(),
+        };
+        let e = error(invoke_dt(
+            multiply,
+            vec![Some(i64::MAX)],
+            scalar(ScalarValue::Int32(Some(2))),
+        ));
+        assert!(e.contains("long overflow"), "{e}");
+        let e = error(invoke_dt(
+            divide,
+            vec![Some(1)],
+            scalar(ScalarValue::Int32(Some(0))),
+        ));
+        assert!(e.contains("INTERVAL_DIVIDED_BY_ZERO"), "{e}");
+        assert_eq!(
+            invoke_dt(divide, vec![None], scalar(ScalarValue::Int32(Some(0))))?,
+            vec![None]
+        );
+        let e = error(invoke_dt(
+            divide,
+            vec![Some(i64::MIN)],
+            scalar(ScalarValue::Int64(Some(-1))),
+        ));
+        assert!(e.contains("INTERVAL_ARITHMETIC_OVERFLOW"), "{e}");
         Ok(())
     }
 

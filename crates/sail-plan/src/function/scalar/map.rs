@@ -11,6 +11,7 @@ use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
 
+use super::conditional::coerce_string_promotion_values;
 use crate::config::MapKeyDedupPolicy;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -41,7 +42,10 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             coerce_ansi_map_strings(values, schema)?,
         )
     } else {
-        (keys, values)
+        (
+            coerce_string_promotion_values(keys, &input.function_context)?,
+            coerce_string_promotion_values(values, &input.function_context)?,
+        )
     };
     let timezone = &input.function_context.plan_config.session_timezone_label();
     let keys = coerce_timestamp_ntz_values(keys, schema, timezone)?;
