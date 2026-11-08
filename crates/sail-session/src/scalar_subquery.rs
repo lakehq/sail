@@ -381,16 +381,16 @@ impl NameNormalizer {
         let [input] = inputs else {
             return Ok(None);
         };
-        let input = Arc::new(input.clone());
+        let input = || Arc::new(input.clone());
         Ok(Some(if node.is::<MonotonicIdNode>() {
-            Arc::new(MonotonicIdNode::try_new(input, self.fresh())?)
+            Arc::new(MonotonicIdNode::try_new(input(), self.fresh())?)
         } else if node.is::<SparkPartitionIdNode>() {
-            Arc::new(SparkPartitionIdNode::try_new(input, self.fresh())?)
+            Arc::new(SparkPartitionIdNode::try_new(input(), self.fresh())?)
         } else if let Some(map) = node.downcast_ref::<MapPartitionsNode>() {
             let width = map.udf().output_schema().fields().len();
             let names = (0..width).map(|_| self.fresh()).collect();
             Arc::new(MapPartitionsNode::try_new(
-                input,
+                input(),
                 names,
                 vec![None; width],
                 self.stream_udf(map.udf())?,

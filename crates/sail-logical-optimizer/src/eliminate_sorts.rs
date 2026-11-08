@@ -5,7 +5,8 @@ use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchema, Result};
-use datafusion_expr::logical_plan::{Aggregate, Partitioning};
+use datafusion_expr::expr::{Cast, TryCast};
+use datafusion_expr::logical_plan::{Aggregate, Join, Partitioning};
 use datafusion_expr::{AggregateUDF, Expr, ExprSchemable, JoinType, LogicalPlan};
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
@@ -38,13 +39,7 @@ impl OptimizerRule for EliminateSorts {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         let plan = match plan {
-            LogicalPlan::Join(mut join)
-                if !join
-                    .on
-                    .iter()
-                    .any(|(left, right)| left.is_volatile() || right.is_volatile())
-                    && !join.filter.as_ref().is_some_and(Expr::is_volatile) =>
-            {
+            LogicalPlan::Join(mut join) if is_deterministic(&join) => {
                 // A semi, anti or mark join returns the rows of one side in their order, as
                 // Spark keeps the sort of that side by pushing the join below it.
                 let (left, right) = match join.join_type {
@@ -136,8 +131,38 @@ fn remove_sorts(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             plan.map_children(remove_sorts)
         }
         LogicalPlan::SubqueryAlias(_) => plan.map_children(remove_sorts),
+        // A semi or anti join returns the rows of one side, so Spark pushes it below the
+        // sorts of that side, which are then removed as well.
+        LogicalPlan::Join(mut join) if is_deterministic(&join) => match join.join_type {
+            JoinType::LeftSemi | JoinType::LeftAnti => {
+                let input = remove_sorts(Arc::unwrap_or_clone(join.left))?;
+                join.left = Arc::new(input.data);
+                Ok(Transformed::new_transformed(
+                    LogicalPlan::Join(join),
+                    input.transformed,
+                ))
+            }
+            JoinType::RightSemi | JoinType::RightAnti => {
+                let input = remove_sorts(Arc::unwrap_or_clone(join.right))?;
+                join.right = Arc::new(input.data);
+                Ok(Transformed::new_transformed(
+                    LogicalPlan::Join(join),
+                    input.transformed,
+                ))
+            }
+            _ => Ok(Transformed::no(LogicalPlan::Join(join))),
+        },
         _ => Ok(Transformed::no(plan)),
     }
+}
+
+/// Returns whether the join condition is deterministic.
+fn is_deterministic(join: &Join) -> bool {
+    !join
+        .on
+        .iter()
+        .any(|(left, right)| left.is_volatile() || right.is_volatile())
+        && !join.filter.as_ref().is_some_and(Expr::is_volatile)
 }
 
 /// Removes the sort at the top of a subquery plan, whose order cannot affect the result
@@ -172,6 +197,10 @@ fn remove_top_level_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> 
 /// Returns whether the result of the aggregate does not depend on the order of its input,
 /// following Spark's `EliminateSorts`.
 fn is_order_irrelevant(aggregate: &Aggregate) -> Result<bool> {
+    // Spark evaluates volatile grouping keys below the aggregate, which keeps the sort.
+    if aggregate.group_expr.iter().any(Expr::is_volatile) {
+        return Ok(false);
+    }
     let schema = aggregate.input.schema();
     let mut irrelevant = true;
     for expr in &aggregate.aggr_expr {
@@ -179,18 +208,37 @@ fn is_order_irrelevant(aggregate: &Aggregate) -> Result<bool> {
             let Expr::AggregateFunction(function) = expr else {
                 return Ok(TreeNodeRecursion::Continue);
             };
-            if is_order_irrelevant_aggregate(&function.func, &function.params.args, schema)? {
-                Ok(TreeNodeRecursion::Jump)
+            let params = &function.params;
+            irrelevant = !params.args.iter().any(Expr::is_volatile)
+                && !params.filter.as_deref().is_some_and(Expr::is_volatile)
+                && (is_order_irrelevant_aggregate(&function.func, &params.args, schema)?
+                    || is_average_of_integers(&function.func, &params.args, schema)?);
+            Ok(if irrelevant {
+                TreeNodeRecursion::Jump
             } else {
-                irrelevant = false;
-                Ok(TreeNodeRecursion::Stop)
-            }
+                TreeNodeRecursion::Stop
+            })
         })?;
         if !irrelevant {
             return Ok(false);
         }
     }
     Ok(true)
+}
+
+/// Returns whether the aggregate function is an average of integers, whose argument type
+/// coercion casts to a floating-point type. Spark treats the average of integers as
+/// order-irrelevant, although it also adds them as floating-point numbers.
+fn is_average_of_integers(udf: &AggregateUDF, args: &[Expr], schema: &DFSchema) -> Result<bool> {
+    if !(udf == average::avg_udaf().as_ref() || udf.inner().is::<TryAvgFunction>()) {
+        return Ok(false);
+    }
+    match args.first() {
+        Some(Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. })) => {
+            Ok(expr.get_type(schema)?.is_integer())
+        }
+        _ => Ok(false),
+    }
 }
 
 /// Returns whether the result of the aggregate function does not depend on the order of
@@ -363,6 +411,34 @@ mod tests {
         )?)?;
         assert_eq!(sorts(&plan), 1, "{plan}");
         assert!(plan.contains("Sort: l.v DESC"), "{plan}");
+        let plan = optimize(
+            sorted("l")?
+                .join_on(
+                    scan("r")?.build()?,
+                    JoinType::LeftSemi,
+                    vec![col("l.k").eq(col("r.k"))],
+                )?
+                .aggregate(Vec::<Expr>::new(), vec![max(col("l.v"))])?,
+        )?;
+        assert_eq!(sorts(&plan), 0, "{plan}");
+        Ok(())
+    }
+
+    #[test]
+    fn sorts_below_aggregates_with_volatile_inputs_are_kept() -> Result<()> {
+        let plan =
+            optimize(sorted("t")?.aggregate(vec![random().lt(lit(0.5))], vec![max(col("v"))])?)?;
+        assert_eq!(sorts(&plan), 1, "{plan}");
+        Ok(())
+    }
+
+    #[test]
+    fn sorts_below_averages_of_integers_are_removed() -> Result<()> {
+        let plan = optimize(sorted("t")?.aggregate(
+            Vec::<Expr>::new(),
+            vec![average::avg_udaf().call(vec![cast(col("v"), DataType::Float64)])],
+        )?)?;
+        assert_eq!(sorts(&plan), 0, "{plan}");
         Ok(())
     }
 

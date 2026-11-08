@@ -215,6 +215,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -316,6 +319,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_limit:
@@ -723,6 +729,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -824,6 +833,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_limit:
@@ -1232,6 +1244,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -1333,6 +1348,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_limit:
@@ -1741,6 +1759,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -1842,6 +1863,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_limit:
@@ -2249,6 +2273,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -2350,6 +2377,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_limit:
@@ -2758,6 +2788,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -2859,6 +2892,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_limit:
@@ -3267,6 +3303,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -3368,6 +3407,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_limit:
@@ -3775,6 +3817,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -3876,6 +3921,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_limit:
@@ -4284,6 +4332,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -4385,6 +4436,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_limit:

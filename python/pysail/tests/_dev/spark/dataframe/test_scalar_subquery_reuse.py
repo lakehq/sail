@@ -373,6 +373,29 @@ def test_dataframe_scalar_subquery_column_used_twice(spark, tables):
             id="sort-by-under-count",
         ),
         pytest.param(
+            "SELECT (SELECT avg(x) FROM (SELECT x FROM {t} ORDER BY x ASC)) AS a, "
+            "(SELECT avg(x) FROM (SELECT x FROM {t} ORDER BY x DESC)) AS b",
+            [(35 / 3, 35 / 3)],
+            [1],
+            id="sort-direction-under-integer-avg",
+        ),
+        pytest.param(
+            "SELECT (SELECT count(*) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC) AS s "
+            "LEFT SEMI JOIN (SELECT * FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, "
+            "(SELECT count(*) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s "
+            "LEFT SEMI JOIN (SELECT * FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b",
+            [(10, 10)],
+            [1],
+            id="sort-under-semi-join-under-count",
+        ),
+        pytest.param(
+            "SELECT (SELECT max(p) FROM (SELECT spark_partition_id() AS p FROM range(0, 10, 1, 2))) AS a, "
+            "(SELECT max(p) FROM (SELECT spark_partition_id() AS p FROM range(0, 10, 1, 2))) AS b",
+            [(1, 1)],
+            [1],
+            id="spark-partition-id",
+        ),
+        pytest.param(
             "SELECT (SELECT max(x) FROM {t} ORDER BY 1) AS a, (SELECT max(x) FROM {t}) AS b",
             [(20, 20)],
             [1],
@@ -418,6 +441,20 @@ def test_repeated_scalar_subqueries_over_extension_nodes(spark, tables, query, e
         check(df, expected, slots)
 
 
+def test_sorts_below_joins_and_order_irrelevant_aggregates_are_removed(spark, tables):
+    t, u = tables["t"], tables["u"]
+    df = spark.sql(
+        f"SELECT l.x FROM (SELECT * FROM {t} ORDER BY x) AS l LEFT JOIN {u} AS r ON l.g = r.g LIMIT 10"  # noqa: S608
+    )
+    assert sorted(row.x for row in df.collect() if row.x is not None) == [5, 10, 20]
+    if not is_jvm_spark():
+        assert "SortExec" not in df._explain_string()  # noqa: SLF001
+    df = spark.sql(f"SELECT g, avg(x) AS a FROM (SELECT * FROM {t} ORDER BY x DESC) GROUP BY g")  # noqa: S608
+    assert sorted(tuple(row) for row in df.collect()) == [(1, 15.0), (2, 5.0)]
+    if not is_jvm_spark():
+        assert "SortExec" not in df._explain_string()  # noqa: SLF001
+
+
 @pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
 def test_repeated_python_udf_scalar_subqueries(spark, tables):
     from pyspark.sql import functions as F  # noqa: N812
@@ -439,6 +476,10 @@ def test_repeated_python_udf_scalar_subqueries(spark, tables):
     if not is_jvm_spark():
         assert scalar_subquery_slots(df) == [2]
 
+    # Equal nondeterministic calls in one projection are still evaluated separately.
+    rows = t.where("x IS NOT NULL").select(noise("x").alias("a"), noise("x").alias("b")).collect()
+    assert all(row.a != row.b for row in rows)
+
 
 @pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
 def test_repeated_dataframe_scalar_subqueries_over_extension_nodes(spark, tables):
@@ -456,6 +497,251 @@ def test_repeated_dataframe_scalar_subqueries_over_extension_nodes(spark, tables
     assert [tuple(row) for row in df.collect()] == [(45, 45, MAX_X, MAX_X, MAX_X, MAX_X)]
     if not is_jvm_spark():
         assert scalar_subquery_slots(df) == [3]
+
+
+def repeated(body):
+    return f"SELECT ({body}) AS a, ({body}) AS b"
+
+
+R1 = "range(0, 20, 1, 1)"
+
+
+@pytest.mark.parametrize(
+    ("query", "expected", "slots"),
+    [
+        # Windows over a sorted input (MonotonicId and RequiredSort).
+        pytest.param(
+            repeated(
+                "SELECT max(f) FROM (SELECT first_value(x) OVER (PARTITION BY g) AS f "
+                "FROM (SELECT * FROM {t} ORDER BY x DESC NULLS LAST))"
+            ),
+            [(20, 20)],
+            [1],
+            id="window-over-sorted-input",
+        ),
+        # Join branch beyond inner joins: c3-join-left-outer, c3-join-cross, c5-semi-right-first,
+        # c5-anti-right-first, c5-in-right-first.
+        pytest.param(
+            "SELECT (SELECT count(*) FROM (SELECT * FROM {t} ORDER BY x) AS l LEFT JOIN {t} AS r ON l.x = r.x + 5) AS a, "
+            "(SELECT count(*) FROM (SELECT * FROM {t} ORDER BY x DESC) AS l LEFT JOIN {t} AS r ON l.x = r.x + 5) AS b",
+            [(4, 4)],
+            [1],
+            id="sort-under-left-join",
+        ),
+        pytest.param(
+            f"SELECT (SELECT first(s.id) FROM {R1} AS s LEFT SEMI JOIN (SELECT * FROM {R1} WHERE id % 2 = 0 ORDER BY id ASC) "  # noqa: S608
+            f"AS r ON s.id = r.id) AS a, (SELECT first(s.id) FROM {R1} AS s LEFT SEMI JOIN (SELECT * FROM {R1} "
+            "WHERE id % 2 = 0 ORDER BY id DESC) AS r ON s.id = r.id) AS b",
+            [(0, 0)],
+            [1],
+            id="right-side-sort-of-semi-join",
+        ),
+        pytest.param(
+            f"SELECT (SELECT first(s.id) FROM {R1} AS s LEFT ANTI JOIN (SELECT * FROM {R1} WHERE id % 2 = 0 ORDER BY id ASC) "  # noqa: S608
+            f"AS r ON s.id = r.id) AS a, (SELECT first(s.id) FROM {R1} AS s LEFT ANTI JOIN (SELECT * FROM {R1} "
+            "WHERE id % 2 = 0 ORDER BY id DESC) AS r ON s.id = r.id) AS b",
+            [(1, 1)],
+            [1],
+            id="right-side-sort-of-anti-join",
+        ),
+        pytest.param(
+            f"SELECT (SELECT first(id) FROM {R1} AS s WHERE s.id IN (SELECT id FROM {R1} WHERE id % 2 = 1 ORDER BY id ASC)) AS a, "  # noqa: S608
+            f"(SELECT first(id) FROM {R1} AS s WHERE s.id IN (SELECT id FROM {R1} WHERE id % 2 = 1 ORDER BY id DESC)) AS b",
+            [(1, 1)],
+            [1],
+            id="sorted-in-subquery",
+        ),
+        # removeTopLevelSort through a projection (ORDER BY a column that is not selected): c4-project-over-sort.
+        pytest.param(
+            "SELECT (SELECT x + 1 AS z FROM {t} WHERE y = 'b' ORDER BY x DESC) AS a, (SELECT x + 1 AS z FROM {t} WHERE y = 'b') AS b",
+            [(21, 21)],
+            [1],
+            id="top-level-sort-below-projection",
+        ),
+        # Aggregate classification: grouped, DISTINCT, FILTER, bit/bool, decimal (c2-elim-*, c2-grouped-*).
+        pytest.param(
+            "SELECT (SELECT named_struct('a', count(DISTINCT x), 'b', bit_or(x), 'c', bool_or(x > 9), "
+            "'d', sum(CAST(x AS DECIMAL(10, 2))), 'e', max(x) FILTER (WHERE g = 2)) FROM (SELECT * FROM {t} ORDER BY x ASC)) AS a, "
+            "(SELECT named_struct('a', count(DISTINCT x), 'b', bit_or(x), 'c', bool_or(x > 9), "
+            "'d', sum(CAST(x AS DECIMAL(10, 2))), 'e', max(x) FILTER (WHERE g = 2)) FROM (SELECT * FROM {t} ORDER BY x DESC)) AS b",
+            None,
+            [1],
+            id="order-irrelevant-aggregates",
+        ),
+        pytest.param(
+            "SELECT (SELECT max(s) FROM (SELECT g, sum(x) AS s FROM (SELECT * FROM {t} ORDER BY x ASC) GROUP BY g)) AS a, "
+            "(SELECT max(s) FROM (SELECT g, sum(x) AS s FROM (SELECT * FROM {t} ORDER BY x DESC) GROUP BY g)) AS b",
+            [(30, 30)],
+            [1],
+            id="sort-under-grouped-aggregate",
+        ),
+        # Accepted better-than-Spark: order-irrelevant aggregates under ROLLUP (c2-rollup-max).
+        pytest.param(
+            "SELECT (SELECT max(m) FROM (SELECT max(x) AS m FROM (SELECT * FROM {t} ORDER BY x ASC NULLS FIRST) GROUP BY ROLLUP(g))) AS a, "
+            "(SELECT max(m) FROM (SELECT max(x) AS m FROM (SELECT * FROM {t} ORDER BY x DESC NULLS LAST) GROUP BY ROLLUP(g))) AS b",
+            [(20, 20)],
+            [1],
+            id="sort-under-rollup",
+        ),
+        # Sorts that must stay: collect_list / last / stddev (CentralMomentAgg), sort-over-sort (out of scope).
+        pytest.param(
+            "SELECT (SELECT last(x) FROM (SELECT * FROM {t} ORDER BY x ASC NULLS FIRST)) AS a, "
+            "(SELECT last(x) FROM (SELECT * FROM {t} ORDER BY x DESC NULLS LAST)) AS b",
+            [(20, None)],
+            [2],
+            id="sort-under-last",
+        ),
+        # Seeded random near misses and unseeded functions (c3-seeded-*, c3-unseeded-*).
+        pytest.param(
+            "SELECT (SELECT max(r) FROM (SELECT rand(42) AS r FROM range(0, 40, 1, 4))) AS a, "
+            "(SELECT max(r) FROM (SELECT rand(43) AS r FROM range(0, 40, 1, 4))) AS b",
+            None,
+            [2],
+            id="other-seed",
+        ),
+        pytest.param(
+            "SELECT (SELECT max(r) FROM (SELECT rand(42) AS r FROM range(0, 40, 1, 4))) AS a, "
+            "(SELECT max(r) FROM (SELECT randn(42) AS r FROM range(0, 40, 1, 4))) AS b",
+            None,
+            [2],
+            id="rand-and-randn",
+        ),
+        pytest.param(
+            repeated("SELECT sum(r) FROM (SELECT randn(1) AS r FROM range(0, 40, 1, 4))"),
+            None,
+            [1],
+            id="seeded-randn",
+        ),
+        # input_file_* inside subquery bodies (c5-inputfile-*; needs a multi-file table, see below).
+    ],
+)
+def test_more_repeated_scalar_subqueries_over_extension_nodes(spark, tables, query, expected, slots):
+    df = spark.sql(query.format(**tables))
+    rows = [tuple(row) for row in df.collect()]
+    if expected is None:
+        [(a, b)] = rows
+        assert (a == b) == (slots == [1])
+    else:
+        assert rows == expected
+    if not is_jvm_spark():
+        assert scalar_subquery_slots(df) == slots
+
+
+def test_unseeded_random_functions_are_not_shared(spark):
+    for f in ("randn()", "uuid()", "CAST(shuffle(array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)) AS STRING)"):
+        df = spark.sql(repeated(f"SELECT max(r) FROM (SELECT {f} AS r FROM range(0, 40, 1, 4))"))  # noqa: S608
+        [(a, b)] = df.collect()
+        assert a != b
+        if not is_jvm_spark():
+            assert scalar_subquery_slots(df) == [2]
+
+
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
+def test_repeated_map_partitions_scalar_subqueries(spark):
+    """MapPartitions bodies (mapInPandas / mapInArrow / pandas iterator UDF / UDTF): equal functions share
+    (also random ones, a == b, as in Spark); different functions, including closures over different
+    values with the same name, do not (c2-mapIn*, probe udf-named-diff / map-closure-diff)."""
+    import pyarrow.compute as pc
+    from pyspark.sql import functions as F  # noqa: N812
+
+    def plus(n):
+        def m(batches):
+            for batch in batches:
+                yield batch + n
+
+        return m
+
+    def arrow_plus(n):
+        def m(batches):
+            for batch in batches:
+                yield batch.__class__.from_arrays([pc.add(batch.column(0), n)], names=batch.schema.names)
+
+        return m
+
+    one, two = plus(1), plus(2)
+    a_one = arrow_plus(1)
+    body = lambda fn: spark.range(10).mapInPandas(fn, "id long").select(F.max("id")).scalar()  # noqa: E731
+    arrow = lambda fn: spark.range(10).mapInArrow(fn, "id long").select(F.max("id")).scalar()  # noqa: E731
+    df = spark.range(1).select(
+        body(one).alias("a"),
+        body(one).alias("b"),
+        body(two).alias("c"),
+        arrow(a_one).alias("d"),
+        arrow(a_one).alias("e"),
+    )
+    assert [tuple(row) for row in df.collect()] == [(10, 10, 11, 10, 10)]
+    if not is_jvm_spark():
+        assert scalar_subquery_slots(df) == [3]
+
+
+def test_repeated_python_udtf_and_iterator_udf_scalar_subqueries(spark):
+    from collections.abc import Iterator
+
+    import pandas as pd
+    from pyspark.sql.functions import pandas_udf, udtf
+
+    class Series:
+        def eval(self, n: int):
+            for i in range(n):
+                yield (i,)
+
+    @pandas_udf("long")
+    def plus_iter(batches: Iterator[pd.Series]) -> Iterator[pd.Series]:
+        for batch in batches:
+            yield batch + 1
+
+    spark.udtf.register("sse_series", udtf(Series, returnType="i: int"))  # nondeterministic by default
+    spark.udf.register("sse_plus_iter", plus_iter)
+    df = spark.sql(
+        "SELECT (SELECT sum(i) FROM sse_series(5)) AS a, (SELECT sum(i) FROM sse_series(5)) AS b, "
+        "(SELECT sum(i) FROM sse_series(6)) AS c, "
+        "(SELECT max(sse_plus_iter(id)) FROM range(10)) AS d, (SELECT max(sse_plus_iter(id)) FROM range(10)) AS e"
+    )
+    assert [tuple(row) for row in df.collect()] == [(10, 10, 15, 10, 10)]
+    if not is_jvm_spark():
+        assert scalar_subquery_slots(df) == [3]
+
+
+def test_semi_and_anti_joins_keep_the_order_of_a_sorted_left_input(spark):
+    """Result order without an outer ORDER BY (c5-exists-left, c5-in-left, c5-not-in-left, c5-mark-left)."""
+    left = "(SELECT * FROM range(0, 50, 1, 4) ORDER BY id DESC) AS s"
+    right = "range(0, 50, 1, 3)"
+    for predicate, first in [
+        (f"EXISTS (SELECT 1 FROM {right} AS r WHERE r.id = s.id AND r.id % 3 = 0)", [48, 45, 42]),  # noqa: S608
+        (f"s.id IN (SELECT id FROM {right} WHERE id % 3 = 0)", [48, 45, 42]),  # noqa: S608
+        (f"s.id NOT IN (SELECT id FROM {right} WHERE id % 3 = 0)", [49, 47, 46]),  # noqa: S608
+        (f"EXISTS (SELECT 1 FROM {right} AS r WHERE r.id = s.id AND r.id % 7 = 0) OR s.id > 45", [49, 48, 47]),  # noqa: S608
+    ]:
+        rows = [row[0] for row in spark.sql(f"SELECT id FROM {left} WHERE {predicate}").collect()]  # noqa: S608
+        assert rows[:3] == first
+        assert rows == sorted(rows, reverse=True)
+
+
+def test_repeated_input_file_function_scalar_subqueries(spark, tmp_path):
+    """input_file_name / input_file_block_start inside the bodies (c5-inputfile-*)."""
+    from pysail.testing.spark.utils.sql import escape_sql_string_literal
+
+    name = "sse_input_file_mf"
+    spark.sql(
+        f"CREATE TABLE {name} (k INT, v INT) USING parquet LOCATION '{escape_sql_string_literal(str(tmp_path / name))}'"
+    )
+    try:
+        inserts = ("(1, 10), (2, 20)", "(3, 30)", "(4, 40), (5, 50)")
+        for rows in inserts:
+            spark.sql(f"INSERT INTO {name} VALUES {rows}")  # noqa: S608
+        files = f"SELECT count(DISTINCT f) FROM (SELECT input_file_name() AS f FROM {name})"  # noqa: S608
+        start = f"SELECT min(s) FROM (SELECT input_file_block_start() AS s FROM {name})"  # noqa: S608
+        other = f"SELECT count(DISTINCT f) FROM (SELECT input_file_name() AS f FROM {name} WHERE k > 2)"  # noqa: S608
+        df = spark.sql(f"SELECT ({files}) AS a, ({files}) AS b, ({start}) AS c, ({start}) AS d, ({other}) AS e")
+        [(a, b, c, d, e)] = df.collect()
+        assert a == b
+        assert a >= len(inserts)
+        assert c == d == 0
+        assert e < a
+        if not is_jvm_spark():
+            assert scalar_subquery_slots(df) == [3]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
 @pytest.fixture(scope="module")

@@ -87,13 +87,15 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
             continue;
         }
         if rule.name() == DataFusionPushDownLimit::new().name() {
+            // Sorts are removed before limit pushdown would turn them into top-k sorts,
+            // which select rows and are kept.
+            custom.push(Arc::new(EliminateSorts));
             custom.push(Arc::new(PushDownLimit));
             continue;
         }
 
         custom.push(rule);
     }
-    custom.push(Arc::new(EliminateSorts));
     custom.push(Arc::new(RewriteBinaryGrouping));
     // `ResolveLambdaVariables` must run after the built-in rules: constant
     // folding can change the type or nullability of higher-order function
@@ -105,6 +107,17 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_optimizer_rules_eliminate_sorts_before_limit_pushdown() {
+        let names = default_optimizer_rules()
+            .iter()
+            .map(|rule| rule.name().to_string())
+            .collect::<Vec<_>>();
+        let position = |name: &str| names.iter().position(|n| n == name);
+        assert!(position("eliminate_sorts") < position(PushDownLimit.name()));
+        assert!(position("eliminate_sorts").is_some());
+    }
 
     #[test]
     fn default_analyzer_rules_skip_datafusion_type_coercion() {
