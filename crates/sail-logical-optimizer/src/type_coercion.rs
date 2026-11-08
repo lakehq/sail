@@ -1808,10 +1808,11 @@ fn normalize_float_in_list(
             (false, true) => in_list(expr, list).and(!zeros),
         };
     }
-    // A literal compared with a list of columns keeps the columns as they are, which keeps the
-    // predicate usable for pruning. A literal other than a zero or NaN cannot equal a zero of
-    // either sign, so it is compared as it is. A zero is compared with each column by a range
-    // that matches both zeros. NaN is normalized below, since NaN values may differ in their bits.
+    // A literal compared with a list of columns and literals keeps the columns as they are, which
+    // keeps the predicate usable for pruning. A literal other than a zero or NaN cannot equal a
+    // zero of either sign, so it is compared as it is. A zero is compared with each column by a
+    // range that matches both zeros, and with each literal at planning time. NaN is normalized
+    // below, since NaN values may differ in their bits.
     let is_nan = |value: &ScalarValue| match value {
         ScalarValue::Float16(Some(v)) => v.is_nan(),
         ScalarValue::Float32(Some(v)) => v.is_nan(),
@@ -1819,17 +1820,20 @@ fn normalize_float_in_list(
         _ => false,
     };
     if let Some(value) = literal(&expr).filter(|value| !is_nan(value))
-        && list.iter().all(column)
+        && list.iter().all(|e| column(e) || literal(e).is_some())
     {
         if value != positive_zero && value != negative_zero {
             return in_list(expr, list);
         }
         let zeros = list
             .into_iter()
-            .map(|e| {
-                e.clone()
+            .map(|e| match literal(&e) {
+                Some(v) if v.is_null() => lit(ScalarValue::Boolean(None)),
+                Some(v) => lit(v == positive_zero || v == negative_zero),
+                None => e
+                    .clone()
                     .gt_eq(lit(negative_zero.clone()))
-                    .and(e.lt_eq(lit(positive_zero.clone())))
+                    .and(e.lt_eq(lit(positive_zero.clone()))),
             })
             .reduce(Expr::or);
         return match zeros {
@@ -4240,9 +4244,39 @@ mod test {
                 !any_zero.clone()
             );
         }
+        // Literals in the list are compared at planning time.
+        let mixed = vec![col("b"), lit(2.0_f64)];
+        assert_eq!(
+            normalize_float_in_list(lit(1.5_f64), mixed.clone(), false, &DataType::Float64),
+            in_list(lit(1.5_f64), mixed, false)
+        );
+        let b_zero = zeros(col("b"), lit(-0.0_f64), lit(0.0_f64));
+        for (element, constant) in [
+            (lit(-0.0_f64), lit(true)),
+            (lit(1.0_f64), lit(false)),
+            (lit(f64::NAN), lit(false)),
+            (
+                lit(ScalarValue::Float64(None)),
+                lit(ScalarValue::Boolean(None)),
+            ),
+        ] {
+            for negated in [false, true] {
+                let expected = b_zero.clone().or(constant.clone());
+                assert_eq!(
+                    normalize_float_in_list(
+                        lit(0.0_f64),
+                        vec![col("b"), element.clone()],
+                        negated,
+                        &DataType::Float64
+                    ),
+                    if negated { !expected } else { expected }
+                );
+            }
+        }
         // NaN, or a value that is not a column, is normalized.
         for (value, list) in [
             (lit(f64::NAN), vec![col("b")]),
+            (lit(f64::NAN), vec![col("b"), lit(1.0_f64)]),
             (lit(0.0_f64), vec![col("b") + lit(1.0_f64)]),
         ] {
             let Expr::InList(InList { expr, list, .. }) =
