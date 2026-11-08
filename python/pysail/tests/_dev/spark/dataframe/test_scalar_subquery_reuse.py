@@ -402,6 +402,12 @@ def test_dataframe_scalar_subquery_column_used_twice(spark, tables):
             id="top-level-sort",
         ),
         pytest.param(
+            "SELECT (SELECT max(x) FROM {t} ORDER BY rand(1)) AS a, (SELECT max(x) FROM {t}) AS b",
+            [(20, 20)],
+            [1],
+            id="top-level-sort-by-seeded-random",
+        ),
+        pytest.param(
             "SELECT (SELECT max(a.x) FROM (SELECT g, x FROM {t} ORDER BY x ASC) a JOIN {u} b ON a.g = b.g) AS a, "
             "(SELECT max(a.x) FROM (SELECT g, x FROM {t} ORDER BY x DESC) a JOIN {u} b ON a.g = b.g) AS b",
             [(20, 20)],
@@ -427,6 +433,13 @@ def test_dataframe_scalar_subquery_column_used_twice(spark, tables):
             None,
             [1],
             id="seeded-rand",
+        ),
+        pytest.param(
+            "SELECT (SELECT max(r) FROM (SELECT CASE WHEN x > 5 THEN x + rand(42) END AS r FROM {t})) AS a, "
+            "(SELECT max(r) FROM (SELECT CASE WHEN x > 5 THEN x + rand(42) END AS r FROM {t})) AS b",
+            None,
+            [1],
+            id="seeded-rand-expression",
         ),
     ],
 )

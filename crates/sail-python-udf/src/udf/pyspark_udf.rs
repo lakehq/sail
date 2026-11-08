@@ -27,7 +27,7 @@ pub enum PySparkUdfKind {
     ScalarArrowIter,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PySparkUDF {
     signature: Signature,
     kind: PySparkUdfKind,
@@ -73,15 +73,8 @@ impl PySparkUDF {
     /// when the UDF is nondeterministic.
     pub fn to_shared(&self) -> Self {
         Self {
-            signature: self.signature.clone(),
-            kind: self.kind,
-            name: self.name.clone(),
-            payload: self.payload.clone(),
-            deterministic: self.deterministic,
-            input_types: self.input_types.clone(),
-            output_type: self.output_type.clone(),
-            config: Arc::clone(&self.config),
             udf: LazyPyObject::new(false),
+            ..self.clone()
         }
     }
 

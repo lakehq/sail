@@ -18,7 +18,7 @@ use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PySparkCoGroupMapUDF {
     signature: Signature,
     name: String,
@@ -78,18 +78,8 @@ impl PySparkCoGroupMapUDF {
     /// when the UDF is nondeterministic.
     pub fn to_shared(&self) -> Self {
         Self {
-            signature: self.signature.clone(),
-            name: self.name.clone(),
-            payload: self.payload.clone(),
-            deterministic: self.deterministic,
-            left_types: self.left_types.clone(),
-            left_names: self.left_names.clone(),
-            right_types: self.right_types.clone(),
-            right_names: self.right_names.clone(),
-            output_type: self.output_type.clone(),
-            is_pandas: self.is_pandas,
-            config: Arc::clone(&self.config),
             udf: LazyPyObject::new(false),
+            ..self.clone()
         }
     }
 

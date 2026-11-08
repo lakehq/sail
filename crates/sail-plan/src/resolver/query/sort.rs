@@ -15,6 +15,7 @@ use sail_logical_plan::sort::SortWithinPartitionsNode;
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
+use crate::resolver::tree::seeded_random::SeededRandomScope;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_sort(
@@ -91,8 +92,12 @@ impl PlanResolver<'_> {
             sorts.iter().map(|sort| sort.expr.clone()).collect(),
             state,
         )?;
-        let (input, expressions) =
-            self.rewrite_seeded_random_expressions(input, expressions, state)?;
+        let (input, expressions) = self.rewrite_seeded_random_expressions(
+            input,
+            expressions,
+            SeededRandomScope::Call,
+            state,
+        )?;
         let sorts = sorts
             .into_iter()
             .zip(expressions)

@@ -7,6 +7,7 @@ use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitio
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
+use crate::resolver::tree::seeded_random::SeededRandomScope;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_repartition(
@@ -61,7 +62,8 @@ impl PlanResolver<'_> {
             .resolve_expressions_with_missing_inputs(partition_expressions, input, state)
             .await?;
         let (input, expr) = self.rewrite_partition_expressions(input, expr, state)?;
-        let (input, expr) = self.rewrite_seeded_random_expressions(input, expr, state)?;
+        let (input, expr) =
+            self.rewrite_seeded_random_expressions(input, expr, SeededRandomScope::Call, state)?;
         let plan = LogicalPlan::Extension(Extension {
             node: Arc::new(ExplicitRepartitionNode::new(
                 Arc::new(input),

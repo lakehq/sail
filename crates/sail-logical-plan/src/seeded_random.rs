@@ -7,18 +7,20 @@ use educe::Educe;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::math::partition_random::PartitionSeed;
 
-/// A column computed by a random function called with a seed.
+/// A column computed by an expression with calls of random functions with a seed.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd)]
 pub struct SeededRandomColumn {
     pub name: String,
-    /// The call of the random function, whose arguments are constant.
+    /// The expression, where each call of a random function with a seed and constant
+    /// arguments is evaluated by its own generator, which advances only for the rows that
+    /// evaluate the call.
     pub expr: Expr,
     pub seed: PartitionSeed,
 }
 
-/// Appends columns computed by random functions called with a seed. Each column is
-/// computed by a generator that is seeded once per partition and continues across
-/// the rows of the partition, as in Spark.
+/// Appends columns computed by expressions with calls of random functions with a seed.
+/// Each call is evaluated by a generator that is seeded once per partition and continues
+/// across the rows of the partition, as in Spark.
 ///
 /// Filters and limits are not pushed below the node, since that would change which rows
 /// consume the random values. Spark does not push filters below a projection with
@@ -118,7 +120,7 @@ impl UserDefinedLogicalNodeCore for SeededRandomNode {
     }
 
     fn necessary_children_exprs(&self, output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
-        // The random columns do not depend on the values of the input columns.
+        // The columns that the expressions refer to are added by the optimizer.
         let input_len = self.input.schema().fields().len();
         Some(vec![
             output_columns

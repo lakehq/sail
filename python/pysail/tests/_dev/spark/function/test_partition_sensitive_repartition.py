@@ -42,6 +42,18 @@ from pyspark.sql import functions as F  # noqa: N812
             ],
             id="filter-and-projection",
         ),
+        pytest.param(
+            "SELECT id, spark_partition_id() AS p FROM "
+            "(SELECT id FROM range(0, 12, 1, 3) WHERE id % 2 = 1 AND rand(7) < 0.8) ORDER BY id",
+            [(1, 0), (3, 0), (5, 1), (7, 1), (9, 2), (11, 2)],
+            id="sorted-partition-id-over-seeded-filter",
+        ),
+        pytest.param(
+            "SELECT id, monotonically_increasing_id() AS m FROM "
+            "(SELECT id FROM range(0, 12, 1, 3) WHERE id % 2 = 1 AND rand(7) < 0.8) ORDER BY id",
+            [(1, 0), (3, 1), (5, 8589934592), (7, 8589934593), (9, 17179869184), (11, 17179869185)],
+            id="sorted-monotonic-id-over-seeded-filter",
+        ),
     ],
 )
 def test_partition_sensitive_functions_over_filters(spark, query, expected):

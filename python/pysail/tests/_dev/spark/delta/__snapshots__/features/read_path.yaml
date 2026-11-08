@@ -146,6 +146,9 @@ data:
     Projection: delta_read_metadata_path.id AS #3, delta_read_metadata_path.name AS #4, delta_read_metadata_path.value AS #5
       TableScan: delta_read_metadata_path projection=[id, name, value]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -243,6 +246,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:

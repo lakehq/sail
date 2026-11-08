@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::optimizer::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
+use datafusion::optimizer::optimize_projections::OptimizeProjections;
 use datafusion::optimizer::push_down_limit::PushDownLimit as DataFusionPushDownLimit;
 use datafusion::optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
@@ -10,6 +11,7 @@ mod deduplicate;
 mod eliminate_sorts;
 mod input_file_metadata;
 mod lateral_join;
+mod prune_seeded_random;
 mod resolve_lambda_variables;
 mod rewrite_binary_grouping;
 mod scalar_iterator_udf;
@@ -24,6 +26,7 @@ use eliminate_sorts::EliminateSorts;
 pub use eliminate_sorts::{is_order_irrelevant_aggregate, push_down_left_semi_anti_join};
 use input_file_metadata::PushDownLimit;
 use lateral_join::DecorrelateLateralProjection;
+use prune_seeded_random::PruneSeededRandomColumns;
 use resolve_lambda_variables::ResolveLambdaVariables;
 use rewrite_binary_grouping::RewriteBinaryGrouping;
 use scalar_iterator_udf::ExtractScalarIteratorUDF;
@@ -93,6 +96,11 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
             ));
             custom.push(Arc::new(NormalizeScalarSubqueryKeys));
             custom.push(rule);
+            continue;
+        }
+        if rule.name() == OptimizeProjections::new().name() {
+            custom.push(rule);
+            custom.push(Arc::new(PruneSeededRandomColumns));
             continue;
         }
         if rule.name() == DataFusionPushDownLimit::new().name() {

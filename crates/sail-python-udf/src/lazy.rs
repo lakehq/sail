@@ -24,6 +24,14 @@ impl Debug for LazyPyObject {
     }
 }
 
+/// A clone has an empty cache. A clone of a distinct object is another distinct object, so it is
+/// not equal to the original.
+impl Clone for LazyPyObject {
+    fn clone(&self) -> Self {
+        Self::new(self.distinct)
+    }
+}
+
 impl PartialEq for LazyPyObject {
     fn eq(&self, other: &Self) -> bool {
         if self.distinct || other.distinct {

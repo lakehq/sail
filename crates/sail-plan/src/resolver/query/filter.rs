@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion_expr::{Filter, LogicalPlan};
+use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -23,8 +23,7 @@ impl PlanResolver<'_> {
             .resolve_expressions_with_missing_inputs(vec![condition], input, state)
             .await?;
         let (input, predicate) = self.rewrite_partition_expressions(input, predicate, state)?;
-        let (input, predicate) = self.rewrite_seeded_random_expressions(input, predicate, state)?;
-        let filter = LogicalPlan::Filter(Filter::try_new(predicate.one()?, Arc::new(input))?);
+        let filter = self.rewrite_seeded_random_filter(input, predicate.one()?, false, state)?;
         Self::restore_missing_input_output(filter, output_schema)
     }
 }

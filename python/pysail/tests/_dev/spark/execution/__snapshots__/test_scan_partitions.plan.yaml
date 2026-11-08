@@ -258,6 +258,9 @@ data:
           Filter: ?table?.id % Int64(2) = Int64(0)
             TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -355,6 +358,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -787,6 +793,9 @@ data:
           Filter: ?table?.id % Int64(2) = Int64(0)
             TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -884,6 +893,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -1317,6 +1329,9 @@ data:
           Filter: ?table?.id % Int64(2) = Int64(0)
             TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -1414,6 +1429,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -1847,6 +1865,9 @@ data:
           Filter: ?table?.id % Int64(2) = Int64(0)
             TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -1944,6 +1965,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -2376,6 +2400,9 @@ data:
           Filter: ?table?.id % Int64(2) = Int64(0)
             TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -2473,6 +2500,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -2906,6 +2936,9 @@ data:
           Filter: ?table?.id % Int64(2) = Int64(0)
             TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -3003,6 +3036,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -3436,6 +3472,9 @@ data:
           Filter: ?table?.id % Int64(2) = Int64(0)
             TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -3533,6 +3572,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -3965,6 +4007,9 @@ data:
           Filter: ?table?.id % Int64(2) = Int64(0)
             TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -4062,6 +4107,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -4495,6 +4543,9 @@ data:
           Filter: ?table?.id % Int64(2) = Int64(0)
             TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -4592,6 +4643,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:

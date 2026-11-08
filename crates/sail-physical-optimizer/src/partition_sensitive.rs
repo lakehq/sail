@@ -8,6 +8,7 @@ use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanProperties, Partitioning, replace_children_if_necessary,
 };
@@ -23,8 +24,11 @@ use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 /// `EnsureRequirements` adds round-robin repartitions below the filters and projections of
 /// their input, which change the partitions and make the order of the rows in each partition
 /// nondeterministic. These repartitions are removed down to the operator that defines the
-/// partitions, and a round-robin repartition to the same number of partitions is added above
-/// the operator instead, so that the operators above keep their parallelism.
+/// partitions, also below the sorts within partitions that sort pushdown moves below these
+/// operators. A round-robin repartition to the same number of partitions is added above the
+/// operator instead, so that the operators above keep their parallelism, unless it would lose
+/// the order of the rows that the operators above rely on. It is merged into a round-robin
+/// repartition that directly follows it.
 #[derive(Debug, Default)]
 pub struct KeepPartitionSensitiveInputs;
 
@@ -35,6 +39,18 @@ impl PhysicalOptimizerRule for KeepPartitionSensitiveInputs {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|plan| {
+            if let Some(input) = round_robin_input(&plan)
+                && let Some(inner) = round_robin_input(input)
+                && is_partition_sensitive(inner)
+            {
+                // The round-robin repartition added above the operator is merged into the
+                // round-robin repartition that follows it.
+                let input = Arc::clone(inner);
+                return Ok(Transformed::yes(replace_children_if_necessary(
+                    plan,
+                    vec![input],
+                )?));
+            }
             if !is_partition_sensitive(&plan) {
                 return Ok(Transformed::no(plan));
             }
@@ -47,14 +63,19 @@ impl PhysicalOptimizerRule for KeepPartitionSensitiveInputs {
                 return Ok(Transformed::no(plan));
             }
             let partitions = plan.output_partitioning().partition_count();
+            let ordering = plan.output_ordering().cloned();
             let plan = replace_children_if_necessary(Arc::clone(&plan), vec![child.data])?;
             if plan.output_partitioning().partition_count() == partitions {
                 return Ok(Transformed::yes(plan));
             }
-            Ok(Transformed::yes(Arc::new(RepartitionExec::try_new(
-                plan,
+            let repartition: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+                Arc::clone(&plan),
                 Partitioning::RoundRobinBatch(partitions),
-            )?)))
+            )?);
+            if ordering.is_some() && repartition.output_ordering() != ordering.as_ref() {
+                return Ok(Transformed::yes(plan));
+            }
+            Ok(Transformed::yes(repartition))
         })
         .data()
     }
@@ -74,19 +95,27 @@ fn is_partition_sensitive(plan: &Arc<dyn ExecutionPlan>) -> bool {
         || plan.is::<SparkPartitionIdExec>()
 }
 
-/// Removes the round-robin repartitions through the operators that keep the rows of each
-/// partition in order.
+/// Returns the input of a round-robin repartition that does not preserve the order of rows.
+fn round_robin_input(plan: &Arc<dyn ExecutionPlan>) -> Option<&Arc<dyn ExecutionPlan>> {
+    let repartition = plan.downcast_ref::<RepartitionExec>()?;
+    (matches!(repartition.partitioning(), Partitioning::RoundRobinBatch(_))
+        && !repartition.preserve_order())
+    .then(|| repartition.input())
+}
+
+/// Removes the round-robin repartitions through the operators that keep each row in its
+/// partition.
 fn remove_round_robin(plan: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    if let Some(repartition) = plan.downcast_ref::<RepartitionExec>()
-        && matches!(repartition.partitioning(), Partitioning::RoundRobinBatch(_))
-        && !repartition.preserve_order()
-    {
-        let input = Arc::clone(repartition.input());
+    if let Some(input) = round_robin_input(&plan) {
+        let input = Arc::clone(input);
         return Ok(Transformed::yes(remove_round_robin(input)?.data));
     }
     if !(plan.is::<FilterExec>()
         || plan.is::<ProjectionExec>()
         || plan.is::<CooperativeExec>()
+        || plan
+            .downcast_ref::<SortExec>()
+            .is_some_and(SortExec::preserve_partitioning)
         || is_partition_sensitive(&plan))
     {
         return Ok(Transformed::no(plan));
@@ -108,9 +137,12 @@ fn remove_round_robin(plan: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dy
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::internal_datafusion_err;
     use datafusion::physical_expr::expressions::{col, lit};
+    use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
     use datafusion::physical_plan::displayable;
     use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
+    use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use datafusion::physical_plan::union::UnionExec;
 
     use super::*;
@@ -160,23 +192,21 @@ mod tests {
     }
 
     #[test]
-    fn round_robin_repartitions_move_above_partition_sensitive_operators() -> Result<()> {
+    fn round_robin_repartitions_move_into_the_repartition_above_partition_sensitive_operators()
+    -> Result<()> {
         let plan = monotonic_id(filter(round_robin(source(2)?, 4)?)?)?;
         let plan = optimize(round_robin(plan, 8)?)?;
         let lines = plan.lines().map(str::trim_start).collect::<Vec<_>>();
         assert!(
-            lines[0].starts_with("RepartitionExec: partitioning=RoundRobinBatch(8)"),
-            "{plan}"
-        );
-        assert!(
-            lines[1].starts_with(
-                "RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2"
+            lines[0].starts_with(
+                "RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=2"
             ),
             "{plan}"
         );
-        assert!(lines[2].starts_with("MonotonicIdExec"), "{plan}");
-        assert!(lines[3].starts_with("FilterExec"), "{plan}");
-        assert!(lines[4].starts_with("UnionExec"), "{plan}");
+        assert!(lines[1].starts_with("MonotonicIdExec"), "{plan}");
+        assert!(lines[2].starts_with("FilterExec"), "{plan}");
+        assert!(lines[3].starts_with("UnionExec"), "{plan}");
+        assert_eq!(plan.matches("RepartitionExec").count(), 1, "{plan}");
         Ok(())
     }
 
@@ -215,6 +245,27 @@ mod tests {
         assert!(lines[3].starts_with("MonotonicIdExec"), "{plan}");
         assert!(lines[4].starts_with("FilterExec"), "{plan}");
         assert!(lines[5].starts_with("UnionExec"), "{plan}");
+        Ok(())
+    }
+
+    #[test]
+    fn round_robin_repartitions_below_sorts_within_partitions_are_removed() -> Result<()> {
+        let input = filter(round_robin(source(3)?, 10)?)?;
+        let order = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
+            "a",
+            &input.schema(),
+        )?)])
+        .ok_or_else(|| internal_datafusion_err!("empty ordering"))?;
+        let sort = Arc::new(SortExec::new(order.clone(), input).with_preserve_partitioning(true));
+        let plan = monotonic_id(sort)?;
+        let plan = optimize(Arc::new(SortPreservingMergeExec::new(order, plan)))?;
+        let lines = plan.lines().map(str::trim_start).collect::<Vec<_>>();
+        assert!(lines[0].starts_with("SortPreservingMergeExec"), "{plan}");
+        assert!(lines[1].starts_with("MonotonicIdExec"), "{plan}");
+        assert!(lines[2].starts_with("SortExec"), "{plan}");
+        assert!(lines[3].starts_with("FilterExec"), "{plan}");
+        assert!(lines[4].starts_with("UnionExec"), "{plan}");
+        assert!(!plan.contains("RoundRobinBatch"), "{plan}");
         Ok(())
     }
 

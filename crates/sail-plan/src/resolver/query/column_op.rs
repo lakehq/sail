@@ -255,6 +255,8 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<SeededRandomRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_window_projection(input, expr, state)?;
+        // The expressions around the window functions can be evaluated as a whole now.
+        let (input, expr) = self.rewrite_projection::<SeededRandomRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let mut expr = self.rewrite_named_expressions(expr, state)?;
         // Spark preserves qualifiers only on untouched columns. Keep them on the

@@ -27,7 +27,7 @@ pub struct PySparkGroupMapMode {
     pub is_iter: bool,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PySparkGroupMapUDF {
     signature: Signature,
     name: String,
@@ -77,16 +77,8 @@ impl PySparkGroupMapUDF {
     /// when the UDF is nondeterministic.
     pub fn to_shared(&self) -> Self {
         Self {
-            signature: self.signature.clone(),
-            name: self.name.clone(),
-            payload: self.payload.clone(),
-            deterministic: self.deterministic,
-            input_names: self.input_names.clone(),
-            input_types: self.input_types.clone(),
-            output_type: self.output_type.clone(),
-            mode: self.mode,
-            config: Arc::clone(&self.config),
             udf: LazyPyObject::new(false),
+            ..self.clone()
         }
     }
 

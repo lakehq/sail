@@ -398,6 +398,28 @@ impl NameNormalizer {
             LogicalPlan::SubqueryAlias(alias) => Arc::unwrap_or_clone(alias.input),
             // The schema of a union is kept when its inputs are rewritten.
             LogicalPlan::Union(union) => LogicalPlan::Union(Union::try_new(union.inputs)?),
+            // A seeded random node names its output columns outside its expressions.
+            LogicalPlan::Extension(extension) => {
+                match extension.node.as_any().downcast_ref::<SeededRandomNode>() {
+                    Some(random) => {
+                        let columns = random
+                            .columns()
+                            .iter()
+                            .map(|column| SeededRandomColumn {
+                                name: self.fresh(),
+                                ..column.clone()
+                            })
+                            .collect();
+                        LogicalPlan::Extension(Extension {
+                            node: Arc::new(SeededRandomNode::try_new(
+                                Arc::clone(random.input()),
+                                columns,
+                            )?),
+                        })
+                    }
+                    None => LogicalPlan::Extension(extension),
+                }
+            }
             plan => plan,
         })
     }
@@ -423,16 +445,6 @@ impl NameNormalizer {
             Arc::new(MonotonicIdNode::try_new(input(), self.fresh())?)
         } else if node.is::<SparkPartitionIdNode>() {
             Arc::new(SparkPartitionIdNode::try_new(input(), self.fresh())?)
-        } else if let Some(random) = node.downcast_ref::<SeededRandomNode>() {
-            let columns = random
-                .columns()
-                .iter()
-                .map(|column| SeededRandomColumn {
-                    name: self.fresh(),
-                    ..column.clone()
-                })
-                .collect();
-            Arc::new(SeededRandomNode::try_new(input(), columns)?)
         } else if let Some(map) = node.downcast_ref::<MapPartitionsNode>() {
             let width = map.udf().output_schema().fields().len();
             let names = (0..width).map(|_| self.fresh()).collect();

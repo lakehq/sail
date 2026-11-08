@@ -138,6 +138,9 @@ data:
           Projection: column1 AS #1
             Values: (Binary("1")), (Binary("1"))
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     Projection: CAST(CAST(t.#2 || LargeBinary("") AS BinaryView) AS Binary) AS #2
       Aggregate: groupBy=[[CAST(t.#2 AS LargeBinary) AS #2]], aggr=[[]]
@@ -240,6 +243,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:

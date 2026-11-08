@@ -1,12 +1,16 @@
 use std::collections::{HashMap, HashSet};
+use std::mem;
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, TableReference};
 use datafusion_expr::expr::{Alias, FieldMetadata, ScalarFunction};
 use datafusion_expr::expr_rewriter::normalize_col;
-use datafusion_expr::utils::{columnize_expr, expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, Projection};
+use datafusion_expr::utils::{
+    columnize_expr, conjunction, expand_qualified_wildcard, expand_wildcard,
+    split_conjunction_owned,
+};
+use datafusion_expr::{Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, Projection};
 use sail_common::spec;
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -21,7 +25,9 @@ use crate::resolver::tree::PlanRewriter;
 use crate::resolver::tree::exists::ExistsRewriter;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
-use crate::resolver::tree::seeded_random::SeededRandomRewriter;
+use crate::resolver::tree::seeded_random::{
+    SeededRandomRewriter, SeededRandomScope, contains_seeded_random_call,
+};
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 
@@ -70,6 +76,13 @@ impl PlanResolver<'_> {
         )?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_window_projection(input, expr, state)?;
+        // The expressions around the window functions can be evaluated as a whole now.
+        let (input, expr) = self.rewrite_projection_with::<SeededRandomRewriter>(
+            input,
+            expr,
+            aggregate_arguments_only,
+            state,
+        )?;
         let expr = self.rewrite_multi_expr(expr)?;
         if Self::has_aggregate(&expr) {
             self.rewrite_aggregate(input, expr, vec![], None, false, state)
@@ -408,6 +421,8 @@ impl PlanResolver<'_> {
                 self.rewrite_projection::<SeededRandomRewriter>(next, named, state)?;
             let (next, named) = self.rewrite_projection::<ExplodeRewriter>(next, named, state)?;
             let (next, named) = self.rewrite_projection::<WindowRewriter>(next, named, state)?;
+            let (next, named) =
+                self.rewrite_projection::<SeededRandomRewriter>(next, named, state)?;
             let (next, named) = self.rewrite_projection::<ExistsRewriter>(next, named, state)?;
             input = next;
             let named = named.one()?;
@@ -773,14 +788,88 @@ impl PlanResolver<'_> {
         &self,
         input: LogicalPlan,
         expressions: Vec<Expr>,
+        scope: SeededRandomScope,
         state: &mut PlanResolverState,
     ) -> PlanResult<(LogicalPlan, Vec<Expr>)> {
-        let mut rewriter = SeededRandomRewriter::new_from_plan(input, state);
+        let mut rewriter = SeededRandomRewriter::new(input, state, scope);
         let expressions = expressions
             .into_iter()
-            .map(|expr| Ok(expr.rewrite(&mut rewriter)?.data))
+            .map(|expr| Ok(expr.rewrite(&mut rewriter)?.data.unalias()))
             .collect::<PlanResult<Vec<_>>>()?;
         Ok((rewriter.into_plan(), expressions))
+    }
+
+    /// Builds the filter of a predicate. Spark evaluates the conjuncts of a filter in order,
+    /// each for the rows that satisfy the previous ones, so a conjunct with calls of random
+    /// functions with a seed is evaluated after filtering by the previous conjuncts.
+    ///
+    /// Spark rewrites `IN` and correlated `EXISTS` subqueries to joins above the other
+    /// conjuncts (`RewritePredicateSubquery`), so those conjuncts are applied last. A conjunct
+    /// with both a subquery and a call is evaluated after such a join in Spark, so its calls
+    /// stay scalar functions, as do all calls when a correlated scalar subquery follows a call,
+    /// since the subquery could not be decorrelated above the node.
+    pub(super) fn rewrite_seeded_random_filter(
+        &self,
+        input: LogicalPlan,
+        predicate: Expr,
+        having: bool,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let filter = |input: LogicalPlan, predicate: Expr| -> PlanResult<LogicalPlan> {
+            Ok(if having {
+                LogicalPlanBuilder::from(input).having(predicate)?.build()?
+            } else {
+                LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(input))?)
+            })
+        };
+        if !contains_seeded_random_call(&predicate) {
+            return filter(input, predicate);
+        }
+        // A correlated predicate must stay in one filter to be decorrelated.
+        if predicate.contains_outer() {
+            let (input, predicate) = self.rewrite_seeded_random_expressions(
+                input,
+                vec![predicate],
+                SeededRandomScope::Expression,
+                state,
+            )?;
+            return filter(input, predicate.one()?);
+        }
+        let (joined, conjuncts): (Vec<_>, Vec<_>) = split_conjunction_owned(predicate.clone())
+            .into_iter()
+            .partition(|conjunct| has_subquery(conjunct, SubqueryKind::Join));
+        let materialized = |conjunct: &Expr| {
+            contains_seeded_random_call(conjunct) && !has_subquery(conjunct, SubqueryKind::Any)
+        };
+        if let Some(first) = conjuncts.iter().position(materialized)
+            && conjuncts[first..]
+                .iter()
+                .any(|conjunct| has_subquery(conjunct, SubqueryKind::CorrelatedScalar))
+        {
+            return filter(input, predicate);
+        }
+        let mut plan = input;
+        let mut pending = vec![];
+        for conjunct in conjuncts {
+            if !materialized(&conjunct) {
+                pending.push(conjunct);
+                continue;
+            }
+            if let Some(predicate) = conjunction(mem::take(&mut pending)) {
+                plan = filter(plan, predicate)?;
+            }
+            let (input, conjunct) = self.rewrite_seeded_random_expressions(
+                plan,
+                vec![conjunct],
+                SeededRandomScope::Expression,
+                state,
+            )?;
+            plan = filter(input, conjunct.one()?)?;
+        }
+        match conjunction(pending.into_iter().chain(joined)) {
+            Some(predicate) => filter(plan, predicate),
+            None => Ok(plan),
+        }
     }
 
     pub(super) fn rewrite_multi_expr(&self, expr: Vec<NamedExpr>) -> PlanResult<Vec<NamedExpr>> {
@@ -927,6 +1016,38 @@ impl PlanResolver<'_> {
             schema,
         )?))
     }
+}
+
+/// The kinds of subqueries that [`has_subquery`] looks for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SubqueryKind {
+    Any,
+    /// `IN` and correlated `EXISTS` subqueries, which Spark rewrites to joins.
+    Join,
+    CorrelatedScalar,
+}
+
+fn has_subquery(expr: &Expr, kind: SubqueryKind) -> bool {
+    expr.exists(|e| {
+        Ok(match (kind, e) {
+            (
+                SubqueryKind::Any,
+                Expr::ScalarSubquery(_)
+                | Expr::Exists(_)
+                | Expr::InSubquery(_)
+                | Expr::SetComparison(_),
+            ) => true,
+            (SubqueryKind::Join, Expr::InSubquery(_) | Expr::SetComparison(_)) => true,
+            (SubqueryKind::Join, Expr::Exists(exists)) => {
+                !exists.subquery.outer_ref_columns.is_empty()
+            }
+            (SubqueryKind::CorrelatedScalar, Expr::ScalarSubquery(subquery)) => {
+                !subquery.outer_ref_columns.is_empty()
+            }
+            _ => false,
+        })
+    })
+    .unwrap_or(true)
 }
 
 #[cfg(test)]

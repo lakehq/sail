@@ -139,6 +139,9 @@ data:
         Projection: range.id AS id
           TableScan: range projection=[id]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -236,6 +239,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -565,6 +571,9 @@ data:
         Projection: range.id AS id
           TableScan: range projection=[id]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -662,6 +671,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -1008,6 +1020,9 @@ data:
             Projection: distributed_iceberg_commit.id AS id, distributed_iceberg_commit.__sail_file_path AS __sail_file_path, CASE WHEN distributed_iceberg_commit.id < Int64(10) THEN Int32(1) ELSE Int32(0) END AS __sail_operation_type
               TableScan: distributed_iceberg_commit projection=[id, __sail_file_path]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -1105,6 +1120,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -1637,6 +1655,9 @@ data:
                           Filter: range.id < Int64(10)
                             TableScan: range projection=[id]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -1734,6 +1755,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -2313,6 +2337,9 @@ data:
               Projection: distributed_iceberg_commit.id < Int64(10) AS __common_expr_1, distributed_iceberg_commit.id AS id, distributed_iceberg_commit.__sail_file_path AS __sail_file_path
                 TableScan: distributed_iceberg_commit projection=[id, __sail_file_path]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -2410,6 +2437,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -2847,6 +2877,9 @@ data:
             Projection: distributed_iceberg_commit.id AS id, distributed_iceberg_commit.__sail_file_path AS __sail_file_path, CASE WHEN distributed_iceberg_commit.id >= Int64(0) THEN Int32(1) ELSE Int32(0) END AS __sail_operation_type
               TableScan: distributed_iceberg_commit projection=[id, __sail_file_path]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -2944,6 +2977,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:

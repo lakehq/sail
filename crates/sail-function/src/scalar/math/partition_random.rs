@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, Float64Array, Int64Array, StringArray};
+use datafusion::arrow::array::{ArrayRef, Float64Array, Int64Array};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::ScalarUDF;
@@ -19,7 +19,7 @@ use super::randn::Randn;
 use super::random::Random;
 use super::spark_uniform::{SparkUniform, uniform_with_rng};
 use super::xorshift::SparkXorShiftRandom;
-use crate::scalar::string::randstr::{Randstr, generate_random_string, randstr_length};
+use crate::scalar::string::randstr::{Randstr, random_strings, randstr_length};
 
 /// How the seed of a partition is derived from the seed of a random function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
@@ -178,10 +178,11 @@ struct RandstrGenerator {
 
 impl PartitionRandomGenerator for RandstrGenerator {
     fn generate(&mut self, num_rows: usize) -> Result<ArrayRef> {
-        let values: Vec<String> = (0..num_rows)
-            .map(|_| generate_random_string(&mut self.rng, self.length))
-            .collect();
-        Ok(Arc::new(StringArray::from(values)))
+        Ok(Arc::new(random_strings(
+            &mut self.rng,
+            self.length,
+            num_rows,
+        )?))
     }
 }
 

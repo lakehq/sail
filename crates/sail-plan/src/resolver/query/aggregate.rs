@@ -35,7 +35,7 @@ use crate::resolver::tree::exists::ExistsRewriter;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::seeded_random::{
-    SeededRandomRewriter, unconditional_seeded_random_calls,
+    SeededRandomRewriter, SeededRandomScope, seeded_random_calls,
 };
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 
@@ -430,7 +430,7 @@ impl PlanResolver<'_> {
                 }
                 Ok(TreeNodeRecursion::Continue)
             })?;
-            for call in unconditional_seeded_random_calls(&group.expr) {
+            for call in seeded_random_calls(&group.expr) {
                 if !partition_expressions.contains(call) {
                     partition_expressions.push(call.clone());
                 }
@@ -438,7 +438,8 @@ impl PlanResolver<'_> {
         }
         let (input, columns) =
             self.rewrite_partition_expressions(input, partition_expressions.clone(), state)?;
-        let (input, columns) = self.rewrite_seeded_random_expressions(input, columns, state)?;
+        let (input, columns) =
+            self.rewrite_seeded_random_expressions(input, columns, SeededRandomScope::Call, state)?;
         let replacements = partition_expressions
             .into_iter()
             .zip(columns.into_iter().map(Expr::unalias))
@@ -605,10 +606,9 @@ impl PlanResolver<'_> {
             Some(having) => {
                 let (plan, having) =
                     self.rewrite_partition_expressions(plan, vec![having], state)?;
-                let (plan, having) = self.rewrite_seeded_random_expressions(plan, having, state)?;
                 let having =
                     Self::rebase_expression(having.one()?, &aggregate_or_grouping_exprs, &plan)?;
-                LogicalPlanBuilder::from(plan).having(having)?.build()?
+                self.rewrite_seeded_random_filter(plan, having, true, state)?
             }
             None => plan,
         };
@@ -621,6 +621,9 @@ impl PlanResolver<'_> {
         let (plan, projections) =
             self.rewrite_projection::<ExplodeRewriter>(plan, projections, state)?;
         let (plan, projections) = self.rewrite_window_projection(plan, projections, state)?;
+        // The expressions around the window functions can be evaluated as a whole now.
+        let (plan, projections) =
+            self.rewrite_projection::<SeededRandomRewriter>(plan, projections, state)?;
         let (plan, projections) =
             self.rewrite_projection::<ExistsRewriter>(plan, projections, state)?;
         let projections = projections
