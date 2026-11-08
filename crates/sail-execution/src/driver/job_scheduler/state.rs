@@ -73,6 +73,7 @@ impl JobDescriptor {
         let regions = (0..topology.regions.len())
             .map(|_| TaskRegionDescriptor {
                 state: TaskRegionState::Running,
+                retry_cause: None,
             })
             .collect();
         Ok(Self {
@@ -115,6 +116,8 @@ impl StageState {
 #[derive(Debug)]
 pub struct TaskRegionDescriptor {
     pub state: TaskRegionState,
+    /// The failure that triggered the current region attempt, including successful siblings.
+    pub retry_cause: Option<CommonErrorCause>,
 }
 
 #[derive(Debug, Clone, Copy)]

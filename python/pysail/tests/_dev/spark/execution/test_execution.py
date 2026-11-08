@@ -37,6 +37,17 @@ def test_basic_query_execution(spark):
     assert result[0]["result"] == 2  # noqa: PLR2004
 
 
+@pytest.mark.timeout(30)
+def test_invalid_cast_preserves_cause_and_session_recovers(spark):
+    frame = spark.createDataFrame([("42",), (None,), ("bad",)], "x STRING").repartition(2)
+    with pytest.raises(Exception, match="Cannot cast string 'bad' to value of Int32 type"):
+        frame.selectExpr("CAST(x AS INT)").collect()
+
+    rows = frame.selectExpr("x", "TRY_CAST(x AS INT) AS value").collect()
+    assert {row.x: row.value for row in rows} == {"42": 42, None: None, "bad": None}
+    assert [row.id for row in spark.range(4, numPartitions=2).orderBy("id").collect()] == [0, 1, 2, 3]
+
+
 @pytest.mark.parametrize(
     "predicate",
     [
