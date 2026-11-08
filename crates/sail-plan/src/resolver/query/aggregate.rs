@@ -19,7 +19,7 @@ use sail_function::scalar::explode::Explode;
 use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
 use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
 use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
-use sail_logical_optimizer::is_order_irrelevant_aggregate;
+use sail_logical_optimizer::{is_order_irrelevant_aggregate, push_down_left_semi_anti_join};
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
@@ -926,6 +926,16 @@ impl PlanResolver<'_> {
                     Ok((plan.with_new_exprs(expressions, vec![child])?, true, global))
                 } else {
                     Ok((plan, false, false))
+                }
+            }
+            LogicalPlan::Join(join) => {
+                // A left semi or anti join keeps the order of the sorts of its left input
+                // once it is moved below them.
+                let plan = push_down_left_semi_anti_join(join)?;
+                if plan.transformed {
+                    Self::require_input_sort_inner(plan.data)
+                } else {
+                    Ok((plan.data, false, false))
                 }
             }
             plan => {

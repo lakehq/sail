@@ -1,0 +1,243 @@
+"""Order-sensitive aggregates and row order over LEFT SEMI / LEFT ANTI joins (and EXISTS / IN /
+NOT EXISTS / NOT IN subqueries) of a sorted left input: Spark keeps the left order.
+
+Expected values were verified on JVM Spark 4.2.0 (test corpus suite scalar-subquery-reuse-extension
+v9 (bug follow-ups B1-B3), cases b1-*). The `t` fixture is a parquet table (g INT, x INT, y STRING) with the rows
+(1, 10, 'a'), (1, 20, 'b'), (2, 5, 'c'), (2, NULL, 'd').
+"""
+
+import uuid
+
+import pytest
+
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
+
+
+@pytest.fixture(scope="module")
+def t(spark, tmp_path_factory):
+    name = f"semi_order_{uuid.uuid4().hex[:8]}"
+    location = escape_sql_string_literal(str(tmp_path_factory.mktemp("semi_order") / name))
+    spark.sql(f"CREATE TABLE {name} (g INT, x INT, y STRING) USING parquet LOCATION '{location}'")
+    spark.sql(f"INSERT INTO {name} VALUES (1, 10, 'a'), (1, 20, 'b'), (2, 5, 'c'), (2, NULL, 'd')")  # noqa: S608
+    yield name
+    spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        pytest.param(
+            'SELECT (SELECT first(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT first(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [(0, 18)],
+            id='semi-first',
+        ),
+        pytest.param(
+            'SELECT (SELECT last(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT last(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [(18, 0)],
+            id='semi-last',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [([0, 2, 4, 6, 8, 10, 12, 14, 16, 18], [18, 16, 14, 12, 10, 8, 6, 4, 2, 0])],
+            id='semi-collect_list',
+        ),
+        pytest.param(
+            'SELECT (SELECT first(s.id, true) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT first(s.id, true) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [(0, 18)],
+            id='semi-first-ignorenulls',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 100, 1, 4) ORDER BY id ASC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 100, 1, 3) WHERE id % 9 = 0) AS r ON s.id = r.id) AS a, (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 100, 1, 4) ORDER BY id DESC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 100, 1, 3) WHERE id % 9 = 0) AS r ON s.id = r.id) AS b',
+            [([0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99], [99, 90, 81, 72, 63, 54, 45, 36, 27, 18, 9, 0])],
+            id='semi-multipart-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC LIMIT 8) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC LIMIT 8) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [([0, 2, 4, 6], [18, 16, 14, 12])],
+            id='semi-fetch-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) SORT BY id ASC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) SORT BY id DESC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [([0, 2, 4, 6, 8, 10, 12, 14, 16, 18], [18, 16, 14, 12, 10, 8, 6, 4, 2, 0])],
+            id='semi-sortby-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(s.z) FROM (SELECT id + 0 AS z FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC)) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.z = r.id) AS a, (SELECT collect_list(s.z) FROM (SELECT id + 0 AS z FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC)) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.z = r.id) AS b',
+            [([0, 2, 4, 6, 8, 10, 12, 14, 16, 18], [18, 16, 14, 12, 10, 8, 6, 4, 2, 0])],
+            id='semi-computed-alias-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(s.id) FROM (SELECT id FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC)) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT collect_list(s.id) FROM (SELECT id FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC)) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [([0, 2, 4, 6, 8, 10, 12, 14, 16, 18], [18, 16, 14, 12, 10, 8, 6, 4, 2, 0])],
+            id='semi-plain-projection-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT count(*) FROM (SELECT /*+ REPARTITION(3) */ * FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC)) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT count(*) FROM (SELECT /*+ REPARTITION(3) */ * FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC)) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [(10, 10)],
+            id='semi-repartition-count',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(s.y) FROM (SELECT * FROM {t} ORDER BY x ASC NULLS LAST) AS s LEFT SEMI JOIN (SELECT * FROM {t} WHERE x > 6) AS r ON s.g = r.g) AS a, (SELECT collect_list(s.y) FROM (SELECT * FROM {t} ORDER BY x DESC NULLS LAST) AS s LEFT SEMI JOIN (SELECT * FROM {t} WHERE x > 6) AS r ON s.g = r.g) AS b',
+            [(['a', 'b'], ['b', 'a'])],
+            id='semi-table-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT first(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT first(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [(1, 19)],
+            id='anti-first',
+        ),
+        pytest.param(
+            'SELECT (SELECT last(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT last(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [(19, 1)],
+            id='anti-last',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [([1, 3, 5, 7, 9, 11, 13, 15, 17, 19], [19, 17, 15, 13, 11, 9, 7, 5, 3, 1])],
+            id='anti-collect_list',
+        ),
+        pytest.param(
+            'SELECT (SELECT first(s.id, true) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT first(s.id, true) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [(1, 19)],
+            id='anti-first-ignorenulls',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 100, 1, 4) ORDER BY id ASC) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 100, 1, 3) WHERE id % 9 = 0) AS r ON s.id = r.id) AS a, (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 100, 1, 4) ORDER BY id DESC) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 100, 1, 3) WHERE id % 9 = 0) AS r ON s.id = r.id) AS b',
+            [([1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 25, 26, 28, 29, 30, 31, 32, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 46, 47, 48, 49, 50, 51, 52, 53, 55, 56, 57, 58, 59, 60, 61, 62, 64, 65, 66, 67, 68, 69, 70, 71, 73, 74, 75, 76, 77, 78, 79, 80, 82, 83, 84, 85, 86, 87, 88, 89, 91, 92, 93, 94, 95, 96, 97, 98], [98, 97, 96, 95, 94, 93, 92, 91, 89, 88, 87, 86, 85, 84, 83, 82, 80, 79, 78, 77, 76, 75, 74, 73, 71, 70, 69, 68, 67, 66, 65, 64, 62, 61, 60, 59, 58, 57, 56, 55, 53, 52, 51, 50, 49, 48, 47, 46, 44, 43, 42, 41, 40, 39, 38, 37, 35, 34, 33, 32, 31, 30, 29, 28, 26, 25, 24, 23, 22, 21, 20, 19, 17, 16, 15, 14, 13, 12, 11, 10, 8, 7, 6, 5, 4, 3, 2, 1])],
+            id='anti-multipart-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC LIMIT 8) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC LIMIT 8) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [([1, 3, 5, 7], [19, 17, 15, 13])],
+            id='anti-fetch-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) SORT BY id ASC) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT collect_list(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) SORT BY id DESC) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [([1, 3, 5, 7, 9, 11, 13, 15, 17, 19], [19, 17, 15, 13, 11, 9, 7, 5, 3, 1])],
+            id='anti-sortby-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(s.z) FROM (SELECT id + 0 AS z FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC)) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.z = r.id) AS a, (SELECT collect_list(s.z) FROM (SELECT id + 0 AS z FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC)) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.z = r.id) AS b',
+            [([1, 3, 5, 7, 9, 11, 13, 15, 17, 19], [19, 17, 15, 13, 11, 9, 7, 5, 3, 1])],
+            id='anti-computed-alias-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(s.id) FROM (SELECT id FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC)) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT collect_list(s.id) FROM (SELECT id FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC)) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [([1, 3, 5, 7, 9, 11, 13, 15, 17, 19], [19, 17, 15, 13, 11, 9, 7, 5, 3, 1])],
+            id='anti-plain-projection-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT count(*) FROM (SELECT /*+ REPARTITION(3) */ * FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC)) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS a, (SELECT count(*) FROM (SELECT /*+ REPARTITION(3) */ * FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC)) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id) AS b',
+            [(10, 10)],
+            id='anti-repartition-count',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(s.y) FROM (SELECT * FROM {t} ORDER BY x ASC NULLS LAST) AS s LEFT ANTI JOIN (SELECT * FROM {t} WHERE x > 6) AS r ON s.g = r.g) AS a, (SELECT collect_list(s.y) FROM (SELECT * FROM {t} ORDER BY x DESC NULLS LAST) AS s LEFT ANTI JOIN (SELECT * FROM {t} WHERE x > 6) AS r ON s.g = r.g) AS b',
+            [(['c', 'd'], ['c', 'd'])],
+            id='anti-table-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC) AS s WHERE EXISTS (SELECT 1 FROM (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r WHERE r.id = s.id)) AS a, (SELECT collect_list(id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s WHERE EXISTS (SELECT 1 FROM (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r WHERE r.id = s.id)) AS b',
+            [([0, 2, 4, 6, 8, 10, 12, 14, 16, 18], [18, 16, 14, 12, 10, 8, 6, 4, 2, 0])],
+            id='exists-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC) AS s WHERE s.id IN (SELECT id FROM (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0))) AS a, (SELECT collect_list(id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s WHERE s.id IN (SELECT id FROM (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0))) AS b',
+            [([0, 2, 4, 6, 8, 10, 12, 14, 16, 18], [18, 16, 14, 12, 10, 8, 6, 4, 2, 0])],
+            id='in-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC) AS s WHERE NOT EXISTS (SELECT 1 FROM (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r WHERE r.id = s.id)) AS a, (SELECT collect_list(id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s WHERE NOT EXISTS (SELECT 1 FROM (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r WHERE r.id = s.id)) AS b',
+            [([1, 3, 5, 7, 9, 11, 13, 15, 17, 19], [19, 17, 15, 13, 11, 9, 7, 5, 3, 1])],
+            id='not-exists-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC) AS s WHERE s.id NOT IN (SELECT id FROM (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0))) AS a, (SELECT collect_list(id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s WHERE s.id NOT IN (SELECT id FROM (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0))) AS b',
+            [([1, 3, 5, 7, 9, 11, 13, 15, 17, 19], [19, 17, 15, 13, 11, 9, 7, 5, 3, 1])],
+            id='not-in-collect',
+        ),
+        pytest.param(
+            'SELECT (SELECT collect_list(id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id ASC) AS s WHERE EXISTS (SELECT 1 FROM (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r WHERE r.id = s.id) OR s.id = 19) AS a, (SELECT collect_list(id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s WHERE EXISTS (SELECT 1 FROM (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r WHERE r.id = s.id) OR s.id = 19) AS b',
+            [([0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 19], [19, 18, 16, 14, 12, 10, 8, 6, 4, 2, 0])],
+            id='exists-or-collect',
+        ),
+    ],
+)
+def test_order_sensitive_aggregates_over_semi_and_anti_joins_of_sorted_inputs(spark, t, query, expected):
+    actual = [tuple(row) for row in spark.sql(query.format(t=t)).collect()]
+    assert actual == expected
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        pytest.param(
+            'SELECT id FROM (SELECT * FROM range(0, 100, 1, 4) ORDER BY id DESC) AS s WHERE EXISTS (SELECT 1 FROM (SELECT id FROM range(0, 100, 1, 3) WHERE id % 3 = 0) AS r WHERE r.id = s.id)',
+            [(99,), (96,), (93,), (90,), (87,), (84,), (81,), (78,), (75,), (72,), (69,), (66,), (63,), (60,), (57,), (54,), (51,), (48,), (45,), (42,), (39,), (36,), (33,), (30,), (27,), (24,), (21,), (18,), (15,), (12,), (9,), (6,), (3,), (0,)],
+            id='exists-rows',
+        ),
+        pytest.param(
+            'SELECT id FROM (SELECT * FROM range(0, 100, 1, 4) ORDER BY id DESC) AS s WHERE s.id IN (SELECT id FROM (SELECT id FROM range(0, 100, 1, 3) WHERE id % 3 = 0))',
+            [(99,), (96,), (93,), (90,), (87,), (84,), (81,), (78,), (75,), (72,), (69,), (66,), (63,), (60,), (57,), (54,), (51,), (48,), (45,), (42,), (39,), (36,), (33,), (30,), (27,), (24,), (21,), (18,), (15,), (12,), (9,), (6,), (3,), (0,)],
+            id='in-rows',
+        ),
+        pytest.param(
+            'SELECT id FROM (SELECT * FROM range(0, 100, 1, 4) ORDER BY id DESC) AS s WHERE NOT EXISTS (SELECT 1 FROM (SELECT id FROM range(0, 100, 1, 3) WHERE id % 3 = 0) AS r WHERE r.id = s.id)',
+            [(98,), (97,), (95,), (94,), (92,), (91,), (89,), (88,), (86,), (85,), (83,), (82,), (80,), (79,), (77,), (76,), (74,), (73,), (71,), (70,), (68,), (67,), (65,), (64,), (62,), (61,), (59,), (58,), (56,), (55,), (53,), (52,), (50,), (49,), (47,), (46,), (44,), (43,), (41,), (40,), (38,), (37,), (35,), (34,), (32,), (31,), (29,), (28,), (26,), (25,), (23,), (22,), (20,), (19,), (17,), (16,), (14,), (13,), (11,), (10,), (8,), (7,), (5,), (4,), (2,), (1,)],
+            id='not-exists-rows',
+        ),
+        pytest.param(
+            'SELECT id FROM (SELECT * FROM range(0, 100, 1, 4) ORDER BY id DESC) AS s WHERE s.id NOT IN (SELECT id FROM (SELECT id FROM range(0, 100, 1, 3) WHERE id % 3 = 0))',
+            [(98,), (97,), (95,), (94,), (92,), (91,), (89,), (88,), (86,), (85,), (83,), (82,), (80,), (79,), (77,), (76,), (74,), (73,), (71,), (70,), (68,), (67,), (65,), (64,), (62,), (61,), (59,), (58,), (56,), (55,), (53,), (52,), (50,), (49,), (47,), (46,), (44,), (43,), (41,), (40,), (38,), (37,), (35,), (34,), (32,), (31,), (29,), (28,), (26,), (25,), (23,), (22,), (20,), (19,), (17,), (16,), (14,), (13,), (11,), (10,), (8,), (7,), (5,), (4,), (2,), (1,)],
+            id='not-in-rows',
+        ),
+        pytest.param(
+            'SELECT id FROM (SELECT * FROM range(0, 100, 1, 4) ORDER BY id DESC) AS s WHERE EXISTS (SELECT 1 FROM (SELECT id FROM range(0, 100, 1, 3) WHERE id % 3 = 0) AS r WHERE r.id = s.id) OR s.id = 19',
+            [(99,), (96,), (93,), (90,), (87,), (84,), (81,), (78,), (75,), (72,), (69,), (66,), (63,), (60,), (57,), (54,), (51,), (48,), (45,), (42,), (39,), (36,), (33,), (30,), (27,), (24,), (21,), (19,), (18,), (15,), (12,), (9,), (6,), (3,), (0,)],
+            id='exists-or-rows',
+        ),
+        pytest.param(
+            'SELECT s.x, s.y FROM (SELECT * FROM {t} ORDER BY x DESC NULLS LAST) AS s LEFT SEMI JOIN (SELECT * FROM {t} WHERE x > 15) AS r ON s.g = r.g',
+            [(20, 'b'), (10, 'a')],
+            id='semi-table-rows',
+        ),
+        pytest.param(
+            'SELECT s.id FROM (SELECT * FROM range(0, 100, 1, 4) ORDER BY id DESC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 100, 1, 3) WHERE id % 3 = 0) AS r ON s.id = r.id LIMIT 5',
+            [(99,), (96,), (93,), (90,), (87,)],
+            id='semi-limit-rows',
+        ),
+        pytest.param(
+            'SELECT s.id FROM (SELECT * FROM range(0, 20, 1, 1) SORT BY id DESC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id',
+            [(18,), (16,), (14,), (12,), (10,), (8,), (6,), (4,), (2,), (0,)],
+            id='semi-sortby-rows',
+        ),
+        pytest.param(
+            'SELECT s.x, s.y FROM (SELECT * FROM {t} ORDER BY x DESC NULLS LAST) AS s LEFT ANTI JOIN (SELECT * FROM {t} WHERE x > 15) AS r ON s.g = r.g',
+            [(5, 'c'), (None, 'd')],
+            id='anti-table-rows',
+        ),
+        pytest.param(
+            'SELECT s.id FROM (SELECT * FROM range(0, 100, 1, 4) ORDER BY id DESC) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 100, 1, 3) WHERE id % 3 = 0) AS r ON s.id = r.id LIMIT 5',
+            [(98,), (97,), (95,), (94,), (92,)],
+            id='anti-limit-rows',
+        ),
+        pytest.param(
+            'SELECT s.id FROM (SELECT * FROM range(0, 20, 1, 1) SORT BY id DESC) AS s LEFT ANTI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 2 = 0) AS r ON s.id = r.id',
+            [(19,), (17,), (15,), (13,), (11,), (9,), (7,), (5,), (3,), (1,)],
+            id='anti-sortby-rows',
+        ),
+        pytest.param(
+            'SELECT s.id % 2 AS k, collect_list(s.id) FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 3 = 0) AS r ON s.id = r.id GROUP BY s.id % 2 ORDER BY k',
+            [(0, [18, 12, 6, 0]), (1, [15, 9, 3])],
+            id='semi-grouped-collect',
+        ),
+        pytest.param(
+            'SELECT s.id, first_value(s.id) OVER (PARTITION BY s.id % 2) AS f FROM (SELECT * FROM range(0, 20, 1, 1) ORDER BY id DESC) AS s LEFT SEMI JOIN (SELECT id FROM range(0, 20, 1, 1) WHERE id % 3 = 0) AS r ON s.id = r.id ORDER BY s.id',
+            [(0, 18), (3, 15), (6, 18), (9, 15), (12, 18), (15, 15), (18, 18)],
+            id='semi-window-first-value',
+        ),
+    ],
+)
+def test_semi_and_anti_joins_keep_the_order_of_a_sorted_left_input(spark, t, query, expected):
+    actual = [tuple(row) for row in spark.sql(query.format(t=t)).collect()]
+    assert actual == expected

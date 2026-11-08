@@ -62,10 +62,16 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -159,10 +165,16 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:

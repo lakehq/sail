@@ -10,10 +10,117 @@ use datafusion_expr::expr::{Sort, WindowFunction, WindowFunctionParams};
 use datafusion_expr::logical_plan::{FetchType, SkipType};
 use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, Operator, Projection, WindowFrame,
+    EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, Operator, Projection, WindowFrame,
     WindowFunctionDefinition, lit,
 };
-use sail_logical_plan::sort::RequiredSortNode;
+use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
+
+/// A correlated EXISTS subquery only tests whether its body returns a row for each outer
+/// row, so a LIMIT without an OFFSET at the top of the body, and the sorts below it, cannot
+/// change its result. The limit is removed, or the body is replaced by an empty relation for
+/// `LIMIT 0`, as the decorrelation of EXISTS does, so that the sorts do not prevent it.
+#[derive(Debug)]
+pub struct RemoveExistsLimit;
+
+impl OptimizerRule for RemoveExistsLimit {
+    fn name(&self) -> &str {
+        "remove_exists_limit"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
+        let mut found = false;
+        plan.apply_expressions(|expr| {
+            expr.apply(|expr| {
+                if let Expr::Exists(exists) = expr
+                    && !exists.subquery.outer_ref_columns.is_empty()
+                {
+                    found = true;
+                    return Ok(TreeNodeRecursion::Stop);
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+        })?;
+        if !found {
+            return Ok(Transformed::no(plan));
+        }
+        plan.map_expressions(|expr| {
+            expr.transform_up(|expr| {
+                let Expr::Exists(mut exists) = expr else {
+                    return Ok(Transformed::no(expr));
+                };
+                if exists.subquery.outer_ref_columns.is_empty() {
+                    return Ok(Transformed::no(Expr::Exists(exists)));
+                }
+                let body = remove_top_level_limit(exists.subquery.subquery.as_ref().clone())?;
+                if !body.transformed {
+                    return Ok(Transformed::no(Expr::Exists(exists)));
+                }
+                exists.subquery.outer_ref_columns = body.data.all_out_ref_exprs();
+                exists.subquery.subquery = Arc::new(body.data);
+                Ok(Transformed::yes(Expr::Exists(exists)))
+            })
+        })
+    }
+}
+
+/// Removes the limit without an offset at the top of the plan, and the sorts below it.
+fn remove_top_level_limit(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    match plan {
+        LogicalPlan::Projection(_) | LogicalPlan::SubqueryAlias(_) => {
+            plan.map_children(remove_top_level_limit)
+        }
+        LogicalPlan::Limit(limit) => {
+            let (SkipType::Literal(0), FetchType::Literal(fetch)) =
+                (limit.get_skip_type()?, limit.get_fetch_type()?)
+            else {
+                return Ok(Transformed::no(LogicalPlan::Limit(limit)));
+            };
+            if fetch == Some(0) {
+                return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
+                    EmptyRelation {
+                        produce_one_row: false,
+                        schema: Arc::clone(limit.input.schema()),
+                    },
+                )));
+            }
+            Ok(Transformed::yes(
+                remove_top_level_sorts(Arc::unwrap_or_clone(limit.input))?.data,
+            ))
+        }
+        plan => Ok(Transformed::no(plan)),
+    }
+}
+
+/// Removes the sorts at the top of the plan, which select no rows.
+fn remove_top_level_sorts(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    match plan {
+        LogicalPlan::Projection(_) | LogicalPlan::SubqueryAlias(_) => {
+            plan.map_children(remove_top_level_sorts)
+        }
+        LogicalPlan::Sort(sort) if sort.fetch.is_none() => Ok(Transformed::yes(
+            remove_top_level_sorts(Arc::unwrap_or_clone(sort.input))?.data,
+        )),
+        LogicalPlan::Extension(ref extension)
+            if extension
+                .node
+                .as_any()
+                .downcast_ref::<SortWithinPartitionsNode>()
+                .is_some_and(|sort| sort.fetch().is_none()) =>
+        {
+            let input = extension.node.inputs()[0].clone();
+            Ok(Transformed::yes(remove_top_level_sorts(input)?.data))
+        }
+        plan => Ok(Transformed::no(plan)),
+    }
+}
 
 /// A correlated LIMIT applies independently to every equality key. Rank the
 /// decorrelated input within each key, then put the correlation above the rank.
