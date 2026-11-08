@@ -79,6 +79,7 @@ message ExtendedPhysicalPlanNode {
     InputFileMetadataExecNode input_file_metadata = 64;
     DeltaMaintenanceExecNode delta_maintenance = 65;
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
+    RangePartitionSampleExecNode range_partition_sample = 67;
   }
 }
 
@@ -1024,6 +1025,11 @@ message SparkPartitionIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;
+}
+
+message RangePartitionSampleExecNode {
+  bytes input = 1;
+  uint64 sample_size = 2;
 }
 
 message CoalesceExecNode {

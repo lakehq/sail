@@ -18,6 +18,7 @@ datafusion-common = { workspace = true }
 datafusion-datasource-parquet = { workspace = true }
 datafusion-expr = { workspace = true }
 futures = { workspace = true }
+rand = { workspace = true }
 object_store = { workspace = true }
 parquet = { workspace = true }
 serde = { workspace = true }

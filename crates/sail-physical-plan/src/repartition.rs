@@ -9,7 +9,9 @@ use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::common::runtime::SpawnedTask;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{Partitioning, PhysicalExpr};
+use datafusion::physical_expr::{
+    LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning,
+};
 use datafusion::physical_plan::execution_plan::{
     CardinalityEffect, EvaluationType, SchedulingType,
 };
@@ -554,6 +556,22 @@ impl ExecutionPlan for ExplicitRepartitionExec {
                 }
                 Partitioning::Hash(new_partitions, *size)
             }
+            Partitioning::Range(range) => {
+                let mut sort_exprs = Vec::with_capacity(range.ordering().len());
+                for sort_expr in range.ordering() {
+                    let Some(expr) = update_expr(&sort_expr.expr, projection.expr(), false)? else {
+                        return Ok(None);
+                    };
+                    sort_exprs.push(PhysicalSortExpr::new(expr, sort_expr.options));
+                }
+                let Some(ordering) = LexOrdering::new(sort_exprs) else {
+                    return Ok(None);
+                };
+                Partitioning::Range(RangePartitioning::try_new(
+                    ordering,
+                    range.split_points().to_vec(),
+                )?)
+            }
             other => other.clone(),
         };
         Ok(Some(Arc::new(ExplicitRepartitionExec::new(
@@ -565,4 +583,55 @@ impl ExecutionPlan for ExplicitRepartitionExec {
     // Do not implement Filter pushdown, as its evaluation can be potentially
     // expensive, and the presence of explicit repartitioning indicates that
     // the user wants to evaluate the filters after repartitioning.
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use datafusion::arrow::compute::SortOptions;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::physical_expr::SplitPoint;
+    use datafusion::physical_expr::expressions::Column;
+    use datafusion::physical_expr::projection::ProjectionExpr;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion_common::ScalarValue;
+
+    use super::*;
+
+    #[test]
+    fn test_projection_swap_remaps_range_keys() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("k", DataType::Int64, true),
+        ]));
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("k", 1)),
+            SortOptions::default(),
+        )])
+        .unwrap();
+        let range = RangePartitioning::try_new(
+            ordering,
+            vec![SplitPoint::new(vec![ScalarValue::Int64(Some(5))])],
+        )
+        .unwrap();
+        let repartition = Arc::new(ExplicitRepartitionExec::new(
+            Arc::new(EmptyExec::new(schema)),
+            Partitioning::Range(range),
+        ));
+        let projection = ProjectionExec::try_new(
+            [ProjectionExpr::new(Arc::new(Column::new("k", 1)), "k")],
+            Arc::clone(&repartition) as Arc<dyn ExecutionPlan>,
+        )
+        .unwrap();
+
+        let swapped = repartition
+            .try_swapping_with_projection(&projection)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            swapped.output_partitioning().to_string(),
+            "Range([k@0 ASC], [(5)], 2)"
+        );
+    }
 }

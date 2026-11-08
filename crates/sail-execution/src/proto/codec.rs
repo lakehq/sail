@@ -322,6 +322,7 @@ use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
+use sail_physical_plan::range_sample::RangePartitionSampleExec;
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
 };
@@ -1513,6 +1514,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )?))
             }
+            NodeKind::RangePartitionSample(r#gen::RangePartitionSampleExecNode {
+                input,
+                sample_size,
+            }) => Ok(Arc::new(RangePartitionSampleExec::try_new(
+                try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
+                usize::try_from(sample_size).map_err(|e| plan_datafusion_err!("{e}"))?,
+            )?)),
             NodeKind::Coalesce(r#gen::CoalesceExecNode {
                 input,
                 output_partitions,
@@ -3045,6 +3053,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 column_name: spark_partition_id.column_name().to_string(),
                 schema,
+            })
+        } else if let Some(sample) = node.downcast_ref::<RangePartitionSampleExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                sample.input().clone(),
+            )?;
+            NodeKind::RangePartitionSample(r#gen::RangePartitionSampleExecNode {
+                input,
+                sample_size: sample.sample_size() as u64,
             })
         } else if let Some(coalesce) = node.downcast_ref::<CoalesceExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -8926,6 +8944,24 @@ mod tests {
         };
         as_hof(decoded)?;
         assert_same_result(&physical, decoded, schema_ref, vec![Arc::new(list)])
+    }
+
+    #[test]
+    fn test_range_partition_sample_round_trip() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_physical_plan::range_sample::RangePartitionSampleExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, true)]));
+        let plan = RangePartitionSampleExec::try_new(Arc::new(EmptyExec::new(schema)), 300)?;
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(plan.clone()))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<RangePartitionSampleExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected range partition sample"))?;
+        assert_eq!(decoded.sample_size(), 300);
+        assert_eq!(decoded.schema(), plan.schema());
+        Ok(())
     }
 
     #[test]

@@ -7666,6 +7666,7 @@ dependencies = [
  "log",
  "object_store",
  "parquet",
+ "rand 0.10.3",
  "sail-cache",
  "sail-catalog",
  "sail-common-datafusion",

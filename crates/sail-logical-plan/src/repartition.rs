@@ -11,7 +11,12 @@ pub enum ExplicitRepartitionKind {
     RoundRobin,
     Hash(Vec<Expr>),
     /// Each key keeps its sort direction and null order, which decide the partition ranges.
-    Range(Vec<SortExpr>),
+    /// The split points come from a sample of about `sample_size_per_partition` rows
+    /// for each output partition (`spark.sql.execution.rangeExchange.sampleSizePerPartition`).
+    Range {
+        sorts: Vec<SortExpr>,
+        sample_size_per_partition: i32,
+    },
 }
 
 impl ExplicitRepartitionKind {
@@ -20,7 +25,7 @@ impl ExplicitRepartitionKind {
             Self::Coalesce => "coalesce",
             Self::RoundRobin => "round_robin",
             Self::Hash(_) => "hash",
-            Self::Range(_) => "range",
+            Self::Range { .. } => "range",
         }
     }
 }
@@ -76,7 +81,7 @@ impl UserDefinedLogicalNodeCore for ExplicitRepartitionNode {
         match &self.kind {
             ExplicitRepartitionKind::Coalesce | ExplicitRepartitionKind::RoundRobin => vec![],
             ExplicitRepartitionKind::Hash(exprs) => exprs.clone(),
-            ExplicitRepartitionKind::Range(sorts) => {
+            ExplicitRepartitionKind::Range { sorts, .. } => {
                 sorts.iter().map(|sort| sort.expr.clone()).collect()
             }
         }
@@ -92,7 +97,7 @@ impl UserDefinedLogicalNodeCore for ExplicitRepartitionNode {
         match &self.kind {
             ExplicitRepartitionKind::Coalesce | ExplicitRepartitionKind::RoundRobin => {}
             ExplicitRepartitionKind::Hash(exprs) => write!(f, "{}", expr_vec_fmt!(exprs))?,
-            ExplicitRepartitionKind::Range(sorts) => write!(f, "{}", expr_vec_fmt!(sorts))?,
+            ExplicitRepartitionKind::Range { sorts, .. } => write!(f, "{}", expr_vec_fmt!(sorts))?,
         }
         write!(f, "]")
     }
@@ -108,7 +113,7 @@ impl UserDefinedLogicalNodeCore for ExplicitRepartitionNode {
         let expected = match &self.kind {
             ExplicitRepartitionKind::Coalesce | ExplicitRepartitionKind::RoundRobin => 0,
             ExplicitRepartitionKind::Hash(exprs) => exprs.len(),
-            ExplicitRepartitionKind::Range(sorts) => sorts.len(),
+            ExplicitRepartitionKind::Range { sorts, .. } => sorts.len(),
         };
         if exprs.len() != expected {
             return plan_err!(
@@ -121,13 +126,17 @@ impl UserDefinedLogicalNodeCore for ExplicitRepartitionNode {
             ExplicitRepartitionKind::Coalesce => ExplicitRepartitionKind::Coalesce,
             ExplicitRepartitionKind::RoundRobin => ExplicitRepartitionKind::RoundRobin,
             ExplicitRepartitionKind::Hash(_) => ExplicitRepartitionKind::Hash(exprs),
-            ExplicitRepartitionKind::Range(sorts) => ExplicitRepartitionKind::Range(
-                sorts
+            ExplicitRepartitionKind::Range {
+                sorts,
+                sample_size_per_partition,
+            } => ExplicitRepartitionKind::Range {
+                sorts: sorts
                     .iter()
                     .zip(exprs)
                     .map(|(sort, expr)| sort.with_expr(expr))
                     .collect(),
-            ),
+                sample_size_per_partition: *sample_size_per_partition,
+            },
         };
         Ok(Self::new(Arc::new(input), self.num_partitions, kind))
     }

@@ -272,6 +272,17 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             })?;
         }
 
+        if let Some(value) = config.get_option(
+            SparkConfigKey::SPARK_SQL_EXECUTION_RANGE_EXCHANGE_SAMPLE_SIZE_PER_PARTITION,
+        ) {
+            output.range_exchange_sample_size_per_partition =
+                value.trim().parse::<i32>().map_err(|_| {
+                    SparkError::invalid(format!(
+                        "spark.sql.execution.rangeExchange.sampleSizePerPartition should be int, but was {value}"
+                    ))
+                })?;
+        }
+
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE)
             .map(|x| x.to_string())

@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use datafusion_expr::{Extension, LogicalPlan};
+use datafusion_expr::{ExprSchemable, Extension, LogicalPlan, SortExpr};
 use sail_common::spec;
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::common::normalize_distinct_floats;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -86,14 +87,29 @@ impl PlanResolver<'_> {
             .await?;
         let (input, expr) = self.rewrite_partition_expressions(input, expr, state)?;
         let kind = if is_range {
-            ExplicitRepartitionKind::Range(
-                expr.into_iter()
-                    .zip(sort_options.into_iter().flatten())
-                    .map(|(expr, (direction, null_ordering))| {
-                        Self::sort_with_options(expr, direction, null_ordering)
-                    })
-                    .collect(),
-            )
+            let mut sorts: Vec<SortExpr> = vec![];
+            for (expr, (direction, null_ordering)) in
+                expr.into_iter().zip(sort_options.into_iter().flatten())
+            {
+                // A repeated key cannot break a tie, so only its first order counts.
+                if sorts.iter().any(|sort| sort.expr == expr) {
+                    continue;
+                }
+                sorts.push(Self::sort_with_options(expr, direction, null_ordering));
+            }
+            let sorts = sorts
+                .into_iter()
+                .map(|sort| {
+                    // Spark compares -0.0 and 0.0 as equal, so they share a partition.
+                    let data_type = sort.expr.get_type(input.schema())?;
+                    let expr = normalize_distinct_floats(sort.expr.clone(), &data_type);
+                    Ok(sort.with_expr(expr))
+                })
+                .collect::<PlanResult<Vec<_>>>()?;
+            ExplicitRepartitionKind::Range {
+                sorts,
+                sample_size_per_partition: self.config.range_exchange_sample_size_per_partition,
+            }
         } else {
             ExplicitRepartitionKind::Hash(expr)
         };

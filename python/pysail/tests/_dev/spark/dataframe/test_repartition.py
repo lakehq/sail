@@ -7,7 +7,6 @@ from pandas.testing import assert_frame_equal
 from pyspark.errors import AnalysisException, IllegalArgumentException
 from pyspark.sql import Row
 
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.plan import normalize_plan_text
 
 
@@ -59,12 +58,6 @@ def test_range_repartition_preserves_rows_and_partition_count(spark, descending)
 
 # Regression extending Spark 3 (3.5.9): pyspark/sql/dataframe.py, DataFrame.repartitionByRange doctest.
 # Uses Connect partition IDs/counts instead of the RDD API.
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="repartitionByRange currently uses hash partitioning instead of ordered range boundaries",
-    raises=AssertionError,
-    strict=True,
-)
 @pytest.mark.parametrize("descending", [False, True])
 def test_range_repartition_has_nonoverlapping_ordered_boundaries(spark, descending):
     source = spark.range(0, 36, 1, 4).withColumn("key", F.col("id") % 12)
@@ -77,6 +70,34 @@ def test_range_repartition_has_nonoverlapping_ordered_boundaries(spark, descendi
             assert min(groups[lower]) > max(groups[upper])
         else:
             assert max(groups[lower]) < min(groups[upper])
+
+
+def test_range_repartition_orders_compound_keys_by_each_direction(spark):
+    source = spark.range(12).select((F.col("id") / 6).cast("int").alias("a"), (F.col("id") % 6).alias("b"))
+    rows = source.repartitionByRange(3, "a", F.col("b").desc()).select("a", "b", F.spark_partition_id().alias("pid"))
+    assert sorted((row.pid, row.a, row.b) for row in rows.collect()) == [
+        (0, 0, 2),
+        (0, 0, 3),
+        (0, 0, 4),
+        (0, 0, 5),
+        (1, 0, 0),
+        (1, 0, 1),
+        (1, 1, 4),
+        (1, 1, 5),
+        (2, 1, 0),
+        (2, 1, 1),
+        (2, 1, 2),
+        (2, 1, 3),
+    ]
+
+
+def test_range_repartition_rejects_non_positive_sample_size(spark):
+    try:
+        spark.conf.set("spark.sql.execution.rangeExchange.sampleSizePerPartition", "0")
+        with pytest.raises(Exception, match="Sample points per partition must be greater than 0 but found 0"):
+            spark.range(12).repartitionByRange(3, "id").collect()
+    finally:
+        spark.conf.unset("spark.sql.execution.rangeExchange.sampleSizePerPartition")
 
 
 def assert_range_repartition_plan(df, sorts):
