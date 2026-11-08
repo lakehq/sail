@@ -1,15 +1,14 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, TableReference};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, ScalarValue, TableReference};
 use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, col, expr, lit, try_cast};
 use datafusion_functions::core::get_field;
 use datafusion_functions_nested::expr_fn::{array_element, map_extract};
 use sail_common::spec;
-use sail_function::scalar::array_struct_field::ArrayStructField;
+use sail_function::scalar::conversion::spark_cast_string_to_int32::parse_spark_legacy_string_to_i64;
 use sail_function::scalar::datetime::spark_date::SparkDate;
-use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::r#struct::array_struct_field::ArrayStructField;
 
 use crate::error::{PlanError, PlanResult};
@@ -593,8 +592,8 @@ impl PlanResolver<'_> {
         let ansi_mode = self.config.ansi_mode;
         match key_type {
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Some(key),
-            DataType::Int32 if !ansi_mode => {
-                Some(ScalarUDF::new_from_impl(SparkCastStringToInt32::new()).call(vec![key]))
+            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 if !ansi_mode => {
+                legacy_integer_key(name, key_type).map(lit)
             }
             DataType::Date32 => {
                 Some(ScalarUDF::new_from_impl(SparkDate::new(!ansi_mode)).call(vec![key]))
@@ -618,6 +617,21 @@ impl PlanResolver<'_> {
             (qualifier, &name[index], &name[index + 1..])
         })
     }
+}
+
+/// Parses a name into an integer key, as Spark casts a string with ANSI mode off.
+/// The name is a constant, so the key is computed during planning.
+/// An invalid or out-of-range name gives a null key.
+fn legacy_integer_key(name: &str, key_type: &DataType) -> Option<ScalarValue> {
+    let value = parse_spark_legacy_string_to_i64(name);
+    let key = match key_type {
+        DataType::Int8 => ScalarValue::Int8(value.and_then(|x| i8::try_from(x).ok())),
+        DataType::Int16 => ScalarValue::Int16(value.and_then(|x| i16::try_from(x).ok())),
+        DataType::Int32 => ScalarValue::Int32(value.and_then(|x| i32::try_from(x).ok())),
+        DataType::Int64 => ScalarValue::Int64(value),
+        _ => return None,
+    };
+    Some(key)
 }
 
 /// A qualifier matches a suffix of the relation name, including multipart namespaces.

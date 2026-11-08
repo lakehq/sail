@@ -85,7 +85,16 @@ fn parse_string_values<'a>(values: impl Iterator<Item = Option<&'a str>>) -> Int
         .collect()
 }
 
+/// Parses a string as Spark does when it casts a string to INT with ANSI mode off.
+/// This is the BIGINT parse narrowed to INT, since both truncate the fraction and reject overflow.
 fn parse_spark_legacy_string_to_i32(value: &str) -> Option<i32> {
+    parse_spark_legacy_string_to_i64(value).and_then(|value| i32::try_from(value).ok())
+}
+
+/// Parses a string as Spark does when it casts a string to BIGINT with ANSI mode off.
+/// Whitespace is trimmed and a fractional part is truncated, as long as it only has digits.
+/// Returns `None` for invalid input or on overflow.
+pub fn parse_spark_legacy_string_to_i64(value: &str) -> Option<i64> {
     let bytes = value.as_bytes();
     let mut offset = 0;
     while offset < bytes.len() && is_spark_trim_byte(bytes[offset]) {
@@ -108,8 +117,8 @@ fn parse_spark_legacy_string_to_i32(value: &str) -> Option<i32> {
         offset += 1;
     }
 
-    let stop_value = i32::MIN / 10;
-    let mut result = 0_i32;
+    let stop_value = i64::MIN / 10;
+    let mut result = 0_i64;
     while offset <= end {
         let byte = bytes[offset];
         offset += 1;
@@ -119,7 +128,7 @@ fn parse_spark_legacy_string_to_i32(value: &str) -> Option<i32> {
         if !byte.is_ascii_digit() || result < stop_value {
             return None;
         }
-        result = result.checked_mul(10)?.checked_sub((byte - b'0') as i32)?;
+        result = result.checked_mul(10)?.checked_sub((byte - b'0') as i64)?;
     }
 
     while offset <= end {
@@ -172,6 +181,43 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(
                 parse_spark_legacy_string_to_i32(input),
+                expected,
+                "input: {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_spark_legacy_string_to_i64() {
+        let cases = [
+            ("100", Some(100)),
+            ("1.9", Some(1)),
+            ("-1.9", Some(-1)),
+            ("-0.5", Some(0)),
+            (" \t1\n", Some(1)),
+            ("\u{7f}+1\u{0}", Some(1)),
+            ("9223372036854775807", Some(i64::MAX)),
+            ("-9223372036854775808", Some(i64::MIN)),
+            ("9223372036854775807.9", Some(i64::MAX)),
+            ("-9223372036854775808.9", Some(i64::MIN)),
+            ("9223372036854775808", None),
+            ("-9223372036854775809", None),
+            ("99999999999999999999", None),
+            // Spark parses a lone separator as zero.
+            (".", Some(0)),
+            ("x", None),
+            ("1.x", None),
+            ("1.2.3", None),
+            ("1 2", None),
+            ("1e2", None),
+            ("", None),
+            ("   ", None),
+            ("-", None),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(
+                parse_spark_legacy_string_to_i64(input),
                 expected,
                 "input: {input:?}"
             );

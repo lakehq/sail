@@ -156,26 +156,47 @@ Feature: Attribute identity in column resolution
       | ansi  | key                    | name       | value |
       | false | 1                      | 1          | a     |
       | false | 1                      | x          | NULL  |
+      | false | 1                      | 1.9        | a     |
       | true  | 1                      | 1          | a     |
       | false | CAST(1 AS BIGINT)      | 1          | a     |
       | false | CAST(1 AS BIGINT)      | x          | NULL  |
+      | false | CAST(1 AS BIGINT)      | 1.9        | a     |
+      | false | CAST(-1 AS BIGINT)     | -1.9       | a     |
+      | false | CAST(1 AS BIGINT)      | 1.x        | NULL  |
       | true  | CAST(1 AS BIGINT)      | 1          | a     |
+      | false | CAST(1 AS SMALLINT)    | 1.9        | a     |
+      | false | CAST(1 AS SMALLINT)    | 65537      | NULL  |
+      | false | CAST(1 AS TINYINT)     | 1.9        | a     |
+      | false | CAST(1 AS TINYINT)     | 257        | NULL  |
       | false | CAST(1 AS DECIMAL(3))  | 1          | a     |
       | false | 1.5D                   | 1.5        | a     |
       | false | DATE '2024-01-01'      | 2024-01-01 | a     |
       | false | DATE '2024-01-01'      | x          | NULL  |
       | true  | DATE '2024-01-01'      | 2024-01-01 | a     |
 
+  Scenario: A padded dotted name is trimmed before it is cast to an integer map key
+    Given config spark.sql.ansi.enabled = false
+    When query
+      """
+      SELECT m.` 1` AS v, n.`1 ` AS w
+      FROM VALUES (map(1, 'a'), map(CAST(1 AS BIGINT), 'b')) AS t(m, n)
+      """
+    Then query result
+      | v | w |
+      | a | b |
+
   Scenario Outline: A dotted name that is not a valid map key fails in ANSI mode
     Given config spark.sql.ansi.enabled = true
     When query
       """
-      SELECT m.x FROM VALUES (map(<key>, 'a')) AS t(m)
+      SELECT m.`<name>` FROM VALUES (map(<key>, 'a')) AS t(m)
       """
     Then query error (?i)cast
 
     Examples:
-      | key               |
-      | 1                 |
-      | CAST(1 AS BIGINT) |
-      | DATE '2024-01-01' |
+      | key               | name |
+      | 1                 | x    |
+      | 1                 | 1.9  |
+      | CAST(1 AS BIGINT) | x    |
+      | CAST(1 AS BIGINT) | 1.9  |
+      | DATE '2024-01-01' | x    |
