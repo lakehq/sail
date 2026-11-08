@@ -1808,6 +1808,36 @@ fn normalize_float_in_list(
             (false, true) => in_list(expr, list).and(!zeros),
         };
     }
+    // A literal compared with a list of columns keeps the columns as they are, which keeps the
+    // predicate usable for pruning. A literal other than a zero or NaN cannot equal a zero of
+    // either sign, so it is compared as it is. A zero is compared with each column by a range
+    // that matches both zeros. NaN is normalized below, since NaN values may differ in their bits.
+    let is_nan = |value: &ScalarValue| match value {
+        ScalarValue::Float16(Some(v)) => v.is_nan(),
+        ScalarValue::Float32(Some(v)) => v.is_nan(),
+        ScalarValue::Float64(Some(v)) => v.is_nan(),
+        _ => false,
+    };
+    if let Some(value) = literal(&expr).filter(|value| !is_nan(value))
+        && list.iter().all(column)
+    {
+        if value != positive_zero && value != negative_zero {
+            return in_list(expr, list);
+        }
+        let zeros = list
+            .into_iter()
+            .map(|e| {
+                e.clone()
+                    .gt_eq(lit(negative_zero.clone()))
+                    .and(e.lt_eq(lit(positive_zero.clone())))
+            })
+            .reduce(Expr::or);
+        return match zeros {
+            Some(zeros) if negated => !zeros,
+            Some(zeros) => zeros,
+            None => in_list(expr, vec![]),
+        };
+    }
     let normalize = |e: Expr| {
         if is_normalized_float_operand(&e) {
             e
@@ -4184,12 +4214,44 @@ mod test {
         };
         assert!(is_normalized_float_operand(&expr));
         assert!(list.iter().all(is_normalized_float_operand));
-        let Expr::InList(InList { expr, list, .. }) =
-            normalize_float_in_list(lit(0.0_f64), vec![col("b")], false, &DataType::Float64)
-        else {
-            panic!("expected an IN list");
-        };
-        assert!(is_normalized_float_operand(&expr) && is_normalized_float_operand(&list[0]));
+        // A literal other than a zero or NaN compared with columns is unchanged.
+        let columns = vec![col("b"), cast(col("c"), DataType::Float64)];
+        assert_eq!(
+            normalize_float_in_list(lit(1.5_f64), columns.clone(), true, &DataType::Float64),
+            in_list(lit(1.5_f64), columns.clone(), true)
+        );
+        // A zero is compared with each column by a range that matches both zeros.
+        let any_zero = zeros(col("b"), lit(-0.0_f64), lit(0.0_f64)).or(zeros(
+            cast(col("c"), DataType::Float64),
+            lit(-0.0_f64),
+            lit(0.0_f64),
+        ));
+        for value in [
+            lit(0.0_f64),
+            lit(-0.0_f64),
+            Expr::Negative(Box::new(lit(0.0_f64))),
+        ] {
+            assert_eq!(
+                normalize_float_in_list(value.clone(), columns.clone(), false, &DataType::Float64),
+                any_zero.clone()
+            );
+            assert_eq!(
+                normalize_float_in_list(value, columns.clone(), true, &DataType::Float64),
+                !any_zero.clone()
+            );
+        }
+        // NaN, or a value that is not a column, is normalized.
+        for (value, list) in [
+            (lit(f64::NAN), vec![col("b")]),
+            (lit(0.0_f64), vec![col("b") + lit(1.0_f64)]),
+        ] {
+            let Expr::InList(InList { expr, list, .. }) =
+                normalize_float_in_list(value, list, false, &DataType::Float64)
+            else {
+                panic!("expected an IN list");
+            };
+            assert!(is_normalized_float_operand(&expr) && is_normalized_float_operand(&list[0]));
+        }
         // Other types are unchanged.
         assert_eq!(
             normalize_float_in_list(col("a"), vec![col("b")], false, &DataType::Int32),
