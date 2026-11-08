@@ -29,6 +29,7 @@ use crate::input_file_name::{
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
 use crate::offset::OffsetSafeRequirements;
+use crate::partition_sensitive::KeepPartitionSensitiveInputs;
 use crate::projection_pushdown::ContextSafeProjectionPushdown;
 use crate::select_semi_join_build_side::SelectSemiJoinBuildSide;
 
@@ -41,6 +42,7 @@ mod input_file_name;
 mod join_reorder;
 mod mixed_numeric;
 mod offset;
+mod partition_sensitive;
 mod projection_pushdown;
 mod scan_partitions;
 mod select_semi_join_build_side;
@@ -91,6 +93,9 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(PostFilterPushdown));
     rules.push(Arc::new(PushDownStreamedJoinInputFileMetadata));
     rules.push(Arc::new(RewriteInputFileMetadataFallback::new()));
+    // Explicit repartitions are rewritten to round-robin repartitions afterwards, and they
+    // define the partitions that partition-sensitive operators keep.
+    rules.push(Arc::new(KeepPartitionSensitiveInputs));
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));

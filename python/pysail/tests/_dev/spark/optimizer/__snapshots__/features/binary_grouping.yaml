@@ -395,6 +395,9 @@ data:
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepPartitionSensitiveInputs:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
