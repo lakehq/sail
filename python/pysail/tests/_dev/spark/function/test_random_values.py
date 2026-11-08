@@ -185,8 +185,9 @@ def test_seeded_random_values(spark, expr, expected):
             ["8.4", "7.4", "5.4", "6.4", "8.2", "6.2", "6.1", "7.5"],
             id="int-and-decimal-bounds",
         ),
+        # The decimal bound is converted to the nearest double (not 61822791393531.89).
         pytest.param(
-            "uniform(CAST(61822791393531.8852 AS DECIMAL(18,4)), CAST(61822791393531.8852 AS DOUBLE), 0)",
+            "uniform(CAST(61822791393531.8852 AS DECIMAL(18,4)), 61822791393531.88D, 0)",
             "double",
             ["61822791393531.88"] * 8,
             id="decimal-bound-to-double",

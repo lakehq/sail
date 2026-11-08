@@ -65,7 +65,23 @@ impl PySparkUDF {
             input_types,
             output_type,
             config,
-            udf: LazyPyObject::new(),
+            udf: LazyPyObject::new(!deterministic),
+        }
+    }
+
+    /// Returns the same UDF, whose calls are equal to the calls of all other equal UDFs, even
+    /// when the UDF is nondeterministic.
+    pub fn to_shared(&self) -> Self {
+        Self {
+            signature: self.signature.clone(),
+            kind: self.kind,
+            name: self.name.clone(),
+            payload: self.payload.clone(),
+            deterministic: self.deterministic,
+            input_types: self.input_types.clone(),
+            output_type: self.output_type.clone(),
+            config: Arc::clone(&self.config),
+            udf: LazyPyObject::new(false),
         }
     }
 

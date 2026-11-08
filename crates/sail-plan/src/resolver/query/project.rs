@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, TableReference};
 use datafusion_expr::expr::{Alias, FieldMetadata, ScalarFunction};
 use datafusion_expr::expr_rewriter::normalize_col;
@@ -46,22 +46,32 @@ impl PlanResolver<'_> {
         };
         let (input, expr) = self.resolve_projection_list(input, expr, state).await?;
         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
-        let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
-        let (input, expr) =
-            self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
-        let (input, expr) = self.rewrite_projection::<SeededRandomRewriter>(input, expr, state)?;
+        // In an aggregate query, the partition-dependent functions outside the aggregate
+        // functions are evaluated over the aggregate output, as in Spark, so only the
+        // arguments of the aggregate functions are rewritten over the input here.
+        let aggregate_arguments_only = Self::has_aggregate(&expr);
+        let (input, expr) = self.rewrite_projection_with::<MonotonicIdRewriter>(
+            input,
+            expr,
+            aggregate_arguments_only,
+            state,
+        )?;
+        let (input, expr) = self.rewrite_projection_with::<SparkPartitionIdRewriter>(
+            input,
+            expr,
+            aggregate_arguments_only,
+            state,
+        )?;
+        let (input, expr) = self.rewrite_projection_with::<SeededRandomRewriter>(
+            input,
+            expr,
+            aggregate_arguments_only,
+            state,
+        )?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_window_projection(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
-        let has_aggregate = expr.iter().any(|e| {
-            e.expr
-                .exists(|e| match e {
-                    Expr::AggregateFunction(_) => Ok(true),
-                    _ => Ok(false),
-                })
-                .unwrap_or(false)
-        });
-        if has_aggregate {
+        if Self::has_aggregate(&expr) {
             self.rewrite_aggregate(input, expr, vec![], None, false, state)
         } else {
             let (input, expr) = self.rewrite_projection::<ExistsRewriter>(input, expr, state)?;
@@ -668,10 +678,36 @@ impl PlanResolver<'_> {
         Ok((input, expressions))
     }
 
+    fn has_aggregate(expr: &[NamedExpr]) -> bool {
+        expr.iter().any(|e| {
+            e.expr
+                .exists(|e| match e {
+                    Expr::AggregateFunction(_) => Ok(true),
+                    _ => Ok(false),
+                })
+                .unwrap_or(false)
+        })
+    }
+
     pub(super) fn rewrite_projection<'s, T>(
         &self,
         input: LogicalPlan,
         expr: Vec<NamedExpr>,
+        state: &'s mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)>
+    where
+        T: PlanRewriter<'s> + TreeNodeRewriter<Node = Expr>,
+    {
+        self.rewrite_projection_with::<T>(input, expr, false, state)
+    }
+
+    /// Rewrites the projection, or only the aggregate functions in it if
+    /// `aggregate_functions_only` is true.
+    fn rewrite_projection_with<'s, T>(
+        &self,
+        input: LogicalPlan,
+        expr: Vec<NamedExpr>,
+        aggregate_functions_only: bool,
         state: &'s mut PlanResolverState,
     ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)>
     where
@@ -686,9 +722,23 @@ impl PlanResolver<'_> {
                     expr,
                     metadata,
                 } = e;
+                let expr = if aggregate_functions_only {
+                    expr.transform_down(|expr| {
+                        if !matches!(expr, Expr::AggregateFunction(_)) {
+                            return Ok(Transformed::no(expr));
+                        }
+                        let Transformed {
+                            data, transformed, ..
+                        } = expr.rewrite(&mut rewriter)?;
+                        Ok(Transformed::new(data, transformed, TreeNodeRecursion::Jump))
+                    })?
+                    .data
+                } else {
+                    expr.rewrite(&mut rewriter)?.data
+                };
                 Ok(NamedExpr {
                     name,
-                    expr: expr.rewrite(&mut rewriter)?.data,
+                    expr,
                     metadata,
                 })
             })

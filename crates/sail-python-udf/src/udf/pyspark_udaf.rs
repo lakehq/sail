@@ -83,7 +83,26 @@ impl PySparkGroupAggregateUDF {
             output_type,
             config,
             actual_arg_count,
-            udf: LazyPyObject::new(),
+            udf: LazyPyObject::new(!deterministic),
+        }
+    }
+
+    /// Returns the same UDF, whose calls are equal to the calls of all other equal UDFs, even
+    /// when the UDF is nondeterministic.
+    pub fn to_shared(&self) -> Self {
+        Self {
+            signature: self.signature.clone(),
+            kind: self.kind,
+            mode: self.mode,
+            name: self.name.clone(),
+            payload: self.payload.clone(),
+            deterministic: self.deterministic,
+            input_names: self.input_names.clone(),
+            input_types: self.input_types.clone(),
+            output_type: self.output_type.clone(),
+            config: Arc::clone(&self.config),
+            actual_arg_count: self.actual_arg_count,
+            udf: LazyPyObject::new(false),
         }
     }
 

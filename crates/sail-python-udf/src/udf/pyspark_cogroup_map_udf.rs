@@ -70,8 +70,27 @@ impl PySparkCoGroupMapUDF {
             output_type,
             config,
             is_pandas,
-            udf: LazyPyObject::new(),
+            udf: LazyPyObject::new(!deterministic),
         })
+    }
+
+    /// Returns the same UDF, whose calls are equal to the calls of all other equal UDFs, even
+    /// when the UDF is nondeterministic.
+    pub fn to_shared(&self) -> Self {
+        Self {
+            signature: self.signature.clone(),
+            name: self.name.clone(),
+            payload: self.payload.clone(),
+            deterministic: self.deterministic,
+            left_types: self.left_types.clone(),
+            left_names: self.left_names.clone(),
+            right_types: self.right_types.clone(),
+            right_names: self.right_names.clone(),
+            output_type: self.output_type.clone(),
+            is_pandas: self.is_pandas,
+            config: Arc::clone(&self.config),
+            udf: LazyPyObject::new(false),
+        }
     }
 
     pub fn payload(&self) -> &[u8] {

@@ -11,8 +11,8 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, Tre
 use datafusion_common::{Column, TableReference, plan_err};
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::{
-    AggregateUDFImpl, Expr, Extension, LogicalPlan, Projection, ScalarUDF, Subquery, TableSource,
-    Union, UserDefinedLogicalNode, Volatility, WindowFunctionDefinition,
+    AggregateUDF, AggregateUDFImpl, Expr, Extension, LogicalPlan, Projection, ScalarUDF, Subquery,
+    TableSource, Union, UserDefinedLogicalNode, Volatility, WindowFunctionDefinition,
 };
 use datafusion_physical_expr::projection::ProjectionExpr;
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
@@ -349,6 +349,42 @@ impl NameNormalizer {
                         Expr::OuterReferenceColumn(_, _) => {
                             return plan_err!("unexpected outer reference");
                         }
+                        // The calls of a nondeterministic Python UDF are only equal to
+                        // themselves, but equal subqueries are shared regardless of determinism.
+                        Expr::ScalarFunction(mut function) => {
+                            match shared_python_scalar_udf(&function.func) {
+                                Some(func) => {
+                                    function.func = Arc::new(func);
+                                    Transformed::yes(Expr::ScalarFunction(function))
+                                }
+                                None => Transformed::no(Expr::ScalarFunction(function)),
+                            }
+                        }
+                        Expr::AggregateFunction(mut function) => {
+                            match shared_python_aggregate_udf(&function.func) {
+                                Some(func) => {
+                                    function.func = Arc::new(func);
+                                    Transformed::yes(Expr::AggregateFunction(function))
+                                }
+                                None => Transformed::no(Expr::AggregateFunction(function)),
+                            }
+                        }
+                        Expr::WindowFunction(mut function) => {
+                            let shared = match &function.fun {
+                                WindowFunctionDefinition::AggregateUDF(udaf) => {
+                                    shared_python_aggregate_udf(udaf)
+                                }
+                                WindowFunctionDefinition::WindowUDF(_) => None,
+                            };
+                            match shared {
+                                Some(func) => {
+                                    function.fun =
+                                        WindowFunctionDefinition::AggregateUDF(Arc::new(func));
+                                    Transformed::yes(Expr::WindowFunction(function))
+                                }
+                                None => Transformed::no(Expr::WindowFunction(function)),
+                            }
+                        }
                         _ => Transformed::no(expr),
                     })
                 })
@@ -486,6 +522,40 @@ fn is_reusable_volatile_scalar(function: &ScalarUDF, args: &[Expr]) -> bool {
 /// Python UDFs as for [`is_reusable_volatile_scalar`].
 fn is_reusable_volatile_aggregate(func: &dyn AggregateUDFImpl) -> bool {
     func.is::<PySparkGroupAggregateUDF>() || func.is::<PySparkGroupMapUDF>()
+}
+
+/// Returns the nondeterministic Python UDF with calls that are equal to the calls of all other
+/// equal UDFs, or `None` for other functions.
+fn shared_python_scalar_udf(func: &ScalarUDF) -> Option<ScalarUDF> {
+    let inner = func.inner();
+    if let Some(udf) = inner.downcast_ref::<PySparkUDF>()
+        && !udf.deterministic()
+    {
+        Some(ScalarUDF::new_from_impl(udf.to_shared()))
+    } else if let Some(udf) = inner.downcast_ref::<PySparkCoGroupMapUDF>()
+        && !udf.deterministic()
+    {
+        Some(ScalarUDF::new_from_impl(udf.to_shared()))
+    } else {
+        None
+    }
+}
+
+/// Returns the nondeterministic Python aggregate UDF with calls that are equal to the calls of
+/// all other equal UDFs, or `None` for other functions.
+fn shared_python_aggregate_udf(func: &AggregateUDF) -> Option<AggregateUDF> {
+    let inner = func.inner();
+    if let Some(udf) = inner.downcast_ref::<PySparkGroupAggregateUDF>()
+        && !udf.deterministic()
+    {
+        Some(AggregateUDF::new_from_impl(udf.to_shared()))
+    } else if let Some(udf) = inner.downcast_ref::<PySparkGroupMapUDF>()
+        && !udf.deterministic()
+    {
+        Some(AggregateUDF::new_from_impl(udf.to_shared()))
+    } else {
+        None
+    }
 }
 
 /// Returns whether the projection only renames the columns of its input, in order.

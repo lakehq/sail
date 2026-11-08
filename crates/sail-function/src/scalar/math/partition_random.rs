@@ -19,7 +19,7 @@ use super::randn::Randn;
 use super::random::Random;
 use super::spark_uniform::{SparkUniform, uniform_with_rng};
 use super::xorshift::SparkXorShiftRandom;
-use crate::scalar::string::randstr::{Randstr, generate_random_string};
+use crate::scalar::string::randstr::{Randstr, generate_random_string, randstr_length};
 
 /// How the seed of a partition is derived from the seed of a random function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
@@ -81,7 +81,7 @@ pub fn create_partition_random_generator(
         };
         Ok(Box::new(RandstrGenerator {
             rng: SparkXorShiftRandom::new(seed),
-            length: length as usize,
+            length: randstr_length(length)?,
         }))
     } else if inner.is::<SparkUniform>() {
         Ok(Box::new(UniformGenerator {

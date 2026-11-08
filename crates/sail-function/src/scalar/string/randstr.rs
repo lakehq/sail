@@ -52,9 +52,9 @@ impl ScalarUDFImpl for Randstr {
         }
 
         let length = match &args[0] {
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(v))) => *v as usize,
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) => *v as usize,
-            ColumnarValue::Scalar(ScalarValue::Int16(Some(v))) => *v as usize,
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(v))) => randstr_length(i64::from(*v))?,
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) => randstr_length(*v)?,
+            ColumnarValue::Scalar(ScalarValue::Int16(Some(v))) => randstr_length(i64::from(*v))?,
             other => {
                 return exec_err!(
                     "`randstr` expects a constant integer length, got {:?}",
@@ -135,6 +135,16 @@ impl ScalarUDFImpl for Randstr {
 
         Ok(result)
     }
+}
+
+/// Returns the length of the random strings, which must not be negative.
+pub(crate) fn randstr_length(length: i64) -> Result<usize> {
+    usize::try_from(length).or_else(|_| {
+        exec_err!(
+            "[INVALID_PARAMETER_VALUE.LENGTH] The value of parameter(s) `length` in `randstr` is \
+             invalid: Expects `length` greater than or equal to 0, but got {length}."
+        )
+    })
 }
 
 /// Generates a random alphanumeric string (0-9, a-z, A-Z) of the specified length.
