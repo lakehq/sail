@@ -1309,6 +1309,11 @@ class PySparkArrowTableUdf:
         columns = (tuple(batch.column(i) for i in range(batch.num_columns)) for batch in batches_for_passthrough)
         last = None
         for passthrough, result in itertools.zip_longest(self._iter_passthrough(columns), outputs):
+            # terminate() inherits the last input row even when eval() emitted no rows.
+            if passthrough is None:
+                passthrough = last  # noqa: PLW2901
+            else:
+                last = passthrough
             if PYSPARK_VERSION >= (4, 3):
                 out = _flatten_struct(result) if result is not None else None
             else:
@@ -1317,8 +1322,6 @@ class PySparkArrowTableUdf:
                 continue
             out_batch = out.combine_chunks().to_batches()[0] if isinstance(out, pa.Table) else out
             num_rows = out_batch.num_rows
-            if passthrough is None:
-                passthrough = last  # noqa: PLW2901
             passthrough_arrays = []
             passthrough_fields = []
             for i, name in enumerate(self._input_names[: self._passthrough_columns]):
@@ -1335,7 +1338,6 @@ class PySparkArrowTableUdf:
                     passthrough_fields + [out_batch.schema.field(i) for i in range(out_batch.num_columns)]
                 ),
             )
-            last = passthrough
 
     def _call_legacy(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
         for output in self._iter_output_legacy(args):
@@ -1367,11 +1369,14 @@ class PySparkArrowTableUdf:
         outputs = self._udf(None, inputs)
         last = None
         for passthrough, (out, *_) in itertools.zip_longest(self._iter_passthrough(batches1), outputs):
+            # terminate() inherits the last input row even when eval() emitted no rows.
+            if passthrough is None:
+                passthrough = last  # noqa: PLW2901
+            else:
+                last = passthrough
             if out is None or len(out) == 0:
                 continue
             df = pd.DataFrame(index=out.index)
-            if passthrough is None:
-                passthrough = last  # noqa: PLW2901
             if passthrough is not None:
                 for v, name in zip(passthrough, self._input_names, strict=False):
                     df[name] = [v] * len(out)
@@ -1381,7 +1386,6 @@ class PySparkArrowTableUdf:
             for col in out:
                 df[col] = out[col]
             yield df
-            last = passthrough
 
     def _iter_passthrough(self, batches: Iterator[tuple]) -> Iterator[tuple]:
         if self._passthrough_columns > 0:

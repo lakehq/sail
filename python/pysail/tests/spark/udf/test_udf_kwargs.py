@@ -161,7 +161,8 @@ def test_arrow_udtf_lateral_view_uses_argument_schema(spark, use_arrow):
 
 @pytest.mark.spark(version=">=4.1", reason="Uses configurable Arrow UDTF conversion")
 @pytest.mark.parametrize("legacy_conversion", [False, True])
-def test_arrow_udtf_preserves_passthrough_with_empty_results_and_terminate(spark, legacy_conversion):
+@pytest.mark.parametrize("emitting_values", [(1, 2), (1,), ()])
+def test_arrow_udtf_preserves_passthrough_with_empty_results_and_terminate(spark, legacy_conversion, emitting_values):
     key = "spark.sql.legacy.execution.pythonUDTF.pandas.conversion.enabled"
     original = spark.conf.get(key)
     spark.conf.set(key, str(legacy_conversion).lower())
@@ -170,7 +171,7 @@ def test_arrow_udtf_preserves_passthrough_with_empty_results_and_terminate(spark
         @udtf(returnType="output: long", useArrow=True)
         class Expand:
             def eval(self, value):
-                if value:
+                if value in emitting_values:
                     yield (value,)
                     yield (value + 10,)
 
@@ -181,13 +182,8 @@ def test_arrow_udtf_preserves_passthrough_with_empty_results_and_terminate(spark
         result = spark.sql(
             "SELECT id, output FROM range(0, 3, 1, 1) LATERAL VIEW expand_arrow_with_terminate(id) AS output"
         ).orderBy("id", "output")
-        assert result.collect() == [
-            Row(id=1, output=1),
-            Row(id=1, output=11),
-            Row(id=2, output=2),
-            Row(id=2, output=12),
-            Row(id=2, output=99),
-        ]
+        expected = [Row(id=value, output=output) for value in emitting_values for output in (value, value + 10)]
+        assert result.collect() == [*expected, Row(id=2, output=99)]
     finally:
         spark.conf.set(key, original)
 
