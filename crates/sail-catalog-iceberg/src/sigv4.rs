@@ -134,8 +134,10 @@ impl SigV4Signer {
     /// redirect replays the signature, and across hosts reqwest drops
     /// `Authorization` but keeps `Original-Authorization`.
     ///
-    /// `aws_sigv4` traces requests without redacting `Original-Authorization`,
-    /// but `CompositeLogger` drops those records.
+    /// `aws_sigv4` traces requests without redacting `Original-Authorization`.
+    /// A `tracing` subscriber is muted for the call, but the `log` bridge (no
+    /// subscriber, or `log-always`) still forwards those events, and
+    /// `CompositeLogger` drops them.
     pub fn sign(&self, request: &mut Request, credentials: &Credentials) -> Result<()> {
         self.sign_at(request, credentials, SystemTime::now())
     }
@@ -164,6 +166,8 @@ impl SigV4Signer {
     ) -> Result<()> {
         use aws_sigv4::http_request::{SignableBody, SignableRequest, sign};
         use aws_sigv4::sign::v4;
+        use tracing::dispatcher::Dispatch;
+        use tracing::level_filters::LevelFilter;
 
         // Before the content hash is displaced, which takes it out of signing.
         signable_headers(request).try_for_each(|header| header.map(|_| ()))?;
@@ -206,7 +210,16 @@ impl SigV4Signer {
         )
         .map_err(SigV4Error::UnsignableRequest)?;
 
-        let signed = sign(signable, &params);
+        // `aws_sigv4` traces the request, `Original-Authorization` included.
+        // Mute it only when a subscriber could record that (the max level is
+        // `OFF` until one is registered): `with_default` also sets
+        // tracing-core's `EXISTS` flag, which nothing clears, and with the
+        // `log` feature tracing then stops forwarding events to `log` for good.
+        let signed = if LevelFilter::current() == LevelFilter::TRACE {
+            tracing::dispatcher::with_default(&Dispatch::none(), || sign(signable, &params))
+        } else {
+            sign(signable, &params)
+        };
         let (instructions, _signature) = signed.map_err(SigV4Error::SigningFailed)?.into_parts();
 
         update_request_headers(request, instructions, displaced_content_hash)
@@ -520,6 +533,62 @@ mod tests {
             .collect();
         pairs.sort();
         pairs
+    }
+
+    /// Records every event field.
+    #[derive(Clone, Default)]
+    struct CapturedLog(std::sync::Arc<std::sync::Mutex<String>>);
+
+    impl tracing::field::Visit for CapturedLog {
+        fn record_debug(&mut self, _: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0.lock().unwrap().push_str(&format!("{value:?}"));
+        }
+    }
+
+    impl tracing::Subscriber for CapturedLog {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::Id {
+            tracing::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::Id, _: &tracing::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            event.record(&mut self.clone());
+        }
+        fn enter(&self, _: &tracing::Id) {}
+        fn exit(&self, _: &tracing::Id) {}
+    }
+
+    /// `aws_sigv4` does not redact `Original-Authorization` itself.
+    #[test]
+    fn signing_does_not_trace_a_relocated_bearer_token() {
+        const TOKEN: &str = "Bearer topsecretdelegatetoken";
+        let signer = test_signer(PayloadHashMode::IcebergRest);
+        let mut req = reqwest::Client::new()
+            .get("https://rest.example.com/v1/config")
+            .header(reqwest::header::AUTHORIZATION, TOKEN)
+            .build()
+            .unwrap();
+
+        let log = CapturedLog::default();
+        tracing::subscriber::with_default(log.clone(), || {
+            // `sign_at` mutes only at this level, which is what is under test.
+            assert_eq!(
+                tracing::level_filters::LevelFilter::current(),
+                tracing::level_filters::LevelFilter::TRACE
+            );
+            signer
+                .sign_at(&mut req, &test_credentials(), test_time())
+                .unwrap();
+            tracing::trace!(canary = "subscriber-is-live");
+        });
+
+        let captured = log.0.lock().unwrap().clone();
+        assert!(captured.contains("subscriber-is-live"), "captured nothing");
+        assert!(!captured.contains(TOKEN), "{captured}");
+        assert_eq!(req.headers().get(RELOCATED_AUTHORIZATION).unwrap(), TOKEN);
     }
 
     #[test]
