@@ -11,6 +11,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::input_file::{InputFileBlockLengthFunc, InputFileBlockStartFunc};
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
 use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
 use sail_function::scalar::misc::raise_error::RaiseError;
@@ -95,7 +96,7 @@ fn input_file_name() -> expr::Expr {
     // COALESCE gives the expression Spark's non-nullable string schema; it does not catch errors.
     // RewriteInputFileMetadataFallback replaces the UDF with an empty string outside file scans
     // before execution, since DataFusion's UDF cannot be evaluated directly.
-    expr_fn::coalesce(vec![expr_fn::input_file_name(), lit("")])
+    ScalarUDF::from(CoalesceFunc::new()).call(vec![expr_fn::input_file_name(), lit("")])
 }
 
 fn input_file_block_start() -> expr::Expr {

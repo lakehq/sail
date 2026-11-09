@@ -10,10 +10,10 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::spark_struct_rename::SparkStructRename;
-use sail_function::scalar::spark_to_string::SparkToUtf8;
-use sail_function::scalar::update_struct_field::UpdateStructField;
+use sail_function::scalar::r#struct::spark_struct_rename::SparkStructRename;
+use sail_function::scalar::r#struct::update_struct_field::UpdateStructField;
 use sail_logical_optimizer::type_coercion::{
     case_result_type, cast_case_result_value, cast_nested_value,
 };
@@ -1358,8 +1358,8 @@ mod tests {
     use datafusion::arrow::compute::can_cast_types;
     use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue, internal_err};
-    use datafusion_expr::{Expr, ExprSchemable, col, lit, when};
-    use datafusion_functions::core::expr_fn::coalesce;
+    use datafusion_expr::{Expr, ExprSchemable, ScalarUDF, col, lit, when};
+    use sail_function::scalar::conditional::coalesce::CoalesceFunc;
     use sail_logical_optimizer::type_coercion::case_result_type;
 
     use super::coerce_conditional_values;
@@ -1513,7 +1513,7 @@ mod tests {
             Expr::ScalarFunction(function) => Ok(function.args.clone()),
             _ => internal_err!("not a function: {expr}"),
         };
-        let expr = coalesce(vec![col("a"), col("b"), col("c2")]);
+        let expr = ScalarUDF::from(CoalesceFunc::new()).call(vec![col("a"), col("b"), col("c2")]);
         let expr = coerce_conditional_values(expr, &schema)?;
         let args = arguments(&expr)?;
         // The analyzer casts the argument whose type differs from the coerced type.
@@ -1521,7 +1521,7 @@ mod tests {
         assert!(matches!(args[1], Expr::Cast(_)));
         assert_eq!(args[2], col("c2"));
         assert_eq!(coerce_conditional_values(expr.clone(), &schema)?, expr);
-        let expr = coalesce(vec![col("d"), lit(1)]);
+        let expr = ScalarUDF::from(CoalesceFunc::new()).call(vec![col("d"), lit(1)]);
         assert_eq!(coerce_conditional_values(expr.clone(), &schema)?, expr);
         Ok(())
     }

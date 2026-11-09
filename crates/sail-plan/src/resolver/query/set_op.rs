@@ -16,10 +16,10 @@ use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_common_datafusion::type_coercion::binary_type_coercion::set_operation_coercion;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ntz_to_ltz;
-use sail_function::scalar::spark_to_string::SparkToUtf8;
-use sail_function::scalar::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_function::StructFunction;
 use sail_logical_optimizer::type_coercion::TypeCoercion;
 
 use crate::error::{PlanError, PlanResult};
@@ -40,7 +40,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<(Expr, Expr)> {
         use datafusion_common::arrow::datatypes::DataType;
         use datafusion_expr::{ScalarUDF, lit, when};
-        use sail_function::scalar::struct_function::StructFunction;
+        use sail_function::scalar::r#struct::struct_function::StructFunction;
         let (DataType::Struct(left_fields), DataType::Struct(right_fields)) =
             (left_type, right_type)
         else {

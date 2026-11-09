@@ -11,6 +11,9 @@ use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
+use sail_function::scalar::conversion::spark_to_string::{
+    SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View,
+};
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_interval::SparkDayTimeIntervalToCalendarInterval;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -35,7 +38,6 @@ use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::raise_error::RaiseError;
-use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};

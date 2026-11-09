@@ -308,7 +308,7 @@ mod tests {
     use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
     use datafusion::datasource::source::DataSourceExec;
     use datafusion::execution::object_store::ObjectStoreUrl;
-    use datafusion::functions::expr_fn::{coalesce, concat, input_file_name};
+    use datafusion::functions::expr_fn::{concat, input_file_name};
     use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
     use datafusion::logical_expr::{Expr, ScalarUDF, cast, col, lit};
     use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
@@ -319,6 +319,7 @@ mod tests {
     use datafusion::physical_plan::projection::ProjectionExpr;
     use datafusion_physical_expr::create_physical_exprs;
     use sail_common_datafusion::input_file::{InputFileBlockLengthFunc, InputFileBlockStartFunc};
+    use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 
     use super::*;
     use crate::input_file_name::{
@@ -374,7 +375,7 @@ mod tests {
         let cases = [
             (
                 concat(vec![
-                    coalesce(vec![input_file_name(), lit("")]),
+                    ScalarUDF::from(CoalesceFunc::new()).call(vec![input_file_name(), lit("")]),
                     lit(":"),
                     cast(sum.clone(), DataType::Utf8),
                 ]),

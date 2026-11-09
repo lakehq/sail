@@ -15,9 +15,9 @@ use either::Either;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
-use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::multi_expr::MultiExpr;
+use sail_function::scalar::r#struct::array_struct_field::ArrayStructField;
 
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{PlanRewriter, empty_logical_plan};

@@ -20,6 +20,7 @@ use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_sequence::SparkSequenceLazy;
+use sail_function::scalar::conditional::coalesce_lazy::CoalesceLazy;
 use sail_function::scalar::datetime::convert_tz::ConvertTzLazy;
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
 use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
@@ -192,6 +193,8 @@ pub(super) fn try_encode_higher_order_udf(
             session_timezone: sequence.session_timezone().to_owned(),
             ansi_mode: sequence.ansi_mode(),
         })
+    } else if udf_inner.is::<CoalesceLazy>() {
+        HigherOrderUdfKind::CoalesceLazy(r#gen::CoalesceLazyUdf {})
     } else if let Some(convert_tz) = udf_inner.downcast_ref::<ConvertTzLazy>() {
         HigherOrderUdfKind::ConvertTzLazy(r#gen::ConvertTzUdf {
             classic: convert_tz.classic(),

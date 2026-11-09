@@ -39,6 +39,7 @@ use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
 use parquet::arrow::RowNumber;
+use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 use sail_common_datafusion::scan::load_parquet_scan_metadata;
 use sail_common_datafusion::schema_evolution::{
     FIELD_ALIASES_METADATA_KEY, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
@@ -794,6 +795,17 @@ fn stats_for_add(action: &Add, file_schema: &SchemaRef) -> Result<Option<Arc<Sta
             })
             .unwrap_or(Precision::Absent);
 
+        // TODO: Pruning still uses the float maximum, which leaves out NaN.
+        if field.data_type().is_floating() {
+            let non_null_count = match &null_count {
+                Precision::Exact(null_count) if stats.num_records >= 0 => {
+                    (stats.num_records as usize).checked_sub(*null_count)
+                }
+                _ => None,
+            };
+            (min_value, max_value) =
+                float_file_statistics_bounds(min_value, max_value, non_null_count);
+        }
         if arrow_type_contains_timestamp(field.data_type()) {
             min_value = min_value.to_inexact();
             max_value = max_value.map(widen_timestamp_max_scalar).to_inexact();

@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
-use datafusion::functions::expr_fn::{coalesce, isnan};
+use datafusion::functions::expr_fn::isnan;
 use datafusion::functions_aggregate::{
-    approx_distinct, array_agg, average, bit_and_or_xor, bool_and_or, correlation, count,
-    covariance, first_last, grouping, min_max, percentile_cont, stddev, sum, variance,
+    approx_distinct, average, bit_and_or_xor, bool_and_or, correlation, count, covariance,
+    grouping, percentile_cont, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
@@ -20,12 +20,15 @@ use datafusion_expr::{
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
+use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::approx_percentile::ApproxPercentileCont;
+use sail_function::aggregate::array_agg::ArrayAgg;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
 use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
+use sail_function::aggregate::first_last::{FirstValue, LastValue};
 use sail_function::aggregate::grouping_id::GroupingIdFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
@@ -45,13 +48,14 @@ use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::vector::avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
-use sail_function::scalar::struct_function::StructFunction;
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
+use sail_function::scalar::r#struct::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
     AggFunction, AggFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
     get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
-    theta_args_with_default_lg,
+    normalize_distinct_floats, theta_args_with_default_lg,
 };
 use crate::function::transform_count_star_wildcard_expr;
 
@@ -289,7 +293,7 @@ fn first_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let (args, null_treatment) =
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: first_last::first_value_udaf(),
+        func: Arc::new(AggregateUDF::from(FirstValue::new())),
         params: AggregateFunctionParams {
             args,
             // Spark's `EliminateDistinct` strips DISTINCT from `First` as duplicate-agnostic.
@@ -305,7 +309,7 @@ fn last_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let (args, null_treatment) =
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: first_last::last_value_udaf(),
+        func: Arc::new(AggregateUDF::from(LastValue::new())),
         params: AggregateFunctionParams {
             args,
             // Spark's `EliminateDistinct` strips DISTINCT from `Last` as duplicate-agnostic.
@@ -501,6 +505,30 @@ fn try_avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+/// Makes all NaN values one value and `-0.0` the same as `0.0` in a floating-point argument, like
+/// Spark's `NormalizeNaNAndZero` for the arguments of DISTINCT aggregates.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/optimizer/NormalizeFloatingNumbers.scala#L194-L215>
+fn normalize_nan_and_zero(arg: expr::Expr, schema: &DFSchema) -> PlanResult<expr::Expr> {
+    let (nan, zero) = match arg.get_type(schema)? {
+        DataType::Float16 => (
+            ScalarValue::Float16(Some(half::f16::NAN)),
+            ScalarValue::Float16(Some(half::f16::ZERO)),
+        ),
+        DataType::Float32 => (
+            ScalarValue::Float32(Some(f32::NAN)),
+            ScalarValue::Float32(Some(0.0)),
+        ),
+        DataType::Float64 => (
+            ScalarValue::Float64(Some(f64::NAN)),
+            ScalarValue::Float64(Some(0.0)),
+        ),
+        _ => return Ok(arg),
+    };
+    Ok(when(isnan(arg.clone()), lit(nan))
+        .when(arg.clone().eq(lit(zero.clone())), lit(zero))
+        .otherwise(arg)?)
+}
+
 fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let AggFunctionInput {
         arguments,
@@ -596,6 +624,14 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             nullable_args
         };
     }
+    // Like Spark, DISTINCT treats all NaN values as one value and `-0.0` as `0.0`.
+    let args = if distinct {
+        args.into_iter()
+            .map(|arg| normalize_nan_and_zero(arg, function_context.schema))
+            .collect::<PlanResult<Vec<_>>>()?
+    } else {
+        args
+    };
     // TODO: remove StructFunction call when count distinct from multiple arguments is implemented
     // https://github.com/apache/datafusion/blob/58ddf0d4390c770bc571f3ac2727c7de77aa25ab/datafusion/functions-aggregate/src/count.rs#L333
     let args = if distinct && (args.len() > 1) {
@@ -655,11 +691,11 @@ fn is_non_null_literal(expression: &expr::Expr) -> bool {
 }
 
 fn min_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    duplicate_agnostic_extreme(input, min_max::min_udaf)
+    duplicate_agnostic_extreme(input, || Arc::new(AggregateUDF::from(Min::new())))
 }
 
 fn max_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    duplicate_agnostic_extreme(input, min_max::max_udaf)
+    duplicate_agnostic_extreme(input, || Arc::new(AggregateUDF::from(Max::new())))
 }
 
 fn duplicate_agnostic_extreme(
@@ -683,11 +719,16 @@ fn duplicate_agnostic_extreme(
 fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     match input.arguments.len() {
         1 => {
-            let filter = input
+            let condition = input
                 .arguments
                 .first()
                 .ok_or_else(|| PlanError::invalid("`count_if` requires 1 argument"))?
                 .clone();
+            // A row is counted when both the FILTER clause and the condition are true.
+            let filter = match input.filter {
+                Some(filter) => filter.as_ref().clone().and(condition),
+                None => condition,
+            };
             Ok(expr::Expr::AggregateFunction(AggregateFunction {
                 func: count::count_udaf(),
                 params: AggregateFunctionParams {
@@ -709,6 +750,12 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let ignore_nulls = input.ignore_nulls.or(Some(true));
     let arg = input.arguments.one()?;
     let element_type = arg.get_type(schema)?;
+    // DISTINCT with ORDER BY requires the ordering to be the argument itself.
+    let arg = if input.order_by.is_empty() {
+        normalize_distinct_floats(arg, &element_type)
+    } else {
+        arg
+    };
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs
@@ -725,7 +772,7 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     };
 
     let agg = expr::Expr::AggregateFunction(AggregateFunction {
-        func: array_agg::array_agg_udaf(),
+        func: Arc::new(AggregateUDF::from(ArrayAgg::default())),
         params: AggregateFunctionParams {
             args: vec![arg],
             distinct: true,
@@ -743,6 +790,12 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let ignore_nulls = input.ignore_nulls.or(Some(true));
     let arg = input.arguments.one()?;
     let element_type = arg.get_type(schema)?;
+    // DISTINCT with ORDER BY requires the ordering to be the argument itself.
+    let arg = if input.distinct && input.order_by.is_empty() {
+        normalize_distinct_floats(arg, &element_type)
+    } else {
+        arg
+    };
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs when both distinct and ignore_nulls are true
@@ -759,7 +812,7 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     };
 
     let agg = expr::Expr::AggregateFunction(AggregateFunction {
-        func: array_agg::array_agg_udaf(),
+        func: Arc::new(AggregateUDF::from(ArrayAgg::default())),
         params: AggregateFunctionParams {
             args: vec![arg],
             distinct: input.distinct,
@@ -776,7 +829,7 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 /// aggregate to a typed empty array so the empty case matches Spark instead of yielding NULL.
 fn coalesce_to_empty_array(agg: expr::Expr, element_type: &DataType) -> expr::Expr {
     let empty = ScalarValue::List(ScalarValue::new_list_nullable(&[], element_type));
-    coalesce(vec![agg, lit(empty)])
+    ScalarUDF::from(CoalesceFunc::new()).call(vec![agg, lit(empty)])
 }
 
 fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -788,11 +841,11 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let delim = other_args.first().cloned().unwrap_or_else(|| lit(""));
 
     let agg = expr::Expr::AggregateFunction(AggregateFunction {
-        func: array_agg::array_agg_udaf(),
+        func: Arc::new(AggregateUDF::from(ArrayAgg::default())),
         params: AggregateFunctionParams {
             args: vec![agg_col.clone()],
             distinct: input.distinct,
-            order_by: if input.distinct {
+            order_by: if input.distinct && input.order_by.is_empty() {
                 vec![agg_col.clone().sort(true, true)]
             } else {
                 input.order_by
@@ -802,6 +855,14 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         },
     });
 
+    // Spark joins the values without a delimiter when the delimiter is NULL.
+    // <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/collect.scala#L586-L600>
+    let delim = delim.cast_to(&DataType::Utf8, schema)?;
+    let delim = if delim.nullable(schema)? {
+        ScalarUDF::from(CoalesceFunc::new()).call(vec![delim, lit("")])
+    } else {
+        delim
+    };
     let string_agg = array_to_string(
         agg.cast_to(
             &DataType::List(Arc::new(Field::new(
@@ -811,7 +872,7 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             ))),
             schema,
         )?,
-        delim.cast_to(&DataType::Utf8, schema)?,
+        delim,
     );
 
     let casted_agg = match agg_col.get_type(schema)? {

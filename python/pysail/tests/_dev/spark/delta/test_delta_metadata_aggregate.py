@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -18,11 +19,21 @@ from pyspark.sql.types import (
     StructType,
 )
 
+from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.plan import normalize_plan_text
 from pysail.tests._dev.spark.delta.test_delta_external_log_stats import _write_external_delta_table
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+# `max` from file statistics leaves out NaN, which is the largest value in Spark.
+max_statistics_nan_bug = pytest.mark.xfail(
+    not is_jvm_spark(), reason="Known Sail bug: `max` from file statistics leaves out NaN", strict=True
+)
+# File statistics may record `-0.0` as the minimum of `0.0` values.
+min_statistics_zero_bug = pytest.mark.xfail(
+    not is_jvm_spark(), reason="Known Sail bug: a zero `min` from file statistics may be `-0.0`", strict=True
+)
 
 
 def _latest_add_stats(table_path: Path) -> dict:
@@ -70,6 +81,45 @@ def test_count_non_null_containers_does_not_count_null_elements(spark, tmp_path:
     )
     assert result == [Row(item_count=2, attribute_count=2, item_size=2, attribute_size=2)]
     assert _latest_add_stats(table_path)["nullCount"] == {"items": 0, "attributes": 0}
+
+
+@pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
+@pytest.mark.parametrize(
+    "metadata_as_data", [pytest.param(False, marks=max_statistics_nan_bug), True], ids=["driver", "metadata"]
+)
+def test_float_extrema_include_nan(spark, tmp_path: Path, data_type, metadata_as_data):
+    # File statistics leave out NaN, which is larger than any other value in Spark.
+    table_path = tmp_path / "delta_float_nan"
+    source = spark.sql(
+        f"SELECT CAST(x AS {data_type}) AS x FROM VALUES (1.0D), (CAST('NaN' AS DOUBLE)), (-2.0D) AS t(x)"  # noqa: S608
+    )
+    source.coalesce(1).write.format("delta").save(str(table_path))
+    frame = spark.read.format("delta").option("metadataAsDataRead", str(metadata_as_data).lower()).load(str(table_path))
+
+    for expressions in [
+        ["MAX(x) AS maximum", "MIN(x) AS minimum"],
+        ["COUNT(*) AS rows", "MAX(x) AS maximum", "MIN(x) AS minimum"],
+    ]:
+        [row] = frame.selectExpr(*expressions).collect()
+        assert math.isnan(row.maximum)
+        assert row.minimum == -2.0  # noqa: PLR2004
+
+
+@pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
+@pytest.mark.parametrize(
+    "metadata_as_data", [pytest.param(False, marks=min_statistics_zero_bug), True], ids=["driver", "metadata"]
+)
+def test_float_minimum_of_zeros_is_positive_zero(spark, tmp_path: Path, data_type, metadata_as_data):
+    # File statistics may record `-0.0` as the minimum of `0.0` values.
+    table_path = tmp_path / "delta_float_zero"
+    source = spark.sql(f"SELECT CAST(x AS {data_type}) AS x FROM VALUES (0.0D), (1.0D) AS t(x)")  # noqa: S608
+    source.coalesce(1).write.format("delta").save(str(table_path))
+    frame = spark.read.format("delta").option("metadataAsDataRead", str(metadata_as_data).lower()).load(str(table_path))
+
+    [row] = frame.selectExpr("MIN(x) AS minimum", "MAX(x) AS maximum").collect()
+    assert math.copysign(1.0, row.minimum) == 1.0
+    assert row.minimum == 0.0
+    assert row.maximum == 1.0
 
 
 def test_decimal_writer_stats_preserve_values_beyond_float_precision(spark, tmp_path: Path):
@@ -150,3 +200,29 @@ def test_partition_cast_extrema_preserve_lexical_order(spark, tmp_path, metadata
         "extrema": normalize_plan_text(extrema._explain_string()),  # noqa: SLF001
         "combined": normalize_plan_text(combined._explain_string()),  # noqa: SLF001
     } == snapshot
+
+
+@pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
+@pytest.mark.parametrize("nan", ["CAST('NaN' AS DOUBLE)", "-CAST('NaN' AS DOUBLE)"], ids=["nan", "negative_nan"])
+def test_float_column_with_nan_and_one_other_value_reads_back(spark, tmp_path: Path, data_type, nan):
+    # File statistics leave out NaN, so the bounds of this file are equal but its values are not.
+    table_path = tmp_path / "delta_float_nan_bounds"
+    source = spark.sql(f"SELECT id, CAST(x AS {data_type}) AS x FROM VALUES (0, {nan}), (1, 1.0D) AS t(id, x)")  # noqa: S608
+    source.coalesce(1).write.format("delta").save(str(table_path))
+    [first, second] = spark.read.format("delta").load(str(table_path)).orderBy("id").collect()
+    assert math.isnan(first.x)
+    assert second.x == 1.0
+
+
+@pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
+def test_count_distinct_of_nan_values_read_back(spark, tmp_path: Path, data_type):
+    # All NaN values are one value for DISTINCT.
+    table_path = tmp_path / "delta_float_nan_distinct"
+    source = spark.sql(
+        f"SELECT f, CAST(x AS {data_type}) AS x FROM VALUES (0, -CAST('NaN' AS DOUBLE)), (0, 1.0D), "  # noqa: S608
+        "(1, CAST('NaN' AS DOUBLE)), (1, NULL) AS t(f, x)"
+    )
+    for f in (0, 1):
+        source.where(f"f = {f}").coalesce(1).write.format("delta").mode("append").save(str(table_path))
+    [row] = spark.read.format("delta").load(str(table_path)).selectExpr("count(DISTINCT x) AS n").collect()
+    assert row.n == 2  # noqa: PLR2004
