@@ -371,6 +371,7 @@ pub fn alter_column_type(
     columns: &mut [TableColumnStatus],
     path: &[String],
     data_type: DataType,
+    metadata: Vec<(String, String)>,
 ) -> Result<()> {
     let Some((name, nested_path)) = path.split_first() else {
         return plan_err!("ALTER COLUMN TYPE requires a column name");
@@ -380,8 +381,11 @@ pub fn alter_column_type(
     };
     if nested_path.is_empty() {
         column.data_type = data_type;
+        column.metadata.remove(crate::uuid::UUID_METADATA_KEY);
+        column.metadata.extend(metadata);
     } else {
-        column.data_type = alter_nested_data_type(&column.data_type, nested_path, data_type)?;
+        column.data_type =
+            alter_nested_data_type(&column.data_type, nested_path, data_type, &metadata)?;
     }
     Ok(())
 }
@@ -401,10 +405,27 @@ pub fn alter_column_default(
     Ok(())
 }
 
+fn alter_type_field(
+    field: &Field,
+    path: &[String],
+    data_type: DataType,
+    metadata: &[(String, String)],
+) -> Result<Field> {
+    let data_type = alter_nested_data_type(field.data_type(), path, data_type, metadata)?;
+    let mut field = field.clone().with_data_type(data_type);
+    if path.is_empty() {
+        // Type markers come from the target, not the old storage-compatible type.
+        field.metadata_mut().remove(crate::uuid::UUID_METADATA_KEY);
+        field.metadata_mut().extend(metadata.iter().cloned());
+    }
+    Ok(field)
+}
+
 fn alter_nested_data_type(
     current: &DataType,
     path: &[String],
     data_type: DataType,
+    metadata: &[(String, String)],
 ) -> Result<DataType> {
     let Some((name, nested_path)) = path.split_first() else {
         return Ok(data_type);
@@ -417,15 +438,12 @@ fn alter_nested_data_type(
                 .map(|field| {
                     if field.name() == name {
                         found = true;
-                        let new_type = alter_nested_data_type(
-                            field.data_type(),
+                        Ok(Arc::new(alter_type_field(
+                            field,
                             nested_path,
                             data_type.clone(),
-                        )?;
-                        Ok(Arc::new(
-                            Field::new(field.name().clone(), new_type, field.is_nullable())
-                                .with_metadata(field.metadata().clone()),
-                        ))
+                            metadata,
+                        )?))
                     } else {
                         Ok(Arc::clone(field))
                     }
@@ -437,20 +455,10 @@ fn alter_nested_data_type(
             Ok(DataType::Struct(Fields::from(fields)))
         }
         DataType::List(field) if name == "element" => Ok(DataType::List(Arc::new(
-            Field::new(
-                field.name().clone(),
-                alter_nested_data_type(field.data_type(), nested_path, data_type)?,
-                field.is_nullable(),
-            )
-            .with_metadata(field.metadata().clone()),
+            alter_type_field(field, nested_path, data_type, metadata)?,
         ))),
         DataType::LargeList(field) if name == "element" => Ok(DataType::LargeList(Arc::new(
-            Field::new(
-                field.name().clone(),
-                alter_nested_data_type(field.data_type(), nested_path, data_type)?,
-                field.is_nullable(),
-            )
-            .with_metadata(field.metadata().clone()),
+            alter_type_field(field, nested_path, data_type, metadata)?,
         ))),
         DataType::Map(field, sorted) => {
             let DataType::Struct(entries) = field.data_type() else {
@@ -461,12 +469,12 @@ fn alter_nested_data_type(
             for entry in entries {
                 if entry.name() == name {
                     found = true;
-                    let new_type =
-                        alter_nested_data_type(entry.data_type(), nested_path, data_type.clone())?;
-                    fields.push(Arc::new(
-                        Field::new(entry.name().clone(), new_type, entry.is_nullable())
-                            .with_metadata(entry.metadata().clone()),
-                    ));
+                    fields.push(Arc::new(alter_type_field(
+                        entry,
+                        nested_path,
+                        data_type.clone(),
+                        metadata,
+                    )?));
                 } else {
                     fields.push(Arc::clone(entry));
                 }
@@ -564,6 +572,86 @@ mod tests {
     use super::*;
     use crate::column_features::ColumnFeatures;
     use crate::schema_evolution::encode_field_default;
+
+    #[test]
+    fn alter_type_replaces_uuid_marker_and_preserves_column_metadata() -> Result<()> {
+        let field = Field::new("u", DataType::FixedSizeBinary(16), false).with_metadata(
+            [
+                (crate::uuid::UUID_METADATA_KEY.into(), "uuid".into()),
+                ("custom".into(), "retained".into()),
+                ("PARQUET:field_id".into(), "7".into()),
+                ("comment".into(), "retained doc".into()),
+                (
+                    ColumnFeatureKey::CurrentDefault.as_str().into(),
+                    "NULL".into(),
+                ),
+            ]
+            .into(),
+        );
+        let mut columns = vec![];
+        replace_columns(&mut columns, &Schema::new(vec![field.clone()]));
+        alter_column_type(
+            &mut columns,
+            &["u".into()],
+            DataType::FixedSizeBinary(16),
+            vec![],
+        )?;
+        let mut fixed = field.clone();
+        fixed.metadata_mut().remove(crate::uuid::UUID_METADATA_KEY);
+        assert_eq!(columns[0].field(), fixed);
+        let marker = vec![(crate::uuid::UUID_METADATA_KEY.into(), "uuid".into())];
+        alter_column_type(
+            &mut columns,
+            &["u".into()],
+            DataType::FixedSizeBinary(16),
+            marker.clone(),
+        )?;
+        assert_eq!(columns[0].field(), field);
+        let cases = [
+            (
+                DataType::Struct(vec![Arc::new(field.clone())].into()),
+                vec!["u".into()],
+            ),
+            (
+                DataType::List(Arc::new(field.clone())),
+                vec!["element".into()],
+            ),
+            (
+                DataType::LargeList(Arc::new(field.clone())),
+                vec!["element".into()],
+            ),
+            (
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(
+                            vec![
+                                Arc::new(Field::new("key", DataType::Utf8, false)),
+                                Arc::new(field.clone().with_name("value")),
+                            ]
+                            .into(),
+                        ),
+                        false,
+                    )),
+                    false,
+                ),
+                vec!["value".into()],
+            ),
+        ];
+        for (data_type, path) in cases {
+            let fixed =
+                alter_nested_data_type(&data_type, &path, DataType::FixedSizeBinary(16), &[])?;
+            assert!(!crate::uuid::contains_uuid(&Field::new(
+                "c",
+                fixed.clone(),
+                true
+            )));
+            let restored =
+                alter_nested_data_type(&fixed, &path, DataType::FixedSizeBinary(16), &marker)?;
+            assert_eq!(restored, data_type);
+        }
+        Ok(())
+    }
 
     #[test]
     fn dropped_default_is_not_restored_by_column_changes() -> Result<()> {

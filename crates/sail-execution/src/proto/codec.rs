@@ -171,6 +171,7 @@ use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
+use sail_function::scalar::collection::element::CollectionElement;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
@@ -206,7 +207,7 @@ use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
-use sail_function::scalar::explode::{Explode, explode_name_to_kind};
+use sail_function::scalar::explode::{Explode, MapExplodeEntry, explode_name_to_kind};
 use sail_function::scalar::geo::st_asbinary::StAsBinary;
 use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
 use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
@@ -3828,6 +3829,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         };
         match name {
             "array_element" => Ok(Arc::new(ScalarUDF::from(ArrayElement::new()))),
+            "spark_array_element" => Ok(Arc::new(ScalarUDF::from(CollectionElement::array()))),
+            "spark_map_element" => Ok(Arc::new(ScalarUDF::from(CollectionElement::map()))),
+            "map_explode_entry" => Ok(Arc::new(ScalarUDF::from(MapExplodeEntry::default()))),
             "map_extract" => Ok(Arc::new(ScalarUDF::from(MapExtract::new()))),
             "array_item_with_position" => {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
@@ -4072,6 +4076,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let udf_kind: UdfKind = if (node.as_async().is_some()
             && sail_function::scalar::jev::JevKind::from_name(node.name()).is_some())
             || node_inner.is::<ArrayElement>()
+            || node_inner.is::<CollectionElement>()
+            || node_inner.is::<MapExplodeEntry>()
             || node_inner.is::<DeltaDecodePath>()
             || node_inner.is::<MapExtract>()
             || node_inner.is::<ArrayItemWithPosition>()
@@ -8032,6 +8038,20 @@ mod tests {
 
         let coalesce = round_trip_udf(ScalarUDF::from(CoalesceFunc::new()))?;
         downcast_udf::<CoalesceFunc>(&coalesce, "CoalesceFunc")?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_collection_element_and_map_entry_udfs() -> Result<()> {
+        for function in [CollectionElement::array(), CollectionElement::map()] {
+            let name = function.name().to_string();
+            let decoded = round_trip_udf(ScalarUDF::from(function))?;
+            downcast_udf::<CollectionElement>(&decoded, "CollectionElement")?;
+            assert_eq!(decoded.name(), name);
+        }
+        let decoded = round_trip_udf(ScalarUDF::from(MapExplodeEntry::default()))?;
+        downcast_udf::<MapExplodeEntry>(&decoded, "MapExplodeEntry")?;
+        assert_eq!(decoded.name(), "map_explode_entry");
         Ok(())
     }
 

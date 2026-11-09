@@ -8,12 +8,13 @@ use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions::expr_fn as datafusion_fn;
-use datafusion_functions_nested::expr_fn::{array_element, array_length, map_extract};
+use datafusion_functions_nested::expr_fn::array_length;
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::collection::element::{array_element, map_element};
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::r#struct::drop_struct_field::DropStructField;
 use sail_function::scalar::r#struct::update_struct_field::UpdateStructField;
@@ -338,8 +339,7 @@ impl PlanResolver<'_> {
                 .await?;
 
             let result_name = format!("{}[{}]", name.one()?, extraction_name.one()?);
-            // Use map_extract which supports dynamic keys, then extract first element
-            let result_expr = array_element(map_extract(expr, extraction_expr), lit(1));
+            let result_expr = map_element(expr, extraction_expr);
             return Ok(NamedExpr::new(vec![result_name], result_expr));
         }
 

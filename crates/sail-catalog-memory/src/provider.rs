@@ -231,8 +231,11 @@ impl MemoryCatalogProvider {
                         Ok(())
                     }
                     AlterTableOptions::AlterColumnType {
-                        name, data_type, ..
-                    } => alter_column_type(columns, &name, data_type).map_err(|e| {
+                        name,
+                        data_type,
+                        metadata,
+                        ..
+                    } => alter_column_type(columns, &name, data_type, metadata).map_err(|e| {
                         CatalogError::InvalidArgument(format!(
                             "failed to alter column type for '{}': {e}",
                             name.join(".")

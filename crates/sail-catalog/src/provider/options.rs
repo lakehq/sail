@@ -184,6 +184,8 @@ pub enum AlterTableOptions {
         name: Vec<String>,
         data_type: DataType,
         #[serde(default)]
+        metadata: Vec<(String, String)>,
+        #[serde(default)]
         case_sensitive: bool,
     },
     AlterColumnDefault {
@@ -276,10 +278,12 @@ impl From<&AlterTableOptions>
             AlterTableOptions::AlterColumnType {
                 name,
                 data_type,
+                metadata,
                 case_sensitive,
             } => LakeSourceAlterTableOperation::AlterColumnType {
                 column_path: name.clone(),
                 data_type: data_type.clone(),
+                metadata: metadata.clone(),
                 case_sensitive: *case_sensitive,
             },
             AlterTableOptions::AlterColumnDefault { name, default } => {

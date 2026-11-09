@@ -612,9 +612,23 @@ impl PlanResolver<'_> {
                 AlterTableOptions::UnsetTableProperties { keys, if_exists }
             }
             spec::AlterTableOperation::AlterColumnType { name, data_type } => {
+                let field = self.resolve_field(
+                    &spec::Field {
+                        name: String::new(),
+                        data_type,
+                        nullable: true,
+                        metadata: vec![],
+                    },
+                    state,
+                )?;
                 AlterTableOptions::AlterColumnType {
                     name: name.into(),
-                    data_type: self.resolve_data_type(&data_type, state)?,
+                    data_type: field.data_type().clone(),
+                    metadata: field
+                        .metadata()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
                     case_sensitive: self.config.case_sensitive,
                 }
             }

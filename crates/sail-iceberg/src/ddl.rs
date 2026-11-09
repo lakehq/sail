@@ -10,7 +10,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::LakeSourceAlterTableOperation;
 
 use crate::catalog_support::commit::IcebergCatalogCommitCoordinator;
-use crate::datasource::type_converter::arrow_type_to_iceberg;
+use crate::datasource::type_converter::arrow_field_to_iceberg;
 use crate::lake_source::{IcebergLakeSource, metadata_location_from_properties};
 use crate::operations::metadata_commit::{PreviousMetadataFile, previous_metadata_log_entry};
 use crate::spec::{
@@ -175,11 +175,13 @@ fn catalog_alter_options(
         LakeSourceAlterTableOperation::AlterColumnType {
             column_path,
             data_type,
+            metadata,
             case_sensitive,
         } => {
             vec![AlterTableOptions::AlterColumnType {
                 name: column_path.clone(),
                 data_type: data_type.clone(),
+                metadata: metadata.clone(),
                 case_sensitive: *case_sensitive,
             }]
         }
@@ -263,9 +265,15 @@ pub(crate) fn apply_operation(
         LakeSourceAlterTableOperation::AlterColumnType {
             column_path,
             data_type,
+            metadata: target_metadata,
             case_sensitive,
         } => {
-            let target = arrow_type_to_iceberg(data_type)?;
+            // Type identity belongs to the target; IDs, docs and defaults stay on
+            // the existing Iceberg field and must not supply a stale UUID marker.
+            let target_field =
+                datafusion::arrow::datatypes::Field::new("", data_type.clone(), true)
+                    .with_metadata(target_metadata.iter().cloned().collect());
+            let target = *arrow_field_to_iceberg(&target_field)?.field_type;
             update_column(metadata, column_path, *case_sensitive, |field| {
                 let allowed = *field.field_type == target
                     || matches!(
@@ -1007,5 +1015,62 @@ fn update_nested_field(
             update,
         ),
         _ => plan_err!("Column '{}' is not a nested field", path.join(".")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::DataType;
+    use sail_common_datafusion::uuid::UUID_METADATA_KEY;
+
+    use super::*;
+
+    #[test]
+    fn alter_uuid_type_uses_target_metadata() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
+        for source_uuid in [false, true] {
+            for target_uuid in [false, true] {
+                let mut field = serde_json::json!({
+                    "id": 7, "name": "u", "required": true,
+                    "type": if source_uuid { "uuid" } else { "fixed[16]" },
+                    "doc": "retained"
+                });
+                if source_uuid {
+                    field["initial-default"] = "00000000-0000-0000-0000-000000000001".into();
+                    field["write-default"] = "00000000-0000-0000-0000-000000000002".into();
+                }
+                let mut metadata: TableMetadata = serde_json::from_value(serde_json::json!({
+                    "format-version": 3, "location": "file:///uuid", "last-updated-ms": 1,
+                    "last-column-id": 7, "current-schema-id": 0,
+                    "schemas": [{"schema-id": 0, "type": "struct", "fields": [field]}]
+                }))?;
+                let before = serde_json::to_value(&metadata)?;
+                let operation = LakeSourceAlterTableOperation::AlterColumnType {
+                    column_path: vec!["u".into()],
+                    data_type: DataType::FixedSizeBinary(16),
+                    metadata: if target_uuid {
+                        vec![(UUID_METADATA_KEY.into(), "uuid".into())]
+                    } else {
+                        vec![]
+                    },
+                    case_sensitive: true,
+                };
+                let options = catalog_alter_options(&operation)?;
+                let operation = LakeSourceAlterTableOperation::from(&options[0]);
+                let result = apply_operation(&mut metadata, &operation);
+                if source_uuid == target_uuid {
+                    result?;
+                    let schema = metadata.current_schema().ok_or("missing schema")?;
+                    assert_eq!(
+                        serde_json::to_value(schema)?["fields"],
+                        before["schemas"][0]["fields"]
+                    );
+                } else {
+                    assert!(result.is_err());
+                    assert_eq!(serde_json::to_value(&metadata)?, before);
+                }
+            }
+        }
+        Ok(())
     }
 }

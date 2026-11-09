@@ -8,7 +8,7 @@ use arrow::array::{
 use arrow::compute::{CastOptions, cast, cast_with_options};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -36,10 +36,12 @@ pub fn contains_uuid(field: &Field) -> bool {
 /// Schema evolution and ordinary casts remain the responsibility of the caller.
 pub fn uuid_input_field(source: &Field, target: &Field) -> Field {
     if is_uuid_field(target) || (source.data_type() == &DataType::Null && contains_uuid(target)) {
+        let mut metadata = source.metadata().clone();
+        metadata.extend(target.metadata().clone());
         return source
             .clone()
             .with_data_type(target.data_type().clone())
-            .with_metadata(target.metadata().clone());
+            .with_metadata(metadata);
     }
     let data_type = match (source.data_type(), target.data_type()) {
         (DataType::Struct(source), DataType::Struct(target)) => DataType::Struct(
@@ -77,31 +79,40 @@ pub fn uuid_input_field(source: &Field, target: &Field) -> Field {
 fn uuid_cast_field(source: &Field, target: &Field, safe: bool) -> Result<Field> {
     let field = uuid_input_field(source, target);
     if safe {
-        nullable_uuid_field(&field)
+        nullable_uuid_field(source, &field)
     } else {
         Ok(field)
     }
 }
 
-fn nullable_uuid_field(field: &Field) -> Result<Field> {
+fn nullable_uuid_field(source: &Field, field: &Field) -> Result<Field> {
     if is_uuid_field(field) {
-        return Ok(field.clone().with_nullable(true));
+        let fallible = !matches!(
+            source.data_type(),
+            DataType::Null | DataType::FixedSizeBinary(16)
+        );
+        return Ok(field.clone().with_nullable(field.is_nullable() || fallible));
     }
-    let data_type = match field.data_type() {
-        DataType::Struct(fields) => DataType::Struct(
-            fields
+    let data_type = match (source.data_type(), field.data_type()) {
+        (DataType::Struct(source), DataType::Struct(fields)) => DataType::Struct(
+            source
                 .iter()
-                .map(|field| nullable_uuid_field(field).map(Arc::new))
+                .zip(fields)
+                .map(|(source, field)| nullable_uuid_field(source, field).map(Arc::new))
                 .collect::<Result<Vec<_>>>()?
                 .into(),
         ),
-        DataType::List(field) => DataType::List(Arc::new(nullable_uuid_field(field)?)),
-        DataType::LargeList(field) => DataType::LargeList(Arc::new(nullable_uuid_field(field)?)),
-        DataType::FixedSizeList(field, size) => {
-            DataType::FixedSizeList(Arc::new(nullable_uuid_field(field)?), *size)
+        (DataType::List(source), DataType::List(field)) => {
+            DataType::List(Arc::new(nullable_uuid_field(source, field)?))
         }
-        DataType::Map(entries, sorted) => {
-            let entries = nullable_uuid_field(entries)?;
+        (DataType::LargeList(source), DataType::LargeList(field)) => {
+            DataType::LargeList(Arc::new(nullable_uuid_field(source, field)?))
+        }
+        (DataType::FixedSizeList(source, _), DataType::FixedSizeList(field, size)) => {
+            DataType::FixedSizeList(Arc::new(nullable_uuid_field(source, field)?), *size)
+        }
+        (DataType::Map(source, _), DataType::Map(entries, sorted)) => {
+            let entries = nullable_uuid_field(source, entries)?;
             if let DataType::Struct(fields) = entries.data_type()
                 && fields[0].is_nullable()
             {
@@ -176,9 +187,9 @@ impl ScalarUDFImpl for UuidCast {
         let array = source.to_array(if scalar { 1 } else { args.number_rows })?;
         let output = convert_uuid_array(&array, &self.target, self.safe)?;
         if scalar {
-            Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
-                &output, 0,
-            )?))
+            Ok(ColumnarValue::Scalar(
+                crate::utils::scalar::scalar_from_array(&output, 0)?,
+            ))
         } else {
             Ok(ColumnarValue::Array(output))
         }
@@ -347,6 +358,7 @@ mod tests {
         StringArray, StringViewArray, StructArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer};
+    use datafusion_common::ScalarValue;
 
     use super::*;
 
@@ -603,10 +615,77 @@ mod tests {
         assert!(output.is_null(1));
         assert_eq!(output.as_map().keys().null_count(), 0);
         assert!(convert_uuid_array(&input, &target, true).is_err());
+        // Fixed[16] keys (with or without a UUID marker) cannot become null.
+        for input in [
+            output.clone(),
+            output.slice(0, 0),
+            new_null_array(output.data_type(), 1),
+        ] {
+            let converted = convert_uuid_array(&input, &target, true)?;
+            assert_eq!(converted.data_type(), output.data_type());
+            assert_eq!(converted.len(), input.len());
+            assert_eq!(converted.null_count(), input.null_count());
+            for index in 0..input.len() {
+                assert_eq!(converted.is_null(index), input.is_null(index));
+            }
+            converted.to_data().validate_full()?;
+            assert_eq!(
+                UuidCast::new(Arc::new(target.clone()), true)
+                    .return_type(&[input.data_type().clone()])?,
+                *converted.data_type()
+            );
+        }
         assert!(
             UuidCast::new(Arc::new(target), true)
                 .return_type(&[input.data_type().clone()])
                 .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn uuid_scalar_containers_preserve_fields() -> Result<()> {
+        for value in [
+            Some("00000000-0000-0000-0000-000000000001"),
+            Some("bad"),
+            None,
+        ] {
+            for safe in [false, true] {
+                if value == Some("bad") && !safe {
+                    continue;
+                }
+                for nulls in [None, Some(NullBuffer::new_null(1))] {
+                    let values: ArrayRef = Arc::new(StringArray::from(vec![value]));
+                    for (input, target) in nested_cases(values, nulls)? {
+                        let converted = convert_uuid_array(&input, &target, safe)?;
+                        let scalar = crate::utils::scalar::scalar_from_array(&converted, 0)?;
+                        assert_eq!(scalar.data_type(), *converted.data_type());
+                        assert_eq!(scalar.to_array_of_size(1)?.to_data(), converted.to_data());
+                        // Lists inside structs/maps and other lists must retain the same
+                        // child metadata, not just the outer container's field.
+                        for (nested, _) in nested_cases(converted.clone(), None)? {
+                            let scalar = crate::utils::scalar::scalar_from_array(&nested, 0)?;
+                            assert_eq!(scalar.data_type(), *nested.data_type());
+                            assert_eq!(scalar.to_array_of_size(1)?.to_data(), nested.to_data());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn uuid_try_cast_preserves_infallible_leaf_metadata() -> Result<()> {
+        let source = Field::new("key", DataType::FixedSizeBinary(16), false)
+            .with_metadata([("custom".to_string(), "kept".to_string())].into());
+        let target = uuid_field().with_name("key");
+        let output = uuid_cast_field(&source, &target, true)?;
+        assert!(!output.is_nullable());
+        assert!(is_uuid_field(&output));
+        assert_eq!(
+            output.metadata().get("custom"),
+            source.metadata().get("custom")
         );
         Ok(())
     }

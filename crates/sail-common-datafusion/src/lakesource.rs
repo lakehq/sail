@@ -142,6 +142,7 @@ pub enum LakeSourceAlterTableOperation {
     AlterColumnType {
         column_path: Vec<String>,
         data_type: DataType,
+        metadata: Vec<(String, String)>,
         case_sensitive: bool,
     },
     /// Alters the default expression of a table column.
@@ -262,9 +263,10 @@ pub trait LakeSource: DataSource {
             LakeSourceAlterTableOperation::AlterColumnType {
                 column_path,
                 data_type,
+                metadata,
                 ..
             } => {
-                self.alter_table_column_type(runtime_env, path, column_path, data_type)
+                self.alter_table_column_type(runtime_env, path, column_path, data_type, metadata)
                     .await
             }
             LakeSourceAlterTableOperation::AlterColumnDefault {
@@ -313,8 +315,9 @@ pub trait LakeSource: DataSource {
         path: &str,
         column_path: Vec<String>,
         data_type: DataType,
+        metadata: Vec<(String, String)>,
     ) -> Result<()> {
-        let _ = (runtime_env, path, column_path, data_type);
+        let _ = (runtime_env, path, column_path, data_type, metadata);
         not_impl_err!(
             "Column type alteration not supported for lake source '{}'",
             self.name()

@@ -10,12 +10,12 @@ use datafusion::logical_expr::{Expr, ExprSchemable, LogicalPlan, Projection, Sca
 use datafusion_common::{ExprSchema, plan_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{ident, lit};
-use datafusion_functions_nested::expr_fn as nested_fn;
 use either::Either;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
-use sail_function::scalar::explode::{Explode, ExplodeKind};
+use sail_function::scalar::explode::{Explode, ExplodeKind, MapExplodeEntry};
+use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::r#struct::array_struct_field::ArrayStructField;
 
@@ -83,7 +83,7 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
         let data_type = ExplodeDataType::try_from_expr(&arg, self.plan.schema())?;
         let arg = match data_type {
             ExplodeDataType::List => arg,
-            ExplodeDataType::Map => nested_fn::map_entries(arg),
+            ExplodeDataType::Map => ScalarUDF::from(SparkMapEntries::new()).call(vec![arg]),
         };
         let arg = match with_position {
             true => ScalarUDF::from(ArrayItemWithPosition::new()).call(vec![arg]),
@@ -91,6 +91,14 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
         };
 
         let name = self.state.next_field_id();
+        // DataFusion allows null padding in every unnested field. A single non-outer
+        // map generator instead drops null/empty maps and emits only valid entries.
+        // Refine the parent struct, not its children, retaining value nullability.
+        let map_entry = if matches!(null_handling, NullHandling::Drop) {
+            ScalarUDF::from(MapExplodeEntry::default()).call(vec![ident(&name)])
+        } else {
+            ident(&name)
+        };
         let mut inline_projections = vec![];
         let out = match (data_type, with_position, is_inline) {
             (ExplodeDataType::List, false, false) => vec![ident(&name).alias("col")],
@@ -122,17 +130,24 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             }?,
             (ExplodeDataType::Map, false, _) => {
                 vec![
-                    ident(&name).field(SAIL_MAP_KEY_FIELD_NAME).alias("key"),
-                    ident(&name).field(SAIL_MAP_VALUE_FIELD_NAME).alias("value"),
+                    map_entry
+                        .clone()
+                        .field(SAIL_MAP_KEY_FIELD_NAME)
+                        .alias("key"),
+                    map_entry
+                        .clone()
+                        .field(SAIL_MAP_VALUE_FIELD_NAME)
+                        .alias("value"),
                 ]
             }
             (ExplodeDataType::Map, true, _) => vec![
-                ident(&name).field("pos").alias("pos"),
-                ident(&name)
+                map_entry.clone().field("pos").alias("pos"),
+                map_entry
+                    .clone()
                     .field("col")
                     .field(SAIL_MAP_KEY_FIELD_NAME)
                     .alias("key"),
-                ident(&name)
+                map_entry
                     .field("col")
                     .field(SAIL_MAP_VALUE_FIELD_NAME)
                     .alias("value"),

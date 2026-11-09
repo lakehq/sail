@@ -8,6 +8,7 @@ from uuid import UUID
 
 import pyarrow.parquet as pq
 import pytest
+from pyiceberg import types as iceberg_types
 from pyiceberg.schema import Schema
 from pyiceberg.table import StaticTable
 from pyiceberg.transforms import BucketTransform
@@ -343,6 +344,211 @@ def test_uuid_add_nested_leaf_preserves_identity(spark, tmp_path, container):
             assert field.type.field("u").metadata[b"PARQUET:field_id"] == str(leaf["id"]).encode()
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("target", ["STRING", "INT", "UUID"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_uuid_try_cast_infallible_map_keys(spark, target, nested):
+    frame = spark.createDataFrame([(VALUE, "bad")], "k STRING, v STRING").repartition(2)
+    typed = frame.selectExpr("CAST(map(k, v) AS MAP<UUID, STRING>) AS m")
+    expression, data_type, projection = "m", f"MAP<UUID, {target}>", "m"
+    if nested:
+        expression, data_type, projection = (
+            f"array(named_struct('m', {expression}))",
+            f"ARRAY<STRUCT<m: {data_type}>>",
+            "m[0].m",
+        )
+    converted = typed.selectExpr(f"TRY_CAST({expression} AS {data_type}) AS m").selectExpr(f"{projection} AS m")
+    row = converted.selectExpr("hex(map_keys(m)[0]) AS k", "map_values(m)[0] AS v").first()
+    assert row.k == VALUE_BYTES.hex().upper()
+    assert row.v == ("bad" if target == "STRING" else None)
+
+
+@pytest.mark.parametrize(("expression", "expected"), [("NULL", None), ("map()", 0)])
+def test_uuid_try_cast_typed_null_and_empty_map_keys(spark, expression, expected):
+    row = spark.sql(f"SELECT size(TRY_CAST(CAST({expression} AS MAP<UUID, STRING>) AS MAP<UUID, STRING>)) AS n").first()
+    assert row.n == expected
+
+
+@pytest.mark.parametrize("key_type", ["STRING", "BINARY"])
+def test_uuid_try_cast_fallible_map_keys_rejected(spark, key_type):
+    frame = spark.createDataFrame([(VALUE,)], "k STRING").repartition(2)
+    with pytest.raises(Exception, match="null UUID map keys"):
+        frame.selectExpr(f"TRY_CAST(map(CAST(k AS {key_type}), 'v') AS MAP<UUID, STRING>)").collect()
+
+
+@pytest.mark.parametrize("cast", ["CAST", "TRY_CAST"])
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        (f"array('{VALUE}')", [VALUE_BYTES]),
+        (f"array('{VALUE}', NULL)", [VALUE_BYTES, None]),
+        ("array()", []),
+        ("NULL", None),
+    ],
+)
+def test_uuid_constant_array_cast(spark, cast, expression, expected):
+    value = spark.sql(f"SELECT {cast}({expression} AS ARRAY<UUID>) AS a").first().a
+    assert (None if value is None else [None if v is None else bytes(v) for v in value]) == expected
+
+
+def test_uuid_constant_array_invalid_cast(spark):
+    assert spark.sql("SELECT TRY_CAST(array('bad') AS ARRAY<UUID>) AS a").first().a == [None]
+    with pytest.raises(Exception, match=r"(?i)invalid uuid"):
+        spark.sql("SELECT CAST(array('bad') AS ARRAY<UUID>)").collect()
+
+
+@pytest.mark.parametrize("container", ["struct", "array", "map"])
+def test_uuid_constant_nested_array_cast(spark, container):
+    expression, target, projection = f"named_struct('a', array('{VALUE}'))", "STRUCT<a: ARRAY<UUID>>", "v.a[0]"
+    if container == "array":
+        expression, target, projection = f"array(array('{VALUE}'))", "ARRAY<ARRAY<UUID>>", "v[0][0]"
+    elif container == "map":
+        expression, target, projection = f"map('k', array('{VALUE}'))", "MAP<STRING, ARRAY<UUID>>", "v['k'][0]"
+    row = spark.sql(f"SELECT CAST({expression} AS {target}) AS v").selectExpr(f"hex({projection}) AS u").first()
+    assert row.u == VALUE_BYTES.hex().upper()
+
+
+@pytest.mark.parametrize("constant", [False, True])
+@pytest.mark.parametrize("container", ["map", "array"])
+@pytest.mark.parametrize("route", ["index", "element_at", "try_element_at"])
+def test_uuid_nested_collection_lookup(spark, constant, container, route):
+    values = [[VALUE, None], [], None, [None]]
+    inputs = [{"k": value} if container == "map" else [value] for value in values]
+    target = "MAP<STRING, ARRAY<UUID>>" if container == "map" else "ARRAY<ARRAY<UUID>>"
+    source = target.replace("UUID", "STRING")
+    key = "'k'" if container == "map" else "1"
+    expression = f"v[{'0' if container == 'array' else key}]" if route == "index" else f"{route}(v, {key})"
+    expected_schema = StructType([StructField("u", ArrayType(BinaryType(), True), True)])
+    if constant:
+        frames = []
+        for value in values:
+            inner = (
+                "NULL"
+                if value is None
+                else "array(" + ",".join("NULL" if item is None else f"'{item}'" for item in value) + ")"
+            )
+            outer = f"map('k', {inner})" if container == "map" else f"array({inner})"
+            frames.append(spark.sql(f"SELECT CAST({outer} AS {target}) AS v"))
+    else:
+        frames = [
+            spark.createDataFrame([(value,) for value in inputs], f"v {source}")
+            .repartition(2)
+            .selectExpr(f"CAST(v AS {target}) AS v")
+        ]
+    actual = []
+    for frame in frames:
+        selected = frame.selectExpr(f"{expression} AS u")
+        assert selected.schema == expected_schema
+        actual.extend(
+            None if row.u is None else [None if v is None else bytes(v) for v in row.u] for row in selected.collect()
+        )
+    expected = [[VALUE_BYTES, None], [], None, [None]]
+    assert sorted(actual, key=repr) == sorted(expected, key=repr)
+
+
+def test_uuid_lookup_missing_and_invalid_index(spark):
+    maps = spark.createDataFrame(
+        [({}, "k"), (None, "k"), ({"k": [VALUE]}, "missing"), ({"k": [VALUE]}, None)],
+        "v MAP<STRING, ARRAY<STRING>>, k STRING",
+    )
+    maps = maps.repartition(2).selectExpr("CAST(v AS MAP<STRING, ARRAY<UUID>>) AS v", "k")
+    for expression in ["v[k]", "element_at(v,k)", "try_element_at(v,k)"]:
+        assert [row.u for row in maps.selectExpr(f"{expression} AS u").collect()] == [None] * 4
+    frame = spark.sql(f"SELECT CAST(array(array('{VALUE}')) AS ARRAY<ARRAY<UUID>>) AS v")
+    assert frame.selectExpr("try_element_at(v,2) AS u").first().u is None
+    assert bytes(frame.selectExpr("element_at(v,-1)[0] AS u").first().u) == VALUE_BYTES
+    for expression in ["v[1]", "element_at(v,2)"]:
+        with pytest.raises(Exception, match=r"(?i)(out of bounds|invalid_array_index)"):
+            frame.selectExpr(expression).collect()
+    with pytest.raises(Exception, match=r"(?i)(out of bounds|invalid_array_index)"):
+        frame.select(frame.v[-1]).collect()
+    for expression in ["element_at(v,0)", "try_element_at(v,0)"]:
+        with pytest.raises(Exception, match=r"(?i)index 0 is invalid"):
+            frame.selectExpr(expression).collect()
+
+
+def test_uuid_constant_array_insert(spark, tmp_path):
+    table = "uuid_constant_arrays"
+    location = escape_sql_string_literal(str(tmp_path))
+    try:
+        spark.sql(f"CREATE TABLE {table} (id INT, a ARRAY<UUID>) USING iceberg LOCATION '{location}'")
+        spark.sql(f"INSERT INTO {table} SELECT 1, array('{VALUE}')")
+        spark.sql(f"INSERT INTO {table} SELECT 2, CAST(array('{VALUE}', NULL) AS ARRAY<UUID>)")
+        spark.sql(f"INSERT INTO {table} SELECT 3, TRY_CAST(array('bad') AS ARRAY<UUID>)")
+        spark.sql(f"INSERT INTO {table} VALUES (4, NULL), (5, array())")
+        before = _find_latest_metadata(tmp_path)
+        with pytest.raises(Exception, match=r"(?i)invalid uuid"):
+            spark.sql(f"INSERT INTO {table} SELECT 6, array('bad')").collect()
+        assert _find_latest_metadata(tmp_path) == before
+        rows = spark.read.format("iceberg").load(str(tmp_path)).orderBy("id").collect()
+        assert [
+            (row.id, None if row.a is None else [None if v is None else bytes(v) for v in row.a]) for row in rows
+        ] == [(1, [VALUE_BYTES]), (2, [VALUE_BYTES, None]), (3, [None]), (4, None), (5, [])]
+        assert _current_schema(before)["fields"][1]["type"]["element"] == "uuid"
+        for parquet in _data_files(tmp_path):
+            assert parquet.schema.column(1).logical_type.type == "UUID"
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("container", ["scalar", "struct", "array", "map"])
+@pytest.mark.parametrize("source_uuid", [False, True])
+def test_uuid_alter_type_preserves_target_identity(spark, sql_catalog, container, source_uuid):
+    # Iceberg Java UpdateSchema.updateColumn accepts UUID identity, not fixed[16] -> UUID.
+    identifier, name = "default.uuid_alter_type", "uuid_alter_type"
+    leaf = UUIDType() if source_uuid else FixedType(UUID_BYTE_LENGTH)
+    data_type, column, projection = leaf, "payload", "payload"
+    value = f"'{VALUE}'" if source_uuid else f"unhex('{VALUE_BYTES.hex()}')"
+    expression = value
+    if container == "struct":
+        data_type = iceberg_types.StructType(NestedField(3, "u", leaf, required=False, doc="leaf doc"))
+        column, projection, expression = "payload.u", "payload.u", f"named_struct('u', {value})"
+    elif container == "array":
+        data_type = iceberg_types.ListType(element_id=3, element_type=leaf, element_required=False)
+        column, projection, expression = "payload.element", "payload[0]", f"array({value})"
+    elif container == "map":
+        data_type = iceberg_types.MapType(
+            key_id=3, key_type=iceberg_types.StringType(), value_id=4, value_type=leaf, value_required=False
+        )
+        column, projection, expression = "payload.value", "payload['k']", f"map('k', {value})"
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(
+            NestedField(1, "id", LongType(), required=False),
+            NestedField(2, "payload", data_type, required=False, doc="retained doc"),
+        ),
+    )
+    location = Path(table.location().removeprefix("file://"))
+    try:
+        escaped = escape_sql_string_literal(str(location))
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{escaped}'")
+        spark.sql(f"INSERT INTO {name} SELECT 1, {expression}")
+        before = _find_latest_metadata(location)
+        if source_uuid:
+            spark.sql(f"ALTER TABLE {name} ALTER COLUMN {column} TYPE UUID")
+            after = _find_latest_metadata(location)
+            assert _current_schema(after)["fields"] == _current_schema(before)["fields"]
+            assert after.get("snapshots") == before.get("snapshots")
+            assert after.get("current-snapshot-id") == before.get("current-snapshot-id")
+            spark.sql(f"INSERT INTO {name} SELECT 2, {expression}")
+        else:
+            with pytest.raises(Exception, match=r"Cannot change Iceberg column .* from fixed\(16\) to uuid"):
+                spark.sql(f"ALTER TABLE {name} ALTER COLUMN {column} TYPE UUID").collect()
+            assert _find_latest_metadata(location) == before
+        rows = (
+            spark.read.format("iceberg")
+            .load(str(location))
+            .selectExpr("id", f"hex({projection}) AS u")
+            .orderBy("id")
+            .collect()
+        )
+        assert [(row.id, row.u) for row in rows] == [
+            (i, VALUE_BYTES.hex().upper()) for i in ([1, 2] if source_uuid else [1])
+        ]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+        sql_catalog.drop_table(identifier)
 
 
 def test_uuid_and_fixed16_keep_distinct_identity(spark, sql_catalog):
