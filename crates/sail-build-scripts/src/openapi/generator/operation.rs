@@ -392,7 +392,11 @@ impl OperationDefinition {
                 #(#headers)*
                 #query_request
                 #body_request
-                let response = request.send().await?;
+                let mut request = request.build()?;
+                if let Some(signer) = &self.signer {
+                    signer.sign(&mut request).map_err(ApiError::Sign)?;
+                }
+                let response = self.client.execute(request).await?;
                 let status = response.status();
                 let headers = response.headers().clone();
                 if #success_status_check {
