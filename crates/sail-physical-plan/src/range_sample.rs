@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{AsArray, Float32Array, RecordBatch};
-use datafusion::arrow::compute::interleave_record_batch;
+use datafusion::arrow::array::{AsArray, Float32Array, RecordBatch, UInt64Array};
 use datafusion::arrow::compute::kernels::sort::SortOptions;
+use datafusion::arrow::compute::{interleave_record_batch, take_record_batch};
 use datafusion::arrow::datatypes::{DataType, Field, Float32Type, Schema, SchemaRef};
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -18,6 +18,7 @@ use datafusion_common::{Result, ScalarValue, internal_err};
 use futures::{StreamExt, TryStreamExt};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
+use sail_common_datafusion::array::compact::compact_array;
 
 const WEIGHT_COLUMN: &str = "__weight";
 
@@ -157,47 +158,115 @@ async fn sample_partition(
     partition: usize,
     schema: SchemaRef,
 ) -> Result<Option<RecordBatch>> {
-    // The seed only needs to keep the sample the same across runs on the same input.
-    let mut rng = StdRng::seed_from_u64(partition as u64);
-    let mut reservoir = RecordBatch::new_empty(input.schema());
-    let mut count: u64 = 0;
+    let mut reservoir = Reservoir::new(sample_size, partition as u64);
     while let Some(batch) = input.next().await {
-        let batch = batch?;
-        // Each entry is (0, row) for a row kept so far or (1, row) for a row of `batch`.
-        let mut indices = (0..reservoir.num_rows())
-            .map(|row| (0, row))
-            .collect::<Vec<_>>();
-        let mut changed = false;
-        for row in 0..batch.num_rows() {
-            count += 1;
-            if indices.len() < sample_size {
-                indices.push((1, row));
-                changed = true;
-            } else {
-                let slot = rng.random_range(0..count);
-                if let Ok(slot) = usize::try_from(slot)
-                    && slot < sample_size
-                {
-                    indices[slot] = (1, row);
-                    changed = true;
-                }
-            }
-        }
-        if changed {
-            reservoir = interleave_record_batch(&[&reservoir, &batch], &indices)?;
-        }
+        reservoir.insert(&batch?)?;
     }
-    if reservoir.num_rows() == 0 {
+    let count = reservoir.count;
+    let Some(sample) = reservoir.finish()? else {
         return Ok(None);
-    }
+    };
     // Spark computes the weight in double precision and keeps it as a float.
-    let weight = (count as f64 / reservoir.num_rows() as f64) as f32;
-    let mut columns = reservoir.columns().to_vec();
+    let weight = (count as f64 / sample.num_rows() as f64) as f32;
+    let mut columns = sample.columns().to_vec();
     columns.push(Arc::new(Float32Array::from(vec![
         weight;
-        reservoir.num_rows()
+        sample.num_rows()
     ])));
     Ok(Some(RecordBatch::try_new(schema, columns)?))
+}
+
+/// The rows kept by reservoir sampling.
+///
+/// Each input batch adds one small batch with only the rows picked from it, so the
+/// work per input batch depends on the rows picked, not on the sample size.
+/// Every stored batch is compacted, so the sample never holds the buffers of an
+/// input batch. The rows that are no longer in the sample are dropped when the
+/// stored rows exceed twice the sample size.
+struct Reservoir {
+    sample_size: usize,
+    /// The seed only needs to keep the sample the same across runs on the same input.
+    rng: StdRng,
+    /// The number of input rows seen.
+    count: u64,
+    /// The stored batches, including rows that are no longer in the sample.
+    batches: Vec<RecordBatch>,
+    /// The number of rows in `batches`.
+    stored_rows: usize,
+    /// For each slot of the sample, the stored batch and the row in it.
+    slots: Vec<(usize, usize)>,
+}
+
+impl Reservoir {
+    fn new(sample_size: usize, seed: u64) -> Self {
+        Self {
+            sample_size,
+            rng: StdRng::seed_from_u64(seed),
+            count: 0,
+            batches: vec![],
+            stored_rows: 0,
+            slots: vec![],
+        }
+    }
+
+    fn insert(&mut self, batch: &RecordBatch) -> Result<()> {
+        // The picked rows go to a new stored batch at index `next`, in the order picked.
+        let next = self.batches.len();
+        let mut picked: Vec<u64> = vec![];
+        for row in 0..batch.num_rows() {
+            self.count += 1;
+            let slot = if self.slots.len() < self.sample_size {
+                self.slots.push((next, 0));
+                self.slots.len() - 1
+            } else {
+                match usize::try_from(self.rng.random_range(0..self.count)) {
+                    Ok(slot) if slot < self.sample_size => slot,
+                    _ => continue,
+                }
+            };
+            self.slots[slot] = (next, picked.len());
+            picked.push(row as u64);
+        }
+        if picked.is_empty() {
+            return Ok(());
+        }
+        let picked = take_record_batch(batch, &UInt64Array::from(picked))?;
+        self.stored_rows += picked.num_rows();
+        self.batches.push(compact_record_batch(picked)?);
+        if self.stored_rows > 2 * self.sample_size {
+            self.compact()?;
+        }
+        Ok(())
+    }
+
+    /// Keeps only the rows in the sample, in one batch in slot order.
+    fn compact(&mut self) -> Result<()> {
+        let batches = self.batches.iter().collect::<Vec<_>>();
+        let sample = compact_record_batch(interleave_record_batch(&batches, &self.slots)?)?;
+        self.stored_rows = sample.num_rows();
+        self.batches = vec![sample];
+        self.slots = (0..self.stored_rows).map(|row| (0, row)).collect();
+        Ok(())
+    }
+
+    /// Returns the sample in slot order, or `None` if no row was seen.
+    fn finish(mut self) -> Result<Option<RecordBatch>> {
+        if self.slots.is_empty() {
+            return Ok(None);
+        }
+        self.compact()?;
+        Ok(self.batches.pop())
+    }
+}
+
+/// Copies the bytes that a batch shares with its source, such as view buffers.
+fn compact_record_batch(batch: RecordBatch) -> Result<RecordBatch> {
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|column| compact_array(Arc::clone(column)))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(RecordBatch::try_new(batch.schema(), columns)?)
 }
 
 /// Picks range split points from the batches of [`RangePartitionSampleExec`], like
@@ -213,6 +282,8 @@ pub fn range_split_points(
     sort_options: &[SortOptions],
     partitions: usize,
 ) -> Result<Vec<SplitPoint>> {
+    // Step 1: collect every sampled row as a key and its weight. The weight is the
+    // number of input rows that one sampled row stands for.
     let mut candidates: Vec<(Vec<ScalarValue>, f32)> = vec![];
     for batch in batches {
         let Some(weight_index) = batch.num_columns().checked_sub(1) else {
@@ -239,11 +310,15 @@ pub fn range_split_points(
             candidates.push((key, weights.value(row)));
         }
     }
+    // There cannot be more partitions than sampled rows. No split points means one partition.
     let partitions = partitions.min(candidates.len());
     if partitions <= 1 {
         return Ok(vec![]);
     }
 
+    // Step 2: sort the candidates in the range ordering, so "greater" below means
+    // "later in the ordering". `sort_by` cannot fail, so the first comparison error
+    // is kept and returned after the sort.
     let mut error = None;
     candidates.sort_by(|(left, _), (right, _)| {
         compare_rows(left, right, sort_options).unwrap_or_else(|e| {
@@ -255,6 +330,11 @@ pub fn range_split_points(
         return Err(e);
     }
 
+    // Step 3: pick the Spark bounds. Each partition should get `step` of the total
+    // weight. Walk the sorted candidates and add up their weight. When the sum reaches
+    // the next target, the key becomes a bound, unless it equals the previous bound.
+    // A repeated key does not move the target, so the next greater key becomes the
+    // bound, and a skewed key gives fewer than `partitions - 1` bounds.
     let step = candidates
         .iter()
         .map(|(_, weight)| f64::from(*weight))
@@ -282,6 +362,12 @@ pub fn range_split_points(
         }
     }
 
+    // Step 4: turn each Spark bound into a split point. A Spark partition ends at its
+    // bound and includes it. A DataFusion partition starts at its split point and
+    // includes it. So the split point is the first candidate greater than the bound.
+    // This keeps every sampled key in the same partition as in Spark. A key that was
+    // not sampled and lies between the bound and that candidate goes one partition
+    // lower than in Spark.
     let mut split_points = vec![];
     for bound in bounds {
         let mut next = bound + 1;
@@ -301,7 +387,8 @@ pub fn range_split_points(
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use datafusion::arrow::array::{Float64Array, Int64Array};
+    use datafusion::arrow::array::{Array, Float64Array, Int64Array, StringViewArray};
+    use datafusion::arrow::datatypes::Float64Type;
     use datafusion::physical_plan::test::TestMemoryExec;
     use datafusion::prelude::SessionContext;
 
@@ -474,5 +561,68 @@ mod tests {
     async fn test_sample_emits_nothing_for_an_empty_partition() {
         let output = run_sample(vec![], 5).await;
         assert!(output.is_empty());
+    }
+
+    /// Reservoir sampling (Algorithm R) over all rows at once, with the seed of partition 0.
+    fn reference_sample(values: &[f64], sample_size: usize) -> Vec<f64> {
+        let mut rng = StdRng::seed_from_u64(0);
+        let mut sample = vec![];
+        for (count, value) in (1u64..).zip(values) {
+            if sample.len() < sample_size {
+                sample.push(*value);
+            } else {
+                let slot = rng.random_range(0..count) as usize;
+                if slot < sample_size {
+                    sample[slot] = *value;
+                }
+            }
+        }
+        sample
+    }
+
+    #[tokio::test]
+    async fn test_sample_does_not_depend_on_batch_boundaries() {
+        let values = (0..2_000).map(f64::from).collect::<Vec<_>>();
+        for (batch_size, sample_size) in [(1, 7), (3, 50), (100, 50), (128, 300), (2_000, 300)] {
+            let batches = values
+                .chunks(batch_size)
+                .map(|chunk| float_batch(chunk.to_vec()))
+                .collect();
+            let output = run_sample(batches, sample_size).await;
+            let sampled = output[0].column(0).as_primitive::<Float64Type>().values();
+            assert_eq!(
+                sampled.to_vec(),
+                reference_sample(&values, sample_size),
+                "batch size {batch_size}, sample size {sample_size}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sample_does_not_hold_the_string_buffers_of_its_input() {
+        // Strings longer than 12 bytes live in each batch's data buffer, not in the views.
+        let batches = (0..100)
+            .map(|b| {
+                let values = (0..100).map(|r| format!("key-{b:04}-{r:04}-padding"));
+                RecordBatch::try_new(
+                    key_schema(DataType::Utf8View),
+                    vec![Arc::new(StringViewArray::from_iter_values(values))],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let output = run_sample(batches, 10).await;
+        let sampled = output[0].column(0).as_string_view();
+        let kept_bytes = sampled.iter().flatten().map(str::len).sum::<usize>();
+        let held_bytes = sampled
+            .data_buffers()
+            .iter()
+            .map(|buffer| buffer.len())
+            .sum::<usize>();
+        assert_eq!(sampled.len(), 10);
+        assert!(
+            held_bytes <= kept_bytes,
+            "holds {held_bytes} bytes of strings for {kept_bytes} bytes of kept keys"
+        );
     }
 }
