@@ -1500,6 +1500,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         Ok(
                             sail_physical_plan::identity_generate::IdentityGenerateColumn {
                                 output: column.output,
+                                column_name: column.column_name,
                                 mask: column.mask_index.map(usize::try_from).transpose().map_err(
                                     |_| plan_datafusion_err!("identity mask index too large"),
                                 )?,
@@ -3073,6 +3074,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .iter()
                     .map(|column| r#gen::IdentityGenerateColumn {
                         output: column.output.clone(),
+                        column_name: column.column_name.clone(),
                         mask_index: column.mask.map(|index| index as u64),
                         start: column.start,
                         step: column.step,
@@ -6470,6 +6472,7 @@ mod tests {
         let columns = vec![
             IdentityGenerateColumn {
                 output: "positive".into(),
+                column_name: "IncreasingId".into(),
                 mask: Some(0),
                 start: 7,
                 step: 3,
@@ -6477,6 +6480,7 @@ mod tests {
             },
             IdentityGenerateColumn {
                 output: "negative".into(),
+                column_name: "DecreasingId".into(),
                 mask: None,
                 start: -7,
                 step: -3,
@@ -6505,6 +6509,7 @@ mod tests {
         let converter = crate::proto::converter::RemotePhysicalProtoConverter::default();
         let valid = r#gen::IdentityGenerateColumn {
             output: "id".into(),
+            column_name: "CustomerId".into(),
             mask_index: Some(0),
             start: 7,
             step: 3,

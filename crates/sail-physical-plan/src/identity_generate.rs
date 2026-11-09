@@ -22,6 +22,7 @@ use futures::Stream;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdentityGenerateColumn {
     pub output: String,
+    pub column_name: String,
     pub mask: Option<usize>,
     pub start: i64,
     pub step: i64,
@@ -197,7 +198,7 @@ impl Generator {
         let overflow = || {
             DataFusionError::Execution(format!(
                 "DELTA_IDENTITY_COLUMN_VALUE_OVERFLOW: identity column `{}` cannot generate a next value without overflowing BIGINT",
-                self.column.output
+                self.column.column_name
             ))
         };
         let increment = match self.increment {
@@ -297,6 +298,7 @@ mod tests {
     fn descriptor(step: i64) -> IdentityGenerateColumn {
         IdentityGenerateColumn {
             output: "id".into(),
+            column_name: "CustomerId".into(),
             mask: Some(0),
             start: 7,
             step,
@@ -374,7 +376,14 @@ mod tests {
                 next: None,
                 increment: None,
             };
-            assert!(generator.next(0, 1).is_err());
+            let error = generator
+                .next(0, 1)
+                .err()
+                .ok_or_else(|| DataFusionError::Internal("expected identity overflow".into()))?;
+            assert_eq!(
+                error.to_string(),
+                "Execution error: DELTA_IDENTITY_COLUMN_VALUE_OVERFLOW: identity column `CustomerId` cannot generate a next value without overflowing BIGINT"
+            );
         }
         let mut generator = Generator {
             column: IdentityGenerateColumn {

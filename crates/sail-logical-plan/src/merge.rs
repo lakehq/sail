@@ -1405,10 +1405,11 @@ fn project_merge_with_identity(
             Arc::new(plan),
             allocations
                 .iter()
-                .map(|(_, identity, domain)| {
+                .map(|(name, identity, domain)| {
                     let (_, marker, output) = &domains[*domain];
                     crate::identity_generate::IdentityGenerateColumn {
                         output: output.clone(),
+                        column_name: (*name).clone(),
                         mask: Some(marker.clone()),
                         start: identity.start,
                         step: identity.step,

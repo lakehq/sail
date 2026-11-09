@@ -95,6 +95,7 @@ message IdentityGenerateColumn {
   sint64 start = 3;
   sint64 step = 4;
   optional sint64 high_water_mark = 5;
+  string column_name = 6;
 }
 
 message InputFileMetadataExecNode {

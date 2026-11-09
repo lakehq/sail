@@ -1185,6 +1185,7 @@ impl PlanResolver<'_> {
                     .map(
                         |identity| sail_logical_plan::identity_generate::IdentityGenerateColumn {
                             output: field_ids[index].clone(),
+                            column_name: column.name.clone(),
                             mask: None,
                             start: identity.start,
                             step: identity.step,

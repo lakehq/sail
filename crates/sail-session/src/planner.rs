@@ -367,6 +367,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     Ok(
                         sail_physical_plan::identity_generate::IdentityGenerateColumn {
                             output: column.output.clone(),
+                            column_name: column.column_name.clone(),
                             mask: column
                                 .mask
                                 .as_ref()

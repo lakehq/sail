@@ -11,6 +11,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd)]
 pub struct IdentityGenerateColumn {
     pub output: String,
+    pub column_name: String,
     pub mask: Option<String>,
     pub start: i64,
     pub step: i64,
