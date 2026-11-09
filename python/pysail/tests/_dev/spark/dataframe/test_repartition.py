@@ -94,7 +94,9 @@ def test_range_repartition_orders_compound_keys_by_each_direction(spark):
 def test_range_repartition_rejects_non_positive_sample_size(spark):
     try:
         spark.conf.set("spark.sql.execution.rangeExchange.sampleSizePerPartition", "0")
-        with pytest.raises(Exception, match="Sample points per partition must be greater than 0 but found 0"):
+        with pytest.raises(
+            IllegalArgumentException, match="Sample points per partition must be greater than 0 but found 0"
+        ):
             spark.range(12).repartitionByRange(3, "id").collect()
     finally:
         spark.conf.unset("spark.sql.execution.rangeExchange.sampleSizePerPartition")
@@ -163,6 +165,14 @@ def test_repartition_with_one_shuffle_partition_accepts_mixed_sort_order_and_has
         assert sorted(row.id for row in result.collect()) == list(range(12))
     finally:
         spark.conf.unset("spark.sql.shuffle.partitions")
+
+
+def test_range_repartition_treats_a_key_repeated_after_simplification_as_one_key(spark):
+    # The SQL hint accepts only columns, so this case exists only in the DataFrame API.
+    rows = (
+        spark.range(12).repartitionByRange(3, "id", F.col("id") + 0).select("id", F.spark_partition_id().alias("pid"))
+    )
+    assert sorted((row.id, row.pid) for row in rows.collect()) == [(i, i // 4) for i in range(12)]
 
 
 @pytest.mark.parametrize(

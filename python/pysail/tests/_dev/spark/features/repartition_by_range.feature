@@ -118,6 +118,45 @@ Feature: REPARTITION_BY_RANGE hint
       | 1   | 2 |
       | 2   | 2 |
 
+  @sail-bug
+  Scenario: The range hint puts every NaN key in the last partition
+    When query
+      """
+      SELECT pid, count(*) AS n, count_if(isnan(v)) AS nans
+      FROM (
+        SELECT v, spark_partition_id() AS pid
+        FROM (
+          SELECT /*+ REPARTITION_BY_RANGE(3, v) */ v
+          FROM VALUES (1.0D), (CAST('NaN' AS DOUBLE)), (-CAST('NaN' AS DOUBLE)), (2.0D), (CAST(NULL AS DOUBLE)), (3.0D) AS t(v)
+        )
+      )
+      GROUP BY pid
+      ORDER BY pid
+      """
+    Then query result ordered
+      | pid | n | nans |
+      | 0   | 2 | 0    |
+      | 1   | 2 | 0    |
+      | 2   | 2 | 2    |
+
+  Scenario: The range hint rejects a non-positive sample size
+    Given config spark.sql.execution.rangeExchange.sampleSizePerPartition = 0
+    When query
+      """
+      SELECT /*+ REPARTITION_BY_RANGE(3, id) */ id FROM range(12)
+      """
+    Then query error Sample points per partition must be greater than 0 but found 0
+
+  Scenario: The range hint does not check the sample size for one partition
+    Given config spark.sql.execution.rangeExchange.sampleSizePerPartition = 0
+    When query
+      """
+      SELECT count(*) AS n FROM (SELECT /*+ REPARTITION_BY_RANGE(1, id) */ id FROM range(12))
+      """
+    Then query result
+      | n  |
+      | 12 |
+
   Scenario: The range hint returns no rows for empty input
     When query
       """

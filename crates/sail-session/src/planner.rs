@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::error::ArrowError;
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::catalog::Session;
 use datafusion::common::config::TableParquetOptions;
@@ -21,7 +22,7 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    DFSchema, Statistics, exec_err, internal_datafusion_err, internal_err, not_impl_err,
+    DFSchema, DataFusionError, Statistics, internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
@@ -629,11 +630,15 @@ async fn plan_range_partitioning(
     session: &dyn Session,
     planning_ctx: &PhysicalPlanningContext,
 ) -> datafusion_common::Result<Partitioning> {
+    // Step 1: the number of partitions. Without a count, use the input's partition count.
+    // The resolver rejects zero, so zero here is an internal error.
     let num_partitions = match node.num_partitions() {
         Some(0) => return internal_err!("number of explicit partitions cannot be zero"),
         Some(num_partitions) => num_partitions,
         None => input.output_partitioning().partition_count().max(1),
     };
+    // Step 2: the physical range ordering. `LexOrdering::new` drops repeated keys, so a
+    // shorter ordering means two keys became equal after the resolver removed repeats.
     let ordering = create_physical_sort_exprs(
         sorts,
         UserDefinedLogicalNode::schema(node),
@@ -643,6 +648,9 @@ async fn plan_range_partitioning(
     let Some(ordering) = LexOrdering::new(ordering).filter(|x| x.len() == sorts.len()) else {
         return internal_err!("range repartitioning requires distinct sort keys");
     };
+    // Step 3: the cases that need no sample. One partition needs no split points.
+    // The sample size is checked only when Sail samples, as in Spark.
+    // Sampling an unbounded input would never finish.
     if num_partitions == 1 {
         return Ok(Partitioning::Range(RangePartitioning::try_new(
             ordering,
@@ -650,14 +658,26 @@ async fn plan_range_partitioning(
         )?));
     }
     if sample_size_per_partition <= 0 {
-        return exec_err!(
-            "requirement failed: Sample points per partition must be greater than 0 but found {sample_size_per_partition}"
-        );
+        // Spark fails a `require`, which raises `IllegalArgumentException`.
+        // An Arrow invalid argument error reaches the client as that class. It is
+        // external because `CommonErrorCause::build` drops the class of
+        // `DataFusionError::ArrowError` (see the TODO there). Use that variant once it is fixed.
+        return Err(DataFusionError::External(Box::new(
+            ArrowError::InvalidArgumentError(format!(
+                "requirement failed: Sample points per partition must be greater than 0 but found {sample_size_per_partition}"
+            )),
+        )));
     }
     if input.boundedness().is_unbounded() {
         return not_impl_err!("range repartitioning of unbounded input");
     }
 
+    // Step 4: the sample plan projects only the range keys from the logical input.
+    // The input is already optimized, and the physical planner runs only the physical
+    // optimizer, which pushes the projection into the scan. The whole input subtree is
+    // planned again here. The main query path also runs
+    // `ensure_scalar_subquery_nullability` after planning, and this plan does not go
+    // through that path.
     let keys = sorts
         .iter()
         .enumerate()
@@ -668,6 +688,9 @@ async fn plan_range_partitioning(
         .build()?;
     let sample = planner.create_physical_plan(&sample, session).await?;
     let sample = ensure_scalar_subquery_nullability(sample)?;
+    // Step 5: the sample sizes, as in Spark. `sample_size` is the total number of rows
+    // wanted. Each input partition keeps `partition_sample_size` rows. For example,
+    // 200 partitions and 8 input partitions give 20,000 in total and 7,500 per partition.
     let sample_size =
         (f64::from(sample_size_per_partition) * num_partitions as f64).min(RANGE_SAMPLE_SIZE_LIMIT);
     let input_partitions = sample.output_partitioning().partition_count().max(1);
@@ -678,6 +701,11 @@ async fn plan_range_partitioning(
         partition_sample_size.max(1),
     )?);
 
+    // Step 6: run the sample as a job, locally or on the cluster, and collect one batch per
+    // nonempty input partition. Planning waits here until the job has read the whole input.
+    // TODO: Sample when the exchange first runs, as Spark does, not during planning.
+    //  Planning runs before the operation is registered, so an interrupt cannot stop this
+    //  job, no heartbeat is sent while it runs, and EXPLAIN runs it too.
     let Some(state) = session.as_any().downcast_ref::<SessionState>() else {
         return internal_err!("range repartitioning requires a session state");
     };
@@ -689,6 +717,8 @@ async fn plan_range_partitioning(
         .await?
         .try_collect::<Vec<_>>()
         .await?;
+    // Step 7: pick the split points from the sample. The query then computes the
+    // planned input again and shuffles it by these split points.
     let options = ordering.iter().map(|x| x.options).collect::<Vec<_>>();
     let split_points = range_split_points(&batches, &options, num_partitions)?;
     Ok(Partitioning::Range(RangePartitioning::try_new(
