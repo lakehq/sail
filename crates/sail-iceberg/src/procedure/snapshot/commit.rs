@@ -209,28 +209,26 @@ pub(crate) async fn commit_snapshot_operation(
         if let Some(table) = catalog_table.as_ref()
             && (use_metadata_location_fallback
                 || matches!(commit_mode, IcebergCatalogCommitMode::Filesystem))
-        {
-            if let Err(error) = IcebergCatalogCommitCoordinator::new(ctx, table)
+            && let Err(error) = IcebergCatalogCommitCoordinator::new(ctx, table)
                 .update_metadata_location(
                     table_properties,
                     recorded_metadata_location.as_deref(),
                     prepared_metadata.location(),
                 )
                 .await
-            {
-                // A unique metadata file is not published until its pointer CAS succeeds.
-                // All other errors (including unknown commit state) preserve every artifact.
-                if use_metadata_location_fallback && is_catalog_conflict(&error) {
-                    let (store, path) = store_context.resolve(prepared_metadata.location())?;
-                    store.delete(&path).await?;
-                    remove_uncommitted_manifests(&store_context, &prepared.manifests).await?;
-                    if attempt < MAX_PROCEDURE_COMMIT_RETRIES {
-                        continue;
-                    }
-                    return Err(procedure_commit_conflict());
+        {
+            // A unique metadata file is not published until its pointer CAS succeeds.
+            // All other errors (including unknown commit state) preserve every artifact.
+            if use_metadata_location_fallback && is_catalog_conflict(&error) {
+                let (store, path) = store_context.resolve(prepared_metadata.location())?;
+                store.delete(&path).await?;
+                remove_uncommitted_manifests(&store_context, &prepared.manifests).await?;
+                if attempt < MAX_PROCEDURE_COMMIT_RETRIES {
+                    continue;
                 }
-                return Err(error);
+                return Err(procedure_commit_conflict());
             }
+            return Err(error);
         }
         prepared_metadata.write_hint(&store_context).await;
         return Ok(prepared.output);

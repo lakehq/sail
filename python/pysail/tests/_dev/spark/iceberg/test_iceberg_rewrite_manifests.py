@@ -1,3 +1,5 @@
+# ruff: noqa: S608
+
 import hashlib
 
 import pyarrow as pa
@@ -145,7 +147,8 @@ def test_manifest_rewrite_fixed_identity_preserves_metrics_and_data(spark, sql_c
         spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{escape_sql_string_literal(str(path))}'")
         before = spark.table(f"{name}.files").orderBy("file_path").collect()
         payloads = _payloads(row.file_path for row in before)
-        assert len(_manifests(path)) == 2
+        expected_manifest_count = 2
+        assert len(_manifests(path)) == expected_manifest_count
         # First write two manifests in Iceberg's length-prefixed fixed encoding, then
         # compact those manifests. The second rewrite must use the normalized reader.
         spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('commit.manifest.target-size-bytes'='1')")
@@ -182,7 +185,8 @@ def test_manifest_rewrite_selects_current_or_explicit_spec(spark, tmp_path):
         files = _file_state(path)
         assert _rewrite(spark, name, ", spec_id => 0") == (2, 1)
         after = _manifests(path)
-        assert len(after) == 2
+        expected_manifest_count = 2
+        assert len(after) == expected_manifest_count
         assert all(m in after for m in retained)
         assert _file_state(path) == files
         assert [row.id for row in spark.table(name).orderBy("id").collect()] == [1, 2, 3]
@@ -238,7 +242,8 @@ def test_manifest_rewrite_preserves_delete_files_and_visibility(spark, tmp_path,
         manifests = _manifests(path)
         files = _file_state(path)
         deletes = _delete_files(path)
-        assert len(deletes) >= 2
+        minimum_delete_file_count = 2
+        assert len(deletes) >= minimum_delete_file_count
         payloads = _payloads(files)
         lineage = _current_row_lineage(path) if version == ROW_LINEAGE_VERSION else None
         rewritten = sum(
@@ -290,7 +295,7 @@ def test_manifest_rewrite_rejects_invalid_arguments_without_changes(spark, tmp_p
         spark.sql(f"INSERT INTO {name} VALUES (2)")
         before = _find_latest_metadata(path)
         artifacts = _payloads((path / "metadata").iterdir())
-        with pytest.raises(Exception, match="(?i)(argument|parameter|spec|identifier|table)"):
+        with pytest.raises(Exception, match=r"(?i)(argument|parameter|spec|identifier|table)"):
             spark.sql(f"CALL system.rewrite_manifests({arguments})").collect()
         assert _find_latest_metadata(path) == before
         assert _payloads((path / "metadata").iterdir()) == artifacts
@@ -337,7 +342,7 @@ def test_manifest_rewrite_failed_read_does_not_publish_or_stage_files(spark, tmp
         before = _find_latest_metadata(path)
         artifacts = _payloads((path / "metadata").iterdir())
         try:
-            with pytest.raises(Exception, match="(?i)(avro|manifest|header|magic)"):
+            with pytest.raises(Exception, match=r"(?i)(avro|manifest|header|magic)"):
                 _rewrite(spark, name)
             assert _find_latest_metadata(path) == before
             assert _payloads((path / "metadata").iterdir()) == artifacts
@@ -357,14 +362,36 @@ def test_manifest_rewrite_preserves_historical_schema_metrics(spark, tmp_path):
     try:
         spark.sql(f"INSERT INTO {name} VALUES (1, 'a')")
         spark.sql(f"INSERT INTO {name} VALUES (2, 'b')")
+        old_paths = {manifest["manifest-path"] for manifest in _manifests(path)}
         spark.sql(f"ALTER TABLE {name} DROP COLUMN old")
         spark.sql(f"INSERT INTO {name} VALUES (3)")
+        retained = [manifest for manifest in _manifests(path) if manifest["manifest-path"] not in old_paths]
+        retained_payloads = _payloads(manifest["manifest-path"] for manifest in retained)
         before = _file_state(path)
+        data_payloads = _payloads(before)
+        old_field_id = 2
         assert any(
-            2 in (entry.data_file.lower_bounds or {}) for entry in _current_manifest_entries(path, ManifestContent.DATA)
+            old_field_id in (entry.data_file.lower_bounds or {})
+            for entry in _current_manifest_entries(path, ManifestContent.DATA)
         )
-        assert _rewrite(spark, name) == (3, 2)
+        assert _rewrite(spark, name) == (2, 1)
+        assert all(manifest in _manifests(path) for manifest in retained)
+        assert _payloads(retained_payloads) == retained_payloads
         assert _file_state(path) == before
+        assert _payloads(before) == data_payloads
+        assert [row.id for row in spark.table(name).orderBy("id").collect()] == [1, 2, 3]
+        metadata = _find_latest_metadata(path)
+        snapshot = _current_snapshot(metadata)
+        assert snapshot["summary"]["entries-processed"] == "2"
+        manifests = _manifests(path)
+        artifacts = _payloads((path / "metadata").iterdir())
+        assert _rewrite(spark, name) == (0, 0)
+        assert _find_latest_metadata(path) == metadata
+        assert _current_snapshot(_find_latest_metadata(path)) == snapshot
+        assert _manifests(path) == manifests
+        assert _payloads((path / "metadata").iterdir()) == artifacts
+        assert _file_state(path) == before
+        assert _payloads(before) == data_payloads
         assert [row.id for row in spark.table(name).orderBy("id").collect()] == [1, 2, 3]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")

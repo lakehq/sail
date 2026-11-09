@@ -10,13 +10,14 @@ use serde::Deserialize;
 
 use super::arguments::{optional_bool, optional_i32};
 use crate::io::StoreContext;
+use crate::spec::manifest::deserialize_optional_vec;
 use crate::spec::manifest_list::{ManifestListWriteContext, ManifestListWriter};
 use crate::spec::snapshots::{SnapshotRetention, Summary};
 use crate::spec::{
     DataContentType, Datum, FormatVersion, Literal, MAIN_BRANCH, Manifest, ManifestContentType,
-    ManifestEntry, ManifestFile, ManifestMetadata, ManifestWriter, Operation, PrimitiveLiteral,
-    PrimitiveType, SnapshotBuilder, SnapshotReference, TableMetadata, TableRequirement,
-    TableUpdate,
+    ManifestEntry, ManifestFile, ManifestMetadata, ManifestStatus, ManifestWriter, Operation,
+    PrimitiveLiteral, PrimitiveType, SnapshotBuilder, SnapshotReference, TableMetadata,
+    TableRequirement, TableUpdate,
 };
 use crate::table::files::{
     EntrySelection, ManifestScope, SnapshotScope, manifest_entries, scan_manifests,
@@ -40,6 +41,12 @@ pub(super) struct PreparedManifestRewrite {
     pub output: RecordBatch,
 }
 
+struct RewriteGroup {
+    metadata: ManifestMetadata,
+    sources: Vec<ManifestFile>,
+    entries: Vec<ManifestEntry>,
+}
+
 impl RewriteManifests {
     pub(super) fn from_invocation(invocation: &LakeProcedureInvocation) -> Result<Self> {
         // Spark's caching option is a performance hint. This implementation materializes each
@@ -56,6 +63,18 @@ impl RewriteManifests {
         table_url: &url::Url,
         metadata: &TableMetadata,
         output_schema: SchemaRef,
+    ) -> Result<PreparedManifestRewrite> {
+        self.prepare_with_entry_limit(store, table_url, metadata, output_schema, MAX_ENTRIES)
+            .await
+    }
+
+    async fn prepare_with_entry_limit(
+        &self,
+        store: &StoreContext,
+        table_url: &url::Url,
+        metadata: &TableMetadata,
+        output_schema: SchemaRef,
+        max_entries: usize,
     ) -> Result<PreparedManifestRewrite> {
         let spec_id = self.spec_id.unwrap_or(metadata.default_spec_id);
         let spec = metadata
@@ -87,7 +106,7 @@ impl RewriteManifests {
         if parent.key_id.is_some() || !metadata.encryption_keys.is_empty() {
             return not_impl_err!("rewrite_manifests does not support encrypted table metadata");
         }
-        let manifests = scan_manifests(
+        let mut manifests = scan_manifests(
             store,
             metadata,
             &ManifestScope {
@@ -105,12 +124,6 @@ impl RewriteManifests {
                 })
                 .collect::<Vec<_>>();
             let size = matching.iter().try_fold(0u64, |size, manifest| {
-                if manifest.added_files_count.is_none()
-                    || manifest.existing_files_count.is_none()
-                    || manifest.deleted_files_count.is_none()
-                {
-                    return exec_err!("No file counts in manifest: {}", manifest.manifest_path);
-                }
                 let length = u64::try_from(manifest.manifest_length)
                     .map_err(|_| DataFusionError::Execution("Negative manifest length".into()))?;
                 size.checked_add(length)
@@ -128,7 +141,7 @@ impl RewriteManifests {
         if selected.is_empty() {
             return Ok(prepared);
         }
-        let selected_bytes = manifests
+        let mut selected_bytes = manifests
             .iter()
             .filter(|m| selected.contains(&m.manifest_path))
             .try_fold(0u64, |size, manifest| {
@@ -170,19 +183,21 @@ impl RewriteManifests {
         };
         let mut added = vec![];
         let mut live_entries = 0usize;
+        let mut remaining_entries = max_entries;
+        let mut replaced = HashSet::new();
         for content in [ManifestContentType::Data, ManifestContentType::Deletes] {
             // Retain the original schema when rewriting historical manifests: using only the
             // current schema would discard metrics for dropped fields on subsequent reads.
-            let mut groups: BTreeMap<String, (ManifestMetadata, Vec<ManifestEntry>)> =
-                BTreeMap::new();
+            let mut groups: BTreeMap<String, RewriteGroup> = BTreeMap::new();
             for descriptor in manifests
-                .iter()
+                .iter_mut()
                 .filter(|m| m.content == content && selected.contains(&m.manifest_path))
             {
-                if descriptor.key_metadata.is_some() {
-                    return not_impl_err!("rewrite_manifests does not support encrypted manifests");
+                let (mut manifest_metadata, entries) =
+                    read_entries(store, descriptor, &mut remaining_entries).await?;
+                if metadata.format_version != FormatVersion::V1 && missing_counts(descriptor) {
+                    populate_counts(descriptor, &entries)?;
                 }
-                let (mut manifest_metadata, entries) = read_entries(store, descriptor).await?;
                 if manifest_metadata.partition_spec != *spec || manifest_metadata.content != content
                 {
                     return exec_err!(
@@ -193,19 +208,16 @@ impl RewriteManifests {
                 manifest_metadata.format_version = metadata.format_version;
                 let key = serde_json::to_string(&manifest_metadata.schema)
                     .map_err(|error| DataFusionError::External(Box::new(error)))?;
-                let group = groups
-                    .entry(key)
-                    .or_insert_with(|| (manifest_metadata, vec![]));
+                let group = groups.entry(key).or_insert_with(|| RewriteGroup {
+                    metadata: manifest_metadata,
+                    sources: vec![],
+                    entries: vec![],
+                });
+                group.sources.push(descriptor.clone());
                 for entry in entries
                     .into_iter()
                     .filter(|entry| EntrySelection::live().matches(entry))
                 {
-                    live_entries += 1;
-                    if live_entries > MAX_ENTRIES {
-                        return not_impl_err!(
-                            "rewrite_manifests supports at most {MAX_ENTRIES} live entries per call"
-                        );
-                    }
                     let is_data = entry.data_file.content == DataContentType::Data;
                     if is_data != (content == ManifestContentType::Data) {
                         return exec_err!("Manifest contains a file with incompatible content");
@@ -215,11 +227,19 @@ impl RewriteManifests {
                             "rewrite_manifests requires assigned data-file row lineage"
                         );
                     }
-                    group.1.push(entry);
+                    group.entries.push(entry);
                 }
             }
-            for (_, (manifest_metadata, entries)) in groups {
-                let mut keyed = entries
+            for (_, group) in groups {
+                if group.sources.len() == 1
+                    && group.sources[0].manifest_length as u64 <= target_size
+                {
+                    continue;
+                }
+                replaced.extend(group.sources.into_iter().map(|source| source.manifest_path));
+                live_entries += group.entries.len();
+                let mut keyed = group
+                    .entries
                     .into_iter()
                     .map(|entry| {
                         let key = partition_key(&entry)?;
@@ -232,7 +252,7 @@ impl RewriteManifests {
                     .map(|(_, entry)| entry)
                     .collect::<Vec<_>>();
                 for (mut descriptor, bytes) in encode_manifests(
-                    &manifest_metadata,
+                    &group.metadata,
                     &entries,
                     target_size,
                     sequence_number,
@@ -249,12 +269,35 @@ impl RewriteManifests {
                 }
             }
         }
+        if replaced.is_empty() {
+            return Ok(prepared);
+        }
+        // V1 lists may omit counts even after a table upgrade. A new V2+ list requires
+        // actual counts for retained manifests, including those outside the selected spec.
+        if metadata.format_version != FormatVersion::V1 {
+            for descriptor in manifests.iter_mut().filter(|descriptor| {
+                !replaced.contains(&descriptor.manifest_path) && missing_counts(descriptor)
+            }) {
+                let length = u64::try_from(descriptor.manifest_length)
+                    .map_err(|_| DataFusionError::Execution("Negative manifest length".into()))?;
+                selected_bytes = selected_bytes
+                    .checked_add(length)
+                    .ok_or_else(|| DataFusionError::Execution("Manifest size overflow".into()))?;
+                if selected_bytes > MAX_INPUT_BYTES {
+                    return not_impl_err!(
+                        "rewrite_manifests supports at most {MAX_INPUT_BYTES} bytes of input manifests per call"
+                    );
+                }
+                let (_, entries) = read_entries(store, descriptor, &mut remaining_entries).await?;
+                populate_counts(descriptor, &entries)?;
+            }
+        }
         let added_count = added.len();
         let mut list = ManifestListWriter::new();
         for manifest in added.into_iter().chain(
             manifests
                 .into_iter()
-                .filter(|m| !selected.contains(&m.manifest_path)),
+                .filter(|m| !replaced.contains(&m.manifest_path)),
         ) {
             list.append(manifest);
         }
@@ -275,7 +318,7 @@ impl RewriteManifests {
             }
         }
         summary = summary
-            .with_property("manifests-replaced", selected.len().to_string())
+            .with_property("manifests-replaced", replaced.len().to_string())
             .with_property("manifests-created", added_count.to_string())
             .with_property("entries-processed", live_entries.to_string());
         let mut snapshot = SnapshotBuilder::new()
@@ -322,9 +365,44 @@ impl RewriteManifests {
             },
         ];
         prepared.manifests.push((list_path, list_bytes));
-        prepared.output = output(output_schema, selected.len(), added_count)?;
+        prepared.output = output(output_schema, replaced.len(), added_count)?;
         Ok(prepared)
     }
+}
+
+fn missing_counts(descriptor: &ManifestFile) -> bool {
+    descriptor.added_files_count.is_none()
+        || descriptor.existing_files_count.is_none()
+        || descriptor.deleted_files_count.is_none()
+        || descriptor.added_rows_count.is_none()
+        || descriptor.existing_rows_count.is_none()
+        || descriptor.deleted_rows_count.is_none()
+}
+
+fn populate_counts(descriptor: &mut ManifestFile, entries: &[ManifestEntry]) -> Result<()> {
+    let mut counts = [(0i32, 0i64); 3];
+    for entry in entries {
+        let index = match entry.status {
+            ManifestStatus::Added => 0,
+            ManifestStatus::Existing => 1,
+            ManifestStatus::Deleted => 2,
+        };
+        let (files, rows) = &mut counts[index];
+        *files = files
+            .checked_add(1)
+            .ok_or_else(|| DataFusionError::Execution("Manifest file count overflow".into()))?;
+        *rows = i64::try_from(entry.data_file.record_count)
+            .ok()
+            .and_then(|count| rows.checked_add(count))
+            .ok_or_else(|| DataFusionError::Execution("Manifest row count overflow".into()))?;
+    }
+    descriptor.added_files_count.get_or_insert(counts[0].0);
+    descriptor.existing_files_count.get_or_insert(counts[1].0);
+    descriptor.deleted_files_count.get_or_insert(counts[2].0);
+    descriptor.added_rows_count.get_or_insert(counts[0].1);
+    descriptor.existing_rows_count.get_or_insert(counts[1].1);
+    descriptor.deleted_rows_count.get_or_insert(counts[2].1);
+    Ok(())
 }
 
 fn output(schema: SchemaRef, rewritten: usize, added: usize) -> Result<RecordBatch> {
@@ -401,7 +479,9 @@ struct RawEntry {
 
 #[derive(Deserialize)]
 struct RawBounds {
+    #[serde(default, deserialize_with = "deserialize_optional_vec")]
     lower_bounds: Option<Vec<RawBound>>,
+    #[serde(default, deserialize_with = "deserialize_optional_vec")]
     upper_bounds: Option<Vec<RawBound>>,
 }
 
@@ -440,14 +520,20 @@ fn restore_bounds(raw: Option<Vec<RawBound>>, decoded: &mut HashMap<i32, Datum>)
 async fn read_entries(
     store: &StoreContext,
     descriptor: &ManifestFile,
+    remaining_entries: &mut usize,
 ) -> Result<(ManifestMetadata, Vec<ManifestEntry>)> {
+    if descriptor.key_metadata.is_some() {
+        return not_impl_err!("rewrite_manifests does not support encrypted manifests");
+    }
     let (object_store, path) = store.resolve(&descriptor.manifest_path)?;
     let bytes = object_store.get(&path).await?.bytes().await?;
-    let (manifest_metadata, raw_entries) = Manifest::decode_avro_entries(&bytes, |_, value| {
-        apache_avro::from_value::<RawEntry>(value)
-            .map_err(|error| format!("Avro decode manifest bounds error: {error}"))
-    })
-    .map_err(DataFusionError::Execution)?;
+    let (manifest_metadata, raw_entries) =
+        Manifest::decode_avro_entries_with_limit(&bytes, *remaining_entries, |_, value| {
+            apache_avro::from_value::<RawEntry>(value)
+                .map_err(|error| format!("Avro decode manifest bounds error: {error}"))
+        })
+        .map_err(DataFusionError::Execution)?;
+    *remaining_entries -= raw_entries.len();
     // Use the common inheritance implementation before changing status to EXISTING.
     let mut entries = manifest_entries(store, descriptor).await?;
     if raw_entries.len() != entries.len() {
@@ -490,6 +576,318 @@ mod tests {
             Some(index),
             file,
         )
+    }
+
+    async fn rewrite_fixture(
+        version: FormatVersion,
+        inputs: Vec<(i32, Vec<ManifestEntry>)>,
+        unknown_counts: bool,
+    ) -> (StoreContext, url::Url, TableMetadata, Vec<ManifestFile>) {
+        use object_store::memory::InMemory;
+        use object_store::path::Path;
+
+        let url = url::Url::parse("memory://bucket/table/").expect("URL");
+        let store = StoreContext::new(Arc::new(InMemory::new()), &url).expect("store");
+        let schema = Schema::builder().build().expect("schema");
+        let mut specs = vec![PartitionSpec::unpartitioned_spec()];
+        let mut descriptors = vec![];
+        let mut list = ManifestListWriter::new();
+        for (index, (spec_id, entries)) in inputs.into_iter().enumerate() {
+            let spec: PartitionSpec = serde_json::from_value(serde_json::json!({
+                "spec-id": spec_id, "fields": []
+            }))
+            .expect("spec");
+            if !specs.contains(&spec) {
+                specs.push(spec.clone());
+            }
+            let mut writer = ManifestWriter::new(
+                Some(10),
+                None,
+                ManifestMetadata::new(
+                    Arc::new(schema.clone()),
+                    0,
+                    spec,
+                    version,
+                    ManifestContentType::Data,
+                ),
+            );
+            for mut entry in entries {
+                entry.data_file.partition_spec_id = spec_id;
+                writer.add_entry(entry);
+            }
+            let bytes = writer.to_avro_bytes_v2().expect("manifest");
+            let path = format!("metadata/input-{index}.avro");
+            let mut descriptor = writer
+                .into_manifest_file(path.clone(), 0, 10)
+                .expect("descriptor");
+            descriptor.manifest_length = bytes.len() as i64;
+            if version == FormatVersion::V1 {
+                descriptor.min_sequence_number = 0;
+            }
+            if unknown_counts {
+                descriptor.added_files_count = None;
+                descriptor.existing_files_count = None;
+                descriptor.deleted_files_count = None;
+                descriptor.added_rows_count = None;
+                descriptor.existing_rows_count = None;
+                descriptor.deleted_rows_count = None;
+            }
+            store
+                .prefixed
+                .put(&Path::from(path), bytes.into())
+                .await
+                .expect("write");
+            list.append(descriptor.clone());
+            descriptors.push(descriptor);
+        }
+        let list_bytes = list
+            .to_bytes_with_context(ManifestListWriteContext {
+                version,
+                snapshot_id: 10,
+                parent_snapshot_id: None,
+                sequence_number: 0,
+                first_row_id: None,
+            })
+            .expect("list");
+        store
+            .prefixed
+            .put(&Path::from("metadata/list.avro"), list_bytes.into())
+            .await
+            .expect("write list");
+        let metadata = serde_json::from_value(serde_json::json!({
+            "format-version": version,
+            "location": url.as_str(),
+            "last-updated-ms": 0,
+            "last-column-id": 0,
+            "schemas": [schema],
+            "current-schema-id": 0,
+            "partition-specs": specs,
+            "current-snapshot-id": 10,
+            "snapshots": [{
+                "snapshot-id": 10, "sequence-number": 0, "timestamp-ms": 0,
+                "manifest-list": "metadata/list.avro", "summary": {"operation": "append"}
+            }]
+        }))
+        .expect("table metadata");
+        (store, url, metadata, descriptors)
+    }
+
+    fn output_schema() -> SchemaRef {
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        Arc::new(Schema::new(vec![
+            Field::new("rewritten_manifests_count", DataType::Int32, false),
+            Field::new("added_manifests_count", DataType::Int32, false),
+        ]))
+    }
+
+    #[tokio::test]
+    async fn optional_v1_counts_survive_rewrite_and_upgrade() {
+        use futures::TryStreamExt;
+
+        use crate::spec::ManifestList;
+
+        let retained_entries = [
+            ManifestStatus::Added,
+            ManifestStatus::Existing,
+            ManifestStatus::Deleted,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, status)| {
+            let mut entry = entry(index as i64 + 3, FormatVersion::V1);
+            entry.status = status;
+            entry
+        })
+        .collect::<Vec<_>>();
+        for upgraded in [false, true] {
+            let (store, url, mut metadata, descriptors) = rewrite_fixture(
+                FormatVersion::V1,
+                vec![
+                    (0, vec![entry(1, FormatVersion::V1)]),
+                    (0, vec![entry(2, FormatVersion::V1)]),
+                    (1, retained_entries.clone()),
+                ],
+                true,
+            )
+            .await;
+            if upgraded {
+                metadata.format_version = FormatVersion::V2;
+                let before = store
+                    .prefixed
+                    .list(None)
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .expect("objects");
+                let error = RewriteManifests { spec_id: None }
+                    .prepare_with_entry_limit(&store, &url, &metadata, output_schema(), 4)
+                    .await
+                    .err()
+                    .expect("retained entries share budget");
+                assert!(error.to_string().contains("Manifest entry limit exceeded"));
+                assert_eq!(
+                    store
+                        .prefixed
+                        .list(None)
+                        .try_collect::<Vec<_>>()
+                        .await
+                        .expect("objects"),
+                    before
+                );
+            }
+            let prepared = RewriteManifests { spec_id: None }
+                .prepare_with_entry_limit(&store, &url, &metadata, output_schema(), 5)
+                .await
+                .expect("prepare");
+            assert_eq!(
+                prepared
+                    .output
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .expect("count")
+                    .value(0),
+                2
+            );
+            assert_eq!(
+                prepared
+                    .output
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .expect("count")
+                    .value(0),
+                1
+            );
+            let (_, list) = prepared.manifests.last().expect("list");
+            let list =
+                ManifestList::parse_with_version(list, metadata.format_version).expect("list");
+            assert_eq!(list.entries().len(), 2);
+            let retained = list
+                .entries()
+                .iter()
+                .find(|m| m.manifest_path == descriptors[2].manifest_path)
+                .expect("retained");
+            if upgraded {
+                assert_eq!(retained.added_files_count, Some(1));
+                assert_eq!(retained.added_rows_count, Some(2));
+                assert_eq!(retained.existing_files_count, Some(1));
+                assert_eq!(retained.deleted_rows_count, Some(2));
+                let mut expected = descriptors[2].clone();
+                expected.added_files_count = Some(1);
+                expected.existing_files_count = Some(1);
+                expected.deleted_files_count = Some(1);
+                expected.added_rows_count = Some(2);
+                expected.existing_rows_count = Some(2);
+                expected.deleted_rows_count = Some(2);
+                assert_eq!(retained, &expected);
+            } else {
+                assert_eq!(retained, &descriptors[2]);
+            }
+        }
+        let (store, url, metadata, _) = rewrite_fixture(
+            FormatVersion::V1,
+            vec![(0, vec![entry(1, FormatVersion::V1)])],
+            true,
+        )
+        .await;
+        let prepared = RewriteManifests { spec_id: None }
+            .prepare(&store, &url, &metadata, output_schema())
+            .await
+            .expect("no-op");
+        assert!(prepared.updates.is_empty());
+        assert!(prepared.requirements.is_empty());
+        assert!(prepared.manifests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn entry_budget_counts_deleted_records_across_manifests_before_staging() {
+        use futures::TryStreamExt;
+
+        for statuses in [
+            [
+                ManifestStatus::Added,
+                ManifestStatus::Existing,
+                ManifestStatus::Added,
+            ],
+            [ManifestStatus::Deleted; 3],
+            [
+                ManifestStatus::Deleted,
+                ManifestStatus::Added,
+                ManifestStatus::Existing,
+            ],
+        ] {
+            let entries = statuses
+                .into_iter()
+                .enumerate()
+                .map(|(index, status)| {
+                    let mut entry = entry(index as i64, FormatVersion::V2);
+                    entry.status = status;
+                    entry
+                })
+                .collect::<Vec<_>>();
+            // Both a single oversized manifest and a cumulative cross-manifest limit.
+            for inputs in [
+                vec![(0, entries.clone())],
+                vec![(0, entries[..2].to_vec()), (0, entries[2..].to_vec())],
+            ] {
+                let (store, url, mut metadata, _) =
+                    rewrite_fixture(FormatVersion::V2, inputs, false).await;
+                metadata
+                    .properties
+                    .insert(TARGET_SIZE_PROPERTY.into(), "1".into());
+                let before = store
+                    .prefixed
+                    .list(None)
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .expect("objects");
+                let metadata_before = serde_json::to_value(&metadata).expect("metadata");
+                for limit in [0, 2, 3] {
+                    let result = RewriteManifests { spec_id: None }
+                        .prepare_with_entry_limit(&store, &url, &metadata, output_schema(), limit)
+                        .await;
+                    if limit < 3 {
+                        let error = result.err().expect("entry limit");
+                        assert!(
+                            error.to_string().contains("Manifest entry limit exceeded"),
+                            "{error}"
+                        );
+                    } else {
+                        let prepared = result.expect("exact budget");
+                        assert!(!prepared.updates.is_empty());
+                        let snapshot = prepared
+                            .updates
+                            .iter()
+                            .find_map(|update| match update {
+                                TableUpdate::AddSnapshot { snapshot } => Some(snapshot),
+                                _ => None,
+                            })
+                            .expect("snapshot");
+                        let live = statuses
+                            .iter()
+                            .filter(|status| **status != ManifestStatus::Deleted)
+                            .count();
+                        assert_eq!(
+                            snapshot.summary().additional_properties["entries-processed"],
+                            live.to_string()
+                        );
+                    }
+                    assert_eq!(
+                        store
+                            .prefixed
+                            .list(None)
+                            .try_collect::<Vec<_>>()
+                            .await
+                            .expect("objects"),
+                        before
+                    );
+                    assert_eq!(
+                        serde_json::to_value(&metadata).expect("metadata"),
+                        metadata_before
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -592,6 +990,7 @@ mod tests {
             );
             let mut original = vec![];
             let mut live = vec![];
+            let mut remaining_entries = MAX_ENTRIES;
             for index in 1..=2 {
                 let mut entry = entry(index, FormatVersion::V2);
                 entry.data_file.partition = vec![Some(Literal::Primitive(value.clone())); 2];
@@ -628,7 +1027,7 @@ mod tests {
                     .await
                     .expect("write input");
                 live.extend(
-                    read_entries(&store, &descriptor)
+                    read_entries(&store, &descriptor, &mut remaining_entries)
                         .await
                         .expect("read input")
                         .1,
@@ -649,7 +1048,7 @@ mod tests {
                 entry.status = ManifestStatus::Existing;
             }
             assert_eq!(
-                read_entries(&store, &descriptor)
+                read_entries(&store, &descriptor, &mut remaining_entries)
                     .await
                     .expect("read rewritten")
                     .1,
@@ -657,6 +1056,73 @@ mod tests {
             );
             assert_eq!(descriptor.existing_files_count, Some(2));
             assert_eq!(descriptor.min_sequence_number, 1);
+        }
+    }
+
+    #[test]
+    fn raw_bounds_accept_optional_avro_encodings() {
+        use apache_avro::types::Value;
+
+        let bound = Value::Record(vec![
+            ("key".into(), Value::Int(999)),
+            ("value".into(), Value::Bytes(vec![0xff, 0, 0x80])),
+        ]);
+        let array = Value::Array(vec![bound.clone()]);
+        for value in [
+            Some(array.clone()),
+            Some(Value::Union(1, Box::new(array))),
+            Some(Value::Null),
+            Some(Value::Union(0, Box::new(Value::Null))),
+            None,
+        ] {
+            let fields = value
+                .clone()
+                .map(|value| {
+                    vec![
+                        ("lower_bounds".into(), value.clone()),
+                        ("upper_bounds".into(), value),
+                    ]
+                })
+                .unwrap_or_default();
+            let raw: RawBounds = apache_avro::from_value(&Value::Record(fields)).expect("bounds");
+            for bounds in [raw.lower_bounds, raw.upper_bounds] {
+                let mut decoded = HashMap::new();
+                restore_bounds(bounds, &mut decoded).expect("restore");
+                if matches!(value, Some(Value::Array(_) | Value::Union(1, _))) {
+                    assert_eq!(
+                        decoded[&999].to_bytes().expect("bytes"),
+                        vec![0xff, 0, 0x80]
+                    );
+                } else {
+                    assert!(decoded.is_empty());
+                }
+            }
+        }
+        for field in ["lower_bounds", "upper_bounds"] {
+            for value in [
+                Value::String("invalid".into()),
+                Value::Array(vec![Value::Record(vec![("key".into(), Value::Int(1))])]),
+                Value::Array(vec![Value::Record(vec![
+                    ("key".into(), Value::String("1".into())),
+                    ("value".into(), Value::Bytes(vec![1])),
+                ])]),
+            ] {
+                assert!(
+                    apache_avro::from_value::<RawBounds>(&Value::Record(vec![(
+                        field.into(),
+                        value
+                    ),]))
+                    .is_err()
+                );
+            }
+            let raw: RawBounds = apache_avro::from_value(&Value::Record(vec![(
+                field.into(),
+                Value::Array(vec![bound.clone(), bound.clone()]),
+            )]))
+            .expect("duplicate bounds decode");
+            assert!(
+                restore_bounds(raw.lower_bounds.or(raw.upper_bounds), &mut HashMap::new()).is_err()
+            );
         }
     }
 
