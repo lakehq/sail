@@ -16,7 +16,6 @@ use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::{SortOptions, cast, cast_with_options, filter, take as take_array};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use arrow::row::{OwnedRow, Row, RowConverter, Rows, SortField};
-use arrow_select::dictionary::garbage_collect_any_dictionary;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
@@ -39,6 +38,7 @@ use datafusion_functions_aggregate_common::utils::ordering_fields;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use hashbrown::hash_table::HashTable;
 use itertools::{Either, Itertools};
+use sail_common_datafusion::array::compact::compact_array;
 
 use crate::functions_utils::offset_span;
 
@@ -1966,7 +1966,7 @@ impl OrderSensitiveArrayAggAccumulator {
         let values = if skip_detach {
             values
         } else {
-            compact_payload(make_array(copy_array_data(&values.to_data())))?
+            compact_array(make_array(copy_array_data(&values.to_data())))?
         };
 
         // Recheck the cap after compaction, which can shrink view and dictionary buffers.
@@ -1980,7 +1980,7 @@ impl OrderSensitiveArrayAggAccumulator {
                 // View concat shares input data buffers. Compact them so the
                 // tail does not retain one buffer per small input batch.
                 let merged = if compact_view_after_concat {
-                    compact_payload(merged)?
+                    compact_array(merged)?
                 } else {
                     merged
                 };
@@ -2010,39 +2010,6 @@ impl OrderSensitiveArrayAggAccumulator {
 
         debug_assert_eq!(self.entries.len(), self.ordering_rows.num_rows());
         Ok(Some(start..self.entries.len()))
-    }
-}
-
-/// Compact buffers that `copy_array_data` leaves shared with the input.
-/// Dictionary GC removes unused values without decoding the dictionary, while
-/// view GC copies only referenced bytes. Recurse into children so nested payloads
-/// cannot retain the source buffers either.
-fn compact_payload(array: ArrayRef) -> Result<ArrayRef> {
-    match array.data_type() {
-        DataType::Utf8View => Ok(Arc::new(array.as_string_view().gc())),
-        DataType::BinaryView => Ok(Arc::new(array.as_binary_view().gc())),
-        DataType::Dictionary(_, _) => {
-            let array = garbage_collect_any_dictionary(array.as_any_dictionary())?;
-            let dictionary = array.as_any_dictionary();
-            // GC can return the original values if every entry is referenced.
-            // Detach offset slices as well as any nested view/dictionary buffers.
-            let values = make_array(copy_array_data(&dictionary.values().to_data()));
-            Ok(dictionary.with_values(compact_payload(values)?))
-        }
-        data_type if data_type.is_nested() => {
-            let data = array.to_data();
-            let children = data
-                .child_data()
-                .iter()
-                .map(|child| {
-                    compact_payload(make_array(child.clone())).map(|array| array.to_data())
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(make_array(
-                data.into_builder().child_data(children).build()?,
-            ))
-        }
-        _ => Ok(array),
     }
 }
 

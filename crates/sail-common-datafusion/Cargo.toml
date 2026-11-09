@@ -11,6 +11,7 @@ workspace = true
 sail-common = { path = "../sail-common" }
 
 arrow = { workspace = true }
+arrow-select = { workspace = true }
 chrono = { workspace = true }
 datafusion = { workspace = true }
 datafusion-datasource = { workspace = true }

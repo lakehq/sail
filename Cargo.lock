@@ -7224,6 +7224,7 @@ version = "0.7.3"
 dependencies = [
  "arrow",
  "arrow-schema",
+ "arrow-select",
  "async-trait",
  "chrono",
  "datafusion",
@@ -7451,7 +7452,6 @@ dependencies = [
  "arrow",
  "arrow-buffer",
  "arrow-schema",
- "arrow-select",
  "async-trait",
  "base64 0.23.1",
  "bytes",

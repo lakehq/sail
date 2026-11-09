@@ -14,7 +14,6 @@ sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
-arrow-select = { workspace = true }
 async-trait = { workspace = true }
 arrow-buffer = { workspace = true }
 bytes = { workspace = true }
