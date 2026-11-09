@@ -56,6 +56,7 @@ pub struct RowLevelWriteInfo {
     /// Pre-expanded physical plan carrying row intent for MERGE and UPDATE.
     pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
     pub change_data_plan: Option<Arc<dyn ExecutionPlan>>,
+    pub change_data_preimage: Option<String>,
     /// Physical plan that yields touched file paths for row-level rewrites or DV updates.
     pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
     /// Physical plan that yields target file path and file-local row index rows to delete via DVs.
@@ -109,7 +110,11 @@ pub(crate) async fn build_row_level_rewrite_plan(
         DataFusionError::Plan("pre-expanded row-level plan missing expanded input".to_string())
     })?;
 
+    options.merge_change_data_preimage = row_level_info.change_data_preimage.clone();
     let operation = row_level_info.operation.clone();
+    if options.merge_change_data_preimage.is_some() {
+        super::change_data::validate_change_data_input(&expanded)?;
+    }
 
     let touched_plan_opt = row_level_info.touched_file_plan.clone();
 
@@ -119,7 +124,17 @@ pub(crate) async fn build_row_level_rewrite_plan(
     //
     // Untouched files remain as-is (not removed, not rewritten).
     let writer_input: Arc<dyn ExecutionPlan> = if let Some(touched_plan) = &touched_plan_opt {
-        build_targeted_writer_input(row_level_info.command, &expanded, touched_plan)?
+        build_targeted_writer_input(
+            row_level_info.command,
+            &expanded,
+            touched_plan,
+            !ctx.config().identity_columns_to_track.is_empty()
+                || options.merge_change_data_preimage.is_some(),
+        )?
+    } else if options.merge_change_data_preimage.is_some() {
+        // Without file removals, untouched target rows must not be rewritten.
+        // NULL paths retain inserts and source-metric rows from the same evaluation.
+        build_insert_rows_input(&expanded)?
     } else {
         Arc::clone(&expanded)
     };
@@ -147,7 +162,7 @@ pub(crate) async fn build_row_level_rewrite_plan(
         None
     };
 
-    let write_context = prepare_delta_write_context(
+    let mut write_context = prepare_delta_write_context(
         ctx.table_url(),
         Some(snapshot_state.as_ref()),
         &options,
@@ -158,6 +173,8 @@ pub(crate) async fn build_row_level_rewrite_plan(
         &writer_input.schema(),
         operation.clone(),
     )?;
+    write_context.commit_context.identity_columns_to_track =
+        ctx.config().identity_columns_to_track.clone();
 
     let change_data_writer = row_level_info
         .change_data_plan
@@ -207,7 +224,9 @@ pub async fn build_merge_plan_mor(
     let expanded = merge_info.expanded_input.clone().ok_or_else(|| {
         DataFusionError::Plan("pre-expanded MERGE plan missing expanded input".to_string())
     })?;
-    let writer_input = if has_update_actions {
+    let writer_input = if merge_info.change_data_preimage.is_some() {
+        expanded
+    } else if has_update_actions {
         build_merge_mor_changed_rows_input(&expanded)?
     } else if merge_info.deletion_vector_plan.is_some() {
         build_insert_rows_input(&expanded)?
@@ -244,6 +263,11 @@ pub(crate) async fn assemble_row_level_mor_plan(
         options.merge_schema = true;
     }
 
+    options.merge_change_data_preimage = row_level_info.change_data_preimage.clone();
+    options.merge_on_read = true;
+    if options.merge_change_data_preimage.is_some() {
+        super::change_data::validate_change_data_input(&writer_input)?;
+    }
     let operation = row_level_info.operation.clone();
     let deletion_vector_plan = row_level_info.deletion_vector_plan.clone();
     let deletion_vector_operation_mode = row_level_info.deletion_vector_operation_mode;
@@ -251,7 +275,7 @@ pub(crate) async fn assemble_row_level_mor_plan(
     let writer_input = strip_internal_columns(writer_input)?;
     let writer_input = prepare_delta_writer_input(writer_input, &partition_columns, None)?;
     let writer_schema = writer_input.schema();
-    let write_context = prepare_delta_write_context(
+    let mut write_context = prepare_delta_write_context(
         ctx.table_url(),
         Some(snapshot_state.as_ref()),
         &options,
@@ -262,6 +286,8 @@ pub(crate) async fn assemble_row_level_mor_plan(
         &writer_schema,
         operation.clone(),
     )?;
+    write_context.commit_context.identity_columns_to_track =
+        ctx.config().identity_columns_to_track.clone();
 
     let change_data_writer = row_level_info
         .change_data_plan
@@ -417,10 +443,14 @@ fn build_targeted_writer_input(
     command: RowLevelCommand,
     expanded: &Arc<dyn ExecutionPlan>,
     touched_plan: &Arc<dyn ExecutionPlan>,
+    single_evaluation: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    // Physical plans can hold runtime state after execution. The operation branches this subtree,
-    // so each consumer needs its own reset copy rather than sharing a multi-parent DAG.
-    let projected_for_touched = reset_plan_states(Arc::clone(expanded))?;
+    // Keep the postimage stream single-consumer: it may contain stateful identity allocation.
+    let projected_for_touched = if single_evaluation {
+        Arc::clone(expanded)
+    } else {
+        reset_plan_states(Arc::clone(expanded))?
+    };
     let touched_plan_for_writer = reset_plan_states(Arc::clone(touched_plan))?;
     let projected_schema = expanded.schema();
     if projected_schema.column_with_name(PATH_COLUMN).is_none() {
@@ -456,12 +486,32 @@ fn build_targeted_writer_input(
             Arc::new(Column::new(PATH_COLUMN, path_idx)),
         )],
         None,
-        &JoinType::Inner,
+        &if command == RowLevelCommand::Merge && single_evaluation {
+            JoinType::Right
+        } else {
+            JoinType::Inner
+        },
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNothing,
         false,
     )?);
+    let join: Arc<dyn ExecutionPlan> = if command == RowLevelCommand::Merge && single_evaluation {
+        let touched: Arc<dyn PhysicalExpr> =
+            Arc::new(datafusion_physical_expr::expressions::IsNotNullExpr::new(
+                Arc::new(Column::new(PATH_COLUMN, touched_idx)),
+            ));
+        let inserted: Arc<dyn PhysicalExpr> = Arc::new(IsNullExpr::new(Arc::new(Column::new(
+            PATH_COLUMN,
+            touched_schema.fields().len() + path_idx,
+        ))));
+        Arc::new(FilterExec::try_new(
+            Arc::new(BinaryExpr::new(touched, Operator::Or, inserted)),
+            join,
+        )?)
+    } else {
+        join
+    };
 
     // Keep only the right side columns (original writer input schema) after join.
     let left_cols = touched_schema.fields().len();
@@ -480,11 +530,10 @@ fn build_targeted_writer_input(
     let touched_rows: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(proj_exprs, join)?);
 
     match command {
-        RowLevelCommand::Update => Ok(touched_rows),
-        RowLevelCommand::Merge => {
-            let insert_rows = build_insert_rows_input(expanded)?;
-            UnionExec::try_new(vec![insert_rows, touched_rows])
+        RowLevelCommand::Merge if !single_evaluation => {
+            UnionExec::try_new(vec![build_insert_rows_input(expanded)?, touched_rows])
         }
+        RowLevelCommand::Update | RowLevelCommand::Merge => Ok(touched_rows),
         RowLevelCommand::Truncate | RowLevelCommand::Delete => {
             internal_err!(
                 "DELETE/TRUNCATE does not use the targeted row-level writer input assembly path"

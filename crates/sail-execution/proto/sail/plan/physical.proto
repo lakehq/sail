@@ -79,8 +79,22 @@ message ExtendedPhysicalPlanNode {
     InputFileMetadataExecNode input_file_metadata = 64;
     DeltaMaintenanceExecNode delta_maintenance = 65;
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
-    IdentityPartitionKeyExecNode identity_partition_key = 67;
+    IdentityGenerateExecNode identity_generate = 68;
   }
+}
+
+message IdentityGenerateExecNode {
+  bytes input = 1;
+  repeated IdentityGenerateColumn columns = 2;
+  uint64 allocation_partitions = 3;
+}
+
+message IdentityGenerateColumn {
+  string output = 1;
+  optional uint64 mask_index = 2;
+  sint64 start = 3;
+  sint64 step = 4;
+  optional sint64 high_water_mark = 5;
 }
 
 message InputFileMetadataExecNode {
@@ -850,6 +864,8 @@ message DeltaSnapshotContext {
 
 message DeltaCommitContext {
   optional DeltaSnapshotContext base_snapshot = 1;
+  repeated string identity_columns_to_track = 2;
+  optional uint64 identity_writer_partitions = 3;
 }
 
 message DeltaWriteContext {
@@ -995,17 +1011,6 @@ message MergeCardinalityCheckExecNode {
   string target_row_id_col = 2;
   string target_present_col = 3;
   string source_present_col = 4;
-}
-
-message IdentityPartitionKeyExecNode {
-  bytes input = 1;
-  repeated IdentityPartitionKeyColumn keys = 2;
-  int32 false_shards = 3;
-}
-
-message IdentityPartitionKeyColumn {
-  uint64 mask_index = 1;
-  string column_name = 2;
 }
 
 message MonotonicIdExecNode {

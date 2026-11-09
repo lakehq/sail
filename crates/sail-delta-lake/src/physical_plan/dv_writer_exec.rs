@@ -871,6 +871,7 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
             encode_actions(
                 output_actions,
                 Some(ExecCommitMeta {
+                    identity_high_water_marks: None,
                     row_count,
                     operation,
                     operation_metrics,

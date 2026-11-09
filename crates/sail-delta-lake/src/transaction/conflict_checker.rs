@@ -588,6 +588,6 @@ pub(super) fn can_downgrade_to_snapshot_isolation<'a>(
     match isolation_level {
         IsolationLevel::Serializable => !data_changed,
         IsolationLevel::WriteSerializable => !data_changed && !operation.changes_data(),
-        IsolationLevel::SnapshotIsolation => false, // this case should never happen, since spanpshot isolation cannot be configured on table
+        IsolationLevel::SnapshotIsolation => false, // already at snapshot isolation; no downgrade needed
     }
 }

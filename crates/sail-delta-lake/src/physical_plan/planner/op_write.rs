@@ -182,11 +182,36 @@ async fn build_overwrite_if_plan(
         physical_condition.clone(),
         &snapshot_state,
         table_schema.clone(),
+        false,
     )
     .await?;
 
+    let single_stream_cdf = crate::change_data_feed::enabled(snapshot_state.metadata())
+        && !ctx.config().identity_columns_to_track.is_empty();
     let (aligned_new, aligned_old) = align_schemas_for_union(Arc::clone(&input), old_data_plan)?;
-    let union_plan = UnionExec::try_new(vec![aligned_new, aligned_old])?;
+    let union_plan = if single_stream_cdf {
+        use super::change_data::{tag_row_operation, validate_change_data_input};
+        use sail_common_datafusion::datasource::RowLevelOperationType;
+        validate_change_data_input(&aligned_new)?;
+        let deleted = build_old_data_plan(
+            ctx,
+            condition_expr.clone(),
+            ctx.session()
+                .create_physical_expr(condition_expr.clone().is_true(), &table_df_schema)?,
+            &snapshot_state,
+            table_schema.clone(),
+            true,
+        )
+        .await?;
+        let (_, deleted) = align_schemas_for_union(aligned_new.clone(), deleted)?;
+        UnionExec::try_new(vec![
+            tag_row_operation(aligned_new, RowLevelOperationType::Insert)?,
+            tag_row_operation(aligned_old, RowLevelOperationType::Copy)?,
+            tag_row_operation(deleted, RowLevelOperationType::MatchedDelete)?,
+        ])?
+    } else {
+        UnionExec::try_new(vec![aligned_new, aligned_old])?
+    };
     let union_plan = prepare_delta_writer_input(union_plan, ctx.partition_columns(), sort_order)?;
 
     let input_schema = input.schema();
@@ -199,10 +224,11 @@ async fn build_overwrite_if_plan(
         },
         predicate: predicate_source.clone(),
     });
-    let writer_options = DeltaWriterExecOptions::from(ctx.options().clone())
+    let mut writer_options = DeltaWriterExecOptions::from(ctx.options().clone())
         .with_generation_expressions(ctx.generation_expressions().clone())
         .with_identity_columns(ctx.identity_columns().clone());
-    let write_context = crate::physical_plan::prepare_delta_write_context(
+    writer_options.change_data_row_tags = single_stream_cdf;
+    let mut write_context = crate::physical_plan::prepare_delta_write_context(
         ctx.table_url(),
         Some(snapshot_state.as_ref()),
         &writer_options,
@@ -216,7 +242,11 @@ async fn build_overwrite_if_plan(
         &union_plan.schema(),
         operation_override,
     )?;
-    let change_data_writer = if crate::change_data_feed::enabled(snapshot_state.metadata()) {
+    write_context.commit_context.identity_columns_to_track =
+        ctx.config().identity_columns_to_track.clone();
+    let change_data_writer = if crate::change_data_feed::enabled(snapshot_state.metadata())
+        && !single_stream_cdf
+    {
         let deleted = build_old_data_plan(
             ctx,
             condition_expr.clone(),
@@ -224,6 +254,7 @@ async fn build_overwrite_if_plan(
                 .create_physical_expr(condition_expr.clone().is_true(), &table_df_schema)?,
             &snapshot_state,
             table_schema.clone(),
+            true,
         )
         .await?;
         let deleted = super::change_data::tag_change_rows(deleted, &table_schema, "delete")?;
@@ -315,6 +346,7 @@ async fn build_old_data_plan(
     condition: Arc<dyn PhysicalExpr>,
     snapshot_state: &DeltaSnapshot,
     table_schema: SchemaRef,
+    materialize_partition_rows: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let version = snapshot_state.version();
     let partition_only = !predicate_requires_stats(&condition_expr, ctx.partition_columns());
@@ -337,7 +369,8 @@ async fn build_old_data_plan(
         ctx.table_url().clone(),
         version,
         ctx.partition_columns().to_vec(),
-        partition_only,
+        // CDC deletes need actual preimages even when whole partitions match.
+        partition_only && !materialize_partition_rows,
     )?);
 
     // Spread Add actions across partitions so `DeltaScanByAddsExec` can scan files in parallel.

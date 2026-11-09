@@ -29,8 +29,6 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
-use crate::identity::{identity_next_value, identity_row_number, identity_value_expr};
-use crate::identity_partition_key::IdentityPartitionKeyNode;
 use crate::monotonic_id::MonotonicIdNode;
 use crate::row_level::{
     RowLevelEffectRequirements, StructFieldAlignment, align_row_level_value, evolve_row_level_field,
@@ -150,6 +148,7 @@ pub struct MergeExpansion {
     pub touched_files_plan: Option<LogicalPlan>,
     pub row_index_delete_plan: Option<LogicalPlan>,
     pub change_data_plan: Option<LogicalPlan>,
+    pub change_data_preimage: Option<String>,
     pub output_schema: DFSchemaRef,
     pub options: MergeIntoOptions,
 }
@@ -607,7 +606,10 @@ pub fn expand_merge(
     );
 
     // Detect insert-only MERGE that can use fast append (no touched files).
-    let can_fast_append = can_fast_append_insert_only(&options, target_schema, path_column)?;
+    let single_stream_cdf =
+        requirements.effects.change_data && !options.identity_columns.is_empty();
+    let can_fast_append =
+        !single_stream_cdf && can_fast_append_insert_only(&options, target_schema, path_column)?;
 
     if can_fast_append {
         let join_on = options
@@ -704,6 +706,7 @@ pub fn expand_merge(
             touched_files_plan: None,
             row_index_delete_plan: None,
             change_data_plan,
+            change_data_preimage: None,
             output_schema: command_schema,
             options,
         });
@@ -739,11 +742,13 @@ fn build_default_merge_expansion(
         options.matched_clauses.as_slice(),
         [clause] if clause.condition.is_none() && matches!(clause.action, MergeMatchedAction::Delete)
     );
-    let should_preserve_cow_target_rows_by_existence_join = requirements
-        .preserve_unmodified_target_rows
-        && (unconditional_matched_delete
-            || (options.matched_clauses.is_empty()
-                && !options.not_matched_by_source_clauses.is_empty()));
+    let single_stream_cdf =
+        requirements.effects.change_data && !options.identity_columns.is_empty();
+    let should_preserve_cow_target_rows_by_existence_join =
+        (requirements.preserve_unmodified_target_rows || single_stream_cdf)
+            && (unconditional_matched_delete
+                || (options.matched_clauses.is_empty()
+                    && !options.not_matched_by_source_clauses.is_empty()));
     let include_source_only_rows = !options.not_matched_by_target_clauses.is_empty();
     let source_schema = source_plan.schema().clone();
 
@@ -866,7 +871,7 @@ fn build_default_merge_expansion(
         .build()?;
     let value_schema = filtered.schema().clone();
 
-    let (projection_exprs, generated_assignment_markers) = build_merge_projection(
+    let (mut projection_exprs, generated_assignment_markers) = build_merge_projection(
         &options,
         target_schema,
         &value_schema,
@@ -874,6 +879,40 @@ fn build_default_merge_expansion(
         row_index_column,
         row_delete_metadata_columns,
     )?;
+    let change_data_preimage =
+        if single_stream_cdf {
+            let mut occupied = filtered
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| merge_name_key(field.name(), options.case_sensitive))
+                .collect::<HashSet<_>>();
+            occupied.extend(projection_exprs.iter().map(|expr| {
+                merge_name_key(&expr.schema_name().to_string(), options.case_sensitive)
+            }));
+            let name =
+                collision_free_source_alias("cdc_preimage", &mut occupied, options.case_sensitive);
+            let values = change_data_columns(
+                target_schema,
+                path_column,
+                row_index_column,
+                row_delete_metadata_columns,
+            );
+            let names = values
+                .iter()
+                .map(|expr| expr.schema_name().to_string())
+                .collect();
+            projection_exprs.push(
+                ScalarUDF::from(sail_function::scalar::struct_function::StructFunction::new(
+                    names,
+                ))
+                .call(values)
+                .alias(&name),
+            );
+            Some(name)
+        } else {
+            None
+        };
     let row_index_operation_expr = if requirements.effects.row_index_deletes {
         Some(
             projection_exprs
@@ -891,7 +930,8 @@ fn build_default_merge_expansion(
         None
     };
     trace!("projection exprs: {:?}", projection_exprs);
-    let change_data_input = requirements.effects.change_data.then(|| filtered.clone());
+    let change_data_input =
+        (requirements.effects.change_data && !single_stream_cdf).then(|| filtered.clone());
     let projected = project_merge_with_identity(
         filtered,
         projection_exprs.clone(),
@@ -957,13 +997,26 @@ fn build_default_merge_expansion(
     // Targeted rewrites may omit matched or source-only rows from the write branch,
     // so formats that report source-row metrics use a separate aggregate branch.
     let projected = if requirements.source_metrics {
-        let source_metric_projected = build_source_metric_plan(
+        let mut source_metric_projected = build_source_metric_plan(
             source_plan.clone(),
             target_schema,
             path_column,
             row_index_column,
             row_delete_metadata_columns,
         )?;
+        if let Some(name) = &change_data_preimage {
+            let field = projected.schema().field_with_unqualified_name(name)?;
+            let mut expressions = source_metric_projected
+                .schema()
+                .columns()
+                .into_iter()
+                .map(Expr::Column)
+                .collect::<Vec<_>>();
+            expressions.push(lit(ScalarValue::try_new_null(field.data_type())?).alias(name));
+            source_metric_projected = LogicalPlanBuilder::from(source_metric_projected)
+                .project(expressions)?
+                .build()?;
+        }
         LogicalPlanBuilder::from(projected)
             .union(source_metric_projected)?
             .build()?
@@ -1025,6 +1078,7 @@ fn build_default_merge_expansion(
         touched_files_plan,
         row_index_delete_plan,
         change_data_plan,
+        change_data_preimage,
         output_schema: command_schema,
         options,
     })
@@ -1299,7 +1353,7 @@ fn project_merge_with_identity(
                 merge_name_key(&expr.schema_name().to_string(), options.case_sensitive)
             }))
             .collect::<HashSet<_>>();
-    let mut domains: Vec<(Expr, String, String, String)> = Vec::new();
+    let mut domains: Vec<(Expr, String, String)> = Vec::new();
     let mut allocations = Vec::new();
     for (name, identity) in &options.identity_columns {
         if !merge_generates_identity(options, name) {
@@ -1323,26 +1377,19 @@ fn project_merge_with_identity(
                 .collect::<Vec<_>>(),
         )
         .unwrap_or_else(|| lit(false));
-        let domain = if let Some(index) = domains.iter().position(|(expr, _, _, _)| expr == &mask) {
-            index
-        } else {
+        let domain = {
             let marker = collision_free_source_alias(
                 "identity_generate",
                 &mut occupied,
                 options.case_sensitive,
             );
             let number = collision_free_source_alias(
-                "identity_row_number",
-                &mut occupied,
-                options.case_sensitive,
-            );
-            let key = collision_free_source_alias(
-                "identity_partition_key",
+                "identity_value",
                 &mut occupied,
                 options.case_sensitive,
             );
             projections.push(mask.clone().alias(marker.clone()));
-            domains.push((mask, marker, number, key));
+            domains.push((mask, marker, number));
             domains.len() - 1
         };
         allocations.push((name, identity, domain));
@@ -1354,31 +1401,32 @@ fn project_merge_with_identity(
         return Ok(plan);
     }
     plan = LogicalPlan::Extension(Extension {
-        node: Arc::new(IdentityPartitionKeyNode::try_new(
+        node: Arc::new(crate::identity_generate::IdentityGenerateNode::try_new(
             Arc::new(plan),
-            domains
+            allocations
                 .iter()
-                .map(|(_, marker, _, key)| (marker.clone(), key.clone()))
+                .map(|(_, identity, domain)| {
+                    let (_, marker, output) = &domains[*domain];
+                    crate::identity_generate::IdentityGenerateColumn {
+                        output: output.clone(),
+                        mask: Some(marker.clone()),
+                        start: identity.start,
+                        step: identity.step,
+                        high_water_mark: identity.high_water_mark,
+                    }
+                })
                 .collect(),
         )?),
     });
-    // True rows retain one allocation domain; false rows use bounded shards.
-    // Use the materialized key alone: a composite mask/key requirement can be
-    // satisfied by an existing Boolean-only hash partitioning.
-    for (_, _, number, key) in &domains {
-        plan = LogicalPlanBuilder::from(plan)
-            .window(vec![identity_row_number(vec![col(key)]).alias(number)])?
-            .build()?;
-    }
     let schema = plan.schema();
     let column = |name: &str| Expr::Column(Column::from_name(name));
     let output = schema
         .fields()
         .iter()
         .filter(|field| {
-            !domains.iter().any(|(_, marker, number, key)| {
-                field.name() == marker || field.name() == number || field.name() == key
-            })
+            !domains
+                .iter()
+                .any(|(_, marker, number)| field.name() == marker || field.name() == number)
         })
         .map(|field| {
             let Some((name, identity, domain)) = allocations
@@ -1387,14 +1435,8 @@ fn project_merge_with_identity(
             else {
                 return Ok(column(field.name()));
             };
-            let (_, marker, number, _) = &domains[*domain];
-            let value = identity_value_expr(
-                name,
-                identity_next_value(identity),
-                identity.step,
-                column(number),
-                schema,
-            )?;
+            let (_, marker, number) = &domains[*domain];
+            let value = column(number);
             let value = when(column(marker), value).otherwise(column(field.name()))?;
             let mut metadata = options
                 .resolved_target_field_names

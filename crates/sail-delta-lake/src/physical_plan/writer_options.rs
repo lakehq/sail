@@ -27,6 +27,12 @@ pub struct DeltaWriterExecOptions {
     pub write_batch_size: std::num::NonZeroUsize,
     pub merge_schema: bool,
     pub change_data: bool,
+    #[serde(default)]
+    pub merge_change_data_preimage: Option<String>,
+    #[serde(default)]
+    pub change_data_row_tags: bool,
+    #[serde(default)]
+    pub merge_on_read: bool,
     pub overwrite_schema: bool,
     pub replace_where: Option<String>,
     #[serde(default)]
@@ -46,6 +52,9 @@ impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
             write_batch_size: options.write_batch_size,
             merge_schema: options.merge_schema,
             change_data: false,
+            merge_change_data_preimage: None,
+            change_data_row_tags: false,
+            merge_on_read: false,
             overwrite_schema: options.overwrite_schema,
             replace_where: options.replace_where,
             generation_expressions: HashMap::new(),

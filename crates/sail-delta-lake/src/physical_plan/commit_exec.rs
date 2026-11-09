@@ -42,15 +42,15 @@ use url::Url;
 use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
 use crate::catalog_managed::{catalog_managed_delta_table, enable_catalog_managed_create_actions};
 use crate::delta_log::{LogStoreRef, StorageConfig, get_object_store_from_context};
-use crate::physical_plan::action_schema::ExecCommitMeta;
+use crate::physical_plan::action_schema::{ExecCommitMeta, IdentityHighWaterMarks};
 use crate::physical_plan::{COL_ACTION, DeltaCommitContext, decode_actions_and_meta_from_batch};
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_metadata,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    Add, ColumnMetadataKey, ColumnValueStat, CommitAction, DeltaError, DeltaOperation, Metadata,
-    MetadataValue, SaveMode, StatValue, Stats, StructField, StructType, TableFeature, commit_path,
+    ColumnMetadataKey, CommitAction, DeltaError, DeltaOperation, Metadata, MetadataValue, SaveMode,
+    StructField, StructType, TableFeature, commit_path,
 };
 use crate::table::{
     create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
@@ -106,7 +106,6 @@ fn commit_output_batch(
 #[derive(Debug, Clone)]
 struct IdentityColumnCommitInfo {
     name: String,
-    stats_name: String,
     start: i64,
     step: i64,
     high_water_mark: Option<i64>,
@@ -141,9 +140,35 @@ impl DeltaCommitExec {
         sink_schema: SchemaRef,
         sink_mode: PhysicalSinkMode,
         user_metadata: Option<String>,
-        commit_context: DeltaCommitContext,
+        mut commit_context: DeltaCommitContext,
         lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Self {
+        fn writer_partitions(plan: &Arc<dyn ExecutionPlan>, counts: &mut Vec<usize>) {
+            if let Some(writer) = plan.downcast_ref::<crate::physical_plan::DeltaWriterExec>() {
+                if !writer.options().change_data
+                    && !writer
+                        .write_context()
+                        .commit_context
+                        .identity_columns_to_track
+                        .is_empty()
+                {
+                    counts.push(writer.properties().output_partitioning().partition_count());
+                }
+                return;
+            }
+            for child in plan.children() {
+                writer_partitions(child, counts);
+            }
+        }
+        let mut counts = Vec::new();
+        writer_partitions(&input, &mut counts);
+        if !commit_context.identity_columns_to_track.is_empty() {
+            match counts.as_slice() {
+                [count] => commit_context.identity_writer_partitions = Some(*count),
+                [] => {} // A serialized driver stage has only its action-stream input.
+                _ => commit_context.identity_writer_partitions = Some(0), // Reject multiple domains.
+            }
+        }
         let output = CommandOutput::Count;
         let cache = Self::compute_properties(output.schema());
         Self {
@@ -645,6 +670,7 @@ impl ExecutionPlan for DeltaCommitExec {
             let mut initial_actions: Vec<CommitAction> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
             let mut operation_metrics = OperationMetrics::default();
+            let mut identity_evidence = Vec::new();
             let mut unknown_touched_rows = false;
             let mut data = input_stream;
 
@@ -676,6 +702,7 @@ impl ExecutionPlan for DeltaCommitExec {
                         row_count,
                         operation: op,
                         operation_metrics: metrics,
+                        identity_high_water_marks,
                     } in decoded_meta
                     {
                         total_rows = total_rows.checked_add(row_count).ok_or_else(|| {
@@ -687,6 +714,7 @@ impl ExecutionPlan for DeltaCommitExec {
                             operation = op;
                         }
                         operation_metrics.merge(metrics);
+                        identity_evidence.extend(identity_high_water_marks);
                     }
                     has_data = has_data || batch.num_rows() > 0;
                 } else {
@@ -710,7 +738,12 @@ impl ExecutionPlan for DeltaCommitExec {
             let mut final_actions = initial_actions;
             final_actions.extend(actions);
             if !table_exists {
-                final_actions = apply_identity_high_water_marks(final_actions, None, false)?;
+                final_actions = apply_identity_high_water_marks(
+                    final_actions,
+                    None,
+                    &commit_context,
+                    &identity_evidence,
+                )?;
             }
             let kinds: Vec<&'static str> = final_actions
                 .iter()
@@ -956,7 +989,8 @@ impl ExecutionPlan for DeltaCommitExec {
                 final_actions = apply_identity_high_water_marks(
                     final_actions,
                     reference.as_deref().map(|snapshot| snapshot.metadata()),
-                    matches!(operation, DeltaOperation::Merge { .. }),
+                    &commit_context,
+                    &identity_evidence,
                 )?;
             }
 
@@ -1182,8 +1216,12 @@ impl ExecutionPlan for DeltaCommitExec {
 fn apply_identity_high_water_marks(
     mut actions: Vec<CommitAction>,
     reference_metadata: Option<&Metadata>,
-    require_identity_bounds: bool,
+    context: &DeltaCommitContext,
+    evidence: &[IdentityHighWaterMarks],
 ) -> Result<Vec<CommitAction>> {
+    if context.identity_columns_to_track.is_empty() {
+        return Ok(actions);
+    }
     let metadata_index = actions
         .iter()
         .rposition(|action| matches!(action, CommitAction::Metadata(_)));
@@ -1194,7 +1232,7 @@ fn apply_identity_high_water_marks(
         })
         .or_else(|| reference_metadata.cloned())
     else {
-        return Ok(actions);
+        return internal_err!("tracked identity commit is missing table metadata");
     };
 
     let schema = base_metadata
@@ -1202,14 +1240,10 @@ fn apply_identity_high_water_marks(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let identity_columns = collect_identity_columns_for_commit(&schema)?;
     if identity_columns.is_empty() {
-        return Ok(actions);
+        return internal_err!("tracked identity commit has no identity definitions");
     }
 
-    let candidates = collect_identity_high_water_mark_candidates(
-        &actions,
-        &identity_columns,
-        require_identity_bounds,
-    )?;
+    let candidates = collect_identity_writer_candidates(context, evidence, &identity_columns)?;
     if candidates.is_empty() {
         return Ok(actions);
     }
@@ -1262,8 +1296,6 @@ fn collect_identity_columns_for_commit(
             let _allow_explicit =
                 metadata_bool(field, &ColumnMetadataKey::IdentityAllowExplicitInsert)?;
             let high_water_mark = metadata_i64(field, &ColumnMetadataKey::IdentityHighWaterMark);
-            let stats_name = metadata_string(field, &ColumnMetadataKey::ColumnMappingPhysicalName)
-                .unwrap_or_else(|| field.name.clone());
             Some(if step == 0 {
                 Err(DataFusionError::Plan(format!(
                     "identity column `{}` has invalid step 0",
@@ -1272,7 +1304,6 @@ fn collect_identity_columns_for_commit(
             } else {
                 Ok(IdentityColumnCommitInfo {
                     name: field.name.clone(),
-                    stats_name,
                     start,
                     step,
                     high_water_mark,
@@ -1282,102 +1313,57 @@ fn collect_identity_columns_for_commit(
         .collect()
 }
 
-fn collect_identity_high_water_mark_candidates(
-    actions: &[CommitAction],
-    identity_columns: &[IdentityColumnCommitInfo],
-    require_identity_bounds: bool,
+fn collect_identity_writer_candidates(
+    context: &DeltaCommitContext,
+    evidence: &[IdentityHighWaterMarks],
+    identities: &[IdentityColumnCommitInfo],
 ) -> Result<HashMap<String, i64>> {
-    let mut candidates: HashMap<String, i64> = HashMap::new();
-    for action in actions {
-        let CommitAction::Add(add) = action else {
-            continue;
-        };
-        let Some(stats_json) = add.stats.as_deref() else {
-            if require_identity_bounds {
-                return Err(DataFusionError::Plan(format!(
-                    "Delta identity MERGE requires AddFile statistics for `{}`",
-                    add.path
-                )));
-            }
-            continue;
-        };
-        let stats = Stats::from_json_str(stats_json).map_err(|e| {
-            DataFusionError::Plan(format!("failed to parse Delta AddFile stats: {e}"))
-        })?;
-        for identity in identity_columns {
-            let candidate = if require_identity_bounds {
-                identity_merge_high_water_mark_candidate(add, &stats, identity)?
-            } else {
-                let stat = if identity.step > 0 {
-                    stats.max_value(&identity.stats_name)
-                } else {
-                    stats.min_value(&identity.stats_name)
-                };
-                stat.and_then(stat_value_i64)
-            };
-            let Some(value) = candidate else {
-                continue;
-            };
-            candidates
-                .entry(identity.name.clone())
-                .and_modify(|current| {
-                    if identity.step > 0 {
-                        *current = (*current).max(value);
-                    } else {
-                        *current = (*current).min(value);
-                    }
-                })
-                .or_insert(value);
+    let expected = context.identity_writer_partitions.ok_or_else(|| {
+        DataFusionError::Execution("missing identity writer partition count".into())
+    })?;
+    if expected == 0 {
+        return internal_err!("identity writes require exactly one reporting writer domain");
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut candidates = HashMap::<String, i64>::new();
+    for partition in evidence {
+        if partition.partition >= expected || !seen.insert(partition.partition) {
+            return internal_err!("invalid or duplicate identity writer completion");
         }
+        if partition.candidates.len() != context.identity_columns_to_track.len() {
+            return internal_err!("incomplete identity writer evidence");
+        }
+        for name in &context.identity_columns_to_track {
+            let value = partition.candidates.get(name).ok_or_else(|| {
+                DataFusionError::Execution(format!("missing identity evidence for `{name}`"))
+            })?;
+            let identity = identities
+                .iter()
+                .find(|identity| &identity.name == name)
+                .ok_or_else(|| {
+                    DataFusionError::Execution(format!("unknown tracked identity `{name}`"))
+                })?;
+            if let Some(value) = value {
+                candidates
+                    .entry(name.clone())
+                    .and_modify(|current| {
+                        *current = if identity.step > 0 {
+                            (*current).max(*value)
+                        } else {
+                            (*current).min(*value)
+                        };
+                    })
+                    .or_insert(*value);
+            }
+        }
+    }
+    if seen.len() != expected {
+        return internal_err!(
+            "missing identity writer completion: expected {expected}, got {}",
+            seen.len()
+        );
     }
     Ok(candidates)
-}
-
-/// MERGE must not publish generated values without a watermark. Even an explicit-only
-/// or rewritten file is rejected if its identity statistics cannot establish a safe bound.
-fn identity_merge_high_water_mark_candidate(
-    add: &Add,
-    stats: &Stats,
-    identity: &IdentityColumnCommitInfo,
-) -> Result<Option<i64>> {
-    let (bounds, direction) = if identity.step > 0 {
-        (&stats.max_values, "maxValues")
-    } else {
-        (&stats.min_values, "minValues")
-    };
-    let invalid_stats = || {
-        DataFusionError::Plan(format!(
-            "Delta identity MERGE requires usable {direction} statistics for identity column `{}` in `{}` unless exact statistics prove it is all NULL or empty",
-            identity.name, add.path
-        ))
-    };
-    let null_count = stats.null_count.get(&identity.stats_name);
-    if stats.num_records < 0
-        || null_count.is_some_and(|count| {
-            count
-                .as_value()
-                .is_none_or(|count| count < 0 || count > stats.num_records)
-        })
-    {
-        return Err(invalid_stats());
-    }
-    match bounds.get(&identity.stats_name) {
-        Some(ColumnValueStat::Value(StatValue::Number(value))) => {
-            value.as_i64().map(Some).ok_or_else(invalid_stats)
-        }
-        None | Some(ColumnValueStat::Value(StatValue::Null))
-            // numRecords is physical, not the live count after a deletion vector.
-            // Keep the no-bound exception to exact, non-DV file statistics. Loose
-            // directional bounds above are still safe conservative watermarks.
-            if add.deletion_vector.is_none()
-                && stats.tight_bounds
-                && (stats.num_records == 0
-                    || stats.null_count_value(&identity.stats_name) == Some(stats.num_records)) =>
-        {
-            Ok(None)
-        }
-        _ => Err(invalid_stats()),
-    }
 }
 
 fn update_identity_high_water_marks_in_schema(
@@ -1493,194 +1479,72 @@ fn metadata_bool(field: &StructField, key: &ColumnMetadataKey) -> Option<bool> {
     }
 }
 
-fn metadata_string(field: &StructField, key: &ColumnMetadataKey) -> Option<String> {
-    match field.metadata.get(key.as_ref())? {
-        MetadataValue::String(value) => Some(value.clone()),
-        _ => None,
-    }
-}
-
-fn stat_value_i64(value: &StatValue) -> Option<i64> {
-    match value {
-        StatValue::Number(value) => value.as_i64(),
-        StatValue::String(value) => value.parse().ok(),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod identity_tests {
-    use datafusion_common::Result;
-    use serde_json::json;
-
-    use super::{
-        IdentityColumnCommitInfo, collect_identity_high_water_mark_candidates,
-        round_identity_high_water_mark,
-    };
-    use crate::spec::{Add, CommitAction, DeletionVectorDescriptor};
+    use super::*;
 
     fn identity(step: i64) -> IdentityColumnCommitInfo {
         IdentityColumnCommitInfo {
             name: "id".to_string(),
-            stats_name: "physical.id".to_string(),
             start: 0,
             step,
             high_water_mark: None,
         }
     }
 
-    fn add(stats: Option<String>) -> CommitAction {
-        CommitAction::Add(Add {
-            path: "part.parquet".to_string(),
-            stats,
+    fn evidence(partition: usize, value: Option<i64>) -> IdentityHighWaterMarks {
+        IdentityHighWaterMarks {
+            partition,
+            candidates: HashMap::from([("id".into(), value)]),
+        }
+    }
+
+    #[test]
+    fn writer_evidence_is_directional_exact_and_complete() -> Result<()> {
+        let context = DeltaCommitContext {
+            identity_columns_to_track: vec!["id".into()],
+            identity_writer_partitions: Some(3),
             ..Default::default()
-        })
-    }
-
-    #[test]
-    fn merge_watermark_uses_directional_physical_bounds() -> Result<()> {
-        for (step, expected) in [(1, 12), (-1, -9)] {
-            for tight_bounds in [true, false] {
-                let actions = [(-5, 12), (-9, 7)].map(|(min, max)| {
-                    add(Some(
-                        json!({
-                            "numRecords": 2,
-                            "tightBounds": tight_bounds,
-                            "minValues": {"physical.id": min, "id": -100},
-                            "maxValues": {"physical.id": max, "id": 100},
-                            "nullCount": {"physical.id": 0}
-                        })
-                        .to_string(),
-                    ))
-                });
-                let candidates =
-                    collect_identity_high_water_mark_candidates(&actions, &[identity(step)], true)?;
-                assert_eq!(candidates.get("id"), Some(&expected));
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn merge_watermark_rejects_missing_or_malformed_statistics() {
-        for step in [1, -1] {
-            let direction = if step > 0 { "maxValues" } else { "minValues" };
-            let mut invalid = vec![
-                None,
-                Some("{".to_string()),
-                Some("{}".to_string()),
-                Some(json!({"numRecords": -1}).to_string()),
-                Some(json!({"numRecords": 1}).to_string()),
-                Some(json!({"numRecords": 2, "nullCount": {"physical.id": 1}}).to_string()),
-                Some(json!({"numRecords": 1, "nullCount": {"id": 1}}).to_string()),
+        };
+        for (step, expected) in [(3, i64::MAX), (-3, i64::MIN)] {
+            let evidence = [
+                evidence(0, Some(i64::MIN)),
+                evidence(1, None),
+                evidence(2, Some(i64::MAX)),
             ];
-            for bound in [
-                json!(null),
-                json!(true),
-                json!(1.5),
-                json!("1"),
-                json!(9223372036854775808_u64),
-                json!({"nested": 1}),
-                json!([1]),
-            ] {
-                invalid.push(Some(
-                    json!({
-                        "numRecords": 1, direction: {"physical.id": bound}
-                    })
-                    .to_string(),
-                ));
-            }
-            for count in [json!(-1), json!(2), json!({"nested": 1})] {
-                invalid.push(Some(
-                    json!({
-                        "numRecords": 1,
-                        direction: {"physical.id": 1},
-                        "nullCount": {"physical.id": count}
-                    })
-                    .to_string(),
-                ));
-            }
-            for stats in invalid {
-                let actions = [
-                    add(Some(
-                        json!({"numRecords": 1, direction: {"physical.id": 1}}).to_string(),
-                    )),
-                    add(stats),
-                ];
-                assert!(
-                    collect_identity_high_water_mark_candidates(&actions, &[identity(step)], true,)
-                        .is_err(),
-                    "invalid stats accepted: {actions:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn merge_watermark_allows_only_exact_non_dv_empty_or_all_null_proof() -> Result<()> {
-        for step in [1, -1] {
-            for stats in [
-                json!({"numRecords": 0}),
-                json!({"numRecords": 2, "nullCount": {"physical.id": 2}}),
-                json!({"numRecords": 2, "nullCount": {"physical.id": 2},
-                    "minValues": {"physical.id": null}, "maxValues": {"physical.id": null}}),
-            ] {
-                let actions = [add(Some(stats.to_string()))];
-                assert!(
-                    collect_identity_high_water_mark_candidates(&actions, &[identity(step)], true)?
-                        .is_empty()
-                );
-
-                let mut loose = stats.clone();
-                loose["tightBounds"] = json!(false);
-                assert!(
-                    collect_identity_high_water_mark_candidates(
-                        &[add(Some(loose.to_string()))],
-                        &[identity(step)],
-                        true,
-                    )
-                    .is_err()
-                );
-                let dv_action = CommitAction::Add(Add {
-                    stats: Some(stats.to_string()),
-                    deletion_vector: Some(DeletionVectorDescriptor::default()),
-                    ..Default::default()
-                });
-                assert!(
-                    collect_identity_high_water_mark_candidates(
-                        &[dv_action],
-                        &[identity(step)],
-                        true,
-                    )
-                    .is_err()
-                );
-            }
-        }
-        assert!(collect_identity_high_water_mark_candidates(&[], &[identity(1)], true)?.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn non_merge_watermark_keeps_optional_statistics_policy() -> Result<()> {
-        for step in [1, -1] {
-            let direction = if step > 0 { "maxValues" } else { "minValues" };
-            let actions = [add(None), add(Some(json!({"numRecords": 1}).to_string()))];
-            assert!(
-                collect_identity_high_water_mark_candidates(&actions, &[identity(step)], false)?
-                    .is_empty()
-            );
-            let actions = [add(Some(
-                json!({
-                    "numRecords": 1, direction: {"physical.id": "42"}
-                })
-                .to_string(),
-            ))];
             assert_eq!(
-                collect_identity_high_water_mark_candidates(&actions, &[identity(step)], false)?
-                    .get("id"),
-                Some(&42)
+                collect_identity_writer_candidates(&context, &evidence, &[identity(step)])?["id"],
+                expected
             );
         }
+        assert!(
+            collect_identity_writer_candidates(
+                &context,
+                &[evidence(0, None), evidence(1, None), evidence(2, None)],
+                &[identity(1)]
+            )?
+            .is_empty()
+        );
+        for incomplete in [
+            vec![],
+            vec![evidence(0, None)],
+            vec![evidence(0, None), evidence(0, None), evidence(2, None)],
+            vec![evidence(0, None), evidence(1, None), evidence(3, None)],
+        ] {
+            assert!(
+                collect_identity_writer_candidates(&context, &incomplete, &[identity(1)]).is_err()
+            );
+        }
+        let mut missing_column = evidence(0, None);
+        missing_column.candidates.clear();
+        assert!(
+            collect_identity_writer_candidates(
+                &context,
+                &[missing_column, evidence(1, None), evidence(2, None)],
+                &[identity(1)]
+            )
+            .is_err()
+        );
         Ok(())
     }
 

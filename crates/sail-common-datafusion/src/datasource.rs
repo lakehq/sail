@@ -251,6 +251,8 @@ impl SourceInfo {
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
     pub input: LogicalPlan,
+    /// Target identities omitted by this write, independent of input field metadata.
+    pub identity_columns_to_track: Vec<String>,
     /// SQL INSERT has a format-selected result, unlike CTAS and internal writes.
     pub sql_insert: bool,
     pub mode: SinkMode,

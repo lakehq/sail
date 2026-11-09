@@ -23,6 +23,14 @@ pub struct ExecCommitMeta {
     pub row_count: u64,
     pub operation: Option<DeltaOperation>,
     pub operation_metrics: OperationMetrics,
+    pub identity_high_water_marks: Option<IdentityHighWaterMarks>,
+}
+
+/// Successful completion of one data-writer partition. None candidates prove empty/all-null.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdentityHighWaterMarks {
+    pub partition: usize,
+    pub candidates: std::collections::HashMap<String, Option<i64>>,
 }
 
 fn action_field(name: &str, data_type: ArrowDataType, nullable: bool) -> Arc<Field> {
@@ -84,6 +92,7 @@ struct ExecCommitMetaTransport {
     commit_row_count: u64,
     operation_json: Option<String>,
     operation_metrics_json: Option<String>,
+    identity_high_water_marks_json: Option<String>,
 }
 
 impl ExecCommitMetaTransport {
@@ -93,6 +102,7 @@ impl ExecCommitMetaTransport {
                 action_field("commit_row_count", ArrowDataType::UInt64, false),
                 action_field("operation_json", ArrowDataType::Utf8, true),
                 action_field("operation_metrics_json", ArrowDataType::Utf8, true),
+                action_field("identity_high_water_marks_json", ArrowDataType::Utf8, true),
             ]
             .into(),
         )
@@ -118,6 +128,12 @@ impl ExecCommitMetaTransport {
             commit_row_count: meta.row_count,
             operation_json,
             operation_metrics_json,
+            identity_high_water_marks_json: meta
+                .identity_high_water_marks
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
         })
     }
 
@@ -140,6 +156,12 @@ impl ExecCommitMetaTransport {
             row_count: self.commit_row_count,
             operation,
             operation_metrics,
+            identity_high_water_marks: self
+                .identity_high_water_marks_json
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
         })
     }
 }
@@ -276,6 +298,13 @@ mod tests {
     fn coalesced_batches_preserve_every_writer_commit_meta() -> Result<()> {
         let metadata = [
             ExecCommitMeta {
+                identity_high_water_marks: Some(IdentityHighWaterMarks {
+                    partition: 0,
+                    candidates: HashMap::from([
+                        ("positive".into(), Some(i64::MAX)),
+                        ("empty".into(), None),
+                    ]),
+                }),
                 row_count: 10,
                 operation: Some(DeltaOperation::Delete { predicate: None }),
                 operation_metrics: OperationMetrics {
@@ -284,6 +313,13 @@ mod tests {
                 },
             },
             ExecCommitMeta {
+                identity_high_water_marks: Some(IdentityHighWaterMarks {
+                    partition: 1,
+                    candidates: HashMap::from([
+                        ("positive".into(), None),
+                        ("negative".into(), Some(i64::MIN)),
+                    ]),
+                }),
                 row_count: 20,
                 operation: Some(DeltaOperation::Delete { predicate: None }),
                 operation_metrics: OperationMetrics {
@@ -302,6 +338,10 @@ mod tests {
         assert_eq!(decoded.len(), metadata.len());
         for (actual, expected) in decoded.iter().zip(metadata) {
             assert_eq!(actual.row_count, expected.row_count);
+            assert_eq!(
+                actual.identity_high_water_marks,
+                expected.identity_high_water_marks
+            );
             assert!(matches!(
                 actual.operation,
                 Some(DeltaOperation::Delete { predicate: None })
@@ -370,6 +410,7 @@ mod tests {
             row_count: 10,
             operation: None,
             operation_metrics: OperationMetrics::default(),
+            identity_high_water_marks: None,
         };
         let batch = encode_actions(
             adds.into_iter()
@@ -394,6 +435,7 @@ mod tests {
     #[test]
     fn exec_commit_meta_transport_uses_compact_operation_metrics_json() -> Result<()> {
         let meta = ExecCommitMeta {
+            identity_high_water_marks: None,
             row_count: 10,
             operation: None,
             operation_metrics: OperationMetrics {

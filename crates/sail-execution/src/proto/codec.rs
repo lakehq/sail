@@ -306,7 +306,6 @@ use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::data_source::RemoteDataSourceExec;
-use sail_physical_plan::identity_partition_key::IdentityPartitionKeyExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
@@ -1479,27 +1478,41 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col,
                 source_present_col,
             )?)),
-            NodeKind::IdentityPartitionKey(r#gen::IdentityPartitionKeyExecNode {
+            NodeKind::IdentityGenerate(r#gen::IdentityGenerateExecNode {
                 input,
-                keys,
-                false_shards,
+                columns,
+                allocation_partitions,
             }) => {
-                let keys = keys
+                let columns = columns
                     .into_iter()
-                    .map(|key| {
-                        Ok((
-                            usize::try_from(key.mask_index).map_err(|_| {
-                                plan_datafusion_err!("identity partition mask index is too large")
-                            })?,
-                            key.column_name,
-                        ))
+                    .map(|column| {
+                        Ok(
+                            sail_physical_plan::identity_generate::IdentityGenerateColumn {
+                                output: column.output,
+                                mask: column.mask_index.map(usize::try_from).transpose().map_err(
+                                    |_| plan_datafusion_err!("identity mask index too large"),
+                                )?,
+                                start: column.start,
+                                step: column.step,
+                                high_water_mark: column.high_water_mark,
+                            },
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Ok(Arc::new(IdentityPartitionKeyExec::try_new(
-                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
-                    keys,
-                    false_shards,
-                )?))
+                Ok(Arc::new(
+                    sail_physical_plan::identity_generate::IdentityGenerateExec::try_new(
+                        try_decode_physical_plan_with_converter(
+                            ctx,
+                            self,
+                            proto_converter,
+                            &input,
+                        )?,
+                        columns,
+                        Some(usize::try_from(allocation_partitions).map_err(|_| {
+                            plan_datafusion_err!("identity partition count too large")
+                        })?),
+                    )?,
+                ))
             }
             NodeKind::MonotonicId(r#gen::MonotonicIdExecNode {
                 input,
@@ -3034,22 +3047,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col: cardinality_check.target_present_col().to_string(),
                 source_present_col: cardinality_check.source_present_col().to_string(),
             })
-        } else if let Some(keys) = node.downcast_ref::<IdentityPartitionKeyExec>() {
-            NodeKind::IdentityPartitionKey(r#gen::IdentityPartitionKeyExecNode {
+        } else if let Some(generator) =
+            node.downcast_ref::<sail_physical_plan::identity_generate::IdentityGenerateExec>()
+        {
+            NodeKind::IdentityGenerate(r#gen::IdentityGenerateExecNode {
                 input: try_encode_physical_plan_with_converter(
                     self,
                     proto_converter,
-                    keys.input().clone(),
+                    generator.input().clone(),
                 )?,
-                keys: keys
-                    .keys()
+                allocation_partitions: generator.allocation_partitions() as u64,
+                columns: generator
+                    .columns()
                     .iter()
-                    .map(|(index, name)| r#gen::IdentityPartitionKeyColumn {
-                        mask_index: *index as u64,
-                        column_name: name.clone(),
+                    .map(|column| r#gen::IdentityGenerateColumn {
+                        output: column.output.clone(),
+                        mask_index: column.mask.map(|index| index as u64),
+                        start: column.start,
+                        step: column.step,
+                        high_water_mark: column.high_water_mark,
                     })
                     .collect(),
-                false_shards: keys.false_shards(),
             })
         } else if let Some(monotonic_id) = node.downcast_ref::<MonotonicIdExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -5286,7 +5304,17 @@ impl RemoteExecutionCodec {
             .as_ref()
             .map(|context| self.try_decode_delta_snapshot_context(context))
             .transpose()?;
-        Ok(DeltaCommitContext { base_snapshot })
+        Ok(DeltaCommitContext {
+            base_snapshot,
+            identity_columns_to_track: context.identity_columns_to_track.clone(),
+            identity_writer_partitions: context
+                .identity_writer_partitions
+                .map(usize::try_from)
+                .transpose()
+                .map_err(|_| {
+                    plan_datafusion_err!("identity writer partition count is too large")
+                })?,
+        })
     }
 
     fn try_encode_delta_commit_context(
@@ -5298,7 +5326,13 @@ impl RemoteExecutionCodec {
             .as_ref()
             .map(|context| self.try_encode_delta_snapshot_context(context))
             .transpose()?;
-        Ok(r#gen::DeltaCommitContext { base_snapshot })
+        Ok(r#gen::DeltaCommitContext {
+            base_snapshot,
+            identity_columns_to_track: context.identity_columns_to_track.clone(),
+            identity_writer_partitions: context
+                .identity_writer_partitions
+                .map(|count| count as u64),
+        })
     }
 
     fn try_decode_delta_write_context(
@@ -6369,93 +6403,92 @@ mod tests {
     }
 
     #[test]
-    fn test_identity_partition_key_round_trip_and_invalid_codec() -> Result<()> {
+    fn test_identity_generator_round_trip_and_invalid_codec() -> Result<()> {
         use datafusion::physical_plan::empty::EmptyExec;
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Boolean, false),
-            Field::new("b", DataType::Boolean, false),
-            Field::new("nullable", DataType::Boolean, true),
-            Field::new("value", DataType::Int32, false),
-        ]));
+        use sail_physical_plan::identity_generate::{IdentityGenerateColumn, IdentityGenerateExec};
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "mask",
+            DataType::Boolean,
+            true,
+        )]));
         let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
         let codec = RemoteExecutionCodec;
         let context = TaskContext::default();
-        let keys = vec![
-            (0, "ka".to_string()),
-            (1, "kb".to_string()),
-            (2, "kn".to_string()),
+        let columns = vec![
+            IdentityGenerateColumn {
+                output: "positive".into(),
+                mask: Some(0),
+                start: 7,
+                step: 3,
+                high_water_mark: Some(100),
+            },
+            IdentityGenerateColumn {
+                output: "negative".into(),
+                mask: None,
+                start: -7,
+                step: -3,
+                high_water_mark: None,
+            },
         ];
-        for shards in [1, 256, 4096] {
-            let plan = Arc::new(IdentityPartitionKeyExec::try_new(
+        for partitions in [1, 3, 19] {
+            let plan = Arc::new(IdentityGenerateExec::try_new(
                 input.clone(),
-                keys.clone(),
-                shards,
+                columns.clone(),
+                Some(partitions),
             )?);
             let expected_schema = plan.schema();
             let bytes = try_encode_physical_plan(&codec, plan)?;
             let decoded = try_decode_physical_plan(&context, &codec, &bytes)?;
-            let decoded = decoded
-                .downcast_ref::<IdentityPartitionKeyExec>()
-                .ok_or_else(|| plan_datafusion_err!("expected identity partition key operator"))?;
-            assert_eq!(decoded.keys(), keys);
-            assert_eq!(decoded.false_shards(), shards);
-            assert_eq!(decoded.schema(), expected_schema);
+            #[expect(deprecated)]
+            let decoded = decoded.with_new_children(vec![input.clone()])?;
+            let generator = decoded
+                .downcast_ref::<IdentityGenerateExec>()
+                .ok_or_else(|| plan_datafusion_err!("expected generator"))?;
+            assert_eq!(generator.columns(), columns);
+            assert_eq!(generator.allocation_partitions(), partitions);
+            assert_eq!(generator.schema(), expected_schema);
         }
         let input = try_encode_physical_plan(&codec, input)?;
-        let valid = r#gen::IdentityPartitionKeyColumn {
-            mask_index: 0,
-            column_name: "key".to_string(),
-        };
         let converter = crate::proto::converter::RemotePhysicalProtoConverter::default();
-        for (keys, shards) in [
+        let valid = r#gen::IdentityGenerateColumn {
+            output: "id".into(),
+            mask_index: Some(0),
+            start: 7,
+            step: 3,
+            high_water_mark: None,
+        };
+        for (columns, allocation_partitions) in [
             (vec![valid.clone()], 0),
-            (vec![valid.clone()], -1),
-            (vec![valid.clone()], 4097),
             (vec![], 1),
             (vec![valid.clone(), valid.clone()], 1),
             (
-                vec![r#gen::IdentityPartitionKeyColumn {
-                    mask_index: u64::MAX,
+                vec![r#gen::IdentityGenerateColumn {
+                    mask_index: Some(u64::MAX),
                     ..valid.clone()
                 }],
                 1,
             ),
             (
-                vec![r#gen::IdentityPartitionKeyColumn {
-                    mask_index: 4,
+                vec![r#gen::IdentityGenerateColumn {
+                    step: 0,
                     ..valid.clone()
                 }],
                 1,
             ),
             (
-                vec![r#gen::IdentityPartitionKeyColumn {
-                    mask_index: 3,
-                    ..valid.clone()
-                }],
-                1,
-            ),
-            (
-                vec![r#gen::IdentityPartitionKeyColumn {
-                    column_name: "a".into(),
-                    ..valid.clone()
-                }],
-                1,
-            ),
-            (
-                vec![r#gen::IdentityPartitionKeyColumn {
-                    column_name: String::new(),
+                vec![r#gen::IdentityGenerateColumn {
+                    output: "mask".into(),
                     ..valid
                 }],
                 1,
             ),
         ] {
             let node = ExtendedPhysicalPlanNode {
-                node_kind: Some(NodeKind::IdentityPartitionKey(
-                    r#gen::IdentityPartitionKeyExecNode {
+                node_kind: Some(NodeKind::IdentityGenerate(
+                    r#gen::IdentityGenerateExecNode {
                         input: input.clone(),
-                        keys,
-                        false_shards: shards,
+                        columns,
+                        allocation_partitions,
                     },
                 )),
             };
@@ -6465,6 +6498,18 @@ mod tests {
                     .is_err()
             );
         }
+        let commit = DeltaCommitContext {
+            identity_columns_to_track: vec!["positive".into()],
+            identity_writer_partitions: Some(19),
+            ..Default::default()
+        };
+        let decoded = codec
+            .try_decode_delta_commit_context(&codec.try_encode_delta_commit_context(&commit)?)?;
+        assert_eq!(
+            decoded.identity_columns_to_track,
+            commit.identity_columns_to_track
+        );
+        assert_eq!(decoded.identity_writer_partitions, Some(19));
         Ok(())
     }
 

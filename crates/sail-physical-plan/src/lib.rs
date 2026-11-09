@@ -2,7 +2,7 @@ pub mod barrier;
 pub mod catalog_command;
 pub mod coalesce;
 pub mod data_source;
-pub mod identity_partition_key;
+pub mod identity_generate;
 pub mod lake_procedure;
 pub mod map_partitions;
 pub mod merge_cardinality_check;
