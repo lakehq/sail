@@ -216,13 +216,19 @@ impl Stream for JobOutputStream {
                         });
                         return Poll::Ready(Some(Err(DataFusionError::External(Box::new(error)))));
                     }
-                    self.accepted.insert(
-                        partition,
-                        OutputAttempt {
-                            attempt: key.attempt,
-                            retry_cause,
-                        },
-                    );
+                    if self
+                        .accepted
+                        .get(&partition)
+                        .is_none_or(|current| current.attempt <= key.attempt)
+                    {
+                        self.accepted.insert(
+                            partition,
+                            OutputAttempt {
+                                attempt: key.attempt,
+                                retry_cause,
+                            },
+                        );
+                    }
                     inner.iter_mut().for_each(|s| s.mute_if_needed(&key));
                     inner.push(TaskStreamWrapper::new(key, stream));
                     self.state = JobOutputState::Active { receiver, inner };
@@ -582,6 +588,60 @@ mod tests {
                 );
                 assert_conflict_cause(output, &key, expected)?;
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn delayed_original_output_preserves_the_newest_pending_attempt_cause() -> Result<()> {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+        )])?;
+        for newest_cause in [Some("new"), None] {
+            let (sender, receiver) = mpsc::channel(1);
+            let mut output = JobOutputStream::new(receiver);
+            let waker = futures::task::noop_waker();
+            let mut cx = Context::from_waker(&waker);
+            assert!(
+                sender
+                    .try_send(JobOutputItem::Stream {
+                        key: TaskStreamKey {
+                            attempt: 2,
+                            ..stream_key()
+                        },
+                        stream: Box::pin(futures::stream::pending()),
+                        retry_cause: newest_cause
+                            .map(|message| CommonErrorCause::ArrowCast(message.into())),
+                    })
+                    .is_ok()
+            );
+            assert!(Pin::new(&mut output).poll_next(&mut cx).is_pending());
+            assert!(
+                sender
+                    .try_send(JobOutputItem::Stream {
+                        key: stream_key(),
+                        stream: Box::pin(futures::stream::iter([Ok(batch.clone())])),
+                        retry_cause: None,
+                    })
+                    .is_ok()
+            );
+            assert!(matches!(Pin::new(&mut output).poll_next(&mut cx),
+                Poll::Ready(Some(Ok(actual))) if actual == batch));
+            let key = TaskStreamKey {
+                attempt: 1,
+                ..stream_key()
+            };
+            assert!(
+                sender
+                    .try_send(JobOutputItem::Stream {
+                        key: key.clone(),
+                        stream: Box::pin(futures::stream::iter([Ok(batch.clone())])),
+                        retry_cause: Some(CommonErrorCause::ArrowCast("old".into())),
+                    })
+                    .is_ok()
+            );
+            assert_conflict_cause(output, &key, newest_cause)?;
         }
         Ok(())
     }
