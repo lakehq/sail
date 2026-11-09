@@ -903,9 +903,9 @@ fn build_default_merge_expansion(
                 .map(|expr| expr.schema_name().to_string())
                 .collect();
             projection_exprs.push(
-                ScalarUDF::from(sail_function::scalar::struct_function::StructFunction::new(
-                    names,
-                ))
+                ScalarUDF::from(
+                    sail_function::scalar::r#struct::struct_function::StructFunction::new(names),
+                )
                 .call(values)
                 .alias(&name),
             );
