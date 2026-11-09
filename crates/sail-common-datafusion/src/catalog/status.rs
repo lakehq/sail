@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::catalog::{
     CatalogPartitionField, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
 };
-use crate::column_features::ColumnFeaturesBuilder;
+use crate::column_features::{ColumnFeatureKey, ColumnFeaturesBuilder};
 use crate::session::plan::PlanFormatter;
 
 /// Metadata key used by Spark Connect's column protocol for generation
@@ -346,6 +346,7 @@ impl TableColumnStatus {
             let builder = ColumnFeaturesBuilder::new().with_generation_expression(expr.clone());
             metadata.extend(builder.build());
         }
+        metadata.remove(ColumnFeatureKey::CurrentDefault.as_str());
         if let Some(expr) = &self.default {
             let builder = ColumnFeaturesBuilder::new().with_current_default(expr.clone());
             metadata.extend(builder.build());
@@ -552,4 +553,65 @@ pub fn replace_columns(
             }
         })
         .collect();
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::Schema;
+    use datafusion_common::ScalarValue;
+    use sail_common::spec::ColumnChange;
+
+    use super::*;
+    use crate::column_features::ColumnFeatures;
+    use crate::schema_evolution::encode_field_default;
+
+    #[test]
+    fn dropped_default_is_not_restored_by_column_changes() -> Result<()> {
+        let typed_default = encode_field_default(&ScalarValue::Int32(None))?;
+        let field = Field::new("x", DataType::Int32, true).with_metadata(
+            [
+                (ColumnFeatureKey::CurrentDefault.as_str().into(), "7".into()),
+                (
+                    ColumnFeatureKey::CurrentDefaultValue.as_str().into(),
+                    typed_default.clone(),
+                ),
+                ("custom".into(), "retained".into()),
+            ]
+            .into(),
+        );
+        let uuid = Field::new("u", DataType::FixedSizeBinary(16), true)
+            .with_metadata([("iceberg.type".into(), "uuid".into())].into());
+        let mut columns = vec![];
+        replace_columns(&mut columns, &Schema::new(vec![field, uuid.clone()]));
+        let changes = [ColumnChange::Comment {
+            path: vec!["x".into()],
+            comment: Some("updated".into()),
+        }];
+        alter_columns(&mut columns, &changes, false)?;
+        assert_eq!(columns[0].default.as_deref(), Some("7"));
+        alter_column_default(&mut columns, &["x".into()], Some("9".into()))?;
+        assert_eq!(
+            ColumnFeatures::from_field(&columns[0].field())
+                .current_default()
+                .as_deref(),
+            Some("9")
+        );
+        alter_column_default(&mut columns, &["x".into()], None)?;
+        alter_columns(&mut columns, &changes, false)?;
+        assert_eq!(columns[0].default, None);
+        assert_eq!(
+            columns[0].field().metadata(),
+            &[
+                (
+                    ColumnFeatureKey::CurrentDefaultValue.as_str().into(),
+                    typed_default
+                ),
+                ("custom".into(), "retained".into()),
+                ("comment".into(), "updated".into()),
+            ]
+            .into()
+        );
+        assert_eq!(columns[1].field(), uuid);
+        Ok(())
+    }
 }

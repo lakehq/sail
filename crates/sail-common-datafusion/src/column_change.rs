@@ -28,6 +28,7 @@ pub fn replacement_schema(columns: &[ColumnChange<DataType>]) -> Result<Schema> 
         let ColumnChange::Add {
             path,
             data_type,
+            metadata,
             nullable,
             comment,
             default,
@@ -42,7 +43,12 @@ pub fn replacement_schema(columns: &[ColumnChange<DataType>]) -> Result<Schema> 
         if default.is_some() || position.is_some() {
             return plan_err!("REPLACE COLUMNS does not support DEFAULT or positional clauses");
         }
-        let mut field = Field::new(name, data_type.clone(), *nullable);
+        let mut field = Field::new(name, data_type.clone(), *nullable).with_metadata(
+            metadata
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        );
         if let Some(comment) = comment {
             field
                 .metadata_mut()
@@ -139,6 +145,7 @@ fn alter_fields(
     if rest.is_empty()
         && let ColumnChange::Add {
             data_type,
+            metadata,
             nullable,
             comment,
             default,
@@ -157,7 +164,12 @@ fn alter_fields(
                 "Adding a column with a DEFAULT is not supported; add the column then set its default"
             );
         }
-        let mut field = Field::new(name, data_type.clone(), *nullable);
+        let mut field = Field::new(name, data_type.clone(), *nullable).with_metadata(
+            metadata
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        );
         if let Some(comment) = comment {
             field
                 .metadata_mut()
@@ -278,4 +290,83 @@ fn alter_collection_field(
     let mut fields = vec![Arc::new(field.as_ref().clone().with_name(&path[0]))];
     alter_fields(&mut fields, path, change, case_sensitive)?;
     Ok(Arc::new(fields[0].as_ref().clone().with_name(field.name())))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+
+    fn uuid_add(path: &[&str]) -> ColumnChange<DataType> {
+        ColumnChange::Add {
+            path: path.iter().map(|s| (*s).to_string()).collect(),
+            data_type: DataType::FixedSizeBinary(16),
+            metadata: BTreeMap::from([
+                ("iceberg.type".into(), "uuid".into()),
+                ("custom".into(), "retained".into()),
+                ("comment".into(), "old".into()),
+            ]),
+            nullable: true,
+            comment: Some("UUID column".into()),
+            default: None,
+            position: None,
+        }
+    }
+
+    fn expected_uuid() -> Field {
+        Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata(
+            [
+                ("iceberg.type".into(), "uuid".into()),
+                ("custom".into(), "retained".into()),
+                ("comment".into(), "UUID column".into()),
+            ]
+            .into(),
+        )
+    }
+
+    #[test]
+    fn add_and_replace_preserve_field_metadata() -> Result<()> {
+        let fixed = Field::new("fixed", DataType::FixedSizeBinary(16), true);
+        let schema = Schema::new(vec![fixed.clone()]);
+        let added = alter_schema(&schema, &[uuid_add(&["u"])], false)?;
+        assert_eq!(added.field(0), &fixed);
+        assert_eq!(added.field(1), &expected_uuid());
+        let replaced = replacement_schema(&[uuid_add(&["u"])])?;
+        assert_eq!(replaced.field(0), &expected_uuid());
+        Ok(())
+    }
+
+    #[test]
+    fn add_nested_leaf_preserves_metadata_through_further_alteration() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(vec![Field::new("id", DataType::Int32, true)].into()),
+            true,
+        )]);
+        let schema = alter_schema(&schema, &[uuid_add(&["s", "u"])], false)?;
+        let schema = alter_schema(
+            &schema,
+            &[
+                ColumnChange::Rename {
+                    path: vec!["s".into(), "u".into()],
+                    name: "renamed".into(),
+                },
+                ColumnChange::Comment {
+                    path: vec!["s".into(), "renamed".into()],
+                    comment: Some("updated".into()),
+                },
+            ],
+            false,
+        )?;
+        let mut expected = expected_uuid().with_name("renamed");
+        expected
+            .metadata_mut()
+            .insert("comment".into(), "updated".into());
+        assert_eq!(
+            schema.field(0).data_type(),
+            &DataType::Struct(vec![Field::new("id", DataType::Int32, true), expected,].into())
+        );
+        Ok(())
+    }
 }

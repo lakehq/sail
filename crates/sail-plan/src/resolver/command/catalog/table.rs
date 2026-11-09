@@ -1,3 +1,4 @@
+use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::manager::CatalogManager;
@@ -17,6 +18,48 @@ use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
+    fn resolve_column_change(
+        &self,
+        change: spec::ColumnChange,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<spec::ColumnChange<DataType>> {
+        match change {
+            spec::ColumnChange::Add {
+                path,
+                data_type,
+                metadata,
+                nullable,
+                comment,
+                default,
+                position,
+            } => {
+                let field = self.resolve_field(
+                    &spec::Field {
+                        name: path.last().cloned().unwrap_or_default(),
+                        data_type,
+                        nullable,
+                        metadata: metadata.into_iter().collect(),
+                    },
+                    state,
+                )?;
+                Ok(spec::ColumnChange::Add {
+                    path,
+                    data_type: field.data_type().clone(),
+                    metadata: field
+                        .metadata()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                    nullable,
+                    comment,
+                    default,
+                    position,
+                })
+            }
+            change => change.try_map_type(|ty| self.resolve_data_type(&ty, state)),
+        }
+    }
+
     pub(in super::super) async fn resolve_catalog_create_table(
         &self,
         table: spec::ObjectName,
@@ -543,7 +586,7 @@ impl PlanResolver<'_> {
             spec::AlterTableOperation::ReplaceColumns { columns } => {
                 let columns = columns
                     .into_iter()
-                    .map(|column| column.try_map_type(|ty| self.resolve_data_type(&ty, state)))
+                    .map(|column| self.resolve_column_change(column, state))
                     .collect::<PlanResult<Vec<_>>>()?;
                 let schema = sail_common_datafusion::column_change::replacement_schema(&columns)?;
                 self.validate_delta_replacement_generated_columns(&table, &schema, state)
@@ -558,7 +601,7 @@ impl PlanResolver<'_> {
                     case_sensitive: self.config.case_sensitive,
                     changes: changes
                         .into_iter()
-                        .map(|change| change.try_map_type(|ty| self.resolve_data_type(&ty, state)))
+                        .map(|change| self.resolve_column_change(change, state))
                         .collect::<PlanResult<Vec<_>>>()?,
                 }
             }

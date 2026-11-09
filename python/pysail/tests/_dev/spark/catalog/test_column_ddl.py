@@ -4,6 +4,21 @@ import pytest
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
+def test_drop_default_survives_subsequent_column_comment(spark, tmp_path):
+    table = "drop_default_after_comment"
+    location = escape_sql_string_literal(str(tmp_path))
+    try:
+        spark.sql(f"CREATE TABLE {table} (x INT DEFAULT 7) USING parquet LOCATION '{location}'")
+        spark.sql(f"ALTER TABLE {table} ALTER COLUMN x COMMENT 'before drop'")
+        spark.sql(f"ALTER TABLE {table} ALTER COLUMN x DROP DEFAULT")
+        spark.sql(f"ALTER TABLE {table} ALTER COLUMN x COMMENT 'after drop'")
+        spark.sql(f"INSERT INTO {table} VALUES (DEFAULT)")
+        assert [row.x for row in spark.table(table).collect()] == [None]
+        assert spark.catalog.listColumns(table)[0].description == "after drop"
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
 @pytest.mark.parametrize("fmt", ["parquet", "json", "csv"])
 def test_file_column_rename_rejects_without_losing_values(spark, tmp_path, fmt):
     table = f"file_column_rename_{fmt}"

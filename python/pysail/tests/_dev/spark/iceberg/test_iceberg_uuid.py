@@ -1,5 +1,6 @@
-"""UUID is a Sail SQL extension; Spark rejects UUID DDL.
-"""
+"""UUID is a Sail SQL extension; Spark rejects UUID DDL."""
+
+# ruff: noqa: S608
 
 import json
 from pathlib import Path
@@ -18,6 +19,7 @@ from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 VALUE = "6f1c2d3e-4b5a-4c6d-8e7f-0123456789ab"
 VALUE_BYTES = UUID(VALUE).bytes
+UUID_BYTE_LENGTH = 16
 
 
 def _current_schema(metadata):
@@ -59,7 +61,7 @@ def test_uuid_sql_insert_cast_and_artifacts(spark, tmp_path, partitioned):
         for parquet in _data_files(tmp_path):
             column = parquet.schema.column(1)
             assert column.physical_type == "FIXED_LEN_BYTE_ARRAY"
-            assert column.length == 16
+            assert column.length == UUID_BYTE_LENGTH
             assert column.logical_type.type == "UUID"
             assert parquet.schema_arrow.field("x").metadata[b"PARQUET:field_id"] == str(fields[1]["id"]).encode()
         if partitioned:
@@ -85,10 +87,11 @@ def test_uuid_invalid_write_keeps_snapshot(spark, tmp_path, entry, invalid):
         spark.sql(f"CREATE TABLE {table} (id BIGINT, x UUID) USING iceberg LOCATION '{location}'")
         spark.sql(f"INSERT INTO {table} VALUES (1, '{VALUE}')")
         before = _find_latest_metadata(tmp_path)
-        with pytest.raises(Exception, match="(?i)invalid uuid"):
-            if entry == "sql":
+        if entry == "sql":
+            with pytest.raises(Exception, match=r"(?i)invalid uuid"):
                 spark.sql(f"INSERT INTO {table} VALUES (2, '{invalid}')").collect()
-            else:
+        else:
+            with pytest.raises(Exception, match=r"(?i)invalid uuid"):
                 spark.createDataFrame([(2, invalid)], "id LONG, x STRING").write.format("iceberg").mode("append").save(
                     str(tmp_path)
                 )
@@ -118,7 +121,7 @@ def test_uuid_cast_nonconstant_and_try_cast(spark):
         None: None,
         "bad": None,
     }
-    with pytest.raises(Exception, match="(?i)invalid uuid"):
+    with pytest.raises(Exception, match=r"(?i)invalid uuid"):
         frame.selectExpr("CAST(x AS UUID)").collect()
 
 
@@ -207,10 +210,12 @@ def test_uuid_try_cast_nonnullable_nested_values(spark):
     assert converted.schema["m"].dataType.valueContainsNull
     assert converted.schema["nested"].dataType.elementType.valueType["u"].nullable
     rows = converted.collect()
-    assert len(rows) == 3
+    expected_row_count = 3
+    assert len(rows) == expected_row_count
     assert sum(tuple(row) == (None, None, None, None) for row in rows) == 1
     values = [row for row in rows if row.s is not None]
-    assert len(values) == 2
+    expected_nonnull_count = 2
+    assert len(values) == expected_nonnull_count
     for row in values:
         expected = bytes(row.s.u) if row.s.u is not None else None
         assert expected in (None, VALUE_BYTES)
@@ -244,6 +249,102 @@ def test_uuid_dataframe_write_literal_column_names(spark, tmp_path, name, binary
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
+@pytest.mark.parametrize(
+    "operation", ["ADD COLUMN u UUID COMMENT 'added'", "REPLACE COLUMNS (id BIGINT, u UUID COMMENT 'added')"]
+)
+def test_uuid_column_evolution_preserves_identity(spark, tmp_path, operation):
+    table = "uuid_column_evolution"
+    location = escape_sql_string_literal(str(tmp_path))
+    try:
+        spark.sql(f"CREATE TABLE {table} (id BIGINT) USING iceberg LOCATION '{location}'")
+        before = _find_latest_metadata(tmp_path)
+        spark.sql(f"ALTER TABLE {table} {operation}")
+        evolved = _current_schema(_find_latest_metadata(tmp_path))
+        fields = evolved["fields"]
+        assert evolved["schema-id"] > before["current-schema-id"]
+        assert [(f["name"], f["type"]) for f in fields] == [("id", "long"), ("u", "uuid")]
+        assert fields[1]["id"] > before["last-column-id"]
+        assert fields[1]["doc"] == "added"
+        if operation.startswith("ADD"):
+            assert fields[0]["id"] == _current_schema(before)["fields"][0]["id"]
+        else:
+            assert fields[0]["id"] > before["last-column-id"]
+        assert len({f["id"] for f in fields}) == len(fields)
+        spark.sql(f"INSERT INTO {table} VALUES (1, '{VALUE}')")
+        spark.sql(f"ALTER TABLE {table} RENAME COLUMN u TO renamed")
+        spark.sql(f"ALTER TABLE {table} ALTER COLUMN renamed COMMENT 'updated'")
+        after = _current_schema(_find_latest_metadata(tmp_path))
+        assert after["schema-id"] > evolved["schema-id"]
+        assert after["fields"] == [fields[0], {**fields[1], "name": "renamed", "doc": "updated"}]
+        spark.sql(f"INSERT INTO {table} VALUES (2, '{VALUE.upper()}')")
+        rows = spark.read.format("iceberg").load(str(tmp_path)).orderBy("id").collect()
+        assert [(row.id, bytes(row.renamed)) for row in rows] == [(1, VALUE_BYTES), (2, VALUE_BYTES)]
+        for parquet in _data_files(tmp_path):
+            column = parquet.schema.column(1)
+            assert column.physical_type == "FIXED_LEN_BYTE_ARRAY"
+            assert column.length == UUID_BYTE_LENGTH
+            assert column.logical_type.type == "UUID"
+            assert parquet.schema_arrow.field(1).metadata[b"PARQUET:field_id"] == str(fields[1]["id"]).encode()
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("container", ["struct", "array", "map"])
+def test_uuid_add_nested_leaf_preserves_identity(spark, tmp_path, container):
+    table = "uuid_nested_evolution"
+    location = escape_sql_string_literal(str(tmp_path))
+    data_type, path = "STRUCT<n: INT>", "s.u"
+    expression = f"named_struct('n', 10, 'u', '{VALUE}')"
+    if container == "array":
+        data_type, path = f"ARRAY<{data_type}>", "s.element.u"
+        expression = f"array({expression})"
+    elif container == "map":
+        data_type, path = f"MAP<STRING, {data_type}>", "s.value.u"
+        expression = f"map('k', {expression})"
+
+    def struct_type(schema):
+        ty = schema["fields"][1]["type"]
+        return ty["element"] if container == "array" else ty["value"] if container == "map" else ty
+
+    try:
+        spark.sql(f"CREATE TABLE {table} (id BIGINT, s {data_type}) USING iceberg LOCATION '{location}'")
+        before = _find_latest_metadata(tmp_path)
+        spark.sql(f"ALTER TABLE {table} ADD COLUMN {path} UUID COMMENT 'added'")
+        evolved = _current_schema(_find_latest_metadata(tmp_path))
+        assert evolved["schema-id"] > before["current-schema-id"]
+        assert [f["id"] for f in evolved["fields"]] == [f["id"] for f in _current_schema(before)["fields"]]
+        children = struct_type(evolved)["fields"]
+        assert children[0] == struct_type(_current_schema(before))["fields"][0]
+        leaf = children[1]
+        assert leaf["type"] == "uuid"
+        assert leaf["doc"] == "added"
+        assert leaf["id"] > before["last-column-id"]
+        spark.sql(f"INSERT INTO {table} SELECT 1, {expression}")
+        spark.sql(f"ALTER TABLE {table} ALTER COLUMN {path} COMMENT 'updated'")
+        after = _current_schema(_find_latest_metadata(tmp_path))
+        assert after["schema-id"] > evolved["schema-id"]
+        assert struct_type(after)["fields"] == [children[0], {**leaf, "doc": "updated"}]
+        spark.sql(f"INSERT INTO {table} SELECT 2, {expression}")
+        rows = spark.read.format("iceberg").load(str(tmp_path)).orderBy("id").collect()
+        assert [row.id for row in rows] == [1, 2]
+        for row in rows:
+            value = row.s[0] if container == "array" else row.s["k"] if container == "map" else row.s
+            assert bytes(value.u) == VALUE_BYTES
+        for parquet in _data_files(tmp_path):
+            column = parquet.schema.column(len(parquet.schema) - 1)
+            assert column.physical_type == "FIXED_LEN_BYTE_ARRAY"
+            assert column.length == UUID_BYTE_LENGTH
+            assert column.logical_type.type == "UUID"
+            field = parquet.schema_arrow.field("s")
+            if container == "array":
+                field = field.type.value_field
+            elif container == "map":
+                field = field.type.item_field
+            assert field.type.field("u").metadata[b"PARQUET:field_id"] == str(leaf["id"]).encode()
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
 def test_uuid_and_fixed16_keep_distinct_identity(spark, sql_catalog):
     identifier = "default.uuid_and_fixed16"
     table = sql_catalog.create_table(
@@ -265,7 +366,7 @@ def test_uuid_and_fixed16_keep_distinct_identity(spark, sql_catalog):
         for parquet in _data_files(location):
             assert parquet.schema.column(1).logical_type.type == "UUID"
             assert parquet.schema.column(2).logical_type.type == "NONE"
-        with pytest.raises(Exception, match="(?i)Column 'f' has type"):
+        with pytest.raises(Exception, match=r"(?i)Column 'f' has type"):
             spark.createDataFrame([(2, VALUE, VALUE)], "id LONG, u STRING, f STRING").write.format("iceberg").mode(
                 "append"
             ).save(table.location())
