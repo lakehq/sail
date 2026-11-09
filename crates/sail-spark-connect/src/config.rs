@@ -8,7 +8,8 @@ use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::config::{
-    SPARK_CONFIG_V3_5, SPARK_CONFIG_V4_0, SPARK_CONFIG_V4_1, SPARK_CONFIG_V4_2, SparkConfigKey,
+    SPARK_CONFIG_V3_5, SPARK_CONFIG_V4_0, SPARK_CONFIG_V4_1, SPARK_CONFIG_V4_2, SPARK_CONFIG_V4_3,
+    SparkConfigKey,
 };
 use crate::spark::connect;
 
@@ -54,6 +55,7 @@ impl SparkRuntimeConfig {
                     (Some("4"), Some("0")) => &SPARK_CONFIG_V4_0,
                     (Some("4"), Some("1")) => &SPARK_CONFIG_V4_1,
                     (Some("4"), Some("2")) => &SPARK_CONFIG_V4_2,
+                    (Some("4"), Some("3")) => &SPARK_CONFIG_V4_3,
                     _ => {
                         return Err(SparkError::invalid(format!(
                             "unsupported PySpark version: {version}"
