@@ -85,13 +85,13 @@ fn parse_string_values<'a>(values: impl Iterator<Item = Option<&'a str>>) -> Int
         .collect()
 }
 
-/// Parses a string as Spark does when it casts a string to INT with ANSI mode off.
+/// Spark's non-ANSI string to INT cast.
 /// This is the BIGINT parse narrowed to INT, since both truncate the fraction and reject overflow.
 fn parse_spark_legacy_string_to_i32(value: &str) -> Option<i32> {
     parse_spark_legacy_string_to_i64(value).and_then(|value| i32::try_from(value).ok())
 }
 
-/// Parses a string as Spark does when it casts a string to BIGINT with ANSI mode off.
+/// Spark's non-ANSI string to BIGINT cast.
 /// Whitespace is trimmed and a fractional part is truncated, as long as it only has digits.
 /// Returns `None` for invalid input or on overflow.
 pub fn parse_spark_legacy_string_to_i64(value: &str) -> Option<i64> {

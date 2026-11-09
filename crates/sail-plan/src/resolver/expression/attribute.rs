@@ -619,9 +619,7 @@ impl PlanResolver<'_> {
     }
 }
 
-/// Parses a name into an integer key, as Spark casts a string with ANSI mode off.
-/// The name is a constant, so the key is computed during planning.
-/// An invalid or out-of-range name gives a null key.
+/// Spark's non-ANSI string cast of a name to an integer key.
 fn legacy_integer_key(name: &str, key_type: &DataType) -> Option<ScalarValue> {
     let value = parse_spark_legacy_string_to_i64(name);
     let key = match key_type {
