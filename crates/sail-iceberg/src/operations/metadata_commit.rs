@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use datafusion_common::{DataFusionError, Result, internal_err};
-use object_store::ObjectStoreExt;
 use object_store::path::Path;
+use sail_common_datafusion::error::CommitStateUnknownError;
 use url::Url;
 
 use crate::io::StoreContext;
@@ -69,6 +69,10 @@ impl MetadataFileCommit {
         })
     }
 
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub(crate) fn location(&self) -> &str {
         &self.location
     }
@@ -94,18 +98,26 @@ impl MetadataFileCommit {
             Err(error) => return Err(DataFusionError::External(Box::new(error))),
         }
         if matches!(self.style, MetadataFileStyle::Versioned) {
-            let version_files = metadata_files_for_version(store, self.version).await?;
-            if version_files.iter().any(|file| file != self.path.as_ref()) {
-                match store.prefixed.delete(&self.path).await {
-                    Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
-                    Err(error) => {
-                        return Err(DataFusionError::Execution(format!(
-                            "failed to remove conflicted Iceberg metadata file {}; commit state is uncertain: {error}",
+            let version_files = metadata_files_for_version(store, self.version)
+                .await
+                .map_err(|error| {
+                    DataFusionError::External(Box::new(CommitStateUnknownError::with_source(
+                        format!(
+                            "created {} but could not check concurrent metadata publication",
                             self.path
-                        )));
-                    }
-                }
-                return Ok(MetadataWriteOutcome::Conflict);
+                        ),
+                        error,
+                    )))
+                })?;
+            if version_files.iter().any(|file| file != self.path.as_ref()) {
+                // Successful versioned Create is already discoverable by readers. Neither
+                // this metadata nor its referenced files can safely be removed or retried.
+                return Err(DataFusionError::External(Box::new(
+                    CommitStateUnknownError::from(format!(
+                        "created {} but found concurrent metadata for version {}",
+                        self.path, self.version
+                    )),
+                )));
             }
         }
         Ok(MetadataWriteOutcome::Written)

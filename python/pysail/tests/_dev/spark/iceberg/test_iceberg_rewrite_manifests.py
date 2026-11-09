@@ -206,12 +206,56 @@ def test_manifest_rewrite_rolls_large_manifests(spark, tmp_path):
         assert _rewrite(spark, name) == (1, 4)
         assert len(_manifests(path)) == len(files)
         assert _file_state(path) == files
+        # Unlike Spark's rewrite action, Sail avoids repeating unchanged manifest groups.
+        metadata = _find_latest_metadata(path)
+        artifacts = _payloads((path / "metadata").iterdir())
+        assert _rewrite(spark, name) == (0, 0)
+        assert _find_latest_metadata(path) == metadata
+        assert _payloads((path / "metadata").iterdir()) == artifacts
+        assert _file_state(path) == files
         # Reset the property and compact again: splitting must not change the underlying files.
         spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('commit.manifest.target-size-bytes'='8388608')")
         assert _rewrite(spark, name) == (4, 1)
         assert _file_state(path) == files
         entries = _current_manifest_entries(path, ManifestContent.DATA)
         assert [entry.data_file.partition[0] for entry in entries] == [1, 2, 3, 4]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def test_equal_count_rewrite_reclusters_partition_groups(spark, tmp_path):
+    name = "manifest_reclustering"
+    path = tmp_path / name
+    spark.sql(f"""CREATE TABLE {name} (id BIGINT, p INT) USING iceberg PARTITIONED BY (p)
+        LOCATION '{escape_sql_string_literal(str(path))}'""")
+    try:
+        spark.sql(f"INSERT INTO {name} VALUES (1, 1), (4, 4)")
+        spark.sql(f"INSERT INTO {name} VALUES (2, 2), (3, 3)")
+        files = _file_state(path)
+        source_snapshot = _find_latest_metadata(path)["current-snapshot-id"]
+        source_pair_size = max(manifest["manifest-length"] for manifest in _manifests(path))
+        # Calibrate with the same files: EXISTING entries encode explicit lineage and can
+        # exceed the original ADDED pair size. Choose an interior target below the measured
+        # four-entry output, then restore the original interleaved source groups.
+        assert _rewrite(spark, name) == (2, 1)
+        combined_size = _manifests(path)[0]["manifest-length"]
+        target = (source_pair_size + combined_size) // 2
+        spark.sql(f"CALL system.rollback_to_snapshot('{name}', {source_snapshot})")
+        spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('commit.manifest.target-size-bytes'='{target}')")
+        assert _rewrite(spark, name) == (2, 2)
+        assert max(manifest["manifest-length"] for manifest in _manifests(path)) <= target < combined_size
+        entries = _current_manifest_entries(path, ManifestContent.DATA)
+        assert [entry.data_file.partition[0] for entry in entries] == [1, 2, 3, 4]
+        assert _file_state(path) == files
+        metadata = _find_latest_metadata(path)
+        artifacts = _payloads((path / "metadata").iterdir())
+        assert _rewrite(spark, name) == (0, 0)
+        assert _find_latest_metadata(path) == metadata
+        assert _payloads((path / "metadata").iterdir()) == artifacts
+        spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('commit.manifest.target-size-bytes'='8388608')")
+        assert _rewrite(spark, name) == (2, 1)
+        assert _file_state(path) == files
+        assert [row.id for row in spark.table(name).orderBy("id").collect()] == [1, 2, 3, 4]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
