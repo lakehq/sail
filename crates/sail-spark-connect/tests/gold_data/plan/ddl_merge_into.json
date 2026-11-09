@@ -2577,6 +2577,18 @@
       }
     },
     {
+      "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target WITH (`k` = 'v')\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED THEN UPDATE SET target.col2 = source.col2\n      ",
+      "output": {
+        "failure": "invalid argument: found WITH at 43:47 expected '(', or 'USING'"
+      }
+    },
+    {
+      "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target WITH (`write.split-size` = 10)\nUSING testcat2.ns1.ns2.tbl WITH (`split-size` = 5) AS source\nON target.col1 = source.col1\nWHEN MATCHED THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED THEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\n      ",
+      "output": {
+        "failure": "invalid argument: found WITH at 43:47 expected '(', or 'USING'"
+      }
+    },
+    {
       "input": "MERGE INTO t1 USING t2 ON t1.id = t2.id\nWHEN NOT MATCHED THEN INSERT (col1, col2) VALUES (1)",
       "exception": "\n[MERGE_INSERT_VALUE_COUNT_MISMATCH] The number of provided values (1) must match the number of expected columns (2) in the INSERT clause of MERGE. SQLSTATE: 21S01\n== SQL (line 1, position 1) ==\nMERGE INTO t1 USING t2 ON t1.id = t2.id\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nWHEN NOT MATCHED THEN INSERT (col1, col2) VALUES (1)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {

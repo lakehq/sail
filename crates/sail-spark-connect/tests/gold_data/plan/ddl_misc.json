@@ -79,6 +79,134 @@
       }
     },
     {
+      "input": "COMMENT ON COLUMN a IS 'comment'",
+      "exception": "\n[INVALID_SQL_SYNTAX.COMMENT_ON_COLUMN_INCORRECT_IDENTIFIER] Invalid SQL syntax: COMMENT ON COLUMN requires an identifier with at least two parts. Please qualify the column with the table name (e.g. `table.column`, `database.table.column`, or `catalog.database.table.column`). SQLSTATE: 42000\n== SQL (line 1, position 1) ==\nCOMMENT ON COLUMN a IS 'comment'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "success": {
+          "command": {
+            "commentOnColumn": {
+              "column": [
+                "a"
+              ],
+              "value": "comment"
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "COMMENT ON COLUMN a.b IS 'comment'",
+      "output": {
+        "success": {
+          "command": {
+            "commentOnColumn": {
+              "column": [
+                "a",
+                "b"
+              ],
+              "value": "comment"
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "COMMENT ON COLUMN a.b.c IS 'comment'",
+      "output": {
+        "success": {
+          "command": {
+            "commentOnColumn": {
+              "column": [
+                "a",
+                "b",
+                "c"
+              ],
+              "value": "comment"
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "COMMENT ON COLUMN a.b.c.d IS ''",
+      "output": {
+        "success": {
+          "command": {
+            "commentOnColumn": {
+              "column": [
+                "a",
+                "b",
+                "c",
+                "d"
+              ],
+              "value": ""
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "COMMENT ON COLUMN a.b.c.d IS 'NULL'",
+      "output": {
+        "success": {
+          "command": {
+            "commentOnColumn": {
+              "column": [
+                "a",
+                "b",
+                "c",
+                "d"
+              ],
+              "value": "NULL"
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "COMMENT ON COLUMN a.b.c.d IS 'comment'",
+      "output": {
+        "success": {
+          "command": {
+            "commentOnColumn": {
+              "column": [
+                "a",
+                "b",
+                "c",
+                "d"
+              ],
+              "value": "comment"
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "COMMENT ON COLUMN a.b.c.d IS NULL",
+      "output": {
+        "success": {
+          "command": {
+            "commentOnColumn": {
+              "column": [
+                "a",
+                "b",
+                "c",
+                "d"
+              ],
+              "value": null
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "COMMENT ON DATABASE a.b.c IS 'NULL'",
       "output": {
         "success": {
@@ -133,6 +261,24 @@
       }
     },
     {
+      "input": "COMMENT ON TABLE a.b COLUMN (\n c IS 'comment 1',\n c.d IS 'comment 2',\n c.d.e IS 'comment 3')",
+      "output": {
+        "failure": "invalid argument: found COLUMN at 21:27 expected '.', or 'IS'"
+      }
+    },
+    {
+      "input": "COMMENT ON TABLE a.b COLUMN (c IS 'comment')",
+      "output": {
+        "failure": "invalid argument: found COLUMN at 21:27 expected '.', or 'IS'"
+      }
+    },
+    {
+      "input": "COMMENT ON TABLE a.b COLUMN (c IS NULL, d IS 'keep')",
+      "output": {
+        "failure": "invalid argument: found COLUMN at 21:27 expected '.', or 'IS'"
+      }
+    },
+    {
       "input": "COMMENT ON TABLE a.b.c IS 'xYz'",
       "output": {
         "success": {
@@ -148,6 +294,12 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "INSERT WITH SCHEMA EVOLUTION INTO testcat.ns1.ns2.tbl (a, b) REPLACE WHERE a > 5 SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found WITH at 7:11 expected 'OVERWRITE', or 'INTO'"
       }
     },
     {
