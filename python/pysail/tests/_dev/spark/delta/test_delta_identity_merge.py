@@ -16,6 +16,7 @@ import pytest
 
 from pysail.testing.spark.session import spark_session_factory
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
+from pysail.tests._dev.spark.delta.test_delta_cdf import _assert_cdc_metrics, _feed
 
 
 @pytest.fixture
@@ -131,7 +132,8 @@ def test_merge_nullable_clause_conditions_do_not_generate(spark, identity_table,
         """).collect()  # noqa: S608
         rows = spark.table(name).orderBy("k").collect()
         assert rows[0] == (1, 0, 0)
-        assert rows[1].id > 1 and tuple(rows[1][1:]) == (1, 1)
+        assert rows[1].id > 1
+        assert tuple(rows[1][1:]) == (1, 1)
         assert rows[2:] == [(None, 2, 2), (None, 3, 2)]
         assert _watermark(path) == rows[1].id
     finally:
@@ -254,39 +256,49 @@ def test_merge_without_generated_rows_allows_boundary_start(spark, identity_tabl
 @pytest.mark.parametrize("deletion_vectors", [False, True], ids=["cow", "mor"])
 @pytest.mark.parametrize(("start", "step"), [(10, 3), (-10, -3)])
 def test_identity_cdf_evaluates_once_and_tracks_delete_preimages(spark, identity_table, deletion_vectors, start, step):
-    from .test_delta_cdf import _assert_cdc_metrics, _feed
-
     direction = 1 if step > 0 else -1
     high = 100000 * direction
     updated_id = 20 * direction
-    name, path = identity_table(mode="BY DEFAULT", start=start, step=step, properties=f"""
+    name, path = identity_table(
+        mode="BY DEFAULT",
+        start=start,
+        step=step,
+        properties=f"""
         TBLPROPERTIES ('delta.enableChangeDataFeed'='true',
         'delta.enableDeletionVectors'='{str(deletion_vectors).lower()}', 'delta.dataSkippingNumIndexedCols'='0')
-    """)
-    spark.sql(f"INSERT INTO {name} (id,k,v) VALUES ({high},0,1),({updated_id},1,3)").collect()
+    """,
+    )
+    spark.sql(f"INSERT INTO {name} (id,k,v) VALUES ({high},0,1),({updated_id},1,3)").collect()  # noqa: S608
     assert _watermark(path) is None
     result = spark.sql(f"""
         MERGE INTO {name} t USING (SELECT 0 AS k UNION ALL SELECT 1 UNION ALL SELECT 2) s ON t.k=s.k
         WHEN MATCHED AND s.k=0 THEN DELETE
         WHEN MATCHED THEN UPDATE SET v=31
         WHEN NOT MATCHED THEN INSERT (k,v) VALUES (s.k,22)
-    """).collect()
+    """).collect()  # noqa: S608
     assert result == [(3, 1, 1, 1)]
     rows = spark.table(name).orderBy("k").collect()
     assert rows[0] == (updated_id, 1, 31)
     generated = rows[1].id
-    assert rows[1].k == 2 and rows[1].v == 22
-    assert (generated - start) % step == 0 and (generated - start) * step >= 0
+    assert tuple(rows[1][1:]) == (2, 22)
+    assert (generated - start) % step == 0
+    assert (generated - start) * step >= 0
     assert (high - generated) * step > 0
     changes = sorted(tuple(row) for row in _feed(spark, path, 2, 2).select("id", "k", "v", "_change_type").collect())
-    assert changes == sorted([(high, 0, 1, "delete"), (updated_id, 1, 3, "update_preimage"),
-                              (updated_id, 1, 31, "update_postimage"), (generated, 2, 22, "insert")])
+    assert changes == sorted(
+        [
+            (high, 0, 1, "delete"),
+            (updated_id, 1, 3, "update_preimage"),
+            (updated_id, 1, 31, "update_postimage"),
+            (generated, 2, 22, "insert"),
+        ]
+    )
     assert _watermark(path) == high
     metrics = _assert_cdc_metrics(path, 2, "MERGE")
     assert int(metrics["numTargetRowsInserted"]) == 1
     assert int(metrics["numTargetRowsUpdated"]) == 1
     assert int(metrics["numTargetRowsDeleted"]) == 1
-    spark.sql(f"INSERT INTO {name} (k,v) VALUES (3,33)").collect()
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (3,33)").collect()  # noqa: S608
     reopened = spark.read.format("delta").load(str(path)).orderBy("k").collect()
     assert reopened[:2] == rows
     assert (reopened[2].id - high) * step > 0
@@ -295,14 +307,17 @@ def test_identity_cdf_evaluates_once_and_tracks_delete_preimages(spark, identity
 
 @pytest.mark.parametrize("overwrite", ["conditional", "full", "dynamic"])
 def test_identity_cdf_overwrite_evaluates_inserted_rows_once(spark, identity_table, overwrite):
-    from .test_delta_cdf import _feed
-
-    name, path = identity_table(mode="BY DEFAULT", properties="""PARTITIONED BY (v)
-        TBLPROPERTIES ('delta.enableChangeDataFeed'='true')""")
-    spark.sql(f"INSERT INTO {name} (id,k,v) VALUES (100000,1,1)").collect()
-    spark.sql(f"INSERT INTO {name} (k,v) VALUES (0,0)").collect()
-    assert _watermark(path) == 10
-    incoming = spark.range(1, 18, numPartitions=3).selectExpr("CAST(id AS INT) AS k", "1 AS v")
+    expected_start = 10
+    expected_count = 17
+    name, path = identity_table(
+        mode="BY DEFAULT",
+        properties="""PARTITIONED BY (v)
+        TBLPROPERTIES ('delta.enableChangeDataFeed'='true')""",
+    )
+    spark.sql(f"INSERT INTO {name} (id,k,v) VALUES (100000,1,1)").collect()  # noqa: S608
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (0,0)").collect()  # noqa: S608
+    assert _watermark(path) == expected_start
+    incoming = spark.range(1, expected_count + 1, numPartitions=3).selectExpr("CAST(id AS INT) AS k", "1 AS v")
     writer = incoming.write.format("delta").mode("overwrite")
     if overwrite == "conditional":
         writer = writer.option("replaceWhere", "v=1")
@@ -311,12 +326,14 @@ def test_identity_cdf_overwrite_evaluates_inserted_rows_once(spark, identity_tab
     writer.save(str(path))
     rows = spark.read.format("delta").load(str(path)).orderBy("k").collect()
     inserted = [row for row in rows if row.k != 0]
-    assert len(inserted) == len({row.id for row in inserted}) == 17
-    assert all(row.id > 10 and (row.id - 10) % 3 == 0 for row in inserted)
-    assert [row.k for row in inserted] == list(range(1, 18))
+    assert len(inserted) == len({row.id for row in inserted}) == expected_count
+    assert all(row.id > expected_start and (row.id - expected_start) % 3 == 0 for row in inserted)
+    assert [row.k for row in inserted] == list(range(1, expected_count + 1))
     assert [tuple(row) for row in rows if row.k == 0] == ([] if overwrite == "full" else [(10, 0, 0)])
     changes = _feed(spark, path, 3, 3).select("id", "k", "v", "_change_type").collect()
-    assert sorted(tuple(row)[:3] for row in changes if row["_change_type"] == "insert") == sorted(tuple(row) for row in inserted)
+    assert sorted(tuple(row)[:3] for row in changes if row["_change_type"] == "insert") == sorted(
+        tuple(row) for row in inserted
+    )
     deleted = [(100000, 1, 1)] + ([(10, 0, 0)] if overwrite == "full" else [])
     assert sorted(tuple(row)[:3] for row in changes if row["_change_type"] == "delete") == sorted(deleted)
     assert len(changes) == len(inserted) + len(deleted)
@@ -327,43 +344,49 @@ def test_identity_cdf_overwrite_evaluates_inserted_rows_once(spark, identity_tab
     assert any("add" in action for action in actions)
     assert any("remove" in action for action in actions)
     assert any("cdc" in action for action in actions) == (overwrite == "conditional")
-    spark.sql(f"INSERT INTO {name} (k,v) VALUES (18,1)").collect()
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (18,1)").collect()  # noqa: S608
     assert spark.table(name).where("k=18").first().id > expected_hwm
 
 
 @pytest.mark.parametrize("deletion_vectors", [False, True])
 def test_identity_cdf_unconditional_delete_deduplicates_target(spark, identity_table, deletion_vectors):
-    from .test_delta_cdf import _feed
-
-    name, path = identity_table(mode="BY DEFAULT", properties=f"""TBLPROPERTIES
-        ('delta.enableChangeDataFeed'='true', 'delta.enableDeletionVectors'='{str(deletion_vectors).lower()}')""")
-    spark.sql(f"INSERT INTO {name} (id,k,v) VALUES (100000,0,1)").collect()
-    assert spark.sql(f"""MERGE INTO {name} t USING (SELECT 0 AS k UNION ALL SELECT 0 UNION ALL SELECT 1) s
-        ON t.k=s.k WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT (k,v) VALUES (s.k,2)""").collect() == [(2, 0, 1, 1)]
+    explicit_id = 100000
+    name, path = identity_table(
+        mode="BY DEFAULT",
+        properties=f"""TBLPROPERTIES
+        ('delta.enableChangeDataFeed'='true', 'delta.enableDeletionVectors'='{str(deletion_vectors).lower()}')""",
+    )
+    spark.sql(f"INSERT INTO {name} (id,k,v) VALUES ({explicit_id},0,1)").collect()  # noqa: S608
+    result = spark.sql(f"""MERGE INTO {name} t USING (SELECT 0 AS k UNION ALL SELECT 0 UNION ALL SELECT 1) s
+        ON t.k=s.k WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT (k,v) VALUES (s.k,2)""").collect()  # noqa: S608
+    assert result == [(2, 0, 1, 1)]
     inserted = spark.table(name).collect()
-    assert len(inserted) == 1 and inserted[0].k == 1
-    assert sorted(tuple(row) for row in _feed(spark, path, 2, 2).select("id", "k", "v", "_change_type").collect()) == sorted([
-        (100000, 0, 1, "delete"), (*tuple(inserted[0]), "insert")])
-    assert _watermark(path) == 100000
+    assert len(inserted) == 1
+    assert inserted[0].k == 1
+    assert sorted(
+        tuple(row) for row in _feed(spark, path, 2, 2).select("id", "k", "v", "_change_type").collect()
+    ) == sorted([(100000, 0, 1, "delete"), (*tuple(inserted[0]), "insert")])
+    assert _watermark(path) == explicit_id
 
 
 @pytest.mark.parametrize("from_identity_source", [False, True])
 def test_explicit_only_insert_does_not_track_input_identity_metadata(spark, identity_table, from_identity_source):
-    target, path = identity_table(mode="BY DEFAULT")
+    start = 10
+    target, path = identity_table(mode="BY DEFAULT", start=start)
     if from_identity_source:
         source, _ = identity_table(start=1000, step=7)
-        spark.sql(f"INSERT INTO {source} (k,v) VALUES (1,10)").collect()
-        spark.sql(f"INSERT INTO {target} (id,k,v) SELECT id,k,v FROM {source}").collect()
+        spark.sql(f"INSERT INTO {source} (k,v) VALUES (1,10)").collect()  # noqa: S608
+        spark.sql(f"INSERT INTO {target} (id,k,v) SELECT id,k,v FROM {source}").collect()  # noqa: S608
         expected = 1000
     else:
-        spark.sql(f"INSERT INTO {target} (id,k,v) VALUES (42,1,10)").collect()
+        spark.sql(f"INSERT INTO {target} (id,k,v) VALUES (42,1,10)").collect()  # noqa: S608
         expected = 42
-    spark.sql(f"INSERT INTO {target} (id,k,v) VALUES (NULL,2,20)").collect()
+    spark.sql(f"INSERT INTO {target} (id,k,v) VALUES (NULL,2,20)").collect()  # noqa: S608
     assert _watermark(path) is None
     assert spark.table(target).orderBy("k").collect() == [(expected, 1, 10), (None, 2, 20)]
-    spark.sql(f"INSERT INTO {target} (k,v) VALUES (3,30)").collect()
-    assert spark.table(target).where("k=3").first().id == 10
-    assert _watermark(path) == 10
+    spark.sql(f"INSERT INTO {target} (k,v) VALUES (3,30)").collect()  # noqa: S608
+    assert spark.table(target).where("k=3").first().id == start
+    assert _watermark(path) == start
 
 
 @pytest.mark.parametrize(("start", "step"), [(9223372036854775807, 1), (-9223372036854775808, -1)])
@@ -371,7 +394,7 @@ def test_first_identity_value_checks_successor_atomically(spark, identity_table,
     name, path = identity_table(start=start, step=step)
     before = _state(spark, name, path)
     with pytest.raises(Exception, match="DELTA_IDENTITY_COLUMN_VALUE_OVERFLOW"):
-        spark.sql(f"INSERT INTO {name} (k,v) VALUES (1,10)").collect()
+        spark.sql(f"INSERT INTO {name} (k,v) VALUES (1,10)").collect()  # noqa: S608
     assert _state(spark, name, path) == before
     assert _watermark(path) is None
 
@@ -404,7 +427,8 @@ def test_merge_identity_tracking_is_independent_of_file_statistics(spark, identi
         assert "id" not in stats.get("maxValues", {})
     spark.sql(f"INSERT INTO {name} (k,v) VALUES (2,20)").collect()  # noqa: S608
     reopened = spark.read.format("delta").load(str(path)).orderBy("k").collect()
-    assert len(reopened) == 2
+    expected_count = 2
+    assert len(reopened) == expected_count
     assert reopened[1].id > generated
     assert _watermark(path) == reopened[1].id
 
@@ -728,7 +752,9 @@ def _check_non_generating_allocation_rows(spark, tmp_path, layout, *, distribute
             assert result[-1].id >= 1
             assert all(row == (row.k + 1, row.k, row.k * 7) for row in result[1:-1])
             touched = [pq.read_table(path / add["path"]).to_pylist() for add in seed_files]
-            copied_ids = [row["id"] for file_rows in touched if any(row["k"] == 0 for row in file_rows) for row in file_rows]
+            copied_ids = [
+                row["id"] for file_rows in touched if any(row["k"] == 0 for row in file_rows) for row in file_rows
+            ]
             expected_watermark = max([result[-1].id, *copied_ids])
         assert _watermark(path) == expected_watermark
         changes = [

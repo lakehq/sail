@@ -5,9 +5,9 @@ import json
 import pyarrow.parquet as pq
 import pytest
 
-from . import test_delta_identity_merge
-from .test_delta_cdf import _feed
-from .test_delta_identity_merge import _log, _watermark
+from pysail.tests._dev.spark.delta import test_delta_identity_merge
+from pysail.tests._dev.spark.delta.test_delta_cdf import _feed
+from pysail.tests._dev.spark.delta.test_delta_identity_merge import _log, _watermark
 
 identity_table = test_delta_identity_merge.identity_table
 
@@ -21,7 +21,7 @@ def test_insert_only_identity_cdf_preserves_untouched_files(spark, identity_tabl
         properties=f"""TBLPROPERTIES ('delta.enableChangeDataFeed'='true',
             'delta.enableDeletionVectors'='{str(deletion_vectors).lower()}')""",
     )
-    spark.sql(f"INSERT INTO {name} (k,v) VALUES (1,10),(2,20)").collect()
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (1,10),(2,20)").collect()  # noqa: S608
     before_rows = [tuple(row) for row in spark.table(name).orderBy("k").collect()]
     before_log = _log(path)
     before_watermark = _watermark(path)
@@ -30,7 +30,8 @@ def test_insert_only_identity_cdf_preserves_untouched_files(spark, identity_tabl
         "matched": "SELECT 1 AS k,30 AS v",
         "empty": "SELECT 3 AS k,30 AS v WHERE false",
     }[source]
-    insert = "(k,v) VALUES (s.k,s.v)" if generated else "(id,k,v) VALUES (999999,s.k,s.v)"
+    explicit_id = 999999
+    insert = "(k,v) VALUES (s.k,s.v)" if generated else f"(id,k,v) VALUES ({explicit_id},s.k,s.v)"
     spark.sql(f"""
         MERGE INTO {name} t USING ({source_sql}) s ON t.k=s.k
         WHEN NOT MATCHED THEN INSERT {insert}
@@ -48,7 +49,7 @@ def test_insert_only_identity_cdf_preserves_untouched_files(spark, identity_tabl
             assert (inserted[0][0] - 10) % 3 == 0
             assert _watermark(path) == inserted[0][0]
         else:
-            assert inserted[0][0] == 999999
+            assert inserted[0][0] == explicit_id
     if not generated or not inserted:
         assert _watermark(path) == before_watermark
 

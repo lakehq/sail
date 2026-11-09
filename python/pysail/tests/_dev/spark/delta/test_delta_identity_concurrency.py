@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pyarrow.parquet as pq
 import pytest
 from pyspark.errors import PySparkException
-from pyspark.sql import functions as F
+from pyspark.sql import functions as sf
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
@@ -62,7 +62,7 @@ def merge_gate(tmp_path):
     path = tmp_path / "table"
 
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):  # noqa: N802
+        def do_GET(self):
             writer = int(self.path.strip("/"))
             with lock:
                 arrivals.append((writer, sorted(_log(path))))
@@ -89,8 +89,8 @@ def merge_gate(tmp_path):
                 response.read()
             return value
 
-        gate = F.udf(wait_at_gate, "long").asNondeterministic()
-        spark.range(writer, writer + 1, numPartitions=1).select(gate(F.col("id")).alias("k")).createOrReplaceTempView(
+        gate = sf.udf(wait_at_gate, "long").asNondeterministic()
+        spark.range(writer, writer + 1, numPartitions=1).select(gate(sf.col("id")).alias("k")).createOrReplaceTempView(
             "gated_source"
         )
 
@@ -137,7 +137,7 @@ def test_concurrent_identity_merge_rejects_stale_allocation(remote, tmp_path, me
                     winner.result(timeout=90)
                 finally:
                     release_second.set()
-                with pytest.raises(PySparkException, match="^Failed to commit transaction: 0$"):
+                with pytest.raises(PySparkException, match=r"^Failed to commit transaction: 0$"):
                     loser.result(timeout=90)
 
             assert {writer for writer, _ in arrivals} == {1, 2}

@@ -178,12 +178,12 @@ impl DeltaWriter {
         table_path: Path,
         config: WriterConfig,
     ) -> Self {
-        #[expect(unused_mut)]
-        let mut writer = Self::new(object_store, table_path, config);
+        let writer = Self::new(object_store, table_path, config);
         #[cfg(debug_assertions)]
-        {
-            writer.closed_partition_keys = None;
-        }
+        let writer = Self {
+            closed_partition_keys: None,
+            ..writer
+        };
         writer
     }
 

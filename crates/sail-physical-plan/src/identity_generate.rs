@@ -58,14 +58,13 @@ impl IdentityGenerateExec {
             {
                 return plan_err!("IdentityGenerate requires nonzero steps and fresh output names");
             }
-            if let Some(mask) = column.mask {
-                if schema
+            if let Some(mask) = column.mask
+                && schema
                     .fields()
                     .get(mask)
                     .is_none_or(|f| f.data_type() != &DataType::Boolean)
-                {
-                    return plan_err!("invalid IdentityGenerate mask index {mask}");
-                }
+            {
+                return plan_err!("invalid IdentityGenerate mask index {mask}");
             }
             fields.push(Arc::new(Field::new(
                 &column.output,
@@ -277,12 +276,23 @@ impl RecordBatchStream for IdentityGenerateStream {
     }
 }
 
+impl Stream for IdentityGenerateStream {
+    type Item = Result<RecordBatch>;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.input.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(batch))) => Poll::Ready(Some(self.generate(batch))),
+            other => other,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::physical_plan::empty::EmptyExec;
     use futures::TryStreamExt;
+
+    use super::*;
 
     fn descriptor(step: i64) -> IdentityGenerateColumn {
         IdentityGenerateColumn {
@@ -399,14 +409,5 @@ mod tests {
             .ok_or_else(|| DataFusionError::Internal("missing generator".into()))?;
         assert_eq!(generator.allocation_partitions(), 11);
         Ok(())
-    }
-}
-impl Stream for IdentityGenerateStream {
-    type Item = Result<RecordBatch>;
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.input.as_mut().poll_next(cx) {
-            Poll::Ready(Some(Ok(batch))) => Poll::Ready(Some(self.generate(batch))),
-            other => other,
-        }
     }
 }

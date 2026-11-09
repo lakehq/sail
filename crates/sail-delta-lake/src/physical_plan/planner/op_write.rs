@@ -190,8 +190,9 @@ async fn build_overwrite_if_plan(
         && !ctx.config().identity_columns_to_track.is_empty();
     let (aligned_new, aligned_old) = align_schemas_for_union(Arc::clone(&input), old_data_plan)?;
     let union_plan = if single_stream_cdf {
-        use super::change_data::{tag_row_operation, validate_change_data_input};
         use sail_common_datafusion::datasource::RowLevelOperationType;
+
+        use super::change_data::{tag_row_operation, validate_change_data_input};
         validate_change_data_input(&aligned_new)?;
         let deleted = build_old_data_plan(
             ctx,

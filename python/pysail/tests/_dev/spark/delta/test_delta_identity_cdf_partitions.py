@@ -5,8 +5,8 @@ from urllib.parse import unquote
 import pyarrow.parquet as pq
 import pytest
 
-from .test_delta_cdf import _actions, _assert_cdc_metrics, _feed
-from .test_delta_identity_merge import _watermark, identity_table  # noqa: F401
+from pysail.tests._dev.spark.delta.test_delta_cdf import _actions, _assert_cdc_metrics, _feed
+from pysail.tests._dev.spark.delta.test_delta_identity_merge import _watermark, identity_table  # noqa: F401
 
 
 @pytest.mark.parametrize("deletion_vectors", [False, True], ids=["cow", "mor"])
@@ -22,7 +22,7 @@ def test_identity_merge_cdf_partition_revisits(spark, identity_table, deletion_v
                 'delta.enableChangeDataFeed'='true',
                 'delta.enableDeletionVectors'='{str(deletion_vectors).lower()}')""",
         )
-        spark.sql(f"INSERT INTO {name} (k,v,p) VALUES (1,100,10),(2,200,20)").collect()
+        spark.sql(f"INSERT INTO {name} (k,v,p) VALUES (1,100,10),(2,200,20)").collect()  # noqa: S608
         before = {row.k: tuple(row) for row in spark.table(name).collect()}
         old_hwm = _watermark(path)
         p1, p2 = (20, 10) if move_partitions else (10, 20)
@@ -32,7 +32,7 @@ def test_identity_merge_cdf_partition_revisits(spark, identity_table, deletion_v
             ON t.k=s.k
             WHEN MATCHED THEN UPDATE SET v=s.v,p=s.p
             WHEN NOT MATCHED THEN INSERT (k,v,p) VALUES (s.k,s.v,s.p)
-        """).collect()
+        """).collect()  # noqa: S608
         assert result == [(3, 2, 0, 1)]
         rows = spark.read.format("delta").load(str(path)).orderBy("k").collect()
         generated = rows[2].id
@@ -41,8 +41,9 @@ def test_identity_merge_cdf_partition_revisits(spark, identity_table, deletion_v
             (before[2][0], 2, 201, p2),
             (generated, 3, 300, 10),
         ]
-        assert generated > old_hwm and (generated - 10) % 3 == 0
-        assert len({row.id for row in rows}) == 3
+        assert generated > old_hwm
+        assert (generated - 10) % 3 == 0
+        assert len({row.id for row in rows}) == len(rows)
         assert _watermark(path) == generated
         expected = sorted(
             [
