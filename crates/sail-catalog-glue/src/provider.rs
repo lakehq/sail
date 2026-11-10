@@ -1107,6 +1107,35 @@ mod tests {
     }
 
     #[test]
+    fn view_to_status_falls_back_when_view_definition_text_is_empty() {
+        let provider = GlueCatalogProvider::new("glue".to_string(), GlueCatalogConfig::default());
+        let table = Table::builder()
+            .name("hive_view")
+            .table_type("VIRTUAL_VIEW")
+            .view_definition(
+                aws_sdk_glue::types::ViewDefinition::builder()
+                    .representations(
+                        aws_sdk_glue::types::ViewRepresentation::builder()
+                            .view_original_text("")
+                            .build(),
+                    )
+                    .build(),
+            )
+            .view_original_text("SELECT 1 AS id")
+            .storage_descriptor(StorageDescriptor::builder().columns(view_column()).build())
+            .build()
+            .unwrap();
+
+        let status = provider
+            .view_to_status(&vec!["db".to_string()].try_into().unwrap(), &table)
+            .unwrap();
+        let TableKind::View { definition, .. } = status.kind else {
+            panic!("expected view");
+        };
+        assert_eq!(definition, "SELECT 1 AS id");
+    }
+
+    #[test]
     fn view_to_status_accepts_athena_views() {
         // Views created in Amazon Athena store a base64-encoded Presto view in
         // ViewOriginalText and have no ViewDefinition.
