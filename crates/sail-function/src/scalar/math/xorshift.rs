@@ -159,16 +159,204 @@ impl SparkXorShiftRandom {
                 break (v1, v2, s);
             }
         };
-        let multiplier = (-2.0 * s.ln() / s).sqrt();
+        let multiplier = (-2.0 * strict_log(s) / s).sqrt();
         self.next_next_gaussian = v2 * multiplier;
         self.have_next_next_gaussian = true;
         v1 * multiplier
     }
 }
 
+// [CREDIT]: https://netlib.org/fdlibm/e_log.c (fdlibm 5.3, "@(#)e_log.c 1.3 95/01/18")
+// ====================================================
+// Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+//
+// Developed at SunSoft, a Sun Microsystems, Inc. business.
+// Permission to use, copy, modify, and distribute this
+// software is freely granted, provided that this notice
+// is preserved.
+// ====================================================
+//
+// __ieee754_log(x)
+// Return the logrithm of x
+//
+// Method :
+//   1. Argument Reduction: find k and f such that
+//            x = 2^k * (1+f),
+//       where  sqrt(2)/2 < 1+f < sqrt(2) .
+//
+//   2. Approximation of log(1+f).
+//    Let s = f/(2+f) ; based on log(1+f) = log(1+s) - log(1-s)
+//         = 2s + 2/3 s**3 + 2/5 s**5 + .....,
+//              = 2s + s*R
+//      We use a special Reme algorithm on [0,0.1716] to generate
+//     a polynomial of degree 14 to approximate R The maximum error
+//    of this polynomial approximation is bounded by 2**-58.45. In
+//    other words,
+//                2      4      6      8      10      12      14
+//        R(z) ~ Lg1*s +Lg2*s +Lg3*s +Lg4*s +Lg5*s  +Lg6*s  +Lg7*s
+//      (the values of Lg1 to Lg7 are listed in the program)
+//    and
+//        |      2          14          |     -58.45
+//        | Lg1*s +...+Lg7*s    -  R(z) | <= 2
+//        |                             |
+//    Note that 2s = f - s*f = f - hfsq + s*hfsq, where hfsq = f*f/2.
+//    In order to guarantee error in log below 1ulp, we compute log
+//    by
+//        log(1+f) = f - s*(f - R)    (if f is not too large)
+//        log(1+f) = f - (hfsq - s*(hfsq+R)).    (better accuracy)
+//
+//    3. Finally,  log(x) = k*ln2 + log(1+f).
+//                = k*ln2_hi+(f-(hfsq-(s*(hfsq+R)+k*ln2_lo)))
+//       Here ln2 is split into two floating point number:
+//            ln2_hi + ln2_lo,
+//       where n*ln2_hi is always exact for |n| < 2000.
+//
+// Special cases:
+//    log(x) is NaN with signal if x < 0 (including -INF) ;
+//    log(+INF) is +INF; log(0) is -INF with signal;
+//    log(NaN) is that NaN with no signal.
+//
+// Accuracy:
+//    according to an error analysis, the error is always less than
+//    1 ulp (unit in the last place).
+//
+// Constants:
+// The hexadecimal values are the intended ones for the following
+// constants. The decimal values may be used, provided that the
+// compiler will convert from decimal to binary accurately enough
+// to produce the hexadecimal values shown.
+//
+/// Returns the natural logarithm of `x`, bit for bit as Java's `StrictMath.log`,
+/// which `Random.nextGaussian()` uses.
+fn strict_log(x: f64) -> f64 {
+    const LN2_HI: f64 = f64::from_bits(0x3fe6_2e42_fee0_0000);
+    const LN2_LO: f64 = f64::from_bits(0x3dea_39ef_3579_3c76);
+    const TWO54: f64 = f64::from_bits(0x4350_0000_0000_0000);
+    const LG1: f64 = f64::from_bits(0x3fe5_5555_5555_5593);
+    const LG2: f64 = f64::from_bits(0x3fd9_9999_9997_fa04);
+    const LG3: f64 = f64::from_bits(0x3fd2_4924_9422_9359);
+    const LG4: f64 = f64::from_bits(0x3fcc_71c5_1d8e_78af);
+    const LG5: f64 = f64::from_bits(0x3fc7_4664_96cb_03de);
+    const LG6: f64 = f64::from_bits(0x3fc3_9a09_d078_c69f);
+    const LG7: f64 = f64::from_bits(0x3fc2_f112_df3e_5244);
+    const THIRD: f64 = f64::from_bits(0x3fd5_5555_5555_5555);
+
+    let mut x = x;
+    let mut hx = (x.to_bits() >> 32) as i32;
+    let lx = x.to_bits() as u32;
+    let mut k: i32 = 0;
+    if hx < 0x0010_0000 {
+        if ((hx & 0x7fff_ffff) as u32 | lx) == 0 {
+            return f64::NEG_INFINITY;
+        }
+        if hx < 0 {
+            return f64::NAN;
+        }
+        k -= 54;
+        x *= TWO54;
+        hx = (x.to_bits() >> 32) as i32;
+    }
+    if hx >= 0x7ff0_0000 {
+        return x + x;
+    }
+    k += (hx >> 20) - 1023;
+    hx &= 0x000f_ffff;
+    let i = (hx + 0x95f64) & 0x10_0000;
+    x = f64::from_bits(
+        (((hx | (i ^ 0x3ff0_0000)) as u32 as u64) << 32) | (x.to_bits() & 0xffff_ffff),
+    );
+    k += i >> 20;
+    let f = x - 1.0;
+    if (0x000f_ffff & (2 + hx)) < 3 {
+        if f == 0.0 {
+            if k == 0 {
+                return 0.0;
+            }
+            let dk = k as f64;
+            return dk * LN2_HI + dk * LN2_LO;
+        }
+        let r = f * f * (0.5 - THIRD * f);
+        if k == 0 {
+            return f - r;
+        }
+        let dk = k as f64;
+        return dk * LN2_HI - ((r - dk * LN2_LO) - f);
+    }
+    let s = f / (2.0 + f);
+    let dk = k as f64;
+    let z = s * s;
+    let mut i = hx - 0x6147a;
+    let w = z * z;
+    let j = 0x6b851 - hx;
+    let t1 = w * (LG2 + w * (LG4 + w * LG6));
+    let t2 = z * (LG1 + w * (LG3 + w * (LG5 + w * LG7)));
+    i |= j;
+    let r = t2 + t1;
+    if i > 0 {
+        let hfsq = 0.5 * f * f;
+        if k == 0 {
+            f - (hfsq - s * (hfsq + r))
+        } else {
+            dk * LN2_HI - ((hfsq - (s * (hfsq + r) + dk * LN2_LO)) - f)
+        }
+    } else if k == 0 {
+        f - s * (f - r)
+    } else {
+        dk * LN2_HI - ((s * (f - r) - dk * LN2_LO) - f)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_strict_log_matches_java() {
+        // `StrictMath.log(x)` in Java, where `f64::ln` differs in the last bit.
+        for (x, expected) in [
+            (0.3012676595157123, -1.199756175096359),
+            (0.7141294836112025, -0.33669098348888105),
+            (0.3949634040007439, -0.9289621664724979),
+            (0.5842517929701989, -0.5374232367271445),
+        ] {
+            assert_eq!(strict_log(x), expected);
+        }
+        assert_eq!(strict_log(1.0), 0.0);
+        assert_eq!(strict_log(0.0), f64::NEG_INFINITY);
+        assert!(strict_log(-1.0).is_nan());
+    }
+
+    #[test]
+    fn test_next_gaussian_matches_spark() {
+        // `new XORShiftRandom(42).nextGaussian()` in Spark 4.2.
+        let expected = [
+            2.384479054241165,
+            0.1920934041293524,
+            0.7337336533286575,
+            -0.5224480195716871,
+            2.060084179317831,
+            0.20963383826633825,
+            -0.548526047771831,
+            1.907968332171668,
+            -0.41705865828987015,
+            1.0872260173387922,
+            0.952245128862656,
+            0.8510993210731433,
+            -0.14118066384892058,
+            1.7477132048926163,
+            0.10149926853578273,
+            0.9645306446729486,
+            1.0996250111363042,
+            -0.878471078118558,
+            -0.6581329650674823,
+            -0.5268540568138337,
+            0.5749488892067608,
+            0.8799444982255561,
+            0.6553338995859576,
+        ];
+        let mut rng = SparkXorShiftRandom::new(42);
+        assert_eq!(expected.map(|_| rng.next_gaussian()), expected);
+    }
 
     /// Expected values from Spark's XORShiftRandom (verified via spark-shell).
     const SPARK_XORSHIFT_SEED_1: [f64; 5] = [

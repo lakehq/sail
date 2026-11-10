@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion_common::DFSchema;
+use datafusion_common::{DFSchema, Result};
 use datafusion_expr::{EmptyRelation, LogicalPlan};
 
 use crate::resolver::state::PlanResolverState;
@@ -8,6 +8,7 @@ use crate::resolver::state::PlanResolverState;
 pub(crate) mod exists;
 pub(crate) mod explode;
 pub(crate) mod monotonic_id;
+pub(crate) mod seeded_random;
 pub(crate) mod spark_partition_id;
 pub(crate) mod table_input;
 pub(crate) mod window;
@@ -21,5 +22,5 @@ fn empty_logical_plan() -> LogicalPlan {
 
 pub(crate) trait PlanRewriter<'s> {
     fn new_from_plan(plan: LogicalPlan, state: &'s mut PlanResolverState) -> Self;
-    fn into_plan(self) -> LogicalPlan;
+    fn into_plan(self) -> Result<LogicalPlan>;
 }

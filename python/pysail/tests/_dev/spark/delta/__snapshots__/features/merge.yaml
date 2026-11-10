@@ -288,10 +288,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -328,6 +337,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_limit:
@@ -533,6 +545,9 @@ data:
                                   Filter: column3 + Int32(1) > Int32(10) AND (column1 = Int32(1) OR column1 = Int32(2) OR column1 = Int32(4))
                                     Values: (Int32(1), Utf8("existing"), Int32(15), Utf8("promote")), (Int32(2), Utf8("vip"), Int32(22), Utf8("platinum")), (Int32(4), Utf8("standard"), Int32(25), Utf8("regular"))
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -560,10 +575,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -600,6 +624,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_limit:
@@ -732,6 +759,9 @@ data:
                                 Projection: column1 AS #4, column2 AS #5, column3 AS #6, column4 AS #7
                                   Filter: column3 + Int32(1) > Int32(10) AND (column1 = Int32(1) OR column1 = Int32(2) OR column1 = Int32(4))
                                     Values: (Int32(1), Utf8("existing"), Int32(15), Utf8("promote")), (Int32(2), Utf8("vip"), Int32(22), Utf8("platinum")), (Int32(4), Utf8("standard"), Int32(25), Utf8("regular"))
+
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -1877,6 +1907,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
