@@ -705,9 +705,9 @@ def test_seeded_case_subquery_columns_are_shared(spark):
 def test_seeded_column_reuse_preserves_timestamp_types(spark, session_timezone, condition):
     _ = session_timezone
     df = spark.sql(
-        f"SELECT CASE WHEN {condition} THEN TIMESTAMP_NTZ '1970-01-01 00:00:00' END AS a, "
-        f"CASE WHEN {condition} THEN TIMESTAMP_LTZ '1970-01-01 00:00:00Z' END AS b "
-        "FROM range(0, 3, 1, 1)"
+        f"""SELECT CASE WHEN {condition} THEN TIMESTAMP_NTZ '1970-01-01 00:00:00' END AS a
+        CASE WHEN {condition} THEN TIMESTAMP_LTZ '1970-01-01 00:00:00Z' END AS b
+        FROM range(0, 3, 1, 1)"""  # noqa: S608
     )
     assert [field.dataType.simpleString() for field in df.schema] == ["timestamp_ntz", "timestamp"]
-    assert len(df.collect()) == 3
+    assert len(df.collect()) == 3  # noqa: PLR2004
