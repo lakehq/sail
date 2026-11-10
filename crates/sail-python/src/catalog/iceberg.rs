@@ -54,7 +54,7 @@ impl PyIcebergRestCatalogProvider {
                     IcebergRestCatalogOptions {
                         credentials: Arc::new(EmptyCatalogCredentials),
                         properties,
-                        sigv4: None,
+                        sigv4_service: None,
                     },
                 )
             },

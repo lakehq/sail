@@ -6981,7 +6981,6 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-iceberg",
- "secrecy",
  "serde",
  "serde_json",
  "sha2",

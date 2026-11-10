@@ -908,28 +908,12 @@ pub enum CatalogType {
         )]
         password: Option<SecretString>,
         /// Signs every request with AWS Signature Version 4, for example for the
-        /// AWS Glue or Amazon S3 Tables Iceberg REST endpoints.
+        /// Amazon S3 Tables or RustFS Iceberg REST endpoints.
         #[serde(skip_serializing_if = "Option::is_none")]
         sigv4_enabled: Option<bool>,
-        /// The SigV4 signing region. Defaults to the AWS region provider chain.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        signing_region: Option<String>,
-        /// The SigV4 signing name, such as `glue` or `s3tables`. Defaults to `execute-api`.
+        /// The SigV4 signing name, such as `s3tables` or `s3`. Defaults to `execute-api`.
         #[serde(skip_serializing_if = "Option::is_none")]
         signing_name: Option<String>,
-        /// Static AWS credentials. Default to the AWS credential provider chain.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        access_key_id: Option<String>,
-        #[serde(
-            skip_serializing_if = "Option::is_none",
-            serialize_with = "serialize_optional_secret"
-        )]
-        secret_access_key: Option<SecretString>,
-        #[serde(
-            skip_serializing_if = "Option::is_none",
-            serialize_with = "serialize_optional_secret"
-        )]
-        session_token: Option<SecretString>,
         #[serde(flatten)]
         cache: CatalogCacheConfig,
     },

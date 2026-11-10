@@ -24,11 +24,7 @@ An Iceberg REST catalog can be configured using the following options.
 - `username` (optional): The user name for HTTP Basic authentication, which some REST catalog servers, such as Apache Gravitino, accept instead of a token. Must be set together with `password`.
 - `password` (optional): The password for HTTP Basic authentication. Sail sends `Authorization: Basic <base64(username:password)>`. Basic authentication cannot be combined with `oauth_access_token`, `bearer_access_token`, or `bearer_access_token_file`.
 - `sigv4_enabled` (optional): Whether to sign every request with [AWS Signature Version 4](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html) (SigV4). Use this option for Iceberg REST endpoints that verify SigV4, such as Amazon S3 Tables and RustFS. The default is `false`.
-- `signing_region` (optional): The AWS region used for signing, such as `us-east-1`. If this option is not set, Sail resolves the region from the AWS default region provider chain, such as the `AWS_REGION` environment variable or the AWS profile.
 - `signing_name` (optional): The service name used for signing. The default is `execute-api`. Use `s3tables` for Amazon S3 Tables and `s3` for RustFS.
-- `access_key_id` (optional): The AWS access key ID used for signing. Must be set together with `secret_access_key`. If both options are not set, Sail resolves credentials from the AWS default credential provider chain.
-- `secret_access_key` (optional): The AWS secret access key used for signing. Must be set together with `access_key_id`. If both options are not set, Sail resolves credentials from the AWS default credential provider chain.
-- `session_token` (optional): The AWS session token for temporary credentials. Requires `access_key_id` and `secret_access_key`.
 
 See [Common Options](./index.md#common-options) for caching configuration.
 
@@ -74,16 +70,20 @@ This example uses HTTP Basic authentication.
 export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://catalog.example.com", warehouse="s3://data/warehouse", username="...", password="..."}]'
 ```
 
-This example connects to the Amazon S3 Tables Iceberg REST endpoint with SigV4 authentication. The warehouse is the ARN of the table bucket. The AWS credentials are resolved from the default credential provider chain.
+This example connects to the Amazon S3 Tables Iceberg REST endpoint with SigV4 authentication. The warehouse is the ARN of the table bucket. The signing region and the AWS credentials are resolved from the AWS default provider chains.
 
 ```bash
-export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="s3tables", uri="https://s3tables.us-east-1.amazonaws.com/iceberg", warehouse="arn:aws:s3tables:us-east-1:111122223333:bucket/my-table-bucket", sigv4_enabled=true, signing_region="us-east-1", signing_name="s3tables"}]'
+export AWS_REGION="us-east-1"
+export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="s3tables", uri="https://s3tables.us-east-1.amazonaws.com/iceberg", warehouse="arn:aws:s3tables:us-east-1:111122223333:bucket/my-table-bucket", sigv4_enabled=true, signing_name="s3tables"}]'
 ```
 
 This example connects to the RustFS Iceberg REST endpoint with SigV4 authentication and static AWS credentials.
 
 ```bash
-export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="rustfs", uri="http://localhost:9000/iceberg", warehouse="warehouse", access_delegation="none", sigv4_enabled=true, signing_region="us-east-1", signing_name="s3", access_key_id="...", secret_access_key="..."}]'
+export AWS_REGION="us-east-1"
+export AWS_ACCESS_KEY_ID="..."
+export AWS_SECRET_ACCESS_KEY="..."
+export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="rustfs", uri="http://localhost:9000/iceberg", warehouse="warehouse", access_delegation="none", sigv4_enabled=true, signing_name="s3"}]'
 ```
 
 This example configures a client-side namespace separator fallback.

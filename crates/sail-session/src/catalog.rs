@@ -14,9 +14,7 @@ use sail_catalog::provider::{
 };
 use sail_catalog_glue::{GlueCatalogConfig, GlueCatalogProvider};
 use sail_catalog_hms::{HmsCatalogConfig, HmsCatalogProvider};
-use sail_catalog_iceberg::{
-    IcebergRestCatalogOptions, IcebergRestCatalogProvider, SigV4Credentials, SigV4Options,
-};
+use sail_catalog_iceberg::{IcebergRestCatalogOptions, IcebergRestCatalogProvider};
 use sail_catalog_memory::MemoryCatalogProvider;
 use sail_catalog_onelake::{OneLakeApiKind, OneLakeCatalogProvider};
 use sail_catalog_system::{SYSTEM_CATALOG_NAME, SystemCatalogProvider};
@@ -61,11 +59,7 @@ pub fn create_catalog_manager(
                     username,
                     password,
                     sigv4_enabled,
-                    signing_region,
                     signing_name,
-                    access_key_id,
-                    secret_access_key,
-                    session_token,
                     cache,
                 } => {
                     let mut properties = HashMap::new();
@@ -96,14 +90,11 @@ pub fn create_catalog_manager(
                         password.as_ref(),
                     )?;
 
-                    let sigv4 = iceberg_rest_sigv4(
-                        *sigv4_enabled,
-                        signing_region.as_ref(),
-                        signing_name.as_ref(),
-                        access_key_id.as_ref(),
-                        secret_access_key.as_ref(),
-                        session_token.as_ref(),
-                    )?;
+                    let sigv4_service = if sigv4_enabled.unwrap_or(false) {
+                        signing_name.clone().or_else(|| Some("execute-api".to_string()))
+                    } else {
+                        None
+                    };
 
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || {
@@ -112,7 +103,7 @@ pub fn create_catalog_manager(
                                 IcebergRestCatalogOptions {
                                     credentials,
                                     properties,
-                                    sigv4,
+                                    sigv4_service,
                                 },
                             )?;
                             Ok(provider)
@@ -395,43 +386,6 @@ fn iceberg_rest_credentials(
     }
 }
 
-fn iceberg_rest_sigv4(
-    sigv4_enabled: Option<bool>,
-    signing_region: Option<&String>,
-    signing_name: Option<&String>,
-    access_key_id: Option<&String>,
-    secret_access_key: Option<&SecretString>,
-    session_token: Option<&SecretString>,
-) -> CatalogResult<Option<SigV4Options>> {
-    Ok(match sigv4_enabled {
-        Some(true) => Some(SigV4Options {
-            region: signing_region.cloned(),
-            service: signing_name
-                .cloned()
-                .unwrap_or_else(|| "execute-api".to_string()),
-            credentials: match (access_key_id, secret_access_key, session_token) {
-                (Some(access_key_id), Some(secret_access_key), session_token) => {
-                    Some(SigV4Credentials {
-                        access_key_id: access_key_id.clone(),
-                        secret_access_key: secret_access_key.clone(),
-                        session_token: session_token.cloned(),
-                    })
-                }
-                (Some(_), None, _) | (None, Some(_), _) => {
-                    return Err(CatalogError::InvalidArgument("Iceberg REST catalog options 'access_key_id' and 'secret_access_key' must be set together"
-                        .to_string()));
-                }
-                (None, None, Some(_)) => {
-                    return Err(CatalogError::InvalidArgument("Iceberg REST catalog option 'session_token' requires 'access_key_id' and 'secret_access_key'"
-                        .to_string()));
-                }
-                (None, None, None) => None,
-            },
-        }),
-        _ => None,
-    })
-}
-
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -603,79 +557,6 @@ mod tests {
                 .unwrap_err();
         assert!(
             matches!(&error, CatalogError::InvalidArgument(message) if message.contains("cannot be combined")),
-            "unexpected error: {error:?}"
-        );
-    }
-
-    #[test]
-    fn iceberg_sigv4_uses_static_credentials() {
-        let options = iceberg_rest_sigv4(
-            Some(true),
-            Some(&"us-east-1".to_string()),
-            Some(&"s3".to_string()),
-            Some(&"AKID".to_string()),
-            Some(&SecretString::from("secret".to_string())),
-            Some(&SecretString::from("token".to_string())),
-        )
-        .unwrap()
-        .unwrap();
-
-        assert_eq!(options.region, Some("us-east-1".to_string()));
-        assert_eq!(options.service, "s3".to_string());
-
-        let credentials = options.credentials.unwrap();
-        assert_eq!(credentials.access_key_id, "AKID");
-        assert_eq!(credentials.secret_access_key.expose_secret(), "secret");
-        assert_eq!(credentials.session_token.unwrap().expose_secret(), "token");
-    }
-
-    #[test]
-    fn iceberg_sigv4_rejects_a_key_without_its_secret() {
-        let error = iceberg_rest_sigv4(
-            Some(true),
-            None,
-            None,
-            Some(&"AKID".to_string()),
-            None,
-            None,
-        )
-        .unwrap_err();
-        assert!(
-            matches!(&error, CatalogError::InvalidArgument(message) if message.contains("must be set together")),
-            "unexpected error: {error:?}"
-        );
-    }
-
-    #[test]
-    fn iceberg_sigv4_rejects_a_secret_without_its_key() {
-        let error = iceberg_rest_sigv4(
-            Some(true),
-            None,
-            None,
-            None,
-            Some(&SecretString::from("secret".to_string())),
-            Some(&SecretString::from("token".to_string())),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(&error, CatalogError::InvalidArgument(message) if message.contains("must be set together")),
-            "unexpected error: {error:?}"
-        );
-    }
-
-    #[test]
-    fn iceberg_sigv4_rejects_a_session_token_without_keys() {
-        let error = iceberg_rest_sigv4(
-            Some(true),
-            None,
-            None,
-            None,
-            None,
-            Some(&SecretString::from("token".to_string())),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(&error, CatalogError::InvalidArgument(message) if message.contains("requires 'access_key_id' and 'secret_access_key'")),
             "unexpected error: {error:?}"
         );
     }
