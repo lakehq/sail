@@ -31,9 +31,9 @@ pub(crate) enum SeededRandomScope {
     /// advances its generator only for the rows that evaluate it. Spark evaluates
     /// nondeterministic expressions in projections and filters this way.
     Expression,
-    /// Each call is evaluated by a [`SeededRandomNode`] for every row. Spark pulls the calls
-    /// out of the other operators (`PullOutNondeterministic`), such as sorts, grouping
-    /// expressions, and repartitioning.
+    /// Each outermost call is evaluated by a [`SeededRandomNode`] for every row, retaining
+    /// nested calls and their argument evaluation semantics. Spark pulls these expressions
+    /// out of sorts, grouping, and repartitioning (`PullOutNondeterministic`).
     Call,
 }
 
@@ -279,9 +279,17 @@ impl<'s> SeededRandomRewriter<'s> {
     }
 
     fn rewrite_calls(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        expr.transform_up(|expr| {
+        // Keep nested calls inside the outer expression, as Spark's
+        // PullOutNondeterministic does. Columns of one node cannot reference each
+        // other, and extracting nested calls would also make lazy arguments eager.
+        expr.transform_down(|expr| {
             if is_seeded_random_call(&expr) {
-                self.materialize(expr)
+                let result = self.materialize(expr)?;
+                Ok(Transformed::new(
+                    result.data,
+                    result.transformed,
+                    TreeNodeRecursion::Jump,
+                ))
             } else {
                 Ok(Transformed::no(expr))
             }
@@ -614,6 +622,35 @@ mod tests {
         Ok(when(col("id").eq(lit(0_i64)), lit(1.0))
             .otherwise(subquery)?
             .alias(name))
+    }
+
+    #[test]
+    fn test_call_scope_keeps_nested_calls_and_reuses_outer_expressions() -> Result<()> {
+        use datafusion::functions_nested::expr_fn::make_array;
+        use datafusion_expr::ScalarUDF;
+        use sail_function::scalar::array::spark_shuffle::SparkShuffle;
+        use sail_function::scalar::math::random::Random;
+
+        let random = ScalarUDF::from(Random::new());
+        let outer = ScalarUDF::from(SparkShuffle::new()).call(vec![
+            make_array(vec![random.call(vec![lit(1_i64)]), lit(0.0)]),
+            lit(3_i64),
+        ]);
+        let mut state = PlanResolverState::new();
+        let input = LogicalPlanBuilder::empty(true).build()?;
+        let mut rewriter = SeededRandomRewriter::new(input, &mut state, SeededRandomScope::Call);
+        let first = rewriter.rewrite_calls(outer.clone())?.data;
+        let repeated = rewriter.rewrite_calls(outer.clone())?.data;
+        assert_eq!(first, repeated);
+        let independent = random.call(vec![lit(2_i64)]);
+        rewriter.rewrite_calls(independent.clone())?;
+        assert_eq!(rewriter.columns.len(), 2);
+        assert_eq!(rewriter.columns[0].expr, outer);
+        assert_eq!(rewriter.columns[1].expr, independent);
+        // All expressions must resolve against the original input, with no references
+        // to the sibling columns that the node has not appended yet.
+        rewriter.into_plan()?;
+        Ok(())
     }
 
     #[test]
