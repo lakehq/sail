@@ -29,6 +29,35 @@ const DEFAULT_TARGET_SIZE: u64 = 8 * 1024 * 1024;
 // This coordinator implementation does not spill or distribute manifest entries.
 const MAX_INPUT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_ENTRIES: usize = 1_000_000;
+const MAX_OUTPUT_BYTES: usize = 256 * 1024 * 1024;
+
+// Counts encoded payloads retained across all groups and the final manifest list.
+// Decoded entries, descriptors and serializer temporaries are not an RSS budget.
+struct OutputBudget {
+    limit: usize,
+    used: usize,
+}
+
+impl OutputBudget {
+    fn new(limit: usize) -> Self {
+        Self { limit, used: 0 }
+    }
+
+    fn reserve(&mut self, bytes: usize) -> Result<()> {
+        self.used = self
+            .used
+            .checked_add(bytes)
+            .filter(|total| *total <= self.limit)
+            .ok_or_else(|| {
+                DataFusionError::Execution("Manifest output byte limit exceeded".into())
+            })?;
+        Ok(())
+    }
+
+    fn remaining(&self) -> usize {
+        self.limit - self.used
+    }
+}
 
 pub(crate) struct RewriteManifests {
     spec_id: Option<i32>,
@@ -71,10 +100,18 @@ impl RewriteManifests {
         metadata: &TableMetadata,
         output_schema: SchemaRef,
     ) -> Result<PreparedManifestRewrite> {
-        self.prepare_with_entry_limit(store, table_url, metadata, output_schema, MAX_ENTRIES)
-            .await
+        self.prepare_with_limits(
+            store,
+            table_url,
+            metadata,
+            output_schema,
+            MAX_ENTRIES,
+            MAX_OUTPUT_BYTES,
+        )
+        .await
     }
 
+    #[cfg(test)]
     async fn prepare_with_entry_limit(
         &self,
         store: &StoreContext,
@@ -83,6 +120,27 @@ impl RewriteManifests {
         output_schema: SchemaRef,
         max_entries: usize,
     ) -> Result<PreparedManifestRewrite> {
+        self.prepare_with_limits(
+            store,
+            table_url,
+            metadata,
+            output_schema,
+            max_entries,
+            MAX_OUTPUT_BYTES,
+        )
+        .await
+    }
+
+    async fn prepare_with_limits(
+        &self,
+        store: &StoreContext,
+        table_url: &url::Url,
+        metadata: &TableMetadata,
+        output_schema: SchemaRef,
+        max_entries: usize,
+        max_output_bytes: usize,
+    ) -> Result<PreparedManifestRewrite> {
+        let mut budget = OutputBudget::new(max_output_bytes);
         let spec_id = self.spec_id.unwrap_or(metadata.default_spec_id);
         let spec = metadata
             .partition_specs
@@ -262,18 +320,22 @@ impl RewriteManifests {
                     .into_iter()
                     .map(|(_, origin, entry)| (origin, entry))
                     .unzip();
-                let candidates = encode_manifests(
+                let retained_before_group = budget.used;
+                let candidates = encode_manifests_with_budget(
                     &group.metadata,
                     &entries,
                     target_size,
                     sequence_number,
                     snapshot_id,
+                    &mut budget,
                 )?;
                 // Avoid rewriting identical groups, including indivisible oversized entries.
                 // Equal manifest counts alone do not establish that clustering is unchanged.
                 if !group.needs_normalization
                     && same_source_groups(&candidates, &origins, group.sources.len())
                 {
+                    // Discarded candidates do not consume the later groups' budget.
+                    budget.used = retained_before_group;
                     continue;
                 }
                 replaced.extend(group.sources.into_iter().map(|source| source.manifest_path));
@@ -330,14 +392,18 @@ impl RewriteManifests {
         }
         let list_path = format!("metadata/snap-{snapshot_id}-{}.avro", uuid::Uuid::new_v4());
         let list_bytes = list
-            .to_bytes_with_context(ManifestListWriteContext {
-                version: metadata.format_version,
-                snapshot_id,
-                parent_snapshot_id: Some(parent.snapshot_id()),
-                sequence_number,
-                first_row_id,
-            })
+            .to_bytes_with_context_and_limit(
+                ManifestListWriteContext {
+                    version: metadata.format_version,
+                    snapshot_id,
+                    parent_snapshot_id: Some(parent.snapshot_id()),
+                    sequence_number,
+                    first_row_id,
+                },
+                budget.remaining(),
+            )
             .map_err(DataFusionError::Execution)?;
+        budget.reserve(list_bytes.len())?;
         let mut summary = Summary::new(Operation::Replace);
         for (key, value) in &parent.summary().additional_properties {
             if key.starts_with("total-") {
@@ -475,12 +541,31 @@ fn same_source_groups(
 
 /// Split contiguous partition-clustered ranges using actual encoded size, including headers.
 /// A single entry is indivisible and may exceed the target, as with a rolling writer.
+#[cfg(test)]
 fn encode_manifests(
     metadata: &ManifestMetadata,
     entries: &[ManifestEntry],
     target_size: u64,
     sequence_number: i64,
     snapshot_id: i64,
+) -> Result<Vec<EncodedManifest>> {
+    encode_manifests_with_budget(
+        metadata,
+        entries,
+        target_size,
+        sequence_number,
+        snapshot_id,
+        &mut OutputBudget::new(MAX_OUTPUT_BYTES),
+    )
+}
+
+fn encode_manifests_with_budget(
+    metadata: &ManifestMetadata,
+    entries: &[ManifestEntry],
+    target_size: u64,
+    sequence_number: i64,
+    snapshot_id: i64,
+    budget: &mut OutputBudget,
 ) -> Result<Vec<EncodedManifest>> {
     let mut pending = std::iter::once(0..entries.len()).collect::<Vec<_>>();
     let mut output = vec![];
@@ -495,8 +580,10 @@ fn encode_manifests(
                 .add_existing_entry(entry.clone())
                 .map_err(DataFusionError::Execution)?;
         }
+        // Trials are dropped before splitting. Bound each encoding independently;
+        // only completed candidates reserve cumulative retained output bytes.
         let bytes = writer
-            .to_avro_bytes_v2()
+            .to_avro_bytes_with_limit(budget.remaining())
             .map_err(DataFusionError::Execution)?;
         if bytes.len() as u64 > target_size && chunk.len() > 1 {
             let split = range.start + chunk.len() / 2;
@@ -509,6 +596,7 @@ fn encode_manifests(
             .map_err(DataFusionError::Execution)?;
         descriptor.manifest_length = i64::try_from(bytes.len())
             .map_err(|_| DataFusionError::Execution("Manifest length exceeds int64".into()))?;
+        budget.reserve(bytes.len())?;
         output.push(EncodedManifest {
             descriptor,
             bytes,
@@ -952,6 +1040,262 @@ pub(crate) mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn output_budget_checks_overflow_without_changing_reservations() {
+        let mut budget = OutputBudget::new(usize::MAX);
+        budget.reserve(usize::MAX).expect("exact");
+        assert!(budget.reserve(1).is_err());
+        assert_eq!(budget.used, usize::MAX);
+        assert_eq!(budget.remaining(), 0);
+        let mut budget = OutputBudget::new(0);
+        budget.reserve(0).expect("empty");
+        assert!(budget.reserve(1).is_err());
+        assert_eq!(budget.used, 0);
+    }
+
+    #[test]
+    fn encoded_output_budget_covers_singletons_and_all_content_and_schema_groups() {
+        let mut budget = OutputBudget::new(MAX_OUTPUT_BYTES);
+        let mut total = 0;
+        for schema_id in [0, 1] {
+            for content in [ManifestContentType::Data, ManifestContentType::Deletes] {
+                let metadata = ManifestMetadata::new(
+                    Arc::new(
+                        Schema::builder()
+                            .with_schema_id(schema_id)
+                            .build()
+                            .expect("schema"),
+                    ),
+                    schema_id,
+                    PartitionSpec::unpartitioned_spec(),
+                    FormatVersion::V2,
+                    content.clone(),
+                );
+                let mut item = entry(1, FormatVersion::V2);
+                if content == ManifestContentType::Deletes {
+                    item.data_file.content = DataContentType::PositionDeletes;
+                }
+                let entries = [item];
+                let size = encode_manifests(&metadata, &entries, 1, 1, 20).expect("measure")[0]
+                    .bytes
+                    .len();
+                for limit in [0, size - 1, size] {
+                    let result = encode_manifests_with_budget(
+                        &metadata,
+                        &entries,
+                        1,
+                        1,
+                        20,
+                        &mut OutputBudget::new(limit),
+                    );
+                    assert_eq!(
+                        result.is_ok(),
+                        limit == size,
+                        "limit={limit}, error={:?}",
+                        result.err()
+                    );
+                }
+                // Each group fits individually, but none may reset the shared budget.
+                budget.limit = total + size - 1;
+                assert!(
+                    encode_manifests_with_budget(&metadata, &entries, 1, 1, 20, &mut budget)
+                        .is_err()
+                );
+                assert_eq!(budget.used, total);
+                budget.limit += 1;
+                let output =
+                    encode_manifests_with_budget(&metadata, &entries, 1, 1, 20, &mut budget)
+                        .expect("exact cumulative budget");
+                total += output[0].bytes.len();
+                assert_eq!(budget.used, total);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn output_budget_rejects_before_staging_including_retained_list_descriptors() {
+        use std::sync::atomic::Ordering;
+
+        use futures::TryStreamExt;
+
+        let (store, url, mut metadata, _) = rewrite_fixture(
+            FormatVersion::V2,
+            vec![
+                (
+                    0,
+                    vec![entry(1, FormatVersion::V2), entry(2, FormatVersion::V2)],
+                ),
+                (1, vec![entry(3, FormatVersion::V2)]),
+            ],
+            false,
+        )
+        .await;
+        metadata
+            .properties
+            .insert(TARGET_SIZE_PROPERTY.into(), "1".into());
+        let counting = Arc::new(crate::io::test_store::TestStore::new(store.base.clone()));
+        let store = StoreContext::new(counting.clone(), &url).expect("store");
+        let before = store
+            .prefixed
+            .list(None)
+            .try_collect::<Vec<_>>()
+            .await
+            .expect("inventory");
+        let original_metadata = serde_json::to_value(&metadata).expect("metadata");
+        let prepared = operation()
+            .prepare(&store, &url, &metadata, output_schema())
+            .await
+            .expect("target 1");
+        assert_eq!(prepared.manifests.len(), 3);
+        let manifests_size: usize = prepared.manifests[..2].iter().map(|(_, b)| b.len()).sum();
+        let list = crate::spec::ManifestList::parse_with_version(
+            &prepared.manifests[2].1,
+            FormatVersion::V2,
+        )
+        .expect("list");
+        assert_eq!(list.entries().len(), 3, "includes out-of-spec descriptor");
+        for limit in [0, 1, manifests_size, manifests_size + 1] {
+            let error = operation()
+                .prepare_with_limits(&store, &url, &metadata, output_schema(), MAX_ENTRIES, limit)
+                .await
+                .err()
+                .expect("output limit");
+            assert!(
+                error
+                    .to_string()
+                    .contains("Manifest output byte limit exceeded"),
+                "{error}"
+            );
+            assert_eq!(counting.puts.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                store
+                    .prefixed
+                    .list(None)
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .expect("inventory"),
+                before
+            );
+            assert_eq!(
+                serde_json::to_value(&metadata).expect("metadata"),
+                original_metadata
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn discarded_noop_schema_group_releases_output_budget() {
+        use object_store::path::Path;
+
+        let (store, url, mut table, _) = rewrite_fixture(FormatVersion::V2, vec![], false).await;
+        let mut list = ManifestListWriter::new();
+        let mut discarded_bytes = 0;
+        for schema_id in [0, 1] {
+            let schema = Schema::builder()
+                .with_schema_id(schema_id)
+                .build()
+                .expect("schema");
+            if schema_id == 1 {
+                table.schemas.push(schema.clone());
+            }
+            for index in 0..2 {
+                let mut writer = ManifestWriter::new(
+                    Some(20),
+                    None,
+                    ManifestMetadata::new(
+                        Arc::new(schema.clone()),
+                        schema_id,
+                        PartitionSpec::unpartitioned_spec(),
+                        FormatVersion::V2,
+                        ManifestContentType::Data,
+                    ),
+                );
+                let mut item = entry(i64::from(schema_id * 2 + index), FormatVersion::V2);
+                if schema_id == 0 {
+                    item.status = ManifestStatus::Existing;
+                }
+                writer.add_entry(item);
+                let bytes = writer.to_avro_bytes_v2().expect("source");
+                if schema_id == 0 {
+                    discarded_bytes += bytes.len();
+                }
+                let path = format!("metadata/source-{schema_id}-{index}.avro");
+                let mut descriptor = writer
+                    .into_manifest_file(path.clone(), 1, 20)
+                    .expect("descriptor");
+                descriptor.manifest_length = bytes.len() as i64;
+                store
+                    .prefixed
+                    .put(&Path::from(path), bytes.into())
+                    .await
+                    .expect("source");
+                list.append(descriptor);
+            }
+        }
+        store
+            .prefixed
+            .put(
+                &Path::from("metadata/list.avro"),
+                list.to_bytes_with_context(ManifestListWriteContext {
+                    version: FormatVersion::V2,
+                    snapshot_id: 10,
+                    parent_snapshot_id: None,
+                    sequence_number: 1,
+                    first_row_id: None,
+                })
+                .expect("list")
+                .into(),
+            )
+            .await
+            .expect("source list");
+        table
+            .properties
+            .insert(TARGET_SIZE_PROPERTY.into(), "1".into());
+        let measured = operation()
+            .prepare(&store, &url, &table, output_schema())
+            .await
+            .expect("measure");
+        let total: usize = measured.manifests.iter().map(|(_, b)| b.len()).sum();
+        // Snapshot IDs can vary slightly in encoded decimal length; reserve a small margin.
+        let limit = total + 64;
+        assert!(discarded_bytes < limit);
+        assert!(discarded_bytes > 64);
+        let prepared = operation()
+            .prepare_with_limits(&store, &url, &table, output_schema(), MAX_ENTRIES, limit)
+            .await
+            .expect("released no-op budget");
+        assert_eq!(
+            prepared.output,
+            output(output_schema(), 2, 2).expect("output")
+        );
+        for (path, bytes) in &prepared.manifests {
+            store
+                .prefixed
+                .put(&Path::from(path.as_str()), bytes.clone().into())
+                .await
+                .expect("stage");
+        }
+        crate::operations::metadata_commit::apply_snapshot_updates(
+            &url,
+            &mut table,
+            &prepared.updates,
+            crate::operations::metadata_commit::PreviousMetadataFile::ObjectPath(
+                "metadata/v1.metadata.json",
+            ),
+        )
+        .expect("apply");
+        let repeated = operation()
+            .prepare(&store, &url, &table, output_schema())
+            .await
+            .expect("repeat noop");
+        assert!(repeated.manifests.is_empty());
+        assert!(repeated.updates.is_empty());
+        assert_eq!(
+            repeated.output,
+            output(output_schema(), 0, 0).expect("output")
+        );
     }
 
     #[test]

@@ -21,6 +21,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStoreExt;
+use sail_common_datafusion::error::CommitStateUnknownError;
 use url::Url;
 
 use crate::io::StoreContext;
@@ -64,6 +65,7 @@ pub struct BootstrapResult {
 }
 
 struct PreparedMetadataVersion {
+    metadata_style: NewTableMetadataStyle,
     table_metadata: TableMetadata,
     metadata_file: String,
     version_hint: String,
@@ -102,6 +104,7 @@ fn prepare_metadata_version(
     let metadata_path = object_store::path::Path::from(metadata_file.as_str());
 
     Ok(PreparedMetadataVersion {
+        metadata_style,
         table_metadata,
         metadata_file,
         version_hint,
@@ -115,6 +118,7 @@ async fn publish_metadata_version(
     prepared: PreparedMetadataVersion,
 ) -> Result<BootstrapResult> {
     let PreparedMetadataVersion {
+        metadata_style,
         table_metadata,
         metadata_file,
         version_hint,
@@ -128,7 +132,15 @@ async fn publish_metadata_version(
             object_store::PutPayload::from(Bytes::from(metadata_bytes)),
         )
         .await
-        .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        .map_err(|error| match metadata_style {
+            NewTableMetadataStyle::Hadoop => {
+                DataFusionError::External(Box::new(CommitStateUnknownError::with_source(
+                    format!("could not confirm metadata publication at {metadata_path}"),
+                    error,
+                )))
+            }
+            NewTableMetadataStyle::Uuid => DataFusionError::External(Box::new(error)),
+        })?;
     write_version_hint(&store_ctx.prefixed, &version_hint).await;
 
     Ok(BootstrapResult {
@@ -730,6 +742,87 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn bootstrap_publication_errors_preserve_style_source_and_visibility() {
+        use std::sync::atomic::Ordering;
+
+        use crate::io::test_store::{PutFault, TestStore, assert_commit_retryability};
+
+        for style in [NewTableMetadataStyle::Hadoop, NewTableMetadataStyle::Uuid] {
+            for fault in [PutFault::Reject, PutFault::LostAck] {
+                let url = Url::parse("memory://bucket/bootstrap/").expect("URL");
+                let mut injected = TestStore::new(Arc::new(object_store::memory::InMemory::new()));
+                injected.fault = Some((".metadata.json".into(), fault));
+                let injected = Arc::new(injected);
+                let store = StoreContext::new(injected.clone(), &url).expect("store");
+                let metadata: TableMetadata = serde_json::from_value(serde_json::json!({
+                    "format-version": FormatVersion::V2,
+                    "location": url.as_str(),
+                    "last-updated-ms": 0, "last-column-id": 0,
+                    "schemas": [IcebergSchema::builder().build().expect("schema")],
+                    "current-schema-id": 0,
+                    "partition-specs": [PartitionSpec::unpartitioned_spec()]
+                }))
+                .expect("metadata");
+                let prepared = prepare_metadata_version(metadata, 1, style).expect("prepare");
+                let path = prepared.metadata_path.clone();
+                let bytes = prepared.metadata_bytes.clone();
+                let error = publish_metadata_version(&store, prepared)
+                    .await
+                    .expect_err("publication fault");
+                let hadoop = matches!(style, NewTableMetadataStyle::Hadoop);
+                assert_commit_retryability(&error, hadoop);
+                let source = match &error {
+                    DataFusionError::External(source) => Some(source),
+                    _ => None,
+                }
+                .expect("external error");
+                let original = if hadoop {
+                    std::error::Error::source(
+                        source
+                            .downcast_ref::<CommitStateUnknownError>()
+                            .expect("unknown state"),
+                    )
+                    .expect("original source")
+                } else {
+                    source.as_ref()
+                };
+                assert!(original.is::<object_store::Error>());
+                assert!(
+                    original
+                        .source()
+                        .expect("I/O source")
+                        .is::<std::io::Error>()
+                );
+                assert_eq!(injected.puts.load(Ordering::SeqCst), 1);
+                assert!(injected.deletes.lock().expect("deletes").is_empty());
+                let reader = StoreContext::new(injected.inner.clone(), &url).expect("reader");
+                let objects = reader
+                    .prefixed
+                    .list(None)
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .expect("objects");
+                if matches!(fault, PutFault::LostAck) {
+                    assert_eq!(objects.len(), 1);
+                    assert_eq!(objects[0].location, path);
+                    let published = reader
+                        .prefixed
+                        .get(&path)
+                        .await
+                        .expect("metadata")
+                        .bytes()
+                        .await
+                        .expect("bytes");
+                    assert_eq!(published.as_ref(), bytes.as_slice());
+                    TableMetadata::from_json(&published).expect("readable metadata");
+                } else {
+                    assert!(objects.is_empty());
+                }
+            }
+        }
+    }
+
     #[test]
     fn bootstrap_metadata_ignores_version_hint_failure() {
         futures::executor::block_on(async {
@@ -879,6 +972,7 @@ mod tests {
             )
             .await
             .expect_err("unsupported metadata codec must fail before publication");
+            assert!(matches!(&error, DataFusionError::Plan(_)));
             assert!(
                 error
                     .to_string()

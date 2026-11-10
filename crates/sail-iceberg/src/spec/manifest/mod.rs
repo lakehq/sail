@@ -92,6 +92,14 @@ fn parse_avro_object_header(bytes: &[u8]) -> Result<AvroObjectHeader, String> {
 }
 
 fn replace_avro_schema_header_bytes(bytes: &[u8], schema: Vec<u8>) -> Result<Vec<u8>, String> {
+    replace_avro_schema_header_bytes_with_limit(bytes, schema, usize::MAX)
+}
+
+fn replace_avro_schema_header_bytes_with_limit(
+    bytes: &[u8],
+    schema: Vec<u8>,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
     let AvroObjectHeader {
         mut metadata,
         marker,
@@ -103,15 +111,20 @@ fn replace_avro_schema_header_bytes(bytes: &[u8], schema: Vec<u8>) -> Result<Vec
         .map(|(key, value)| (key, AvroValue::Bytes(value)))
         .collect::<HashMap<_, _>>();
     let metadata_schema = AvroSchema::map(AvroSchema::Bytes).build();
-    let encoded_metadata = GenericDatumWriter::builder(&metadata_schema)
+    let mut encoded_metadata = crate::spec::avro_utils::LimitedWriter::new(Vec::new(), limit);
+    GenericDatumWriter::builder(&metadata_schema)
         .build()
-        .and_then(|writer| writer.write_value_to_vec(AvroValue::Map(metadata)))
+        .and_then(|writer| writer.write_value(&mut encoded_metadata, AvroValue::Map(metadata)))
         .map_err(|error| format!("Avro header serialization error: {error}"))?;
-
-    let mut output = Vec::with_capacity(
-        AVRO_OBJECT_HEADER.len() + encoded_metadata.len() + marker.len() + bytes.len()
-            - payload_offset,
-    );
+    let encoded_metadata = encoded_metadata.into_inner();
+    let length = AVRO_OBJECT_HEADER
+        .len()
+        .checked_add(encoded_metadata.len())
+        .and_then(|n| n.checked_add(marker.len()))
+        .and_then(|n| n.checked_add(bytes.len() - payload_offset))
+        .filter(|n| *n <= limit)
+        .ok_or_else(|| "Manifest output byte limit exceeded".to_string())?;
+    let mut output = Vec::with_capacity(length);
     output.extend_from_slice(AVRO_OBJECT_HEADER);
     output.extend_from_slice(&encoded_metadata);
     output.extend_from_slice(&marker);
@@ -123,6 +136,15 @@ pub(super) fn replace_avro_schema_header(
     bytes: &[u8],
     schema: &AvroSchema,
     partition_type: &StructType,
+) -> Result<Vec<u8>, String> {
+    replace_avro_schema_header_with_limit(bytes, schema, partition_type, usize::MAX)
+}
+
+pub(super) fn replace_avro_schema_header_with_limit(
+    bytes: &[u8],
+    schema: &AvroSchema,
+    partition_type: &StructType,
+    limit: usize,
 ) -> Result<Vec<u8>, String> {
     let mut schema = serde_json::to_value(schema)
         .map_err(|error| format!("Avro schema serialization error: {error}"))?;
@@ -145,9 +167,10 @@ pub(super) fn replace_avro_schema_header(
             })?;
         object.insert("adjust-to-utc".into(), JsonValue::Bool(adjust_to_utc));
     }
-    let schema = serde_json::to_vec(&schema)
+    let mut encoded_schema = crate::spec::avro_utils::LimitedWriter::new(Vec::new(), limit);
+    serde_json::to_writer(&mut encoded_schema, &schema)
         .map_err(|error| format!("Avro schema serialization error: {error}"))?;
-    replace_avro_schema_header_bytes(bytes, schema)
+    replace_avro_schema_header_bytes_with_limit(bytes, encoded_schema.into_inner(), limit)
 }
 
 fn find_avro_field_type(schema: &mut JsonValue, field_id: i32) -> Option<&mut JsonValue> {

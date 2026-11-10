@@ -256,7 +256,7 @@ pub(crate) async fn commit_snapshot_operation(
                 }
                 return Err(procedure_commit_conflict());
             }
-            return Err(error);
+            return Err(prepared_metadata.catalog_publication_error(error));
         }
         cleanup.disarm();
         prepared_metadata.write_hint(&store_context).await;
@@ -523,6 +523,7 @@ mod tests {
             .await
             .expect_err("conflicts exhausted");
         assert!(error.to_string().contains("after 5 retries"));
+        crate::io::test_store::assert_commit_retryability(&error, false);
         assert_eq!(
             injected.puts.load(Ordering::SeqCst),
             MAX_PROCEDURE_COMMIT_RETRIES * 3
@@ -554,6 +555,28 @@ mod tests {
                     .await
                     .expect_err("publication error");
             assert!(error.to_string().contains("injected"));
+            crate::io::test_store::assert_commit_retryability(&error, true);
+            let source = match &error {
+                DataFusionError::External(source) => Some(source),
+                _ => None,
+            }
+            .expect("external error");
+            let unknown = source
+                .downcast_ref::<sail_common_datafusion::error::CommitStateUnknownError>()
+                .expect("typed unknown");
+            let original = std::error::Error::source(unknown).expect("original error");
+            assert!(original.is::<object_store::Error>());
+            assert!(
+                original
+                    .source()
+                    .expect("I/O source")
+                    .is::<std::io::Error>()
+            );
+            assert_eq!(
+                injected.puts.load(Ordering::SeqCst),
+                3,
+                "one publication attempt"
+            );
             assert!(injected.deletes.lock().expect("deletes").is_empty());
             let store = StoreContext::new(injected.inner.clone(), &url).expect("store");
             let metadata = store
@@ -645,6 +668,7 @@ mod tests {
                 matches!(&error, DataFusionError::External(source) if source.downcast_ref::<CommitStateUnknownError>().is_some()),
                 "{error}"
             );
+            crate::io::test_store::assert_commit_retryability(&error, true);
             assert_eq!(
                 injected.puts.load(Ordering::SeqCst),
                 3,

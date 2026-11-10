@@ -40,6 +40,68 @@ pub(crate) fn create_avro_writer<W: Write>(
         .build()
 }
 
+/// Limits encoded writes, not allocations made by serializers before writing.
+pub(crate) struct LimitedWriter<W> {
+    inner: W,
+    remaining: usize,
+}
+
+impl<W> LimitedWriter<W> {
+    pub(crate) fn new(inner: W, limit: usize) -> Self {
+        Self {
+            inner,
+            remaining: limit,
+        }
+    }
+
+    pub(crate) fn into_inner(self) -> W {
+        self.inner
+    }
+}
+
+impl<W: Write> Write for LimitedWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.remaining {
+            return Err(std::io::Error::other("Manifest output byte limit exceeded"));
+        }
+        let written = self.inner.write(bytes)?;
+        self.remaining -= written;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// Check a record before Avro buffers its complete encoding internally.
+pub(crate) fn check_avro_record_size(
+    schema: &AvroSchema,
+    value: &AvroValue,
+    limit: usize,
+) -> AvroResult<()> {
+    if limit != usize::MAX {
+        apache_avro::writer::datum::GenericDatumWriter::builder(schema)
+            .build()?
+            .write_value_ref(&mut LimitedWriter::new(std::io::sink(), limit), value)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn append_avro_with_limit<W: Write, T: serde::Serialize>(
+    writer: &mut AvroWriter<'_, W>,
+    schema: &AvroSchema,
+    value: T,
+    limit: usize,
+) -> AvroResult<usize> {
+    if limit != usize::MAX {
+        apache_avro::writer::datum::GenericDatumWriter::builder(schema)
+            .build()?
+            .write_ser(&mut LimitedWriter::new(std::io::sink(), limit), &value)?;
+    }
+    writer.append_ser(value)
+}
+
 /// Convert an Iceberg field name to a valid Avro field name.
 pub(crate) fn avro_compatible_name(name: &str) -> String {
     let mut output = String::with_capacity(name.len());

@@ -950,7 +950,11 @@ impl ExecutionPlan for IcebergCommitExec {
                             catalog_recorded_metadata_location.as_deref(),
                             &new_metadata_location,
                         )
-                        .await?;
+                        .await
+                        .map_err(|error| {
+                            MetadataFileStyle::Versioned
+                                .catalog_publication_error(&bootstrap_result.metadata_file, error)
+                        })?;
                     }
                 }
 
@@ -1211,7 +1215,11 @@ impl ExecutionPlan for IcebergCommitExec {
                             catalog_recorded_metadata_location.as_deref(),
                             &new_metadata_location,
                         )
-                        .await?;
+                        .await
+                        .map_err(|error| {
+                            MetadataFileStyle::Versioned
+                                .catalog_publication_error(&bootstrap_result.metadata_file, error)
+                        })?;
                     }
 
                     return commit_output_batch(
@@ -1454,7 +1462,8 @@ impl ExecutionPlan for IcebergCommitExec {
                         catalog_metadata_location.as_deref(),
                         metadata_location,
                     )
-                    .await?;
+                    .await
+                    .map_err(|error| prepared_metadata.catalog_publication_error(error))?;
                 } else if let Some(catalog_table) = catalog_registered_metadata_table {
                     Self::update_catalog_metadata_location(
                         &context,
@@ -1463,7 +1472,8 @@ impl ExecutionPlan for IcebergCommitExec {
                         catalog_recorded_metadata_location.as_deref(),
                         metadata_location,
                     )
-                    .await?;
+                    .await
+                    .map_err(|error| prepared_metadata.catalog_publication_error(error))?;
                 }
 
                 return commit_output_batch(
@@ -2419,7 +2429,9 @@ mod tests {
                     .try_collect::<Vec<_>>()
                     .await;
                 if lose_acknowledgement {
-                    result.expect_err("publication succeeded but its acknowledgement was lost");
+                    let error =
+                        result.expect_err("publication succeeded but its acknowledgement was lost");
+                    crate::io::test_store::assert_commit_retryability(&error, true);
                 } else {
                     let batches = result.expect("published first attempt");
                     assert_eq!(batches[0].num_rows(), 1);

@@ -12,6 +12,40 @@ use object_store::{
     ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 
+/// Exercise the cause extracted by TaskMonitor and its serialized remote wrapper.
+#[expect(clippy::expect_used)]
+pub(crate) fn assert_commit_retryability(
+    error: &datafusion_common::DataFusionError,
+    unknown: bool,
+) {
+    use sail_common_datafusion::error::{
+        CommonErrorCause, PythonErrorCause, PythonErrorCauseExtractor, RemoteError,
+    };
+    struct NoPython;
+    impl PythonErrorCauseExtractor for NoPython {
+        fn extract(_: &(dyn std::error::Error + 'static)) -> Option<PythonErrorCause> {
+            None
+        }
+    }
+    let cause = CommonErrorCause::new::<NoPython>(error);
+    assert_eq!(
+        matches!(cause, CommonErrorCause::CommitStateUnknown(_)),
+        unknown,
+        "{error}"
+    );
+    assert_eq!(cause.is_retryable(), !unknown);
+    let encoded = serde_json::to_vec(&cause).expect("serialize cause");
+    let remote = datafusion_common::DataFusionError::External(Box::new(RemoteError {
+        cause: serde_json::from_slice(&encoded).expect("deserialize cause"),
+    }));
+    let received = CommonErrorCause::new::<NoPython>(&remote);
+    assert_eq!(received.is_retryable(), !unknown);
+    assert_eq!(
+        matches!(received, CommonErrorCause::CommitStateUnknown(_)),
+        unknown
+    );
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PutFault {
     Reject,
