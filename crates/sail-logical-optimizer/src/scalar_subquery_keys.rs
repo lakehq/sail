@@ -19,6 +19,7 @@ use datafusion_expr::{
 };
 use projection::project_with_keys;
 use sail_common_datafusion::OPTIMIZER_CORRELATION_KEY_PREFIX;
+use sail_function::scalar::conversion::spark_float_to_decimal::SparkFloatToDecimal;
 use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 
 mod projection;
@@ -87,8 +88,7 @@ fn native_equality(expression: &Expr) -> Option<(&Expr, &Expr)> {
         return None;
     }
     let inner_key = |expression: &Expr| {
-        matches!(expression, Expr::Column(_))
-            || matches!(expression, Expr::Cast(cast) if matches!(cast.expr.as_ref(), Expr::Column(_)))
+        matches!(expression, Expr::Column(_)) || cast_column(expression).is_some()
     };
     let (left, right) = (
         strip_identity_cast(&binary.left),
@@ -100,6 +100,29 @@ fn native_equality(expression: &Expr) -> Option<(&Expr, &Expr)> {
         Some((right, &binary.left))
     } else {
         None
+    }
+}
+
+/// The column that a key casts. Sail plans a strict FLOAT or DOUBLE to DECIMAL cast
+/// as a function that rounds like Spark, so key it like the cast it replaces; its
+/// null-on-overflow form, like TRY_CAST, is not a key.
+fn cast_column(expression: &Expr) -> Option<&Column> {
+    let input = match expression {
+        Expr::Cast(cast) => cast.expr.as_ref(),
+        Expr::ScalarFunction(function)
+            if function
+                .func
+                .inner()
+                .downcast_ref::<SparkFloatToDecimal>()
+                .is_some_and(|function| !function.null_on_overflow()) =>
+        {
+            function.args.first()?
+        }
+        _ => return None,
+    };
+    match input {
+        Expr::Column(column) => Some(column),
+        _ => None,
     }
 }
 
@@ -486,7 +509,7 @@ fn normalize_keys(
 }
 
 /// The optional cast, inner column and outer comparison value.
-type KeyEquality<'a> = (Option<&'a Cast>, &'a Column, &'a Expr);
+type KeyEquality<'a> = (Option<&'a Expr>, &'a Column, &'a Expr);
 
 /// Return the cast equality that a filter below an aggregate hands to that aggregate.
 fn lifted_key<'a>(
@@ -497,13 +520,10 @@ fn lifted_key<'a>(
     let (inner, outer) = native_equality(expression)?;
     match inner {
         Expr::Column(column) if domains.contains(column) => Some((None, column, outer)),
-        Expr::Cast(cast) => {
-            let Expr::Column(column) = cast.expr.as_ref() else {
-                return None;
-            };
-            (!pinned.contains(&column.name)).then_some((Some(cast), column, outer))
+        _ => {
+            let column = cast_column(inner)?;
+            (!pinned.contains(&column.name)).then_some((Some(inner), column, outer))
         }
-        _ => None,
     }
 }
 
@@ -660,7 +680,7 @@ fn lifted_scope<'a>(
 
 /// A cast equality lifted from its filter to the first window or aggregate above it.
 struct Pending {
-    cast: Option<Cast>,
+    cast: Option<Expr>,
     column: Column,
     outer: Expr,
 }
@@ -936,8 +956,14 @@ impl Lift<'_> {
             outer,
         } in pending.drain(..)
         {
+            let cast = cast
+                .map(|cast| {
+                    cast.map_children(|_| Ok(Transformed::yes(Expr::Column(column.clone()))))
+                })
+                .transpose()?
+                .map(|cast| cast.data);
             let data_type = match &cast {
-                Some(cast) => cast.field.data_type().clone(),
+                Some(cast) => cast.get_type(input.schema())?,
                 None => input
                     .schema()
                     .qualified_field_from_column(&column)?
@@ -985,13 +1011,7 @@ impl Lift<'_> {
                 // Group injective casts by their input; the comparison casts each group.
                 Expr::Column(column)
             } else {
-                let value = match cast {
-                    Some(cast) => Expr::Cast(Cast {
-                        expr: Box::new(Expr::Column(column)),
-                        ..cast
-                    }),
-                    None => Expr::Column(column),
-                };
+                let value = cast.unwrap_or(Expr::Column(column));
                 if canonical {
                     ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![value])
                 } else {
@@ -1209,10 +1229,10 @@ mod tests {
                         Column::from_name("outer"),
                     );
                     let mut pending = vec![Pending {
-                        cast: Some(Cast::new(
+                        cast: Some(Expr::Cast(Cast::new(
                             Box::new(Expr::Column(column.clone())),
                             to.clone(),
-                        )),
+                        ))),
                         column: column.clone(),
                         outer: outer.clone(),
                     }];

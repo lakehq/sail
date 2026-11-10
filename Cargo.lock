@@ -7405,6 +7405,7 @@ dependencies = [
  "rand_distr",
  "regex",
  "reqwest 0.12.28",
+ "ryu",
  "sail-common",
  "sail-common-datafusion",
  "sail-common-spark",

@@ -70,3 +70,4 @@ xot = { workspace = true }
 itertools = { workspace = true }
 hashbrown = { workspace = true }
 memchr = { workspace = true }
+ryu = { workspace = true }
