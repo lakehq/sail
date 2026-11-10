@@ -283,6 +283,7 @@ impl<'a> RawGlobUrl<'a> {
         let non_hierarchical_path = none_of("/?#").then(none_of("?#").repeated()).to_slice();
         let hierarchical_path = none_of("?#").repeated().to_slice();
         let authority = just("//").ignore_then(none_of("/").repeated().to_slice());
+        let http_authority = just("//").ignore_then(none_of("/?#").repeated().to_slice());
         let query = just('?').ignore_then(none_of("#").repeated().to_slice());
         let fragment = just('#').ignore_then(any().repeated().to_slice());
         choice((
@@ -299,7 +300,7 @@ impl<'a> RawGlobUrl<'a> {
                     },
                 ),
             scheme_allowing_query_or_segment
-                .then(authority)
+                .then(http_authority)
                 .then(hierarchical_path)
                 .then(query.or_not())
                 .then(fragment.or_not())
@@ -373,7 +374,7 @@ impl GlobUrl {
                 let Ok(url) = Url::parse(&base) else {
                     return plan_err!("base URL: {s}");
                 };
-                Self::parse_glob_path(path)?
+                Self::parse_glob_path(if path.is_empty() { "/" } else { path })?
                     .into_iter()
                     .map(|(prefix, suffix)| {
                         let mut url = url.clone();
@@ -558,18 +559,9 @@ fn fill_directory_root_path(mut path: String) -> Result<String> {
             path: raw_path,
             ..
         } = raw_url
+            && raw_path.is_empty()
         {
-            // The permissive raw parser may include a root URL's query or
-            // fragment in its authority, stopping only at the first slash.
-            let authority_end =
-                if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") {
-                    authority.find(['?', '#']).unwrap_or(authority.len())
-                } else {
-                    authority.len()
-                };
-            if raw_path.is_empty() || authority_end < authority.len() {
-                path.insert(scheme.len() + 3 + authority_end, '/');
-            }
+            path.insert(scheme.len() + 3 + authority.len(), '/');
         }
     }
     Ok(path)
@@ -1130,6 +1122,28 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let cwd = Url::from_directory_path(cwd).unwrap();
 
+        for (input, expected) in [
+            ("https://example.com", "https://example.com/"),
+            (
+                "https://example.com?token=a/b",
+                "https://example.com/?token=a/b",
+            ),
+            ("https://example.com#part/a", "https://example.com/#part/a"),
+            (
+                "https://[::1]?token=a/b#part/c",
+                "https://[::1]/?token=a/b#part/c",
+            ),
+            (
+                "http://example.com?token=a/b#part/c",
+                "http://example.com/?token=a/b#part/c",
+            ),
+            ("s3://bucket", "s3://bucket/"),
+            ("oss://bucket", "oss://bucket/"),
+            ("hdfs://namenode", "hdfs://namenode/"),
+        ] {
+            test(input, &[(expected, None)]);
+        }
+
         test(
             "https://example.com/path/?foo#bar",
             &[("https://example.com/path/?foo#bar", None)],
@@ -1137,6 +1151,10 @@ mod tests {
         test(
             "https://example.com/path/**/*.txt?foo#bar",
             &[("https://example.com/path/?foo#bar", Some("**/*.txt"))],
+        );
+        test(
+            "https://example.com/path/*.txt?token=a/b#part/c",
+            &[("https://example.com/path/?token=a/b#part/c", Some("*.txt"))],
         );
         test("s3://bucket/path", &[("s3://bucket/path", None)]);
         test("oss://bucket/path", &[("oss://bucket/path", None)]);
