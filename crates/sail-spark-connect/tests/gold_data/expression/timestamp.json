@@ -23,6 +23,161 @@
       }
     },
     {
+      "input": "TIMESTAMP '2020-01-01 00:00:00.123456789'",
+      "output": {
+        "success": {
+          "unresolvedTimestamp": {
+            "value": "2020-01-01 00:00:00.123456789",
+            "timestampType": "configured"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP '2020-01-01 00:00:00.123456789+00:00'",
+      "output": {
+        "success": {
+          "unresolvedTimestamp": {
+            "value": "2020-01-01 00:00:00.123456789+00:00",
+            "timestampType": "configured"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_LTZ '2020-01-01 00:00:00.123456789'",
+      "output": {
+        "success": {
+          "unresolvedTimestamp": {
+            "value": "2020-01-01 00:00:00.123456789",
+            "timestampType": "withLocalTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_LTZ '2020-01-01 00:00:00.123456789+05:00'",
+      "output": {
+        "success": {
+          "unresolvedTimestamp": {
+            "value": "2020-01-01 00:00:00.123456789+05:00",
+            "timestampType": "withLocalTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ '1582-10-15 23:59:59.123456789'",
+      "output": {
+        "success": {
+          "unresolvedTimestamp": {
+            "value": "1582-10-15 23:59:59.123456789",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ '1970-01-01 00:00:00.000000000'",
+      "output": {
+        "success": {
+          "unresolvedTimestamp": {
+            "value": "1970-01-01 00:00:00.000000000",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ '1970-01-01 00:00:00.000000999'",
+      "output": {
+        "success": {
+          "unresolvedTimestamp": {
+            "value": "1970-01-01 00:00:00.000000999",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ '2020-01-01 00:00:00.123456'",
+      "output": {
+        "success": {
+          "unresolvedTimestamp": {
+            "value": "2020-01-01 00:00:00.123456",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ '2020-01-01 00:00:00.1234567'",
+      "output": {
+        "success": {
+          "unresolvedTimestamp": {
+            "value": "2020-01-01 00:00:00.1234567",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ '2020-01-01 00:00:00.12345678'",
+      "output": {
+        "success": {
+          "unresolvedTimestamp": {
+            "value": "2020-01-01 00:00:00.12345678",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ '2020-01-01 00:00:00.123456789'",
+      "output": {
+        "success": {
+          "unresolvedTimestamp": {
+            "value": "2020-01-01 00:00:00.123456789",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ '2020-01-01 00:00:00.1234567890'",
+      "exception": "\n[INVALID_TIMESTAMP_LITERAL_PRECISION] The timestamp literal '2020-01-01 00:00:00.1234567890' has more than 9 fractional-second digits. The maximum supported fractional-second precision of a timestamp literal is 9 (nanoseconds). SQLSTATE: 22023\n== SQL (line 1, position 1) ==\nTIMESTAMP_NTZ '2020-01-01 00:00:00.1234567890'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "success": {
+          "unresolvedTimestamp": {
+            "value": "2020-01-01 00:00:00.1234567890",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ '9999-12-31 23:59:59.999999999'",
+      "output": {
+        "success": {
+          "unresolvedTimestamp": {
+            "value": "9999-12-31 23:59:59.999999999",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ 'epoch'",
+      "output": {
+        "success": {
+          "unresolvedTimestamp": {
+            "value": "epoch",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
       "input": "Timestamp '2000-01-01T00:55:00'",
       "output": {
         "success": {

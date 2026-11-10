@@ -180,6 +180,28 @@
     },
     {
       "input": {
+        "query": "SELECT array_contains(array(1, NULL, 3), 2);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "array_contains(array(1, NULL, 3), 2)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT array_distinct(array(1, 2, 3, null, 3));",
         "result": [
           "[1,2,3,null]"

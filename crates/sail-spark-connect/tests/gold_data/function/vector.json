@@ -30,7 +30,7 @@
       "input": {
         "query": "SELECT vector_cosine_similarity(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F));",
         "result": [
-          "0.9746319"
+          "0.97463185"
         ],
         "schema": {
           "type": "struct",

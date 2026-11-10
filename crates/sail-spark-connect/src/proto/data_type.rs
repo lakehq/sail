@@ -268,6 +268,9 @@ impl TryFrom<DataType> for spec::DataType {
             Kind::Unparsed(sdt::Unparsed { data_type_string }) => {
                 Ok(parse_spark_data_type(data_type_string.as_str())?)
             }
+            Kind::TimestampNtzNanos(_) | Kind::TimestampLtzNanos(_) => {
+                Err(SparkError::unsupported("nanosecond timestamp type"))
+            }
             Kind::Time(sdt::Time {
                 precision,
                 type_variation_reference: _,
