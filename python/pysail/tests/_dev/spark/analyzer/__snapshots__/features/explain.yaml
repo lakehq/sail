@@ -86,6 +86,9 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
     logical_plan after eliminate_sorts:
     SAME TEXT AS ABOVE
 
@@ -190,6 +193,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_sorts:
