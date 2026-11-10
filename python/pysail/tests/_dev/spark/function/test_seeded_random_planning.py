@@ -3,7 +3,7 @@
 The expected values were verified on JVM Spark 4.2.0.
 """
 
-from typing import Iterator
+from collections.abc import Iterator
 
 import pandas as pd
 import pytest

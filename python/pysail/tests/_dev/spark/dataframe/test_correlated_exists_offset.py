@@ -52,7 +52,7 @@ INNER = "FROM range(0, 10) AS t"
             id="not-exists-in-disjunction",
         ),
         pytest.param(
-            f"SELECT id {OUTER} WHERE EXISTS "
+            f"SELECT id {OUTER} WHERE EXISTS "  # noqa: S608
             f"(SELECT k FROM (SELECT t.id AS k {INNER} WHERE t.id >= o.id) AS s LIMIT 1 OFFSET 4)",
             list(range(6)),
             id="exists-derived-table",
@@ -68,14 +68,14 @@ INNER = "FROM range(0, 10) AS t"
             id="exists-limit-0",
         ),
         pytest.param(
-            "SELECT id FROM range(0, 6) AS o WHERE EXISTS "
+            "SELECT id FROM range(0, 6) AS o WHERE EXISTS "  # noqa: S608
             f"(SELECT 1 {INNER} WHERE t.id >= o.id LIMIT 1 OFFSET 3) AND NOT EXISTS "
             f"(SELECT 1 {INNER} WHERE t.id >= o.id LIMIT 1 OFFSET 7)",
             [3, 4, 5],
             id="exists-and-not-exists",
         ),
         pytest.param(
-            f"SELECT id {OUTER} WHERE EXISTS (SELECT 1 {INNER} WHERE t.id >= o.id AND EXISTS "
+            f"SELECT id {OUTER} WHERE EXISTS (SELECT 1 {INNER} WHERE t.id >= o.id AND EXISTS "  # noqa: S608
             "(SELECT 1 FROM range(0, 10) AS u WHERE u.id > t.id LIMIT 1 OFFSET 2) LIMIT 1 OFFSET 1)",
             list(range(6)),
             id="nested",
