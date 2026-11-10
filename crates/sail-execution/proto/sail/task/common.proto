@@ -11,6 +11,8 @@ message TaskDefinition {
 message TaskInput {
   uint64 stage = 1;
   TaskInputLocator locator = 2;
+  // Whether each consumer task reads its own replica of the input streams.
+  bool replicated = 3;
 }
 
 message TaskInputLocator {
