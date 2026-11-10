@@ -123,7 +123,7 @@ def test_constant_seed_aliases_keep_equal_values(spark, function):
     ],
 )
 def test_correlated_aggregate_does_not_replay_mixed_random_calls(spark, query, message):
-    from pyspark.errors import PySparkException  # noqa: PLC0415
+    from pyspark.errors import PySparkException
 
     with pytest.raises(PySparkException, match=message):
         spark.sql(query).collect()
@@ -133,15 +133,13 @@ def test_correlated_aggregate_does_not_replay_mixed_random_calls(spark, query, m
 @pytest.mark.parametrize("seed", ["NULL", "(SELECT CAST(NULL AS BIGINT))"])
 @pytest.mark.parametrize("function", ["uuid({seed})", "CAST(shuffle(array(1, 2, 3, 4, 5, 6, 7, 8), {seed}) AS STRING)"])
 def test_correlated_aggregate_does_not_replay_null_seeds(spark, seed, function):
-    from pyspark.errors import PySparkException  # noqa: PLC0415
+    from pyspark.errors import PySparkException
 
     function = function.format(seed=seed)
     # Every key lies strictly between '!' and '~', so a successful query must return 1.
     # Replaying its unseeded portion used to lose the key and return 0.
-    query = (
-        "SELECT k, (SELECT count(*) FROM VALUES ('!'), ('~') i(v) WHERE i.v < o.k) AS n "
-        f"FROM (SELECT concat(CAST(rand(42) AS STRING), {function}) AS k FROM range(0, 4, 1, 1)) o"
-    )
+    query = f"""SELECT k, (SELECT count(*) FROM VALUES ('!'), ('~') i(v) WHERE i.v < o.k) AS n
+    FROM (SELECT concat(CAST(rand(42) AS STRING), {function}) AS k FROM range(0, 4, 1, 1)) o"""  # noqa: S608
     with pytest.raises(PySparkException, match="Physical plan does not support logical expression ScalarSubquery"):
         spark.sql(query).collect()
 
@@ -165,10 +163,8 @@ def test_correlated_aggregate_does_not_replay_null_seeds(spark, seed, function):
     ],
 )
 def test_correlated_aggregate_can_replay_reproducible_inputs(spark, expression):
-    query = (
-        "SELECT id, k, (SELECT count(*) FROM range(0, 3, 1, 1) i WHERE i.id < o.k) AS n "
-        f"FROM (SELECT id, {expression} AS k FROM range(0, 12, 1, 1)) o"
-    )
+    query = f"""SELECT id, k, (SELECT count(*) FROM range(0, 3, 1, 1) i WHERE i.id < o.k) AS n
+    FROM (SELECT id, {expression} AS k FROM range(0, 12, 1, 1)) o"""  # noqa: S608
     rows = spark.sql(query).collect()
     assert len(rows) == 12  # noqa: PLR2004
     assert all(row.n == sum(value < row.k for value in range(3)) for row in rows)
@@ -190,10 +186,8 @@ def test_correlated_aggregate_keeps_cached_inner_scalar_subquery(spark):
     ["uuid((SELECT 42))", "CAST(shuffle(array(1, 2, 3, 4, 5, 6, 7, 8), (SELECT 42)) AS STRING)"],
 )
 def test_correlated_aggregate_replays_cached_nonnull_seeds(spark, function):
-    query = (
-        "SELECT k, (SELECT count(*) FROM VALUES ('!'), ('~') i(v) WHERE i.v < o.k) AS n "
-        f"FROM (SELECT concat(CAST(rand(42) AS STRING), {function}) AS k FROM range(0, 12, 1, 1)) o"
-    )
+    query = f"""SELECT k, (SELECT count(*) FROM VALUES ('!'), ('~') i(v) WHERE i.v < o.k) AS n
+    FROM (SELECT concat(CAST(rand(42) AS STRING), {function}) AS k FROM range(0, 12, 1, 1)) o"""  # noqa: S608
     rows = spark.sql(query).collect()
     assert len(rows) == 12  # noqa: PLR2004
     assert all(row.n == 1 for row in rows)
