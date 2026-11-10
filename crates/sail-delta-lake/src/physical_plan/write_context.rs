@@ -164,7 +164,7 @@ pub fn prepare_delta_write_context(
             Some(DeltaOperation::Create { mode, .. }) => *mode,
             _ => SaveMode::Append,
         };
-        let schema_mode = get_schema_mode(options, save_mode)?;
+        let schema_mode = get_schema_mode(options, save_mode, sink_mode)?;
         handle_schema_evolution(snapshot, &input_schema, schema_mode, partition_columns)?
     } else {
         (input_schema.clone(), Vec::new())
@@ -384,8 +384,12 @@ fn operation_for_sink_mode(
 fn get_schema_mode(
     options: &DeltaWriterExecOptions,
     save_mode: SaveMode,
+    sink_mode: &PhysicalSinkMode,
 ) -> Result<Option<SchemaMode>> {
-    match (options.merge_schema, options.overwrite_schema) {
+    // Conditional overwrites retain the table schema unless schema merging is enabled.
+    let overwrite_schema =
+        options.overwrite_schema && !matches!(sink_mode, PhysicalSinkMode::OverwriteIf { .. });
+    match (options.merge_schema, overwrite_schema) {
         (true, true) => Err(DataFusionError::Plan(
             "Cannot specify both mergeSchema and overwriteSchema options".to_string(),
         )),

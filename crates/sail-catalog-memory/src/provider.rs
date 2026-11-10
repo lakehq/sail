@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow::datatypes::{Schema, SchemaRef};
 use dashmap::{DashMap, Entry};
@@ -11,24 +13,57 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
-    CatalogPartitionField, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
-    alter_column_default, alter_column_type,
+    CatalogPartitionField, DatabaseStatus, TableColumnStatus, TableKind, TableReplacement,
+    TableStatus, alter_column_default, alter_column_type,
 };
 use sail_common_datafusion::column_features::ColumnFeatures;
+use tokio::sync::RwLock;
 
 use crate::managed_table;
 
+mod replacement;
+
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn next_generation() -> u64 {
+    NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
+}
+
 struct MemoryDatabase {
+    generation: u64,
+    table_generations: HashMap<String, u64>,
+    uncertain_tables: HashSet<String>,
     status: DatabaseStatus,
     tables: HashMap<String, TableStatus>,
     views: HashMap<String, TableStatus>,
+}
+
+impl MemoryDatabase {
+    fn check_known(&self, table: &str) -> CatalogResult<()> {
+        if self.uncertain_tables.contains(table) {
+            return Err(CatalogError::CommitStateUnknown(
+                format!(
+                    "replacement of {table} requires storage reconciliation before catalog access"
+                )
+                .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn changed(&mut self, table: &str) {
+        self.table_generations
+            .insert(table.to_string(), next_generation());
+    }
 }
 
 /// An in-memory catalog provider.
 pub struct MemoryCatalogProvider {
     name: String,
     default_namespace: Namespace,
-    databases: DashMap<Namespace, MemoryDatabase>,
+    databases: Arc<DashMap<Namespace, MemoryDatabase>>,
+    generation: u64,
+    publication_gate: Arc<RwLock<()>>,
 }
 
 impl MemoryCatalogProvider {
@@ -41,6 +76,9 @@ impl MemoryCatalogProvider {
         databases.insert(
             initial_database.clone(),
             MemoryDatabase {
+                generation: next_generation(),
+                table_generations: HashMap::new(),
+                uncertain_tables: HashSet::new(),
                 status: DatabaseStatus {
                     catalog: name.clone(),
                     database: initial_database.clone().into(),
@@ -54,7 +92,9 @@ impl MemoryCatalogProvider {
         );
         Self {
             name,
-            databases,
+            databases: Arc::new(databases),
+            generation: next_generation(),
+            publication_gate: Arc::new(RwLock::new(())),
             default_namespace: initial_database,
         }
     }
@@ -69,6 +109,7 @@ impl MemoryCatalogProvider {
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
             CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
+        db.check_known(table)?;
         let status = db
             .tables
             .get_mut(table)
@@ -262,6 +303,7 @@ impl MemoryCatalogProvider {
             }?;
         }
         *status = updated;
+        db.changed(table);
         Ok(())
     }
 }
@@ -294,6 +336,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         database: &Namespace,
         options: CreateDatabaseOptions,
     ) -> CatalogResult<DatabaseStatus> {
+        let _access = self.publication_gate.read().await;
         let CreateDatabaseOptions {
             if_not_exists,
             comment,
@@ -321,6 +364,9 @@ impl CatalogProvider for MemoryCatalogProvider {
                     properties,
                 };
                 let db = MemoryDatabase {
+                    generation: next_generation(),
+                    table_generations: HashMap::new(),
+                    uncertain_tables: HashSet::new(),
                     status: status.clone(),
                     tables: HashMap::new(),
                     views: HashMap::new(),
@@ -364,9 +410,13 @@ impl CatalogProvider for MemoryCatalogProvider {
         database: &Namespace,
         options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
+        let _access = self.publication_gate.read().await;
         let DropDatabaseOptions { if_exists, cascade } = options;
         match self.databases.entry(database.clone()) {
             Entry::Occupied(entry) => {
+                for table in &entry.get().uncertain_tables {
+                    entry.get().check_known(table)?;
+                }
                 if !cascade && (!entry.get().tables.is_empty() || !entry.get().views.is_empty()) {
                     return Err(CatalogError::InvalidArgument(format!(
                         "Cannot drop non-empty database '{}', use CASCADE",
@@ -395,6 +445,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
+        let _access = self.publication_gate.read().await;
         let CreateTableOptions {
             columns,
             comment,
@@ -413,6 +464,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
             CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
+        db.check_known(table)?;
         if let Some(status) = db.tables.get(table) {
             match mode {
                 CreateTableMode::CreateIfNotExists => return Ok(status.clone()),
@@ -484,7 +536,25 @@ impl CatalogProvider for MemoryCatalogProvider {
             },
         };
         db.tables.insert(table.to_string(), status.clone());
+        db.changed(table);
         Ok(status)
+    }
+
+    async fn stage_table_replacement(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CreateTableOptions,
+    ) -> CatalogResult<TableReplacement> {
+        self.stage_replacement(database, table, options).await
+    }
+
+    async fn publish_table_replacement(
+        &self,
+        replacement: TableReplacement,
+        publication: sail_catalog::provider::TablePublication,
+    ) -> CatalogResult<()> {
+        self.publish_replacement(replacement, publication).await
     }
 
     fn create_table_metadata_requirement(
@@ -496,10 +566,12 @@ impl CatalogProvider for MemoryCatalogProvider {
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
-        if let Some(db) = self.databases.get(database)
-            && let Some(status) = db.tables.get(table)
-        {
-            return Ok(status.clone());
+        let _access = self.publication_gate.read().await;
+        if let Some(db) = self.databases.get(database) {
+            db.check_known(table)?;
+            if let Some(status) = db.tables.get(table) {
+                return Ok(status.clone());
+            }
         }
         Err(CatalogError::NotFound(
             CatalogObject::Table,
@@ -508,8 +580,14 @@ impl CatalogProvider for MemoryCatalogProvider {
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
+        let _access = self.publication_gate.read().await;
         match self.databases.get(database) {
-            Some(db) => Ok(db.tables.values().cloned().collect()),
+            Some(db) => {
+                for table in &db.uncertain_tables {
+                    db.check_known(table)?;
+                }
+                Ok(db.tables.values().cloned().collect())
+            }
             _ => Err(CatalogError::NotFound(
                 CatalogObject::Database,
                 quote_namespace_if_needed(database),
@@ -523,6 +601,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         table: &str,
         options: DropTableOptions,
     ) -> CatalogResult<()> {
+        let _access = self.publication_gate.read().await;
         // In Spark, the `DROP TABLE ... PURGE` SQL statement deletes data if the table
         // is managed by the Hive metastore. `PURGE` is ignored if the table is external.
         // In Sail, all tables are external, so we ignore the `purge` option.
@@ -532,6 +611,8 @@ impl CatalogProvider for MemoryCatalogProvider {
         } = options;
         match self.databases.get_mut(database) {
             Some(mut db) => {
+                db.check_known(table)?;
+                db.changed(table);
                 if db.tables.remove(table).is_some() || if_exists {
                     Ok(())
                 } else {
@@ -561,6 +642,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         destination_database: &Namespace,
         destination_table: &str,
     ) -> CatalogResult<()> {
+        let _access = self.publication_gate.read().await;
         if database != destination_database {
             return Err(CatalogError::NotSupported(
                 "Memory catalog cannot rename across databases".into(),
@@ -569,6 +651,8 @@ impl CatalogProvider for MemoryCatalogProvider {
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
             CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
+        db.check_known(table)?;
+        db.check_known(destination_table)?;
         if !db.tables.contains_key(table) {
             return Err(CatalogError::NotFound(CatalogObject::Table, table.into()));
         }
@@ -584,6 +668,8 @@ impl CatalogProvider for MemoryCatalogProvider {
             .ok_or_else(|| CatalogError::NotFound(CatalogObject::Table, table.into()))?;
         status.name = destination_table.into();
         db.tables.insert(destination_table.into(), status);
+        db.changed(table);
+        db.changed(destination_table);
         Ok(())
     }
 
@@ -604,6 +690,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         options: AlterTableOptions,
         schema: SchemaRef,
     ) -> CatalogResult<()> {
+        let _access = self.publication_gate.read().await;
         self.apply_table_alterations(database, table, vec![options], Some(schema.as_ref()))
     }
 
@@ -613,6 +700,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         table: &str,
         options: Vec<AlterTableOptions>,
     ) -> CatalogResult<()> {
+        let _access = self.publication_gate.read().await;
         self.apply_table_alterations(database, table, options, None)
     }
 
@@ -622,6 +710,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         view: &str,
         options: CreateViewOptions,
     ) -> CatalogResult<TableStatus> {
+        let _access = self.publication_gate.read().await;
         let CreateViewOptions {
             columns,
             definition,
@@ -633,6 +722,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
             CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
+        db.check_known(view)?;
         if let Some(status) = db.views.get(view) {
             if if_not_exists {
                 return Ok(status.clone());
@@ -681,6 +771,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             },
         };
         db.views.insert(view.to_string(), status.clone());
+        db.changed(view);
         Ok(status)
     }
 
@@ -712,9 +803,12 @@ impl CatalogProvider for MemoryCatalogProvider {
         view: &str,
         options: DropViewOptions,
     ) -> CatalogResult<()> {
+        let _access = self.publication_gate.read().await;
         let DropViewOptions { if_exists } = options;
         match self.databases.get_mut(database) {
             Some(mut db) => {
+                db.check_known(view)?;
+                db.changed(view);
                 if db.views.remove(view).is_some() || if_exists {
                     Ok(())
                 } else {

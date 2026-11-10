@@ -1,6 +1,12 @@
 {
   "tests": [
     {
+      "input": "SELECT * FROM VALUES\n  (DATE '2026-01-01', 1, DATE '2026-01-02', 2)\n  AS t(date1, int1, date2, int2)\nUNPIVOT EXCLUDE NULLS (\n  (date_value, int_value) FOR kind IN ((date1, int1), (date2, int2))\n)",
+      "output": {
+        "failure": "invalid argument: found UNPIVOT at 101:108 expected 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
       "input": "SELECT * FROM t UNPIVOT (() FOR col in ((a, b), (c, d)))",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'. SQLSTATE: 42601 (line 1, pos 26)\n\n== SQL ==\nSELECT * FROM t UNPIVOT (() FOR col in ((a, b), (c, d)))\n--------------------------^^^\n",
       "output": {

@@ -37,6 +37,10 @@ fn build_delta_check_constraint_validation(
             DeltaConstraintViolation::NotNull { column } => format!(
                 "[DELTA_NOT_NULL_CONSTRAINT_VIOLATED] NOT NULL constraint violated for column: {column}"
             ),
+            DeltaConstraintViolation::ReplaceWhere => format!(
+                "[DELTA_REPLACE_WHERE_MISMATCH] Written data does not conform to partial table overwrite condition or constraint '{}'.",
+                constraint.expression
+            ),
             DeltaConstraintViolation::Invariant { column } => format!(
                 "[DELTA_VIOLATE_CONSTRAINT_WITH_VALUES] CHECK constraint {column} ({}) violated.",
                 constraint.expression

@@ -366,7 +366,8 @@ def test_iceberg_metadata_tables_load_gzip_metadata(spark, tmp_path):
             f"SELECT file FROM {table_name}.metadata_log_entries ORDER BY timestamp, file"  # noqa: S608
         ).collect()
         assert len(metadata_files) == 2  # noqa: PLR2004
-        assert all(row.file.endswith(".gz.metadata.json") for row in metadata_files)
+        assert metadata_files[0].file.endswith("/v1.metadata.json")
+        assert metadata_files[1].file.endswith("/v2.gz.metadata.json")
         assert spark.sql(f"SELECT count(*) FROM {table_name}.snapshots").first()[0] == 1  # noqa: S608
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")

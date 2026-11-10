@@ -68,10 +68,10 @@ def test_invalid_spark_marker_arguments(args, kwargs):
     ("version", "jvm", "passed", "skipped"),
     [
         ("3.5.9", False, 4, 4),
-        ("4.0.4", False, 5, 3),
+        ("4.0.5", False, 5, 3),
         ("4.1.0", False, 5, 3),
         ("4.1.0", True, 4, 4),
-        ("4.2.0", False, 4, 4),
+        ("4.2.1", False, 4, 4),
     ],
 )
 def test_spark_collection(pytester, version, jvm, passed, skipped):

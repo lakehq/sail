@@ -14,8 +14,8 @@ use crate::lake_source::{
     resolve_iceberg_metadata_location,
 };
 use crate::operations::metadata_commit::{
-    MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome, PreviousMetadataFile,
-    apply_snapshot_updates,
+    BaseMetadataCodec, MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome,
+    PreviousMetadataFile, apply_snapshot_updates,
 };
 use crate::spec::TableMetadata;
 use crate::table::metadata_loader::{
@@ -66,6 +66,7 @@ pub(crate) async fn commit_snapshot_operation(
         let bytes = load_metadata_file_bytes(&object_store, &metadata_file).await?;
         let mut metadata = TableMetadata::from_json(&bytes)
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let base_codec = BaseMetadataCodec::capture(Some(&metadata))?;
         let prepared = operation.prepare(&metadata, output_schema.clone())?;
         if !prepared.changed {
             return Ok(prepared.output);
@@ -151,7 +152,7 @@ pub(crate) async fn commit_snapshot_operation(
         let style = if use_metadata_location_fallback {
             MetadataFileStyle::Unique
         } else {
-            MetadataFileStyle::Versioned
+            MetadataFileStyle::Versioned(base_codec)
         };
         let prepared_metadata =
             MetadataFileCommit::prepare(table_url, &metadata, next_version, style)?;
