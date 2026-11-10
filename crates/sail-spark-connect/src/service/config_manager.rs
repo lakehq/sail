@@ -392,6 +392,7 @@ mod tests {
         // `cargo nextest`, so no other test can have initialized it.
         Python::initialize();
         let spark = Arc::new(SparkSession::try_new(
+            "server-session".to_string(),
             "session".to_string(),
             "user".to_string(),
             SparkSessionOptions {
