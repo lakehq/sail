@@ -559,10 +559,9 @@ fn fill_directory_root_path(mut path: String) -> Result<String> {
             path: raw_path,
             ..
         } = raw_url
+            && raw_path.is_empty()
         {
-            if raw_path.is_empty() {
-                path.insert(scheme.len() + 3 + authority.len(), '/');
-            }
+            path.insert(scheme.len() + 3 + authority.len(), '/');
         }
     }
     Ok(path)
@@ -1054,7 +1053,13 @@ mod tests {
                 "https://[::1]?token=a/b#part/c",
                 "https://[::1]/?token=a/b#part/c",
             ),
+            (
+                "http://example.com?token=a/b#part/c",
+                "http://example.com/?token=a/b#part/c",
+            ),
             ("s3://bucket", "s3://bucket/"),
+            ("oss://bucket", "oss://bucket/"),
+            ("hdfs://namenode", "hdfs://namenode/"),
         ] {
             test(input, &[(expected, None)]);
         }
