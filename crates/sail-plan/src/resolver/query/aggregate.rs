@@ -510,18 +510,19 @@ impl PlanResolver<'_> {
             find_aggregate_exprs(&aggregate_candidates),
             state,
         );
+        let group_exprs = Self::disambiguate_grouping_expressions(group_exprs, state);
         let plan = LogicalPlanBuilder::from(input)
-            .aggregate(group_exprs, aggregate_exprs.clone())?
+            .aggregate(group_exprs.clone(), aggregate_exprs.clone())?
             .build()?;
         let (grouping_exprs, aggregate_or_grouping_exprs) = {
             let mut grouping_exprs = vec![];
             let mut aggregate_or_grouping_exprs = aggregate_exprs;
-            for expr in grouping {
+            for (named, expr) in grouping.into_iter().zip(group_exprs) {
                 let NamedExpr {
                     name,
-                    expr,
+                    expr: _,
                     metadata,
-                } = expr;
+                } = named;
                 let exprs = match expr {
                     Expr::GroupingSet(g) => g.distinct_expr().into_iter().cloned().collect(),
                     expr => vec![expr],
@@ -1503,6 +1504,66 @@ impl PlanResolver<'_> {
                 } else {
                     expr.alias(state.register_field_name(""))
                 }
+            })
+            .collect()
+    }
+
+    /// Grouping keys clash the same way: `x` and `to_date(x)` are both named `x`, which also
+    /// breaks the rules that rebuild a projection from the grouping expressions. The internal
+    /// alias goes on the expression that is not a bare column, whatever the order of the keys,
+    /// because later references resolve against the qualifier and the attribute identity of
+    /// the column. A grouping set is never aliased itself, since it would no longer be planned
+    /// as a grouping set. Its keys are, and a key takes the same alias in every set it is in.
+    fn disambiguate_grouping_expressions(
+        expressions: Vec<Expr>,
+        state: &mut PlanResolverState,
+    ) -> Vec<Expr> {
+        use datafusion_expr::GroupingSet;
+
+        let mut owners = expressions
+            .iter()
+            .flat_map(|expr| match expr {
+                Expr::GroupingSet(set) => set.distinct_expr(),
+                expr => vec![expr],
+            })
+            .filter(|expr| matches!(expr, Expr::Column(_)))
+            .map(|expr| (expr.schema_name().to_string(), expr.clone()))
+            .collect::<Vec<_>>();
+        let mut aliases: Vec<(Expr, Expr)> = vec![];
+        let mut name_key = |key: Expr, state: &mut PlanResolverState| {
+            let name = key.schema_name().to_string();
+            match owners.iter().find(|(owner, _)| *owner == name) {
+                None => owners.push((name, key.clone())),
+                Some((_, owner)) if *owner == key => {}
+                Some(_) => {
+                    if let Some((_, alias)) = aliases.iter().find(|(aliased, _)| *aliased == key) {
+                        return alias.clone();
+                    }
+                    let alias = key.clone().alias(state.register_field_name(""));
+                    aliases.push((key, alias.clone()));
+                    return alias;
+                }
+            }
+            key
+        };
+        expressions
+            .into_iter()
+            .map(|expr| match expr {
+                Expr::GroupingSet(set) => {
+                    let mut name_keys = |keys: Vec<Expr>| {
+                        keys.into_iter()
+                            .map(|key| name_key(key, state))
+                            .collect::<Vec<_>>()
+                    };
+                    Expr::GroupingSet(match set {
+                        GroupingSet::Rollup(keys) => GroupingSet::Rollup(name_keys(keys)),
+                        GroupingSet::Cube(keys) => GroupingSet::Cube(name_keys(keys)),
+                        GroupingSet::GroupingSets(sets) => GroupingSet::GroupingSets(
+                            sets.into_iter().map(&mut name_keys).collect(),
+                        ),
+                    })
+                }
+                key => name_key(key, state),
             })
             .collect()
     }
