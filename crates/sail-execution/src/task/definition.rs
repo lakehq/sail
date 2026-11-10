@@ -22,6 +22,9 @@ pub struct TaskDefinition {
 pub struct TaskInput {
     pub stage: usize,
     pub locator: Arc<TaskInputLocator>,
+    /// Whether each consumer task reads its own replica of the input streams,
+    /// as for merge and broadcast inputs, rather than one consumer partition per stream.
+    pub replicated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -131,10 +134,15 @@ impl TryFrom<r#gen::TaskDefinition> for TaskDefinition {
 
 impl From<TaskInput> for r#gen::TaskInput {
     fn from(value: TaskInput) -> Self {
-        let TaskInput { stage, locator } = value;
+        let TaskInput {
+            stage,
+            locator,
+            replicated,
+        } = value;
         r#gen::TaskInput {
             stage: stage as u64,
             locator: Some(locator.as_ref().clone().into()),
+            replicated,
         }
     }
 }
@@ -154,6 +162,7 @@ impl TryFrom<r#gen::TaskInput> for TaskInput {
         Ok(TaskInput {
             stage: value.stage as usize,
             locator: Arc::new(locator),
+            replicated: value.replicated,
         })
     }
 }
