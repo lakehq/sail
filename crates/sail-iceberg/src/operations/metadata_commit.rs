@@ -2,6 +2,7 @@ use bytes::Bytes;
 use datafusion_common::{DataFusionError, Result, internal_err};
 use object_store::ObjectStoreExt;
 use object_store::path::Path;
+use sail_common_datafusion::error::CommitStateUnknownError;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -31,6 +32,26 @@ pub(crate) enum MetadataFileStyle {
     // All participating Sail writers from the same immutable base contend on one key.
     Versioned(BaseMetadataCodec),
     Unique,
+}
+
+impl MetadataFileStyle {
+    /// A pointer error cannot make already discoverable versioned metadata retryable.
+    pub(crate) fn catalog_publication_error(
+        self,
+        path: &str,
+        error: DataFusionError,
+    ) -> DataFusionError {
+        if matches!(self, Self::Unique)
+            || matches!(&error, DataFusionError::External(source)
+                if source.is::<CommitStateUnknownError>())
+        {
+            return error;
+        }
+        DataFusionError::External(Box::new(CommitStateUnknownError::with_source(
+            format!("created {path} but could not update the catalog pointer"),
+            error,
+        )))
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -85,12 +106,12 @@ impl MetadataFileCommit {
         })
     }
 
-    pub(crate) fn location(&self) -> &str {
-        &self.location
-    }
-
     pub(crate) fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(crate) fn location(&self) -> &str {
+        &self.location
     }
 
     /// Only definite conflicts may be retried; other errors can leave publication uncertain.
@@ -141,19 +162,53 @@ impl MetadataFileCommit {
                         return Ok(MetadataWriteOutcome::Conflict);
                     }
                     // A missing object after a failed PUT is not proof of non-publication.
-                    _ => return Err(DataFusionError::External(Box::new(error))),
+                    _ => {
+                        return Err(match self.style {
+                            MetadataFileStyle::Versioned(_) => DataFusionError::External(Box::new(
+                                CommitStateUnknownError::with_source(
+                                    format!(
+                                        "could not confirm metadata publication at {}",
+                                        self.path
+                                    ),
+                                    error,
+                                ),
+                            )),
+                            MetadataFileStyle::Unique => DataFusionError::External(Box::new(error)),
+                        });
+                    }
                 }
             }
         }
         if matches!(self.style, MetadataFileStyle::Versioned(_)) {
-            let versions = metadata_files_for_version(store, self.version).await?;
-            if versions.iter().any(|file| file != self.path.as_ref()) {
-                return Err(DataFusionError::Execution(
-                    "concurrent Iceberg metadata publications; commit state is unknown".into(),
-                ));
+            let version_files = metadata_files_for_version(store, self.version)
+                .await
+                .map_err(|error| {
+                    DataFusionError::External(Box::new(CommitStateUnknownError::with_source(
+                        format!(
+                            "created {} but could not check concurrent metadata publication",
+                            self.path
+                        ),
+                        error,
+                    )))
+                })?;
+            if version_files.iter().any(|file| file != self.path.as_ref()) {
+                // Successful versioned Create is already discoverable by readers. Neither
+                // this metadata nor its referenced files can safely be removed or retried.
+                return Err(DataFusionError::External(Box::new(
+                    CommitStateUnknownError::from(format!(
+                        "created {} but found concurrent metadata for version {}",
+                        self.path, self.version
+                    )),
+                )));
             }
         }
         Ok(MetadataWriteOutcome::Written)
+    }
+
+    /// A pointer error cannot make an already discoverable versioned Create retryable.
+    pub(crate) fn catalog_publication_error(&self, error: DataFusionError) -> DataFusionError {
+        self.style
+            .catalog_publication_error(self.path.as_ref(), error)
     }
 
     pub(crate) async fn write_hint(&self, store: &StoreContext) {
@@ -236,6 +291,7 @@ mod tests {
     use crate::operations::replacement_test_support::{ReplacementFault, ReplacementStore};
 
     #[tokio::test]
+    #[expect(clippy::expect_used)]
     async fn replacement_storage_requires_exact_readback_and_never_deletes_unknown()
     -> Result<(), Box<dyn std::error::Error>> {
         for fault in [
@@ -267,7 +323,10 @@ mod tests {
                 ReplacementFault::ConditionalConflict => {
                     assert_eq!(result?, MetadataWriteOutcome::Conflict)
                 }
-                _ => assert!(result.is_err(), "{fault:?}: {result:?}"),
+                _ => {
+                    let error = result.expect_err("unresolved publication");
+                    crate::io::test_store::assert_commit_retryability(&error, true);
+                }
             }
             let stored = store
                 .inner
@@ -316,6 +375,139 @@ mod tests {
             store.prefixed.get(&publication.path).await?.bytes().await?,
             publication.bytes
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[expect(clippy::expect_used)]
+    async fn create_errors_preserve_style_publication_and_retry_semantics() {
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+
+        use object_store::ObjectStoreExt;
+
+        use crate::io::test_store::{PutFault, TestStore, assert_commit_retryability};
+        use crate::spec::{FormatVersion, PartitionSpec, Schema};
+
+        for style in [
+            MetadataFileStyle::Versioned(BaseMetadataCodec::capture(None).expect("base codec")),
+            MetadataFileStyle::Unique,
+        ] {
+            for fault in [
+                PutFault::Reject,
+                PutFault::LostAckUnreadable,
+                PutFault::Collision,
+            ] {
+                let url = Url::parse("memory://bucket/table/").expect("URL");
+                let store =
+                    StoreContext::new(Arc::new(object_store::memory::InMemory::new()), &url)
+                        .expect("store");
+                let metadata: TableMetadata = serde_json::from_value(serde_json::json!({
+                    "format-version": FormatVersion::V2,
+                    "location": url.as_str(),
+                    "last-updated-ms": 0, "last-column-id": 0,
+                    "schemas": [Schema::builder().build().expect("schema")],
+                    "current-schema-id": 0,
+                    "partition-specs": [PartitionSpec::unpartitioned_spec()]
+                }))
+                .expect("metadata");
+                let prepared =
+                    MetadataFileCommit::prepare(&url, &metadata, 2, style).expect("prepare");
+                let mut injected = TestStore::new(store.base);
+                injected.fault = Some((".metadata.json".into(), fault));
+                let injected = Arc::new(injected);
+                let store = StoreContext::new(injected.clone(), &url).expect("store");
+                let result = prepared.write(&store).await;
+                {
+                    let error = result.expect_err("unresolved Create error");
+                    let versioned = matches!(style, MetadataFileStyle::Versioned(_));
+                    assert_commit_retryability(&error, versioned);
+                    let source = match &error {
+                        DataFusionError::External(source) => Some(source),
+                        _ => None,
+                    }
+                    .expect("external error");
+                    let original = if versioned {
+                        std::error::Error::source(
+                            source
+                                .downcast_ref::<CommitStateUnknownError>()
+                                .expect("typed unknown"),
+                        )
+                        .expect("source")
+                    } else {
+                        source.as_ref()
+                    };
+                    assert!(original.is::<object_store::Error>());
+                    assert!(
+                        original
+                            .source()
+                            .expect("I/O source")
+                            .is::<std::io::Error>()
+                    );
+                }
+                assert_eq!(injected.puts.load(Ordering::SeqCst), 1);
+                assert!(injected.deletes.lock().expect("deletes").is_empty());
+                let reader = StoreContext::new(injected.inner.clone(), &url).expect("reader");
+                assert_eq!(
+                    reader.prefixed.head(prepared.path()).await.is_ok(),
+                    matches!(fault, PutFault::LostAckUnreadable)
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn normal_publication_reconciles_exact_bytes_and_rejects_other_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::io::test_store::{PutFault, TestStore};
+        for style in [
+            MetadataFileStyle::Versioned(BaseMetadataCodec::capture(None)?),
+            MetadataFileStyle::Unique,
+        ] {
+            let url = Url::parse("memory:///table")?;
+            let mut injected = TestStore::new(Arc::new(object_store::memory::InMemory::new()));
+            injected.fault = Some((".metadata.json".into(), PutFault::LostAck));
+            let injected = Arc::new(injected);
+            let store = StoreContext::new(injected.clone(), &url)?;
+            let mut publication = MetadataFileCommit {
+                path: Path::from("metadata/v2.metadata.json"),
+                location: "memory:///table/metadata/v2.metadata.json".into(),
+                bytes: Bytes::from_static(b"prepared"),
+                version: 2,
+                style,
+                version_hint: "2".into(),
+            };
+            assert_eq!(
+                publication.write(&store).await?,
+                MetadataWriteOutcome::Written
+            );
+            // An internal retry's AlreadyExists is also resolved by exact readback.
+            assert_eq!(
+                publication.write(&store).await?,
+                MetadataWriteOutcome::Written
+            );
+            publication.bytes = Bytes::from_static(b"different candidate");
+            assert_eq!(
+                publication.write(&store).await?,
+                MetadataWriteOutcome::Conflict
+            );
+            assert_eq!(
+                store
+                    .prefixed
+                    .get(publication.path())
+                    .await?
+                    .bytes()
+                    .await?,
+                Bytes::from_static(b"prepared")
+            );
+            assert!(
+                injected
+                    .deletes
+                    .lock()
+                    .map_err(|e| e.to_string())?
+                    .is_empty()
+            );
+        }
         Ok(())
     }
 

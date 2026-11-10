@@ -17,6 +17,7 @@ mod arguments;
 mod descriptor;
 mod logical;
 mod rewrite_data_files;
+mod rewrite_manifests;
 pub(crate) mod snapshot;
 pub(crate) mod table;
 
@@ -126,6 +127,18 @@ pub(crate) async fn execute_iceberg_procedure(
                 load_current_metadata(ctx, &table_url, table_properties, lakehouse_table.as_ref())
                     .await?;
             ancestors_output(&metadata, &invocation)
+        }
+        IcebergProcedureType::RewriteManifests => {
+            let operation = rewrite_manifests::RewriteManifests::from_invocation(&invocation)?;
+            commit_snapshot_operation(
+                ctx,
+                &table_url,
+                table_properties,
+                lakehouse_table.as_ref(),
+                operation,
+                invocation.procedure.schema(),
+            )
+            .await
         }
         IcebergProcedureType::RollbackToSnapshot => {
             let snapshot_id = required_i64(&invocation, "snapshot_id")?;
@@ -275,6 +288,7 @@ mod tests {
                 "rollback_to_timestamp",
                 "set_current_snapshot",
                 "rewrite_data_files",
+                "rewrite_manifests",
                 "ancestors_of",
                 "fast_forward",
             ]

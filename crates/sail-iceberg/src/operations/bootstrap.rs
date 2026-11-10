@@ -753,6 +753,97 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn bootstrap_publication_errors_preserve_style_source_and_visibility() {
+        use std::sync::atomic::Ordering;
+
+        use sail_common_datafusion::error::CommitStateUnknownError;
+
+        use crate::io::test_store::{PutFault, TestStore, assert_commit_retryability};
+
+        for style in [NewTableMetadataStyle::Hadoop, NewTableMetadataStyle::Uuid] {
+            for fault in [PutFault::Reject, PutFault::LostAckUnreadable] {
+                let url = Url::parse("memory://bucket/bootstrap/").expect("URL");
+                let mut injected = TestStore::new(Arc::new(object_store::memory::InMemory::new()));
+                injected.fault = Some((".metadata.json".into(), fault));
+                let injected = Arc::new(injected);
+                let store = StoreContext::new(injected.clone(), &url).expect("store");
+                let metadata: TableMetadata = serde_json::from_value(serde_json::json!({
+                    "format-version": FormatVersion::V2,
+                    "location": url.as_str(),
+                    "table-uuid": "00000000-0000-0000-0000-000000000001",
+                    "last-updated-ms": 0, "last-column-id": 0,
+                    "schemas": [IcebergSchema::builder().build().expect("schema")],
+                    "current-schema-id": 0,
+                    "partition-specs": [PartitionSpec::unpartitioned_spec()]
+                }))
+                .expect("metadata");
+                let prepared = prepare_metadata_version(
+                    &url,
+                    metadata.clone(),
+                    1,
+                    style,
+                    BaseMetadataCodec::capture(None).expect("base codec"),
+                )
+                .expect("prepare");
+                let path = prepared.publication.path().clone();
+                let bytes = metadata.to_json().expect("metadata bytes");
+                let error = publish_metadata_version(&store, prepared, None)
+                    .await
+                    .expect_err("publication fault");
+                let hadoop = matches!(style, NewTableMetadataStyle::Hadoop);
+                assert_commit_retryability(&error, hadoop);
+                let source = match &error {
+                    DataFusionError::External(source) => Some(source),
+                    _ => None,
+                }
+                .expect("external error");
+                let original = if hadoop {
+                    std::error::Error::source(
+                        source
+                            .downcast_ref::<CommitStateUnknownError>()
+                            .expect("unknown state"),
+                    )
+                    .expect("original source")
+                } else {
+                    source.as_ref()
+                };
+                assert!(original.is::<object_store::Error>());
+                assert!(
+                    original
+                        .source()
+                        .expect("I/O source")
+                        .is::<std::io::Error>()
+                );
+                assert_eq!(injected.puts.load(Ordering::SeqCst), 1);
+                assert!(injected.deletes.lock().expect("deletes").is_empty());
+                let reader = StoreContext::new(injected.inner.clone(), &url).expect("reader");
+                let objects = reader
+                    .prefixed
+                    .list(None)
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .expect("objects");
+                if matches!(fault, PutFault::LostAckUnreadable) {
+                    assert_eq!(objects.len(), 1);
+                    assert_eq!(objects[0].location, path);
+                    let published = reader
+                        .prefixed
+                        .get(&path)
+                        .await
+                        .expect("metadata")
+                        .bytes()
+                        .await
+                        .expect("bytes");
+                    assert_eq!(published.as_ref(), bytes.as_slice());
+                    TableMetadata::from_json(&published).expect("readable metadata");
+                } else {
+                    assert!(objects.is_empty());
+                }
+            }
+        }
+    }
+
     #[test]
     fn bootstrap_metadata_ignores_version_hint_failure() {
         futures::executor::block_on(async {
@@ -1056,6 +1147,7 @@ mod tests {
             )
             .await
             .expect_err("unsupported metadata codec must fail before publication");
+            assert!(matches!(&error, DataFusionError::Plan(_)));
             assert!(
                 error
                     .to_string()

@@ -23,6 +23,8 @@ use crate::spec::{
 };
 
 pub(crate) mod deletion_vector;
+#[cfg(test)]
+pub(crate) mod test_store;
 
 #[derive(Clone)]
 pub struct StoreContext {

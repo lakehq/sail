@@ -340,6 +340,12 @@ impl ManifestWriter {
     }
 
     pub fn to_avro_bytes_v2(&self) -> Result<Vec<u8>, String> {
+        self.to_avro_bytes_with_limit(usize::MAX)
+    }
+
+    pub(crate) fn to_avro_bytes_with_limit(&self, limit: usize) -> Result<Vec<u8>, String> {
+        use crate::spec::avro_utils::{LimitedWriter, check_avro_record_size};
+
         if self.metadata.format_version == FormatVersion::V1
             && self.metadata.content != ManifestContentType::Data
         {
@@ -353,20 +359,25 @@ impl ManifestWriter {
             .map_err(|e| format!("Partition type error: {e}"))?;
         let (declared_schema, encoding_schema) =
             super::schema::manifest_entry_schemas(&partition_type, self.metadata.format_version);
-        let mut writer = create_avro_writer(&encoding_schema, Vec::new())
-            .map_err(|error| format!("Avro writer creation error: {error}"))?;
+        let mut writer =
+            create_avro_writer(&encoding_schema, LimitedWriter::new(Vec::new(), limit))
+                .map_err(|error| format!("Avro writer creation error: {error}"))?;
 
         // Add user metadata per Iceberg spec
-        let schema_json = serde_json::to_vec(&self.metadata.schema)
+        let mut schema_json = LimitedWriter::new(Vec::new(), limit);
+        serde_json::to_writer(&mut schema_json, &self.metadata.schema)
             .map_err(|e| format!("Fail to serialize table schema: {e}"))?;
+        let schema_json = schema_json.into_inner();
         writer
             .add_user_metadata("schema".to_string(), schema_json)
             .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
         writer
             .add_user_metadata("schema-id".to_string(), self.metadata.schema_id.to_string())
             .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
-        let part_fields = serde_json::to_vec(&self.metadata.partition_spec.fields())
+        let mut part_fields = LimitedWriter::new(Vec::new(), limit);
+        serde_json::to_writer(&mut part_fields, &self.metadata.partition_spec.fields())
             .map_err(|e| format!("Fail to serialize partition spec: {e}"))?;
+        let part_fields = part_fields.into_inner();
         writer
             .add_user_metadata("partition-spec".to_string(), part_fields)
             .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
@@ -407,6 +418,8 @@ impl ManifestWriter {
             .map_err(|e| format!("Avro to_value error: {e}"))?
             .resolve(&encoding_schema)
             .map_err(|e| format!("Avro resolve error: {e}"))?;
+            check_avro_record_size(&encoding_schema, &value, limit)
+                .map_err(|e| format!("Avro record size error: {e}"))?;
             writer
                 .append_value(value)
                 .map_err(|e| format!("Avro append error: {e}"))?;
@@ -414,8 +427,14 @@ impl ManifestWriter {
 
         let encoded = writer
             .into_inner()
-            .map_err(|e| format!("Avro writer finalize error: {e}"))?;
-        super::replace_avro_schema_header(&encoded, &declared_schema, &partition_type)
+            .map_err(|e| format!("Avro writer finalize error: {e}"))?
+            .into_inner();
+        super::replace_avro_schema_header_with_limit(
+            &encoded,
+            &declared_schema,
+            &partition_type,
+            limit,
+        )
     }
 }
 

@@ -34,6 +34,7 @@ mod schema;
 mod writer;
 
 // Provide data file avro helpers API surface
+pub(crate) use _serde::deserialize_optional_vec;
 use apache_avro::to_value;
 pub use data_file::*;
 pub use entry::*;
@@ -91,6 +92,14 @@ fn parse_avro_object_header(bytes: &[u8]) -> Result<AvroObjectHeader, String> {
 }
 
 fn replace_avro_schema_header_bytes(bytes: &[u8], schema: Vec<u8>) -> Result<Vec<u8>, String> {
+    replace_avro_schema_header_bytes_with_limit(bytes, schema, usize::MAX)
+}
+
+fn replace_avro_schema_header_bytes_with_limit(
+    bytes: &[u8],
+    schema: Vec<u8>,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
     let AvroObjectHeader {
         mut metadata,
         marker,
@@ -102,15 +111,20 @@ fn replace_avro_schema_header_bytes(bytes: &[u8], schema: Vec<u8>) -> Result<Vec
         .map(|(key, value)| (key, AvroValue::Bytes(value)))
         .collect::<HashMap<_, _>>();
     let metadata_schema = AvroSchema::map(AvroSchema::Bytes).build();
-    let encoded_metadata = GenericDatumWriter::builder(&metadata_schema)
+    let mut encoded_metadata = crate::spec::avro_utils::LimitedWriter::new(Vec::new(), limit);
+    GenericDatumWriter::builder(&metadata_schema)
         .build()
-        .and_then(|writer| writer.write_value_to_vec(AvroValue::Map(metadata)))
+        .and_then(|writer| writer.write_value(&mut encoded_metadata, AvroValue::Map(metadata)))
         .map_err(|error| format!("Avro header serialization error: {error}"))?;
-
-    let mut output = Vec::with_capacity(
-        AVRO_OBJECT_HEADER.len() + encoded_metadata.len() + marker.len() + bytes.len()
-            - payload_offset,
-    );
+    let encoded_metadata = encoded_metadata.into_inner();
+    let length = AVRO_OBJECT_HEADER
+        .len()
+        .checked_add(encoded_metadata.len())
+        .and_then(|n| n.checked_add(marker.len()))
+        .and_then(|n| n.checked_add(bytes.len() - payload_offset))
+        .filter(|n| *n <= limit)
+        .ok_or_else(|| "Manifest output byte limit exceeded".to_string())?;
+    let mut output = Vec::with_capacity(length);
     output.extend_from_slice(AVRO_OBJECT_HEADER);
     output.extend_from_slice(&encoded_metadata);
     output.extend_from_slice(&marker);
@@ -122,6 +136,15 @@ pub(super) fn replace_avro_schema_header(
     bytes: &[u8],
     schema: &AvroSchema,
     partition_type: &StructType,
+) -> Result<Vec<u8>, String> {
+    replace_avro_schema_header_with_limit(bytes, schema, partition_type, usize::MAX)
+}
+
+pub(super) fn replace_avro_schema_header_with_limit(
+    bytes: &[u8],
+    schema: &AvroSchema,
+    partition_type: &StructType,
+    limit: usize,
 ) -> Result<Vec<u8>, String> {
     let mut schema = serde_json::to_value(schema)
         .map_err(|error| format!("Avro schema serialization error: {error}"))?;
@@ -144,9 +167,10 @@ pub(super) fn replace_avro_schema_header(
             })?;
         object.insert("adjust-to-utc".into(), JsonValue::Bool(adjust_to_utc));
     }
-    let schema = serde_json::to_vec(&schema)
+    let mut encoded_schema = crate::spec::avro_utils::LimitedWriter::new(Vec::new(), limit);
+    serde_json::to_writer(&mut encoded_schema, &schema)
         .map_err(|error| format!("Avro schema serialization error: {error}"))?;
-    replace_avro_schema_header_bytes(bytes, schema)
+    replace_avro_schema_header_bytes_with_limit(bytes, encoded_schema.into_inner(), limit)
 }
 
 fn find_avro_field_type(schema: &mut JsonValue, field_id: i32) -> Option<&mut JsonValue> {
@@ -345,13 +369,18 @@ fn partition_avro_header(
     replace_avro_schema_header_bytes(bytes, schema)
 }
 
-fn decode_avro_values<T, F>(bytes: &[u8], decode: &F) -> Result<Vec<T>, String>
+fn decode_avro_values<T, F>(bytes: &[u8], max_entries: usize, decode: &F) -> Result<Vec<T>, String>
 where
     F: Fn(AvroValue) -> Result<T, String>,
 {
     AvroReader::new(bytes)
         .map_err(|error| format!("Avro reader error: {error}"))?
-        .map(|value| {
+        .enumerate()
+        .map(|(index, value)| {
+            // Each codec attempt has its own counter; fallback must not charge entries twice.
+            if index >= max_entries {
+                return Err(format!("Manifest entry limit exceeded ({max_entries})"));
+            }
             value
                 .map_err(|error| format!("Avro read value error: {error}"))
                 .and_then(decode)
@@ -362,6 +391,7 @@ where
 fn decode_iceberg_avro<T, F>(
     bytes: &[u8],
     partition_type: &StructType,
+    max_entries: usize,
     decode: F,
 ) -> Result<Vec<T>, String>
 where
@@ -376,21 +406,23 @@ where
         },
     );
     if !has_named_schema {
-        return decode_avro_values(bytes, &decode);
+        return decode_avro_values(bytes, max_entries, &decode);
     }
 
     if !requires_iceberg_codec {
         let normalized_header = partition_avro_header(bytes, partition_type, false)?;
-        return decode_avro_values(&normalized_header, &decode);
+        return decode_avro_values(&normalized_header, max_entries, &decode);
     }
 
     let iceberg_result = partition_avro_header(bytes, partition_type, true)
-        .and_then(|encoded_header| decode_avro_values(&encoded_header, &decode));
+        .and_then(|encoded_header| decode_avro_values(&encoded_header, max_entries, &decode));
     match iceberg_result {
         Ok(values) => Ok(values),
         Err(iceberg_error) => {
-            let standard_result = partition_avro_header(bytes, partition_type, false)
-                .and_then(|normalized_header| decode_avro_values(&normalized_header, &decode));
+            let standard_result =
+                partition_avro_header(bytes, partition_type, false).and_then(|normalized_header| {
+                    decode_avro_values(&normalized_header, max_entries, &decode)
+                });
             standard_result.map_err(|standard_error| {
                 format!(
                     "Iceberg partition decoding failed ({iceberg_error}); standard Avro fallback also failed ({standard_error})"
@@ -469,7 +501,7 @@ pub fn read_data_files_from_avro<R: std::io::Read>(
     reader
         .read_to_end(&mut bytes)
         .map_err(|error| format!("Avro input read error: {error}"))?;
-    decode_iceberg_avro(&bytes, partition_type, |value| {
+    decode_iceberg_avro(&bytes, partition_type, usize::MAX, |value| {
         let serde_df: _serde::DataFileSerde =
             avro_from_value(&value).map_err(|e| format!("Avro decode DataFile error: {e}"))?;
         serde_df.into_data_file(partition_spec_id, partition_type, Some(schema))
@@ -517,6 +549,24 @@ impl Manifest {
     pub(crate) fn try_from_avro_bytes(
         bs: &[u8],
     ) -> Result<(ManifestMetadata, Vec<ManifestEntry>), String> {
+        Self::decode_avro_entries(bs, |entry, _| Ok(entry))
+    }
+
+    /// Decode additional entry fields through the same partition codec and typed validation
+    /// as normal manifest reads, including the standard-Avro fallback for fixed partitions.
+    pub(crate) fn decode_avro_entries<T>(
+        bs: &[u8],
+        decode: impl Fn(ManifestEntry, &AvroValue) -> Result<T, String>,
+    ) -> Result<(ManifestMetadata, Vec<T>), String> {
+        Self::decode_avro_entries_with_limit(bs, usize::MAX, decode)
+    }
+
+    /// Bound all records, including deleted entries, before collecting decoded values.
+    pub(crate) fn decode_avro_entries_with_limit<T>(
+        bs: &[u8],
+        max_entries: usize,
+        decode: impl Fn(ManifestEntry, &AvroValue) -> Result<T, String>,
+    ) -> Result<(ManifestMetadata, Vec<T>), String> {
         // Parse manifest metadata from avro user metadata
         let header = parse_avro_object_header(bs)?;
         let metadata = ManifestMetadata::parse_from_avro_meta(&header.metadata)?;
@@ -526,7 +576,7 @@ impl Manifest {
             .partition_spec
             .partition_type(&metadata.schema)
             .map_err(|e| format!("Partition type error: {e}"))?;
-        let entries = decode_iceberg_avro(bs, &partition_type, |value| {
+        let entries = decode_iceberg_avro(bs, &partition_type, max_entries, |value| {
             let entry = match metadata.format_version {
                 FormatVersion::V1 => {
                     let entry: _serde::ManifestEntryV1 = avro_from_value(&value)
@@ -547,7 +597,7 @@ impl Manifest {
                     )?
                 }
             };
-            Ok(entry)
+            decode(entry, &value)
         })?;
 
         Ok((metadata, entries))
@@ -805,6 +855,14 @@ mod tests {
         };
         let (legacy_schema, _) =
             super::schema::data_file_schemas(&partition_type, FormatVersion::V2);
+        let mut null_partition_file = data_file.clone();
+        null_partition_file.partition = vec![None, None];
+        let null_value = to_value(super::_serde::DataFileSerde::from_data_file(
+            null_partition_file,
+            &partition_type,
+        )?)
+        .and_then(|value| value.resolve(&legacy_schema))
+        .map_err(|error| error.to_string())?;
         let value = to_value(super::_serde::DataFileSerde::from_data_file(
             data_file,
             &partition_type,
@@ -814,6 +872,10 @@ mod tests {
         .map_err(|error| format!("Avro resolve error: {error}"))?;
         let mut writer = AvroWriter::new(&legacy_schema, Vec::new())
             .map_err(|error| format!("Avro writer creation error: {error}"))?;
+        // The first attempt decodes one complete record before failing on fixed values.
+        writer
+            .append_value(null_value)
+            .map_err(|error| error.to_string())?;
         writer
             .append_value(value)
             .map_err(|error| format!("Avro append error: {error}"))?;
@@ -847,6 +909,33 @@ mod tests {
             .map_err(|error| format!("Avro schema serialization error: {error}"))?;
         let bytes = super::replace_avro_schema_header_bytes(&bytes, header_schema)?;
 
+        let decode = |value| {
+            let file: super::_serde::DataFileSerde =
+                apache_avro::from_value(&value).map_err(|error| error.to_string())?;
+            file.into_data_file(0, &partition_type, Some(&table_schema))
+        };
+        let iceberg_bytes = super::partition_avro_header(&bytes, &partition_type, true)?;
+        let decoded = std::cell::Cell::new(0);
+        assert!(
+            super::decode_avro_values(&iceberg_bytes, 2, &|value| {
+                let file = decode(value)?;
+                decoded.set(decoded.get() + 1);
+                Ok(file)
+            })
+            .is_err()
+        );
+        assert_eq!(decoded.get(), 1);
+        assert_eq!(
+            super::decode_iceberg_avro(&bytes, &partition_type, 2, decode)?.len(),
+            2
+        );
+        assert!(
+            super::decode_iceberg_avro(&bytes, &partition_type, 1, decode)
+                .err()
+                .ok_or("expected entry budget error")?
+                .contains("Manifest entry limit exceeded")
+        );
+
         let parsed = read_data_files_from_avro(
             &mut Cursor::new(bytes),
             &table_schema,
@@ -854,8 +943,9 @@ mod tests {
             &partition_type,
             FormatVersion::V2,
         )?;
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].partition, expected_partition);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].partition, vec![None, None]);
+        assert_eq!(parsed[1].partition, expected_partition);
         Ok(())
     }
 }
