@@ -10,12 +10,12 @@ use crate::error::PyUdfResult;
 /// and implements the [Debug] trait.
 ///
 /// The object is a cache of the deserialized payload of the UDF that owns it, and the UDF
-/// compares the payload itself. A shared object equals all other shared objects, so that the
-/// calls of the same UDF are equal. A distinct object only equals itself, so that the calls of
-/// a nondeterministic UDF are not merged into one evaluation.
+/// compares the payload itself. An object only equals itself, so that separate calls of a UDF
+/// are not merged into one evaluation. A shared object equals all other shared objects, so
+/// that the calls of the same UDF are equal when comparing plans.
 pub(crate) struct LazyPyObject {
     object: PyOnceLock<Py<PyAny>>,
-    distinct: bool,
+    shared: bool,
 }
 
 impl Debug for LazyPyObject {
@@ -24,20 +24,23 @@ impl Debug for LazyPyObject {
     }
 }
 
-/// A clone has an empty cache. A clone of a distinct object is another distinct object, so it is
-/// not equal to the original.
+/// A clone has an empty cache. A clone of an object that is not shared is another object, so
+/// it is not equal to the original.
 impl Clone for LazyPyObject {
     fn clone(&self) -> Self {
-        Self::new(self.distinct)
+        Self {
+            object: PyOnceLock::new(),
+            shared: self.shared,
+        }
     }
 }
 
 impl PartialEq for LazyPyObject {
     fn eq(&self, other: &Self) -> bool {
-        if self.distinct || other.distinct {
-            std::ptr::eq(self, other)
-        } else {
+        if self.shared && other.shared {
             true
+        } else {
+            std::ptr::eq(self, other)
         }
     }
 }
@@ -46,17 +49,24 @@ impl Eq for LazyPyObject {}
 
 impl Hash for LazyPyObject {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        if self.distinct {
+        if !self.shared {
             std::ptr::from_ref(self).hash(state);
         }
     }
 }
 
 impl LazyPyObject {
-    pub fn new(distinct: bool) -> Self {
+    pub fn new() -> Self {
         Self {
             object: PyOnceLock::new(),
-            distinct,
+            shared: false,
+        }
+    }
+
+    pub fn shared() -> Self {
+        Self {
+            object: PyOnceLock::new(),
+            shared: true,
         }
     }
 

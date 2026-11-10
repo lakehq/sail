@@ -65,15 +65,15 @@ impl PySparkUDF {
             input_types,
             output_type,
             config,
-            udf: LazyPyObject::new(!deterministic),
+            udf: LazyPyObject::new(),
         }
     }
 
-    /// Returns the same UDF, whose calls are equal to the calls of all other equal UDFs, even
-    /// when the UDF is nondeterministic.
+    /// Returns the same UDF, whose calls are equal to the calls of all other equal shared UDFs.
+    /// It is only used to compare plans, so that calls are never merged into one evaluation.
     pub fn to_shared(&self) -> Self {
         Self {
-            udf: LazyPyObject::new(false),
+            udf: LazyPyObject::shared(),
             ..self.clone()
         }
     }

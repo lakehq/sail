@@ -11,6 +11,7 @@ pub mod spark_conv;
 pub mod spark_div;
 pub mod spark_negative;
 pub mod spark_pmod;
+pub mod spark_poisson;
 pub mod spark_signum;
 pub mod spark_sqrt;
 pub mod spark_try_add;

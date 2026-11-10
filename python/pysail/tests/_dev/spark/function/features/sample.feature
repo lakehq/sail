@@ -55,7 +55,6 @@ Feature: DataFrame sample operations
 
   Rule: Sample with replacement
 
-    @sail-bug
     Scenario: a seeded replacement sample matches Spark's Poisson sampler
       Given sample with replacement fraction 0.5 seed 1 as temporary view sample_data
       When query

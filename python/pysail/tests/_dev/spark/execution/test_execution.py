@@ -57,14 +57,7 @@ def test_builtin_functions_in_driver_system_table_filter(spark, predicate):
     ("with_replacement", "expected"),
     [
         (False, [2, 3]),
-        pytest.param(
-            True,
-            [0, 2, 3, 4],
-            marks=pytest.mark.xfail(
-                reason="Replacement sampling RNG differs from Spark",
-                strict=True,
-            ),
-        ),
+        (True, [0, 2, 3, 4]),
     ],
 )
 def test_seeded_sample_in_cluster_mode(spark, with_replacement, expected):

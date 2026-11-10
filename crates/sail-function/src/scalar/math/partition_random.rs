@@ -7,16 +7,14 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Float64Array, Int64Array};
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::ScalarUDF;
-use rand::SeedableRng;
-use rand::rngs::StdRng;
-use rand_distr::{Distribution, Poisson};
 
 use super::java_random::JavaRandom;
 use super::rand_poisson::RandPoisson;
 use super::randn::Randn;
 use super::random::Random;
+use super::spark_poisson::SparkPoisson;
 use super::spark_uniform::{SparkUniform, uniform_with_rng};
 use super::xorshift::SparkXorShiftRandom;
 use crate::scalar::string::randstr::{Randstr, random_strings, randstr_length};
@@ -100,18 +98,16 @@ pub fn create_partition_random_generator(
                 );
             }
         };
-        let poisson =
-            if lambda == 0.0 {
-                None
-            } else {
-                Some(Poisson::new(lambda).map_err(|e| {
-                    exec_datafusion_err!("Failed to create Poisson distribution: {e}")
-                })?)
-            };
-        Ok(Box::new(PoissonGenerator {
-            rng: StdRng::seed_from_u64(seed as u64),
-            poisson,
-        }))
+        let poisson = if lambda == 0.0 {
+            None
+        } else if lambda > 0.0 && lambda.is_finite() {
+            Some(SparkPoisson::new(lambda, seed))
+        } else {
+            return exec_err!(
+                "Failed to create Poisson distribution: lambda must be positive and finite, got {lambda}"
+            );
+        };
+        Ok(Box::new(PoissonGenerator { poisson }))
     }
 }
 
@@ -201,19 +197,17 @@ impl PartitionRandomGenerator for UniformGenerator {
     }
 }
 
+/// Spark's `PoissonSampler` without gap sampling, as used by `SampleExec`.
 struct PoissonGenerator {
-    rng: StdRng,
-    poisson: Option<Poisson<f64>>,
+    poisson: Option<SparkPoisson>,
 }
 
 impl PartitionRandomGenerator for PoissonGenerator {
     fn generate(&mut self, num_rows: usize) -> Result<ArrayRef> {
-        let array = match &self.poisson {
+        let array = match &mut self.poisson {
             // Spark permits a zero sampling fraction and emits no copies of each input row.
             None => Int64Array::from_value(0, num_rows),
-            Some(poisson) => Int64Array::from_iter_values(
-                (0..num_rows).map(|_| poisson.sample(&mut self.rng) as i64),
-            ),
+            Some(poisson) => Int64Array::from_iter_values((0..num_rows).map(|_| poisson.sample())),
         };
         Ok(Arc::new(array))
     }

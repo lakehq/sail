@@ -349,8 +349,8 @@ impl NameNormalizer {
                         Expr::OuterReferenceColumn(_, _) => {
                             return plan_err!("unexpected outer reference");
                         }
-                        // The calls of a nondeterministic Python UDF are only equal to
-                        // themselves, but equal subqueries are shared regardless of determinism.
+                        // The calls of a Python UDF are only equal to themselves, but equal
+                        // subqueries are shared regardless of determinism.
                         Expr::ScalarFunction(mut function) => {
                             match shared_python_scalar_udf(&function.func) {
                                 Some(func) => {
@@ -536,37 +536,33 @@ fn is_reusable_volatile_aggregate(func: &dyn AggregateUDFImpl) -> bool {
     func.is::<PySparkGroupAggregateUDF>() || func.is::<PySparkGroupMapUDF>()
 }
 
-/// Returns the nondeterministic Python UDF with calls that are equal to the calls of all other
-/// equal UDFs, or `None` for other functions.
+/// Returns the Python UDF with calls that are equal to the calls of all other equal UDFs, or
+/// `None` for other functions.
+///
+/// The calls of a Python UDF in a plan are only equal to themselves, so separate calls are
+/// evaluated separately, even when the UDF is deterministic. The sharing key deliberately
+/// uses these equal calls instead, so that equal subqueries are still shared.
 fn shared_python_scalar_udf(func: &ScalarUDF) -> Option<ScalarUDF> {
     let inner = func.inner();
-    if let Some(udf) = inner.downcast_ref::<PySparkUDF>()
-        && !udf.deterministic()
-    {
-        Some(ScalarUDF::new_from_impl(udf.to_shared()))
-    } else if let Some(udf) = inner.downcast_ref::<PySparkCoGroupMapUDF>()
-        && !udf.deterministic()
-    {
+    if let Some(udf) = inner.downcast_ref::<PySparkUDF>() {
         Some(ScalarUDF::new_from_impl(udf.to_shared()))
     } else {
-        None
+        inner
+            .downcast_ref::<PySparkCoGroupMapUDF>()
+            .map(|udf| ScalarUDF::new_from_impl(udf.to_shared()))
     }
 }
 
-/// Returns the nondeterministic Python aggregate UDF with calls that are equal to the calls of
-/// all other equal UDFs, or `None` for other functions.
+/// Returns the Python aggregate UDF with calls that are equal to the calls of all other equal
+/// UDFs, or `None` for other functions.
 fn shared_python_aggregate_udf(func: &AggregateUDF) -> Option<AggregateUDF> {
     let inner = func.inner();
-    if let Some(udf) = inner.downcast_ref::<PySparkGroupAggregateUDF>()
-        && !udf.deterministic()
-    {
-        Some(AggregateUDF::new_from_impl(udf.to_shared()))
-    } else if let Some(udf) = inner.downcast_ref::<PySparkGroupMapUDF>()
-        && !udf.deterministic()
-    {
+    if let Some(udf) = inner.downcast_ref::<PySparkGroupAggregateUDF>() {
         Some(AggregateUDF::new_from_impl(udf.to_shared()))
     } else {
-        None
+        inner
+            .downcast_ref::<PySparkGroupMapUDF>()
+            .map(|udf| AggregateUDF::new_from_impl(udf.to_shared()))
     }
 }
 
