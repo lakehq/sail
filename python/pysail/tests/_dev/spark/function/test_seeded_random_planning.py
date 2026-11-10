@@ -202,7 +202,7 @@ def test_equal_unaliased_expressions_with_unseeded_calls_are_independent(spark):
 def test_unused_seeded_random_column_does_not_keep_the_input_sort(spark):
     query = "SELECT sum({}) AS s FROM (SELECT id, rand(1) AS r FROM (SELECT * FROM range(0, 100, 1, 4) ORDER BY id DESC)) WHERE id > 5"
     df = spark.sql(query.format("id"))
-    assert df.collect()[0].s == 4935
+    assert df.collect()[0].s == 4935  # noqa: PLR2004
     assert "SortExec" not in df._explain_string()  # noqa: SLF001
     # The random values depend on the order of the input when the random column is used.
     assert "SortExec" in spark.sql(query.format("r"))._explain_string()  # noqa: SLF001
