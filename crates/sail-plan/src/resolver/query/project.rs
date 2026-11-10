@@ -26,7 +26,7 @@ use crate::resolver::tree::exists::ExistsRewriter;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::seeded_random::{
-    SeededRandomRewriter, SeededRandomScope, contains_seeded_random_call,
+    SeededRandomRewriter, SeededRandomScope, contains_generator, contains_seeded_random_call,
 };
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
@@ -68,12 +68,36 @@ impl PlanResolver<'_> {
             aggregate_arguments_only,
             state,
         )?;
-        let (input, expr) = self.rewrite_projection_with::<SeededRandomRewriter>(
-            input,
-            expr,
-            aggregate_arguments_only,
-            state,
-        )?;
+        let (input, expr) =
+            if !aggregate_arguments_only && expr.iter().any(|e| contains_generator(&e.expr)) {
+                // Spark evaluates the expressions other than the generators over the output of
+                // the generators (`ExtractGenerator`), so they are rewritten afterwards.
+                // TODO: The calls in the window functions of these expressions stay scalar
+                //   functions, since the window functions are planned before the second pass.
+                let mut rewriter =
+                    SeededRandomRewriter::new(input, state, SeededRandomScope::Expression);
+                let expr = expr
+                    .into_iter()
+                    .map(|e| {
+                        if contains_generator(&e.expr) {
+                            Ok(NamedExpr {
+                                expr: e.expr.rewrite(&mut rewriter)?.data,
+                                ..e
+                            })
+                        } else {
+                            Ok(e)
+                        }
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
+                (rewriter.into_plan(), expr)
+            } else {
+                self.rewrite_projection_with::<SeededRandomRewriter>(
+                    input,
+                    expr,
+                    aggregate_arguments_only,
+                    state,
+                )?
+            };
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_window_projection(input, expr, state)?;
         // The expressions around the window functions can be evaluated as a whole now.
@@ -825,15 +849,10 @@ impl PlanResolver<'_> {
         if !contains_seeded_random_call(&predicate) {
             return filter(input, predicate);
         }
-        // A correlated predicate must stay in one filter to be decorrelated.
+        // A correlated predicate must stay in one filter over the input to be decorrelated,
+        // so its calls stay scalar functions.
         if predicate.contains_outer() {
-            let (input, predicate) = self.rewrite_seeded_random_expressions(
-                input,
-                vec![predicate],
-                SeededRandomScope::Expression,
-                state,
-            )?;
-            return filter(input, predicate.one()?);
+            return filter(input, predicate);
         }
         let (joined, conjuncts): (Vec<_>, Vec<_>) = split_conjunction_owned(predicate.clone())
             .into_iter()

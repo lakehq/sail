@@ -5,6 +5,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
+use datafusion::physical_expr::utils::collect_columns;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
@@ -30,6 +31,7 @@ use sail_logical_plan::repartition::ExplicitRepartitionNode;
 use sail_logical_plan::seeded_random::{SeededRandomColumn, SeededRandomNode};
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
+use sail_physical_plan::seeded_random::SeededRandomExec;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_scalar_iter_udf::PySparkScalarPandasIterUDF;
@@ -660,11 +662,46 @@ pub fn share_equivalent_scalar_subqueries(
     .data()
 }
 
+/// Makes the columns of the node nullable when their expressions read input columns that
+/// became nullable, which the expressions planned before do not know.
+fn nullable_seeded_random(
+    seeded: &SeededRandomExec,
+) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
+    let schema = seeded.schema();
+    let input_schema = seeded.input().schema();
+    let input_len = input_schema.fields().len();
+    let mut changed = false;
+    let mut fields = schema.fields().iter().cloned().collect::<Vec<_>>();
+    for (field, column) in fields.iter_mut().skip(input_len).zip(seeded.columns()) {
+        let nullable = collect_columns(&column.expr)
+            .iter()
+            .any(|c| input_schema.field(c.index()).is_nullable());
+        if nullable && !field.is_nullable() {
+            *field = Arc::new(field.as_ref().clone().with_nullable(true));
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(None);
+    }
+    Ok(Some(Arc::new(SeededRandomExec::try_new(
+        Arc::clone(seeded.input()),
+        seeded.columns().to_vec(),
+        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
+    )?)))
+}
+
 #[expect(deprecated)]
 pub fn ensure_scalar_subquery_nullability(
     plan: Arc<dyn ExecutionPlan>,
 ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
     plan.transform_up(|plan| {
+        if let Some(seeded) = plan.downcast_ref::<SeededRandomExec>() {
+            return Ok(match nullable_seeded_random(seeded)? {
+                Some(seeded) => Transformed::yes(seeded),
+                None => Transformed::no(plan),
+            });
+        }
         let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
             return Ok(Transformed::no(plan));
         };
@@ -696,6 +733,20 @@ pub fn ensure_scalar_subquery_nullability(
                 ))
             })
             .collect::<datafusion_common::Result<Vec<_>>>()?;
+        // A projection keeps its output schema when its input changes, so it is rebuilt when
+        // an input column it passes through became nullable.
+        let input_schema = projection.input().schema();
+        changed |=
+            expressions
+                .iter()
+                .zip(projection.schema().fields())
+                .any(|(projection_expr, field)| {
+                    !field.is_nullable()
+                        && projection_expr
+                            .expr
+                            .nullable(&input_schema)
+                            .unwrap_or(false)
+                });
 
         if changed {
             Ok(Transformed::yes(Arc::new(ProjectionExec::try_new(

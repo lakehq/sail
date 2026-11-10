@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
 use datafusion::common::{DataFusionError, Result};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{Expr, Extension, LogicalPlan, ident};
+use datafusion_expr::expr::{BinaryExpr, Case, ScalarFunction};
+use datafusion_expr::{Expr, Extension, LogicalPlan, Operator, ident};
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_function::scalar::explode::Explode;
 use sail_function::scalar::math::partition_random::{PartitionSeed, seed_argument_position};
@@ -36,12 +36,18 @@ pub(crate) enum SeededRandomScope {
 /// can evaluate are replaced. An expression with a window function is evaluated around the
 /// window, so only the arguments and the window specification are replaced, and the rest is
 /// replaced when the rewriter is applied again after the window functions are planned. An
-/// expression with an aggregate function, a subquery, or a function that must be planned
-/// separately cannot be evaluated by the node, so its calls are replaced individually.
+/// expression with an aggregate function, a correlated or predicate subquery, or a function
+/// that must be planned separately cannot be evaluated by the node, so its calls are replaced
+/// individually, except for the calls in children that are not evaluated for every row, which
+/// stay scalar functions.
 pub(crate) struct SeededRandomRewriter<'s> {
     plan: LogicalPlan,
     state: &'s mut PlanResolverState,
     scope: SeededRandomScope,
+    /// Whether the plan has outer references, which the node would separate from the
+    /// operators above it, so that the subquery could not be decorrelated. It is found when
+    /// an expression first has a call to replace.
+    correlated: Option<bool>,
     input: Option<LogicalPlan>,
     columns: Vec<SeededRandomColumn>,
 }
@@ -60,6 +66,9 @@ impl TreeNodeRewriter for SeededRandomRewriter<'_> {
     type Node = Expr;
 
     fn f_down(&mut self, node: Expr) -> Result<Transformed<Expr>> {
+        if contains_seeded_random_call(&node) && self.is_correlated() {
+            return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
+        }
         let Transformed {
             data, transformed, ..
         } = match self.scope {
@@ -80,9 +89,19 @@ impl<'s> SeededRandomRewriter<'s> {
             plan,
             state,
             scope,
+            correlated: None,
             input: None,
             columns: vec![],
         }
+    }
+
+    fn is_correlated(&mut self) -> bool {
+        // The plan is not replaced by the node before the first call is replaced.
+        *self.correlated.get_or_insert_with(|| {
+            self.plan
+                .exists(|plan| Ok(plan.contains_outer_reference()))
+                .unwrap_or(true)
+        })
     }
 
     fn rewrite_expression(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
@@ -101,7 +120,25 @@ impl<'s> SeededRandomRewriter<'s> {
                     Ok(Transformed::no(child))
                 }
             }),
-            expr => expr.map_children(|child| self.rewrite_expression(child)),
+            expr => {
+                // The calls in the children that are not evaluated for every row stay
+                // scalar functions, so that they advance their generators only for the rows
+                // that evaluate them.
+                // TODO: Such calls are not seeded per partition, as Spark does.
+                let lazy = lazy_children(&expr);
+                let mut index = 0;
+                let result = expr.map_children(|child| {
+                    let is_lazy = lazy.get(index).copied().unwrap_or(false);
+                    index += 1;
+                    if is_lazy {
+                        Ok(Transformed::no(child))
+                    } else {
+                        self.rewrite_expression(child)
+                    }
+                });
+                debug_assert!(result.is_err() || index == lazy.len());
+                result
+            }
         }
     }
 
@@ -117,8 +154,17 @@ impl<'s> SeededRandomRewriter<'s> {
 
     /// Replaces an expression by a column of the node.
     fn materialize(&mut self, node: Expr) -> Result<Transformed<Expr>> {
-        // Equal expressions over the same rows produce the same values.
-        let name = match self.columns.iter().find(|column| column.expr == node) {
+        // Equal expressions over the same rows produce the same values, unless they contain
+        // other volatile calls, which are evaluated independently.
+        let reusable = !node
+            .exists(|e| Ok(e.is_volatile_node() && !is_seeded_random_call(e)))
+            .unwrap_or(true);
+        let existing = if reusable {
+            self.columns.iter().find(|column| column.expr == node)
+        } else {
+            None
+        };
+        let name = match existing {
             Some(column) => column.name.clone(),
             None => {
                 // Create an internal-only field ID without a referenceable name.
@@ -174,6 +220,56 @@ pub(crate) fn contains_seeded_random_call(expr: &Expr) -> bool {
         .unwrap_or(false)
 }
 
+/// Returns, for each child of the expression in order, whether the child may not be
+/// evaluated for every row, as in the common subexpression elimination of DataFusion.
+fn lazy_children(expr: &Expr) -> Vec<bool> {
+    let lazy: Vec<&Expr> = match expr {
+        Expr::ScalarFunction(ScalarFunction { func, args }) => func
+            .conditional_arguments(args)
+            .map(|(_, lazy)| lazy)
+            .unwrap_or_default(),
+        Expr::BinaryExpr(BinaryExpr {
+            op: Operator::And | Operator::Or,
+            right,
+            ..
+        }) => vec![right.as_ref()],
+        Expr::Case(Case {
+            when_then_expr,
+            else_expr,
+            ..
+        }) => when_then_expr
+            .iter()
+            .take(1)
+            .map(|(_, then)| then.as_ref())
+            .chain(
+                when_then_expr
+                    .iter()
+                    .skip(1)
+                    .flat_map(|(when, then)| [when.as_ref(), then.as_ref()]),
+            )
+            .chain(else_expr.iter().map(|e| e.as_ref()))
+            .collect(),
+        _ => vec![],
+    };
+    let mut children = vec![];
+    let _ = expr.apply_children(|child| {
+        children.push(lazy.iter().any(|e| std::ptr::eq(*e, child)));
+        Ok(TreeNodeRecursion::Continue)
+    });
+    children
+}
+
+/// Returns whether the expression contains a generator, which is planned separately.
+pub(crate) fn contains_generator(expr: &Expr) -> bool {
+    expr.exists(|e| {
+        Ok(
+            matches!(e, Expr::ScalarFunction(ScalarFunction { func, .. })
+            if func.inner().is::<Explode>()),
+        )
+    })
+    .unwrap_or(false)
+}
+
 fn contains_window_function(expr: &Expr) -> bool {
     expr.exists(|e| Ok(matches!(e, Expr::WindowFunction(_))))
         .unwrap_or(false)
@@ -187,7 +283,6 @@ fn can_evaluate_in_node(expr: &Expr) -> bool {
             Ok(match e {
                 Expr::AggregateFunction(_)
                 | Expr::WindowFunction(_)
-                | Expr::ScalarSubquery(_)
                 | Expr::Exists(_)
                 | Expr::InSubquery(_)
                 | Expr::SetComparison(_)
@@ -196,6 +291,8 @@ fn can_evaluate_in_node(expr: &Expr) -> bool {
                 | Expr::ScalarVariable(_, _)
                 | Expr::GroupingSet(_)
                 | Expr::Unnest(_) => true,
+                // An uncorrelated scalar subquery is evaluated before the node as a constant.
+                Expr::ScalarSubquery(subquery) => !subquery.outer_ref_columns.is_empty(),
                 Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                     func.as_async().is_some()
                         || is_input_file_metadata_function(func)

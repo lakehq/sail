@@ -9,6 +9,7 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::unnest::UnnestExec;
 use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanProperties, Partitioning, replace_children_if_necessary,
 };
@@ -113,6 +114,7 @@ fn remove_round_robin(plan: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dy
     if !(plan.is::<FilterExec>()
         || plan.is::<ProjectionExec>()
         || plan.is::<CooperativeExec>()
+        || plan.is::<UnnestExec>()
         || plan
             .downcast_ref::<SortExec>()
             .is_some_and(SortExec::preserve_partitioning)

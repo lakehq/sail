@@ -6,6 +6,7 @@ use datafusion_common::{Column, Result};
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator};
+use sail_logical_plan::seeded_random::SeededRandomNode;
 
 /// Evaluate non-equality scalar aggregates over the distinct outer values.
 /// Native decorrelation can then pull up equality on those values without
@@ -72,7 +73,10 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                 }
                 // The domain reads the outer input again; do not duplicate volatile
                 // evaluations whose values must be shared with the original row.
-                if input.exists(|node| Ok(node.expressions().iter().any(Expr::is_volatile)))? {
+                // The calls of random functions with a seed produce the same values again.
+                if input.exists(|node| {
+                    Ok(!is_seeded_random(node) && node.expressions().iter().any(Expr::is_volatile))
+                })? {
                     return Ok(Transformed::no(Expr::ScalarSubquery(query)));
                 }
                 if query
@@ -317,4 +321,9 @@ fn native_equality(expr: &Expr) -> bool {
     };
     (inner_key(&binary.left) && !binary.right.any_column_refs())
         || (inner_key(&binary.right) && !binary.left.any_column_refs())
+}
+
+fn is_seeded_random(plan: &LogicalPlan) -> bool {
+    matches!(plan, LogicalPlan::Extension(extension)
+        if extension.node.as_any().is::<SeededRandomNode>())
 }

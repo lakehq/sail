@@ -4,8 +4,11 @@ use std::sync::Arc;
 use datafusion::common::tree_node::Transformed;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
-use datafusion_expr::{Extension, LogicalPlan};
+use datafusion_expr::{Extension, LogicalPlan, Sort, UserDefinedLogicalNodeCore};
 use sail_logical_plan::seeded_random::SeededRandomNode;
+use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
+
+use crate::eliminate_sorts::is_order_irrelevant;
 
 /// Removes the columns of a [`SeededRandomNode`] that are not used, and the node itself if
 /// none of its columns are used, as Spark's `ColumnPruning` removes unused nondeterministic
@@ -13,8 +16,9 @@ use sail_logical_plan::seeded_random::SeededRandomNode;
 /// `optimize_projections`, which removes the input columns that are no longer used in the
 /// next optimizer pass.
 ///
-/// When the node is removed, the sort that requires the input order of the node is kept,
-/// although Spark would not need it any more.
+/// When the node is removed below an aggregate that does not depend on the order of its
+/// input, the sort that the node required of its input is no longer required, so that it can
+/// be eliminated as Spark does.
 #[derive(Debug, Default)]
 pub struct PruneSeededRandomColumns;
 
@@ -58,6 +62,11 @@ fn prune_seeded_random_columns(plan: LogicalPlan) -> Result<Transformed<LogicalP
             | LogicalPlan::Limit(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Repartition(_) => chain.push(input),
+            // The projections below an aggregate are followed to find the sort that is no
+            // longer required.
+            LogicalPlan::Projection(_) if matches!(plan, LogicalPlan::Aggregate(_)) => {
+                chain.push(input)
+            }
             LogicalPlan::Extension(extension)
                 if extension.node.as_any().is::<SeededRandomNode>() =>
             {
@@ -67,16 +76,36 @@ fn prune_seeded_random_columns(plan: LogicalPlan) -> Result<Transformed<LogicalP
         }
     }
     let mut used = HashSet::new();
-    for node in chain {
+    for node in &chain {
         for expr in node.expressions() {
             used.extend(expr.column_refs().into_iter().map(|c| c.name.clone()));
         }
     }
-    prune(plan, &used)
+    // Nothing above the aggregate depends on the order of the input of the node.
+    let unrequire = match &plan {
+        LogicalPlan::Aggregate(aggregate) => {
+            is_order_irrelevant(aggregate)?
+                && chain[1..].iter().all(|node| {
+                    matches!(
+                        node,
+                        LogicalPlan::Projection(_)
+                            | LogicalPlan::Filter(_)
+                            | LogicalPlan::SubqueryAlias(_)
+                            | LogicalPlan::Repartition(_)
+                    )
+                })
+        }
+        _ => false,
+    };
+    prune(plan, &used, unrequire)
 }
 
 /// Rebuilds the plan down to the node, without the columns of the node that are not used.
-fn prune(plan: LogicalPlan, used: &HashSet<String>) -> Result<Transformed<LogicalPlan>> {
+fn prune(
+    plan: LogicalPlan,
+    used: &HashSet<String>,
+    unrequire: bool,
+) -> Result<Transformed<LogicalPlan>> {
     if let LogicalPlan::Extension(extension) = &plan
         && let Some(node) = extension.node.as_any().downcast_ref::<SeededRandomNode>()
     {
@@ -90,7 +119,9 @@ fn prune(plan: LogicalPlan, used: &HashSet<String>) -> Result<Transformed<Logica
             return Ok(Transformed::no(plan));
         }
         let input = Arc::clone(node.input());
-        return Ok(Transformed::yes(if columns.is_empty() {
+        return Ok(Transformed::yes(if columns.is_empty() && unrequire {
+            unrequire_sort(Arc::unwrap_or_clone(input))
+        } else if columns.is_empty() {
             Arc::unwrap_or_clone(input)
         } else {
             LogicalPlan::Extension(Extension {
@@ -101,7 +132,7 @@ fn prune(plan: LogicalPlan, used: &HashSet<String>) -> Result<Transformed<Logica
     let [input] = plan.inputs()[..] else {
         return Ok(Transformed::no(plan));
     };
-    let input = prune(input.clone(), used)?;
+    let input = prune(input.clone(), used, unrequire)?;
     if !input.transformed {
         return Ok(Transformed::no(plan));
     }
@@ -109,6 +140,47 @@ fn prune(plan: LogicalPlan, used: &HashSet<String>) -> Result<Transformed<Logica
     Ok(Transformed::yes(
         plan.with_new_exprs(exprs, vec![input.data])?,
     ))
+}
+
+/// Reverts the [`RequiredSortNode`] below the operators that pass the input order through
+/// to the sort that it was created from.
+fn unrequire_sort(plan: LogicalPlan) -> LogicalPlan {
+    if matches!(
+        plan,
+        LogicalPlan::SubqueryAlias(_) | LogicalPlan::Projection(_) | LogicalPlan::Filter(_)
+    ) {
+        let [input] = plan.inputs()[..] else {
+            return plan;
+        };
+        let input = unrequire_sort(input.clone());
+        let exprs = plan.expressions();
+        return plan.with_new_exprs(exprs, vec![input]).unwrap_or(plan);
+    }
+    let LogicalPlan::Extension(extension) = &plan else {
+        return plan;
+    };
+    let Some(sort) = extension.node.as_any().downcast_ref::<RequiredSortNode>() else {
+        return plan;
+    };
+    let [input] = sort.inputs()[..] else {
+        return plan;
+    };
+    let input = Arc::new(input.clone());
+    if sort.preserve_partitioning() {
+        LogicalPlan::Extension(Extension {
+            node: Arc::new(SortWithinPartitionsNode::new(
+                input,
+                sort.sort_expr().to_vec(),
+                sort.fetch(),
+            )),
+        })
+    } else {
+        LogicalPlan::Sort(Sort {
+            expr: sort.sort_expr().to_vec(),
+            input,
+            fetch: sort.fetch(),
+        })
+    }
 }
 
 #[cfg(test)]

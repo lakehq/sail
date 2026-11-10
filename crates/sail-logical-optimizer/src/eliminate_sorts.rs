@@ -399,7 +399,7 @@ fn remove_top_level_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> 
 
 /// Returns whether the result of the aggregate does not depend on the order of its input,
 /// following Spark's `EliminateSorts`.
-fn is_order_irrelevant(aggregate: &Aggregate) -> Result<bool> {
+pub(crate) fn is_order_irrelevant(aggregate: &Aggregate) -> Result<bool> {
     // Spark evaluates volatile grouping keys below the aggregate, which keeps the sort.
     if aggregate.group_expr.iter().any(Expr::is_volatile) {
         return Ok(false);

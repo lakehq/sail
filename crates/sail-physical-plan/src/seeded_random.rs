@@ -64,6 +64,16 @@ impl SeededRandomExec {
                 schema.fields().len()
             );
         }
+        // The input fields come from the input, whose nullability can change after planning,
+        // e.g. for scalar subqueries.
+        let fields = input
+            .schema()
+            .fields()
+            .iter()
+            .chain(schema.fields().iter().skip(input_len))
+            .cloned()
+            .collect::<Vec<_>>();
+        let schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema.clone())
                 .extend(input.equivalence_properties().clone())?,

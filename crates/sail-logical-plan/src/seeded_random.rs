@@ -46,9 +46,17 @@ impl SeededRandomNode {
             .collect::<Vec<_>>();
         for column in &columns {
             let (_, field) = column.expr.to_field(input.schema().as_ref())?;
+            // A scalar subquery returns null for no rows, even if its output is not nullable.
+            let nullable = field.is_nullable() || column.expr.contains_scalar_subquery();
             qualified_fields.push((
                 None,
-                Arc::new(field.as_ref().clone().with_name(column.name.clone())),
+                Arc::new(
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_name(column.name.clone())
+                        .with_nullable(nullable),
+                ),
             ));
         }
         let schema =
