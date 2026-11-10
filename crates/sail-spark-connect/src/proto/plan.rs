@@ -1337,6 +1337,7 @@ impl TryFrom<RelType> for RelationNode {
             }
             RelType::Catalog(catalog) => Ok(RelationNode::Command(catalog.try_into()?)),
             RelType::RelationChanges(_) => Err(SparkError::unsupported("relation changes")),
+            RelType::Zip(_) => Err(SparkError::unsupported("zip relation")),
             RelType::NearestByJoin(_) => Err(SparkError::unsupported("nearest-by join")),
             RelType::MlRelation(_) => Err(SparkError::unsupported("ML relation")),
             // TODO: Lower Delta Connect relation extensions for scans, inspection, and maintenance.

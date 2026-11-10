@@ -34,13 +34,21 @@ impl PySparkUdtfPayload {
             .call0()?;
         let worker = PyModule::import(py, intern!(py, "pyspark.worker"))?;
         let read_udtf = worker.getattr(intern!(py, "read_udtf"))?;
-        let tuple = match get_pyspark_version()? {
-            PySparkVersion::V4_2 => {
+        let pyspark_version = get_pyspark_version()?;
+        let tuple = match pyspark_version {
+            PySparkVersion::V4_2 | PySparkVersion::V4_3 => {
                 let runner_conf = worker
                     .getattr(intern!(py, "RunnerConf"))?
                     .call1((&infile,))?;
                 let eval_conf = worker.getattr(intern!(py, "EvalConf"))?.call1((&infile,))?;
-                read_udtf.call1((serializer, infile, eval_type, runner_conf, eval_conf))?
+                let input = if pyspark_version == PySparkVersion::V4_3 {
+                    PyModule::import(py, intern!(py, "pyspark.worker_message"))?
+                        .getattr(intern!(py, "UDTFInfo"))?
+                        .call_method1(intern!(py, "from_stream"), (&infile,))?
+                } else {
+                    infile
+                };
+                read_udtf.call1((serializer, input, eval_type, runner_conf, eval_conf))?
             }
             PySparkVersion::V3 | PySparkVersion::V4_0 | PySparkVersion::V4_1 => {
                 read_udtf.call1((serializer, infile, eval_type))?
@@ -159,7 +167,7 @@ impl PySparkUdtfPayload {
         data.extend(i32::from(eval_type).to_be_bytes()); // Add eval_type for extraction in visit_bytes
 
         match pyspark_version {
-            PySparkVersion::V4_2 => {
+            PySparkVersion::V4_2 | PySparkVersion::V4_3 => {
                 write_conf(&mut data, config.to_key_value_pairs());
                 let mut eval_conf = vec![];
                 if eval_type == spec::PySparkUdfType::ArrowTable {
@@ -216,7 +224,7 @@ impl PySparkUdtfPayload {
             .try_into()
             .map_err(|e| PyUdfError::invalid(format!("num_args: {e}")))?;
         let allow_kwargs = match pyspark_version {
-            PySparkVersion::V4_2 => true,
+            PySparkVersion::V4_2 | PySparkVersion::V4_3 => true,
             PySparkVersion::V4_0 | PySparkVersion::V4_1 => supports_kwargs(eval_type),
             PySparkVersion::V3 => false,
         };
@@ -229,7 +237,10 @@ impl PySparkUdtfPayload {
         }
 
         match pyspark_version {
-            PySparkVersion::V4_0 | PySparkVersion::V4_1 | PySparkVersion::V4_2 => {
+            PySparkVersion::V4_0
+            | PySparkVersion::V4_1
+            | PySparkVersion::V4_2
+            | PySparkVersion::V4_3 => {
                 data.extend(0i32.to_be_bytes()); // number of partition child indexes
                 data.extend(0u8.to_be_bytes()); // pickled analyze result is not present
             }
@@ -252,7 +263,10 @@ impl PySparkUdtfPayload {
         data.extend(type_string.as_bytes());
 
         match pyspark_version {
-            PySparkVersion::V4_0 | PySparkVersion::V4_1 | PySparkVersion::V4_2 => {
+            PySparkVersion::V4_0
+            | PySparkVersion::V4_1
+            | PySparkVersion::V4_2
+            | PySparkVersion::V4_3 => {
                 // TODO: support UDTF name
                 data.extend(0u32.to_be_bytes()); // length of UDTF name
             }
