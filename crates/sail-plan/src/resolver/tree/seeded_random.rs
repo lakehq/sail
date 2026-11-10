@@ -13,7 +13,9 @@ use sail_function::scalar::math::partition_random::{
     LazyRightOperand, PartitionSeed, is_row_argument, lazy_right_operand, seed_argument_position,
 };
 use sail_function::scalar::multi_expr::MultiExpr;
-use sail_logical_plan::seeded_random::{SeededRandomColumn, SeededRandomNode};
+use sail_logical_plan::seeded_random::{
+    SeededRandomColumn, SeededRandomNode, is_reproducible_seeded_random_call,
+};
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 
 use crate::resolver::PlanResolver;
@@ -291,7 +293,10 @@ impl<'s> SeededRandomRewriter<'s> {
         // Equal expressions over the same rows produce the same values, unless they contain
         // other volatile calls, which are evaluated independently.
         let reusable = !node
-            .exists(|e| Ok(e.is_volatile_node() && !is_seeded_random_call(e)))
+            .exists(|e| {
+                Ok(e.is_volatile_node()
+                    && !(is_seeded_random_call(e) && is_reproducible_seeded_random_call(e)))
+            })
             .unwrap_or(true);
         let key = if reusable {
             ColumnKey::try_new(&node)?

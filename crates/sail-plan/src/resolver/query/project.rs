@@ -804,7 +804,7 @@ impl PlanResolver<'_> {
     }
 
     /// Rewrites only the expressions that contain generators.
-    fn rewrite_generator_projection<'s, T>(
+    pub(super) fn rewrite_generator_projection<'s, T>(
         &self,
         input: LogicalPlan,
         expr: Vec<NamedExpr>,

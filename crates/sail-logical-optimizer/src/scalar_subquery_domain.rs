@@ -6,7 +6,7 @@ use datafusion_common::{Column, Result};
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator};
-use sail_logical_plan::seeded_random::SeededRandomNode;
+use sail_logical_plan::seeded_random::{SeededRandomNode, is_reproducible_seeded_random_call};
 
 /// Evaluate non-equality scalar aggregates over the distinct outer values.
 /// Native decorrelation can then pull up equality on those values without
@@ -75,17 +75,12 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                 }
                 // The domain reads the outer input again; do not duplicate volatile
                 // evaluations whose values must be shared with the original row.
-                // The calls of random functions with a seed produce the same values again.
-                if input.exists(|node| {
-                    Ok(!is_seeded_random(node) && node.expressions().iter().any(Expr::is_volatile))
-                })? {
+                // Only reproducible seeded calls may be replayed, including calls inside a node.
+                if has_unreproducible_volatile_expression(&input)? {
                     return Ok(Transformed::no(Expr::ScalarSubquery(query)));
                 }
-                // The calls of random functions with a seed produce the same values again. A
-                // node above the correlated filter is evaluated by a projection before this rule.
-                if query.subquery.exists(|node| {
-                    Ok(!is_seeded_random(node) && node.expressions().iter().any(Expr::is_volatile))
-                })? {
+                // A node above the correlated filter is evaluated by a projection before this rule.
+                if has_unreproducible_volatile_expression(&query.subquery)? {
                     return datafusion_common::not_impl_err!(
                         "correlated scalar aggregate with volatile inner expressions"
                     );
@@ -339,7 +334,22 @@ pub(crate) fn correlated_equality_key(expr: &Expr, cast: bool) -> Option<&Column
     }
 }
 
-fn is_seeded_random(plan: &LogicalPlan) -> bool {
-    matches!(plan, LogicalPlan::Extension(extension)
-        if extension.node.as_any().is::<SeededRandomNode>())
+fn has_unreproducible_volatile_expression(plan: &LogicalPlan) -> Result<bool> {
+    // Uncorrelated scalar subqueries are evaluated once and their results are shared by both
+    // copies of the plan. Inspect this plan's expressions, not those subquery bodies.
+    plan.exists(|node| {
+        let seeded = matches!(node, LogicalPlan::Extension(extension)
+            if extension.node.as_any().is::<SeededRandomNode>());
+        for expr in node.expressions() {
+            if expr.exists(|expr| {
+                Ok(
+                    expr.is_volatile_node()
+                        && !(seeded && is_reproducible_seeded_random_call(expr)),
+                )
+            })? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })
 }

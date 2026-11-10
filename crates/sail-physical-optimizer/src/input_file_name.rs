@@ -222,22 +222,29 @@ fn extract_metadata_expressions(
                 .map(|result| result.data)
         })?;
     // Lambda parameters follow the input columns in the physical evaluation schema.
-    let expressions = expressions.try_map_exprs(|expression| {
-        expression
-            .transform_up(|expression| {
-                if let Some(variable) = expression.downcast_ref::<LambdaVariable>() {
-                    Ok(Transformed::yes(Arc::new(LambdaVariable::new(
-                        variable.index() + extracted.len(),
-                        Arc::clone(variable.field()),
-                    ))
-                        as Arc<dyn PhysicalExpr>))
-                } else {
-                    Ok(Transformed::no(expression))
-                }
-            })
-            .map(|result| result.data)
-    })?;
+    let expressions = expressions
+        .try_map_exprs(|expression| shift_lambda_variables(expression, extracted.len()))?;
     Ok((expressions, extracted))
+}
+
+/// Lambda parameters follow the input columns, including newly appended metadata.
+fn shift_lambda_variables(
+    expression: Arc<dyn PhysicalExpr>,
+    offset: usize,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expression
+        .transform_up(|expression| {
+            if let Some(variable) = expression.downcast_ref::<LambdaVariable>() {
+                Ok(Transformed::yes(Arc::new(LambdaVariable::new(
+                    variable.index() + offset,
+                    Arc::clone(variable.field()),
+                ))
+                    as Arc<dyn PhysicalExpr>))
+            } else {
+                Ok(Transformed::no(expression))
+            }
+        })
+        .map(|result| result.data)
 }
 
 fn push_metadata_through_file_context(
@@ -333,7 +340,14 @@ fn push_metadata_through_file_context(
             if let Some(node) = node.downcast_ref::<SeededRandomExec>() {
                 Arc::new(SeededRandomExec::try_new(
                     input,
-                    node.columns().to_vec(),
+                    node.columns()
+                        .iter()
+                        .cloned()
+                        .map(|mut column| {
+                            column.expr = shift_lambda_variables(column.expr, metadata_len)?;
+                            Ok(column)
+                        })
+                        .collect::<Result<Vec<_>>>()?,
                     node_schema,
                 )?)
             } else if let Some(node) = node.downcast_ref::<MonotonicIdExec>() {

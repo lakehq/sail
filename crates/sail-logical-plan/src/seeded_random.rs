@@ -2,11 +2,61 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::FieldRef;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{DFSchema, DFSchemaRef, Result, plan_err};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::math::partition_random::PartitionSeed;
+use sail_function::scalar::array::spark_shuffle::SparkShuffle;
+use sail_function::scalar::math::partition_random::{
+    PartitionSeed, is_row_argument, seed_argument_position,
+};
+use sail_function::scalar::misc::spark_uuid::SparkUuid;
+
+/// Whether a random call has reproducible arguments, rather than a fresh entropy seed.
+/// Callers must also inspect its children: a shuffle's row argument can itself be volatile.
+pub fn is_reproducible_seeded_random_call(expr: &Expr) -> bool {
+    let Expr::ScalarFunction(call) = expr else {
+        return false;
+    };
+    let Some(seed_index) = seed_argument_position(&call.func, call.args.len()) else {
+        return false;
+    };
+    let null_uses_entropy =
+        call.func.inner().is::<SparkUuid>() || call.func.inner().is::<SparkShuffle>();
+    if !call.args.iter().enumerate().all(|(i, arg)| {
+        is_row_argument(&call.func, i)
+            || (arg.column_refs().is_empty()
+                && !arg.is_volatile()
+                && !arg
+                    .exists(|e| {
+                        if let Expr::ScalarSubquery(query) = e {
+                            // Its cached value is constant across replays, including NULL.
+                            return Ok(!query.outer_ref_columns.is_empty());
+                        }
+                        Ok(matches!(
+                            e,
+                            Expr::LambdaVariable(_)
+                                | Expr::OuterReferenceColumn(_, _)
+                                | Expr::Exists(_)
+                                | Expr::InSubquery(_)
+                                | Expr::SetComparison(_)
+                                | Expr::ScalarVariable(_, _)
+                                | Expr::Placeholder(_)
+                        ))
+                    })
+                    .unwrap_or(true))
+    }) {
+        return false;
+    }
+    // These functions interpret NULL as an absent seed, unlike rand/randn's seed zero.
+    // Nullability also handles casts and other constant expressions before simplification.
+    !null_uses_entropy
+        || matches!(
+            call.args[seed_index].nullable(&DFSchema::empty()),
+            Ok(false)
+        )
+}
 
 /// A column computed by an expression with calls of random functions with a seed.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd)]
@@ -170,6 +220,49 @@ mod tests {
     use sail_function::scalar::math::random::Random;
 
     use super::*;
+
+    #[test]
+    fn test_reproducible_seeds_distinguish_null_from_zero() -> Result<()> {
+        use datafusion_common::ScalarValue;
+        use datafusion_expr::ExprSchemable;
+        let random = ScalarUDF::from(Random::new());
+        let uuid = ScalarUDF::from(SparkUuid::new());
+        let null = lit(ScalarValue::Int64(None));
+        assert!(is_reproducible_seeded_random_call(
+            &random.call(vec![null.clone()])
+        ));
+        assert!(!is_reproducible_seeded_random_call(
+            &uuid.call(vec![null.clone()])
+        ));
+        assert!(!is_reproducible_seeded_random_call(&uuid.call(vec![
+            null.cast_to(&DataType::Int64, &DFSchema::empty())?
+        ])));
+        assert!(is_reproducible_seeded_random_call(
+            &uuid.call(vec![lit(40_i64) + lit(2_i64)])
+        ));
+        assert!(!is_reproducible_seeded_random_call(&random.call(vec![])));
+        assert!(!is_reproducible_seeded_random_call(
+            &uuid.call(vec![random.call(vec![])])
+        ));
+        assert!(!is_reproducible_seeded_random_call(
+            &uuid.call(vec![col("seed")])
+        ));
+        for value in [lit(42_i64), lit(ScalarValue::Int64(None))] {
+            let nullable = value.nullable(&DFSchema::empty())?;
+            let plan = LogicalPlanBuilder::empty(true)
+                .project(vec![value])?
+                .build()?;
+            let seed = datafusion_expr::expr_fn::scalar_subquery(Arc::new(plan));
+            assert!(is_reproducible_seeded_random_call(
+                &random.call(vec![seed.clone()])
+            ));
+            assert_eq!(
+                is_reproducible_seeded_random_call(&uuid.call(vec![seed])),
+                !nullable
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_filters_and_limits_stay_above_seeded_random_node() -> Result<()> {
