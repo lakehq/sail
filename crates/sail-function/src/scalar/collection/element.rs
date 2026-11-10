@@ -23,6 +23,10 @@ impl CollectionElement {
         }
     }
 
+    pub fn is_map(&self) -> bool {
+        self.map
+    }
+
     pub fn map() -> Self {
         Self {
             map: true,

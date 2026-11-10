@@ -7119,6 +7119,7 @@ dependencies = [
  "parquet-variant-compute",
  "sail-catalog",
  "sail-common-datafusion",
+ "sail-function",
  "sail-system-store",
  "serde",
  "tokio",
