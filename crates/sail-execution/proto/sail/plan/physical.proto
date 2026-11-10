@@ -115,7 +115,14 @@ message ExtendedPhysicalExprNode {
     LambdaVariableExprNode lambda_variable = 4;
     IcebergPartitionTransformExprNode iceberg_partition_transform = 5;
     SchemaEvolutionDefaultExprNode schema_evolution_default = 6;
+    Float16LiteralExprNode float16_literal = 7;
   }
+}
+
+message Float16LiteralExprNode {
+  // Absent means null; otherwise the raw IEEE 754 binary16 bits (0..65535).
+  optional uint32 bits = 1;
+  map<string, string> metadata = 2;
 }
 
 message SchemaEvolutionDefaultExprNode {
