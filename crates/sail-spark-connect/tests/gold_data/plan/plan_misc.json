@@ -468,6 +468,12 @@
       }
     },
     {
+      "input": "FROM metrics\n|> BIN BY (\n  RANGE ts_start TO ts_end\n  BIN WIDTH INTERVAL '5' MINUTE\n  DISTRIBUTE UNIFORM (value)\n)",
+      "output": {
+        "failure": "invalid argument: found FROM at 0:4 expected something else, ';', statement, or end of input"
+      }
+    },
+    {
       "input": "TABLE testcat.db.tab",
       "output": {
         "success": {

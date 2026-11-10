@@ -1,6 +1,18 @@
 {
   "tests": [
     {
+      "input": "\nDELETE FROM testcat.ns1.ns2.tbl AS t WITH (`k` = 'v')\nWHERE t.a = 2\n      ",
+      "output": {
+        "failure": "invalid argument: found WITH at 38:42 expected '(', 'WHERE', ';', or end of input"
+      }
+    },
+    {
+      "input": "\nDELETE FROM testcat.ns1.ns2.tbl WITH (`write.split-size` = 10)\nWHERE a = 1\n      ",
+      "output": {
+        "failure": "invalid argument: found WITH at 33:37 expected '.', 'AS', identifier, 'WHERE', ';', or end of input"
+      }
+    },
+    {
       "input": "DELETE FROM testcat.ns1.ns2.tbl",
       "output": {
         "success": {

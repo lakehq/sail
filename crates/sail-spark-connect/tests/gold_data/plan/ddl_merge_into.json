@@ -1153,7 +1153,15 @@
                             "target",
                             "col2"
                           ],
-                          "defaultColumnValue"
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "DEFAULT"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
                         ]
                       ]
                     }
@@ -1220,7 +1228,15 @@
                               "isMetadataColumn": false
                             }
                           },
-                          "defaultColumnValue"
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "DEFAULT"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
                         ]
                       }
                     }
@@ -1312,7 +1328,15 @@
                             "target",
                             "col2"
                           ],
-                          "defaultColumnValue"
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "DEFAULT"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
                         ]
                       ]
                     }
@@ -2574,6 +2598,18 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target WITH (`k` = 'v')\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED THEN UPDATE SET target.col2 = source.col2\n      ",
+      "output": {
+        "failure": "invalid argument: found WITH at 43:47 expected '(', or 'USING'"
+      }
+    },
+    {
+      "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target WITH (`write.split-size` = 10)\nUSING testcat2.ns1.ns2.tbl WITH (`split-size` = 5) AS source\nON target.col1 = source.col1\nWHEN MATCHED THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED THEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\n      ",
+      "output": {
+        "failure": "invalid argument: found WITH at 43:47 expected '(', or 'USING'"
       }
     },
     {

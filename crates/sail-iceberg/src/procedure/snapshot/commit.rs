@@ -14,8 +14,8 @@ use crate::lake_source::{
     resolve_iceberg_metadata_location,
 };
 use crate::operations::metadata_commit::{
-    MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome, PreviousMetadataFile,
-    apply_snapshot_updates,
+    BaseMetadataCodec, MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome,
+    PreviousMetadataFile, apply_snapshot_updates,
 };
 use crate::operations::snapshot::CreatedPathCleanup;
 use crate::procedure::rewrite_manifests::RewriteManifests;
@@ -169,6 +169,7 @@ pub(crate) async fn commit_snapshot_operation(
 
         // These checks cannot publish. Await cleanup on failure rather than relying on Drop.
         let local_preparation = async {
+            let base_codec = BaseMetadataCodec::capture(Some(&metadata))?;
             let current_version = metadata_file_version_from_path(&metadata_file).unwrap_or(0);
             let next_version = current_version.checked_add(1).ok_or_else(|| {
                 DataFusionError::Execution("Iceberg metadata version overflow".into())
@@ -192,7 +193,7 @@ pub(crate) async fn commit_snapshot_operation(
             let style = if use_metadata_location_fallback {
                 MetadataFileStyle::Unique
             } else {
-                MetadataFileStyle::Versioned
+                MetadataFileStyle::Versioned(base_codec)
             };
             MetadataFileCommit::prepare(table_url, &metadata, next_version, style).map(Some)
         }
@@ -511,7 +512,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn definite_metadata_conflicts_clean_each_retry_without_deleting_the_collision() {
+    async fn metadata_collision_without_readback_preserves_artifacts_and_is_terminal() {
         let (injected, ctx, url, _) = commit_fixture(Some(PutFault::Collision), false, false).await;
         let before = injected
             .inner
@@ -521,15 +522,12 @@ mod tests {
             .expect("list");
         let error = commit_snapshot_operation(&ctx, &url, &[], None, operation(), output_schema())
             .await
-            .expect_err("conflicts exhausted");
-        assert!(error.to_string().contains("after 5 retries"));
-        crate::io::test_store::assert_commit_retryability(&error, false);
-        assert_eq!(
-            injected.puts.load(Ordering::SeqCst),
-            MAX_PROCEDURE_COMMIT_RETRIES * 3
-        );
+            .expect_err("unresolved collision");
+        assert!(error.to_string().contains("injected Create collision"));
+        crate::io::test_store::assert_commit_retryability(&error, true);
+        assert_eq!(injected.puts.load(Ordering::SeqCst), 3);
         let deletes = injected.deletes.lock().expect("deletes").clone();
-        assert_eq!(deletes.len(), MAX_PROCEDURE_COMMIT_RETRIES * 2);
+        assert!(deletes.is_empty());
         assert!(
             deletes
                 .iter()
@@ -541,14 +539,15 @@ mod tests {
                 .list(None)
                 .try_collect::<Vec<_>>()
                 .await
-                .expect("list"),
-            before
+                .expect("list")
+                .len(),
+            before.len() + 2
         );
     }
 
     #[tokio::test]
     async fn metadata_publication_errors_preserve_artifacts_including_lost_ack() {
-        for fault in [PutFault::Reject, PutFault::LostAck] {
+        for fault in [PutFault::Reject, PutFault::LostAckUnreadable] {
             let (injected, ctx, url, before) = commit_fixture(Some(fault), false, false).await;
             let error =
                 commit_snapshot_operation(&ctx, &url, &[], None, operation(), output_schema())
@@ -583,7 +582,7 @@ mod tests {
                 .prefixed
                 .get(&Path::from("metadata/v2.metadata.json"))
                 .await;
-            if matches!(fault, PutFault::LostAck) {
+            if matches!(fault, PutFault::LostAckUnreadable) {
                 let metadata = TableMetadata::from_json(
                     &metadata
                         .expect("published metadata")
@@ -603,6 +602,35 @@ mod tests {
                 assert!(metadata.is_err());
             }
         }
+    }
+
+    #[tokio::test]
+    async fn exact_versioned_readback_publishes_once_and_preserves_rewritten_files() {
+        let (injected, ctx, url, before) =
+            commit_fixture(Some(PutFault::LostAck), false, false).await;
+        let output = commit_snapshot_operation(&ctx, &url, &[], None, operation(), output_schema())
+            .await
+            .expect("exact readback resolves publication");
+        assert_eq!(output.num_rows(), 1);
+        assert_eq!(injected.puts.load(Ordering::SeqCst), 4);
+        assert!(injected.deletes.lock().expect("deletes").is_empty());
+        let reader = StoreContext::new(injected.inner.clone(), &url).expect("reader");
+        let bytes = reader
+            .prefixed
+            .get(&Path::from("metadata/v2.metadata.json"))
+            .await
+            .expect("published metadata")
+            .bytes()
+            .await
+            .expect("bytes");
+        let metadata = TableMetadata::from_json(&bytes).expect("metadata");
+        assert_ne!(metadata.current_snapshot_id, before.current_snapshot_id);
+        let files = crate::table::files::collect_live_files(&reader, &metadata, 1, |file| {
+            Ok(Some(file.file_path))
+        })
+        .await
+        .expect("readable files");
+        assert_eq!(files.len(), 2);
     }
 
     #[tokio::test]

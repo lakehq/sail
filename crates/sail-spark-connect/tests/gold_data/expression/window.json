@@ -5446,7 +5446,7 @@
     },
     {
       "input": "foo(*) over (partition by a order by b rows exp(b) preceding)",
-      "exception": "\nFrame bound value must be a literal..\n== SQL (line 1, position 45) ==\n...(partition by a order by b rows exp(b) preceding)\n                                   ^^^^^^^^^^^^^^^^\n",
+      "exception": "\n[INVALID_SQL_SYNTAX.INVALID_WINDOW_FRAME_BOUND] Invalid SQL syntax: Frame bound value must be a literal. SQLSTATE: 42000\n== SQL (line 1, position 45) ==\n...(partition by a order by b rows exp(b) preceding)\n                                   ^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "window": {

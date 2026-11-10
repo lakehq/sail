@@ -20,6 +20,7 @@ use sail_logical_plan::merge::{
 use sail_logical_plan::row_level::{
     StructFieldAlignment, align_row_level_value, evolve_row_level_field,
 };
+use sail_sql_analyzer::expression::expr_with_default_column_values;
 
 use crate::config::StoreAssignmentPolicy;
 use crate::error::{PlanError, PlanResult};
@@ -450,7 +451,9 @@ impl PlanResolver<'_> {
                 source_schema,
                 self.config.case_sensitive,
             );
-            let resolved_value = self.resolve_expression(value, merge_schema, state).await?;
+            let resolved_value = self
+                .resolve_merge_assignment_value(value, merge_schema, state)
+                .await?;
             out.push(MergeAssignment {
                 column: resolved_column,
                 value: resolved_value,
@@ -499,9 +502,41 @@ impl PlanResolver<'_> {
                 source_schema,
                 self.config.case_sensitive,
             );
-            out.push(self.resolve_expression(value, merge_schema, state).await?);
+            out.push(
+                self.resolve_merge_assignment_value(value, merge_schema, state)
+                    .await?,
+            );
         }
         Ok(out)
+    }
+
+    async fn resolve_merge_assignment_value(
+        &self,
+        value: spec::Expr,
+        schema: &datafusion_common::DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Expr> {
+        // Ordinary resolution (including lambda scope) takes precedence over DEFAULT.
+        // Schema disambiguation has already bound real columns to their plan IDs.
+        match self.resolve_expression(value.clone(), schema, state).await {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                let fallback = expr_with_default_column_values(value);
+                let Ok(fallback) = self.resolve_expression(fallback, schema, state).await else {
+                    // Preserve errors for ambiguous, qualified, or plan-bound references.
+                    return Err(error);
+                };
+                if Self::is_default_column_value_expr(&fallback) {
+                    Ok(fallback)
+                } else if Self::expr_contains_default_column_value(&fallback)? {
+                    Err(PlanError::invalid(
+                        "DEFAULT must be a standalone MERGE assignment value",
+                    ))
+                } else {
+                    Err(error)
+                }
+            }
+        }
     }
 
     async fn resolve_merge_column(

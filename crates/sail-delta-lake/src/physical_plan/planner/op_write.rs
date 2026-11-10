@@ -180,6 +180,7 @@ async fn build_overwrite_if_plan(
         ctx,
         condition_expr.clone(),
         physical_condition.clone(),
+        true, // No rows survive in a fully replaced partition.
         &snapshot_state,
         table_schema.clone(),
     )
@@ -222,6 +223,7 @@ async fn build_overwrite_if_plan(
             condition_expr.clone(),
             ctx.session()
                 .create_physical_expr(condition_expr.clone().is_true(), &table_df_schema)?,
+            false, // CDC needs deleted rows even when whole partitions are replaced.
             &snapshot_state,
             table_schema.clone(),
         )
@@ -313,6 +315,7 @@ async fn build_old_data_plan(
     ctx: &PlannerContext<'_>,
     condition_expr: Expr,
     condition: Arc<dyn PhysicalExpr>,
+    skip_partition_only: bool,
     snapshot_state: &DeltaSnapshot,
     table_schema: SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -337,7 +340,7 @@ async fn build_old_data_plan(
         ctx.table_url().clone(),
         version,
         ctx.partition_columns().to_vec(),
-        partition_only,
+        partition_only && skip_partition_only,
     )?);
 
     // Spread Add actions across partitions so `DeltaScanByAddsExec` can scan files in parallel.

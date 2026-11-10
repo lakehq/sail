@@ -187,6 +187,7 @@ pub trait MergeCapableSource: Send + Sync {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub enum SinkMode {
+    ReplaceTable(Box<crate::catalog::TableReplacement>),
     ErrorIfExists,
     IgnoreIfExists,
     Append,
@@ -422,6 +423,7 @@ pub enum DeltaConstraintViolation {
     Check,
     NotNull { column: String },
     Invariant { column: String },
+    ReplaceWhere,
 }
 
 /// Returns the path from options, or `None` if not set.

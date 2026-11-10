@@ -51,6 +51,7 @@ pub(crate) enum PutFault {
     Reject,
     Collision,
     LostAck,
+    LostAckUnreadable,
     Pause,
     PauseAfterWrite,
 }
@@ -138,7 +139,7 @@ impl ObjectStore for TestStore {
             self.paused.notify_one();
             self.resume.notified().await;
         }
-        if matches!(fault, Some(PutFault::LostAck)) {
+        if matches!(fault, Some(PutFault::LostAck | PutFault::LostAckUnreadable)) {
             return Err(injected_error("injected lost acknowledgement"));
         }
         Ok(result)
@@ -163,6 +164,11 @@ impl ObjectStore for TestStore {
             .expect("get counts")
             .entry(location.to_string())
             .or_default() += 1;
+        if self.fault.as_ref().is_some_and(|(pattern, fault)| {
+            matches!(fault, PutFault::LostAckUnreadable) && location.as_ref().contains(pattern)
+        }) {
+            return Err(injected_error("injected readback failure"));
+        }
         self.inner.get_opts(location, options).await
     }
 

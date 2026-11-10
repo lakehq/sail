@@ -1,21 +1,36 @@
 use bytes::Bytes;
 use datafusion_common::{DataFusionError, Result, internal_err};
+use object_store::ObjectStoreExt;
 use object_store::path::Path;
 use sail_common_datafusion::error::CommitStateUnknownError;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::io::StoreContext;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{MetadataLog, SnapshotLog, TableMetadata, TableUpdate};
 use crate::table::metadata_loader::{
-    encode_metadata_file, metadata_file_extension_from_properties, table_metadata_location,
-    write_version_hint,
+    MetadataFileCodec, encode_metadata_file, table_metadata_location, write_version_hint,
 };
 use crate::utils::metadata::metadata_files_for_version;
 
+/// Captured before changing candidate properties; never recomputed from a newer current version.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub(crate) struct BaseMetadataCodec(MetadataFileCodec);
+
+impl BaseMetadataCodec {
+    pub(crate) fn capture(base: Option<&TableMetadata>) -> Result<Self> {
+        Ok(Self(match base {
+            Some(base) => MetadataFileCodec::from_properties(&base.properties)?,
+            None => MetadataFileCodec::None,
+        }))
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum MetadataFileStyle {
-    Versioned,
+    // All participating Sail writers from the same immutable base contend on one key.
+    Versioned(BaseMetadataCodec),
     Unique,
 }
 
@@ -65,13 +80,15 @@ impl MetadataFileCommit {
         let json = metadata
             .to_json()
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        let extension = metadata_file_extension_from_properties(&metadata.properties)?;
+        // Validate the requested codec even when its physical encoding takes effect later.
+        let requested_codec = MetadataFileCodec::from_properties(&metadata.properties)?;
         let (file, version_hint) = match style {
-            MetadataFileStyle::Versioned => (
-                format!("metadata/v{version}{extension}"),
+            MetadataFileStyle::Versioned(base) => (
+                format!("metadata/v{version}{}", base.0.file_extension()),
                 version.to_string(),
             ),
             MetadataFileStyle::Unique => {
+                let extension = requested_codec.file_extension();
                 let name = format!("{version:05}-{}{extension}", uuid::Uuid::new_v4());
                 (format!("metadata/{name}"), name)
             }
@@ -99,6 +116,26 @@ impl MetadataFileCommit {
 
     /// Only definite conflicts may be retried; other errors can leave publication uncertain.
     pub(crate) async fn write(&self, store: &StoreContext) -> Result<MetadataWriteOutcome> {
+        self.write_replacement(store).await
+    }
+
+    /// Failures here are definitely unpublished: no metadata PUT has been attempted.
+    pub(crate) async fn replacement_version_exists(&self, store: &StoreContext) -> Result<bool> {
+        // Catalog pointer publication, not directory discovery, orders unique metadata files.
+        if matches!(self.style, MetadataFileStyle::Unique) {
+            return Ok(false);
+        }
+        Ok(!metadata_files_for_version(store, self.version)
+            .await?
+            .is_empty())
+    }
+
+    /// Call after the separate preflight, marking publication started immediately before this.
+    /// Never delete a version after it may have become visible.
+    pub(crate) async fn write_replacement(
+        &self,
+        store: &StoreContext,
+    ) -> Result<MetadataWriteOutcome> {
         match store
             .prefixed
             .put_opts(
@@ -112,22 +149,37 @@ impl MetadataFileCommit {
             .await
         {
             Ok(_) => {}
-            Err(object_store::Error::AlreadyExists { .. }) => {
-                return Ok(MetadataWriteOutcome::Conflict);
-            }
             Err(error) => {
-                return Err(match self.style {
-                    MetadataFileStyle::Versioned => {
-                        DataFusionError::External(Box::new(CommitStateUnknownError::with_source(
-                            format!("could not confirm metadata publication at {}", self.path),
-                            error,
-                        )))
+                // An internal retry can return AlreadyExists after the first PUT succeeded.
+                // Only exact-object readback can resolve that lost acknowledgement.
+                let observed = match store.prefixed.get(&self.path).await {
+                    Ok(object) => object.bytes().await.ok(),
+                    Err(_) => None,
+                };
+                match observed {
+                    Some(bytes) if bytes == self.bytes => {}
+                    Some(_) if matches!(error, object_store::Error::AlreadyExists { .. }) => {
+                        return Ok(MetadataWriteOutcome::Conflict);
                     }
-                    MetadataFileStyle::Unique => DataFusionError::External(Box::new(error)),
-                });
+                    // A missing object after a failed PUT is not proof of non-publication.
+                    _ => {
+                        return Err(match self.style {
+                            MetadataFileStyle::Versioned(_) => DataFusionError::External(Box::new(
+                                CommitStateUnknownError::with_source(
+                                    format!(
+                                        "could not confirm metadata publication at {}",
+                                        self.path
+                                    ),
+                                    error,
+                                ),
+                            )),
+                            MetadataFileStyle::Unique => DataFusionError::External(Box::new(error)),
+                        });
+                    }
+                }
             }
         }
-        if matches!(self.style, MetadataFileStyle::Versioned) {
+        if matches!(self.style, MetadataFileStyle::Versioned(_)) {
             let version_files = metadata_files_for_version(store, self.version)
                 .await
                 .map_err(|error| {
@@ -233,7 +285,98 @@ pub(crate) fn apply_snapshot_updates(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use crate::operations::replacement_test_support::{ReplacementFault, ReplacementStore};
+
+    #[tokio::test]
+    #[expect(clippy::expect_used)]
+    async fn replacement_storage_requires_exact_readback_and_never_deletes_unknown()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for fault in [
+            ReplacementFault::LostAck,
+            ReplacementFault::PutThenAlreadyExists,
+            ReplacementFault::DifferentBytes,
+            ReplacementFault::Missing,
+            ReplacementFault::ConditionalConflict,
+            ReplacementFault::CompetingVersion,
+            ReplacementFault::ReadbackFailure,
+            ReplacementFault::PostflightList,
+        ] {
+            let store = Arc::new(ReplacementStore::new(fault));
+            let context = StoreContext::new(store.clone(), &Url::parse("memory:///table")?)?;
+            let publication = MetadataFileCommit {
+                path: Path::from("metadata/v2.metadata.json"),
+                location: "memory:///table/metadata/v2.metadata.json".into(),
+                bytes: Bytes::from_static(b"exact prepared metadata"),
+                version: 2,
+                style: MetadataFileStyle::Versioned(BaseMetadataCodec::capture(None)?),
+                version_hint: "2".into(),
+            };
+            assert!(!publication.replacement_version_exists(&context).await?);
+            let result = publication.write_replacement(&context).await;
+            match fault {
+                ReplacementFault::LostAck | ReplacementFault::PutThenAlreadyExists => {
+                    assert_eq!(result?, MetadataWriteOutcome::Written)
+                }
+                ReplacementFault::ConditionalConflict => {
+                    assert_eq!(result?, MetadataWriteOutcome::Conflict)
+                }
+                _ => {
+                    let error = result.expect_err("unresolved publication");
+                    crate::io::test_store::assert_commit_retryability(&error, true);
+                }
+            }
+            let stored = store
+                .inner
+                .get(&Path::from("table/metadata/v2.metadata.json"))
+                .await;
+            match fault {
+                ReplacementFault::Missing => assert!(stored.is_err()),
+                ReplacementFault::LostAck
+                | ReplacementFault::PutThenAlreadyExists
+                | ReplacementFault::CompetingVersion
+                | ReplacementFault::ReadbackFailure
+                | ReplacementFault::PostflightList => {
+                    assert_eq!(stored?.bytes().await?, publication.bytes)
+                }
+                _ => assert_eq!(
+                    stored?.bytes().await?,
+                    Bytes::from_static(b"different metadata")
+                ),
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replacement_storage_existing_version_is_a_non_destructive_conflict()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let store = StoreContext::new(
+            Arc::new(object_store::memory::InMemory::new()),
+            &Url::parse("memory:///table")?,
+        )?;
+        let publication = MetadataFileCommit {
+            path: Path::from("metadata/v2.metadata.json"),
+            location: "memory:///table/metadata/v2.metadata.json".into(),
+            bytes: Bytes::from_static(b"prepared"),
+            version: 2,
+            style: MetadataFileStyle::Versioned(BaseMetadataCodec::capture(None)?),
+            version_hint: "2".into(),
+        };
+        assert!(!publication.replacement_version_exists(&store).await?);
+        assert_eq!(
+            publication.write_replacement(&store).await?,
+            MetadataWriteOutcome::Written
+        );
+        assert!(publication.replacement_version_exists(&store).await?);
+        assert_eq!(
+            store.prefixed.get(&publication.path).await?.bytes().await?,
+            publication.bytes
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     #[expect(clippy::expect_used)]
@@ -246,8 +389,15 @@ mod tests {
         use crate::io::test_store::{PutFault, TestStore, assert_commit_retryability};
         use crate::spec::{FormatVersion, PartitionSpec, Schema};
 
-        for style in [MetadataFileStyle::Versioned, MetadataFileStyle::Unique] {
-            for fault in [PutFault::Reject, PutFault::LostAck, PutFault::Collision] {
+        for style in [
+            MetadataFileStyle::Versioned(BaseMetadataCodec::capture(None).expect("base codec")),
+            MetadataFileStyle::Unique,
+        ] {
+            for fault in [
+                PutFault::Reject,
+                PutFault::LostAckUnreadable,
+                PutFault::Collision,
+            ] {
                 let url = Url::parse("memory://bucket/table/").expect("URL");
                 let store =
                     StoreContext::new(Arc::new(object_store::memory::InMemory::new()), &url)
@@ -268,14 +418,9 @@ mod tests {
                 let injected = Arc::new(injected);
                 let store = StoreContext::new(injected.clone(), &url).expect("store");
                 let result = prepared.write(&store).await;
-                if matches!(fault, PutFault::Collision) {
-                    assert_eq!(
-                        result.expect("definite collision"),
-                        MetadataWriteOutcome::Conflict
-                    );
-                } else {
-                    let error = result.expect_err("Create error");
-                    let versioned = matches!(style, MetadataFileStyle::Versioned);
+                {
+                    let error = result.expect_err("unresolved Create error");
+                    let versioned = matches!(style, MetadataFileStyle::Versioned(_));
                     assert_commit_retryability(&error, versioned);
                     let source = match &error {
                         DataFusionError::External(source) => Some(source),
@@ -305,10 +450,65 @@ mod tests {
                 let reader = StoreContext::new(injected.inner.clone(), &url).expect("reader");
                 assert_eq!(
                     reader.prefixed.head(prepared.path()).await.is_ok(),
-                    matches!(fault, PutFault::LostAck)
+                    matches!(fault, PutFault::LostAckUnreadable)
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn normal_publication_reconciles_exact_bytes_and_rejects_other_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::io::test_store::{PutFault, TestStore};
+        for style in [
+            MetadataFileStyle::Versioned(BaseMetadataCodec::capture(None)?),
+            MetadataFileStyle::Unique,
+        ] {
+            let url = Url::parse("memory:///table")?;
+            let mut injected = TestStore::new(Arc::new(object_store::memory::InMemory::new()));
+            injected.fault = Some((".metadata.json".into(), PutFault::LostAck));
+            let injected = Arc::new(injected);
+            let store = StoreContext::new(injected.clone(), &url)?;
+            let mut publication = MetadataFileCommit {
+                path: Path::from("metadata/v2.metadata.json"),
+                location: "memory:///table/metadata/v2.metadata.json".into(),
+                bytes: Bytes::from_static(b"prepared"),
+                version: 2,
+                style,
+                version_hint: "2".into(),
+            };
+            assert_eq!(
+                publication.write(&store).await?,
+                MetadataWriteOutcome::Written
+            );
+            // An internal retry's AlreadyExists is also resolved by exact readback.
+            assert_eq!(
+                publication.write(&store).await?,
+                MetadataWriteOutcome::Written
+            );
+            publication.bytes = Bytes::from_static(b"different candidate");
+            assert_eq!(
+                publication.write(&store).await?,
+                MetadataWriteOutcome::Conflict
+            );
+            assert_eq!(
+                store
+                    .prefixed
+                    .get(publication.path())
+                    .await?
+                    .bytes()
+                    .await?,
+                Bytes::from_static(b"prepared")
+            );
+            assert!(
+                injected
+                    .deletes
+                    .lock()
+                    .map_err(|e| e.to_string())?
+                    .is_empty()
+            );
+        }
+        Ok(())
     }
 
     #[test]

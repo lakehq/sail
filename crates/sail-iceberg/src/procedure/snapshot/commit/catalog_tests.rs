@@ -323,7 +323,11 @@ async fn unknown_cas_outcome_preserves_published_metadata_and_manifests() {
 
 #[tokio::test]
 async fn unique_metadata_upload_failures_never_reach_pointer_publication() {
-    for fault in [PutFault::Reject, PutFault::Collision, PutFault::LostAck] {
+    for fault in [
+        PutFault::Reject,
+        PutFault::Collision,
+        PutFault::LostAckUnreadable,
+    ] {
         let (store, catalog, ctx, url, context) = fixture(CasFault::None, Some(fault)).await;
         let before = store
             .inner
@@ -343,17 +347,11 @@ async fn unique_metadata_upload_failures_never_reach_pointer_publication() {
         .await
         .expect_err("upload failure");
         crate::io::test_store::assert_commit_retryability(&error, false);
-        if !matches!(fault, PutFault::Collision) {
-            assert!(
-                matches!(&error, DataFusionError::External(source) if source.is::<object_store::Error>())
-            );
-        }
+        assert!(
+            matches!(&error, DataFusionError::External(source) if source.is::<object_store::Error>())
+        );
         assert_eq!(catalog.attempts.load(Ordering::SeqCst), 0);
-        let attempts = if matches!(fault, PutFault::Collision) {
-            MAX_PROCEDURE_COMMIT_RETRIES
-        } else {
-            1
-        };
+        let attempts = 1;
         let deletes = store.deletes.lock().expect("deletes").clone();
         assert_eq!(deletes.len(), attempts * 2);
         assert!(
@@ -370,10 +368,31 @@ async fn unique_metadata_upload_failures_never_reach_pointer_publication() {
             .expect("list");
         assert_eq!(
             remaining.len(),
-            before + usize::from(matches!(fault, PutFault::LostAck))
+            before + usize::from(matches!(fault, PutFault::LostAckUnreadable))
         );
         assert_pointer_is_readable(&store, &catalog, &url).await;
     }
+}
+
+#[tokio::test]
+async fn exact_unique_metadata_readback_continues_to_pointer_publication() {
+    let (store, catalog, ctx, url, context) =
+        fixture(CasFault::None, Some(PutFault::LostAck)).await;
+    let output = commit_snapshot_operation(
+        &ctx,
+        &url,
+        &[],
+        Some(&context),
+        operation(),
+        output_schema(),
+    )
+    .await
+    .expect("exact metadata readback resolves the upload");
+    assert_eq!(output.num_rows(), 1);
+    assert_eq!(catalog.attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(store.puts.load(Ordering::SeqCst), 4);
+    assert!(store.deletes.lock().expect("deletes").is_empty());
+    assert_pointer_is_readable(&store, &catalog, &url).await;
 }
 
 #[tokio::test]
