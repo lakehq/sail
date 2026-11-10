@@ -24,8 +24,12 @@ from pysail.tests._dev.spark.iceberg.test_iceberg_equality_delete import (
     _append_delete_snapshot,
     _append_equality_delete_snapshot,
 )
-from pysail.tests._dev.spark.iceberg.test_iceberg_merge import _current_manifest_entries, _local_file_path
-from pysail.tests._dev.spark.iceberg.utils import WindowsLocalPyArrowFileIO, pyiceberg_file_io_properties
+from pysail.tests._dev.spark.iceberg.utils import (
+    WindowsLocalPyArrowFileIO,
+    _current_manifest_entries,
+    _local_file_path,
+    pyiceberg_file_io_properties,
+)
 
 
 @pytest.mark.yamlsnapshot(group="plan")

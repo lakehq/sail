@@ -591,6 +591,41 @@ pub fn resolve_listing_writer_url(path: String) -> Result<Url> {
     Ok(base)
 }
 
+/// Parse an absolute directory location without glob expansion or filesystem probes.
+/// Only the path gets a trailing separator; URL authority, escapes, query and fragment stay intact.
+pub fn parse_absolute_directory_url(path: &str) -> Option<Url> {
+    let mut url = parse_absolute_url(path).or_else(|| file_url_from_absolute_path(path))?;
+    if !url.path().ends_with('/') {
+        url.set_path(&format!("{}/", url.path()));
+    }
+    Some(url)
+}
+
+pub fn parse_absolute_url(raw: &str) -> Option<Url> {
+    Url::parse(raw).ok().filter(|url| url.scheme().len() > 1)
+}
+
+pub fn file_url_from_absolute_path(path: &str) -> Option<Url> {
+    if std::path::Path::new(path).is_absolute() {
+        return Url::from_file_path(path).ok();
+    }
+    windows_drive_path_to_file_url(path)
+}
+
+fn windows_drive_path_to_file_url(path: &str) -> Option<Url> {
+    let bytes = path.as_bytes();
+    if bytes.len() < 3
+        || !bytes[0].is_ascii_alphabetic()
+        || bytes[1] != b':'
+        || !matches!(bytes[2], b'/' | b'\\')
+    {
+        return None;
+    }
+
+    let path = path.replace('\\', "/");
+    Url::parse(&format!("file:///{path}")).ok()
+}
+
 /// Resolve a single table directory without caller-supplied glob patterns.
 pub fn resolve_table_url(path: String) -> Result<Url> {
     if path.is_empty() {
@@ -859,6 +894,51 @@ mod tests {
 
         let error = PathGlobFilter::parse("[").unwrap_err();
         assert!(error.to_string().contains("invalid path glob filter"));
+    }
+
+    #[test]
+    fn absolute_directory_urls_preserve_location_identity() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let path = std::env::temp_dir().join("table %20#literal");
+        let raw = path.to_str().ok_or("UTF-8 test path")?;
+        let uri = Url::from_file_path(&path).map_err(|()| "absolute test path")?;
+        assert_eq!(
+            parse_absolute_directory_url(raw),
+            parse_absolute_directory_url(uri.as_str())
+        );
+        for (left, right, equal) in [
+            ("s3://bucket/table", "s3://bucket/table/", true),
+            (r"C:\warehouse\table", "file:///C:/warehouse/table/", true),
+            (
+                "https://[::1]:8443/t?x=a%2Fb#part",
+                "https://[::1]:8443/t/?x=a%2Fb#part",
+                true,
+            ),
+            ("s3://bucket/table", "s3a://bucket/table", false),
+            ("s3://bucket/table", "s3://other/table", false),
+            ("s3://BUCKET/table", "s3://bucket/table", false),
+            ("s3://bucket/a%2Fb", "s3://bucket/a/b", false),
+            ("s3://bucket/a%2Fb", "s3://bucket/a%252Fb", false),
+            ("s3://bucket/a%2Fb", "s3://bucket/a%2fb", false),
+            ("s3://bucket/table", "s3://bucket/table//", false),
+            ("https://host/t?x=1", "https://host/t?x=2", false),
+            ("https://host/t#one", "https://host/t#two", false),
+        ] {
+            let left_url = parse_absolute_directory_url(left).ok_or("absolute left URL")?;
+            let right_url = parse_absolute_directory_url(right).ok_or("absolute right URL")?;
+            assert_eq!(left_url == right_url, equal, "{left}, {right}");
+        }
+        for invalid in ["", "relative/path", "C:relative"] {
+            assert!(parse_absolute_directory_url(invalid).is_none(), "{invalid}");
+        }
+        for input in ["s3://bucket/literal{a}*", "https://host/t?token=abc/#part/"] {
+            let original = Url::parse(input)?;
+            let directory = parse_absolute_directory_url(input).ok_or("absolute URL")?;
+            assert_eq!(directory.path(), format!("{}/", original.path()));
+            assert_eq!(directory.query(), original.query());
+            assert_eq!(directory.fragment(), original.fragment());
+        }
+        Ok(())
     }
 
     #[test]

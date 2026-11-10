@@ -1129,6 +1129,8 @@ message IcebergCommitExecNode {
     CommandOutput command_output = 9;
     IcebergRewriteDataFilesOutput rewrite_data_files_output = 10;
   }
+  // Typed private replacement metadata and staged catalog identity, never a live guard.
+  optional string table_replacement_json = 11;
 }
 
 message IcebergRewriteDataFilesOutput {

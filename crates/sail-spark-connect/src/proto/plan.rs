@@ -1936,11 +1936,6 @@ fn merge_matched_clause_from_expression(
         sc::merge_action::ActionType::UpdateStar => spec::MergeMatchedAction::UpdateAll,
         sc::merge_action::ActionType::Update => {
             let assignments = merge_assignments_to_pairs(action.assignments)?;
-            if assignments.is_empty() {
-                return Err(SparkError::invalid(
-                    "merge matched update requires assignments",
-                ));
-            }
             spec::MergeMatchedAction::UpdateSet(assignments)
         }
         sc::merge_action::ActionType::Invalid
@@ -1965,9 +1960,6 @@ fn merge_not_matched_by_target_clause_from_expression(
         sc::merge_action::ActionType::InsertStar => spec::MergeNotMatchedByTargetAction::InsertAll,
         sc::merge_action::ActionType::Insert => {
             let assignments = merge_assignments_to_pairs(action.assignments)?;
-            if assignments.is_empty() {
-                return Err(SparkError::invalid("merge insert requires assignments"));
-            }
             let (columns, values) = assignments.into_iter().unzip();
             spec::MergeNotMatchedByTargetAction::InsertColumns { columns, values }
         }
@@ -1993,11 +1985,6 @@ fn merge_not_matched_by_source_clause_from_expression(
         sc::merge_action::ActionType::Delete => spec::MergeNotMatchedBySourceAction::Delete,
         sc::merge_action::ActionType::Update => {
             let assignments = merge_assignments_to_pairs(action.assignments)?;
-            if assignments.is_empty() {
-                return Err(SparkError::invalid(
-                    "merge not matched by source update requires assignments",
-                ));
-            }
             spec::MergeNotMatchedBySourceAction::UpdateSet(assignments)
         }
         sc::merge_action::ActionType::Invalid
