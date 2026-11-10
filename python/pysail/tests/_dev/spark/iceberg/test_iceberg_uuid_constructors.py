@@ -20,6 +20,16 @@ SECOND_BYTES = UUID(SECOND).bytes
 UUID_BYTE_LENGTH = 16
 
 
+def _to_arrow(frame):
+    if hasattr(type(frame), "toArrow"):
+        return frame.toArrow()
+    # Spark Connect 3.5 collect() uses this Arrow transport before converting rows.
+    # Keep the Arrow map/UUID representation rather than round-tripping through Rows.
+    query = frame._plan.to_proto(frame.sparkSession.client)  # noqa: SLF001
+    table, _ = frame.sparkSession.client.to_table(query)
+    return table
+
+
 def _normalize(value):
     if isinstance(value, UUID):
         return value.bytes
@@ -144,10 +154,10 @@ def test_uuid_constant_constructor_ctas(spark, tmp_path, entry):
         "typed": ("map", "string", "uuid"),
     }
     try:
-        assert _normalize(frame.toArrow().to_pylist()) == expected
+        assert _normalize(_to_arrow(frame).to_pylist()) == expected
         _persist(spark, frame, table, tmp_path, entry)
         _assert_artifacts(tmp_path, types, expected)
-        assert _normalize(spark.table(table).toArrow().to_pylist()) == expected
+        assert _normalize(_to_arrow(spark.table(table)).to_pylist()) == expected
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
         spark.sql("DROP VIEW IF EXISTS uuid_constructor_result")
@@ -272,10 +282,10 @@ def test_uuid_scanned_constructor_consensus_ctas(spark, sql_catalog, tmp_path, e
             "mixed_map_value": ("map", "string", "fixed[16]"),
             "mixed_map_key": ("map", "fixed[16]", "string"),
         }
-        assert sorted(_normalize(frame.toArrow().to_pylist()), key=repr) == sorted(expected, key=repr)
+        assert sorted(_normalize(_to_arrow(frame).to_pylist()), key=repr) == sorted(expected, key=repr)
         _persist(spark, frame, table, location, entry)
         _assert_artifacts(location, types, expected)
-        assert sorted(_normalize(spark.table(table).toArrow().to_pylist()), key=repr) == sorted(expected, key=repr)
+        assert sorted(_normalize(_to_arrow(spark.table(table)).to_pylist()), key=repr) == sorted(expected, key=repr)
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
         spark.sql("DROP VIEW IF EXISTS uuid_constructor_source")
@@ -294,7 +304,12 @@ def test_uuid_null_cast_ctas_names(spark, tmp_path, entry, cast, target):
         frame = spark.sql(f"SELECT {name}")
     else:
         value = F.lit(None)
-        value = value.cast(target) if cast == "CAST" else value.try_cast(target)
+        if cast == "CAST":
+            value = value.cast(target)
+        elif hasattr(type(value), "try_cast"):
+            value = value.try_cast(target)
+        else:
+            value = F.expr(f"TRY_CAST(NULL AS {target})")
         frame = spark.range(1).select(value)
     types = {
         "UUID": "uuid",
@@ -334,6 +349,20 @@ def test_uuid_cast_preserves_column_alias_and_chain_names(spark, cast, entry):
                 assert bytes(frame.first()[0]) == VALUE_BYTES
         finally:
             spark.catalog.dropTempView("uuid_cast_source")
+    elif cast == "TRY_CAST" and not hasattr(type(F.col("s")), "try_cast"):
+        # SQL expressions are supported by older Connect clients. Project the alias
+        # before casting so its name still comes from the input, not a result alias.
+        frames = [
+            (source.select(F.expr("TRY_CAST(s AS UUID)")), "s"),
+            (source.select(F.expr("TRY_CAST(TRY_CAST(s AS UUID) AS UUID)")), "s"),
+            (source.select(F.expr("TRY_CAST(s AS UUID)").cast("BINARY")), "s"),
+            (source.select(F.col("s").alias("renamed")).select(F.expr("TRY_CAST(renamed AS UUID)")), "renamed"),
+            (source.select(F.expr("TRY_CAST(s AS UUID)").alias("renamed")), "renamed"),
+            (source.select(F.expr(f"TRY_CAST('{VALUE}' AS UUID)")), f"TRY_CAST({VALUE} AS UUID)"),
+        ]
+        for frame, name in frames:
+            assert frame.columns == [name]
+            assert bytes(frame.first()[0]) == VALUE_BYTES
     else:
 
         def convert(column):

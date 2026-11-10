@@ -10,7 +10,7 @@ from pyiceberg.manifest import ManifestContent
 
 from pysail.testing._dev.spark.steps.iceberg import _find_latest_metadata
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
-from pysail.tests._dev.spark.iceberg.test_iceberg_uuid_constructors import _normalize, _shape
+from pysail.tests._dev.spark.iceberg.test_iceberg_uuid_constructors import _normalize, _shape, _to_arrow
 from pysail.tests._dev.spark.iceberg.utils import _current_manifest_entries, _local_file_path
 
 
@@ -56,14 +56,14 @@ def test_uuid_replacement_preserves_catalog_and_storage_identity(spark, tmp_path
             ]
             artifact_rows.extend(parquet.read().to_pylist())
         assert _normalize(artifact_rows) == expected
-        assert _normalize(spark.table(name).toArrow().to_pylist()) == expected
-        assert _normalize(spark.read.format("iceberg").load(str(tmp_path)).toArrow().to_pylist()) == expected
+        assert _normalize(_to_arrow(spark.table(name)).to_pylist()) == expected
+        assert _normalize(_to_arrow(spark.read.format("iceberg").load(str(tmp_path))).to_pylist()) == expected
         spark.sql(f"DROP TABLE {name}")
         spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{location}'")
-        assert _normalize(spark.table(name).toArrow().to_pylist()) == expected
+        assert _normalize(_to_arrow(spark.table(name)).to_pylist()) == expected
         # Appending through the published/reopened definition must still preserve UUID.
         source.writeTo(name).append()
-        assert _normalize(spark.table(name).toArrow().to_pylist()) == expected * 2
+        assert _normalize(_to_arrow(spark.table(name)).to_pylist()) == expected * 2
     finally:
         spark.sql("DROP VIEW IF EXISTS uuid_replacement_source")
         spark.sql(f"DROP TABLE IF EXISTS {name}")
