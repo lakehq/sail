@@ -18,6 +18,7 @@ use crate::operations::metadata_commit::{
     PreviousMetadataFile, apply_snapshot_updates,
 };
 use crate::operations::snapshot::CreatedPathCleanup;
+use crate::procedure::expire_snapshots::{Expiration, ExpireSnapshots};
 use crate::procedure::rewrite_manifests::RewriteManifests;
 use crate::spec::TableMetadata;
 use crate::table::metadata_loader::{
@@ -31,6 +32,13 @@ const MAX_PROCEDURE_COMMIT_RETRIES: usize = 5;
 pub(crate) enum ProcedureCommitOperation {
     Snapshot(SnapshotOperation),
     RewriteManifests(RewriteManifests),
+    ExpireSnapshots(ExpireSnapshots),
+}
+
+impl From<ExpireSnapshots> for ProcedureCommitOperation {
+    fn from(operation: ExpireSnapshots) -> Self {
+        Self::ExpireSnapshots(operation)
+    }
 }
 
 impl From<SnapshotOperation> for ProcedureCommitOperation {
@@ -69,6 +77,13 @@ pub(crate) async fn commit_snapshot_operation(
         };
         let commit_mode =
             IcebergCatalogCommitMode::resolve(lakehouse_table, &catalog_info, table_properties)?;
+        if matches!(&operation, ProcedureCommitOperation::ExpireSnapshots(_))
+            && !matches!(commit_mode, IcebergCatalogCommitMode::Filesystem)
+        {
+            return plan_err!(
+                "expire_snapshots requires versioned filesystem publication; catalog pointer CAS and REST/catalog-update authorities are not yet verified and are unsupported"
+            );
+        }
         let recorded_metadata_location = catalog_info
             .metadata_location
             .clone()
@@ -92,7 +107,24 @@ pub(crate) async fn commit_snapshot_operation(
         let bytes = load_metadata_file_bytes(&object_store, &metadata_file).await?;
         let mut metadata = TableMetadata::from_json(&bytes)
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let mut expiration: Option<Expiration> = None;
         let prepared = match &operation {
+            ProcedureCommitOperation::ExpireSnapshots(operation) => {
+                let prepared = operation
+                    .prepare(&store_context, table_url, &metadata)
+                    .await?;
+                expiration = Some(prepared.expiration);
+                PreparedSnapshotOperation {
+                    changed: !prepared.updates.is_empty(),
+                    requirements: vec![],
+                    updates: prepared.updates,
+                    manifests: vec![],
+                    output: crate::procedure::expire_snapshots::output(
+                        output_schema.clone(),
+                        [0; 6],
+                    )?,
+                }
+            }
             ProcedureCommitOperation::Snapshot(operation) => {
                 operation.prepare(&metadata, output_schema.clone())?
             }
@@ -140,7 +172,16 @@ pub(crate) async fn commit_snapshot_operation(
             {
                 CatalogCommitOutcome::Committed(_) => {
                     cleanup.disarm();
-                    return Ok(prepared.output);
+                    return finish_expiration(
+                        ctx,
+                        table_url,
+                        table_properties,
+                        lakehouse_table,
+                        &store_context,
+                        expiration,
+                        prepared.output,
+                    )
+                    .await;
                 }
                 CatalogCommitOutcome::Conflict => {
                     cleanup.cleanup().await;
@@ -261,9 +302,57 @@ pub(crate) async fn commit_snapshot_operation(
         }
         cleanup.disarm();
         prepared_metadata.write_hint(&store_context).await;
-        return Ok(prepared.output);
+        return finish_expiration(
+            ctx,
+            table_url,
+            table_properties,
+            lakehouse_table,
+            &store_context,
+            expiration,
+            prepared.output,
+        )
+        .await;
     }
     Err(procedure_commit_conflict())
+}
+
+async fn finish_expiration(
+    ctx: &TaskContext,
+    url: &url::Url,
+    properties: &[(String, String)],
+    table: Option<&sail_common_datafusion::catalog::LakehouseExecutionContext>,
+    store: &StoreContext,
+    expiration: Option<Expiration>,
+    output: RecordBatch,
+) -> Result<RecordBatch> {
+    match expiration {
+        None => Ok(output),
+        Some(expiration) => {
+            let current = async {
+                let info = match table {
+                    Some(table) => {
+                        IcebergCatalogCommitCoordinator::load_table_info(ctx, table.catalog_table())
+                            .await?
+                    }
+                    None => CatalogTableInfo::default(),
+                };
+                let mode = IcebergCatalogCommitMode::resolve(table, &info, properties)?;
+                if !matches!(mode, IcebergCatalogCommitMode::Filesystem) {
+                    return plan_err!("Iceberg publication authority changed after expiration; preserving candidate files");
+                }
+                // Never read a catalog pointer through a table store: catalog publication is
+                // unsupported for expiration, including an authority change during refresh.
+                let file = crate::table::find_latest_metadata_file(&store.base, url).await?;
+                let bytes = load_metadata_file_bytes(&store.base, &file).await?;
+                TableMetadata::from_json(&bytes)
+                    .map_err(|error| DataFusionError::External(Box::new(error)))
+            }
+            .await;
+            expiration
+                .finish(store, url, current, output.schema())
+                .await
+        }
+    }
 }
 
 fn is_catalog_conflict(error: &DataFusionError) -> bool {

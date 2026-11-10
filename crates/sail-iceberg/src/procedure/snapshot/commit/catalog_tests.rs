@@ -24,6 +24,7 @@ use crate::procedure::rewrite_manifests::tests::{operation, output_schema};
 #[derive(Clone, Copy)]
 enum CasFault {
     None,
+    NoPublication,
     Conflicts(usize),
     Reject,
     LostAck,
@@ -85,6 +86,9 @@ impl CatalogProvider for PointerCatalog {
             return unsupported();
         };
         let properties = properties.into_iter().collect::<HashMap<_, _>>();
+        if matches!(self.fault, CasFault::NoPublication) {
+            return Ok(());
+        }
         if matches!(self.fault, CasFault::Conflicts(count) if attempt <= count) {
             return Err(CatalogError::Conflict("injected pointer conflict".into()));
         }
@@ -227,6 +231,56 @@ fn pointer_fixture(
     );
     context.commit = CommitAuthority::IcebergMetadataLocationCas;
     (store, catalog, session.task_ctx(), url, context)
+}
+
+#[tokio::test]
+async fn expiration_rejects_catalog_update_authorities_without_touching_state() {
+    use crate::procedure::descriptor::IcebergProcedureType;
+    use sail_common_datafusion::lakeprocedure::{LakeProcedureInvocation, LakeProcedureValue};
+    for authority in [
+        CommitAuthority::IcebergRestCommit,
+        CommitAuthority::VersionedCatalogCommit,
+        CommitAuthority::IcebergMetadataLocationCas,
+    ] {
+        let (store, catalog, ctx, url, mut context) = fixture(CasFault::NoPublication, None).await;
+        context.commit = authority;
+        let before = store
+            .inner
+            .list(None)
+            .try_collect::<Vec<_>>()
+            .await
+            .expect("inventory");
+        let procedure = IcebergProcedureType::ExpireSnapshots
+            .descriptor()
+            .expect("descriptor");
+        let schema = procedure.schema();
+        let mut arguments = vec![LakeProcedureValue::Null; procedure.parameters.len()];
+        arguments[0] = LakeProcedureValue::Utf8("items".into());
+        let operation = ExpireSnapshots::from_invocation(&LakeProcedureInvocation {
+            procedure,
+            arguments,
+        })
+        .expect("operation");
+        let error = commit_snapshot_operation(&ctx, &url, &[], Some(&context), operation, schema)
+            .await
+            .expect_err("unsupported authority");
+        assert!(
+            error
+                .to_string()
+                .contains("requires versioned filesystem publication")
+        );
+        assert_eq!(
+            store
+                .inner
+                .list(None)
+                .try_collect::<Vec<_>>()
+                .await
+                .expect("inventory"),
+            before
+        );
+        assert!(store.deletes.lock().expect("deletes").is_empty());
+        assert_eq!(catalog.attempts.load(Ordering::SeqCst), 0);
+    }
 }
 
 async fn assert_pointer_is_readable(store: &TestStore, catalog: &PointerCatalog, url: &url::Url) {

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, StringArray};
+use datafusion::arrow::array::{Array, Int64Array, StringArray};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{ExprSchemable, Extension, LogicalPlan};
@@ -437,6 +437,22 @@ impl PlanResolver<'_> {
                 .await?;
             validate_procedure_boolean_argument_type(&expression.get_type(&schema)?)?;
         }
+        if data_type == LakeProcedureDataType::Int64Array {
+            let expression = self
+                .resolve_expression(argument.clone(), &schema, state)
+                .await?;
+            if !matches!(
+                expression.get_type(&schema)?,
+                DataType::Null
+                    | DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::FixedSizeList(_, _)
+            ) {
+                return Err(PlanError::invalid(
+                    "Procedure array argument must be an array",
+                ));
+            }
+        }
         let target = match data_type {
             LakeProcedureDataType::Boolean => spec::DataType::Boolean,
             LakeProcedureDataType::Int32 => spec::DataType::Int32,
@@ -447,6 +463,10 @@ impl PlanResolver<'_> {
             LakeProcedureDataType::TimestampMicros => spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Microsecond,
                 timestamp_type: spec::TimestampType::WithLocalTimeZone,
+            },
+            LakeProcedureDataType::Int64Array => spec::DataType::List {
+                data_type: Box::new(spec::DataType::Int64),
+                nullable: true,
             },
             LakeProcedureDataType::StringMap => spec::DataType::Map {
                 key_type: Box::new(spec::DataType::Utf8),
@@ -597,6 +617,19 @@ fn scalar_to_procedure_value(value: ScalarValue) -> PlanResult<LakeProcedureValu
     }
     match value {
         value @ ScalarValue::Map(_) => scalar_to_string_map(&value),
+        ScalarValue::List(array) => {
+            if array.len() != 1 {
+                return Err(PlanError::invalid(
+                    "Procedure array argument must be scalar",
+                ));
+            }
+            let values = array.value(0);
+            let values = values
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .ok_or_else(|| PlanError::invalid("Procedure array elements must be longs"))?;
+            Ok(LakeProcedureValue::Int64Array(values.iter().collect()))
+        }
         ScalarValue::Boolean(Some(value)) => Ok(LakeProcedureValue::Boolean(value)),
         ScalarValue::Int32(Some(value)) => Ok(LakeProcedureValue::Int32(value)),
         ScalarValue::Int64(Some(value)) => Ok(LakeProcedureValue::Int64(value)),
@@ -693,6 +726,19 @@ fn procedure_path_source(path: String) -> SourceInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn procedure_long_arrays_preserve_null_elements_and_empty_arrays() {
+        use datafusion::arrow::array::ListArray;
+        use datafusion::arrow::datatypes::Int64Type;
+        for values in [vec![], vec![Some(1), None, Some(i64::MAX), Some(1)]] {
+            let array = ListArray::from_iter_primitive::<Int64Type, _, _>([Some(values.clone())]);
+            let result = scalar_to_procedure_value(ScalarValue::List(Arc::new(array)));
+            assert!(
+                matches!(result, Ok(LakeProcedureValue::Int64Array(actual)) if actual == values)
+            );
+        }
+    }
 
     #[test]
     fn procedure_booleans_reject_numeric_implicit_casts() {
