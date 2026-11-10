@@ -44,7 +44,7 @@
                 "timestampType": "withLocalTimeZone"
               }
             },
-            "rename": true,
+            "naming": "cast",
             "isTry": false
           }
         }
@@ -70,7 +70,7 @@
                 "timestampType": "withoutTimeZone"
               }
             },
-            "rename": true,
+            "naming": "cast",
             "isTry": false
           }
         }
@@ -108,7 +108,7 @@
                 "timestampType": "withLocalTimeZone"
               }
             },
-            "rename": true,
+            "naming": "cast",
             "isTry": false
           }
         }
@@ -146,7 +146,7 @@
                 "timestampType": "withoutTimeZone"
               }
             },
-            "rename": true,
+            "naming": "cast",
             "isTry": false
           }
         }
