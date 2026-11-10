@@ -223,6 +223,7 @@ def test_seeded_uuid_and_shuffle_many_rows(spark, query, expected):
     assert hashlib.md5(json.dumps(rows).encode()).hexdigest() == expected  # noqa: S324
 
 
+@pytest.mark.spark(version=">=4.1", reason="Uses pyspark.sql.functions.uuid and seeded shuffle")
 def test_seeded_uuid_and_shuffle_dataframe(spark):
     df = spark.range(0, 6, 1, 2).select(
         "id", F.uuid(7).alias("u"), F.shuffle(F.array(F.lit(1), F.lit(2), F.lit(3)), 7).alias("s")
