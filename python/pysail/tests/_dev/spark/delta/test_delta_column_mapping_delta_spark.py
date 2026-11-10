@@ -8,6 +8,7 @@ from urllib.parse import unquote
 
 import pyarrow.parquet as pq
 import pytest
+from packaging.version import Version
 from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import BooleanType, IntegerType, StructField, StructType
@@ -54,6 +55,15 @@ def _add_parquet_data(table_path: Path, add: dict) -> dict[str, list]:
     data_path = table_path / unquote(add["path"])
     assert data_path.is_file()
     return pq.ParquetFile(data_path).read().to_pydict()
+
+
+def _partition_values_only_properties(spark: SparkSession) -> str:
+    # Delta 4.4 (used with Spark 4.2) writes partition columns into Parquet by default.
+    # These regression tests need them absent from the file to exercise log-only values.
+    properties = "'delta.columnMapping.mode' = 'name'"
+    if Version(spark.version) >= Version("4.2"):
+        properties += ", 'delta.writePartitionColumnsToParquet' = 'false'"
+    return properties
 
 
 def _nested_schema(value_field: str) -> StructType:
@@ -147,7 +157,7 @@ def test_sail_replay_preserves_present_null_mapped_partition_value(
         )
         USING DELTA
         PARTITIONED BY (source_partition, target_partition)
-        TBLPROPERTIES ('delta.columnMapping.mode' = 'name')
+        TBLPROPERTIES ({_partition_values_only_properties(delta_jvm_spark)})
         """
     )
     metadata = _latest_metadata(table_path)
@@ -211,7 +221,7 @@ def test_sail_preserves_file_values_when_physical_name_matches_partition_logical
         USING DELTA
         PARTITIONED BY (target_partition)
         TBLPROPERTIES (
-            'delta.columnMapping.mode' = 'name',
+            {_partition_values_only_properties(delta_jvm_spark)},
             'delta.dataSkippingStatsColumns' = 'source_value'
         )
         """
