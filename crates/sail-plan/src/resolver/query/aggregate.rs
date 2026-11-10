@@ -57,23 +57,33 @@ struct AggregateProjections {
 type GroupingReplacements = Vec<(Expr, Expr)>;
 
 /// Returns the name of a volatile (non-deterministic) scalar expression found
-/// in an aggregate context. Catches two Spark CheckAnalysis violations:
-/// 1. Volatile scalar UDF used directly in aggregate projections (outside any aggregate fn)
-/// 2. Volatile scalar UDF nested inside aggregate function arguments
+/// inside the aggregate functions of an aggregate projection, which Spark rejects
+/// (`AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION`). Spark evaluates the
+/// volatile expressions outside the aggregate functions over the aggregate output.
 fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
     let mut found_name: Option<String> = None;
     let _ = expr.apply(|e| {
-        if let Expr::ScalarFunction(f) = e
-            && f.func.signature().volatility == Volatility::Volatile
-            && f.func.as_async().is_none()
-            // This internal assertion is evaluation-sensitive, but does not
-            // make the scalar subquery's value non-deterministic.
-            && !f.func.inner().is::<ScalarSubqueryResult>()
-        {
-            found_name = Some(f.func.name().to_string());
-            return Ok(TreeNodeRecursion::Stop);
+        if !matches!(e, Expr::AggregateFunction(_)) {
+            return Ok(TreeNodeRecursion::Continue);
         }
-        Ok(TreeNodeRecursion::Continue)
+        let _ = e.apply(|e| {
+            if let Expr::ScalarFunction(f) = e
+                && f.func.signature().volatility == Volatility::Volatile
+                && f.func.as_async().is_none()
+                // This internal assertion is evaluation-sensitive, but does not
+                // make the scalar subquery's value non-deterministic.
+                && !f.func.inner().is::<ScalarSubqueryResult>()
+            {
+                found_name = Some(f.func.name().to_string());
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        });
+        Ok(if found_name.is_some() {
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Jump
+        })
     });
     found_name
 }
@@ -243,7 +253,8 @@ impl PlanResolver<'_> {
             .map(|expr| Self::replace_grouping_expressions(expr, &replacements))
             .transpose()?;
 
-        // Grouping keys now reference input columns; other volatile calls remain invalid.
+        // Grouping keys now reference input columns; other volatile calls in the aggregate
+        // functions remain invalid.
         for proj in &projections {
             if let Some(name) = find_volatile_in_aggregate_context(&proj.expr) {
                 return Err(PlanError::AnalysisError(format!(
@@ -507,6 +518,23 @@ impl PlanResolver<'_> {
                 )
             })
             .transpose()?;
+        // Spark rewrites the predicate subqueries in the aggregate functions to joins below the
+        // aggregate (`RewritePredicateSubquery`).
+        let has_having = having.is_some();
+        let (input, mut projections) = self.rewrite_projection_with::<ExistsRewriter>(
+            input,
+            projections
+                .into_iter()
+                .chain(having.map(|expr| NamedExpr::new(vec![], expr)))
+                .collect(),
+            true,
+            state,
+        )?;
+        let having = if has_having {
+            projections.pop().map(|named| named.expr)
+        } else {
+            None
+        };
         let mut aggregate_candidates = projections
             .iter()
             .map(|x| x.expr.clone())

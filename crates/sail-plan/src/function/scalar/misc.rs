@@ -19,6 +19,7 @@ use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
 use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
+use sail_function::scalar::misc::spark_uuid::SparkUuid;
 use sail_function::scalar::misc::theta_sketch::{
     ThetaDifferenceFunction, ThetaIntersectionFunction, ThetaSketchEstimateFunction,
     ThetaUnionFunction,
@@ -313,7 +314,7 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("try_reflect", F::unknown("try_reflect")),
         ("typeof", F::custom(type_of)),
         ("user", F::custom(current_user)),
-        ("uuid", F::nullary(expr_fn::uuid)),
+        ("uuid", F::udf(SparkUuid::new())),
         ("version", F::udf(SparkVersion::new())),
     ]
 }

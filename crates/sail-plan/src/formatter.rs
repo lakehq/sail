@@ -485,6 +485,12 @@ impl PlanFormatter for SparkPlanFormatter {
             "timestamp" | "date" => Ok(arguments.one()?.to_string()),
             // Spark always names the time window column `window`.
             "window" => Ok("window".to_string()),
+            // Spark does not show the seed of `uuid` and `shuffle`.
+            "uuid" => Ok("uuid()".to_string()),
+            "shuffle" => {
+                let (array, _) = arguments.at_least_one()?;
+                Ok(format!("shuffle({array})"))
+            }
             "to_unix_timestamp" => {
                 let mut argv = arguments.clone();
                 if argv.len() == 1 {

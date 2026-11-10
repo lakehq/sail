@@ -72,7 +72,6 @@ use datafusion_proto::physical_plan::{
 };
 use datafusion_proto::protobuf::{JoinType as ProtoJoinType, PhysicalSortExprNode};
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
-use datafusion_spark::function::array::shuffle::SparkShuffle;
 use datafusion_spark::function::bitmap::bitmap_count::BitmapCount;
 use datafusion_spark::function::bitwise::bit_count::SparkBitCount;
 use datafusion_spark::function::bitwise::bit_get::SparkBitGet;
@@ -171,6 +170,7 @@ use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
+use sail_function::scalar::array::spark_shuffle::SparkShuffle;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
@@ -244,6 +244,7 @@ use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
+use sail_function::scalar::misc::spark_uuid::SparkUuid;
 use sail_function::scalar::misc::theta_sketch::{
     ThetaDifferenceFunction, ThetaIntersectionFunction, ThetaSketchEstimateFunction,
     ThetaUnionFunction,
@@ -3950,6 +3951,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "schema_of_variant" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfVariantUdf::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
             "randstr" => Ok(Arc::new(ScalarUDF::from(Randstr::new()))),
+            "uuid" => Ok(Arc::new(ScalarUDF::from(SparkUuid::new()))),
             "format_number" => Ok(Arc::new(ScalarUDF::from(FormatNumber::new()))),
             "soundex" => Ok(Arc::new(ScalarUDF::from(Soundex::new()))),
             "quote" => Ok(Arc::new(ScalarUDF::from(SparkQuote::new()))),
@@ -4157,6 +4159,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<FormatNumber>()
             || node_inner.is::<Levenshtein>()
             || node_inner.is::<Randstr>()
+            || node_inner.is::<SparkUuid>()
             || node_inner.is::<Soundex>()
             || node_inner.is::<SparkQuote>()
             || node_inner.is::<StAsBinary>()

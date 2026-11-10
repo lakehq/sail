@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Schema, SchemaBuilder};
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion::common::{Constraints, JoinType, Result, Statistics};
+use datafusion::common::{Constraints, JoinType, Result, Statistics, internal_err};
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, FileSource};
 use datafusion::datasource::source::DataSourceExec;
@@ -23,7 +23,10 @@ use sail_common_datafusion::input_file::{
     is_input_file_metadata_function, projection_references_input_file_metadata,
     rewrite_input_file_metadata_projection,
 };
+use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
+use sail_physical_plan::seeded_random::SeededRandomExec;
+use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 
 use crate::projection_pushdown::ContextSafeProjectionPushdown;
 
@@ -311,6 +314,62 @@ fn push_metadata_through_file_context(
         )?;
         return Ok(Transformed::yes(Arc::new(rewritten)));
     }
+    if let Some(input) = partition_sensitive_input(projection.input()) {
+        let schema = input.schema();
+        let (expressions, metadata) = extract_metadata_expressions(projection, &schema)?;
+        let input_len = schema.fields().len();
+        let metadata_len = metadata.len();
+        let identity = ProjectionExprs::from_indices(&(0..input_len).collect::<Vec<_>>(), &schema);
+        let input = Arc::new(ProjectionExec::try_new(
+            identity.iter().cloned().chain(metadata),
+            Arc::clone(input),
+        )?) as Arc<dyn ExecutionPlan>;
+        // The node appends its columns after the metadata columns of its input.
+        let node = projection.input();
+        let mut node_schema = SchemaBuilder::from(input.schema().as_ref());
+        node_schema.extend(node.schema().fields().iter().skip(input_len).cloned());
+        let node_schema = Arc::new(node_schema.finish());
+        let node: Arc<dyn ExecutionPlan> =
+            if let Some(node) = node.downcast_ref::<SeededRandomExec>() {
+                Arc::new(SeededRandomExec::try_new(
+                    input,
+                    node.columns().to_vec(),
+                    node_schema,
+                )?)
+            } else if let Some(node) = node.downcast_ref::<MonotonicIdExec>() {
+                Arc::new(MonotonicIdExec::try_new(
+                    input,
+                    node.column_name(),
+                    node_schema,
+                )?)
+            } else if let Some(node) = node.downcast_ref::<SparkPartitionIdExec>() {
+                Arc::new(SparkPartitionIdExec::try_new(
+                    input,
+                    node.column_name(),
+                    node_schema,
+                )?)
+            } else {
+                return internal_err!("unexpected partition-sensitive operator");
+            };
+        // The extracted expressions read the metadata columns after the node columns.
+        let column_len = node.schema().fields().len();
+        let indices = (0..input_len)
+            .chain(input_len + metadata_len..column_len)
+            .chain(input_len..input_len + metadata_len)
+            .collect::<Vec<_>>();
+        let node = Arc::new(ProjectionExec::try_new(
+            ProjectionExprs::from_indices(&indices, &node.schema())
+                .iter()
+                .cloned(),
+            node,
+        )?);
+        let rewritten = ProjectionExec::try_new_with_schema_metadata(
+            expressions.iter().cloned(),
+            node,
+            projection.schema().as_ref(),
+        )?;
+        return Ok(Transformed::yes(Arc::new(rewritten)));
+    }
     let project = |input: &Arc<dyn ExecutionPlan>| -> Result<Arc<dyn ExecutionPlan>> {
         let schema = input.schema();
         let expressions = projection
@@ -357,6 +416,19 @@ fn push_metadata_through_file_context(
         ))));
     }
     Ok(Transformed::no(plan))
+}
+
+/// Returns the input of an operator that appends columns computed for the rows of each
+/// partition after the columns of its input.
+fn partition_sensitive_input(plan: &Arc<dyn ExecutionPlan>) -> Option<&Arc<dyn ExecutionPlan>> {
+    if let Some(node) = plan.downcast_ref::<SeededRandomExec>() {
+        Some(node.input())
+    } else if let Some(node) = plan.downcast_ref::<MonotonicIdExec>() {
+        Some(node.input())
+    } else {
+        plan.downcast_ref::<SparkPartitionIdExec>()
+            .map(|node| node.input())
+    }
 }
 
 /// Uses the final join orientation and exchanges to follow only a streamed probe context.

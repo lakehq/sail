@@ -55,9 +55,11 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                             // before the aggregate is HAVING, not its input.
                             unsupported |= aggregates == 0;
                             filters += 1;
-                            needs_domain |= split_conjunction(&filter.predicate)
-                                .iter()
-                                .any(|expr| expr.contains_outer() && !native_equality(expr));
+                            needs_domain |=
+                                split_conjunction(&filter.predicate).iter().any(|expr| {
+                                    expr.contains_outer()
+                                        && correlated_equality_key(expr, true).is_none()
+                                });
                         }
                         LogicalPlan::Join(_)
                         | LogicalPlan::Union(_)
@@ -79,10 +81,11 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                 })? {
                     return Ok(Transformed::no(Expr::ScalarSubquery(query)));
                 }
-                if query
-                    .subquery
-                    .exists(|node| Ok(node.expressions().iter().any(Expr::is_volatile)))?
-                {
+                // The calls of random functions with a seed produce the same values again. A
+                // node above the correlated filter is evaluated by a projection before this rule.
+                if query.subquery.exists(|node| {
+                    Ok(!is_seeded_random(node) && node.expressions().iter().any(Expr::is_volatile))
+                })? {
                     return datafusion_common::not_impl_err!(
                         "correlated scalar aggregate with volatile inner expressions"
                     );
@@ -308,19 +311,32 @@ fn empty_scalar_value(plan: &LogicalPlan) -> Result<Expr> {
     }
 }
 
-fn native_equality(expr: &Expr) -> bool {
+/// Returns the inner column of a correlated equality of an inner column, or of a cast of one if
+/// `cast` is true, and an outer expression without inner columns, which DataFusion decorrelates
+/// by pulling it up as a join key.
+pub(crate) fn correlated_equality_key(expr: &Expr, cast: bool) -> Option<&Column> {
     let Expr::BinaryExpr(binary) = expr else {
-        return false;
+        return None;
     };
     if binary.op != Operator::Eq {
-        return false;
+        return None;
     }
-    let inner_key = |expr: &Expr| {
-        matches!(expr, Expr::Column(_))
-            || matches!(expr, Expr::Cast(cast) if matches!(cast.expr.as_ref(), Expr::Column(_)))
-    };
-    (inner_key(&binary.left) && !binary.right.any_column_refs())
-        || (inner_key(&binary.right) && !binary.left.any_column_refs())
+    fn key(expr: &Expr, cast: bool) -> Option<&Column> {
+        match expr {
+            Expr::Column(column) => Some(column),
+            Expr::Cast(c) if cast => match c.expr.as_ref() {
+                Expr::Column(column) => Some(column),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    let outer = |expr: &Expr| expr.contains_outer() && !expr.any_column_refs();
+    match (key(&binary.left, cast), key(&binary.right, cast)) {
+        (Some(column), _) if outer(&binary.right) => Some(column),
+        (_, Some(column)) if outer(&binary.left) => Some(column),
+        _ => None,
+    }
 }
 
 fn is_seeded_random(plan: &LogicalPlan) -> bool {

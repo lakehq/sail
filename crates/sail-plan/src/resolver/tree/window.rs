@@ -66,8 +66,8 @@ impl<'s> PlanRewriter<'s> for WindowRewriter<'s> {
         }
     }
 
-    fn into_plan(self) -> LogicalPlan {
-        self.plan
+    fn into_plan(self) -> Result<LogicalPlan> {
+        Ok(self.plan)
     }
 }
 

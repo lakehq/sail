@@ -6,6 +6,7 @@ use datafusion::config::ConfigOptions;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -13,6 +14,7 @@ use datafusion::physical_plan::unnest::UnnestExec;
 use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanProperties, Partitioning, replace_children_if_necessary,
 };
+use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::seeded_random::SeededRandomExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
@@ -105,16 +107,36 @@ fn round_robin_input(plan: &Arc<dyn ExecutionPlan>) -> Option<&Arc<dyn Execution
 }
 
 /// Removes the round-robin repartitions through the operators that keep each row in its
-/// partition.
+/// partition, such as the operator that applies a Python function to each partition.
+///
+/// This includes the probe side of a hash join whose build side is collected, when the join
+/// keeps the order of the probe rows, as the streamed side of a broadcast hash join in Spark.
+/// The partitions and the order of the rows are execution-dependent for other joins, such as
+/// partitioned hash joins and nested loop joins, so their inputs are kept.
 fn remove_round_robin(plan: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     if let Some(input) = round_robin_input(&plan) {
         let input = Arc::clone(input);
         return Ok(Transformed::yes(remove_round_robin(input)?.data));
     }
+    if let Some(join) = plan.downcast_ref::<HashJoinExec>()
+        && *join.partition_mode() == PartitionMode::CollectLeft
+        && plan.maintains_input_order()[1]
+    {
+        let right = remove_round_robin(Arc::clone(join.right()))?;
+        if !right.transformed {
+            return Ok(Transformed::no(plan));
+        }
+        let left = Arc::clone(join.left());
+        return Ok(Transformed::yes(replace_children_if_necessary(
+            plan,
+            vec![left, right.data],
+        )?));
+    }
     if !(plan.is::<FilterExec>()
         || plan.is::<ProjectionExec>()
         || plan.is::<CooperativeExec>()
         || plan.is::<UnnestExec>()
+        || plan.is::<MapPartitionsExec>()
         || plan
             .downcast_ref::<SortExec>()
             .is_some_and(SortExec::preserve_partitioning)
@@ -139,7 +161,7 @@ fn remove_round_robin(plan: Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dy
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::common::internal_datafusion_err;
+    use datafusion::common::{JoinType, NullEquality, internal_datafusion_err};
     use datafusion::physical_expr::expressions::{col, lit};
     use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
     use datafusion::physical_plan::displayable;
@@ -185,6 +207,26 @@ mod tests {
             input,
             "id".to_string(),
             Arc::new(Schema::new(fields)),
+        )?))
+    }
+
+    fn hash_join(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        join_type: JoinType,
+        mode: PartitionMode,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let on = vec![(col("a", &left.schema())?, col("a", &right.schema())?)];
+        Ok(Arc::new(HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &join_type,
+            None,
+            mode,
+            NullEquality::NullEqualsNothing,
+            false,
         )?))
     }
 
@@ -286,6 +328,77 @@ mod tests {
             lines[2].starts_with("RepartitionExec: partitioning=Hash"),
             "{plan}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn round_robin_repartitions_below_the_probe_side_of_collect_left_joins_are_removed()
+    -> Result<()> {
+        for join_type in [
+            JoinType::Inner,
+            JoinType::Right,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+            JoinType::RightMark,
+        ] {
+            let probe = filter(round_robin(source(2)?, 4)?)?;
+            let join = hash_join(source(1)?, probe, join_type, PartitionMode::CollectLeft)?;
+            let plan = optimize(monotonic_id(join)?)?;
+            let lines = plan.lines().map(str::trim_start).collect::<Vec<_>>();
+            assert!(
+                lines[0].starts_with(
+                    "RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2"
+                ),
+                "{plan}"
+            );
+            assert!(lines[1].starts_with("MonotonicIdExec"), "{plan}");
+            assert!(
+                lines[2].starts_with("HashJoinExec: mode=CollectLeft"),
+                "{plan}"
+            );
+            assert!(lines[3].starts_with("PlaceholderRowExec"), "{plan}");
+            assert!(lines[4].starts_with("FilterExec"), "{plan}");
+            assert!(lines[5].starts_with("UnionExec"), "{plan}");
+            assert_eq!(plan.matches("RepartitionExec").count(), 1, "{plan}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn round_robin_repartitions_below_joins_that_do_not_keep_the_probe_order_are_kept() -> Result<()>
+    {
+        for (join_type, mode) in [
+            (JoinType::Left, PartitionMode::CollectLeft),
+            (JoinType::Full, PartitionMode::CollectLeft),
+            (JoinType::Inner, PartitionMode::Partitioned),
+        ] {
+            let build = round_robin(source(2)?, 4)?;
+            let probe = filter(round_robin(source(2)?, 4)?)?;
+            let join = hash_join(build, probe, join_type, mode)?;
+            let plan = optimize(monotonic_id(join)?)?;
+            let lines = plan.lines().map(str::trim_start).collect::<Vec<_>>();
+            assert!(lines[0].starts_with("MonotonicIdExec"), "{plan}");
+            assert!(lines[1].starts_with("HashJoinExec"), "{plan}");
+            assert_eq!(plan.matches("RoundRobinBatch(4)").count(), 2, "{plan}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn round_robin_repartitions_below_the_build_side_of_collect_left_joins_are_kept() -> Result<()>
+    {
+        let build = round_robin(source(2)?, 4)?;
+        let join = hash_join(
+            build,
+            source(2)?,
+            JoinType::Inner,
+            PartitionMode::CollectLeft,
+        )?;
+        let plan = optimize(monotonic_id(join)?)?;
+        let lines = plan.lines().map(str::trim_start).collect::<Vec<_>>();
+        assert!(lines[0].starts_with("MonotonicIdExec"), "{plan}");
+        assert!(lines[1].starts_with("HashJoinExec"), "{plan}");
+        assert_eq!(plan.matches("RoundRobinBatch(4)").count(), 1, "{plan}");
         Ok(())
     }
 }

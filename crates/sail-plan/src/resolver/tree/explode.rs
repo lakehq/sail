@@ -10,12 +10,12 @@ use datafusion::logical_expr::{Expr, ExprSchemable, LogicalPlan, Projection, Sca
 use datafusion_common::{ExprSchema, plan_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{ident, lit};
-use datafusion_functions_nested::expr_fn as nested_fn;
 use either::Either;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
+use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::r#struct::array_struct_field::ArrayStructField;
 
@@ -49,8 +49,8 @@ impl<'s> PlanRewriter<'s> for ExplodeRewriter<'s> {
         Self { plan, state }
     }
 
-    fn into_plan(self) -> LogicalPlan {
-        self.plan
+    fn into_plan(self) -> Result<LogicalPlan> {
+        Ok(self.plan)
     }
 }
 
@@ -79,11 +79,24 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
         };
         let arg = args.one()?;
         let arg_type = arg.get_type(self.plan.schema())?;
-        let return_type = func.return_type(&[arg_type])?;
+        let return_type = func.return_type(std::slice::from_ref(&arg_type))?;
         let data_type = ExplodeDataType::try_from_expr(&arg, self.plan.schema())?;
+        // The entries keep the field names and nullability of the map.
+        let (key_name, value_name) = match &arg_type {
+            DataType::Map(field, _) => match field.data_type() {
+                DataType::Struct(fields) if fields.len() == 2 => {
+                    (fields[0].name().clone(), fields[1].name().clone())
+                }
+                _ => return plan_err!("invalid map entries type: {field:?}"),
+            },
+            _ => (
+                SAIL_MAP_KEY_FIELD_NAME.to_string(),
+                SAIL_MAP_VALUE_FIELD_NAME.to_string(),
+            ),
+        };
         let arg = match data_type {
             ExplodeDataType::List => arg,
-            ExplodeDataType::Map => nested_fn::map_entries(arg),
+            ExplodeDataType::Map => ScalarUDF::from(SparkMapEntries::new()).call(vec![arg]),
         };
         let arg = match with_position {
             true => ScalarUDF::from(ArrayItemWithPosition::new()).call(vec![arg]),
@@ -122,19 +135,19 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             }?,
             (ExplodeDataType::Map, false, _) => {
                 vec![
-                    ident(&name).field(SAIL_MAP_KEY_FIELD_NAME).alias("key"),
-                    ident(&name).field(SAIL_MAP_VALUE_FIELD_NAME).alias("value"),
+                    ident(&name).field(key_name.as_str()).alias("key"),
+                    ident(&name).field(value_name.as_str()).alias("value"),
                 ]
             }
             (ExplodeDataType::Map, true, _) => vec![
                 ident(&name).field("pos").alias("pos"),
                 ident(&name)
                     .field("col")
-                    .field(SAIL_MAP_KEY_FIELD_NAME)
+                    .field(key_name.as_str())
                     .alias("key"),
                 ident(&name)
                     .field("col")
-                    .field(SAIL_MAP_VALUE_FIELD_NAME)
+                    .field(value_name.as_str())
                     .alias("value"),
             ],
         };

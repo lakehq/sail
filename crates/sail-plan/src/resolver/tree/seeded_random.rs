@@ -1,19 +1,23 @@
+use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
 use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::expr::{BinaryExpr, Case, ScalarFunction};
-use datafusion_expr::{Expr, Extension, LogicalPlan, Operator, ident};
+use datafusion_expr::{Expr, Extension, LogicalPlan, Projection, SubqueryAlias, ident};
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_function::scalar::explode::Explode;
-use sail_function::scalar::math::partition_random::{PartitionSeed, seed_argument_position};
+use sail_function::scalar::math::partition_random::{
+    LazyRightOperand, PartitionSeed, is_row_argument, lazy_right_operand, seed_argument_position,
+};
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_logical_plan::seeded_random::{SeededRandomColumn, SeededRandomNode};
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
+use crate::resolver::tree::exists::ExistsRewriter;
 use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
 
 /// How the calls of random functions with a seed in an expression are evaluated.
@@ -35,21 +39,31 @@ pub(crate) enum SeededRandomScope {
 /// In the [`SeededRandomScope::Expression`] scope, the largest subexpressions that the node
 /// can evaluate are replaced. An expression with a window function is evaluated around the
 /// window, so only the arguments and the window specification are replaced, and the rest is
-/// replaced when the rewriter is applied again after the window functions are planned. An
-/// expression with an aggregate function, a correlated or predicate subquery, or a function
-/// that must be planned separately cannot be evaluated by the node, so its calls are replaced
+/// replaced when the rewriter is applied again after the window functions are planned.
+/// Predicate subqueries, correlated scalar subqueries, input file metadata, and pandas
+/// iterator UDFs are evaluated for every row below the node, as Spark evaluates them before
+/// the projection or filter, so that the node can evaluate the expression around them. An
+/// expression that the node still cannot evaluate, such as one with a generator or with such
+/// a part whose arguments call a random function with a seed, has its calls replaced
 /// individually, except for the calls in children that are not evaluated for every row, which
 /// stay scalar functions.
 pub(crate) struct SeededRandomRewriter<'s> {
     plan: LogicalPlan,
     state: &'s mut PlanResolverState,
     scope: SeededRandomScope,
-    /// Whether the plan has outer references, which the node would separate from the
-    /// operators above it, so that the subquery could not be decorrelated. It is found when
-    /// an expression first has a call to replace.
-    correlated: Option<bool>,
+    /// Whether the plan is the aggregate of a correlated subquery, possibly with its filter,
+    /// which DataFusion requires below only projections in a correlated scalar subquery, so
+    /// the calls above it stay scalar functions. It is found when an expression first has a
+    /// call to replace.
+    correlated_aggregate: Option<bool>,
+    /// Whether the input of the node has outer references, which a part evaluated below the
+    /// node would separate from the operators above it, so that the subquery could not be
+    /// decorrelated. Staging does not add outer references, so it is found once.
+    correlated_input: Option<bool>,
     input: Option<LogicalPlan>,
     columns: Vec<SeededRandomColumn>,
+    /// The names of the columns whose expressions can be reused.
+    reusable_columns: HashMap<Expr, String>,
 }
 
 impl<'s> PlanRewriter<'s> for SeededRandomRewriter<'s> {
@@ -57,8 +71,13 @@ impl<'s> PlanRewriter<'s> for SeededRandomRewriter<'s> {
         Self::new(plan, state, SeededRandomScope::Expression)
     }
 
-    fn into_plan(self) -> LogicalPlan {
-        self.plan
+    fn into_plan(self) -> Result<LogicalPlan> {
+        let Some(input) = self.input else {
+            return Ok(self.plan);
+        };
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(SeededRandomNode::try_new(Arc::new(input), self.columns)?),
+        }))
     }
 }
 
@@ -66,7 +85,7 @@ impl TreeNodeRewriter for SeededRandomRewriter<'_> {
     type Node = Expr;
 
     fn f_down(&mut self, node: Expr) -> Result<Transformed<Expr>> {
-        if contains_seeded_random_call(&node) && self.is_correlated() {
+        if contains_seeded_random_call(&node) && self.is_correlated_aggregate() {
             return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
         }
         let Transformed {
@@ -89,18 +108,35 @@ impl<'s> SeededRandomRewriter<'s> {
             plan,
             state,
             scope,
-            correlated: None,
+            correlated_aggregate: None,
+            correlated_input: None,
             input: None,
             columns: vec![],
+            reusable_columns: HashMap::new(),
         }
     }
 
-    fn is_correlated(&mut self) -> bool {
+    fn is_correlated_aggregate(&mut self) -> bool {
         // The plan is not replaced by the node before the first call is replaced.
-        *self.correlated.get_or_insert_with(|| {
-            self.plan
-                .exists(|plan| Ok(plan.contains_outer_reference()))
-                .unwrap_or(true)
+        *self.correlated_aggregate.get_or_insert_with(|| {
+            let mut plan = &self.plan;
+            while let LogicalPlan::Projection(Projection { input, .. })
+            | LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) = plan
+            {
+                plan = input.as_ref();
+            }
+            let aggregate = match plan {
+                LogicalPlan::Aggregate(_) => true,
+                LogicalPlan::Filter(filter) => {
+                    matches!(filter.input.as_ref(), LogicalPlan::Aggregate(_))
+                }
+                _ => false,
+            };
+            aggregate
+                && self
+                    .plan
+                    .exists(|plan| Ok(plan.contains_outer_reference()))
+                    .unwrap_or(true)
         })
     }
 
@@ -120,26 +156,122 @@ impl<'s> SeededRandomRewriter<'s> {
                     Ok(Transformed::no(child))
                 }
             }),
-            expr => {
-                // The calls in the children that are not evaluated for every row stay
-                // scalar functions, so that they advance their generators only for the rows
-                // that evaluate them.
-                // TODO: Such calls are not seeded per partition, as Spark does.
-                let lazy = lazy_children(&expr);
-                let mut index = 0;
-                let result = expr.map_children(|child| {
-                    let is_lazy = lazy.get(index).copied().unwrap_or(false);
-                    index += 1;
-                    if is_lazy {
-                        Ok(Transformed::no(child))
-                    } else {
-                        self.rewrite_expression(child)
-                    }
-                });
-                debug_assert!(result.is_err() || index == lazy.len());
-                result
+            // Staging keeps the children that are not evaluated for every row whole, so it is
+            // only needed for the calls in such children. Other calls are replaced individually.
+            expr if has_lazy_seeded_random_call(&expr)
+                && can_evaluate_after_staging(&expr)
+                && !self.is_input_correlated() =>
+            {
+                match self.stage(expr.clone())? {
+                    Some(staged) => self.materialize(staged),
+                    None => self.rewrite_lazily(expr),
+                }
+            }
+            expr => self.rewrite_lazily(expr),
+        }
+    }
+
+    fn rewrite_lazily(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
+        // The calls in the children that are not evaluated for every row stay
+        // scalar functions, so that they advance their generators only for the rows
+        // that evaluate them.
+        // TODO: Such calls are not seeded per partition, as Spark does.
+        let lazy = lazy_children(&expr);
+        let mut index = 0;
+        let result = expr.map_children(|child| {
+            let is_lazy = lazy.get(index).copied().unwrap_or(false);
+            index += 1;
+            if is_lazy {
+                Ok(Transformed::no(child))
+            } else {
+                self.rewrite_expression(child)
+            }
+        });
+        debug_assert!(result.is_err() || index == lazy.len());
+        result
+    }
+
+    /// Returns the input of the node, which is prepared from the plan for the first column.
+    fn take_input(&mut self) -> Result<LogicalPlan> {
+        match self.input.take() {
+            Some(input) => Ok(input),
+            None => {
+                let plan = mem::replace(&mut self.plan, empty_logical_plan());
+                // The random values depend on the user's input order even when the
+                // consumer does not.
+                let (plan, _, _) = PlanResolver::require_input_sort_inner(plan)
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                Ok(plan)
             }
         }
+    }
+
+    fn is_input_correlated(&mut self) -> bool {
+        let plan = self.input.as_ref().unwrap_or(&self.plan);
+        *self.correlated_input.get_or_insert_with(|| {
+            plan.exists(|plan| Ok(plan.contains_outer_reference()))
+                .unwrap_or(true)
+        })
+    }
+
+    /// Replaces the parts of the expression that the node cannot evaluate by columns
+    /// computed for every row below the node, and updates the input of the node. Returns
+    /// `None` without changing the input if a subquery cannot be evaluated below the node.
+    fn stage(&mut self, expr: Expr) -> Result<Option<Expr>> {
+        let mut input = match &self.input {
+            Some(input) => input.clone(),
+            None => {
+                // The random values depend on the user's input order even when the
+                // consumer does not.
+                let (plan, _, _) = PlanResolver::require_input_sort_inner(self.plan.clone())
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                plan
+            }
+        };
+        let expr = self.stage_into(expr, &mut input)?;
+        if expr.is_some() {
+            self.input = Some(input);
+        }
+        Ok(expr)
+    }
+
+    fn stage_into(&mut self, expr: Expr, input: &mut LogicalPlan) -> Result<Option<Expr>> {
+        let mut staged = true;
+        let expr = expr.transform_down(|expr| {
+            if !is_stageable(&expr) {
+                return Ok(Transformed::no(expr));
+            }
+            let plan = mem::replace(input, empty_logical_plan());
+            let expr = if matches!(expr, Expr::Exists(_) | Expr::InSubquery(_)) {
+                let mut rewriter = ExistsRewriter::new_from_plan(plan, self.state);
+                // Some subqueries cannot be rewritten as joins, so their expressions keep
+                // the subqueries, which are planned after the node.
+                let Ok(result) = expr.clone().rewrite(&mut rewriter) else {
+                    staged = false;
+                    return Ok(Transformed::new(expr, false, TreeNodeRecursion::Stop));
+                };
+                *input = rewriter.into_plan()?;
+                // The result may have a correlated scalar subquery to stage.
+                let Some(expr) = self.stage_into(result.data, input)? else {
+                    staged = false;
+                    return Ok(Transformed::new(expr, false, TreeNodeRecursion::Stop));
+                };
+                expr
+            } else {
+                let name = self.state.next_field_id();
+                let exprs = plan
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .map(Expr::Column)
+                    .chain([expr.alias(&name)])
+                    .collect();
+                *input = LogicalPlan::Projection(Projection::try_new(exprs, Arc::new(plan))?);
+                ident(name)
+            };
+            Ok(Transformed::new(expr, true, TreeNodeRecursion::Jump))
+        })?;
+        Ok(staged.then_some(expr.data))
     }
 
     fn rewrite_calls(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
@@ -160,38 +292,25 @@ impl<'s> SeededRandomRewriter<'s> {
             .exists(|e| Ok(e.is_volatile_node() && !is_seeded_random_call(e)))
             .unwrap_or(true);
         let existing = if reusable {
-            self.columns.iter().find(|column| column.expr == node)
+            self.reusable_columns.get(&node)
         } else {
             None
         };
         let name = match existing {
-            Some(column) => column.name.clone(),
+            Some(name) => name.clone(),
             None => {
+                let input = self.take_input()?;
+                self.input = Some(input);
                 // Create an internal-only field ID without a referenceable name.
                 let name = self.state.next_field_id();
+                if reusable {
+                    self.reusable_columns.insert(node.clone(), name.clone());
+                }
                 self.columns.push(SeededRandomColumn {
                     name: name.clone(),
                     expr: node,
                     seed: PartitionSeed::Offset,
                 });
-                let input = match self.input.take() {
-                    Some(input) => input,
-                    None => {
-                        let plan = mem::replace(&mut self.plan, empty_logical_plan());
-                        // The random values depend on the user's input order even when the
-                        // consumer does not.
-                        let (plan, _, _) = PlanResolver::require_input_sort_inner(plan)
-                            .map_err(|error| DataFusionError::External(Box::new(error)))?;
-                        plan
-                    }
-                };
-                self.plan = LogicalPlan::Extension(Extension {
-                    node: Arc::new(SeededRandomNode::try_new(
-                        Arc::new(input.clone()),
-                        self.columns.clone(),
-                    )?),
-                });
-                self.input = Some(input);
                 name
             }
         };
@@ -200,18 +319,21 @@ impl<'s> SeededRandomRewriter<'s> {
 }
 
 /// Returns whether the expression is a call of a random function with a seed whose arguments
-/// are constant, as Spark requires. Other calls are evaluated as scalar functions.
+/// are constant, as Spark requires, except for the arguments evaluated for each row, which the
+/// node must be able to evaluate. Other calls are evaluated as scalar functions.
 fn is_seeded_random_call(expr: &Expr) -> bool {
     let Expr::ScalarFunction(ScalarFunction { func, args }) = expr else {
         return false;
     };
     seed_argument_position(func, args.len()).is_some()
-        && args.iter().all(|arg| {
-            arg.column_refs().is_empty()
-                && !arg.is_volatile()
-                && !arg
-                    .exists(|e| Ok(matches!(e, Expr::LambdaVariable(_))))
-                    .unwrap_or(true)
+        && args.iter().enumerate().all(|(i, arg)| {
+            (if is_row_argument(func, i) {
+                can_evaluate_in_node(arg)
+            } else {
+                arg.column_refs().is_empty() && !arg.is_volatile()
+            }) && !arg
+                .exists(|e| Ok(matches!(e, Expr::LambdaVariable(_))))
+                .unwrap_or(true)
         })
 }
 
@@ -228,11 +350,14 @@ fn lazy_children(expr: &Expr) -> Vec<bool> {
             .conditional_arguments(args)
             .map(|(_, lazy)| lazy)
             .unwrap_or_default(),
-        Expr::BinaryExpr(BinaryExpr {
-            op: Operator::And | Operator::Or,
-            right,
-            ..
-        }) => vec![right.as_ref()],
+        Expr::BinaryExpr(BinaryExpr { op, right, .. })
+            if matches!(
+                lazy_right_operand(*op),
+                Some(LazyRightOperand::And | LazyRightOperand::Or)
+            ) =>
+        {
+            vec![right.as_ref()]
+        }
         Expr::Case(Case {
             when_then_expr,
             else_expr,
@@ -259,6 +384,44 @@ fn lazy_children(expr: &Expr) -> Vec<bool> {
     children
 }
 
+/// Returns, for each child of the expression in order, whether Spark may not evaluate the
+/// child for every row. In addition to the children in [`lazy_children`], Spark evaluates
+/// the right operand of an operator whose result is null for a null operand only if the left
+/// operand is not null, and the node evaluates it in the same way.
+fn spark_lazy_children(expr: &Expr) -> Vec<bool> {
+    let mut lazy = lazy_children(expr);
+    if let Expr::BinaryExpr(BinaryExpr { op, .. }) = expr
+        && lazy_right_operand(*op).is_some()
+        && let Some(right) = lazy.get_mut(1)
+    {
+        *right = true;
+    }
+    lazy
+}
+
+/// Returns whether a call of a random function with a seed in the expression is in a child
+/// that may not be evaluated for every row.
+fn has_lazy_seeded_random_call(expr: &Expr) -> bool {
+    let lazy = spark_lazy_children(expr);
+    let mut index = 0;
+    let mut found = false;
+    let _ = expr.apply_children(|child| {
+        let is_lazy = lazy.get(index).copied().unwrap_or(false);
+        index += 1;
+        found = if is_lazy {
+            contains_seeded_random_call(child)
+        } else {
+            has_lazy_seeded_random_call(child)
+        };
+        Ok(if found {
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    });
+    found
+}
+
 /// Returns whether the expression contains a generator, which is planned separately.
 pub(crate) fn contains_generator(expr: &Expr) -> bool {
     expr.exists(|e| {
@@ -278,35 +441,82 @@ fn contains_window_function(expr: &Expr) -> bool {
 /// Returns whether the node can evaluate the expression, which must not contain operators
 /// or functions that are planned separately.
 fn can_evaluate_in_node(expr: &Expr) -> bool {
-    !expr
-        .exists(|e| {
-            Ok(match e {
-                Expr::AggregateFunction(_)
-                | Expr::WindowFunction(_)
-                | Expr::Exists(_)
-                | Expr::InSubquery(_)
-                | Expr::SetComparison(_)
-                | Expr::OuterReferenceColumn(_, _)
-                | Expr::Placeholder(_)
-                | Expr::ScalarVariable(_, _)
-                | Expr::GroupingSet(_)
-                | Expr::Unnest(_) => true,
-                // An uncorrelated scalar subquery is evaluated before the node as a constant.
-                Expr::ScalarSubquery(subquery) => !subquery.outer_ref_columns.is_empty(),
-                Expr::ScalarFunction(ScalarFunction { func, .. }) => {
-                    func.as_async().is_some()
-                        || is_input_file_metadata_function(func)
-                        || func.inner().is::<Explode>()
-                        || func.inner().is::<MultiExpr>()
-                        || func
-                            .inner()
-                            .downcast_ref::<PySparkUDF>()
-                            .is_some_and(|udf| udf.kind() == PySparkUdfKind::ScalarPandasIter)
-                }
-                _ => false,
+    !expr.exists(|e| Ok(is_unevaluable(e))).unwrap_or(true)
+}
+
+/// Returns whether the node can evaluate the expression after its stageable parts are
+/// replaced by columns computed below the node.
+fn can_evaluate_after_staging(expr: &Expr) -> bool {
+    let mut evaluable = true;
+    let _ = expr.apply(|e| {
+        if is_stageable(e) {
+            Ok(TreeNodeRecursion::Jump)
+        } else if is_unevaluable(e) {
+            evaluable = false;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    });
+    evaluable
+}
+
+/// Returns whether the expression can be evaluated for every row below the node, which is
+/// how Spark evaluates predicate subqueries, correlated scalar subqueries, input file
+/// metadata, and Python UDFs in projections and filters.
+fn is_stageable(expr: &Expr) -> bool {
+    let stageable = match expr {
+        Expr::Exists(_) | Expr::InSubquery(_) => true,
+        Expr::ScalarSubquery(subquery) => !subquery.outer_ref_columns.is_empty(),
+        Expr::ScalarFunction(ScalarFunction { func, .. }) => {
+            is_input_file_metadata_function(func)
+                || func
+                    .inner()
+                    .downcast_ref::<PySparkUDF>()
+                    .is_some_and(|udf| udf.kind() == PySparkUdfKind::ScalarPandasIter)
+        }
+        _ => false,
+    };
+    stageable
+        && !expr
+            .exists(|e| {
+                Ok(is_seeded_random_call(e)
+                    || matches!(
+                        e,
+                        Expr::LambdaVariable(_) | Expr::OuterReferenceColumn(_, _)
+                    ))
             })
-        })
-        .unwrap_or(true)
+            .unwrap_or(true)
+}
+
+/// Returns whether the expression itself is an operator or a function that the node cannot
+/// evaluate.
+fn is_unevaluable(e: &Expr) -> bool {
+    match e {
+        Expr::AggregateFunction(_)
+        | Expr::WindowFunction(_)
+        | Expr::Exists(_)
+        | Expr::InSubquery(_)
+        | Expr::SetComparison(_)
+        | Expr::OuterReferenceColumn(_, _)
+        | Expr::Placeholder(_)
+        | Expr::ScalarVariable(_, _)
+        | Expr::GroupingSet(_)
+        | Expr::Unnest(_) => true,
+        // An uncorrelated scalar subquery is evaluated before the node as a constant.
+        Expr::ScalarSubquery(subquery) => !subquery.outer_ref_columns.is_empty(),
+        Expr::ScalarFunction(ScalarFunction { func, .. }) => {
+            func.as_async().is_some()
+                || is_input_file_metadata_function(func)
+                || func.inner().is::<Explode>()
+                || func.inner().is::<MultiExpr>()
+                || func
+                    .inner()
+                    .downcast_ref::<PySparkUDF>()
+                    .is_some_and(|udf| udf.kind() == PySparkUdfKind::ScalarPandasIter)
+        }
+        _ => false,
+    }
 }
 
 /// Returns the calls of random functions with a seed in the expression, which Spark

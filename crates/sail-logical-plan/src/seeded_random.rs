@@ -1,6 +1,7 @@
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::FieldRef;
 use datafusion_common::{DFSchema, DFSchemaRef, Result, plan_err};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
@@ -39,26 +40,29 @@ impl SeededRandomNode {
         if columns.is_empty() {
             return plan_err!("seeded random node requires at least one column");
         }
-        let mut qualified_fields = input
+        let fields = columns
+            .iter()
+            .map(|column| {
+                let (_, field) = column.expr.to_field(input.schema().as_ref())?;
+                Ok(Arc::new(
+                    field.as_ref().clone().with_name(column.name.clone()),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Self::try_new_with_fields(input, columns, fields)
+    }
+
+    fn try_new_with_fields(
+        input: Arc<LogicalPlan>,
+        columns: Vec<SeededRandomColumn>,
+        fields: Vec<FieldRef>,
+    ) -> Result<Self> {
+        let qualified_fields = input
             .schema()
             .iter()
             .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
+            .chain(fields.into_iter().map(|field| (None, field)))
             .collect::<Vec<_>>();
-        for column in &columns {
-            let (_, field) = column.expr.to_field(input.schema().as_ref())?;
-            // A scalar subquery returns null for no rows, even if its output is not nullable.
-            let nullable = field.is_nullable() || column.expr.contains_scalar_subquery();
-            qualified_fields.push((
-                None,
-                Arc::new(
-                    field
-                        .as_ref()
-                        .clone()
-                        .with_name(column.name.clone())
-                        .with_nullable(nullable),
-                ),
-            ));
-        }
         let schema =
             DFSchema::new_with_metadata(qualified_fields, input.schema().metadata().clone())?
                 .with_functional_dependencies(input.schema().functional_dependencies().clone())?;
@@ -124,7 +128,23 @@ impl UserDefinedLogicalNodeCore for SeededRandomNode {
                 seed: column.seed,
             })
             .collect();
-        Self::try_new(Arc::new(inputs.one()?), columns)
+        let input = inputs.one()?;
+        // A tree traversal replaces the input before the expressions, which may refer to the
+        // qualifiers of the previous input, so the fields are kept if nothing they depend on
+        // has changed.
+        let input_fields = self.input.schema().fields();
+        if columns == self.columns && input.schema().fields() == input_fields {
+            if input.schema() == self.input.schema() {
+                return Ok(Self {
+                    input: Arc::new(input),
+                    columns,
+                    schema: Arc::clone(&self.schema),
+                });
+            }
+            let fields = self.schema.fields()[input_fields.len()..].to_vec();
+            return Self::try_new_with_fields(Arc::new(input), columns, fields);
+        }
+        Self::try_new(Arc::new(input), columns)
     }
 
     fn necessary_children_exprs(&self, output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
@@ -219,6 +239,47 @@ mod tests {
         let plan = Optimizer::new().optimize(plan, &OptimizerContext::new(), |_, _| {})?;
         let display = plan.display_indent().to_string();
         assert!(display.contains("TableScan: t projection=[a]"), "{display}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_seeded_random_node_reuses_fields_for_unchanged_expressions() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int64, false)]);
+        let scan = LogicalPlanBuilder::scan(
+            "t",
+            provider_as_source(Arc::new(EmptyTable::new(Arc::new(schema)))),
+            None,
+        )?
+        .build()?;
+        let expr = col("t.id") + ScalarUDF::from(Random::new()).call(vec![lit(42_i64)]);
+        let node = SeededRandomNode::try_new(
+            Arc::new(scan.clone()),
+            vec![SeededRandomColumn {
+                name: "r".to_string(),
+                expr: expr.clone(),
+                seed: PartitionSeed::Offset,
+            }],
+        )?;
+        let same = node.with_exprs_and_inputs(vec![expr.clone()], vec![scan.clone()])?;
+        assert!(Arc::ptr_eq(same.schema(), node.schema()));
+        // Optimizer rules may replace the input qualifiers before rewriting the expressions
+        // that refer to them.
+        let input = LogicalPlanBuilder::from(scan).alias("u")?.build()?;
+        let renamed = node.with_exprs_and_inputs(vec![expr], vec![input.clone()])?;
+        assert_eq!(
+            renamed.schema().columns(),
+            vec![
+                datafusion_common::Column::new(Some("u"), "id"),
+                datafusion_common::Column::new_unqualified("r"),
+            ]
+        );
+        assert_eq!(renamed.schema().field(1), node.schema().field(1));
+        // Changed expressions are validated against the new input.
+        let changed = col("t.id") + lit(1.0);
+        assert!(
+            node.with_exprs_and_inputs(vec![changed], vec![input])
+                .is_err()
+        );
         Ok(())
     }
 }

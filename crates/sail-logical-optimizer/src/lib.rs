@@ -11,6 +11,7 @@ mod deduplicate;
 mod eliminate_sorts;
 mod input_file_metadata;
 mod lateral_join;
+mod partition_sensitive_subquery;
 mod prune_seeded_random;
 mod resolve_lambda_variables;
 mod rewrite_binary_grouping;
@@ -22,10 +23,12 @@ mod simplify_expressions;
 mod subquery_aliases;
 pub mod type_coercion;
 
+pub use correlated_limit::exists_by_count;
 use eliminate_sorts::EliminateSorts;
 pub use eliminate_sorts::{is_order_irrelevant_aggregate, push_down_left_semi_anti_join};
 use input_file_metadata::PushDownLimit;
 use lateral_join::DecorrelateLateralProjection;
+pub use partition_sensitive_subquery::pull_up_correlated_filters_in_predicate_subquery;
 use prune_seeded_random::PruneSeededRandomColumns;
 use resolve_lambda_variables::ResolveLambdaVariables;
 use rewrite_binary_grouping::RewriteBinaryGrouping;
@@ -79,6 +82,10 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
             continue;
         }
         if rule.name() == DecorrelatePredicateSubquery::new().name() {
+            // Partition-sensitive operators prevent the decorrelation of the subqueries.
+            custom.push(Arc::new(
+                partition_sensitive_subquery::PullUpCorrelatedFiltersAbovePartitionSensitiveNodes,
+            ));
             // The top-level sort of a correlated subquery prevents its decorrelation.
             custom.push(Arc::new(EliminateSorts));
             // SimplifyExpressions must first fold LIMIT/OFFSET casts into

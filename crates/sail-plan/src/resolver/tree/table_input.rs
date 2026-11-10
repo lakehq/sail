@@ -22,8 +22,8 @@ impl<'s> PlanRewriter<'s> for TableInputRewriter<'s> {
         Self { plan, state }
     }
 
-    fn into_plan(self) -> LogicalPlan {
-        self.plan
+    fn into_plan(self) -> Result<LogicalPlan> {
+        Ok(self.plan)
     }
 }
 

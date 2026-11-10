@@ -2,9 +2,11 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{Result, ScalarValue, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::scalar::math::xorshift::SparkXorShiftRandom;
 
@@ -38,6 +40,10 @@ impl ScalarUDFImpl for Randstr {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Utf8)
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

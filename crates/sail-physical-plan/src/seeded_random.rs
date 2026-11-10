@@ -4,9 +4,9 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
-use datafusion::arrow::array::BooleanArray;
-use datafusion::arrow::compute::kernels::boolean::{and_kleene, or_kleene};
-use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion::arrow::array::{Array, BooleanArray};
+use datafusion::arrow::compute::is_not_null;
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -25,8 +25,8 @@ use datafusion_common::{
 use datafusion_expr::{ColumnarValue, Operator};
 use futures::Stream;
 use sail_function::scalar::math::partition_random::{
-    PartitionRandomGenerator, PartitionSeed, create_partition_random_generator,
-    seed_argument_position,
+    LazyRightOperand, PartitionRandomGenerator, PartitionSeed, create_partition_random_generator,
+    is_row_argument, lazy_right_operand, seed_argument_position,
 };
 
 /// A column computed by an expression with calls of random functions with a seed.
@@ -64,16 +64,6 @@ impl SeededRandomExec {
                 schema.fields().len()
             );
         }
-        // The input fields come from the input, whose nullability can change after planning,
-        // e.g. for scalar subqueries.
-        let fields = input
-            .schema()
-            .fields()
-            .iter()
-            .chain(schema.fields().iter().skip(input_len))
-            .cloned()
-            .collect::<Vec<_>>();
-        let schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema.clone())
                 .extend(input.equivalence_properties().clone())?,
@@ -99,7 +89,8 @@ impl SeededRandomExec {
 }
 
 /// Returns the expression to evaluate for a partition, where each call of a random function
-/// with a seed and constant arguments is evaluated by its own generator for the partition.
+/// with a seed and constant arguments (other than the arguments evaluated for each row) is
+/// evaluated by its own generator for the partition.
 fn partition_expr(
     expr: &Arc<dyn PhysicalExpr>,
     seed: PartitionSeed,
@@ -109,7 +100,7 @@ fn partition_expr(
         .transform_up(|expr| {
             if let Some(call) = expr.downcast_ref::<ScalarFunctionExpr>()
                 && seed_argument_position(call.fun(), call.args().len()).is_some()
-                && let Some(args) = constant_arguments(call.args())
+                && let Some(args) = constant_arguments(call)
             {
                 let generator = create_partition_random_generator(
                     call.fun(),
@@ -118,40 +109,42 @@ fn partition_expr(
                     seed,
                     partition,
                 )?;
+                let row_args = call
+                    .args()
+                    .iter()
+                    .zip(&args)
+                    .filter(|(_, value)| value.is_none())
+                    .map(|(arg, _)| Arc::clone(arg))
+                    .collect();
                 return Ok(Transformed::yes(Arc::new(PartitionRandomExpr {
-                    generator: Mutex::new(generator),
+                    generator: Arc::new(Mutex::new(generator)),
+                    row_args,
                     data_type: call.return_type().clone(),
                     nullable: call.nullable(),
                     name: call.to_string(),
                 })
                     as Arc<dyn PhysicalExpr>));
             }
-            // DataFusion may evaluate the right side of `AND` and `OR` for more rows than
-            // Spark, which would advance the generators of the calls on that side.
-            if let Some(binary) = expr.downcast_ref::<BinaryExpr>()
-                && matches!(binary.op(), Operator::And | Operator::Or)
-                && binary
-                    .right()
-                    .exists(|expr| Ok(expr.is::<PartitionRandomExpr>()))?
-            {
-                return Ok(Transformed::yes(Arc::new(LazyBooleanExpr::try_new(
-                    Arc::clone(binary.left()),
-                    *binary.op(),
-                    Arc::clone(binary.right()),
-                )?)
-                    as Arc<dyn PhysicalExpr>));
+            if let Some(expr) = LazyRightExpr::of(&expr)? {
+                return Ok(Transformed::yes(Arc::new(expr) as Arc<dyn PhysicalExpr>));
             }
             Ok(Transformed::no(expr))
         })?
         .data)
 }
 
-/// Returns the values of the arguments if they do not depend on the input rows.
-fn constant_arguments(args: &[Arc<dyn PhysicalExpr>]) -> Option<Vec<ScalarValue>> {
-    args.iter()
-        .map(|arg| {
-            if collect_columns(arg).is_empty() {
-                evaluate_constant(arg).ok()
+/// Returns the values of the constant arguments of the call, and `None` for the arguments
+/// that are evaluated for each row, or returns `None` if another argument depends on the
+/// input rows.
+fn constant_arguments(call: &ScalarFunctionExpr) -> Option<Vec<Option<ScalarValue>>> {
+    call.args()
+        .iter()
+        .enumerate()
+        .map(|(i, arg)| {
+            if is_row_argument(call.fun(), i) {
+                Some(None)
+            } else if collect_columns(arg).is_empty() {
+                evaluate_constant(arg).ok().map(Some)
             } else {
                 None
             }
@@ -175,7 +168,9 @@ fn evaluate_constant(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
 /// A call of a random function with a seed, evaluated by a generator for one partition,
 /// which advances by the number of rows that the call is evaluated for.
 struct PartitionRandomExpr {
-    generator: Mutex<Box<dyn PartitionRandomGenerator>>,
+    generator: Arc<Mutex<Box<dyn PartitionRandomGenerator>>>,
+    /// The arguments evaluated for each row.
+    row_args: Vec<Arc<dyn PhysicalExpr>>,
     data_type: DataType,
     nullable: bool,
     name: String,
@@ -195,10 +190,11 @@ impl Display for PartitionRandomExpr {
     }
 }
 
-/// Each instance has its own generator, so an instance is only equal to itself.
+/// Each call has its own generator, so an instance is only equal to the instances that share
+/// its generator and arguments.
 impl PartialEq for PartitionRandomExpr {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self, other)
+        Arc::ptr_eq(&self.generator, &other.generator) && self.row_args == other.row_args
     }
 }
 
@@ -206,7 +202,7 @@ impl Eq for PartitionRandomExpr {}
 
 impl Hash for PartitionRandomExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        std::ptr::hash(self, state);
+        std::ptr::hash(Arc::as_ptr(&self.generator), state);
     }
 }
 
@@ -220,25 +216,42 @@ impl PhysicalExpr for PartitionRandomExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let num_rows = batch.num_rows();
+        let args = self
+            .row_args
+            .iter()
+            .map(|arg| arg.evaluate(batch)?.into_array(num_rows))
+            .collect::<Result<Vec<_>>>()?;
         let mut generator = self
             .generator
             .lock()
             .map_err(|e| exec_datafusion_err!("random generator lock poisoned: {e}"))?;
-        Ok(ColumnarValue::Array(generator.generate(batch.num_rows())?))
+        Ok(ColumnarValue::Array(generator.generate(&args, num_rows)?))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-        vec![]
+        self.row_args.iter().collect()
     }
 
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        if !children.is_empty() {
-            return internal_err!("PartitionRandomExpr does not have children");
+        if children.len() != self.row_args.len() {
+            return internal_err!(
+                "PartitionRandomExpr expects {} children, got {}",
+                self.row_args.len(),
+                children.len()
+            );
         }
-        Ok(self)
+        // The new expression shares the generator, which continues across the batches.
+        Ok(Arc::new(Self {
+            generator: Arc::clone(&self.generator),
+            row_args: children,
+            data_type: self.data_type.clone(),
+            nullable: self.nullable,
+            name: self.name.clone(),
+        }))
     }
 
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -250,64 +263,103 @@ impl PhysicalExpr for PartitionRandomExpr {
     }
 }
 
-/// `AND` or `OR` that evaluates the right side only for the rows where the left side does
-/// not determine the result, as Spark does.
-#[derive(Debug, Eq)]
-struct LazyBooleanExpr {
-    left: Arc<dyn PhysicalExpr>,
-    op: Operator,
-    right: Arc<dyn PhysicalExpr>,
-    /// The input columns that the right side refers to.
-    right_columns: Vec<usize>,
-    /// The right side, referring to the columns of the input projected to `right_columns`,
-    /// so that only these columns are filtered for the rows that evaluate it.
-    projected_right: Arc<dyn PhysicalExpr>,
+/// The input columns that an expression refers to, and the expression referring to the
+/// columns of the input projected to these columns.
+type ProjectedExpr = (Vec<usize>, Arc<dyn PhysicalExpr>);
+
+/// Returns the input columns that the expression refers to, and the expression referring to
+/// the columns of the input projected to these columns, so that only these columns are
+/// filtered for the rows that evaluate the expression.
+fn project_lazy_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<ProjectedExpr> {
+    let mut columns = collect_columns(expr)
+        .iter()
+        .map(Column::index)
+        .collect::<Vec<_>>();
+    columns.sort_unstable();
+    columns.dedup();
+    // The calls of random functions are kept as they are, so that they keep their
+    // generators.
+    let projected = Arc::clone(expr)
+        .transform_up(|expr| {
+            let Some(column) = expr.downcast_ref::<Column>() else {
+                return Ok(Transformed::no(expr));
+            };
+            let Ok(index) = columns.binary_search(&column.index()) else {
+                return internal_err!("missing column {column} in the lazy expression");
+            };
+            Ok(Transformed::yes(
+                Arc::new(Column::new(column.name(), index)) as Arc<dyn PhysicalExpr>,
+            ))
+        })?
+        .data;
+    Ok((columns, projected))
 }
 
-impl LazyBooleanExpr {
-    fn try_new(
-        left: Arc<dyn PhysicalExpr>,
-        op: Operator,
-        right: Arc<dyn PhysicalExpr>,
-    ) -> Result<Self> {
-        let mut right_columns = collect_columns(&right)
-            .iter()
-            .map(Column::index)
-            .collect::<Vec<_>>();
-        right_columns.sort_unstable();
-        right_columns.dedup();
-        // The calls of random functions are kept as they are, so that they keep their
-        // generators.
-        let projected_right = Arc::clone(&right)
-            .transform_up(|expr| {
-                let Some(column) = expr.downcast_ref::<Column>() else {
-                    return Ok(Transformed::no(expr));
-                };
-                let Ok(index) = right_columns.binary_search(&column.index()) else {
-                    return internal_err!("missing column {column} in the right side");
-                };
-                Ok(Transformed::yes(
-                    Arc::new(Column::new(column.name(), index)) as Arc<dyn PhysicalExpr>,
-                ))
-            })?
-            .data;
+/// A binary operator that evaluates the right operand only for the rows where Spark
+/// evaluates it, which advances the generators of the calls of random functions with a seed
+/// in the right operand only for these rows. DataFusion evaluates it for every row.
+#[derive(Debug, Eq)]
+struct LazyRightExpr {
+    left: Arc<dyn PhysicalExpr>,
+    op: Operator,
+    kind: LazyRightOperand,
+    right: Arc<dyn PhysicalExpr>,
+    /// The input columns that the right operand refers to.
+    right_columns: Vec<usize>,
+    /// The right operand, referring to the columns of the input projected to `right_columns`,
+    /// so that only these columns are filtered for the rows that evaluate it.
+    projected_right: Arc<dyn PhysicalExpr>,
+    /// The operator applied to the values of the operands, referring to them as columns.
+    combine: Arc<dyn PhysicalExpr>,
+}
+
+impl LazyRightExpr {
+    /// Returns the expression if it is a binary operator whose right operand Spark does not
+    /// evaluate for every row, and the right operand has calls of random functions with a seed.
+    fn of(expr: &Arc<dyn PhysicalExpr>) -> Result<Option<Self>> {
+        let Some(binary) = expr.downcast_ref::<BinaryExpr>() else {
+            return Ok(None);
+        };
+        let Some(kind) = lazy_right_operand(*binary.op()) else {
+            return Ok(None);
+        };
+        if !binary
+            .right()
+            .exists(|expr| Ok(expr.is::<PartitionRandomExpr>()))?
+        {
+            return Ok(None);
+        }
+        Ok(Some(Self::try_new(expr, kind)?))
+    }
+
+    fn try_new(expr: &Arc<dyn PhysicalExpr>, kind: LazyRightOperand) -> Result<Self> {
+        let Some(binary) = expr.downcast_ref::<BinaryExpr>() else {
+            return internal_err!("LazyRightExpr requires a binary expression");
+        };
+        let (right_columns, projected_right) = project_lazy_expr(binary.right())?;
+        let combine = Arc::clone(expr).with_new_children(vec![
+            Arc::new(Column::new("left", 0)),
+            Arc::new(Column::new("right", 1)),
+        ])?;
         Ok(Self {
-            left,
-            op,
-            right,
+            left: Arc::clone(binary.left()),
+            op: *binary.op(),
+            kind,
+            right: Arc::clone(binary.right()),
             right_columns,
             projected_right,
+            combine,
         })
     }
 }
 
-impl PartialEq for LazyBooleanExpr {
+impl PartialEq for LazyRightExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.left.eq(&other.left) && self.op == other.op && self.right.eq(&other.right)
+        self.combine.eq(&other.combine) && self.left.eq(&other.left) && self.right.eq(&other.right)
     }
 }
 
-impl Hash for LazyBooleanExpr {
+impl Hash for LazyRightExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.left.hash(state);
         self.op.hash(state);
@@ -315,15 +367,16 @@ impl Hash for LazyBooleanExpr {
     }
 }
 
-impl Display for LazyBooleanExpr {
+impl Display for LazyRightExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} {} {}", self.left, self.op, self.right)
     }
 }
 
-impl PhysicalExpr for LazyBooleanExpr {
-    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        Ok(DataType::Boolean)
+impl PhysicalExpr for LazyRightExpr {
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        BinaryExpr::new(Arc::clone(&self.left), self.op, Arc::clone(&self.right))
+            .data_type(input_schema)
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
@@ -333,25 +386,32 @@ impl PhysicalExpr for LazyBooleanExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let num_rows = batch.num_rows();
         let left = self.left.evaluate(batch)?.into_array(num_rows)?;
-        let left = as_boolean_array(&left)?;
-        // The result is false where the left side of `AND` is false, and true where the
-        // left side of `OR` is true.
-        let is_or = self.op == Operator::Or;
-        let selection = left
-            .iter()
-            .map(|value| Some(value != Some(is_or)))
-            .collect::<BooleanArray>();
+        let selection = match self.kind {
+            LazyRightOperand::And | LazyRightOperand::Or => {
+                let value = self.kind == LazyRightOperand::Or;
+                as_boolean_array(&left)?
+                    .iter()
+                    .map(|x| Some(x != Some(value)))
+                    .collect::<BooleanArray>()
+            }
+            LazyRightOperand::NullIntolerant => is_not_null(&left)?,
+        };
+        // The right operand is null for the other rows, where the left operand determines
+        // the result.
         let right = self
             .projected_right
             .evaluate_selection(&batch.project(&self.right_columns)?, &selection)?
             .into_array(num_rows)?;
-        let right = as_boolean_array(&right)?;
-        let result = if is_or {
-            or_kleene(left, right)?
-        } else {
-            and_kleene(left, right)?
-        };
-        Ok(ColumnarValue::Array(Arc::new(result)))
+        let schema = Schema::new(vec![
+            Field::new("left", left.data_type().clone(), true),
+            Field::new("right", right.data_type().clone(), true),
+        ]);
+        let operands = RecordBatch::try_new_with_options(
+            Arc::new(schema),
+            vec![left, right],
+            &RecordBatchOptions::new().with_row_count(Some(num_rows)),
+        )?;
+        self.combine.evaluate(&operands)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -363,13 +423,11 @@ impl PhysicalExpr for LazyBooleanExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let [left, right] = children.as_slice() else {
-            return internal_err!("LazyBooleanExpr requires two children");
+            return internal_err!("LazyRightExpr requires two children");
         };
-        Ok(Arc::new(Self::try_new(
-            Arc::clone(left),
-            self.op,
-            Arc::clone(right),
-        )?))
+        let expr = Arc::clone(&self.combine)
+            .with_new_children(vec![Arc::clone(left), Arc::clone(right)])?;
+        Ok(Arc::new(Self::try_new(&expr, self.kind)?))
     }
 
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -819,6 +877,53 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_seeded_random_call_on_right_side_advances_for_rows_with_non_null_left_side()
+    -> Result<()> {
+        // `SELECT IF(id % 3 = 0, NULL, id) + rand(1) FROM range(0, 6, 1, 1)` in Spark 4.2.
+        let expected = [
+            None,
+            Some(1.6363787615254752),
+            Some(2.5993846534021867),
+            None,
+            Some(4.1348427100125384),
+            Some(5.076841639054609),
+        ];
+        let expr = |schema: &Schema| -> Result<Arc<dyn PhysicalExpr>> {
+            let multiple = binary(
+                binary(col("id", schema)?, Operator::Modulo, lit(3_i64), schema)?,
+                Operator::Eq,
+                lit(0_i64),
+                schema,
+            )?;
+            let id = Arc::new(datafusion::physical_expr::expressions::CastExpr::new(
+                col("id", schema)?,
+                DataType::Float64,
+                None,
+            ));
+            let left = case(
+                None,
+                vec![(multiple, lit(ScalarValue::Float64(None)))],
+                Some(id),
+            )?;
+            binary(left, Operator::Plus, rand_expr(1, schema)?, schema)
+        };
+        for batch_size in [1, 4, 6] {
+            let arrays = column_values(expr, DataType::Float64, 0..6, batch_size).await?;
+            let values = arrays
+                .iter()
+                .flat_map(|array| {
+                    array
+                        .as_primitive::<Float64Type>()
+                        .iter()
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(values, expected, "batch size {batch_size}");
+        }
+        Ok(())
+    }
+
     #[test]
     fn test_lazy_boolean_right_side_projection_keeps_lambda_variables() -> Result<()> {
         // The input columns `other` and `id`, and the parameter `x` of a lambda on the
@@ -840,7 +945,10 @@ mod tests {
         )?;
         let lambda = Arc::new(LambdaExpr::try_new(vec!["x".to_string()], body)?);
         let left = binary(col("id", &schema)?, Operator::Gt, lit(5_i64), &schema)?;
-        let expr = LazyBooleanExpr::try_new(left, Operator::And, lambda)?;
+        let expr = LazyRightExpr::try_new(
+            &(Arc::new(BinaryExpr::new(left, Operator::And, lambda)) as Arc<dyn PhysicalExpr>),
+            LazyRightOperand::And,
+        )?;
         assert_eq!(expr.right_columns, vec![1]);
         let mut columns = vec![];
         let mut variables = vec![];
