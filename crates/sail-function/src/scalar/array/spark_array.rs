@@ -7,6 +7,7 @@ use datafusion::arrow::array::{
     OffsetSizeTrait, make_array, new_empty_array, new_null_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
+use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, plan_datafusion_err, plan_err};
@@ -14,9 +15,9 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
 };
+use sail_common_datafusion::metadata::coerced_type_field;
 use sail_common_datafusion::type_coercion::binary_type_coercion::comparison_coercion;
-
-use crate::functions_nested_utils::make_scalar_function;
+use sail_common_datafusion::utils::scalar::scalar_from_array;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArray {
@@ -76,11 +77,21 @@ impl ScalarUDFImpl for SparkArray {
             .cloned()
             .collect::<Vec<_>>();
         let contains_null = args.arg_fields.iter().any(|f| f.is_nullable());
-        let return_type = match self.return_type(&data_types)? {
-            DataType::List(field) => DataType::List(Arc::new(
-                field.as_ref().clone().with_nullable(contains_null),
-            )),
-            data_type => data_type,
+        let return_type = if data_types.is_empty() {
+            empty_array_type()
+        } else {
+            let types = self.coerce_types(&data_types)?;
+            let data_type = types
+                .into_iter()
+                .find(|t| !t.is_null())
+                .unwrap_or(DataType::Null);
+            let field = Field::new_list_field(data_type, contains_null);
+            let sources = args
+                .arg_fields
+                .iter()
+                .map(AsRef::as_ref)
+                .collect::<Vec<_>>();
+            DataType::List(Arc::new(coerced_type_field(&field, &sources)?))
         };
         Ok(Arc::new(Field::new(self.name(), return_type, false)))
     }
@@ -89,14 +100,19 @@ impl ScalarUDFImpl for SparkArray {
         let ScalarFunctionArgs {
             args, return_field, ..
         } = args;
-        let value_nullable = match return_field.data_type() {
-            DataType::List(field) | DataType::LargeList(field) => field.is_nullable(),
-            _ => true,
+        let DataType::List(field) = return_field.data_type() else {
+            return plan_err!("Spark array requires a list return field");
         };
-        let func = make_scalar_function(move |arrays| {
-            make_array_inner_with_nullable(arrays, value_nullable)
-        });
-        func(args.as_slice())
+        let scalar = args
+            .iter()
+            .all(|value| matches!(value, ColumnarValue::Scalar(_)));
+        let arrays = ColumnarValue::values_to_arrays(&args)?;
+        let result = make_array_inner_with_field(&arrays, field.clone())?;
+        if scalar {
+            Ok(ColumnarValue::Scalar(scalar_from_array(&result, 0)?))
+        } else {
+            Ok(ColumnarValue::Array(result))
+        }
     }
 
     fn aliases(&self) -> &[String] {
@@ -156,7 +172,36 @@ impl ScalarUDFImpl for SparkArray {
         } else {
             new_type
         };
-        Ok(vec![new_type; arg_types.len()])
+        // Resolve nested qualifiers before analyzer casts replace the source fields.
+        let sources = arg_types
+            .iter()
+            .map(|data_type| Field::new_list_field(data_type.clone(), true))
+            .collect::<Vec<_>>();
+        let new_type = coerced_type_field(
+            &Field::new_list_field(new_type, true),
+            &sources.iter().collect::<Vec<_>>(),
+        )?
+        .data_type()
+        .clone();
+        // Keep untyped NULL neutral for logical type consensus. The array builder
+        // already accepts NullArray.
+        Ok(arg_types
+            .iter()
+            .map(|source| {
+                if source.is_null()
+                    && matches!(
+                        new_type,
+                        DataType::FixedSizeBinary(16)
+                            | DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth)
+                            | DataType::Duration(arrow::datatypes::TimeUnit::Microsecond)
+                    )
+                {
+                    DataType::Null
+                } else {
+                    new_type.clone()
+                }
+            })
+            .collect())
     }
 }
 
@@ -169,10 +214,16 @@ pub(crate) fn empty_array_type() -> DataType {
 /// Constructs an array using the input `data` as `ArrayRef`.
 /// Returns a reference-counted `Array` instance result.
 pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    make_array_inner_with_nullable(arrays, true)
+    let data_type = arrays
+        .iter()
+        .map(|array| array.data_type())
+        .find(|data_type| !data_type.is_null())
+        .cloned()
+        .unwrap_or(DataType::Null);
+    make_array_inner_with_field(arrays, Arc::new(Field::new_list_field(data_type, true)))
 }
 
-fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> Result<ArrayRef> {
+fn make_array_inner_with_field(arrays: &[ArrayRef], field: FieldRef) -> Result<ArrayRef> {
     if arrays.is_empty() {
         let array = new_empty_array(&DataType::Null);
         return Ok(Arc::new(
@@ -182,14 +233,7 @@ fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> 
         ));
     }
 
-    let data_type = arrays
-        .iter()
-        .map(|arr| arr.data_type())
-        .find(|arr_type| !arr_type.is_null())
-        .unwrap_or(&DataType::Null)
-        .clone();
-
-    match data_type {
+    match field.data_type() {
         // Array or all nulls:
         DataType::Null => {
             let length = arrays.iter().map(|a| a.len()).sum();
@@ -197,14 +241,10 @@ fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> 
             let offsets =
                 OffsetBuffer::from_lengths(std::iter::repeat_n(arrays.len(), arrays[0].len()));
             Ok(Arc::new(GenericListArray::<i32>::try_new(
-                Arc::new(Field::new_list_field(DataType::Null, value_nullable)),
-                offsets,
-                array,
-                None,
+                field, offsets, array, None,
             )?))
         }
-        DataType::LargeList(..) => array_array::<i64>(arrays, data_type, value_nullable),
-        _ => array_array::<i32>(arrays, data_type, value_nullable),
+        _ => array_array::<i32>(arrays, field),
     }
 }
 
@@ -248,11 +288,7 @@ fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> 
 /// └──────────────┘   └──────────────┘        └─────────────────────────────┘
 ///      col1               col2                         output
 /// ```
-fn array_array<O: OffsetSizeTrait>(
-    args: &[ArrayRef],
-    data_type: DataType,
-    value_nullable: bool,
-) -> Result<ArrayRef> {
+fn array_array<O: OffsetSizeTrait>(args: &[ArrayRef], field: FieldRef) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
         return plan_err!("Array requires at least one argument");
@@ -262,9 +298,11 @@ fn array_array<O: OffsetSizeTrait>(
     let mut total_len = 0;
     for arg in args {
         let arg_data = if arg.as_any().is::<NullArray>() {
-            ArrayData::new_empty(&data_type)
-        } else {
+            ArrayData::new_empty(field.data_type())
+        } else if arg.data_type() == field.data_type() {
             arg.to_data()
+        } else {
+            cast(arg, field.data_type())?.to_data()
         };
         total_len += arg_data.len();
         data.push(arg_data);
@@ -291,9 +329,68 @@ fn array_array<O: OffsetSizeTrait>(
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(data_type, value_nullable)),
+        field,
         OffsetBuffer::new(offsets.into()),
         make_array(data),
         None,
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use sail_common_datafusion::uuid::{UUID_METADATA_KEY, contains_uuid};
+
+    use super::*;
+
+    #[test]
+    fn array_null_coercion_and_runtime_keep_resolved_identity() -> Result<()> {
+        let function = SparkArray::new();
+        let uuid = Arc::new(
+            Field::new("source", DataType::FixedSizeBinary(16), true).with_metadata(
+                std::collections::HashMap::from([
+                    (UUID_METADATA_KEY.to_string(), "uuid".to_string()),
+                    ("PARQUET:field_id".to_string(), "17".to_string()),
+                ]),
+            ),
+        );
+        for (other_type, expected_uuid) in [
+            (DataType::Null, true),
+            (DataType::FixedSizeBinary(16), false),
+        ] {
+            let fields = [
+                uuid.clone(),
+                Arc::new(Field::new("other", other_type.clone(), true)),
+            ];
+            let types = [DataType::FixedSizeBinary(16), other_type.clone()];
+            assert_eq!(function.coerce_types(&types)?, types);
+            let output = function.return_field_from_args(ReturnFieldArgs {
+                arg_fields: &fields,
+                scalar_arguments: &[None, None],
+            })?;
+            assert_eq!(contains_uuid(&output), expected_uuid);
+            let DataType::List(child) = output.data_type() else {
+                return plan_err!("expected a list field");
+            };
+            assert!(!child.metadata().contains_key("PARQUET:field_id"));
+            let arrays = [new_null_array(&types[0], 2), new_null_array(&other_type, 2)];
+            let result = make_array_inner_with_field(&arrays, child.clone())?;
+            assert_eq!(result.data_type(), output.data_type());
+            assert_eq!(result.len(), 2);
+            let result = function.invoke_with_args(ScalarFunctionArgs {
+                args: types
+                    .iter()
+                    .map(|data_type| {
+                        datafusion_common::ScalarValue::try_from(data_type)
+                            .map(ColumnarValue::Scalar)
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+                arg_fields: fields.to_vec(),
+                number_rows: 1,
+                return_field: output.clone(),
+                config_options: Arc::new(Default::default()),
+            })?;
+            assert_eq!(&result.data_type(), output.data_type());
+        }
+        Ok(())
+    }
 }

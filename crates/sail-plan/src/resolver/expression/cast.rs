@@ -88,6 +88,18 @@ impl PlanResolver<'_> {
         if sail_common_datafusion::uuid::contains_uuid(&target) {
             let NamedExpr { expr, name, .. } =
                 self.resolve_named_expression(expr, schema, state).await?;
+            let name = if need_rename_cast(&expr) {
+                let service = self.ctx.extension::<PlanService>()?;
+                let target_name = service.plan_formatter().field_to_simple_string(&target)?;
+                vec![format!(
+                    "{}CAST({} AS {})",
+                    if is_try { "TRY_" } else { "" },
+                    name.one()?,
+                    target_name.to_ascii_uppercase()
+                )]
+            } else {
+                name
+            };
             let metadata = target
                 .metadata()
                 .iter()
@@ -103,15 +115,21 @@ impl PlanResolver<'_> {
             } else {
                 expr
             };
-            let expr = ScalarUDF::from(sail_common_datafusion::uuid::UuidCast::new(
-                Arc::new(target),
-                is_try,
-            ))
-            .call(vec![expr]);
-            let expr = if is_try && expr.get_type(schema)? != data_type {
-                try_cast(expr, data_type)
+            let target = Arc::new(target);
+            let uuid_cast =
+                ScalarUDF::from(sail_common_datafusion::uuid::UuidCast::new(target, is_try));
+            let expr = uuid_cast.call(vec![expr]);
+            let expr = if expr.get_type(schema)? != data_type {
+                let expr = if is_try {
+                    try_cast(expr, data_type)
+                } else {
+                    expr.cast_to(&data_type, schema)?
+                };
+                // Folding an Arrow cast can rebuild list scalars without child metadata.
+                // The physical conversion is complete; retain the declared UUID identity.
+                uuid_cast.call(vec![expr])
             } else {
-                expr.cast_to(&data_type, schema)?
+                expr
             };
             return Ok(NamedExpr::new(name, expr).with_metadata(metadata));
         }
@@ -541,6 +559,22 @@ fn need_rename_cast(expr: &expr::Expr) -> bool {
         }
         expr::Expr::Cast(cast) => need_rename_cast(cast.expr.as_ref()),
         expr::Expr::TryCast(try_cast) => need_rename_cast(try_cast.expr.as_ref()),
+        expr::Expr::ScalarFunction(function)
+            if function
+                .func
+                .inner()
+                .is::<sail_common_datafusion::uuid::UuidCast>() =>
+        {
+            function.args.first().is_none_or(|argument| {
+                if let expr::Expr::ScalarFunction(rename) = argument
+                    && rename.func.inner().is::<SparkStructRename>()
+                {
+                    rename.args.first().is_none_or(need_rename_cast)
+                } else {
+                    need_rename_cast(argument)
+                }
+            })
+        }
         _ => true,
     }
 }

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use datafusion::arrow::array::{Array, ArrayRef, NullArray, NullBufferBuilder, StructArray};
 use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::compute::cast;
@@ -12,8 +14,8 @@ use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 
 use crate::scalar::map::utils::{
-    get_element_type, get_list_offsets, get_list_values, map_from_keys_values_offsets_nulls,
-    map_type_from_key_value_types,
+    get_element_field, get_list_offsets, get_list_values, map_from_keys_values_offsets_nulls,
+    map_type_from_key_value_fields,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -45,33 +47,43 @@ impl ScalarUDFImpl for SparkMapFromArrays {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        self.delegate.return_type(arg_types)
+        let [keys, values] = take_function_args("map_from_arrays", arg_types)?;
+        map_type_from_key_value_fields(
+            get_element_field(keys)?.as_ref(),
+            get_element_field(values)?.as_ref(),
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        self.delegate.return_field_from_args(args)
+        let types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let data_type = self.return_type(&types)?;
+        let field = self.delegate.return_field_from_args(args)?;
+        Ok(Arc::new(field.as_ref().clone().with_data_type(data_type)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let last_value_wins = self.last_value_wins;
+        let return_field = args.return_field;
         make_scalar_function(
-            move |args| map_from_arrays_inner(args, last_value_wins),
+            move |args| map_from_arrays_inner(args, last_value_wins, return_field.data_type()),
             vec![],
         )(&args.args)
     }
 }
 
-fn map_from_arrays_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<ArrayRef> {
+fn map_from_arrays_inner(
+    args: &[ArrayRef],
+    last_value_wins: bool,
+    map_type: &DataType,
+) -> Result<ArrayRef> {
     let [keys, values] = take_function_args("map_from_arrays", args)?;
 
     if *keys.data_type() == DataType::Null || *values.data_type() == DataType::Null {
-        return Ok(cast(
-            &NullArray::new(keys.len()),
-            &map_type_from_key_value_types(
-                get_element_type(keys.data_type())?,
-                get_element_type(values.data_type())?,
-            ),
-        )?);
+        return Ok(cast(&NullArray::new(keys.len()), map_type)?);
     }
 
     map_from_keys_values_offsets_nulls(
@@ -82,6 +94,7 @@ fn map_from_arrays_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<Arr
         keys.nulls(),
         values.nulls(),
         last_value_wins,
+        map_type,
     )
 }
 
@@ -114,23 +127,42 @@ impl ScalarUDFImpl for SparkMapFromEntries {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        self.delegate.return_type(arg_types)
+        let [entries] = take_function_args("map_from_entries", arg_types)?;
+        let element = get_element_field(entries)?;
+        if let DataType::Struct(fields) = element.data_type() {
+            let [key, value] = take_function_args("map_from_entries", fields.as_ref())?;
+            map_type_from_key_value_fields(key, value)
+        } else {
+            exec_err!("map_from_entries: expected array<struct<key, value>>")
+        }
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        self.delegate.return_field_from_args(args)
+        let types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let data_type = self.return_type(&types)?;
+        let field = self.delegate.return_field_from_args(args)?;
+        Ok(Arc::new(field.as_ref().clone().with_data_type(data_type)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let last_value_wins = self.last_value_wins;
+        let return_field = args.return_field;
         make_scalar_function(
-            move |args| map_from_entries_inner(args, last_value_wins),
+            move |args| map_from_entries_inner(args, last_value_wins, return_field.data_type()),
             vec![],
         )(&args.args)
     }
 }
 
-fn map_from_entries_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<ArrayRef> {
+fn map_from_entries_inner(
+    args: &[ArrayRef],
+    last_value_wins: bool,
+    map_type: &DataType,
+) -> Result<ArrayRef> {
     let [entries] = take_function_args("map_from_entries", args)?;
     let entries_offsets = get_list_offsets(entries)?;
     let entries_values = get_list_values(entries)?;
@@ -173,5 +205,46 @@ fn map_from_entries_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<Ar
         None,
         result_nulls.as_ref(),
         last_value_wins,
+        map_type,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::new_null_array;
+    use datafusion::arrow::datatypes::Field;
+    use sail_common_datafusion::uuid::UUID_METADATA_KEY;
+
+    use super::*;
+
+    #[test]
+    fn typed_arrays_keep_key_and_value_identity_at_runtime() -> Result<()> {
+        let function = SparkMapFromArrays::new(false);
+        let types = ["17", "29"].map(|id| {
+            DataType::List(Arc::new(
+                Field::new("source", DataType::FixedSizeBinary(16), true).with_metadata(
+                    std::collections::HashMap::from([
+                        (UUID_METADATA_KEY.to_string(), "uuid".to_string()),
+                        ("PARQUET:field_id".to_string(), id.to_string()),
+                    ]),
+                ),
+            ))
+        });
+        let output = function.return_type(&types)?;
+        let DataType::Map(entries, _) = &output else {
+            return exec_err!("expected map");
+        };
+        let DataType::Struct(fields) = entries.data_type() else {
+            return exec_err!("expected entries");
+        };
+        for field in fields {
+            assert!(sail_common_datafusion::uuid::is_uuid_field(field));
+            assert!(!field.metadata().contains_key("PARQUET:field_id"));
+        }
+        let arrays = types.map(|data_type| new_null_array(&data_type, 1));
+        let result = map_from_arrays_inner(&arrays, false, &output)?;
+        assert_eq!(result.data_type(), &output);
+        assert!(result.is_null(0));
+        Ok(())
+    }
 }
