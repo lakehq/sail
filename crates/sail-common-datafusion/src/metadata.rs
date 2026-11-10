@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
@@ -161,45 +161,60 @@ pub fn coerced_type_field(target: &Field, sources: &[&Field]) -> Result<Field, D
         DataType::ListView(field) => DataType::ListView(child(field)?),
         DataType::LargeListView(field) => DataType::LargeListView(child(field)?),
         DataType::Map(field, sorted) => DataType::Map(child(field)?, *sorted),
-        DataType::Struct(fields) => DataType::Struct(
-            fields
+        DataType::Struct(fields) => {
+            // Decide alignment once per source, not once per child. Repeated full-struct
+            // name scans make metadata propagation cubic for wide structs.
+            let unique_names = fields
                 .iter()
-                .enumerate()
-                .map(|(index, field)| {
-                    let children = sources
-                        .iter()
-                        .filter_map(|source| {
-                            let DataType::Struct(source) = source.data_type() else {
-                                return None;
-                            };
-                            // Duplicate names cannot identify a field uniquely; keep positions.
-                            let same_names = source.len() == fields.len()
+                .map(|field| field.name())
+                .collect::<BTreeSet<_>>()
+                .len()
+                == fields.len();
+            let sources = sources
+                .iter()
+                .filter_map(|source| match source.data_type() {
+                    DataType::Struct(fields) => Some(fields),
+                    _ => None,
+                })
+                .map(|source| {
+                    // Duplicate names cannot identify a field uniquely; keep positions.
+                    let by_name = (unique_names && source.len() == fields.len())
+                        .then(|| {
+                            source
+                                .iter()
+                                .map(|field| (field.name(), field))
+                                .collect::<BTreeMap<_, _>>()
+                        })
+                        .filter(|by_name| {
+                            by_name.len() == fields.len()
                                 && fields
                                     .iter()
-                                    .map(|field| field.name())
-                                    .collect::<std::collections::BTreeSet<_>>()
-                                    .len()
-                                    == fields.len()
-                                && fields.iter().all(|field| {
-                                    source
-                                        .iter()
-                                        .filter(|candidate| candidate.name() == field.name())
-                                        .count()
-                                        == 1
-                                });
-                            if same_names {
-                                source.iter().find(|s| s.name() == field.name())
-                            } else {
-                                source.get(index)
-                            }
-                            .map(AsRef::as_ref)
-                        })
-                        .collect::<Vec<_>>();
-                    coerced_type_field(field, &children).map(Arc::new)
+                                    .all(|field| by_name.contains_key(field.name()))
+                        });
+                    (source, by_name)
                 })
-                .collect::<Result<Vec<_>, _>>()?
-                .into(),
-        ),
+                .collect::<Vec<_>>();
+            DataType::Struct(
+                fields
+                    .iter()
+                    .enumerate()
+                    .map(|(index, field)| {
+                        let children = sources
+                            .iter()
+                            .filter_map(|(source, by_name)| {
+                                by_name.as_ref().map_or_else(
+                                    || source.get(index),
+                                    |by_name| by_name.get(field.name()).copied(),
+                                )
+                            })
+                            .map(AsRef::as_ref)
+                            .collect::<Vec<_>>();
+                        coerced_type_field(field, &children).map(Arc::new)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into(),
+            )
+        }
         data_type => data_type.clone(),
     };
     Ok(FieldMetadata::from(metadata).add_to_field(Field::new(
@@ -434,6 +449,54 @@ mod tests {
         };
         assert!(!crate::uuid::is_uuid_field(&fields[0]));
         assert!(crate::uuid::is_uuid_field(&fields[1]));
+        Ok(())
+    }
+
+    #[test]
+    fn constructor_struct_alignment_falls_back_to_positions() -> Result<(), DataFusionError> {
+        for (target_names, source_names, expected_uuid) in [
+            (["u", "f"], ["u", "f"], [true, false]),
+            (["f", "u"], ["u", "f"], [false, true]),
+            (["u", "f"], ["u", "u"], [true, false]),
+            (["u", "u"], ["u", "f"], [true, false]),
+            (["u", "f"], ["x", "y"], [true, false]),
+            (["u", "f"], ["f", "x"], [true, false]),
+        ] {
+            let source = Field::new(
+                "source",
+                DataType::Struct(
+                    vec![
+                        uuid_field("1").with_name(source_names[0]),
+                        Field::new(source_names[1], DataType::FixedSizeBinary(16), true),
+                    ]
+                    .into(),
+                ),
+                true,
+            );
+            let target = Field::new(
+                "target",
+                DataType::Struct(
+                    target_names
+                        .map(|name| Field::new(name, DataType::FixedSizeBinary(16), false))
+                        .to_vec()
+                        .into(),
+                ),
+                false,
+            );
+            let result = coerced_type_field(&target, &[&source])?;
+            let DataType::Struct(fields) = result.data_type() else {
+                return datafusion_common::internal_err!("expected a struct");
+            };
+            assert_eq!(result.name(), target.name());
+            assert!(!result.is_nullable());
+            for ((field, name), expected_uuid) in fields.iter().zip(target_names).zip(expected_uuid)
+            {
+                assert_eq!(field.name(), name);
+                assert!(!field.is_nullable());
+                assert_eq!(crate::uuid::is_uuid_field(field), expected_uuid);
+                assert_eq!(field.metadata().len(), usize::from(expected_uuid));
+            }
+        }
         Ok(())
     }
 
