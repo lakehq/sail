@@ -8,6 +8,7 @@ import time
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
@@ -52,6 +53,7 @@ class _CommitGate:
         self.response_fault: int | str | None = None
         self.apply_commit = True
         self.request_count = 0
+        self.response_transform = None
 
     def arm(self, namespace: str, table: str, *, snapshot_only: bool = True) -> None:
         with self._lock:
@@ -172,6 +174,9 @@ def _commit_gate_handler(
                     self._send_fault()
                     return
 
+            content = response.content
+            if gate.response_transform is not None and response.status_code == HTTPStatus.OK:
+                content = json.dumps(gate.response_transform(self.command, self.path, body, response.json())).encode()
             self.send_response(response.status_code)
             for key, value in response.headers.items():
                 if key.lower() not in {
@@ -181,10 +186,10 @@ def _commit_gate_handler(
                     "transfer-encoding",
                 }:
                     self.send_header(key, value)
-            self.send_header("content-length", str(len(response.content)))
+            self.send_header("content-length", str(len(content)))
             self.end_headers()
             if self.command != "HEAD":
-                self.wfile.write(response.content)
+                self.wfile.write(content)
 
         def _send_fault(self) -> None:
             if gate.response_fault == "disconnect":

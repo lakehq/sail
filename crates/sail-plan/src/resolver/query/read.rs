@@ -646,14 +646,19 @@ impl PlanResolver<'_> {
                     "iceberg does not support user specified schema",
                 ));
             }
-            // FIXME: Match Spark Connect's precedence for conflicting case-insensitive path
-            // options. HashMap decoding loses wire order, making first-match selection unstable.
-            if let Some(path) = source
+            // Connect options have no stable ordering, so conflicting aliases cannot use
+            // last-option-wins semantics without choosing an unpredictable table.
+            let mut paths = source
                 .options
                 .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case("path"))
-                .map(|(_, value)| value.clone())
-            {
+                .filter(|(key, _)| key.eq_ignore_ascii_case("path"))
+                .map(|(_, value)| value);
+            if let Some(path) = paths.next().cloned() {
+                if paths.any(|value| value != &path) {
+                    return Err(PlanError::invalid(
+                        "Conflicting case-insensitive path options",
+                    ));
+                }
                 if !source.paths.is_empty() {
                     return Err(PlanError::invalid(
                         "Cannot specify both a path option and load paths",

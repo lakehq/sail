@@ -6,7 +6,8 @@ use datafusion::execution::TaskContext;
 use datafusion_common::{DataFusionError, Result, plan_err};
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
-use sail_common_datafusion::catalog::TableReplacement;
+use sail_common_datafusion::catalog::{ReplacementAuthority, TableReplacement};
+use sail_common_datafusion::error::CommitRequiresReplanningError;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -23,7 +24,7 @@ use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::schema_evolution::SchemaEvolver;
 use crate::spec::{
     FormatVersion, MAIN_BRANCH, NullOrder, SnapshotLog, SortDirection, SortField, SortOrder,
-    TableMetadata, TableUpdate, Transform,
+    TableMetadata, TableRequirement, TableUpdate, Transform,
 };
 use crate::table::find_latest_metadata_file;
 use crate::table::metadata_loader::metadata_file_version_from_path;
@@ -38,6 +39,40 @@ pub struct IcebergTableReplacement {
     pub(crate) base_codec: BaseMetadataCodec,
 }
 
+fn replacement_fields_compatible(
+    actual: &datafusion::arrow::datatypes::Fields,
+    input: &datafusion::arrow::datatypes::Fields,
+) -> bool {
+    actual.len() == input.len()
+        && actual.iter().zip(input).all(|(actual, input)| {
+            actual.name() == input.name()
+                && (actual.is_nullable() || !input.is_nullable())
+                && replacement_types_compatible(actual.data_type(), input.data_type())
+        })
+}
+
+fn replacement_types_compatible(
+    actual: &datafusion::arrow::datatypes::DataType,
+    input: &datafusion::arrow::datatypes::DataType,
+) -> bool {
+    use datafusion::arrow::datatypes::DataType;
+    match (actual, input) {
+        (DataType::Struct(actual), DataType::Struct(input)) => {
+            replacement_fields_compatible(actual, input)
+        }
+        (DataType::List(actual), DataType::List(input)) => {
+            (actual.is_nullable() || !input.is_nullable())
+                && replacement_types_compatible(actual.data_type(), input.data_type())
+        }
+        (DataType::Map(actual, actual_sorted), DataType::Map(input, input_sorted)) => {
+            actual_sorted == input_sorted
+                && (actual.is_nullable() || !input.is_nullable())
+                && replacement_types_compatible(actual.data_type(), input.data_type())
+        }
+        _ => actual == input,
+    }
+}
+
 pub(crate) fn prepare_replacement(
     table_url: &Url,
     mut catalog: TableReplacement,
@@ -45,6 +80,42 @@ pub(crate) fn prepare_replacement(
     base: Option<&TableMetadata>,
     input: &ArrowSchema,
 ) -> Result<IcebergTableReplacement> {
+    if matches!(
+        catalog.authority,
+        ReplacementAuthority::IcebergRestStagedCreate { .. }
+    ) {
+        let metadata = base
+            .cloned()
+            .ok_or_else(|| DataFusionError::Plan("Missing REST staged metadata".into()))?;
+        let schema = metadata
+            .current_schema()
+            .ok_or_else(|| DataFusionError::Plan("Missing REST staged schema".into()))?;
+        let actual = crate::datasource::type_converter::iceberg_schema_to_arrow(schema)?;
+        // Compare the logical Iceberg representation (e.g. tinyint/smallint become int),
+        // while retaining the authoritative server field IDs for the writer.
+        let normalized_input = crate::datasource::type_converter::iceberg_schema_to_arrow(
+            &arrow_schema_to_iceberg(input)?,
+        )?;
+        if !replacement_fields_compatible(actual.fields(), normalized_input.fields()) {
+            return plan_err!("REST staged schema differs from replacement input");
+        }
+        crate::properties::validate_write_properties(&metadata.properties)?;
+        catalog.properties = metadata
+            .properties
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        catalog.properties.push((
+            "format-version".into(),
+            (metadata.format_version as i32).to_string(),
+        ));
+        return Ok(IcebergTableReplacement {
+            catalog,
+            base_metadata_file: None,
+            base_codec: BaseMetadataCodec::capture(None)?,
+            metadata,
+        });
+    }
     if catalog.existing != base.is_some() {
         return plan_err!("Iceberg replacement catalog/storage existence mismatch");
     }
@@ -267,6 +338,24 @@ pub(crate) fn prepare_replacement(
     })
 }
 
+fn requires_replanning(message: impl Into<String>) -> DataFusionError {
+    DataFusionError::External(Box::new(CommitRequiresReplanningError(message.into())))
+}
+
+// Only replacement commits invalidate captured output on these catalog failures.
+fn replacement_catalog_error(error: CatalogError) -> DataFusionError {
+    match error {
+        CatalogError::Conflict(_)
+        | CatalogError::CommitRejected(_)
+        | CatalogError::StaleMetadata(_)
+        | CatalogError::NotFound(_, _)
+        | CatalogError::AlreadyExists(_, _)
+        | CatalogError::NotSupported(_)
+        | CatalogError::UnsupportedCapability(_) => requires_replanning(error.to_string()),
+        error => DataFusionError::External(Box::new(error)),
+    }
+}
+
 /// Reject a changed base rather than retrying writer outputs with potentially invalid IDs.
 async fn validate_base(
     store: &StoreContext,
@@ -279,9 +368,9 @@ async fn validate_base(
         Err(error) => return Err(error),
     };
     if actual.as_deref() != expected {
-        return plan_err!(
-            "Iceberg replacement conflict: base metadata changed; replan the operation"
-        );
+        return Err(requires_replanning(
+            "Iceberg replacement conflict: base metadata changed; replan the operation",
+        ));
     }
     Ok(())
 }
@@ -293,6 +382,9 @@ pub(crate) async fn commit_replacement(
     replacement: IcebergTableReplacement,
     commit: &IcebergCommitInfo,
 ) -> Result<()> {
+    if replacement.catalog.authority.rest_metadata().is_some() {
+        return commit_rest_replacement(context, table_url, store, replacement, commit).await;
+    }
     validate_base(store, table_url, replacement.base_metadata_file.as_deref()).await?;
     let mut metadata = replacement.metadata;
     let mut snapshot = prepare_bootstrap_snapshot(table_url, store, commit, &metadata).await?;
@@ -397,7 +489,202 @@ pub(crate) async fn commit_replacement(
             }),
         )
         .await
-        .map_err(|error| DataFusionError::External(Box::new(error)))
+        .map_err(replacement_catalog_error)
+}
+
+// [CREDIT]: https://github.com/apache/iceberg/blob/2234c549de60/core/src/main/java/org/apache/iceberg/UpdateRequirements.java#L40-L205
+fn rest_replacement_changes(
+    replacement: &IcebergTableReplacement,
+) -> Result<(Vec<TableRequirement>, Vec<TableUpdate>)> {
+    let authority = &replacement.catalog.authority;
+    let base: TableMetadata = serde_json::from_str(
+        authority
+            .rest_metadata()
+            .ok_or_else(|| DataFusionError::Plan("Missing REST replacement authority".into()))?,
+    )
+    .map_err(|error| DataFusionError::External(Box::new(error)))?;
+    let create = matches!(
+        authority,
+        ReplacementAuthority::IcebergRestStagedCreate { .. }
+    );
+    let metadata = &replacement.metadata;
+    let uuid = base
+        .table_uuid
+        .ok_or_else(|| DataFusionError::Plan("Missing REST table UUID".into()))?;
+    let mut requirements = vec![if create {
+        TableRequirement::NotExist
+    } else {
+        TableRequirement::UuidMatch { uuid }
+    }];
+    if !create {
+        // TODO: Iceberg REST has no assertions for global last-sequence-number, highest
+        // schema ID, or the complete ref set. Schema ABA and writes to branches created
+        // after staging cannot be fully guarded with the standard protocol.
+        // Unlike upstream replacement, fail on observed schema/ref changes: writer artifacts
+        // already contain schema IDs and sequence numbers and must never be blindly rebased.
+        requirements.push(TableRequirement::CurrentSchemaIdMatch {
+            current_schema_id: base.current_schema_id,
+        });
+        let mut refs = base
+            .refs
+            .iter()
+            .map(|(name, reference)| (name.clone(), Some(reference.snapshot_id)))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        refs.entry(MAIN_BRANCH.into())
+            .or_insert(base.current_snapshot_id.filter(|id| *id >= 0));
+        requirements.extend(refs.into_iter().map(|(r#ref, snapshot_id)| {
+            TableRequirement::RefSnapshotIdMatch { r#ref, snapshot_id }
+        }));
+    }
+    let mut updates = Vec::new();
+    if create {
+        updates.push(TableUpdate::AssignUuid { uuid });
+    }
+    if create || metadata.format_version != base.format_version {
+        updates.push(TableUpdate::UpgradeFormatVersion {
+            format_version: metadata.format_version,
+        });
+    }
+    let schema = metadata
+        .current_schema()
+        .ok_or_else(|| DataFusionError::Plan("Missing replacement schema".into()))?;
+    let added = create
+        || !base
+            .schemas
+            .iter()
+            .any(|old| old.schema_id() == schema.schema_id());
+    if added {
+        updates.push(TableUpdate::AddSchema {
+            schema: Box::new(schema.clone()),
+        });
+        if !create {
+            requirements.push(TableRequirement::LastAssignedFieldIdMatch {
+                last_assigned_field_id: base.last_column_id,
+            });
+        }
+    }
+    updates.push(TableUpdate::SetCurrentSchema {
+        schema_id: if added { -1 } else { schema.schema_id() },
+    });
+    let spec = metadata
+        .default_partition_spec()
+        .ok_or_else(|| DataFusionError::Plan("Missing replacement spec".into()))?;
+    let added = create
+        || !base
+            .partition_specs
+            .iter()
+            .any(|old| old.spec_id() == spec.spec_id());
+    if added {
+        updates.push(TableUpdate::AddSpec { spec: spec.into() });
+        if !create {
+            requirements.push(TableRequirement::LastAssignedPartitionIdMatch {
+                last_assigned_partition_id: base.last_partition_id,
+            });
+        }
+    }
+    updates.push(TableUpdate::SetDefaultSpec {
+        spec_id: if added { -1 } else { spec.spec_id() },
+    });
+    let order = metadata
+        .sort_orders
+        .iter()
+        .find(|order| Some(order.order_id as i32) == metadata.default_sort_order_id)
+        .ok_or_else(|| DataFusionError::Plan("Missing replacement sort order".into()))?;
+    let added = create
+        || !base
+            .sort_orders
+            .iter()
+            .any(|old| old.order_id == order.order_id);
+    if added {
+        updates.push(TableUpdate::AddSortOrder {
+            sort_order: order.clone(),
+        });
+    }
+    updates.push(TableUpdate::SetDefaultSortOrder {
+        sort_order_id: if added { -1 } else { order.order_id },
+    });
+    if create {
+        updates.push(TableUpdate::SetLocation {
+            location: metadata.location.clone(),
+        });
+    }
+    let properties = metadata
+        .properties
+        .iter()
+        .filter(|(key, value)| create || base.properties.get(*key) != Some(*value))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<HashMap<_, _>>();
+    if !properties.is_empty() {
+        updates.push(TableUpdate::SetProperties {
+            updates: properties,
+        });
+    }
+    if !create && base.refs.contains_key(MAIN_BRANCH) {
+        updates.push(TableUpdate::RemoveSnapshotRef {
+            ref_name: MAIN_BRANCH.into(),
+        });
+    }
+    Ok((requirements, updates))
+}
+
+async fn commit_rest_replacement(
+    context: &Arc<TaskContext>,
+    table_url: &Url,
+    store: &StoreContext,
+    replacement: IcebergTableReplacement,
+    commit: &IcebergCommitInfo,
+) -> Result<()> {
+    use crate::catalog_support::commit::{CatalogCommitOutcome, IcebergCatalogCommitCoordinator};
+    let (requirements, mut updates) = rest_replacement_changes(&replacement)?;
+    let mut snapshot =
+        prepare_bootstrap_snapshot(table_url, store, commit, &replacement.metadata).await?;
+    updates.extend(snapshot.action_commit().updates().iter().cloned());
+    let execution = replacement
+        .catalog
+        .authority
+        .execution()
+        .cloned()
+        .ok_or_else(|| {
+            DataFusionError::Plan("Missing REST replacement execution binding".into())
+        })?;
+    let context = context.clone();
+    // This task owns publication and cleanup. A cancelled caller cannot delete committed manifests.
+    tokio::spawn(async move {
+        let coordinator = IcebergCatalogCommitCoordinator::new(context.as_ref(), &replacement.catalog.catalog_table);
+        snapshot.publication_started();
+        match coordinator.commit(&execution, requirements, updates).await {
+            Ok(CatalogCommitOutcome::Committed(response)) => {
+                snapshot.commit_succeeded();
+                let metadata = response.payload().and_then(|payload| payload.get("metadata"))
+                    .cloned().and_then(|value| serde_json::from_value::<TableMetadata>(value).ok());
+                if metadata.as_ref().is_none_or(|metadata| metadata.table_uuid != replacement.metadata.table_uuid)
+                    || response.metadata_location().is_none()
+                {
+                    return Err(DataFusionError::External(Box::new(CatalogError::CommitStateUnknown("Invalid REST replacement commit response".to_string().into()))));
+                }
+                Ok(())
+            }
+            Ok(CatalogCommitOutcome::Conflict | CatalogCommitOutcome::NotSupported) => {
+                snapshot.publication_did_not_happen();
+                snapshot.cleanup().await;
+                Err(requires_replanning("Iceberg REST replacement rejected; replan the operation"))
+            }
+            Err(error) => {
+                let unknown = matches!(&error, DataFusionError::External(error) if error.downcast_ref::<CatalogError>().is_some_and(|error| matches!(error, CatalogError::CommitStateUnknown(_))));
+                if !unknown {
+                    snapshot.publication_did_not_happen();
+                    snapshot.cleanup().await;
+                }
+                match error {
+                    DataFusionError::External(error) => match error.downcast::<CatalogError>() {
+                        Ok(error) => Err(replacement_catalog_error(*error)),
+                        Err(error) => Err(DataFusionError::External(error)),
+                    },
+                    error => Err(error),
+                }
+            }
+        }
+    }).await.map_err(|error| DataFusionError::External(Box::new(CatalogError::CommitStateUnknown(error.to_string().into()))))?
 }
 
 #[cfg(test)]
@@ -427,9 +714,11 @@ mod tests {
     fn catalog(existing: bool) -> TableReplacement {
         TableReplacement {
             catalog_table: vec!["memory".into(), "db".into(), "t".into()],
-            catalog_generation: 7,
-            database_generation: 8,
-            table_generation: 9,
+            authority: sail_common_datafusion::catalog::ReplacementAuthority::Path {
+                catalog_generation: 7,
+                database_generation: 8,
+                table_generation: 9,
+            },
             require_existing: existing,
             existing,
             columns: vec![("replacement".into(), DataType::Int64, false)],
@@ -440,6 +729,250 @@ mod tests {
             property_updates: vec![("owner".into(), "new".into())],
             is_external: true,
         }
+    }
+
+    fn rest_catalog(existing: bool, metadata: &TableMetadata) -> Result<TableReplacement> {
+        use sail_common_datafusion::catalog::*;
+        let mut catalog = catalog(existing);
+        let execution = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("rest".into()),
+            catalog.catalog_table.clone(),
+            CatalogTableIdentity {
+                table_id: metadata.table_uuid.map(|id| id.to_string()),
+                table_uri: Some(metadata.location.clone()),
+            },
+            LakehouseOperation::Write,
+            LakehouseFormat::Iceberg,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::Managed,
+                pointer: MetadataPointerAuthority::IcebergRest,
+                commit: CommitAuthority::IcebergRestCommit,
+            },
+            ScanAuthority::ClientLakeSource,
+        );
+        let metadata_json = serde_json::to_string(metadata)
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        catalog.authority = if existing {
+            ReplacementAuthority::IcebergRestExisting {
+                metadata_json,
+                metadata_location: "memory:///table/metadata/catalog.json".into(),
+                execution,
+            }
+        } else {
+            ReplacementAuthority::IcebergRestStagedCreate {
+                metadata_json,
+                execution,
+            }
+        };
+        Ok(catalog)
+    }
+
+    #[test]
+    fn replacement_rejections_are_terminal_but_ordinary_catalog_errors_are_not() {
+        use sail_common_datafusion::error::{
+            CommonErrorCause, PythonErrorCause, PythonErrorCauseExtractor,
+        };
+
+        struct NoPythonError;
+        impl PythonErrorCauseExtractor for NoPythonError {
+            fn extract(_: &(dyn std::error::Error + 'static)) -> Option<PythonErrorCause> {
+                None
+            }
+        }
+        for error in [
+            CatalogError::Conflict("identity changed".into()),
+            CatalogError::CommitRejected("requirements failed".into()),
+            CatalogError::StaleMetadata("base changed".into()),
+            CatalogError::NotSupported("replacement unsupported".into()),
+            CatalogError::NotFound(sail_catalog::error::CatalogObject::Table, "dropped".into()),
+        ] {
+            assert!(CommonErrorCause::new::<NoPythonError>(&error).is_retryable());
+            assert!(matches!(
+                CommonErrorCause::new::<NoPythonError>(&replacement_catalog_error(error)),
+                CommonErrorCause::CommitRequiresReplanning(_)
+            ));
+        }
+        let unknown = replacement_catalog_error(CatalogError::CommitStateUnknown(
+            "lost response".to_string().into(),
+        ));
+        assert!(matches!(
+            CommonErrorCause::new::<NoPythonError>(&unknown),
+            CommonErrorCause::CommitStateUnknown(_)
+        ));
+        let transient =
+            replacement_catalog_error(CatalogError::External("connection unavailable".into()));
+        assert!(CommonErrorCause::new::<NoPythonError>(&transient).is_retryable());
+    }
+
+    #[test]
+    fn staged_schema_compatibility_ignores_ids_but_preserves_logical_constraints() {
+        fn field(name: &str, data_type: DataType, nullable: bool) -> Arc<Field> {
+            Arc::new(Field::new(name, data_type, nullable))
+        }
+        let source = field("n", DataType::Int32, false);
+        let widened = Arc::new(
+            Field::new("n", DataType::Int32, true)
+                .with_metadata(HashMap::from([("PARQUET:field_id".into(), "102".into())])),
+        );
+        let source_struct = DataType::Struct(vec![source.clone()].into());
+        let widened_struct = DataType::Struct(vec![widened.clone()].into());
+        assert!(replacement_types_compatible(
+            &widened_struct,
+            &source_struct
+        ));
+        assert!(!replacement_types_compatible(
+            &source_struct,
+            &widened_struct
+        ));
+        for incompatible in [
+            field("renamed", DataType::Int32, false),
+            field("n", DataType::Utf8, false),
+        ] {
+            assert!(!replacement_types_compatible(
+                &DataType::Struct(vec![incompatible].into()),
+                &source_struct
+            ));
+        }
+        let source_list = DataType::List(field("item", source_struct.clone(), false));
+        let widened_list = DataType::List(field("element", widened_struct.clone(), true));
+        assert!(replacement_types_compatible(&widened_list, &source_list));
+        assert!(!replacement_types_compatible(&source_list, &widened_list));
+        let map = |value| {
+            DataType::Map(
+                field(
+                    "entries",
+                    DataType::Struct(vec![field("key", DataType::Utf8, false), value].into()),
+                    false,
+                ),
+                false,
+            )
+        };
+        assert!(replacement_types_compatible(
+            &map(field("value", widened_struct.clone(), true)),
+            &map(field("value", source_struct.clone(), false))
+        ));
+        assert!(!replacement_types_compatible(
+            &map(field("value", source_struct.clone(), false)),
+            &map(field("value", widened_struct.clone(), true))
+        ));
+        assert!(replacement_fields_compatible(
+            &vec![field("nested", widened_struct, true)].into(),
+            &vec![field("nested", source_struct.clone(), false)].into()
+        ));
+        assert!(!replacement_fields_compatible(
+            &vec![field("nested", source_struct.clone(), false)].into(),
+            &vec![field("nested", source_struct, true)].into()
+        ));
+    }
+
+    #[test]
+    fn rest_replacement_requirements_protect_prepared_output()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let base = historical_metadata()?;
+        let input = ArrowSchema::new(vec![
+            Field::new("old", DataType::Int32, true),
+            Field::new("replacement", DataType::Int64, false),
+        ]);
+        let request = rest_catalog(true, &base)?;
+        let replacement = prepare_replacement(
+            &Url::parse("memory:///table")?,
+            request,
+            None,
+            Some(&base),
+            &input,
+        )?;
+        let (requirements, updates) = rest_replacement_changes(&replacement)?;
+        assert_eq!(
+            requirements,
+            vec![
+                TableRequirement::UuidMatch {
+                    uuid: base.table_uuid.ok_or("missing UUID")?
+                },
+                TableRequirement::CurrentSchemaIdMatch {
+                    current_schema_id: base.current_schema_id
+                },
+                TableRequirement::RefSnapshotIdMatch {
+                    r#ref: "audit".into(),
+                    snapshot_id: Some(42)
+                },
+                TableRequirement::RefSnapshotIdMatch {
+                    r#ref: "frozen".into(),
+                    snapshot_id: Some(42)
+                },
+                TableRequirement::RefSnapshotIdMatch {
+                    r#ref: "main".into(),
+                    snapshot_id: Some(42)
+                },
+                TableRequirement::LastAssignedFieldIdMatch {
+                    last_assigned_field_id: base.last_column_id
+                },
+                TableRequirement::LastAssignedPartitionIdMatch {
+                    last_assigned_partition_id: base.last_partition_id
+                },
+            ]
+        );
+        assert!(updates.contains(&TableUpdate::SetCurrentSchema { schema_id: -1 }));
+        assert!(updates.contains(&TableUpdate::SetDefaultSortOrder { sort_order_id: -1 }));
+        assert!(updates.contains(&TableUpdate::RemoveSnapshotRef {
+            ref_name: MAIN_BRANCH.into()
+        }));
+        let properties = updates
+            .iter()
+            .find_map(|update| match update {
+                TableUpdate::SetProperties { updates } => Some(updates),
+                _ => None,
+            })
+            .ok_or("missing property delta")?;
+        assert_eq!(properties, &HashMap::from([("owner".into(), "new".into())]));
+        assert!(!updates.iter().any(|update| matches!(
+            update,
+            TableUpdate::SetLocation { .. } | TableUpdate::AssignUuid { .. }
+        )));
+        Ok(())
+    }
+
+    #[test]
+    fn rest_staged_create_uses_server_ids_and_full_initialization()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut base = historical_metadata()?;
+        base.snapshots.clear();
+        base.snapshot_log.clear();
+        base.refs.clear();
+        base.current_snapshot_id = None;
+        let input = ArrowSchema::new(vec![Field::new("old", DataType::Int32, true)]);
+        let request = rest_catalog(false, &base)?;
+        let replacement = prepare_replacement(
+            &Url::parse("memory:///table")?,
+            request,
+            None,
+            Some(&base),
+            &input,
+        )?;
+        assert_eq!(
+            replacement.metadata.current_schema_id,
+            base.current_schema_id
+        );
+        assert_eq!(replacement.metadata.schemas, base.schemas);
+        assert_eq!(replacement.metadata.partition_specs, base.partition_specs);
+        let (requirements, updates) = rest_replacement_changes(&replacement)?;
+        assert_eq!(requirements, vec![TableRequirement::NotExist]);
+        assert!(updates.contains(&TableUpdate::AssignUuid {
+            uuid: base.table_uuid.ok_or("missing UUID")?
+        }));
+        assert!(updates.contains(&TableUpdate::SetLocation {
+            location: base.location.clone()
+        }));
+        assert!(updates.contains(&TableUpdate::SetCurrentSchema { schema_id: -1 }));
+        assert!(updates.contains(&TableUpdate::SetDefaultSpec { spec_id: -1 }));
+        assert!(updates.contains(&TableUpdate::SetDefaultSortOrder { sort_order_id: -1 }));
+        for existing in [false, true] {
+            let catalog = rest_catalog(existing, &base)?;
+            assert_eq!(
+                serde_json::from_str::<TableReplacement>(&serde_json::to_string(&catalog)?)?,
+                catalog
+            );
+        }
+        Ok(())
     }
 
     fn historical_metadata() -> serde_json::Result<TableMetadata> {

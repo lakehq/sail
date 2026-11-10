@@ -841,21 +841,40 @@ pub(crate) async fn plan_iceberg_write(
         .object_store_registry
         .get_store(&table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let exists_res = match planned_metadata_location
-        .as_deref()
-        .or(metadata_location.as_deref())
-    {
-        Some(location) if planned_metadata_location.is_some() || catalog_managed_table => {
-            metadata_location_to_object_path_string(location)
+    let captured_metadata = replacement
+        .as_ref()
+        .and_then(|replacement| replacement.authority.rest_metadata())
+        .map(|json| {
+            serde_json::from_str::<TableMetadata>(json)
+                .map_err(|error| DataFusionError::External(Box::new(error)))
+        })
+        .transpose()?;
+    // Authorize storage access through actual reads/writes, not a missing-object HEAD:
+    // S3 can return 403 without ListBucket even with valid GetObject/PutObject access.
+    // Failed writer/manifest writes stop publication; REST session credentials remain unused.
+    let metadata_path = if captured_metadata.is_some() {
+        // REST metadata is authoritative; no path discovery or metadata-file read is needed.
+        None
+    } else {
+        let resolved = match planned_metadata_location
+            .as_deref()
+            .or(metadata_location.as_deref())
+        {
+            Some(location) if planned_metadata_location.is_some() || catalog_managed_table => {
+                metadata_location_to_object_path_string(location)
+            }
+            _ => find_latest_metadata_file(&store, &table_url).await,
+        };
+        match resolved {
+            Ok(path) => Some(path),
+            Err(error) if error.to_string().contains("No metadata files found") => None,
+            Err(error) => return plan_err!("cannot resolve Iceberg table metadata: {error}"),
         }
-        _ => find_latest_metadata_file(&store, &table_url).await,
     };
-    let table_exists = exists_res.is_ok();
-    if let Err(error) = &exists_res
-        && !error.to_string().contains("No metadata files found")
-    {
-        return plan_err!("cannot resolve Iceberg table metadata: {error}");
-    }
+    let table_exists = replacement
+        .as_ref()
+        .filter(|_| captured_metadata.is_some())
+        .map_or(metadata_path.is_some(), |replacement| replacement.existing);
 
     match mode {
         PhysicalSinkMode::ErrorIfExists if table_exists => {
@@ -869,7 +888,7 @@ pub(crate) async fn plan_iceberg_write(
         _ => {}
     }
 
-    let table = if let Ok(metadata_path) = &exists_res {
+    let table = if let Some(metadata_path) = &metadata_path {
         Some(
             Table::load_with_metadata_location(
                 ctx.runtime_env().as_ref(),
@@ -988,8 +1007,10 @@ pub(crate) async fn plan_iceberg_write(
             crate::operations::replacement::prepare_replacement(
                 &table_url,
                 catalog,
-                exists_res.as_ref().ok().cloned(),
-                table.as_ref().map(Table::metadata),
+                metadata_path.clone(),
+                captured_metadata
+                    .as_ref()
+                    .or_else(|| table.as_ref().map(Table::metadata)),
                 writer_input_schema.as_ref(),
             )
         })
@@ -1000,6 +1021,15 @@ pub(crate) async fn plan_iceberg_write(
         options.overwrite_schema = false;
         options.table_properties = replacement.catalog.properties.clone();
     }
+    let writer_input_schema = if replacement.is_some() {
+        // Replacement validation already checked the logical schema. The writer casts
+        // physical input to this Iceberg representation while preserving the server IDs.
+        Arc::new(iceberg_schema_to_arrow(
+            &crate::datasource::type_converter::arrow_schema_to_iceberg(&writer_input_schema)?,
+        )?)
+    } else {
+        writer_input_schema
+    };
     let mut write_context = prepare_iceberg_write_context(
         &table_url,
         replacement

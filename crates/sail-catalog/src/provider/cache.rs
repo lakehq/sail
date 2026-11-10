@@ -376,15 +376,22 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         table: &str,
         request: LakehouseCommitRequest,
     ) -> CatalogResult<LakehouseCommitOutcome> {
-        let outcome = self
-            .inner
-            .commit_lakehouse_table(database, table, request)
-            .await?;
-        if let Some(c) = self.table_cache.as_ref() {
-            let c: &Cache<Namespace, Vec<TableStatus>> = c;
-            c.invalidate(database).await;
-        }
-        Ok(outcome)
+        let inner = self.inner.clone();
+        let cache = self.table_cache.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        tokio::spawn(async move {
+            let outcome = inner
+                .commit_lakehouse_table(&database, &table, request)
+                .await;
+            // Unknown outcomes may also have changed the authoritative table.
+            if let Some(cache) = cache {
+                cache.invalidate(&database).await;
+            }
+            outcome
+        })
+        .await
+        .map_err(|error| CatalogError::CommitStateUnknown(error.to_string().into()))?
     }
 
     async fn get_delta_ratified_commits(

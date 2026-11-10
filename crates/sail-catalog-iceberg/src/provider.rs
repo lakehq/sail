@@ -319,20 +319,35 @@ impl IcebergRestCatalogProvider {
         })
         .await?
         .map(|response| response.inner)
-        .map_err(|e| match e {
-            e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
-                CatalogObject::Table,
-                format!(
-                    "{}.{}",
-                    quote_namespace_if_needed(database),
-                    quote_name_if_needed(table)
-                ),
-            ),
-            _ => CatalogError::External(format!(
-                "Failed to load table {}.{}: {e}",
+        .map_err(|error| {
+            if let ApiError::Response(response) = &error
+                && let crate::r#gen::LoadTableError::NotFound(body) = &response.inner
+            {
+                match body.error.r#type.as_str() {
+                    "NoSuchTableException" => {
+                        return CatalogError::NotFound(
+                            CatalogObject::Table,
+                            format!(
+                                "{}.{}",
+                                quote_namespace_if_needed(database),
+                                quote_name_if_needed(table)
+                            ),
+                        );
+                    }
+                    "NoSuchNamespaceException" => {
+                        return CatalogError::NotFound(
+                            CatalogObject::Namespace,
+                            quote_namespace_if_needed(database),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            CatalogError::External(format!(
+                "Failed to load table {}.{}: {error}",
                 quote_namespace_if_needed(database),
                 quote_name_if_needed(table)
-            )),
+            ))
         })
     }
 
@@ -1450,6 +1465,151 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         Self::load_table_result_to_status(&self.name, database, table, result)
     }
 
+    async fn stage_table_replacement(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CreateTableOptions,
+    ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
+        use sail_common_datafusion::catalog::{
+            LakehouseOperation, ReplacementAuthority, TableReplacement,
+        };
+        if !options.format.eq_ignore_ascii_case("iceberg")
+            || !options.mode.is_replace()
+            || options.bucket_by.is_some()
+            || !options.constraints.is_empty()
+        {
+            return Err(CatalogError::NotSupported(
+                "Iceberg REST replacement options".into(),
+            ));
+        }
+        let config = self.resolved_catalog_config().await?;
+        let loaded = self
+            .load_table_result(database, table, config.access_delegation())
+            .await;
+        let (result, existing) = match loaded {
+            Ok(result) => (result, true),
+            Err(CatalogError::NotFound(CatalogObject::Table, _))
+                if !options.mode.replace_requires_existing() =>
+            {
+                let version = requested_iceberg_format_version(&options.properties)?;
+                let fields = columns_to_nested_fields(&options.columns, version)?;
+                let (names, _) = sail_iceberg::spec::SchemaBuilder::build_name_indexes(
+                    &StructType::new(fields.clone()),
+                );
+                let schema = sail_iceberg::spec::Schema::builder()
+                    .with_fields(fields)
+                    .build()
+                    .map_err(|error| CatalogError::External(error.to_string()))?;
+                let request = crate::r#gen::CreateTableRequest {
+                    name: table.to_string(),
+                    location: options.location.clone(),
+                    schema: Box::new(crate::r#gen::Schema::try_from(schema)?),
+                    partition_spec: build_partition_spec(&options.partition_by, None, &names)?,
+                    write_order: build_sort_order(&options.sort_by, &names)?,
+                    stage_create: Some(true),
+                    properties: Some(
+                        options
+                            .properties
+                            .iter()
+                            .filter(|(key, _)| !key.starts_with("option."))
+                            .cloned()
+                            .collect(),
+                    ),
+                };
+                let prefix = config.prefix().map(ToOwned::to_owned);
+                let namespace = config.namespace_string(database)?;
+                let response = self
+                    .with_auth_retry(|client| {
+                        let prefix = prefix.clone();
+                        let namespace = namespace.clone();
+                        let request = request.clone();
+                        async move { client.create_table(prefix, namespace, None, request).await }
+                    })
+                    .await?
+                    .map_err(|error| {
+                        CatalogError::External(format!("Failed to stage Iceberg table: {error}"))
+                    })?;
+                (response.inner, false)
+            }
+            Err(error) => return Err(error),
+        };
+        Self::validate_create_table_access_session_requirements(
+            &self.name, database, table, config, &result,
+        )?;
+        let metadata_json = serde_json::to_string(&result.metadata)
+            .map_err(|error| CatalogError::External(error.to_string()))?;
+        let metadata: sail_iceberg::spec::TableMetadata = serde_json::from_str(&metadata_json)
+            .map_err(|error| {
+                CatalogError::External(format!(
+                    "Invalid authoritative replacement metadata: {error}"
+                ))
+            })?;
+        if metadata.table_uuid.is_none()
+            || metadata.current_schema().is_none()
+            || metadata.default_partition_spec().is_none()
+        {
+            return Err(CatalogError::InvalidArgument(
+                "Incomplete authoritative replacement metadata".into(),
+            ));
+        }
+        if existing
+            && options.location.as_ref().is_some_and(|location| {
+                location.trim_end_matches('/') != metadata.location.trim_end_matches('/')
+            })
+        {
+            return Err(CatalogError::NotSupported(
+                "relocating an Iceberg table during replacement".into(),
+            ));
+        }
+        let mut catalog_table = vec![self.name.clone()];
+        catalog_table.extend(Vec::<String>::from(database.clone()));
+        catalog_table.push(table.to_string());
+        let metadata_location = result.metadata_location.clone();
+        let status = Self::load_table_result_to_status(&self.name, database, table, result)?;
+        let execution = sail_catalog::lakehouse::resolve_lakehouse_table_status(
+            self.name.clone(),
+            catalog_table.clone(),
+            &status,
+            LakehouseOperation::Write,
+            &self.lakehouse_capabilities(),
+        )
+        .execution;
+        let authority = if existing {
+            ReplacementAuthority::IcebergRestExisting {
+                metadata_json,
+                metadata_location: metadata_location.ok_or_else(|| {
+                    CatalogError::InvalidArgument(
+                        "Existing REST table has no metadata location".into(),
+                    )
+                })?,
+                execution,
+            }
+        } else {
+            ReplacementAuthority::IcebergRestStagedCreate {
+                metadata_json,
+                execution,
+            }
+        };
+        Ok(TableReplacement {
+            catalog_table,
+            authority,
+            require_existing: options.mode.replace_requires_existing(),
+            existing,
+            columns: options
+                .columns
+                .into_iter()
+                .map(|column| (column.name, column.data_type, column.nullable))
+                .collect(),
+            location: metadata.location,
+            partition_by: options.partition_by,
+            sort_by: options.sort_by,
+            properties: metadata.properties.into_iter().collect(),
+            property_updates: options.properties,
+            is_external: options.is_external,
+        })
+    }
+
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         let result = self.load_table_result(database, table, None).await?;
         Self::load_table_result_to_status(&self.name, database, table, result)
@@ -1738,7 +1898,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let payload = match payload {
             Some(payload) => Some(payload),
             None => Some(serde_json::to_value(response).map_err(|e| {
-                CatalogError::External(format!("Failed to serialize commit response: {e}"))
+                CatalogError::CommitStateUnknown(
+                    format!("Failed to serialize commit response: {e}").into(),
+                )
             })?),
         };
         Ok(LakehouseCommitOutcome::Committed { context, payload })
@@ -2781,6 +2943,77 @@ mod tests {
             properties: vec![],
             is_external: false,
             is_write_precondition: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn replacement_stages_only_a_genuine_missing_table() {
+        for (status, error_type, stages) in [
+            (404, "NoSuchTableException", true),
+            (404, "NoSuchNamespaceException", false),
+            (404, "NotFoundException", false),
+            (403, "ForbiddenException", false),
+            (503, "ServiceUnavailableException", false),
+        ] {
+            for replace_only in [false, true] {
+                let context = TestContext::new(Some("rest")).await;
+                Mock::given(method("GET")).and(path("/v1/namespaces/db1/tables/table1"))
+                    .respond_with(ResponseTemplate::new(status).set_body_json(serde_json::json!({"error":{"code":status,"type":error_type,"message":"test failure"}})))
+                    .mount(&context.server).await;
+                let mut response = create_table_response_with_access_session_hints();
+                response
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("metadata-location");
+                response["metadata"]["last-updated-ms"] = serde_json::json!(1);
+                response["metadata"]["last-column-id"] = serde_json::json!(101);
+                response["metadata"]["schemas"][0]["fields"][0]["id"] = serde_json::json!(101);
+                response["metadata"]["partition-specs"] =
+                    serde_json::json!([{"spec-id":0,"fields":[]}]);
+                response["metadata"]["default-spec-id"] = serde_json::json!(0);
+                response["metadata"]["last-partition-id"] = serde_json::json!(999);
+                response["metadata"]["last-sequence-number"] = serde_json::json!(0);
+                response["metadata"]["sort-orders"] =
+                    serde_json::json!([{"order-id":0,"fields":[]}]);
+                response["metadata"]["default-sort-order-id"] = serde_json::json!(0);
+                Mock::given(method("POST"))
+                    .and(path("/v1/namespaces/db1/tables"))
+                    .and(wiremock::matchers::body_partial_json(
+                        serde_json::json!({"stage-create":true}),
+                    ))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(response))
+                    .expect(u64::from(stages && !replace_only))
+                    .mount(&context.server)
+                    .await;
+                let mut options = simple_create_table_options();
+                options.mode = if replace_only {
+                    spec::CreateTableMode::Replace
+                } else {
+                    spec::CreateTableMode::CreateOrReplace
+                };
+                let result = context
+                    .catalog
+                    .stage_table_replacement(
+                        &Namespace::try_from(vec!["db1"]).unwrap(),
+                        "table1",
+                        options,
+                    )
+                    .await;
+                if stages && !replace_only {
+                    let replacement = result.unwrap();
+                    assert!(!replacement.existing);
+                    assert_eq!(replacement.location, "s3://bucket/table");
+                    let serialized = serde_json::to_string(&replacement).unwrap();
+                    assert!(!serialized.contains("storage-secret"));
+                    assert!(!serialized.contains("AKIA-SECRET"));
+                    let metadata: sail_iceberg::spec::TableMetadata =
+                        serde_json::from_str(replacement.authority.rest_metadata().unwrap())
+                            .unwrap();
+                    assert_eq!(metadata.current_schema().unwrap().fields()[0].id, 101);
+                } else {
+                    assert!(result.is_err(), "{status} {error_type}");
+                }
+            }
         }
     }
 

@@ -532,16 +532,6 @@ impl PlanResolver<'_> {
                         is_external: table_is_external || write_options_had_location,
                         is_write_precondition: true,
                     };
-                    if write_format.eq_ignore_ascii_case("iceberg")
-                        && matches!(mode, WriteMode::Replace { .. })
-                    {
-                        table_replacement = Some(
-                            self.ctx
-                                .extension::<CatalogManager>()?
-                                .stage_table_replacement(&catalog_table, create_options.clone())
-                                .await?,
-                        );
-                    }
                     let create_plan = self
                         .ctx
                         .extension::<CatalogManager>()?
@@ -567,6 +557,27 @@ impl PlanResolver<'_> {
                             .execution
                             .for_operation(LakehouseOperation::Write),
                     );
+                    if write_format.eq_ignore_ascii_case("iceberg")
+                        && matches!(mode, WriteMode::Replace { .. })
+                    {
+                        if info.is_none() && !write_options_had_location
+                            && sink_info.lakehouse_table.as_ref().is_some_and(|binding| matches!(binding.commit, sail_common_datafusion::catalog::CommitAuthority::IcebergRestCommit))
+                        {
+                            create_options.location = None;
+                        }
+                        let replacement = self
+                            .ctx
+                            .extension::<CatalogManager>()?
+                            .stage_table_replacement(&catalog_table, create_options.clone())
+                            .await?;
+                        sink_info.options.push(OptionLayer::OptionList {
+                            items: vec![("path".to_string(), replacement.location.clone())],
+                        });
+                        if let Some(execution) = replacement.authority.execution() {
+                            sink_info.lakehouse_table = Some(execution.clone());
+                        }
+                        table_replacement = Some(replacement);
+                    }
                     if table_replacement.is_none() {
                         let command = CatalogCommand::CreateTable {
                             table: table.clone().into(),

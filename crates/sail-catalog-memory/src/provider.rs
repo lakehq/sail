@@ -63,7 +63,8 @@ pub struct MemoryCatalogProvider {
     default_namespace: Namespace,
     databases: Arc<DashMap<Namespace, MemoryDatabase>>,
     generation: u64,
-    publication_gate: Arc<RwLock<()>>,
+    namespace_gates: DashMap<Namespace, Arc<RwLock<()>>>,
+    table_gates: DashMap<(Namespace, String), Arc<RwLock<()>>>,
 }
 
 impl MemoryCatalogProvider {
@@ -94,9 +95,50 @@ impl MemoryCatalogProvider {
             name,
             databases: Arc::new(databases),
             generation: next_generation(),
-            publication_gate: Arc::new(RwLock::new(())),
+            namespace_gates: DashMap::new(),
+            table_gates: DashMap::new(),
             default_namespace: initial_database,
         }
+    }
+
+    fn namespace_gate(&self, database: &Namespace) -> Arc<RwLock<()>> {
+        self.namespace_gates
+            .entry(database.clone())
+            .or_default()
+            .clone()
+    }
+
+    fn table_gate(&self, database: &Namespace, table: &str) -> Arc<RwLock<()>> {
+        self.table_gates
+            .entry((database.clone(), table.to_string()))
+            .or_default()
+            .clone()
+    }
+
+    async fn table_access(
+        &self,
+        database: &Namespace,
+        table: &str,
+    ) -> (
+        tokio::sync::OwnedRwLockReadGuard<()>,
+        tokio::sync::OwnedRwLockReadGuard<()>,
+    ) {
+        let namespace = self.namespace_gate(database).read_owned().await;
+        let table = self.table_gate(database, table).read_owned().await;
+        (namespace, table)
+    }
+
+    async fn ordered_table_access(
+        mut gates: Vec<(String, Arc<RwLock<()>>)>,
+    ) -> Vec<tokio::sync::OwnedRwLockReadGuard<()>> {
+        // Queued publication writers make read lock ordering matter as well.
+        gates.sort_by(|left, right| left.0.cmp(&right.0));
+        gates.dedup_by(|left, right| left.0 == right.0);
+        let mut access = Vec::with_capacity(gates.len());
+        for (_, gate) in gates {
+            access.push(gate.read_owned().await);
+        }
+        access
     }
 
     fn apply_table_alterations(
@@ -328,7 +370,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         database: &Namespace,
         options: CreateDatabaseOptions,
     ) -> CatalogResult<DatabaseStatus> {
-        let _access = self.publication_gate.read().await;
+        let _access = self.namespace_gate(database).write_owned().await;
         let CreateDatabaseOptions {
             if_not_exists,
             comment,
@@ -402,7 +444,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         database: &Namespace,
         options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
-        let _access = self.publication_gate.read().await;
+        let _access = self.namespace_gate(database).write_owned().await;
         let DropDatabaseOptions { if_exists, cascade } = options;
         match self.databases.entry(database.clone()) {
             Entry::Occupied(entry) => {
@@ -437,7 +479,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
-        let _access = self.publication_gate.read().await;
+        let _access = self.table_access(database, table).await;
         let CreateTableOptions {
             columns,
             comment,
@@ -556,7 +598,7 @@ impl CatalogProvider for MemoryCatalogProvider {
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
-        let _access = self.publication_gate.read().await;
+        let _access = self.table_access(database, table).await;
         if let Some(db) = self.databases.get(database) {
             db.check_known(table)?;
             if let Some(status) = db.tables.get(table) {
@@ -570,7 +612,14 @@ impl CatalogProvider for MemoryCatalogProvider {
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let _access = self.publication_gate.read().await;
+        let _namespace = self.namespace_gate(database).read_owned().await;
+        let gates = self
+            .table_gates
+            .iter()
+            .filter(|entry| &entry.key().0 == database)
+            .map(|entry| (entry.key().1.clone(), entry.value().clone()))
+            .collect::<Vec<_>>();
+        let _access = Self::ordered_table_access(gates).await;
         match self.databases.get(database) {
             Some(db) => {
                 for table in &db.uncertain_tables {
@@ -591,7 +640,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         table: &str,
         options: DropTableOptions,
     ) -> CatalogResult<()> {
-        let _access = self.publication_gate.read().await;
+        let _access = self.table_access(database, table).await;
         // In Spark, the `DROP TABLE ... PURGE` SQL statement deletes data if the table
         // is managed by the Hive metastore. `PURGE` is ignored if the table is external.
         // In Sail, all tables are external, so we ignore the `purge` option.
@@ -632,7 +681,15 @@ impl CatalogProvider for MemoryCatalogProvider {
         destination_database: &Namespace,
         destination_table: &str,
     ) -> CatalogResult<()> {
-        let _access = self.publication_gate.read().await;
+        let _namespace = self.namespace_gate(database).read_owned().await;
+        let _access = Self::ordered_table_access(vec![
+            (table.to_string(), self.table_gate(database, table)),
+            (
+                destination_table.to_string(),
+                self.table_gate(database, destination_table),
+            ),
+        ])
+        .await;
         if database != destination_database {
             return Err(CatalogError::NotSupported(
                 "Memory catalog cannot rename across databases".into(),
@@ -680,7 +737,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         options: AlterTableOptions,
         schema: SchemaRef,
     ) -> CatalogResult<()> {
-        let _access = self.publication_gate.read().await;
+        let _access = self.table_access(database, table).await;
         self.apply_table_alterations(database, table, vec![options], Some(schema.as_ref()))
     }
 
@@ -690,7 +747,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         table: &str,
         options: Vec<AlterTableOptions>,
     ) -> CatalogResult<()> {
-        let _access = self.publication_gate.read().await;
+        let _access = self.table_access(database, table).await;
         self.apply_table_alterations(database, table, options, None)
     }
 
@@ -700,7 +757,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         view: &str,
         options: CreateViewOptions,
     ) -> CatalogResult<TableStatus> {
-        let _access = self.publication_gate.read().await;
+        let _access = self.table_access(database, view).await;
         let CreateViewOptions {
             columns,
             definition,
@@ -792,7 +849,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         view: &str,
         options: DropViewOptions,
     ) -> CatalogResult<()> {
-        let _access = self.publication_gate.read().await;
+        let _access = self.table_access(database, view).await;
         let DropViewOptions { if_exists } = options;
         match self.databases.get_mut(database) {
             Some(mut db) => {

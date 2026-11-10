@@ -349,6 +349,7 @@ def test_snapshot_selectors_on_empty_table(spark, tmp_path, entry):
             assert actual.schema.simpleString() == "struct<id:int>"
             assert actual.collect() == []
         for options, error in [
+            ({"versionAsOf": "main"}, r"Snapshot for ref main \(id=-1\) not found"),
             ({"versionAsOf": "-10"}, "Snapshot with id -10 not found"),
             ({"versionAsOf": "missing"}, "Unknown Iceberg ref"),
             ({"branch": "missing"}, "Unknown Iceberg ref"),

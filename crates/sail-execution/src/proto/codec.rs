@@ -7273,7 +7273,7 @@ mod tests {
         let replacement: IcebergTableReplacement = serde_json::from_value(serde_json::json!({
             "catalog": TableReplacement {
                 catalog_table: vec!["catalog".into(), "namespace".into(), "table".into()],
-                catalog_generation: 11, database_generation: 22, table_generation: 33,
+                authority: sail_common_datafusion::catalog::ReplacementAuthority::Path { catalog_generation: 11, database_generation: 22, table_generation: 33 },
                 require_existing: true, existing: true,
                 columns: vec![("id".into(), DataType::Int64, false)],
                 location: "file:///tmp/replacement-codec/".into(),
@@ -7297,40 +7297,88 @@ mod tests {
                 "refs":{"audit":{"snapshot-id":42,"type":"tag"}}
             }),
         })).map_err(|e| plan_datafusion_err!("{e}"))?;
-        let expected =
-            serde_json::to_value(&replacement).map_err(|e| plan_datafusion_err!("{e}"))?;
-        assert_ne!(
-            replacement.catalog.properties,
-            replacement.catalog.property_updates
-        );
-        let serde_round_trip: IcebergTableReplacement =
-            serde_json::from_value(expected.clone()).map_err(|e| plan_datafusion_err!("{e}"))?;
-        assert_eq!(serde_round_trip.catalog, replacement.catalog);
-        let plan = IcebergCommitExec::new(
-            Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
-            Url::parse("file:///tmp/replacement-codec/")
+        let mut cases = vec![replacement.clone()];
+        for existing in [true, false] {
+            use sail_common_datafusion::catalog::*;
+            let mut rest = replacement.clone();
+            rest.catalog.existing = existing;
+            rest.catalog.require_existing = existing;
+            rest.base_metadata_file = None;
+            if !existing {
+                rest.metadata.snapshots.clear();
+                rest.metadata.snapshot_log.clear();
+                rest.metadata.metadata_log.clear();
+                rest.metadata.refs.clear();
+            }
+            let execution = LakehouseExecutionContext::catalog_table_context(
+                CatalogProviderId("rest".into()),
+                rest.catalog.catalog_table.clone(),
+                CatalogTableIdentity {
+                    table_id: rest.metadata.table_uuid.map(|uuid| uuid.to_string()),
+                    table_uri: Some(rest.metadata.location.clone()),
+                },
+                LakehouseOperation::Write,
+                LakehouseFormat::Iceberg,
+                LakehouseAuthority::CatalogAuthoritative {
+                    lifecycle: TableLifecycle::Managed,
+                    pointer: MetadataPointerAuthority::IcebergRest,
+                    commit: CommitAuthority::IcebergRestCommit,
+                },
+                ScanAuthority::ClientLakeSource,
+            );
+            let metadata_json = serde_json::to_string(&rest.metadata)
+                .map_err(|error| plan_datafusion_err!("{error}"))?;
+            rest.catalog.authority = if existing {
+                ReplacementAuthority::IcebergRestExisting {
+                    metadata_json,
+                    metadata_location: "s3://warehouse/table/metadata/catalog.json".into(),
+                    execution,
+                }
+            } else {
+                ReplacementAuthority::IcebergRestStagedCreate {
+                    metadata_json,
+                    execution,
+                }
+            };
+            cases.push(rest);
+        }
+        for replacement in cases {
+            let expected =
+                serde_json::to_value(&replacement).map_err(|e| plan_datafusion_err!("{e}"))?;
+            assert_ne!(
+                replacement.catalog.properties,
+                replacement.catalog.property_updates
+            );
+            let serde_round_trip: IcebergTableReplacement =
+                serde_json::from_value(expected.clone())
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
+            assert_eq!(serde_round_trip.catalog, replacement.catalog);
+            let plan = IcebergCommitExec::new(
+                Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+                Url::parse("file:///tmp/replacement-codec/")
+                    .map_err(|e| plan_datafusion_err!("{e}"))?,
+                None,
+                SnapshotUpdateKind::Truncate,
+            )
+            .with_table_replacement(Some(replacement));
+            let codec = RemoteExecutionCodec;
+            let bytes = try_encode_physical_plan(&codec, Arc::new(plan))?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            let commit = decoded
+                .downcast_ref::<IcebergCommitExec>()
+                .ok_or_else(|| plan_datafusion_err!("decoded plan is not an IcebergCommitExec"))?;
+            assert_eq!(
+                serde_json::to_value(commit.table_replacement().ok_or_else(|| {
+                    plan_datafusion_err!("decoded commit is missing table replacement")
+                })?)
                 .map_err(|e| plan_datafusion_err!("{e}"))?,
-            None,
-            SnapshotUpdateKind::Truncate,
-        )
-        .with_table_replacement(Some(replacement));
-        let codec = RemoteExecutionCodec;
-        let bytes = try_encode_physical_plan(&codec, Arc::new(plan))?;
-        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
-        let commit = decoded
-            .downcast_ref::<IcebergCommitExec>()
-            .ok_or_else(|| plan_datafusion_err!("decoded plan is not an IcebergCommitExec"))?;
-        assert_eq!(
-            serde_json::to_value(commit.table_replacement().ok_or_else(|| {
-                plan_datafusion_err!("decoded commit is missing table replacement")
-            })?)
-            .map_err(|e| plan_datafusion_err!("{e}"))?,
-            expected
-        );
-        assert_eq!(
-            commit.properties().output_partitioning().partition_count(),
-            1
-        );
+                expected
+            );
+            assert_eq!(
+                commit.properties().output_partitioning().partition_count(),
+                1
+            );
+        }
         Ok(())
     }
 

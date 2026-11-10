@@ -103,6 +103,41 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .map_err(|e| CatalogError::External(format!("Failed to execute create_table: {e}")))?
     }
 
+    async fn stage_table_replacement(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CreateTableOptions,
+    ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .stage_table_replacement(&database, &table, options)
+                    .await
+            })
+            .await
+            .map_err(|error| CatalogError::External(error.to_string()))?
+    }
+
+    async fn publish_table_replacement(
+        &self,
+        replacement: sail_common_datafusion::catalog::TableReplacement,
+        publication: crate::provider::TablePublication,
+    ) -> CatalogResult<()> {
+        let inner = self.inner.clone();
+        self.handle
+            .spawn(async move {
+                inner
+                    .publish_table_replacement(replacement, publication)
+                    .await
+            })
+            .await
+            .map_err(|error| CatalogError::CommitStateUnknown(error.to_string().into()))?
+    }
+
     fn create_table_metadata_requirement(
         &self,
         options: &CreateTableOptions,
