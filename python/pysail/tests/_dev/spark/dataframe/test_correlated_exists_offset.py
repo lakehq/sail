@@ -29,8 +29,7 @@ INNER = "FROM range(0, 10) AS t"
             id="exists-offset-without-limit",
         ),
         pytest.param(
-            f"SELECT id {OUTER} WHERE EXISTS "
-            f"(SELECT 1 {INNER} WHERE t.id >= o.id ORDER BY t.id DESC LIMIT 2 OFFSET 3)",
+            f"SELECT id {OUTER} WHERE EXISTS (SELECT 1 {INNER} WHERE t.id >= o.id ORDER BY t.id DESC LIMIT 2 OFFSET 3)",
             list(range(7)),
             id="exists-sorted",
         ),
@@ -46,8 +45,7 @@ INNER = "FROM range(0, 10) AS t"
             id="not-exists-mixed-correlation",
         ),
         pytest.param(
-            f"SELECT id {OUTER} WHERE id < 3 OR NOT EXISTS "
-            f"(SELECT t.id {INNER} WHERE t.id >= o.id LIMIT 5 OFFSET 2)",
+            f"SELECT id {OUTER} WHERE id < 3 OR NOT EXISTS (SELECT t.id {INNER} WHERE t.id >= o.id LIMIT 5 OFFSET 2)",
             [0, 1, 2, 8, 9, 10, 11],
             id="not-exists-in-disjunction",
         ),
