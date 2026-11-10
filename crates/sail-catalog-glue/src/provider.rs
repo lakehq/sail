@@ -263,6 +263,7 @@ impl GlueCatalogProvider {
             .view_definition()
             .and_then(|vd| vd.representations().first())
             .and_then(|rep| rep.view_original_text())
+            .filter(|text| !text.is_empty())
             .or_else(|| table.view_original_text())
             .filter(|text| !text.is_empty())
             .ok_or_else(|| CatalogError::External("View has no definition".to_string()))?
