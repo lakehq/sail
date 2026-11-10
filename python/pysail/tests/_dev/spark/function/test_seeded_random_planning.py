@@ -678,3 +678,36 @@ def test_boolean_case_with_volatile_condition_evaluates_the_condition_once(spark
     # Every branch is true, so the result is true however the condition is evaluated, as long
     # as it is evaluated once for each row.
     assert spark.sql(query).collect()[0][0] == 0
+
+
+def test_seeded_case_subquery_columns_are_shared(spark):
+    df = spark.sql(
+        "SELECT id, CASE WHEN id % 2 = 0 THEN rand(42) ELSE (SELECT 0.0D AS x) END AS a, "
+        "CASE WHEN id % 2 = 0 THEN rand(42) ELSE (SELECT 0.0D AS y) END AS b "
+        "FROM range(0, 6, 1, 1) ORDER BY id"
+    )
+    assert [tuple(row) for row in df.collect()] == [
+        (0, 0.619189370225301, 0.619189370225301),
+        (1, 0.0, 0.0),
+        (2, 0.5096018842446481, 0.5096018842446481),
+        (3, 0.0, 0.0),
+        (4, 0.8325259388871524, 0.8325259388871524),
+        (5, 0.0, 0.0),
+    ]
+    if not is_jvm_spark():
+        lines = [line for line in df._explain_string().splitlines() if "SeededRandomExec:" in line]  # noqa: SLF001
+        assert len(lines) == 1
+        assert lines[0].count("random(42)") == 1
+
+
+@pytest.mark.parametrize("condition", ["rand(42) > 0.5D", "rand(42) > (SELECT 0.5D)"])
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+def test_seeded_column_reuse_preserves_timestamp_types(spark, session_timezone, condition):
+    _ = session_timezone
+    df = spark.sql(
+        f"SELECT CASE WHEN {condition} THEN TIMESTAMP_NTZ '1970-01-01 00:00:00' END AS a, "
+        f"CASE WHEN {condition} THEN TIMESTAMP_LTZ '1970-01-01 00:00:00Z' END AS b "
+        "FROM range(0, 3, 1, 1)"
+    )
+    assert [field.dataType.simpleString() for field in df.schema] == ["timestamp_ntz", "timestamp"]
+    assert len(df.collect()) == 3

@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::DataType;
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
 use datafusion::common::{DataFusionError, Result};
-use datafusion_expr::expr::{BinaryExpr, Case, ScalarFunction};
+use datafusion_expr::expr::{BinaryExpr, Case, Placeholder, ScalarFunction};
 use datafusion_expr::{Expr, Extension, LogicalPlan, Projection, SubqueryAlias, ident};
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_function::scalar::explode::Explode;
@@ -19,6 +20,7 @@ use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::exists::ExistsRewriter;
 use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
+use crate::scalar_subquery_key::ScalarSubqueryKey;
 
 /// How the calls of random functions with a seed in an expression are evaluated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,7 +65,7 @@ pub(crate) struct SeededRandomRewriter<'s> {
     input: Option<LogicalPlan>,
     columns: Vec<SeededRandomColumn>,
     /// The names of the columns whose expressions can be reused.
-    reusable_columns: HashMap<Expr, String>,
+    reusable_columns: HashMap<ColumnKey, String>,
 }
 
 impl<'s> PlanRewriter<'s> for SeededRandomRewriter<'s> {
@@ -291,11 +293,12 @@ impl<'s> SeededRandomRewriter<'s> {
         let reusable = !node
             .exists(|e| Ok(e.is_volatile_node() && !is_seeded_random_call(e)))
             .unwrap_or(true);
-        let existing = if reusable {
-            self.reusable_columns.get(&node)
+        let key = if reusable {
+            ColumnKey::try_new(&node)?
         } else {
             None
         };
+        let existing = key.as_ref().and_then(|key| self.reusable_columns.get(key));
         let name = match existing {
             Some(name) => name.clone(),
             None => {
@@ -303,8 +306,8 @@ impl<'s> SeededRandomRewriter<'s> {
                 self.input = Some(input);
                 // Create an internal-only field ID without a referenceable name.
                 let name = self.state.next_field_id();
-                if reusable {
-                    self.reusable_columns.insert(node.clone(), name.clone());
+                if let Some(key) = key {
+                    self.reusable_columns.insert(key, name.clone());
                 }
                 self.columns.push(SeededRandomColumn {
                     name: name.clone(),
@@ -315,6 +318,58 @@ impl<'s> SeededRandomRewriter<'s> {
             }
         };
         Ok(Transformed::yes(ident(&name).alias(&name)))
+    }
+}
+
+/// Identifies the values of a column of the node, regardless of the aliases and of the
+/// generated names in equivalent uncorrelated scalar subqueries.
+#[derive(PartialEq, Eq, Hash)]
+struct ColumnKey {
+    /// The expression with each shareable scalar subquery replaced by a placeholder.
+    expr: Expr,
+    /// The keys of the replaced scalar subqueries in order.
+    subqueries: Vec<ScalarSubqueryKey>,
+    /// Literal equality can ignore type properties such as timestamp time zones.
+    literal_types: Vec<DataType>,
+}
+
+impl ColumnKey {
+    fn try_new(expr: &Expr) -> Result<Option<Self>> {
+        let mut expr = expr;
+        while let Expr::Alias(alias) = expr
+            && alias.metadata.is_none()
+        {
+            expr = alias.expr.as_ref();
+        }
+        let mut subqueries = vec![];
+        let mut literal_types = vec![];
+        let mut shareable = true;
+        let expr = expr
+            .clone()
+            .transform_down(|expr| {
+                if let Expr::Literal(value, _) = &expr {
+                    literal_types.push(value.data_type());
+                }
+                let Expr::ScalarSubquery(subquery) = &expr else {
+                    return Ok(Transformed::no(expr));
+                };
+                let Some(key) = ScalarSubqueryKey::try_new(subquery)? else {
+                    shareable = false;
+                    return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
+                };
+                subqueries.push(key);
+                Ok(Transformed::new(
+                    Expr::Placeholder(Placeholder::new_with_field("#subquery".to_string(), None)),
+                    true,
+                    TreeNodeRecursion::Jump,
+                ))
+            })?
+            .data;
+        Ok(shareable.then_some(Self {
+            expr,
+            subqueries,
+            literal_types,
+        }))
     }
 }
 
@@ -531,4 +586,86 @@ pub(crate) fn seeded_random_calls(expr: &Expr) -> Vec<&Expr> {
         Ok(TreeNodeRecursion::Continue)
     });
     calls
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_expr::{LogicalPlanBuilder, Subquery, col, lit, when};
+
+    use super::*;
+
+    fn scalar_subquery(value: f64, name: &str) -> Result<Expr> {
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(vec![lit(value).alias(name)])?
+            .build()?;
+        Ok(Expr::ScalarSubquery(Subquery {
+            subquery: Arc::new(plan),
+            outer_ref_columns: vec![],
+            spans: Default::default(),
+        }))
+    }
+
+    fn case(subquery: Expr, name: &str) -> Result<Expr> {
+        Ok(when(col("id").eq(lit(0_i64)), lit(1.0))
+            .otherwise(subquery)?
+            .alias(name))
+    }
+
+    #[test]
+    fn test_column_key_ignores_aliases_and_subquery_names() -> Result<()> {
+        let a = ColumnKey::try_new(&case(scalar_subquery(0.0, "#1")?, "a1")?)?;
+        let b = ColumnKey::try_new(&case(scalar_subquery(0.0, "#2")?, "a2")?)?;
+        let c = ColumnKey::try_new(&case(scalar_subquery(1.0, "#3")?, "a3")?)?;
+        assert!(a.is_some());
+        assert!(a == b);
+        assert!(a != c);
+        Ok(())
+    }
+
+    #[test]
+    fn test_column_key_preserves_literal_types() -> Result<()> {
+        use datafusion_common::ScalarValue;
+
+        // Arrow literal equality ignores these type properties, but column reuse must not.
+        for (a, b) in [
+            (
+                ScalarValue::TimestampMicrosecond(Some(0), None),
+                ScalarValue::TimestampMicrosecond(Some(0), Some("UTC".into())),
+            ),
+            (
+                ScalarValue::FixedSizeBinary(1, None),
+                ScalarValue::FixedSizeBinary(2, None),
+            ),
+        ] {
+            assert_eq!(a, b);
+            let a = ColumnKey::try_new(&when(col("id").eq(lit(0_i64)), lit(a)).end()?.alias("a"))?;
+            let b = ColumnKey::try_new(&when(col("id").eq(lit(0_i64)), lit(b)).end()?.alias("b"))?;
+            assert!(a.is_some() && b.is_some());
+            assert!(a != b);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_column_key_rejects_unshareable_subqueries() -> Result<()> {
+        use datafusion_expr::ScalarUDF;
+        use sail_function::scalar::math::random::Random;
+
+        let random = Expr::ScalarFunction(ScalarFunction::new_udf(
+            Arc::new(ScalarUDF::new_from_impl(Random::new())),
+            vec![],
+        ));
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(vec![random.alias("#1")])?
+            .build()?;
+        let subquery = Expr::ScalarSubquery(Subquery {
+            subquery: Arc::new(plan),
+            outer_ref_columns: vec![],
+            spans: Default::default(),
+        });
+        // Even the same unresolved volatile plan must not bypass the subquery sharing rules.
+        assert!(ColumnKey::try_new(&case(subquery.clone(), "a")?)?.is_none());
+        assert!(ColumnKey::try_new(&case(subquery, "b")?)?.is_none());
+        Ok(())
+    }
 }
