@@ -184,21 +184,21 @@ dependencies = [
 ]
 
 [[tool.hatch.envs.test.matrix]]
-spark = ["3.5.9", "4.0.4", "4.1.3", "4.2.0", "4.3.0"]
+spark = ["3.5.9", "4.0.5", "4.1.4", "4.2.1", "4.3.0"]
 
 [tool.hatch.envs.test.overrides]
 matrix.spark.path = [
     { value = ".venvs/test.spark-3.5.9", if = ["3.5.9"] },
-    { value = ".venvs/test.spark-4.0.4", if = ["4.0.4"] },
-    { value = ".venvs/test.spark-4.1.3", if = ["4.1.3"] },
-    { value = ".venvs/test.spark-4.2.0", if = ["4.2.0"] },
+    { value = ".venvs/test.spark-4.0.5", if = ["4.0.5"] },
+    { value = ".venvs/test.spark-4.1.4", if = ["4.1.4"] },
+    { value = ".venvs/test.spark-4.2.1", if = ["4.2.1"] },
     { value = ".venvs/test.spark-4.3.0", if = ["4.3.0"] },
 ]
 matrix.spark.extra-dependencies = [
     { value = "pyspark[connect]==3.5.9", if = ["3.5.9"] },
-    { value = "pyspark[connect]==4.0.4", if = ["4.0.4"] },
-    { value = "pyspark[connect]==4.1.3", if = ["4.1.3"] },
-    { value = "pyspark[connect]==4.2.0", if = ["4.2.0"] },
+    { value = "pyspark[connect]==4.0.5", if = ["4.0.5"] },
+    { value = "pyspark[connect]==4.1.4", if = ["4.1.4"] },
+    { value = "pyspark[connect]==4.2.1", if = ["4.2.1"] },
     { value = "pyspark[connect]==4.3.0", if = ["4.3.0"] },
 ]
 env.CI.installer = "uv"
