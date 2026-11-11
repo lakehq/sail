@@ -24,6 +24,7 @@ use crate::managed_table;
 mod replacement;
 
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+const GATE_CLEANUP_INTERVAL: u64 = 64;
 
 fn next_generation() -> u64 {
     NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
@@ -63,6 +64,7 @@ pub struct MemoryCatalogProvider {
     default_namespace: Namespace,
     databases: Arc<DashMap<Namespace, MemoryDatabase>>,
     generation: u64,
+    gate_acquisitions: AtomicU64,
     namespace_gates: DashMap<Namespace, Arc<RwLock<()>>>,
     table_gates: DashMap<(Namespace, String), Arc<RwLock<()>>>,
 }
@@ -95,13 +97,35 @@ impl MemoryCatalogProvider {
             name,
             databases: Arc::new(databases),
             generation: next_generation(),
+            gate_acquisitions: AtomicU64::new(0),
             namespace_gates: DashMap::new(),
             table_gates: DashMap::new(),
             default_namespace: initial_database,
         }
     }
 
+    fn cleanup_idle_gates(&self) {
+        // Cloning and eviction share the shard lock. With no Weak handles, a sole
+        // registry owner means no holder, waiter, or unpolled acquisition can use it.
+        self.namespace_gates
+            .retain(|_, gate| Arc::strong_count(gate) > 1);
+        self.table_gates
+            .retain(|_, gate| Arc::strong_count(gate) > 1);
+    }
+
+    fn maybe_cleanup_idle_gates(&self) {
+        // Lazy cleanup bounds idle history between sweeps, not immediate quiescence.
+        if self
+            .gate_acquisitions
+            .fetch_add(1, Ordering::Relaxed)
+            .is_multiple_of(GATE_CLEANUP_INTERVAL)
+        {
+            self.cleanup_idle_gates();
+        }
+    }
+
     fn namespace_gate(&self, database: &Namespace) -> Arc<RwLock<()>> {
+        self.maybe_cleanup_idle_gates();
         self.namespace_gates
             .entry(database.clone())
             .or_default()
@@ -109,6 +133,7 @@ impl MemoryCatalogProvider {
     }
 
     fn table_gate(&self, database: &Namespace, table: &str) -> Arc<RwLock<()>> {
+        self.maybe_cleanup_idle_gates();
         self.table_gates
             .entry((database.clone(), table.to_string()))
             .or_default()
@@ -623,6 +648,7 @@ impl CatalogProvider for MemoryCatalogProvider {
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
         let _namespace = self.namespace_gate(database).read_owned().await;
+        self.cleanup_idle_gates();
         let gates = self
             .table_gates
             .iter()

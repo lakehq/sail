@@ -284,6 +284,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn missing_queries_bound_idle_gate_history() -> CatalogResult<()> {
+        let (provider, namespace) = fixture(false).await?;
+        for missing_namespace in [false, true] {
+            for i in 0..1024 {
+                let database = if missing_namespace {
+                    Namespace::try_from(vec![format!("missing_{i}")])?
+                } else {
+                    namespace.clone()
+                };
+                assert!(matches!(
+                    provider.get_table(&database, &format!("missing_{i}")).await,
+                    Err(CatalogError::NotFound(CatalogObject::Table, _))
+                ));
+                assert!(provider.namespace_gates.len() <= GATE_CLEANUP_INTERVAL as usize);
+                assert!(provider.table_gates.len() <= GATE_CLEANUP_INTERVAL as usize);
+            }
+        }
+        assert_eq!(provider.databases.len(), 1);
+        assert!(provider.list_tables(&namespace).await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn listing_removes_idle_gates_before_snapshot() -> CatalogResult<()> {
+        let (provider, namespace) = fixture(false).await?;
+        let absent = Namespace::try_from(vec!["absent".to_string()])?;
+        // Stay below the cadence so only listing can remove this idle history.
+        for database in [&namespace, &absent] {
+            for i in 0..8 {
+                assert!(
+                    provider
+                        .get_table(database, &format!("missing_{i}"))
+                        .await
+                        .is_err()
+                );
+            }
+        }
+        assert_eq!(provider.table_gates.len(), 16);
+        assert_eq!(provider.namespace_gates.len(), 2);
+        assert!(provider.list_tables(&namespace).await?.is_empty());
+        assert!(provider.table_gates.is_empty());
+        assert_eq!(provider.namespace_gates.len(), 1);
+        assert!(!provider.namespace_gates.contains_key(&absent));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn gate_cleanup_preserves_holders_waiters_and_unpolled_acquisitions() -> CatalogResult<()>
+    {
+        use std::future::Future;
+        use std::task::{Context, Waker};
+
+        for namespace_gate in [false, true] {
+            let (provider, namespace) = fixture(false).await?;
+            let gate = || {
+                if namespace_gate {
+                    provider.namespace_gate(&namespace)
+                } else {
+                    provider.table_gate(&namespace, "t")
+                }
+            };
+            let original = gate();
+            let identity = Arc::as_ptr(&original);
+            let held = original.write_owned().await;
+            provider.cleanup_idle_gates();
+            assert_eq!(Arc::as_ptr(&gate()), identity);
+            let mut queued = Box::pin(gate().write_owned());
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(queued.as_mut().poll(&mut cx).is_pending());
+            provider.cleanup_idle_gates();
+            assert_eq!(Arc::as_ptr(&gate()), identity);
+            let mut later = Box::pin(gate().read_owned());
+            assert!(later.as_mut().poll(&mut cx).is_pending());
+            drop(held);
+            drop(later);
+            provider.cleanup_idle_gates();
+            assert_eq!(Arc::as_ptr(&gate()), identity);
+            // Cancellation releases the queued reservation, but the unpolled
+            // future must still keep the allocation registered on its own.
+            let unpolled = gate().read_owned();
+            drop(queued);
+            provider.cleanup_idle_gates();
+            assert_eq!(Arc::as_ptr(&gate()), identity);
+            drop(unpolled);
+            // Normal acquisitions eventually reclaim it without explicit cleanup.
+            let other = Namespace::try_from(vec!["other".to_string()])?;
+            for _ in 0..GATE_CLEANUP_INTERVAL {
+                drop(provider.table_gate(&other, "churn"));
+            }
+            assert!(!provider.namespace_gates.contains_key(&namespace));
+            assert!(!provider.table_gates.contains_key(&(namespace, "t".into())));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn ordered_reads_do_not_deadlock_with_queued_publications() -> CatalogResult<()> {
         use std::future::Future;
         use std::task::{Context, Poll, Waker};
@@ -300,6 +396,7 @@ mod tests {
         assert!(publish_a.as_mut().poll(&mut cx).is_pending()); // queues behind rename
         let mut listing = Box::pin(MemoryCatalogProvider::ordered_table_access(vec![
             ("b".into(), b.clone()),
+            ("a".into(), a.clone()),
             ("a".into(), a.clone()),
         ]));
         assert!(listing.as_mut().poll(&mut cx).is_pending()); // must wait on a first
@@ -505,6 +602,9 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
+            provider.cleanup_idle_gates();
+            assert!(provider.namespace_gates.is_empty());
+            assert!(provider.table_gates.is_empty());
             let called = Arc::new(AtomicBool::new(false));
             let flag = called.clone();
             let result = provider
@@ -570,6 +670,17 @@ mod tests {
                 if cancel {
                     task.abort();
                 }
+                provider.cleanup_idle_gates();
+                assert!(provider.table_gate(&namespace, "t").try_read().is_err());
+                let mut listing = Box::pin(provider.list_tables(&namespace));
+                {
+                    use std::future::Future;
+                    use std::task::{Context, Waker};
+                    let mut cx = Context::from_waker(Waker::noop());
+                    assert!(listing.as_mut().poll(&mut cx).is_pending());
+                }
+                provider.cleanup_idle_gates();
+                assert!(provider.table_gate(&namespace, "t").try_read().is_err());
                 release.wait().await;
                 if cancel {
                     let error = task.await.err().ok_or_else(|| {
@@ -586,6 +697,7 @@ mod tests {
                     status_value(provider.get_table(&namespace, "t").await?),
                     status_value(expected)
                 );
+                assert_eq!(listing.await?.len(), 3);
             }
             Ok::<(), CatalogError>(())
         })
