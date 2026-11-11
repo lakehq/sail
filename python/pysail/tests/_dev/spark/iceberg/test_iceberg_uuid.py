@@ -175,6 +175,134 @@ def test_uuid_struct_cast_uses_positions(spark, cast, container):
     assert (bytes(result.b), bytes(result.a)) == (VALUE_BYTES, UUID(second).bytes)
 
 
+@pytest.mark.parametrize("cast", ["CAST", "TRY_CAST"])
+@pytest.mark.parametrize("constant", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("types", [("UUID", "STRING"), ("STRING", "INT"), ("UUID", "INT")])
+@pytest.mark.parametrize("container", ["struct", "array", "map"])
+@pytest.mark.parametrize("source_names", [("a", "b"), ("__sail_cast_0", "__sail_cast_1")])
+def test_struct_cast_duplicate_names(spark, cast, constant, reverse, types, container, source_names):
+    # Spark v4.0.5 Cast.castStruct reads/writes ordinal i, not the field name.
+    inputs = {"UUID": VALUE, "STRING": "plain", "INT": "7"}
+    outputs = {"UUID": VALUE_BYTES, "STRING": "plain", "INT": 7}
+    client_types = {"UUID": "binary", "STRING": "string", "INT": "int"}
+    types = types[::-1] if reverse else types
+    target = f"STRUCT<x: {types[0]}, x: {types[1]}>"
+    source = f"STRUCT<{source_names[0]}: STRING, {source_names[1]}: STRING>"
+    values = [(inputs[types[0]], inputs[types[1]]), (None, None), None]
+    expected = [(outputs[types[0]], outputs[types[1]]), (None, None), None]
+    if cast == "TRY_CAST":
+        values.append(tuple("bad" if t != "STRING" else "unchanged" for t in types))
+        expected.append(tuple(None if t != "STRING" else "unchanged" for t in types))
+
+    def cast_expression(expression):
+        if container == "array":
+            return f"{cast}(array({expression}) AS ARRAY<{target}>)"
+        if container == "map":
+            return f"{cast}(map('k', {expression}) AS MAP<STRING, {target}>)"
+        return f"{cast}({expression} AS {target})"
+
+    def convert(rows):
+        if constant:
+            expressions = []
+            for row in rows:
+                if row is None:
+                    expression = f"CAST(NULL AS {source})"
+                else:
+                    a, b = ("NULL" if v is None else f"'{v}'" for v in row)
+                    expression = f"named_struct('{source_names[0]}', {a}, '{source_names[1]}', {b})"
+                expressions.append(f"SELECT {cast_expression(expression)} AS v")
+            frame = spark.sql(" UNION ALL ".join(expressions))
+        else:
+            frame = spark.createDataFrame([(row,) for row in rows], f"s {source}").repartition(2)
+            frame = frame.selectExpr(f"{cast_expression('s')} AS v")
+        return frame
+
+    frame = convert(values)
+    data_type = frame.schema.fields[0].dataType
+    if container == "array":
+        data_type = data_type.elementType
+    elif container == "map":
+        data_type = data_type.valueType
+    fields = data_type.fields
+    assert [(field.name, field.dataType.simpleString()) for field in fields] == [("x", client_types[t]) for t in types]
+
+    # Connect collect()/toArrow() cannot decode duplicate struct names. Read the
+    # same response as collect(), without changing the cast target or its plan.
+    def raw_table(frame):
+        if hasattr(type(frame), "_to_table"):
+            return frame._to_table()[0]  # noqa: SLF001
+        query = frame._plan.to_proto(frame.sparkSession.client)  # noqa: SLF001
+        return frame.sparkSession.client.to_table(query)[0]
+
+    table = raw_table(frame)
+    if container == "array":
+        # ANSI indexing inserts CASE coercion; duplicate fields must stay positional.
+        previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+        try:
+            spark.conf.set("spark.sql.ansi.enabled", "true")
+            projected = raw_table(frame.selectExpr("v[0] AS v"))
+            projected_rows = []
+            for chunk in projected.column(0).chunks:
+                assert [field.name for field in chunk.type] == ["x", "x"]
+                projected_rows.extend(
+                    None if not chunk[index].is_valid else tuple(chunk.field(i)[index].as_py() for i in range(2))
+                    for index in range(len(chunk))
+                )
+            assert sorted(projected_rows, key=str) == sorted(expected, key=str)
+        finally:
+            spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+    actual = []
+    for chunk in table.column(0).chunks:
+        structs = chunk
+        if container == "array":
+            assert chunk.value_lengths().to_pylist() == [1] * len(chunk)
+            structs = chunk.values
+        elif container == "map":
+            assert chunk.keys.to_pylist() == ["k"] * len(chunk)
+            structs = chunk.items
+        assert [field.name for field in structs.type] == ["x", "x"]
+        actual.extend(
+            None if not structs[index].is_valid else tuple(structs.field(i)[index].as_py() for i in range(2))
+            for index in range(len(structs))
+        )
+    assert sorted(actual, key=str) == sorted(expected, key=str)
+    if cast == "CAST":
+        invalid = [tuple("bad" if t != "STRING" else "unchanged" for t in types)]
+        with pytest.raises(Exception, match=r"(?i)invalid uuid|cast|parse"):
+            raw_table(convert(invalid))
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_uuid_nested_write_matches_names(spark, tmp_path, reverse):
+    table = "uuid_nested_name_alignment"
+    location = escape_sql_string_literal(str(tmp_path))
+    try:
+        spark.sql(f"CREATE TABLE {table} (s STRUCT<u: UUID, label: STRING>) USING iceberg LOCATION '{location}'")
+        names = ["u", "label"]
+        values = [VALUE, "plain"]
+        if reverse:
+            names.reverse()
+            values.reverse()
+        source = "s STRUCT<" + ", ".join(f"{name}: STRING" for name in names) + ">"
+        spark.createDataFrame([(tuple(values),), (None,)], source).repartition(2).write.format("iceberg").mode(
+            "append"
+        ).save(str(tmp_path))
+        frame = spark.table(table)
+        assert [(f.name, f.dataType.simpleString()) for f in frame.schema["s"].dataType] == [
+            ("u", "binary"),
+            ("label", "string"),
+        ]
+        actual = [None if row.s is None else (bytes(row.s[0]), row.s[1]) for row in frame.collect()]
+        assert sorted(actual, key=str) == sorted([None, (VALUE_BYTES, "plain")], key=str)
+        fields = _current_schema(_find_latest_metadata(tmp_path))["fields"][0]["type"]["fields"]
+        assert [(f["name"], f["type"]) for f in fields] == [("u", "uuid"), ("label", "string")]
+        for parquet in _data_files(tmp_path):
+            assert parquet.schema.column(0).logical_type.type == "UUID"
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
 def test_uuid_try_cast_keeps_ordinary_leaf_conversion_safe(spark):
     frame = spark.createDataFrame([(VALUE, "bad")], "a STRING, b STRING").repartition(2)
     value = frame.selectExpr("TRY_CAST(named_struct('a', a, 'b', b) AS STRUCT<b: UUID, a: INT>) AS value").first().value

@@ -44,19 +44,29 @@ pub fn uuid_input_field(source: &Field, target: &Field) -> Field {
             .with_metadata(metadata);
     }
     let data_type = match (source.data_type(), target.data_type()) {
-        (DataType::Struct(source), DataType::Struct(target)) => DataType::Struct(
-            source
-                .iter()
-                .map(|field| {
-                    target
-                        .iter()
-                        .find(|target| target.name() == field.name())
-                        .map(|target| Arc::new(uuid_input_field(field, target)))
-                        .unwrap_or_else(|| field.clone())
-                })
-                .collect::<Vec<_>>()
-                .into(),
-        ),
+        (DataType::Struct(source), DataType::Struct(target)) => {
+            // SQL casts rename positionally first, including repeated names.
+            // Writes with a different field order still match by name.
+            let aligned = source.len() == target.len()
+                && source.iter().zip(target).all(|(s, t)| s.name() == t.name());
+            DataType::Struct(
+                source
+                    .iter()
+                    .enumerate()
+                    .map(|(index, field)| {
+                        let target = if aligned {
+                            target.get(index)
+                        } else {
+                            target.iter().find(|target| target.name() == field.name())
+                        };
+                        target
+                            .map(|target| Arc::new(uuid_input_field(field, target)))
+                            .unwrap_or_else(|| field.clone())
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            )
+        }
         (DataType::List(source), DataType::List(target) | DataType::LargeList(target)) => {
             DataType::List(Arc::new(uuid_input_field(source, target)))
         }
@@ -365,6 +375,51 @@ mod tests {
     fn uuid_field() -> Field {
         Field::new("u", DataType::FixedSizeBinary(16), true)
             .with_metadata([(UUID_METADATA_KEY.to_string(), "uuid".to_string())].into())
+    }
+
+    #[test]
+    fn uuid_input_alignment_preserves_positions_and_reordered_names() -> Result<()> {
+        for uuid_index in 0..2 {
+            for reordered in [false, true] {
+                let names = if reordered { ["a", "b"] } else { ["x", "x"] };
+                let source = Field::new(
+                    "s",
+                    DataType::Struct(
+                        names
+                            .iter()
+                            .map(|name| Field::new(*name, DataType::Utf8, true))
+                            .collect(),
+                    ),
+                    true,
+                );
+                let mut target_fields = names
+                    .iter()
+                    .enumerate()
+                    .map(|(index, name)| {
+                        if index == uuid_index {
+                            uuid_field().with_name(*name)
+                        } else {
+                            Field::new(*name, DataType::Utf8, true)
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if reordered {
+                    target_fields.reverse();
+                }
+                let target = Field::new("s", DataType::Struct(target_fields.into()), true);
+                let output = uuid_input_field(&source, &target);
+                let DataType::Struct(fields) = output.data_type() else {
+                    return exec_err!("expected struct");
+                };
+                assert!(is_uuid_field(&fields[uuid_index]));
+                assert_eq!(fields[1 - uuid_index].data_type(), &DataType::Utf8);
+                assert_eq!(
+                    fields.iter().map(|f| f.name().as_str()).collect::<Vec<_>>(),
+                    names
+                );
+            }
+        }
+        Ok(())
     }
 
     fn nested_cases(values: ArrayRef, nulls: Option<NullBuffer>) -> Result<Vec<(ArrayRef, Field)>> {
