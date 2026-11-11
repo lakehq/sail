@@ -36,15 +36,10 @@ use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructT
 pub const ICEBERG_ARROW_FIELD_DOC_KEY: &str = "doc";
 pub const ICEBERG_FIELD_INITIAL_DEFAULT: &str = "iceberg.field.initial-default";
 pub const ICEBERG_FIELD_WRITE_DEFAULT: &str = "iceberg.field.write-default";
-const ICEBERG_ARROW_TYPE_KEY: &str = "iceberg.type";
+const ICEBERG_ARROW_TYPE_KEY: &str = sail_common_datafusion::uuid::UUID_METADATA_KEY;
 
 pub(crate) fn is_uuid_arrow_field(field: &ArrowField) -> bool {
-    field.data_type() == &ArrowDataType::FixedSizeBinary(16)
-        && field
-            .metadata()
-            .get(ICEBERG_ARROW_TYPE_KEY)
-            .map(String::as_str)
-            == Some("uuid")
+    sail_common_datafusion::uuid::is_uuid_field(field)
 }
 
 pub(crate) fn iceberg_field_id(field: &ArrowField) -> Result<Option<i32>> {

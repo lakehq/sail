@@ -2,14 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::functions_window::row_number::row_number_udwf;
-use datafusion::logical_expr::expr::NullTreatment;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, ScalarValue};
-use datafusion_expr::expr::{self, FieldMetadata, Sort, WindowFunctionParams};
+use datafusion_expr::expr::{FieldMetadata, Sort};
 use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, Operator,
-    Projection, ScalarUDF, WindowFrame, WindowFunctionDefinition, col, lit, when,
+    Projection, ScalarUDF, col, lit, when,
 };
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
@@ -21,8 +19,8 @@ use sail_catalog::provider::{
 };
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableSort, LakehouseExecutionContext,
-    LakehouseOperation, TableColumnStatus, TableKind,
+    CatalogTableBucketBy, CatalogTableSort, LakehouseExecutionContext, LakehouseOperation,
+    TableColumnStatus, TableKind,
 };
 use sail_common_datafusion::column_features::{
     ColumnFeatures, ColumnFeaturesBuilder, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
@@ -37,8 +35,6 @@ use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::parse_absolute_directory_url;
 use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
-use sail_function::scalar::math::spark_try_add::SparkTryAdd;
-use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_logical_plan::barrier::BarrierNode;
 
@@ -151,6 +147,7 @@ pub(super) struct WritePlanBuilder {
     table_properties: Vec<(String, String)>,
     table_is_external: bool,
     sql_insert: bool,
+    identity_columns_to_track: Vec<String>,
 }
 
 impl WritePlanBuilder {
@@ -169,7 +166,13 @@ impl WritePlanBuilder {
             table_properties: vec![],
             table_is_external: false,
             sql_insert: false,
+            identity_columns_to_track: Vec::new(),
         }
+    }
+
+    pub fn with_identity_columns_to_track(mut self, columns: Vec<String>) -> Self {
+        self.identity_columns_to_track = columns;
+        self
     }
 
     pub fn with_sql_insert(mut self) -> Self {
@@ -261,6 +264,7 @@ impl PlanResolver<'_> {
             table_properties,
             table_is_external,
             sql_insert,
+            identity_columns_to_track,
         } = builder;
 
         let Some(mode) = mode else {
@@ -282,6 +286,7 @@ impl PlanResolver<'_> {
         let mut write_format = format.unwrap_or_default();
         let mut sink_info = SinkInfo {
             input: input.clone(),
+            identity_columns_to_track,
             sql_insert,
             // The mode will be set later so the value here is just a placeholder.
             mode: SinkMode::ErrorIfExists,
@@ -320,7 +325,7 @@ impl PlanResolver<'_> {
                         .rewrite_data_source_delta_table_features(
                             input,
                             &write_format,
-                            &sink_info,
+                            &mut sink_info,
                             state,
                         )
                         .await?;
@@ -415,6 +420,9 @@ impl PlanResolver<'_> {
                         && matches!(&mode, WriteMode::TruncateIf { .. })
                         && matches!(&column_match, WriteColumnMatch::ByName);
                     if !lake_source_merge_schema {
+                        sink_info
+                            .identity_columns_to_track
+                            .extend(Self::omitted_identity_columns(&input, &column_match, info)?);
                         if conditional_delta_by_name {
                             // Name alignment can fill omitted columns, but must not discard
                             // unknown columns before Delta validates a conditional overwrite.
@@ -453,6 +461,9 @@ impl PlanResolver<'_> {
                         // Normalize compatible inputs, including full-width generated values.
                         // Do not discard new fields or coerce supplied types before Delta
                         // validates schema evolution.
+                        sink_info
+                            .identity_columns_to_track
+                            .extend(Self::omitted_identity_columns(&input, &column_match, info)?);
                         input = self
                             .rewrite_write_input_with_column_expressions(
                                 input,
@@ -561,6 +572,11 @@ impl PlanResolver<'_> {
                         .fields()
                         .iter()
                         .map(|f| CreateTableColumnOptions {
+                            metadata: f
+                                .metadata()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect(),
                             name: f.name().clone(),
                             data_type: f.data_type().clone(),
                             nullable: f.is_nullable(),
@@ -954,6 +970,11 @@ impl PlanResolver<'_> {
         // writers store them as JSON-encoded strings.
         let features = ColumnFeatures::from_field(field);
         TableColumnStatus {
+            metadata: field
+                .metadata()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             name: field.name().clone(),
             data_type: field.data_type().clone(),
             nullable: field.is_nullable(),
@@ -983,6 +1004,11 @@ impl PlanResolver<'_> {
                 continue;
             };
             let features = ColumnFeatures::from_field(field);
+            column.metadata = field
+                .metadata()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
             column.data_type = field.data_type().clone();
             column.nullable = field.is_nullable();
             column.default = features.current_default();
@@ -997,6 +1023,36 @@ impl PlanResolver<'_> {
                 .filter(|field| !existing_names.contains(&field.name().to_lowercase()))
                 .map(|field| Self::table_column_from_format_field(field.as_ref())),
         );
+    }
+
+    pub(super) fn omitted_identity_columns(
+        input: &LogicalPlan,
+        column_match: &WriteColumnMatch,
+        info: &TableInfo,
+    ) -> PlanResult<Vec<String>> {
+        if !info.columns.iter().any(|column| column.identity.is_some()) {
+            return Ok(Vec::new());
+        }
+        let required_count = info
+            .columns
+            .iter()
+            .filter(|column| !info.column_is_omittable(column, column_match))
+            .count();
+        let provided = Self::classify_input_to_table_columns(
+            input,
+            column_match,
+            info,
+            input.schema().fields().len(),
+            info.columns.len(),
+            required_count,
+        )?;
+        Ok(info
+            .columns
+            .iter()
+            .zip(provided)
+            .filter(|(column, value)| column.identity.is_some() && value.is_none())
+            .map(|(column, _)| column.name.clone())
+            .collect())
     }
 
     pub(super) async fn rewrite_write_input(
@@ -1040,9 +1096,19 @@ impl PlanResolver<'_> {
     fn cast_to_column(
         &self,
         expr: Expr,
-        data_type: &DataType,
+        field: &datafusion::arrow::datatypes::Field,
         schema: &DFSchema,
     ) -> PlanResult<Expr> {
+        let data_type = field.data_type();
+        let expr = if sail_common_datafusion::uuid::contains_uuid(field) {
+            datafusion_expr::ScalarUDF::from(sail_common_datafusion::uuid::UuidCast::new(
+                Arc::new(field.clone()),
+                false,
+            ))
+            .call(vec![expr])
+        } else {
+            expr
+        };
         Ok(match (expr.get_type(schema)?, data_type) {
             (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None)) => {
                 session_wall_clock(expr, data_type, &self.config.session_timezone_label())
@@ -1094,8 +1160,7 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .zip(table_schema.fields().iter())
                     .map(|(column, field)| {
-                        let expr =
-                            self.cast_to_column(col(column), field.data_type(), input.schema())?;
+                        let expr = self.cast_to_column(col(column), field, input.schema())?;
                         Ok(Self::make_nullable_if_needed(expr, field, input.schema())?
                             .alias(field.name()))
                     })
@@ -1116,7 +1181,7 @@ impl PlanResolver<'_> {
                             .map(|f| {
                                 let expr = self.cast_to_column(
                                     col(Column::from_name(f.name())),
-                                    field.data_type(),
+                                    field,
                                     input.schema(),
                                 )?;
                                 Self::make_nullable_if_needed(expr, field, input.schema())
@@ -1191,7 +1256,7 @@ impl PlanResolver<'_> {
             .iter()
             .filter(|c| info.column_is_omittable(c, &column_match))
             .count();
-        let identity_count = info.columns.iter().filter(|c| c.identity.is_some()).count();
+
         let required_count = table_field_count - optional_count;
         let input_field_count = input.schema().fields().len();
 
@@ -1238,11 +1303,8 @@ impl PlanResolver<'_> {
             if col.generated_always_as.is_some() {
                 if let Some(user_expr) = provided {
                     let check_id = state.register_hidden_field_name(format!("{}__user", col.name));
-                    let cast_expr = self.cast_to_column(
-                        user_expr.clone(),
-                        col.field().data_type(),
-                        input.schema(),
-                    )?;
+                    let cast_expr =
+                        self.cast_to_column(user_expr.clone(), &col.field(), input.schema())?;
                     intermediate_aliases.push(cast_expr.alias(check_id.clone()));
                     gen_check_field_ids[idx] = Some(check_id);
                 }
@@ -1256,11 +1318,8 @@ impl PlanResolver<'_> {
                             col.name
                         )));
                     }
-                    let cast_expr = self.cast_to_column(
-                        user_expr.clone(),
-                        col.field().data_type(),
-                        input.schema(),
-                    )?;
+                    let cast_expr =
+                        self.cast_to_column(user_expr.clone(), &col.field(), input.schema())?;
                     intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
                 }
                 continue;
@@ -1275,37 +1334,44 @@ impl PlanResolver<'_> {
                     col.name
                 )));
             };
-            let cast_expr =
-                self.cast_to_column(input_expr, col.field().data_type(), input.schema())?;
+            let cast_expr = self.cast_to_column(input_expr, &col.field(), input.schema())?;
             intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
         }
         let intermediate = LogicalPlanBuilder::new(input)
             .project(intermediate_aliases)?
             .build()?;
-        let identity_row_number = if identity_count > 0 {
-            Some(state.register_hidden_field_name("__identity_row_number"))
-        } else {
-            None
-        };
-        let plan_for_final_projection = if let Some(alias) = identity_row_number.as_deref() {
-            let row_number_window = Expr::WindowFunction(Box::new(expr::WindowFunction {
-                fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
-                params: WindowFunctionParams {
-                    args: vec![],
-                    partition_by: vec![],
-                    order_by: vec![],
-                    window_frame: WindowFrame::new(None),
-                    filter: None,
-                    null_treatment: Some(NullTreatment::RespectNulls),
-                    distinct: false,
-                },
-            }))
-            .alias(alias);
-            LogicalPlanBuilder::from(intermediate)
-                .window(vec![row_number_window])?
-                .build()?
-        } else {
+        let identities = info
+            .columns
+            .iter()
+            .enumerate()
+            .filter_map(|(index, column)| {
+                column
+                    .identity
+                    .as_ref()
+                    .filter(|_| provided_by_input[index].is_none())
+                    .map(
+                        |identity| sail_logical_plan::identity_generate::IdentityGenerateColumn {
+                            output: field_ids[index].clone(),
+                            column_name: column.name.clone(),
+                            mask: None,
+                            start: identity.start,
+                            step: identity.step,
+                            high_water_mark: identity.high_water_mark,
+                        },
+                    )
+            })
+            .collect::<Vec<_>>();
+        let plan_for_final_projection = if identities.is_empty() {
             intermediate
+        } else {
+            LogicalPlan::Extension(datafusion_expr::logical_plan::Extension {
+                node: Arc::new(
+                    sail_logical_plan::identity_generate::IdentityGenerateNode::try_new(
+                        Arc::new(intermediate),
+                        identities,
+                    )?,
+                ),
+            })
         };
         let intermediate_schema = plan_for_final_projection.schema().clone();
 
@@ -1365,25 +1431,9 @@ impl PlanResolver<'_> {
                     gen_expr
                 };
                 final_expr.cast_to(field.data_type(), &intermediate_schema)?
-            } else if let Some(identity) = &table_col.identity {
-                if provided_by_input[idx].is_some() {
-                    col(Column::from_name(&field_ids[idx]))
-                        .cast_to(field.data_type(), &intermediate_schema)?
-                } else {
-                    let row_number_alias = identity_row_number.as_deref().ok_or_else(|| {
-                        PlanError::internal(format!(
-                            "expected row number for identity column `{}`",
-                            table_col.name
-                        ))
-                    })?;
-                    Self::make_identity_value_expr(
-                        &table_col.name,
-                        identity,
-                        row_number_alias,
-                        &intermediate_schema,
-                    )?
+            } else if table_col.identity.is_some() {
+                col(Column::from_name(&field_ids[idx]))
                     .cast_to(field.data_type(), &intermediate_schema)?
-                }
             } else {
                 // Regular column: reference the aliased field in intermediate plan.
                 col(Column::from_name(&field_ids[idx]))
@@ -1820,37 +1870,6 @@ impl PlanResolver<'_> {
             column.nullable.to_string(),
         );
         Some(FieldMetadata::from(metadata))
-    }
-
-    fn make_identity_value_expr(
-        column_name: &str,
-        identity: &CatalogTableColumnIdentity,
-        row_number_alias: &str,
-        schema: &DFSchema,
-    ) -> PlanResult<Expr> {
-        let base = match identity.high_water_mark {
-            Some(high_water_mark) => high_water_mark.checked_add(identity.step).ok_or_else(|| {
-                PlanError::invalid(format!(
-                    "identity column `{column_name}` cannot generate a next value without overflowing BIGINT"
-                ))
-            })?,
-            None => identity.start,
-        };
-        let row_number = col(Column::from_name(row_number_alias))
-            .cast_to(&datafusion::arrow::datatypes::DataType::Int64, schema)?;
-        let row_offset = Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(row_number),
-            Operator::Minus,
-            Box::new(lit(1_i64)),
-        ));
-        let product =
-            ScalarUDF::from(SparkTryMult::new()).call(vec![row_offset, lit(identity.step)]);
-        let value = ScalarUDF::from(SparkTryAdd::new()).call(vec![lit(base), product.clone()]);
-        let err_msg = format!(
-            "[DELTA_IDENTITY_COLUMN_VALUE_OVERFLOW] identity column `{column_name}` overflowed BIGINT while generating values"
-        );
-        let raise = ScalarUDF::from(RaiseError::new()).call(vec![lit(err_msg)]);
-        Ok(when(product.is_null().or(value.clone().is_null()), raise).otherwise(value)?)
     }
 
     pub(super) fn resolve_partition_by_expression(

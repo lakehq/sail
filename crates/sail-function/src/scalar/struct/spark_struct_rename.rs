@@ -1,9 +1,13 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, FixedSizeListArray, StructArray};
+use datafusion::arrow::array::{
+    Array, ArrayRef, AsArray, FixedSizeListArray, StructArray, UInt64Array,
+};
 use datafusion::arrow::datatypes::{DataType, Fields};
-use datafusion_common::{Result, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+};
 
 /// Spark-compatible "rename struct fields by position".
 ///
@@ -16,6 +20,8 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 /// the field names rewritten positionally to match the target. It is a
 /// metadata-only operation when the leaf types already match; if leaf types
 /// differ, callers should wrap the result in a regular CAST after the rename.
+/// An optional boolean literal prepares hidden nested storage for a subsequent
+/// strict cast. Ordinary rename callers do not request this extra work.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SparkStructRename {
     signature: Signature,
@@ -25,7 +31,10 @@ pub struct SparkStructRename {
 impl SparkStructRename {
     pub fn new(target_type: DataType) -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![TypeSignature::Any(1), TypeSignature::Any(2)],
+                Volatility::Immutable,
+            ),
             target_type,
         }
     }
@@ -49,10 +58,19 @@ impl ScalarUDFImpl for SparkStructRename {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if args.args.len() != 1 {
-            return exec_err!("spark_struct_rename expects exactly one argument");
-        }
-        let arr = ColumnarValue::values_to_arrays(&args.args)?
+        let (input, prepare_for_cast) = match args.args.as_slice() {
+            [input] => (input, false),
+            [
+                input,
+                ColumnarValue::Scalar(ScalarValue::Boolean(Some(prepare))),
+            ] => (input, *prepare),
+            _ => {
+                return exec_err!(
+                    "spark_struct_rename expects an input and an optional boolean literal"
+                );
+            }
+        };
+        let arr = ColumnarValue::values_to_arrays(std::slice::from_ref(input))?
             .into_iter()
             .next()
             .ok_or_else(|| {
@@ -60,14 +78,29 @@ impl ScalarUDFImpl for SparkStructRename {
                     "spark_struct_rename: missing input array".to_string(),
                 )
             })?;
-        let renamed = rename_positionally(&arr, &self.target_type)?;
+        let renamed = rename_positionally(&arr, &self.target_type, prepare_for_cast)?;
         Ok(ColumnarValue::Array(renamed))
     }
 }
 
 /// Recursively rebuild `arr` so that any `Struct` field names match those in
 /// `target_type` positionally. Leaf data types must already match.
-fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRef> {
+fn rename_positionally(
+    arr: &ArrayRef,
+    target_type: &DataType,
+    prepare_for_cast: bool,
+) -> Result<ArrayRef> {
+    // Null indices omit hidden list/map ranges as well as struct children.
+    // Rebuild only nullable nested storage, and only when a cast requests it.
+    let visible;
+    let arr = if prepare_for_cast && arr.null_count() > 0 && arr.data_type().is_nested() {
+        let indices =
+            UInt64Array::from_iter((0..arr.len()).map(|i| arr.is_valid(i).then_some(i as u64)));
+        visible = datafusion::arrow::compute::take(arr.as_ref(), &indices, None)?;
+        &visible
+    } else {
+        arr
+    };
     match (arr.data_type(), target_type) {
         (DataType::Struct(src_fields), DataType::Struct(tgt_fields)) => {
             if src_fields.len() != tgt_fields.len() {
@@ -82,7 +115,7 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
                 .columns()
                 .iter()
                 .zip(tgt_fields.iter())
-                .map(|(c, tgt)| rename_positionally(c, tgt.data_type()))
+                .map(|(c, tgt)| rename_positionally(c, tgt.data_type(), prepare_for_cast))
                 .collect::<Result<_>>()?;
             let new_fields: Fields = tgt_fields
                 .iter()
@@ -101,7 +134,8 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
         }
         (DataType::List(_), DataType::List(tgt_field)) => {
             let src = arr.as_list::<i32>();
-            let new_values = rename_positionally(src.values(), tgt_field.data_type())?;
+            let new_values =
+                rename_positionally(src.values(), tgt_field.data_type(), prepare_for_cast)?;
             let new_field = Arc::new(
                 tgt_field
                     .as_ref()
@@ -118,7 +152,8 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
         }
         (DataType::LargeList(_), DataType::LargeList(tgt_field)) => {
             let src = arr.as_list::<i64>();
-            let new_values = rename_positionally(src.values(), tgt_field.data_type())?;
+            let new_values =
+                rename_positionally(src.values(), tgt_field.data_type(), prepare_for_cast)?;
             let new_field = Arc::new(
                 tgt_field
                     .as_ref()
@@ -149,7 +184,8 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
                         "spark_struct_rename: expected FixedSizeListArray".to_string(),
                     )
                 })?;
-            let new_values = rename_positionally(src.values(), tgt_field.data_type())?;
+            let new_values =
+                rename_positionally(src.values(), tgt_field.data_type(), prepare_for_cast)?;
             let new_field = Arc::new(
                 tgt_field
                     .as_ref()
@@ -178,6 +214,7 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
             let new_entries_arr = rename_positionally(
                 &(Arc::new(entries.clone()) as ArrayRef),
                 tgt_entry.data_type(),
+                prepare_for_cast,
             )?;
             let new_entries_struct = new_entries_arr
                 .as_any()
@@ -217,6 +254,108 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_rename_positionally_masks_hidden_nonnullable_children() -> Result<()> {
+        use datafusion::arrow::array::StringArray;
+        let source: ArrayRef = Arc::new(StructArray::try_new(
+            vec![Arc::new(Field::new("a", DataType::Utf8, false))].into(),
+            vec![Arc::new(StringArray::from(vec!["bad", "7", "bad"]))],
+            Some(vec![false, true, false].into()),
+        )?);
+        let source = source.slice(1, 2);
+        let target = DataType::Struct(vec![Field::new("x", DataType::Utf8, false)].into());
+        let unprepared = rename_positionally(&source, &target, false)?;
+        assert!(unprepared.as_struct().column(0).is_valid(1));
+        let renamed = rename_positionally(&source, &target, true)?;
+        assert_eq!(renamed.data_type(), &target);
+        assert_eq!(renamed.nulls(), source.nulls());
+        let child = renamed.as_struct().column(0);
+        assert!(child.is_valid(0));
+        assert!(child.is_null(1));
+        let converted = datafusion::arrow::compute::cast_with_options(
+            child,
+            &DataType::Int32,
+            &datafusion::arrow::compute::CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(
+            converted
+                .as_primitive::<datafusion::arrow::datatypes::Int32Type>()
+                .value(0),
+            7
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_preparation_omits_hidden_list_and_map_values() -> Result<()> {
+        use datafusion::arrow::array::{ListArray, MapArray, StringArray};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["bad", "7", "bad"]));
+        let leaf = Arc::new(Field::new("item", DataType::Utf8, true));
+        let list: ArrayRef = Arc::new(ListArray::try_new(
+            leaf,
+            OffsetBuffer::from_lengths([1, 1, 1]),
+            values.clone(),
+            None,
+        )?);
+        let entries = StructArray::try_new(
+            vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Utf8, true),
+            ]
+            .into(),
+            vec![Arc::new(StringArray::from(vec!["k"; 3])), values],
+            None,
+        )?;
+        let map: ArrayRef = Arc::new(MapArray::try_new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            OffsetBuffer::from_lengths([1, 1, 1]),
+            entries,
+            None,
+            false,
+        )?);
+        for child in [list, map] {
+            let source: ArrayRef = Arc::new(StructArray::try_new(
+                vec![Field::new("a", child.data_type().clone(), false)].into(),
+                vec![child],
+                Some(vec![false, true, false].into()),
+            )?);
+            let source = source.slice(1, 2);
+            for prepare in [false, true] {
+                let renamed = rename_positionally(&source, source.data_type(), prepare)?;
+                assert_eq!(renamed.nulls(), source.nulls());
+                let child = renamed.as_struct().column(0);
+                let values = match child.data_type() {
+                    DataType::List(_) => child.as_list::<i32>().values(),
+                    DataType::Map(_, _) => child.as_map().values(),
+                    _ => return exec_err!("expected list or map"),
+                };
+                let converted = datafusion::arrow::compute::cast_with_options(
+                    values,
+                    &DataType::Int32,
+                    &datafusion::arrow::compute::CastOptions {
+                        safe: false,
+                        ..Default::default()
+                    },
+                );
+                assert_eq!(converted.is_ok(), prepare);
+                if prepare {
+                    assert_eq!(
+                        converted?
+                            .as_primitive::<datafusion::arrow::datatypes::Int32Type>()
+                            .values()
+                            .as_ref(),
+                        &[7]
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_rename_positionally_uses_target_field_definition() -> Result<()> {
         let source_field = Arc::new(Field::new("source", DataType::Int32, false));
         let source = Arc::new(StructArray::try_new(
@@ -230,7 +369,7 @@ mod tests {
             true,
         ))]));
 
-        let renamed = rename_positionally(&source, &target_type)?;
+        let renamed = rename_positionally(&source, &target_type, false)?;
 
         assert_eq!(renamed.data_type(), &target_type);
         Ok(())
@@ -239,6 +378,6 @@ mod tests {
     #[test]
     fn test_rename_positionally_rejects_leaf_type_changes() {
         let source = Arc::new(Int32Array::from(vec![1])) as ArrayRef;
-        assert!(rename_positionally(&source, &DataType::Int64).is_err());
+        assert!(rename_positionally(&source, &DataType::Int64, false).is_err());
     }
 }

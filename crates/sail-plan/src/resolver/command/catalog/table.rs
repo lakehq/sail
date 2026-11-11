@@ -1,3 +1,4 @@
+use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::manager::CatalogManager;
@@ -17,6 +18,48 @@ use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
+    fn resolve_column_change(
+        &self,
+        change: spec::ColumnChange,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<spec::ColumnChange<DataType>> {
+        match change {
+            spec::ColumnChange::Add {
+                path,
+                data_type,
+                metadata,
+                nullable,
+                comment,
+                default,
+                position,
+            } => {
+                let field = self.resolve_field(
+                    &spec::Field {
+                        name: path.last().cloned().unwrap_or_default(),
+                        data_type,
+                        nullable,
+                        metadata: metadata.into_iter().collect(),
+                    },
+                    state,
+                )?;
+                Ok(spec::ColumnChange::Add {
+                    path,
+                    data_type: field.data_type().clone(),
+                    metadata: field
+                        .metadata()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                    nullable,
+                    comment,
+                    default,
+                    position,
+                })
+            }
+            change => change.try_map_type(|ty| self.resolve_data_type(&ty, state)),
+        }
+    }
+
     pub(in super::super) async fn resolve_catalog_create_table(
         &self,
         table: spec::ObjectName,
@@ -340,7 +383,16 @@ impl PlanResolver<'_> {
                     generated_always_as,
                     identity,
                 } = x;
-                let data_type = self.resolve_data_type(&data_type, state)?;
+                let field = self.resolve_field(
+                    &spec::Field {
+                        name: name.clone(),
+                        data_type,
+                        nullable,
+                        metadata: vec![],
+                    },
+                    state,
+                )?;
+                let data_type = field.data_type().clone();
                 let identity = Self::resolve_table_column_identity(&name, identity)?;
                 if identity.is_some() && data_type != datafusion::arrow::datatypes::DataType::Int64
                 {
@@ -349,6 +401,11 @@ impl PlanResolver<'_> {
                     )));
                 }
                 Ok(CreateTableColumnOptions {
+                    metadata: field
+                        .metadata()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
                     name,
                     data_type,
                     nullable,
@@ -529,7 +586,7 @@ impl PlanResolver<'_> {
             spec::AlterTableOperation::ReplaceColumns { columns } => {
                 let columns = columns
                     .into_iter()
-                    .map(|column| column.try_map_type(|ty| self.resolve_data_type(&ty, state)))
+                    .map(|column| self.resolve_column_change(column, state))
                     .collect::<PlanResult<Vec<_>>>()?;
                 let schema = sail_common_datafusion::column_change::replacement_schema(&columns)?;
                 self.validate_delta_replacement_generated_columns(&table, &schema, state)
@@ -544,7 +601,7 @@ impl PlanResolver<'_> {
                     case_sensitive: self.config.case_sensitive,
                     changes: changes
                         .into_iter()
-                        .map(|change| change.try_map_type(|ty| self.resolve_data_type(&ty, state)))
+                        .map(|change| self.resolve_column_change(change, state))
                         .collect::<PlanResult<Vec<_>>>()?,
                 }
             }
@@ -555,9 +612,23 @@ impl PlanResolver<'_> {
                 AlterTableOptions::UnsetTableProperties { keys, if_exists }
             }
             spec::AlterTableOperation::AlterColumnType { name, data_type } => {
+                let field = self.resolve_field(
+                    &spec::Field {
+                        name: String::new(),
+                        data_type,
+                        nullable: true,
+                        metadata: vec![],
+                    },
+                    state,
+                )?;
                 AlterTableOptions::AlterColumnType {
                     name: name.into(),
-                    data_type: self.resolve_data_type(&data_type, state)?,
+                    data_type: field.data_type().clone(),
+                    metadata: field
+                        .metadata()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
                     case_sensitive: self.config.case_sensitive,
                 }
             }

@@ -41,6 +41,29 @@ pub(super) fn tag_change_rows(
     Ok(Arc::new(ProjectionExec::try_new(expressions, input)?))
 }
 
+pub(super) fn tag_row_operation(
+    input: Arc<dyn ExecutionPlan>,
+    operation: sail_common_datafusion::datasource::RowLevelOperationType,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let mut expressions = input
+        .schema()
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            (
+                Arc::new(Column::new(field.name(), index)) as Arc<dyn PhysicalExpr>,
+                field.name().clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    expressions.push((
+        Arc::new(Literal::new(ScalarValue::Int32(Some(operation.as_i32())))),
+        sail_common_datafusion::datasource::OPERATION_COLUMN.to_string(),
+    ));
+    Ok(Arc::new(ProjectionExec::try_new(expressions, input)?))
+}
+
 pub(super) fn build_change_data_writer(
     ctx: &PlannerContext<'_>,
     input: Arc<dyn ExecutionPlan>,
@@ -48,20 +71,7 @@ pub(super) fn build_change_data_writer(
     write_context: &DeltaWriteContext,
     partition_columns: &[String],
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    // Change rows and data rows are separate effects and must evaluate identically.
-    input.apply(|node| {
-        node.apply_expressions(&mut |root| {
-            root.apply(|expression| {
-                if expression.is_volatile_node() {
-                    return plan_err!(
-                        "Change data feed writes do not support non-deterministic expressions"
-                    );
-                }
-                Ok(TreeNodeRecursion::Continue)
-            })
-        })?;
-        Ok(TreeNodeRecursion::Continue)
-    })?;
+    validate_change_data_input(&input)?;
     options.change_data = true;
     let input = prepare_delta_writer_input(input, partition_columns, None)?;
     Ok(Arc::new(DeltaWriterExec::new(
@@ -76,4 +86,21 @@ pub(super) fn build_change_data_writer(
         write_context.clone(),
         ctx.lakehouse_table().cloned(),
     )?))
+}
+
+pub(super) fn validate_change_data_input(input: &Arc<dyn ExecutionPlan>) -> Result<()> {
+    input.apply(|node| {
+        node.apply_expressions(&mut |root| {
+            root.apply(|expression| {
+                if expression.is_volatile_node() {
+                    return plan_err!(
+                        "Change data feed writes do not support non-deterministic expressions"
+                    );
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+        })?;
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(())
 }

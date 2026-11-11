@@ -13,7 +13,6 @@ from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import TimestampNTZType, TimestampType
 
 from pysail.testing._dev.spark.utils.files import get_data_directory_size
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
 
 
@@ -234,7 +233,7 @@ def test_parquet_invalid_session_binary_as_string(spark, tmp_path):
         spark.conf.unset(key)
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="`binaryAsString` is a Sail-only read option")
+@pytest.mark.spark(skip_if_jvm=True, reason="`binaryAsString` is a Sail-only read option")
 def test_parquet_read_option_overrides_session_binary_as_string(spark, tmp_path):
     key = "spark.sql.parquet.binaryAsString"
     path = write_unannotated_binary(tmp_path / "read_option_over_session_binary_as_string")

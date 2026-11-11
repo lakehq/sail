@@ -1,4 +1,5 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
@@ -98,11 +99,129 @@ pub fn type_metadata(metadata: &FieldMetadata) -> FieldMetadata {
                         | EXTENSION_TYPE_METADATA_KEY
                         | SAIL_SPARK_UDT_METADATA_KEY
                         | SAIL_SPARK_INTERVAL_METADATA_KEY
+                        | crate::uuid::UUID_METADATA_KEY
                 )
             })
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect::<BTreeMap<_, _>>(),
     )
+}
+
+/// Attach type identity from the original inputs to a resolved physical field, recursively.
+/// Untyped NULL is neutral, but a typed fixed[16] without the UUID marker is not UUID.
+/// Names and nullability come from the resolved target, not from a source column.
+pub fn coerced_type_field(target: &Field, sources: &[&Field]) -> Result<Field, DataFusionError> {
+    use crate::uuid::{UUID_METADATA_KEY, is_uuid_field};
+
+    let sources = sources
+        .iter()
+        .copied()
+        .filter(|field| !field.data_type().is_null())
+        .collect::<Vec<_>>();
+    let mut metadata = type_metadata(&coerced_fields_metadata(sources.iter().copied())?)
+        .inner()
+        .clone();
+    metadata.remove(SAIL_SPARK_INTERVAL_METADATA_KEY);
+    if matches!(
+        target.data_type(),
+        DataType::Duration(TimeUnit::Microsecond) | DataType::Interval(IntervalUnit::YearMonth)
+    ) {
+        // Typed intervals, including typed NULLs, contribute their declared range.
+        if let Some(interval) =
+            widest_interval_metadata(sources.iter().map(|field| (*field, None)))?
+        {
+            metadata.insert(SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), interval);
+        }
+    }
+    if target.data_type() != &DataType::FixedSizeBinary(16)
+        || sources.is_empty()
+        || !sources.iter().all(|field| is_uuid_field(field))
+    {
+        metadata.remove(UUID_METADATA_KEY);
+    }
+    let child = |field: &Field| {
+        let children = sources
+            .iter()
+            .filter_map(|source| match source.data_type() {
+                DataType::List(child)
+                | DataType::LargeList(child)
+                | DataType::FixedSizeList(child, _)
+                | DataType::ListView(child)
+                | DataType::LargeListView(child)
+                | DataType::Map(child, _) => Some(child.as_ref()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        coerced_type_field(field, &children).map(Arc::new)
+    };
+    let data_type = match target.data_type() {
+        DataType::List(field) => DataType::List(child(field)?),
+        DataType::LargeList(field) => DataType::LargeList(child(field)?),
+        DataType::FixedSizeList(field, size) => DataType::FixedSizeList(child(field)?, *size),
+        DataType::ListView(field) => DataType::ListView(child(field)?),
+        DataType::LargeListView(field) => DataType::LargeListView(child(field)?),
+        DataType::Map(field, sorted) => DataType::Map(child(field)?, *sorted),
+        DataType::Struct(fields) => {
+            // Decide alignment once per source, not once per child. Repeated full-struct
+            // name scans make metadata propagation cubic for wide structs.
+            let unique_names = fields
+                .iter()
+                .map(|field| field.name())
+                .collect::<BTreeSet<_>>()
+                .len()
+                == fields.len();
+            let sources = sources
+                .iter()
+                .filter_map(|source| match source.data_type() {
+                    DataType::Struct(fields) => Some(fields),
+                    _ => None,
+                })
+                .map(|source| {
+                    // Duplicate names cannot identify a field uniquely; keep positions.
+                    let by_name = (unique_names && source.len() == fields.len())
+                        .then(|| {
+                            source
+                                .iter()
+                                .map(|field| (field.name(), field))
+                                .collect::<BTreeMap<_, _>>()
+                        })
+                        .filter(|by_name| {
+                            by_name.len() == fields.len()
+                                && fields
+                                    .iter()
+                                    .all(|field| by_name.contains_key(field.name()))
+                        });
+                    (source, by_name)
+                })
+                .collect::<Vec<_>>();
+            DataType::Struct(
+                fields
+                    .iter()
+                    .enumerate()
+                    .map(|(index, field)| {
+                        let children = sources
+                            .iter()
+                            .filter_map(|(source, by_name)| {
+                                by_name.as_ref().map_or_else(
+                                    || source.get(index),
+                                    |by_name| by_name.get(field.name()).copied(),
+                                )
+                            })
+                            .map(AsRef::as_ref)
+                            .collect::<Vec<_>>();
+                        coerced_type_field(field, &children).map(Arc::new)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into(),
+            )
+        }
+        data_type => data_type.clone(),
+    };
+    Ok(FieldMetadata::from(metadata).add_to_field(Field::new(
+        target.name(),
+        data_type,
+        target.is_nullable(),
+    )))
 }
 
 /// The Spark interval metadata of a value that may come from any one of the fields, such as
@@ -150,6 +269,263 @@ pub fn widest_interval_metadata<'a>(
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    fn uuid_field(id: &str) -> Field {
+        Field::new("source", DataType::FixedSizeBinary(16), true).with_metadata(
+            std::collections::HashMap::from([
+                (
+                    crate::uuid::UUID_METADATA_KEY.to_string(),
+                    "uuid".to_string(),
+                ),
+                ("PARQUET:field_id".to_string(), id.to_string()),
+                ("doc".to_string(), "source documentation".to_string()),
+            ]),
+        )
+    }
+
+    #[test]
+    fn constructor_interval_metadata_uses_declared_ranges_recursively() {
+        use sail_common::spec::{IntervalFieldType, IntervalUnit as SparkIntervalUnit};
+
+        let interval = |start, end| {
+            SparkIntervalMetadata::try_new(SparkIntervalUnit::YearMonth, Some(start), Some(end))
+                .unwrap()
+                .unwrap()
+                .to_json()
+                .unwrap()
+        };
+        let year = interval(IntervalFieldType::Year, IntervalFieldType::Year);
+        let month = interval(IntervalFieldType::Month, IntervalFieldType::Month);
+        let wide = interval(IntervalFieldType::Year, IntervalFieldType::Month);
+        let target = Field::new("item", DataType::Interval(IntervalUnit::YearMonth), true);
+        let field = |metadata: String| {
+            target
+                .clone()
+                .with_metadata(std::collections::HashMap::from([
+                    (SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), metadata),
+                    ("PARQUET:field_id".to_string(), "1".to_string()),
+                ]))
+        };
+        let year_field = field(year.clone());
+        let month_field = field(month);
+        let null = Field::new("null", DataType::Null, true);
+        for (right, expected) in [
+            (&month_field, Some(&wide)),
+            (&null, Some(&year)),
+            // A typed interval without a qualifier has the default, widest range.
+            (&target, None),
+        ] {
+            for sources in [[&year_field, right], [right, &year_field]] {
+                let result = coerced_type_field(&target, &sources).unwrap();
+                assert_eq!(
+                    result.metadata().get(SAIL_SPARK_INTERVAL_METADATA_KEY),
+                    expected
+                );
+                assert_eq!(result.metadata().len(), usize::from(expected.is_some()));
+                let nested_sources = sources
+                    .map(|f| Field::new("source", DataType::List(Arc::new(f.clone())), false));
+                let nested_target =
+                    Field::new("result", DataType::List(Arc::new(target.clone())), false);
+                let nested =
+                    coerced_type_field(&nested_target, &nested_sources.iter().collect::<Vec<_>>())
+                        .unwrap();
+                assert_eq!(nested.data_type(), &DataType::List(Arc::new(result)));
+                assert!(nested.metadata().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn constructor_uuid_identity_requires_typed_consensus() {
+        let uuid = uuid_field("1");
+        let other = uuid_field("2");
+        let null = Field::new("null", DataType::Null, true);
+        let fixed = Field::new("typed_null", DataType::FixedSizeBinary(16), true);
+        let binary = Field::new("binary", DataType::Binary, true);
+        for (right, target_type, expected_uuid) in [
+            (&other, DataType::FixedSizeBinary(16), true),
+            (&null, DataType::FixedSizeBinary(16), true),
+            (&fixed, DataType::FixedSizeBinary(16), false),
+            (&binary, DataType::Binary, false),
+        ] {
+            let target = Field::new_list_field(target_type, true);
+            for sources in [[&uuid, right], [right, &uuid]] {
+                let field = coerced_type_field(&target, &sources).unwrap();
+                assert_eq!(crate::uuid::is_uuid_field(&field), expected_uuid);
+                assert_eq!(field.name(), target.name());
+                assert_eq!(field.is_nullable(), target.is_nullable());
+                assert_eq!(field.metadata().len(), usize::from(expected_uuid));
+            }
+        }
+    }
+
+    #[test]
+    fn nested_uuid_coercion_is_order_independent() {
+        use crate::type_coercion::binary_type_coercion::{
+            comparison_coercion, type_union_coercion,
+        };
+        let uuid = uuid_field("1");
+        let other = uuid_field("2");
+        let fixed = Field::new("source", DataType::FixedSizeBinary(16), true);
+        let null = Field::new("source", DataType::Null, true);
+        let binary = Field::new("source", DataType::Binary, true);
+        for (right, expected_uuid) in [
+            (&other, true),
+            (&fixed, false),
+            (&null, true),
+            (&binary, false),
+        ] {
+            for wrap in [
+                |field: Field| DataType::List(Arc::new(field)),
+                |field: Field| DataType::Struct(vec![field].into()),
+                |field: Field| {
+                    DataType::Map(
+                        Arc::new(Field::new(
+                            "entries",
+                            DataType::Struct(
+                                vec![Field::new("key", DataType::Utf8, false), field].into(),
+                            ),
+                            false,
+                        )),
+                        false,
+                    )
+                },
+            ] {
+                let left =
+                    DataType::List(Arc::new(Field::new_list_field(wrap(uuid.clone()), true)));
+                let right =
+                    DataType::List(Arc::new(Field::new_list_field(wrap(right.clone()), true)));
+                for coerce in [comparison_coercion, type_union_coercion] {
+                    let forward = coerce(&left, &right).unwrap();
+                    assert_eq!(forward, coerce(&right, &left).unwrap());
+                    let result = Field::new("result", forward, true);
+                    assert_eq!(crate::uuid::contains_uuid(&result), expected_uuid);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn constructor_struct_identity_handles_duplicate_and_reordered_names()
+    -> Result<(), DataFusionError> {
+        let uuid = uuid_field("1").with_name("x");
+        let fixed = Field::new("x", DataType::FixedSizeBinary(16), true);
+        for fields in [
+            vec![uuid.clone(), fixed.clone()],
+            vec![fixed.clone(), uuid.clone()],
+        ] {
+            let source = Field::new("source", DataType::Struct(fields.clone().into()), true);
+            let target = Field::new("result", source.data_type().clone(), true);
+            let result = coerced_type_field(&target, &[&source]).unwrap();
+            let DataType::Struct(actual) = result.data_type() else {
+                return datafusion_common::internal_err!("expected struct");
+            };
+            for (actual, expected) in actual.iter().zip(&fields) {
+                assert_eq!(
+                    crate::uuid::is_uuid_field(actual),
+                    crate::uuid::is_uuid_field(expected)
+                );
+            }
+        }
+        let source = Field::new(
+            "source",
+            DataType::Struct(vec![uuid.with_name("u"), fixed.with_name("f")].into()),
+            true,
+        );
+        let target = Field::new(
+            "result",
+            DataType::Struct(
+                vec![
+                    Field::new("f", DataType::FixedSizeBinary(16), true),
+                    Field::new("u", DataType::FixedSizeBinary(16), true),
+                ]
+                .into(),
+            ),
+            true,
+        );
+        let result = coerced_type_field(&target, &[&source]).unwrap();
+        let DataType::Struct(fields) = result.data_type() else {
+            return datafusion_common::internal_err!("expected struct");
+        };
+        assert!(!crate::uuid::is_uuid_field(&fields[0]));
+        assert!(crate::uuid::is_uuid_field(&fields[1]));
+        Ok(())
+    }
+
+    #[test]
+    fn constructor_struct_alignment_falls_back_to_positions() -> Result<(), DataFusionError> {
+        for (target_names, source_names, expected_uuid) in [
+            (["u", "f"], ["u", "f"], [true, false]),
+            (["f", "u"], ["u", "f"], [false, true]),
+            (["u", "f"], ["u", "u"], [true, false]),
+            (["u", "u"], ["u", "f"], [true, false]),
+            (["u", "f"], ["x", "y"], [true, false]),
+            (["u", "f"], ["f", "x"], [true, false]),
+        ] {
+            let source = Field::new(
+                "source",
+                DataType::Struct(
+                    vec![
+                        uuid_field("1").with_name(source_names[0]),
+                        Field::new(source_names[1], DataType::FixedSizeBinary(16), true),
+                    ]
+                    .into(),
+                ),
+                true,
+            );
+            let target = Field::new(
+                "target",
+                DataType::Struct(
+                    target_names
+                        .map(|name| Field::new(name, DataType::FixedSizeBinary(16), false))
+                        .to_vec()
+                        .into(),
+                ),
+                false,
+            );
+            let result = coerced_type_field(&target, &[&source])?;
+            let DataType::Struct(fields) = result.data_type() else {
+                return datafusion_common::internal_err!("expected a struct");
+            };
+            assert_eq!(result.name(), target.name());
+            assert!(!result.is_nullable());
+            for ((field, name), expected_uuid) in fields.iter().zip(target_names).zip(expected_uuid)
+            {
+                assert_eq!(field.name(), name);
+                assert!(!field.is_nullable());
+                assert_eq!(crate::uuid::is_uuid_field(field), expected_uuid);
+                assert_eq!(field.metadata().len(), usize::from(expected_uuid));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn constructor_keeps_extension_type_metadata_without_column_metadata() {
+        let metadata = std::collections::HashMap::from([
+            (
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                "geoarrow.wkb".to_string(),
+            ),
+            (
+                EXTENSION_TYPE_METADATA_KEY.to_string(),
+                r#"{"edges":"spherical"}"#.to_string(),
+            ),
+            ("PARQUET:field_id".to_string(), "1".to_string()),
+        ]);
+        let source = Field::new("geography", DataType::Binary, true).with_metadata(metadata);
+        let target = Field::new_list_field(DataType::Binary, true);
+        let result = coerced_type_field(&target, &[&source]).unwrap();
+        assert_eq!(
+            result.metadata().get(EXTENSION_TYPE_NAME_KEY),
+            source.metadata().get(EXTENSION_TYPE_NAME_KEY)
+        );
+        assert_eq!(
+            result.metadata().get(EXTENSION_TYPE_METADATA_KEY),
+            source.metadata().get(EXTENSION_TYPE_METADATA_KEY)
+        );
+        assert!(!result.metadata().contains_key("PARQUET:field_id"));
+    }
 
     #[test]
     fn coerced_fields_metadata_merges_with_earlier_precedence() {
