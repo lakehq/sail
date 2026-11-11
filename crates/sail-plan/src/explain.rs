@@ -20,6 +20,7 @@ use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::plan::NamedPlan;
+use crate::shared_cte::{optimize_shared_ctes, session_state_for_restart};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplainKind {
@@ -281,34 +282,54 @@ async fn collect_plan_with(
     plan_future: impl Future<Output = PlanResult<(LogicalPlan, Option<Vec<String>>)>>,
 ) -> PlanResult<CollectedPlan> {
     let (plan, fields) = plan_future.await?;
-    let initial_logical = plan.clone();
-    let mut stringified = vec![initial_logical.to_stringified(PlanType::InitialLogicalPlan)];
+    let mut initial_logical = plan.clone();
+    let mut stringified = vec![];
 
     let session_state = ctx.state();
     let config_options = session_state.config_options();
 
-    let analyzed_logical = session_state.analyzer().execute_and_check(
-        plan,
-        config_options.as_ref(),
-        |analyzed_plan, analyzer| {
-            let plan_type = PlanType::AnalyzedLogicalPlan {
-                analyzer_name: analyzer.name().to_string(),
-            };
-            stringified.push(analyzed_plan.to_stringified(plan_type));
-        },
-    )?;
-    stringified.push(analyzed_logical.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
-
-    let optimized_logical = session_state.optimizer().optimize(
-        analyzed_logical.clone(),
-        &session_state,
-        |optimized_plan, optimizer| {
-            let plan_type = PlanType::OptimizedLogicalPlan {
-                optimizer_name: optimizer.name().to_string(),
-            };
-            stringified.push(optimized_plan.to_stringified(plan_type));
-        },
-    )?;
+    let mut analyzed_logical = None;
+    let mut restart = false;
+    let optimized_logical = optimize_shared_ctes(plan, &mut |plan, query| {
+        if !query {
+            return session_state.optimize(&plan);
+        }
+        // The query is optimized again after a CTE reference is replaced by its definition.
+        let restarted;
+        let session_state = if std::mem::replace(&mut restart, true) {
+            restarted = session_state_for_restart(&session_state);
+            &restarted
+        } else {
+            &session_state
+        };
+        initial_logical = plan.clone();
+        stringified = vec![initial_logical.to_stringified(PlanType::InitialLogicalPlan)];
+        let analyzed = session_state.analyzer().execute_and_check(
+            plan,
+            config_options.as_ref(),
+            |analyzed_plan, analyzer| {
+                let plan_type = PlanType::AnalyzedLogicalPlan {
+                    analyzer_name: analyzer.name().to_string(),
+                };
+                stringified.push(analyzed_plan.to_stringified(plan_type));
+            },
+        )?;
+        stringified.push(analyzed.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
+        let optimized = session_state.optimizer().optimize(
+            analyzed.clone(),
+            session_state,
+            |optimized_plan, optimizer| {
+                let plan_type = PlanType::OptimizedLogicalPlan {
+                    optimizer_name: optimizer.name().to_string(),
+                };
+                stringified.push(optimized_plan.to_stringified(plan_type));
+            },
+        )?;
+        analyzed_logical = Some(analyzed);
+        Ok(optimized)
+    })?;
+    let analyzed_logical = analyzed_logical
+        .ok_or_else(|| DataFusionError::Internal("the query plan is not analyzed".into()))?;
     stringified.push(optimized_logical.to_stringified(PlanType::FinalLogicalPlan));
 
     let records = Arc::new(Mutex::new(PhysicalPlanRecords::default()));
@@ -456,7 +477,7 @@ pub async fn explain_string(
     options: ExplainOptions,
 ) -> PlanResult<ExplainString> {
     let collected = collect_plan_with(ctx, async {
-        let resolver = PlanResolver::new(ctx, Arc::clone(&config));
+        let resolver = PlanResolver::new(ctx, Arc::clone(&config)).with_shared_ctes();
         let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
         Ok((plan, fields))
     })

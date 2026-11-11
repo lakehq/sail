@@ -370,15 +370,16 @@ impl PlanResolver<'_> {
         let left_column = self.resolve_one_column(input.schema(), left_column.as_ref(), state)?;
         let right_column = self.resolve_one_column(input.schema(), right_column.as_ref(), state)?;
 
-        let projected_plan = LogicalPlanBuilder::from(input.clone())
-            .project(vec![
-                Expr::Cast(expr::Cast::new(
-                    Box::new(col(right_column.clone())),
-                    DataType::Utf8,
-                ))
-                .alias_qualified(right_column.relation.clone(), right_column.name.clone()),
-            ])?
-            .build()?;
+        let projected_plan =
+            LogicalPlanBuilder::from(Self::inline_shared_cte_references(input.clone())?)
+                .project(vec![
+                    Expr::Cast(expr::Cast::new(
+                        Box::new(col(right_column.clone())),
+                        DataType::Utf8,
+                    ))
+                    .alias_qualified(right_column.relation.clone(), right_column.name.clone()),
+                ])?
+                .build()?;
         let distinct_values = LogicalPlanBuilder::from(projected_plan)
             .project(vec![Expr::Column(right_column.clone())])?
             .distinct()?

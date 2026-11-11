@@ -7,6 +7,7 @@ pub mod runtime;
 mod scalar_subquery;
 pub mod session_factory;
 pub mod session_manager;
+mod shared_cte;
 
 #[cfg(test)]
 mod tests {
@@ -498,6 +499,183 @@ mod tests {
             "unexpected lookup count {lookups}"
         );
         assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cte_references_share_or_inline() -> Result<(), Box<dyn std::error::Error>> {
+        use sail_common_datafusion::session::shared_cte::SharedCteConfig;
+        use sail_plan::shared_cte::{
+            CteReference, optimize_shared_ctes, session_state_for_restart,
+        };
+
+        async fn optimize(
+            query: &str,
+            share: bool,
+        ) -> Result<LogicalPlan, Box<dyn std::error::Error>> {
+            let session = create_session()?;
+            session
+                .state_ref()
+                .write()
+                .config_mut()
+                .set_extension(Arc::new(SharedCteConfig::new(share)));
+            let resolver =
+                PlanResolver::new(&session, Arc::new(PlanConfig::default())).with_shared_ctes();
+            let plan = from_ast_statement(parse_one_statement(query)?)?;
+            let plan = resolver.resolve_named_plan(plan).await?.plan;
+            let state = session.state();
+            let mut restart = false;
+            Ok(optimize_shared_ctes(plan, &mut |plan, query| {
+                if query && std::mem::replace(&mut restart, true) {
+                    session_state_for_restart(&state).optimize(&plan)
+                } else {
+                    state.optimize(&plan)
+                }
+            })?)
+        }
+
+        // Returns the number of references that share a body and the number of bodies.
+        fn shared(plan: &LogicalPlan) -> datafusion_common::Result<(usize, usize)> {
+            let mut references = 0;
+            let mut bodies = std::collections::HashSet::new();
+            plan.apply_with_subqueries(|plan| {
+                if let LogicalPlan::TableScan(scan) = plan
+                    && let Some(body) = CteReference::try_from_scan(scan).and_then(|x| x.body())
+                {
+                    references += 1;
+                    bodies.insert(Arc::as_ptr(body));
+                }
+                Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+            })?;
+            Ok((references, bodies.len()))
+        }
+
+        let cte = "WITH c AS (SELECT a, a + 1 AS b FROM VALUES (1), (2), (3) AS t(a))";
+        for (query, expected) in [
+            // The references read the same rows.
+            ("SELECT x.a, y.b FROM c x JOIN c y ON x.a = y.a", (2, 1)),
+            (
+                "SELECT a FROM c WHERE a > 1 UNION ALL SELECT b FROM c WHERE a > 1",
+                (2, 1),
+            ),
+            // A limit above an aggregate reads all the rows of the references.
+            (
+                "(SELECT max(a) FROM c) UNION ALL (SELECT max(b) FROM c) LIMIT 1",
+                (2, 1),
+            ),
+            ("SELECT a, (SELECT max(b) FROM c) FROM c", (2, 1)),
+            // The references read different rows.
+            (
+                "SELECT a FROM c WHERE a > 1 UNION ALL SELECT b FROM c WHERE a > 2",
+                (0, 0),
+            ),
+            (
+                "SELECT a FROM c WHERE a > 1 UNION ALL SELECT b FROM c",
+                (0, 0),
+            ),
+            // A limit can stop reading a reference early.
+            (
+                "(SELECT a FROM c LIMIT 2) UNION ALL (SELECT b FROM c LIMIT 2)",
+                (0, 0),
+            ),
+            (
+                "(SELECT a FROM c WHERE a > 1 LIMIT 2) UNION ALL (SELECT b FROM c WHERE a > 1 LIMIT 2)",
+                (0, 0),
+            ),
+            ("SELECT x.a FROM c x JOIN c y ON x.a = y.a LIMIT 1", (0, 0)),
+            // Two of the three references read the same rows.
+            (
+                "SELECT a FROM c WHERE a > 1 UNION ALL SELECT b FROM c WHERE a > 1 UNION ALL SELECT b FROM c",
+                (2, 1),
+            ),
+            // A filter with a scalar subquery is not recorded for the reference.
+            (
+                "SELECT x.a FROM c x JOIN c y ON x.a = y.a WHERE x.a > (SELECT 1) AND y.a > (SELECT 1)",
+                (0, 0),
+            ),
+            // The CTE is referenced once.
+            ("SELECT a FROM c", (0, 0)),
+        ] {
+            let query = format!("{cte} {query}");
+            let plan = optimize(&query, true).await?;
+            assert_eq!(
+                shared(&plan)?,
+                expected,
+                "{query}\n{}",
+                plan.display_indent()
+            );
+            if expected == (0, 0) {
+                let inlined = optimize(&query, false).await?;
+                assert_eq!(
+                    plan.display_indent().to_string(),
+                    inlined.display_indent().to_string(),
+                    "{query}"
+                );
+            }
+        }
+
+        // A resolver that does not share CTEs resolves no reference as a scan.
+        let session = create_session()?;
+        session
+            .state_ref()
+            .write()
+            .config_mut()
+            .set_extension(Arc::new(SharedCteConfig::new(true)));
+        let resolver = PlanResolver::new(&session, Arc::new(PlanConfig::default()));
+        let plan = from_ast_statement(parse_one_statement(&format!(
+            "{cte} SELECT x.a, y.b FROM c x JOIN c y ON x.a = y.a"
+        ))?)?;
+        let plan = resolver.resolve_named_plan(plan).await?.plan;
+        assert!(!plan.display_indent().to_string().contains("TableScan"));
+
+        // Each reference evaluates a CTE that is volatile, sorted, or refers to outer columns.
+        for query in [
+            "WITH c AS (SELECT a, random() AS r FROM VALUES (1), (2) AS t(a)) SELECT x.r FROM c x JOIN c y ON x.a = y.a",
+            "WITH c AS (SELECT a FROM VALUES (1), (2) AS t(a) ORDER BY a) SELECT x.a FROM c x JOIN c y ON x.a = y.a",
+            "SELECT (WITH c AS (SELECT a + t.b AS a FROM VALUES (1), (2) AS s(a)) SELECT max(x.a) FROM c x JOIN c y ON x.a = y.a) FROM VALUES (1) AS t(b)",
+        ] {
+            let plan = optimize(query, true).await?;
+            assert_eq!(shared(&plan)?, (0, 0), "{query}");
+        }
+
+        // A join in a CTE is evaluated in full for references that read both of its sides,
+        // while references that ignore duplicate rows of one side turn it into a semi join.
+        let join = "WITH j AS (SELECT x.a, y.b FROM VALUES (1), (2) AS x(a) \
+                    JOIN VALUES (1, 5), (1, 6) AS y(a, b) ON x.a = y.a)";
+        let plan = optimize(
+            &format!("{join} SELECT p.a, q.b FROM j p JOIN j q ON p.a = q.a"),
+            true,
+        )
+        .await?;
+        assert_eq!(shared(&plan)?, (2, 1));
+        let query = format!(
+            "{join} SELECT t.a FROM VALUES (1), (2) AS t(a) \
+             WHERE t.a IN (SELECT a FROM j) AND t.a + 1 IN (SELECT a + 1 FROM j)"
+        );
+        let plan = optimize(&query, true).await?;
+        assert_eq!(shared(&plan)?, (0, 0), "{}", plan.display_indent());
+        assert_eq!(
+            plan.display_indent().to_string(),
+            optimize(&query, false).await?.display_indent().to_string()
+        );
+
+        // A CTE that refers twice to a shared CTE is shared as well.
+        let query = format!(
+            "{cte}, d AS (SELECT x.a, y.b FROM c x JOIN c y ON x.a = y.a) \
+             SELECT p.a, q.b FROM d p JOIN d q ON p.a = q.a"
+        );
+        let plan = optimize(&query, true).await?;
+        assert_eq!(shared(&plan)?, (2, 1));
+        let mut nested = (0, 0);
+        plan.apply_with_subqueries(|plan| {
+            if let LogicalPlan::TableScan(scan) = plan
+                && let Some(body) = CteReference::try_from_scan(scan).and_then(|x| x.body())
+            {
+                nested = shared(body.plan())?;
+            }
+            Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(nested, (2, 1));
         Ok(())
     }
 }

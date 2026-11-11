@@ -1,10 +1,13 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion::common::{JoinType, Result, plan_datafusion_err};
+use datafusion::common::{JoinType, Result, internal_err, plan_datafusion_err};
 use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::projection::ProjectionExpr;
 use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -13,6 +16,7 @@ use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
 };
 use datafusion::physical_plan::limit::GlobalLimitExec;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -32,6 +36,7 @@ use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
+use sail_physical_plan::shared_cte::{SharedCte, SharedCteExec, SharedCteScanExec};
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
@@ -404,6 +409,14 @@ fn plan_job_graph_stages(
         return build_scalar_subquery_job_graph(scalar, usage, graph, driver_stage_handling);
     }
 
+    if let Some(shared) = plan.downcast_ref::<SharedCteExec>() {
+        return build_shared_cte_job_graph(shared, usage, graph, driver_stage_handling);
+    }
+
+    if let Some(reference) = plan.downcast_ref::<StageInputExec<SharedCteStage>>() {
+        return create_shared_cte_input(reference, usage, graph);
+    }
+
     if let Some(barrier) = plan.downcast_ref::<BarrierExec>() {
         return build_barrier_job_graph(barrier, usage, graph, scalar_context);
     }
@@ -704,6 +717,123 @@ fn build_scalar_subquery_job_graph(
         }),
     );
     Ok(PlannedSubtree::without_pending_scalar_subquery_expr(plan))
+}
+
+/// The stage of a shared CTE, as the placeholder of a reference to the CTE.
+#[derive(Debug, Clone)]
+struct SharedCteStage {
+    stage: usize,
+    /// The columns of the shared CTE that the reference reads, or `None` for all columns.
+    projection: Option<Vec<usize>>,
+}
+
+impl std::fmt::Display for SharedCteStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SharedCteStage(stage={})", self.stage)
+    }
+}
+
+/// Plans each shared CTE as its own stage, which is read by the stages of its references.
+fn build_shared_cte_job_graph(
+    shared: &SharedCteExec,
+    usage: PartitionUsage,
+    graph: &mut JobGraph,
+    driver_stage_handling: DriverStageHandling,
+) -> ExecutionResult<PlannedSubtree> {
+    // The stage of each shared CTE planned so far.
+    let mut stages: HashMap<*const SharedCte, usize> = HashMap::new();
+    let locate = |plan: &Arc<dyn ExecutionPlan>, stages: &HashMap<*const SharedCte, usize>| {
+        Arc::clone(plan)
+            .transform_up(|plan| {
+                let Some(scan) = plan.downcast_ref::<SharedCteScanExec>() else {
+                    return Ok(Transformed::no(plan));
+                };
+                let Some(&stage) = stages.get(&Arc::as_ptr(scan.cte())) else {
+                    return internal_err!("shared CTE {} is not planned", scan.cte().id());
+                };
+                let input = SharedCteStage {
+                    stage,
+                    projection: scan.projection().map(|x| x.to_vec()),
+                };
+                Ok(Transformed::yes(Arc::new(StageInputExec::new(
+                    input,
+                    Arc::clone(plan.properties()),
+                ))
+                    as Arc<dyn ExecutionPlan>))
+            })
+            .data()
+    };
+    // A reference reads the partitions of the stage, which only the shuffle service
+    // cannot serve from a materialized output.
+    let mode = match graph.options.shuffle_backend {
+        ShuffleBackendKind::Storage { .. } => OutputMode::Blocking,
+        ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Celeborn { .. } => {
+            OutputMode::Pipelined
+        }
+    };
+    for (cte, plan) in shared.ctes() {
+        let plan = plan_job_graph_stages(
+            locate(plan, &stages)?,
+            PartitionUsage::Once,
+            graph,
+            DriverStageHandling::CreateStage,
+            None,
+        )?;
+        let stage = push_stage(
+            plan.plan,
+            graph,
+            OutputDistribution::RoundRobinBatch { channels: 1 },
+            TaskPlacement::Worker,
+            mode,
+        )?;
+        stages.insert(Arc::as_ptr(cte), stage);
+    }
+    plan_job_graph_stages(
+        locate(shared.input(), &stages)?,
+        usage,
+        graph,
+        driver_stage_handling,
+        None,
+    )
+}
+
+/// Reads the stage of a shared CTE for one of its references.
+fn create_shared_cte_input(
+    reference: &StageInputExec<SharedCteStage>,
+    usage: PartitionUsage,
+    graph: &JobGraph,
+) -> ExecutionResult<PlannedSubtree> {
+    let SharedCteStage { stage, projection } = reference.input();
+    let partitions = reference
+        .properties()
+        .output_partitioning()
+        .partition_count();
+    let mode = match usage {
+        // The only partition of the reference is read by every task of its stage.
+        PartitionUsage::Shared if partitions == 1 => InputMode::Broadcast,
+        // Each partition of the reference reads the same partition of the CTE.
+        _ => InputMode::Rescale { partitions },
+    };
+    let input = stage_input_exec(
+        *stage,
+        mode,
+        stage_properties_with_unknown_partitioning(graph, *stage, partitions),
+    );
+    let input = match projection {
+        Some(projection) => {
+            let schema = input.schema();
+            let expressions = projection
+                .iter()
+                .map(|&index| {
+                    let name = schema.field(index).name();
+                    ProjectionExpr::new(Arc::new(Column::new(name, index)), name.clone())
+                })
+                .collect::<Vec<_>>();
+            Arc::new(ProjectionExec::try_new(expressions, input)?) as Arc<dyn ExecutionPlan>
+        }
+        None => input,
+    };
+    Ok(PlannedSubtree::without_pending_scalar_subquery_expr(input))
 }
 
 fn build_barrier_job_graph(

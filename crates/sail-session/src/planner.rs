@@ -84,6 +84,7 @@ use sail_plan::procedure::LakeProcedureNode;
 use crate::scalar_subquery::{
     ensure_scalar_subquery_nullability, share_equivalent_scalar_subqueries,
 };
+use crate::shared_cte::{SharedCtePlanner, shared_cte_bodies};
 
 #[derive(Debug)]
 pub struct ExtensionQueryPlanner {}
@@ -100,6 +101,24 @@ impl QueryPlanner for ExtensionQueryPlanner {
         &self,
         logical_plan: &LogicalPlan,
         session: &dyn Session,
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        // A shared CTE body is planned before the plans that refer to it.
+        let mut shared_ctes = SharedCtePlanner::default();
+        for body in shared_cte_bodies(logical_plan)? {
+            let plan = self.plan(body.plan(), session, &shared_ctes).await?;
+            shared_ctes.add(&body, body.name().to_string(), plan)?;
+        }
+        let plan = self.plan(logical_plan, session, &shared_ctes).await?;
+        shared_ctes.finish(plan)
+    }
+}
+
+impl ExtensionQueryPlanner {
+    async fn plan(
+        &self,
+        logical_plan: &LogicalPlan,
+        session: &dyn Session,
+        shared_ctes: &SharedCtePlanner,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         // TODO: show rewriters and the final logical plan in `EXPLAIN`.
         let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![
@@ -123,6 +142,7 @@ impl QueryPlanner for ExtensionQueryPlanner {
             Arc::new(NoopPhysicalPlanner),
             Arc::new(PythonPhysicalPlanner),
             Arc::new(ExtensionPhysicalPlanner),
+            Arc::new(shared_ctes.clone()),
         ];
         let planner = DefaultPhysicalPlanner::with_extension_planners(extension_planners);
         let plan = planner.create_physical_plan(&logical_plan, session).await?;

@@ -13,6 +13,7 @@ use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::plan::NamedPlan;
+use crate::shared_cte::{optimize_shared_ctes, session_state_for_restart};
 use crate::streaming::rewriter::{is_streaming_plan, rewrite_streaming_plan};
 
 pub mod catalog;
@@ -24,6 +25,7 @@ pub mod function;
 pub mod procedure;
 pub mod resolver;
 pub mod scalar_subquery_key;
+pub mod shared_cte;
 mod streaming;
 
 /// Executes a logical plan.
@@ -39,12 +41,19 @@ pub async fn resolve_and_execute_plan(
     plan: spec::Plan,
 ) -> PlanResult<(Arc<dyn ExecutionPlan>, Vec<StringifiedPlan>)> {
     let mut info = vec![];
-    let resolver = PlanResolver::new(ctx, config);
+    let resolver = PlanResolver::new(ctx, config).with_shared_ctes();
     let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
     info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
     let df = execute_logical_plan(ctx, plan).await?;
     let (session_state, plan) = df.into_parts();
-    let plan = session_state.optimize(&plan)?;
+    let mut restart = false;
+    let plan = optimize_shared_ctes(plan, &mut |plan, query| {
+        if query && std::mem::replace(&mut restart, true) {
+            session_state_for_restart(&session_state).optimize(&plan)
+        } else {
+            session_state.optimize(&plan)
+        }
+    })?;
     let plan = if is_streaming_plan(&plan)? {
         rewrite_streaming_plan(plan)?
     } else {

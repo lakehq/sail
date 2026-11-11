@@ -1785,6 +1785,7 @@ impl PlanResolver<'_> {
     }
 
     pub(super) fn plan_has_default_column_value(plan: &LogicalPlan) -> PlanResult<bool> {
+        let plan = &Self::inline_shared_cte_references(plan.clone())?;
         let mut found = false;
         plan.apply(|node| {
             node.apply_expressions(|expr| {

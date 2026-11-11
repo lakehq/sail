@@ -221,7 +221,7 @@ impl PlanResolver<'_> {
         // `SELECT DISTINCT pivot_column`. Apply a LIMIT of one past the cap so a
         // high-cardinality pivot column never pulls an unbounded number of distinct
         // values into the planner process; the extra row still lets us detect overflow.
-        let plan = LogicalPlanBuilder::from(input.clone())
+        let plan = LogicalPlanBuilder::from(Self::inline_shared_cte_references(input.clone())?)
             .aggregate(vec![pivot_column.clone()], Vec::<expr::Expr>::new())?
             .limit(0, Some(max_pivot_values.saturating_add(1)))?
             .build()?;

@@ -972,6 +972,16 @@
     memory usage and runtime. The top-k operator does not support spilling to disk.
   experimental: true
 
+- key: optimizer.share_cte_definitions
+  type: boolean
+  default: "true"
+  description: |
+    Whether the references to a CTE can share one evaluation of the CTE.
+    If the value is `true`, a CTE that is referenced more than once is planned and
+    evaluated once for the references that read the same rows of it.
+    If the value is `false`, the CTE is planned and evaluated for each reference.
+  experimental: true
+
 - key: optimizer.expand_views_at_output
   type: boolean
   default: "true"

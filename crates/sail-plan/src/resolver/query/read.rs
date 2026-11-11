@@ -90,6 +90,9 @@ impl PlanResolver<'_> {
             }
             let mut plan = cte.plan.as_ref().clone();
             if let Some(names) = cte.renew_reference(state)? {
+                if let Some(scan) = cte.scan(state)? {
+                    plan = scan;
+                }
                 plan = rename_logical_plan_reusing_projection(plan, &names)?;
                 state.register_missing_input_boundary(&plan);
             }

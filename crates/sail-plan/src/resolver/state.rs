@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::{Field, FieldRef};
-use datafusion_common::{DFSchemaRef, HashMap, HashSet, ScalarValue, TableReference};
+use datafusion_common::{DFSchemaRef, HashMap, HashSet, ParamValues, ScalarValue, TableReference};
 use datafusion_expr::{LogicalPlan, TableSource};
 use sail_common::spec;
 
@@ -9,6 +9,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::query::{CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution};
+use crate::shared_cte::CteDefinition;
 
 /// Identifies what a catalog table read scans.
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -125,6 +126,10 @@ pub(super) struct PlanResolverState {
     ctes: HashMap<TableReference, Arc<CteInfo>>,
     /// Output attributes of the CTE definitions referenced so far; later references renew them.
     cte_reference_origins: HashSet<usize>,
+    /// The number of CTE definitions resolved so far.
+    next_cte_definition_index: usize,
+    /// The CTE definitions with references that are scans.
+    shared_cte_definitions: Vec<Arc<CteDefinition>>,
     /// Output attributes of the parameter views referenced so far, including renewed ones.
     parameter_view_origins: HashSet<usize>,
     /// Unresolved subquery references from a WithRelations node, keyed by plan_id.
@@ -168,6 +173,8 @@ impl PlanResolverState {
             aggregate_state: AggregateState::default(),
             ctes: HashMap::new(),
             cte_reference_origins: HashSet::new(),
+            next_cte_definition_index: 0,
+            shared_cte_definitions: Vec::new(),
             parameter_view_origins: HashSet::new(),
             subquery_references: HashMap::new(),
             config: PlanResolverStateConfig::default(),
@@ -456,6 +463,24 @@ impl PlanResolverState {
         Ok(())
     }
 
+    pub fn insert_cte_info(&mut self, table_ref: TableReference, cte: CteInfo) {
+        self.ctes.insert(table_ref, Arc::new(cte));
+    }
+
+    pub fn next_cte_definition_index(&mut self) -> usize {
+        let index = self.next_cte_definition_index;
+        self.next_cte_definition_index += 1;
+        index
+    }
+
+    pub fn register_shared_cte_definition(&mut self, definition: Arc<CteDefinition>) {
+        self.shared_cte_definitions.push(definition);
+    }
+
+    pub fn shared_cte_definitions(&self) -> &[Arc<CteDefinition>] {
+        &self.shared_cte_definitions
+    }
+
     pub fn ctes(&self) -> impl Iterator<Item = &Arc<CteInfo>> {
         self.ctes.values()
     }
@@ -571,6 +596,20 @@ impl PlanResolverState {
 
     pub fn in_lambda_scope(&self) -> bool {
         !self.lambda_param_scopes.is_empty()
+    }
+
+    /// Replaces the parameters in the plan by the parameter values in scope.
+    pub fn bind_param_values(&self, plan: LogicalPlan) -> PlanResult<LogicalPlan> {
+        let plan = if self.positional_param_values.is_empty() {
+            plan
+        } else {
+            plan.with_param_values(ParamValues::from(self.positional_param_values.clone()))?
+        };
+        if self.param_values.is_empty() {
+            Ok(plan)
+        } else {
+            Ok(plan.with_param_values(ParamValues::from(self.param_values.clone()))?)
+        }
     }
 
     /// Enters a scope where named and positional parameter values are set.

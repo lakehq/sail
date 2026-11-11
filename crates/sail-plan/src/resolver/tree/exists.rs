@@ -19,6 +19,7 @@ use sail_logical_optimizer::{exists_by_count, pull_up_correlated_filters_in_pred
 
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
+use crate::shared_cte::{CteReference, exists_in_plan_or_cte_definitions};
 
 pub(crate) struct ExistsRewriter<'s> {
     plan: LogicalPlan,
@@ -207,10 +208,14 @@ impl ExistsRewriter<'_> {
                             if Self::scalar_aggregate_has_filter(&limit.input).is_some() {
                                 return Ok(lit(false));
                             }
-                            if limit.input.exists(|plan| {
-                                Ok(matches!(plan, LogicalPlan::Aggregate(aggregate) if aggregate.group_expr.is_empty()))
+                            if exists_in_plan_or_cte_definitions(&limit.input, &mut |plan| {
+                                Ok(
+                                    matches!(plan, LogicalPlan::Aggregate(aggregate) if aggregate.group_expr.is_empty()),
+                                )
                             })? {
-                                return not_impl_err!("projected correlated EXISTS with OFFSET over nested scalar aggregation");
+                                return not_impl_err!(
+                                    "projected correlated EXISTS with OFFSET over nested scalar aggregation"
+                                );
                             }
                             return self.count_rows(Arc::unwrap_or_clone(limit.input), skip);
                         }
@@ -221,11 +226,16 @@ impl ExistsRewriter<'_> {
                         }
                     }
                 }
+                // The rewrite looks at a CTE reference as at its definition.
+                LogicalPlan::TableScan(scan) => match CteReference::try_from_scan(&scan) {
+                    Some(reference) => reference.definition().resolved().as_ref().clone(),
+                    None => break LogicalPlan::TableScan(scan),
+                },
                 query => break query,
             };
         };
         // Pulling these operators above correlation would change empty-input semantics.
-        if query.exists(|plan| {
+        if exists_in_plan_or_cte_definitions(&query, &mut |plan| {
             Ok(match plan {
                 LogicalPlan::Aggregate(aggregate) => aggregate.group_expr.is_empty(),
                 LogicalPlan::Limit(limit) => {

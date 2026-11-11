@@ -84,7 +84,7 @@ impl PlanResolver<'_> {
         })
         .alias(count_alias);
         let count_plan = LogicalPlan::Aggregate(Aggregate::try_new(
-            Arc::new(input.clone()),
+            Arc::new(Self::inline_shared_cte_references(input.clone())?),
             vec![],
             vec![count_expr],
         )?);

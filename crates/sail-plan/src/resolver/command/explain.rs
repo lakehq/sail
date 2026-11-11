@@ -27,6 +27,7 @@ impl PlanResolver<'_> {
                 (plan, None)
             }
         };
+        let plan = Self::scan_shared_cte_definitions(plan, state, false)?;
         let options = ExplainOptions::from_mode(mode);
         let explain = explain_string_from_logical_plan(self.ctx, plan, fields, options).await?;
         let plan =

@@ -17,7 +17,6 @@ use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
-
 impl PlanResolver<'_> {
     pub(in super::super) async fn resolve_catalog_create_view(
         &self,
@@ -117,6 +116,8 @@ impl PlanResolver<'_> {
             _ => None,
         };
         let input = self.resolve_query_plan(*input, state).await?;
+        // The view outlives the query, so its CTEs are not shared with other plans.
+        let input = Self::inline_shared_cte_references(input)?;
         let input = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
             Arc::new(input),
             TableReference::Bare {
