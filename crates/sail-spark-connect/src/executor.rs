@@ -6,17 +6,17 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
 use fastrace::Span;
 use fastrace::future::FutureExt;
 use futures::stream::StreamExt;
 use futures::{Stream, stream};
-use sail_common_datafusion::schema::{normalize_record_batch, record_batch_has_views};
-use sail_common_datafusion::uuid::UUID_EXTENSION_NAME;
+use sail_common_datafusion::schema::{
+    normalize_record_batch, record_batch_has_views, spark_arrow_schema,
+};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -482,31 +482,6 @@ impl Executor {
     }
 }
 
-// Spark exposes UUID storage as BinaryType. Its clients require bytes, not the
-// uuid.UUID objects produced by PyArrow's canonical UUID extension decoder.
-// Strip only the UUID annotation in the outbound IPC schema, not internal data.
-fn spark_arrow_field(field: &Field) -> Field {
-    use ArrowDataType as D;
-
-    let child = |field: &Arc<Field>| Arc::new(spark_arrow_field(field));
-    let data_type = match field.data_type() {
-        D::Struct(fields) => D::Struct(fields.iter().map(child).collect()),
-        D::List(field) => D::List(child(field)),
-        D::LargeList(field) => D::LargeList(child(field)),
-        D::FixedSizeList(field, size) => D::FixedSizeList(child(field), *size),
-        D::ListView(field) => D::ListView(child(field)),
-        D::LargeListView(field) => D::LargeListView(child(field)),
-        D::Map(field, sorted) => D::Map(child(field), *sorted),
-        data_type => data_type.clone(),
-    };
-    let mut field = field.clone().with_data_type(data_type);
-    if field.extension_type_name() == Some(UUID_EXTENSION_NAME) {
-        field.metadata_mut().remove(EXTENSION_TYPE_NAME_KEY);
-        field.metadata_mut().remove(EXTENSION_TYPE_METADATA_KEY);
-    }
-    field
-}
-
 pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
     let mut output = ArrowBatch::default();
     {
@@ -519,15 +494,7 @@ pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
             batch
         };
         let cursor = Cursor::new(&mut output.data);
-        let schema = batch.schema();
-        let schema = Schema::new_with_metadata(
-            schema
-                .fields()
-                .iter()
-                .map(|field| spark_arrow_field(field))
-                .collect::<Vec<_>>(),
-            schema.metadata().clone(),
-        );
+        let schema = spark_arrow_schema(batch.schema().as_ref());
         let mut writer = StreamWriter::try_new(cursor, &schema)?;
         writer.write(batch)?;
         output.row_count += batch.num_rows() as i64;
