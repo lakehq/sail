@@ -22,6 +22,9 @@ use crate::scalar::csv::options::{
     CsvFunction, find_option, find_option_with_alias, reject_null_entries, validate_options,
 };
 use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::spark_interval::{
+    string_to_day_time_interval, string_to_year_month_interval,
+};
 
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
 
@@ -49,6 +52,7 @@ struct SparkFromCSVOptions {
     timestamp_format: DateTimeFormat,
     date_format: DateTimeFormat,
     timezone: Option<String>,
+    fail_fast: bool,
 }
 
 impl SparkFromCSVOptions {
@@ -90,12 +94,15 @@ impl SparkFromCSVOptions {
             });
 
         let timezone = find_option(map, Self::TIMEZONE_OPTION).map(str::to_string);
+        let fail_fast =
+            find_option(map, "mode").is_some_and(|mode| mode.eq_ignore_ascii_case("FAILFAST"));
 
         Ok(Self {
             sep,
             timestamp_format,
             date_format,
             timezone,
+            fail_fast,
         })
     }
 }
@@ -111,6 +118,7 @@ impl Default for SparkFromCSVOptions {
             date_format: DateTimeFormat::for_parsing(Self::DATE_FORMAT_DEFAULT)
                 .expect("default date format should be valid"),
             timezone: None,
+            fail_fast: false,
         }
     }
 }
@@ -348,6 +356,10 @@ fn parse_csv_line_to_scalar_values(
                 ScalarValue::try_new_null(field.data_type())
             } else {
                 match field.data_type() {
+                    DataType::Duration(TimeUnit::Microsecond)
+                    | DataType::Interval(IntervalUnit::YearMonth) => {
+                        parse_csv_interval(value, field, options.fail_fast)
+                    }
                     DataType::Timestamp(_, _) => parse_timestamp(field.data_type(), value, options),
                     DataType::Date32 | DataType::Date64 => {
                         parse_date(field.data_type(), value, options)
@@ -357,6 +369,30 @@ fn parse_csv_line_to_scalar_values(
             }
         })
         .collect()
+}
+
+fn parse_csv_interval(value: &str, field: &Field, fail_fast: bool) -> Result<ScalarValue> {
+    let qualifier = field
+        .metadata()
+        .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+        .map(|metadata| {
+            spec::SparkIntervalMetadata::from_json(metadata)
+                .map_err(|e| DataFusionError::Execution(e.to_string()))
+        })
+        .transpose()?;
+    let result = match field.data_type() {
+        DataType::Duration(TimeUnit::Microsecond) => string_to_day_time_interval(value, qualifier)
+            .map(|value| ScalarValue::DurationMicrosecond(Some(value))),
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            string_to_year_month_interval(value, qualifier)
+                .map(|value| ScalarValue::IntervalYearMonth(Some(value)))
+        }
+        other => return exec_err!("expected an ANSI interval type, got {other}"),
+    };
+    match result {
+        Err(_) if !fail_fast => ScalarValue::try_new_null(field.data_type()),
+        result => result,
+    }
 }
 
 /// Parses a timestamp from a string value using a specified format.

@@ -304,12 +304,20 @@ impl PlanResolver<'_> {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Interval(IntervalUnit::YearMonth),
                 _,
-            ) => ScalarUDF::new_from_impl(SparkYearMonthInterval::new()).call(vec![expr]),
+            ) => ScalarUDF::new_from_impl(SparkYearMonthInterval::new()).call(vec![
+                expr,
+                lit(ScalarValue::Utf8(spark_interval_metadata.clone())),
+                lit(is_try),
+            ]),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Duration(TimeUnit::Microsecond),
                 _,
-            ) => ScalarUDF::new_from_impl(SparkDayTimeInterval::new()).call(vec![expr]),
+            ) => ScalarUDF::new_from_impl(SparkDayTimeInterval::new()).call(vec![
+                expr,
+                lit(ScalarValue::Utf8(spark_interval_metadata.clone())),
+                lit(is_try),
+            ]),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Interval(IntervalUnit::MonthDayNano),

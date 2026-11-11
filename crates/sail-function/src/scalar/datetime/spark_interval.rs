@@ -12,11 +12,13 @@ use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+use sail_common::spec::SparkIntervalMetadata;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_sql_analyzer::literal::interval::IntervalValue;
+use sail_sql_analyzer::literal::interval::{IntervalValue, parse_interval_with_qualifier};
 use sail_sql_analyzer::parser::parse_interval;
 
 macro_rules! define_interval_udf {
@@ -35,10 +37,17 @@ macro_rules! define_interval_udf {
         impl $udf {
             pub fn new() -> Self {
                 Self {
-                    signature: Signature::coercible(
-                        vec![Coercion::new_exact(TypeSignatureClass::Native(
-                            logical_string(),
-                        ))],
+                    signature: Signature::one_of(
+                        vec![
+                            TypeSignature::Coercible(vec![Coercion::new_exact(
+                                TypeSignatureClass::Native(logical_string()),
+                            )]),
+                            TypeSignature::Exact(vec![
+                                DataType::Utf8,
+                                DataType::Utf8,
+                                DataType::Boolean,
+                            ]),
+                        ],
                         Volatility::Immutable,
                     ),
                 }
@@ -60,21 +69,48 @@ macro_rules! define_interval_udf {
 
             fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
                 let ScalarFunctionArgs { args, .. } = args;
-                let arg = args.one()?;
+                // Qualifiers and error handling are literal arguments so that they survive
+                // serialization without adding state to the UDF.
+                let (arg, qualifier, safe) = match args.as_slice() {
+                    [arg] => (arg, None, false),
+                    [
+                        arg,
+                        ColumnarValue::Scalar(metadata),
+                        ColumnarValue::Scalar(ScalarValue::Boolean(Some(safe))),
+                    ] => {
+                        let metadata = metadata.try_as_str().ok_or_else(|| {
+                            exec_datafusion_err!("interval qualifier must be a constant string")
+                        })?;
+                        let qualifier = metadata
+                            .map(SparkIntervalMetadata::from_json)
+                            .transpose()
+                            .map_err(|e| exec_datafusion_err!("{e}"))?;
+                        (arg, qualifier, *safe)
+                    }
+                    _ => {
+                        return exec_err!(
+                            "expected an interval string and optional constant parsing options"
+                        );
+                    }
+                };
+                let parse = |value: Option<&str>| {
+                    let result = value.map(|x| $func(x, qualifier)).transpose();
+                    if safe { result.or(Ok(None)) } else { result }
+                };
                 match arg {
                     ColumnarValue::Array(array) => {
                         let array: PrimitiveArray<$primitive_type> = match array.data_type() {
                             DataType::Utf8 => as_string_array(&array)?
                                 .iter()
-                                .map(|x| x.map(|x| $func(x)).transpose())
+                                .map(&parse)
                                 .collect::<Result<_>>()?,
                             DataType::LargeUtf8 => as_large_string_array(&array)?
                                 .iter()
-                                .map(|x| x.map(|x| $func(x)).transpose())
+                                .map(&parse)
                                 .collect::<Result<_>>()?,
                             DataType::Utf8View => as_string_view_array(&array)?
                                 .iter()
-                                .map(|x| x.map(|x| $func(x)).transpose())
+                                .map(&parse)
                                 .collect::<Result<_>>()?,
                             _ => return exec_err!("expected string array for intervals"),
                         };
@@ -82,7 +118,7 @@ macro_rules! define_interval_udf {
                     }
                     ColumnarValue::Scalar(scalar) => {
                         let value = match scalar.try_as_str() {
-                            Some(x) => x.map(|x| $func(x)).transpose()?,
+                            Some(x) => parse(x)?,
                             _ => return exec_err!("expected string scalar for intervals"),
                         };
                         Ok(ColumnarValue::Scalar($scalar(value)))
@@ -255,17 +291,22 @@ impl ScalarUDFImpl for SparkDayTimeIntervalToCalendarInterval {
     }
 }
 
-// TODO: support alternative form of interval strings
-//   In Spark, interval strings can be specified in two forms.
-//   For example, the `INTERVAL HOUR` type can have the following string representations.
-//   1. `[+|-]h`
-//   2. `INTERVAL [+|-]'[+|-]h' HOUR`
-//   The first form cannot be parsed since the start and end field information is lost in
-//   Arrow types. Types such as `INTERVAL DAY` and `INTERVAL HOUR` has the same physical type
-//   in Arrow, and we cannot distinguish `[+|-]d` from `[+|-]h`.
+fn parse_interval_string(
+    value: &str,
+    qualifier: Option<SparkIntervalMetadata>,
+) -> Result<IntervalValue> {
+    match qualifier {
+        Some(qualifier) => parse_interval_with_qualifier(value, qualifier),
+        None => parse_interval(value),
+    }
+    .map_err(|e| exec_datafusion_err!("{e}"))
+}
 
-fn string_to_year_month_interval(value: &str) -> Result<i32> {
-    let interval = parse_interval(value).map_err(|e| exec_datafusion_err!("{e}"))?;
+pub(crate) fn string_to_year_month_interval(
+    value: &str,
+    qualifier: Option<SparkIntervalMetadata>,
+) -> Result<i32> {
+    let interval = parse_interval_string(value, qualifier)?;
     match interval {
         IntervalValue::YearMonth { months, .. } => Ok(months),
         IntervalValue::Microsecond { .. } | IntervalValue::MonthDayNanosecond { .. } => {
@@ -274,8 +315,11 @@ fn string_to_year_month_interval(value: &str) -> Result<i32> {
     }
 }
 
-fn string_to_day_time_interval(value: &str) -> Result<i64> {
-    let interval = parse_interval(value).map_err(|e| exec_datafusion_err!("{e}"))?;
+pub(crate) fn string_to_day_time_interval(
+    value: &str,
+    qualifier: Option<SparkIntervalMetadata>,
+) -> Result<i64> {
+    let interval = parse_interval_string(value, qualifier)?;
     match interval {
         IntervalValue::Microsecond { microseconds, .. } => Ok(microseconds),
         IntervalValue::YearMonth { .. } | IntervalValue::MonthDayNanosecond { .. } => {
@@ -284,7 +328,10 @@ fn string_to_day_time_interval(value: &str) -> Result<i64> {
     }
 }
 
-fn string_to_calendar_interval(value: &str) -> Result<IntervalMonthDayNano> {
+fn string_to_calendar_interval(
+    value: &str,
+    _qualifier: Option<SparkIntervalMetadata>,
+) -> Result<IntervalMonthDayNano> {
     let interval = parse_interval(value).map_err(|e| exec_datafusion_err!("{e}"))?;
     match interval {
         IntervalValue::YearMonth { months, .. } => Ok(IntervalMonthDayNano {

@@ -10045,6 +10045,63 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_qualified_interval_parsing() -> Result<()> {
+        use datafusion::arrow::array::StringArray;
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::{col, lit};
+        use datafusion::physical_expr::create_physical_expr;
+        use datafusion::physical_expr::execution_props::ExecutionProps;
+        use sail_common::spec::{
+            DayTimeIntervalField, SparkIntervalMetadata, YearMonthIntervalField,
+        };
+
+        let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+        let dfschema = DFSchema::try_from(schema.as_ref().clone())?;
+        for (udf, qualifier) in [
+            (
+                ScalarUDF::from(SparkDayTimeInterval::new()),
+                SparkIntervalMetadata::DayTime {
+                    start_field: DayTimeIntervalField::Hour,
+                    end_field: DayTimeIntervalField::Hour,
+                },
+            ),
+            (
+                ScalarUDF::from(SparkYearMonthInterval::new()),
+                SparkIntervalMetadata::YearMonth {
+                    start_field: YearMonthIntervalField::Year,
+                    end_field: YearMonthIntervalField::Year,
+                },
+            ),
+        ] {
+            for safe in [false, true] {
+                let metadata = qualifier
+                    .to_json()
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
+                let expression = udf.call(vec![col("value"), lit(metadata), lit(safe)]);
+                let physical = create_physical_expr(
+                    &expression,
+                    &dfschema,
+                    &ExecutionProps::new(),
+                    &PhysicalPlanningContext::default(),
+                )?;
+                let decoded = round_trip_expr(&physical, &schema)?;
+                let values = if safe {
+                    vec![Some("1"), Some("invalid"), None]
+                } else {
+                    vec![Some("1"), Some("-2"), None]
+                };
+                assert_same_result(
+                    &physical,
+                    &decoded,
+                    Arc::clone(&schema),
+                    vec![Arc::new(StringArray::from(values))],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_day_time_interval_to_calendar_interval_udf() -> Result<()> {
         let decoded = round_trip_udf(ScalarUDF::from(
             SparkDayTimeIntervalToCalendarInterval::new(),
