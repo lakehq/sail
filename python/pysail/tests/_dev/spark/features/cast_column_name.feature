@@ -197,3 +197,39 @@ Feature: Cast column names
         root
          |-- k: string (nullable = false)
         """
+
+    Scenario: Cast of a DataFrame grouping column keeps the column name
+      When dataframe for group by a cast of a column
+      Then dataframe schema
+        """
+        root
+         |-- k: long (nullable = false)
+         |-- count: long (nullable = false)
+        """
+
+    Scenario: Chained casts of a DataFrame grouping column are named after both casts
+      When dataframe for group by chained casts of a column
+      Then dataframe schema
+        """
+        root
+         |-- CAST(CAST(k AS BIGINT) AS STRING): string (nullable = false)
+         |-- count: long (nullable = false)
+        """
+
+    Scenario: Cast of a DataFrame rollup column keeps the column name
+      When dataframe for rollup by a cast of a column
+      Then dataframe schema
+        """
+        root
+         |-- k: long (nullable = true)
+         |-- count: long (nullable = false)
+        """
+
+    Scenario: Cast of a DataFrame pivot grouping column keeps the column name
+      When dataframe for pivot grouped by a cast of a column
+      Then dataframe schema
+        """
+        root
+         |-- k: long (nullable = false)
+         |-- 0: long (nullable = true)
+        """

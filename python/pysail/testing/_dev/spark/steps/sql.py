@@ -202,6 +202,15 @@ def dataframe_for(case, spark):
         "chained casts of a column from a string expression": lambda: cast_input().selectExpr(
             "CAST(CAST(k AS BIGINT) AS STRING)"
         ),
+        "group by a cast of a column": lambda: cast_input().groupBy(F.col("k").cast("bigint")).count(),
+        "group by chained casts of a column": lambda: cast_input()
+        .groupBy(F.col("k").cast("bigint").cast("string"))
+        .count(),
+        "rollup by a cast of a column": lambda: cast_input().rollup(F.col("k").cast("bigint")).count(),
+        "pivot grouped by a cast of a column": lambda: cast_input()
+        .groupBy(F.col("k").cast("bigint"))
+        .pivot("k", [0])
+        .count(),
         "null literal": lambda: spark.range(1).select(F.lit(None).alias("result")),
         "null literal alias projection": lambda: (
             spark.range(1).select(F.lit(None).alias("value")).select(F.col("value").alias("result"))
