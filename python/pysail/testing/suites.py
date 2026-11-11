@@ -30,7 +30,7 @@ INTEGRATION_PATHS = (
 INTEGRATION_GROUPS = {
     "hms": ("catalog/hms", "spark/catalog/hms"),
     "unity": ("catalog/unity", "spark/catalog/unity"),
-    "iceberg-rest": ("catalog/iceberg", "spark/catalog/iceberg"),
+    "iceberg": ("catalog/iceberg", "spark/catalog/iceberg"),
     "delta": ("spark/delta",),
     "celeborn": ("celeborn", "spark/execution/test_shuffle_celeborn.py"),
     "glue": ("catalog/glue", "spark/catalog/glue"),

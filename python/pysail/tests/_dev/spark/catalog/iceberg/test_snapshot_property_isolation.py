@@ -145,7 +145,7 @@ def test_rest_invalid_annotation_does_not_mutate_catalog_or_storage(spark, recor
         start = len(records)
         writer = spark.range(10).writeTo(table).using("iceberg").option("snapshot-property.operation", "bad")
         with pytest.raises(Exception, match="reserved"):
-            writer.replace()
+            writer.overwrite(F.lit(True))
         assert _load(endpoint, "protected") == before
         assert _s3_object_keys(seaweedfs_host_endpoint, "s3://icebergdata/demo") == keys
         assert [r.id for r in spark.table(table).orderBy("id").collect()] == [0, 1]
