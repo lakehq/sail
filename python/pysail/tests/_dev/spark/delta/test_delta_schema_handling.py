@@ -195,7 +195,9 @@ def _assert_catalog_nullability(spark, table_name, delta_path, expected_type, ex
         assert [(row.id, row.payload) for row in rows] == expected_rows
 
 
-def _exercise_catalog_nullability(spark, table_name, delta_path, creation, mode, shape, initial_nullable):
+def _exercise_catalog_nullability(
+    spark, table_name, delta_path, creation, mode, shape, initial_nullable, *, use_insert_into=False
+):
     initial_schema = _catalog_nullability_schema(shape, initial_nullable)
     initial_rows, strict_rows, nullable_rows = _catalog_nullability_rows(shape)
     initial = spark.createDataFrame(initial_rows, initial_schema)
@@ -211,7 +213,10 @@ def _exercise_catalog_nullability(spark, table_name, delta_path, creation, mode,
     _assert_catalog_nullability(spark, table_name, delta_path, expected_type, initial_rows)
 
     strict = spark.createDataFrame(strict_rows, _catalog_nullability_schema(shape, False))
-    strict.write.format("delta").mode(mode).saveAsTable(table_name)
+    if use_insert_into:
+        strict.write.insertInto(table_name, overwrite=mode == "overwrite")
+    else:
+        strict.write.format("delta").mode(mode).saveAsTable(table_name)
     expected_rows = (initial_rows if mode == "append" else []) + strict_rows
     _assert_catalog_nullability(spark, table_name, delta_path, expected_type, expected_rows)
 
@@ -254,7 +259,11 @@ def test_delta_catalog_nullability_delta_spark(spark, delta_jvm_spark, tmp_path,
     spark.sql(f"DROP TABLE IF EXISTS {sail_table}").collect()
     delta_jvm_spark.sql(f"DROP TABLE IF EXISTS {jvm_table}").collect()
     try:
-        _exercise_catalog_nullability(delta_jvm_spark, jvm_table, delta_path, creation, "overwrite", shape, True)
+        # Delta 3.3 staged table replacements do not advertise truncate support.
+        # Insert into the existing table to exercise named overwrites on Spark 3.5.
+        _exercise_catalog_nullability(
+            delta_jvm_spark, jvm_table, delta_path, creation, "overwrite", shape, True, use_insert_into=True
+        )
         spark.sql(
             f"CREATE TABLE {sail_table} USING DELTA LOCATION '{escape_sql_string_literal(str(delta_path))}'"
         ).collect()
