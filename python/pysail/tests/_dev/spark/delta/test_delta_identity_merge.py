@@ -369,7 +369,7 @@ def test_conditional_merge_schema_overwrite_tracks_omitted_identity(spark, ident
     spark.sql(f"INSERT INTO {name} (p) VALUES (3)").collect()  # noqa: S608
     rows = spark.read.format("delta").load(str(path)).orderBy("p").collect()
     assert [row.p for row in rows] == [1, 2, 3]
-    assert len({row.id for row in rows}) == 3
+    assert len({row.id for row in rows}) == len(rows)
     assert rows[0].id == replaced
     assert rows[1].id == retained
     assert rows[2].id > replaced
