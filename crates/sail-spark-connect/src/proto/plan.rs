@@ -400,19 +400,20 @@ impl TryFrom<RelType> for RelationNode {
                 } = *aggregate;
                 let input = input.required("aggregate input")?;
                 let input = (*input).try_into()?;
-                // Spark names a grouping column the way it names an item of a SQL
-                // projection list, so a single cast keeps the name of its child.
-                let grouping = grouping_expressions
-                    .into_iter()
-                    .map(|x| {
-                        Ok(spec::Expr::try_from(x)?
-                            .with_projection_item_cast_naming(spec::CastNaming::SqlProjectionItem))
-                    })
-                    .collect::<SparkResult<Vec<_>>>()?;
-                let aggregate = aggregate_expressions
-                    .into_iter()
-                    .map(|x| x.try_into())
-                    .collect::<SparkResult<Vec<_>>>()?;
+                // Spark names grouping and aggregate columns the way it names an item
+                // of a SQL projection list, so a single cast keeps the name of its child.
+                let to_output = |exprs: Vec<sc::Expression>| {
+                    exprs
+                        .into_iter()
+                        .map(|x| {
+                            Ok(spec::Expr::try_from(x)?.with_projection_item_cast_naming(
+                                spec::CastNaming::SqlProjectionItem,
+                            ))
+                        })
+                        .collect::<SparkResult<Vec<_>>>()
+                };
+                let grouping = to_output(grouping_expressions)?;
+                let aggregate = to_output(aggregate_expressions)?;
                 let node = match GroupType::try_from(group_type)? {
                     GroupType::Unspecified => {
                         return Err(SparkError::invalid("unspecified aggregate group type"));

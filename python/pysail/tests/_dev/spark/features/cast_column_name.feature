@@ -233,3 +233,21 @@ Feature: Cast column names
          |-- k: long (nullable = false)
          |-- 0: long (nullable = true)
         """
+
+    Scenario: Cast of a DataFrame aggregate column keeps the column name
+      When dataframe for aggregate a cast of a column
+      Then dataframe schema
+        """
+        root
+         |-- k: integer (nullable = false)
+         |-- k: long (nullable = false)
+        """
+
+    Scenario: Cast of a DataFrame aggregate function is named after the cast
+      When dataframe for aggregate a cast of an aggregate
+      Then dataframe schema
+        """
+        root
+         |-- k: integer (nullable = false)
+         |-- CAST(max(k) AS STRING): string (nullable = true)
+        """

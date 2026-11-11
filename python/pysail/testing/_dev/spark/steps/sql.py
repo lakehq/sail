@@ -211,6 +211,8 @@ def dataframe_for(case, spark):
         .groupBy(F.col("k").cast("bigint"))
         .pivot("k", [0])
         .count(),
+        "aggregate a cast of a column": lambda: cast_input().groupBy("k").agg(F.col("k").cast("bigint")),
+        "aggregate a cast of an aggregate": lambda: cast_input().groupBy("k").agg(F.max("k").cast("string")),
         "null literal": lambda: spark.range(1).select(F.lit(None).alias("result")),
         "null literal alias projection": lambda: (
             spark.range(1).select(F.lit(None).alias("value")).select(F.col("value").alias("result"))
