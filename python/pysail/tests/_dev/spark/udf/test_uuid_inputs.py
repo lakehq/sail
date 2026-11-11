@@ -73,9 +73,10 @@ def test_uuid_iterator_inputs_are_binary(spark, storage, entry):
     [
         pytest.param("map_arrow", marks=pytest.mark.spark(version=">=4.0", reason="Uses mapInArrow")),
         pytest.param("arrow_scalar", marks=pytest.mark.spark(version=">=4.1", reason="Uses arrow_udf")),
+        "map_pandas",
     ],
 )
-def test_nested_uuid_arrow_inputs_are_binary(spark, shape, entry):
+def test_nested_uuid_inputs_are_binary(spark, shape, entry):
     source = spark.createDataFrame([(0, VALUE), (1, None), (2, None)], "id int, text string").repartition(2)
     expressions = {
         "list": "CAST(array(text, NULL) AS ARRAY<UUID>)",
@@ -90,6 +91,18 @@ def test_nested_uuid_arrow_inputs_are_binary(spark, shape, entry):
     }
     assert frame.schema["value"].dataType == expected_types[shape]
 
+    def binary_value(value):
+        if value is not None:
+            if shape == "list":
+                assert len(value) == 2  # noqa: PLR2004
+                assert value[1] is None
+                value = value[0]
+            elif shape == "struct":
+                value = value["u"]
+            else:
+                value = dict(value)["k"]
+        return _binary_value(value)
+
     def inspect(array: pa.Array) -> pa.Array:
         if shape == "list":
             assert array.type.value_type == pa.binary(16)
@@ -97,20 +110,7 @@ def test_nested_uuid_arrow_inputs_are_binary(spark, shape, entry):
             assert array.type.field("u").type == pa.binary(16)
         else:
             assert array.type.item_type == pa.binary(16)
-        values = []
-        for item in array.to_pylist():
-            value = item
-            if value is not None:
-                if shape == "list":
-                    assert len(value) == 2  # noqa: PLR2004
-                    assert value[1] is None
-                    value = value[0]
-                elif shape == "struct":
-                    value = value["u"]
-                else:
-                    value = dict(value)["k"]
-            values.append(_binary_value(value))
-        return pa.array(values, type=pa.binary())
+        return pa.array([binary_value(value) for value in array.to_pylist()], type=pa.binary())
 
     if entry == "map_arrow":
 
@@ -119,6 +119,13 @@ def test_nested_uuid_arrow_inputs_are_binary(spark, shape, entry):
                 yield pa.record_batch([batch.column("id"), inspect(batch.column("value"))], names=["id", "value"])
 
         result = frame.mapInArrow(inspect_batches, "id int, value binary")
+    elif entry == "map_pandas":
+
+        def inspect_batches(batches: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame]:
+            for batch in batches:
+                yield pd.DataFrame({"id": batch.id, "value": batch.value.map(binary_value)})
+
+        result = frame.mapInPandas(inspect_batches, "id int, value binary")
     else:
         result = frame.select("id", F.arrow_udf(inspect, "binary")("value").alias("value"))
 
