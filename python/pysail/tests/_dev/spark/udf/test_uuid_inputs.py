@@ -98,7 +98,8 @@ def test_nested_uuid_arrow_inputs_are_binary(spark, shape, entry):
         else:
             assert array.type.item_type == pa.binary(16)
         values = []
-        for value in array.to_pylist():
+        for item in array.to_pylist():
+            value = item
             if value is not None:
                 if shape == "list":
                     assert len(value) == 2  # noqa: PLR2004
