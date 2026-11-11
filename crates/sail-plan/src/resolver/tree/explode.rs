@@ -14,7 +14,7 @@ use either::Either;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
-use sail_function::scalar::explode::{Explode, ExplodeKind};
+use sail_function::scalar::explode::{Explode, ExplodeKind, MapExplodeEntry};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::r#struct::array_struct_field::ArrayStructField;
@@ -104,6 +104,14 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
         };
 
         let name = self.state.next_field_id();
+        // DataFusion allows null padding in every unnested field. A single non-outer
+        // map generator instead drops null/empty maps and emits only valid entries.
+        // Refine the parent struct, not its children, retaining value nullability.
+        let map_entry = if matches!(null_handling, NullHandling::Drop) {
+            ScalarUDF::from(MapExplodeEntry::default()).call(vec![ident(&name)])
+        } else {
+            ident(&name)
+        };
         let mut inline_projections = vec![];
         let out = match (data_type, with_position, is_inline) {
             (ExplodeDataType::List, false, false) => vec![ident(&name).alias("col")],
@@ -135,17 +143,18 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             }?,
             (ExplodeDataType::Map, false, _) => {
                 vec![
-                    ident(&name).field(key_name.as_str()).alias("key"),
-                    ident(&name).field(value_name.as_str()).alias("value"),
+                    map_entry.clone().field(key_name.as_str()).alias("key"),
+                    map_entry.clone().field(value_name.as_str()).alias("value"),
                 ]
             }
             (ExplodeDataType::Map, true, _) => vec![
-                ident(&name).field("pos").alias("pos"),
-                ident(&name)
+                map_entry.clone().field("pos").alias("pos"),
+                map_entry
+                    .clone()
                     .field("col")
                     .field(key_name.as_str())
                     .alias("key"),
-                ident(&name)
+                map_entry
                     .field("col")
                     .field(value_name.as_str())
                     .alias("value"),

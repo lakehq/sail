@@ -76,6 +76,61 @@ impl PlanResolver<'_> {
             }
         }
 
+        let target = self.resolve_field(
+            &spec::Field {
+                name: "uuid".to_string(),
+                data_type: cast_to_type.clone(),
+                nullable: true,
+                metadata: vec![],
+            },
+            state,
+        )?;
+        if sail_common_datafusion::uuid::contains_uuid(&target) {
+            let NamedExpr { expr, name, .. } =
+                self.resolve_named_expression(expr, schema, state).await?;
+            let name = if need_rename_cast(&expr) {
+                let service = self.ctx.extension::<PlanService>()?;
+                let target_name = service.plan_formatter().field_to_simple_string(&target)?;
+                vec![format!(
+                    "{}CAST({} AS {})",
+                    if is_try { "TRY_" } else { "" },
+                    name.one()?,
+                    target_name.to_ascii_uppercase()
+                )]
+            } else {
+                name
+            };
+            let metadata = target
+                .metadata()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            let data_type = target.data_type().clone();
+            // UUID conversion matches fields by name, just like Arrow casts. Apply
+            // the ordinary Spark positional rename before either conversion.
+            let source_type = expr.get_type(schema)?;
+            let renamed_type = build_rename_target_type(&source_type, &data_type);
+            let expr = if renamed_type != source_type {
+                ScalarUDF::new_from_impl(SparkStructRename::new(renamed_type)).call(vec![expr])
+            } else {
+                expr
+            };
+            let target = Arc::new(target);
+            let uuid_cast =
+                ScalarUDF::from(sail_common_datafusion::uuid::UuidCast::new(target, is_try));
+            let expr = uuid_cast.call(vec![expr]);
+            let expr = if expr.get_type(schema)? != data_type {
+                let source_type = expr.get_type(schema)?;
+                let expr = cast_struct_positionally(expr, &source_type, &data_type, is_try);
+                // Folding an Arrow cast can rebuild list scalars without child metadata.
+                // The physical conversion is complete; retain the declared UUID identity.
+                uuid_cast.call(vec![expr])
+            } else {
+                expr
+            };
+            return Ok(NamedExpr::new(name, expr).with_metadata(metadata));
+        }
+
         // CAST(expr AS VARIANT) → rewrite to SparkCastToVariant UDF
         // Must intercept before resolve_data_type converts Variant to Struct.
         if matches!(cast_to_type, spec::DataType::Variant) {
@@ -296,21 +351,11 @@ impl PlanResolver<'_> {
                 }
                 lit(ScalarValue::try_from(&to)?)
             }
-            (from, to, _) if needs_struct_field_rename(&from, &to) => {
-                // Pre-rename the source struct fields positionally so the cast
-                // becomes a no-op or a valid name-matched one (see
-                // `needs_struct_field_rename`).
-                let renamed_target = build_rename_target_type(&from, &to);
-                let renamed =
-                    ScalarUDF::new_from_impl(SparkStructRename::new(renamed_target.clone()))
-                        .call(vec![expr]);
-                if renamed_target == to {
-                    renamed
-                } else if is_try {
-                    try_cast(renamed, to)
-                } else {
-                    cast(renamed, to)
-                }
+            (from, to, _)
+                if needs_struct_field_rename(&from, &to)
+                    || unique_struct_field_names(&to) != to =>
+            {
+                cast_struct_positionally(expr, &from, &to, is_try)
             }
             (
                 from,
@@ -357,6 +402,82 @@ impl PlanResolver<'_> {
             }
             None => NamedExpr::new(name, expr),
         })
+    }
+}
+
+/// DataFusion's nested casts retrieve children by name, even when names repeat.
+/// Use unique names during conversion, then restore the requested SQL names.
+fn cast_struct_positionally(
+    expr: expr::Expr,
+    from: &DataType,
+    to: &DataType,
+    is_try: bool,
+) -> expr::Expr {
+    let target = unique_struct_field_names(to);
+    let renamed_type = build_rename_target_type(from, &target);
+    let prepare_for_cast = &target != to && renamed_type != target;
+    let renamed = if &renamed_type != from || prepare_for_cast {
+        let arguments = if prepare_for_cast {
+            vec![expr, lit(true)]
+        } else {
+            vec![expr]
+        };
+        ScalarUDF::new_from_impl(SparkStructRename::new(renamed_type.clone())).call(arguments)
+    } else {
+        expr
+    };
+    let converted = if renamed_type == target {
+        renamed
+    } else if is_try {
+        try_cast(renamed, target.clone())
+    } else {
+        cast(renamed, target.clone())
+    };
+    if &target != to {
+        ScalarUDF::new_from_impl(SparkStructRename::new(to.clone())).call(vec![converted])
+    } else {
+        converted
+    }
+}
+
+fn unique_struct_field_names(data_type: &DataType) -> DataType {
+    let nested = |field: &Arc<Field>| {
+        Arc::new(
+            field
+                .as_ref()
+                .clone()
+                .with_data_type(unique_struct_field_names(field.data_type())),
+        )
+    };
+    match data_type {
+        DataType::Struct(fields) => {
+            let mut names = std::collections::HashSet::new();
+            let duplicate = fields.iter().any(|field| !names.insert(field.name()));
+            DataType::Struct(
+                fields
+                    .iter()
+                    .enumerate()
+                    .map(|(index, field)| {
+                        let field = nested(field);
+                        if duplicate {
+                            Arc::new(
+                                field
+                                    .as_ref()
+                                    .clone()
+                                    .with_name(format!("__sail_cast_{index}")),
+                            )
+                        } else {
+                            field
+                        }
+                    })
+                    .collect(),
+            )
+        }
+        DataType::List(field) => DataType::List(nested(field)),
+        DataType::LargeList(field) => DataType::LargeList(nested(field)),
+        DataType::FixedSizeList(field, size) => DataType::FixedSizeList(nested(field), *size),
+        DataType::Map(field, sorted) => DataType::Map(nested(field), *sorted),
+        _ => data_type.clone(),
     }
 }
 
@@ -501,6 +622,22 @@ fn need_rename_cast(expr: &expr::Expr) -> bool {
         }
         expr::Expr::Cast(cast) => need_rename_cast(cast.expr.as_ref()),
         expr::Expr::TryCast(try_cast) => need_rename_cast(try_cast.expr.as_ref()),
+        expr::Expr::ScalarFunction(function)
+            if function
+                .func
+                .inner()
+                .is::<sail_common_datafusion::uuid::UuidCast>() =>
+        {
+            function.args.first().is_none_or(|argument| {
+                if let expr::Expr::ScalarFunction(rename) = argument
+                    && rename.func.inner().is::<SparkStructRename>()
+                {
+                    rename.args.first().is_none_or(need_rename_cast)
+                } else {
+                    need_rename_cast(argument)
+                }
+            })
+        }
         _ => true,
     }
 }

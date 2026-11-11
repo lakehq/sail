@@ -2,8 +2,6 @@ import pytest
 from pyspark.sql.functions import PandasUDFType, pandas_udf, udf
 from pyspark.sql.types import DoubleType
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
 
 @pytest.fixture(scope="module")
 def df(spark):
@@ -38,7 +36,7 @@ def test_deterministic_aggregate_udf_calls_are_equal(df):
     assert sorted((row.g, row.a, row.b) for row in rows) == [(g, 6.0, 6.0) for g in range(5)]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark evaluates equal deterministic Python UDF calls once")
+@pytest.mark.spark(skip_if_jvm=True, reason="Spark evaluates equal deterministic Python UDF calls once")
 def test_deterministic_udf_calls_are_evaluated_separately(spark, df):
     # The calls are not merged even though the UDF claims to be deterministic, as Ibis expects
     # for its impure UDFs (`test_impure_uncorrelated_*`).

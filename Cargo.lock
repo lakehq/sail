@@ -7120,6 +7120,7 @@ dependencies = [
  "parquet-variant-compute",
  "sail-catalog",
  "sail-common-datafusion",
+ "sail-function",
  "sail-system-store",
  "serde",
  "tokio",
@@ -7256,6 +7257,7 @@ dependencies = [
  "tonic",
  "tonic-prost-build",
  "url",
+ "uuid",
 ]
 
 [[package]]
