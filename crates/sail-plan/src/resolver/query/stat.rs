@@ -12,13 +12,16 @@ use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion_common::{Column, ExprSchema, ScalarValue};
 use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction};
 use datafusion_expr::{
-    AggregateUDF, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF, and, col, expr,
-    lit, or, try_cast,
+    AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF, and,
+    col, expr, lit, or, try_cast,
 };
+use rand::{RngExt, rng};
 use sail_common::spec;
 use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::math::partition_random::PartitionSeed;
 use sail_function::scalar::math::random::Random;
+use sail_logical_plan::seeded_random::{SeededRandomColumn, SeededRandomNode};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -596,17 +599,24 @@ impl PlanResolver<'_> {
             .collect();
         // Like Spark's `rand(seed)` in the filter, the random column is not referenceable.
         let rand_column_name: String = state.next_field_id();
-
+        // Like Spark, a random seed is used if no seed is given.
+        let seed = seed.unwrap_or_else(|| rng().random::<i64>());
         let rand_expr: Expr = Expr::ScalarFunction(ScalarFunction {
             func: Arc::new(ScalarUDF::from(Random::new())),
-            args: vec![Expr::Literal(ScalarValue::Int64(seed), None)],
-        })
-        .alias(&rand_column_name);
-        let mut all_exprs: Vec<Expr> = init_exprs.clone();
-        all_exprs.push(rand_expr);
-        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
-            .project(all_exprs)?
-            .build()?;
+            args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)), None)],
+        });
+        // The samples depend on the order of the input rows, which must be kept.
+        let (input, _, _) = Self::require_input_sort_inner(input)?;
+        let plan_with_rand = LogicalPlan::Extension(Extension {
+            node: Arc::new(SeededRandomNode::try_new(
+                Arc::new(input),
+                vec![SeededRandomColumn {
+                    name: rand_column_name.clone(),
+                    expr: rand_expr,
+                    seed: PartitionSeed::Offset,
+                }],
+            )?),
+        });
 
         let mut acc_exprs: Vec<Expr> = vec![];
         for frac in &fractions {

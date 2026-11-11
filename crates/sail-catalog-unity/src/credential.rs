@@ -18,6 +18,7 @@
 
 // [CREDIT]: https://github.com/delta-io/delta-rs/blob/d7dea29162451fd00b9579e3d7fb546d95fb5e4a/crates/catalog-unity/src/credential.rs
 
+use std::fmt::{Debug, Formatter};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -61,13 +62,28 @@ pub trait TokenCredential: std::fmt::Debug + Send + Sync + 'static {
 }
 
 /// Provides credentials for use when signing requests
-#[derive(Debug)]
 pub enum CredentialProvider {
     /// static bearer token
     BearerToken(String),
 
     /// a credential to fetch expiring auth tokens
     TokenCredential(TokenCache<String>, Box<dyn TokenCredential>),
+}
+
+// The trait requires `Debug`, and a static token is usable exactly as it is printed, so it does
+// not reach the output. The cached token and the client secret of a token credential are redacted
+// where they are held, so the credential prints itself.
+impl Debug for CredentialProvider {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BearerToken(_) => f.debug_tuple("BearerToken").field(&"[REDACTED]").finish(),
+            Self::TokenCredential(cache, credential) => f
+                .debug_tuple("TokenCredential")
+                .field(cache)
+                .field(credential)
+                .finish(),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -96,11 +112,23 @@ struct TokenResponse {
 
 /// The same thing as the azure oauth provider, but uses the databricks api to
 /// get tokens directly from the workspace.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WorkspaceOAuthProvider {
     token_url: String,
     client_id: String,
     client_secret: String,
+}
+
+// The client secret is usable exactly as it is printed, so it is kept out of the debug output
+// that the `TokenCredential` trait requires.
+impl Debug for WorkspaceOAuthProvider {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkspaceOAuthProvider")
+            .field("token_url", &self.token_url)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 async fn non200_or_json<T: DeserializeOwned>(response: Response) -> CatalogResult<T> {
@@ -157,11 +185,23 @@ impl TokenCredential for WorkspaceOAuthProvider {
 }
 
 /// Encapsulates the logic to perform an OAuth token challenge
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClientSecretOAuthProvider {
     token_url: String,
     client_id: String,
     client_secret: String,
+}
+
+// The client secret is usable exactly as it is printed, so it is kept out of the debug output
+// that the `TokenCredential` trait requires.
+impl Debug for ClientSecretOAuthProvider {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientSecretOAuthProvider")
+            .field("token_url", &self.token_url)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl ClientSecretOAuthProvider {
@@ -511,6 +551,52 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+
+    #[test]
+    fn debug_output_hides_the_bearer_token() {
+        let credentials = CredentialProvider::BearerToken("s3cr3t-token".to_string());
+        let output = format!("{credentials:?}");
+        assert!(
+            !output.contains("s3cr3t-token"),
+            "unexpected debug output: {output}"
+        );
+    }
+
+    #[test]
+    fn debug_output_hides_the_client_secret() {
+        let workspace = WorkspaceOAuthProvider::new("client", "s3cr3t-secret", "https://host");
+        let client =
+            ClientSecretOAuthProvider::new("client", "s3cr3t-secret", "authority", None::<String>);
+        for output in [format!("{workspace:?}"), format!("{client:?}")] {
+            assert!(
+                !output.contains("s3cr3t-secret") && output.contains("client"),
+                "unexpected debug output: {output}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn debug_output_hides_a_cached_token() {
+        let cache = TokenCache::default();
+        let token = cache
+            .get_or_insert_with(|| async {
+                Ok::<_, CatalogError>(TemporaryToken {
+                    token: "s3cr3t-token".to_string(),
+                    expiry: None,
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(token, "s3cr3t-token");
+
+        let credentials =
+            CredentialProvider::TokenCredential(cache, Box::new(AzureCliCredential::new()));
+        let output = format!("{credentials:?}");
+        assert!(
+            !output.contains("s3cr3t-token"),
+            "unexpected debug output: {output}"
+        );
+    }
 
     #[tokio::test]
     async fn test_managed_identity() {

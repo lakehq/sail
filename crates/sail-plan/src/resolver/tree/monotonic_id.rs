@@ -28,8 +28,8 @@ impl<'s> PlanRewriter<'s> for MonotonicIdRewriter<'s> {
         }
     }
 
-    fn into_plan(self) -> LogicalPlan {
-        self.plan
+    fn into_plan(self) -> Result<LogicalPlan> {
+        Ok(self.plan)
     }
 }
 

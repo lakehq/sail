@@ -157,6 +157,16 @@ impl ManifestListWriter {
         &self,
         context: ManifestListWriteContext,
     ) -> Result<Vec<u8>, String> {
+        self.to_bytes_with_context_and_limit(context, usize::MAX)
+    }
+
+    pub(crate) fn to_bytes_with_context_and_limit(
+        &self,
+        context: ManifestListWriteContext,
+        limit: usize,
+    ) -> Result<Vec<u8>, String> {
+        use crate::spec::avro_utils::{LimitedWriter, append_avro_with_limit};
+
         let version = context.version;
         use crate::spec::manifest_list::schema::{
             MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2,
@@ -168,7 +178,7 @@ impl ManifestListWriter {
             FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
             FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
         };
-        let mut writer = create_avro_writer(schema, Vec::new())
+        let mut writer = create_avro_writer(schema, LimitedWriter::new(Vec::new(), limit))
             .map_err(|error| format!("Avro writer creation error: {error}"))?;
         let mut metadata = vec![
             ("format-version", (version as u8).to_string()),
@@ -239,8 +249,7 @@ impl ManifestListWriter {
                         partitions,
                         key_metadata: mf.key_metadata.clone().map(ByteBuf::from),
                     };
-                    writer
-                        .append_ser(v1)
+                    append_avro_with_limit(&mut writer, schema, v1, limit)
                         .map_err(|e| format!("Avro append error: {e}"))?;
                 }
                 FormatVersion::V3 => {
@@ -262,8 +271,7 @@ impl ManifestListWriter {
                         key_metadata: mf.key_metadata.clone().map(ByteBuf::from),
                         first_row_id: mf.first_row_id,
                     };
-                    writer
-                        .append_ser(v3)
+                    append_avro_with_limit(&mut writer, schema, v3, limit)
                         .map_err(|e| format!("Avro append error: {e}"))?;
                 }
                 FormatVersion::V2 => {
@@ -284,8 +292,7 @@ impl ManifestListWriter {
                         partitions,
                         key_metadata: mf.key_metadata.clone().map(ByteBuf::from),
                     };
-                    writer
-                        .append_ser(v2)
+                    append_avro_with_limit(&mut writer, schema, v2, limit)
                         .map_err(|e| format!("Avro append error: {e}"))?;
                 }
             }
@@ -293,6 +300,7 @@ impl ManifestListWriter {
 
         writer
             .into_inner()
+            .map(LimitedWriter::into_inner)
             .map_err(|e| format!("Avro writer finalize error: {e}"))
     }
 }
@@ -1395,6 +1403,10 @@ mod tests {
                     let bytes = writer
                         .to_bytes_with_context(context)
                         .expect("context write");
+                    for limit in [0, bytes.len() - 1, bytes.len()] {
+                        let result = writer.to_bytes_with_context_and_limit(context, limit);
+                        assert_eq!(result.is_ok(), limit == bytes.len());
+                    }
                     let reader =
                         AvroReader::new(bytes.as_slice()).expect("header even for empty list");
                     let meta = reader.user_metadata();

@@ -49,8 +49,8 @@ impl<'s> PlanRewriter<'s> for ExplodeRewriter<'s> {
         Self { plan, state }
     }
 
-    fn into_plan(self) -> LogicalPlan {
-        self.plan
+    fn into_plan(self) -> Result<LogicalPlan> {
+        Ok(self.plan)
     }
 }
 
@@ -79,8 +79,21 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
         };
         let arg = args.one()?;
         let arg_type = arg.get_type(self.plan.schema())?;
-        let return_type = func.return_type(&[arg_type])?;
+        let return_type = func.return_type(std::slice::from_ref(&arg_type))?;
         let data_type = ExplodeDataType::try_from_expr(&arg, self.plan.schema())?;
+        // The entries keep the field names and nullability of the map.
+        let (key_name, value_name) = match &arg_type {
+            DataType::Map(field, _) => match field.data_type() {
+                DataType::Struct(fields) if fields.len() == 2 => {
+                    (fields[0].name().clone(), fields[1].name().clone())
+                }
+                _ => return plan_err!("invalid map entries type: {field:?}"),
+            },
+            _ => (
+                SAIL_MAP_KEY_FIELD_NAME.to_string(),
+                SAIL_MAP_VALUE_FIELD_NAME.to_string(),
+            ),
+        };
         let arg = match data_type {
             ExplodeDataType::List => arg,
             ExplodeDataType::Map => ScalarUDF::from(SparkMapEntries::new()).call(vec![arg]),
@@ -130,14 +143,8 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             }?,
             (ExplodeDataType::Map, false, _) => {
                 vec![
-                    map_entry
-                        .clone()
-                        .field(SAIL_MAP_KEY_FIELD_NAME)
-                        .alias("key"),
-                    map_entry
-                        .clone()
-                        .field(SAIL_MAP_VALUE_FIELD_NAME)
-                        .alias("value"),
+                    map_entry.clone().field(key_name.as_str()).alias("key"),
+                    map_entry.clone().field(value_name.as_str()).alias("value"),
                 ]
             }
             (ExplodeDataType::Map, true, _) => vec![
@@ -145,11 +152,11 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
                 map_entry
                     .clone()
                     .field("col")
-                    .field(SAIL_MAP_KEY_FIELD_NAME)
+                    .field(key_name.as_str())
                     .alias("key"),
                 map_entry
                     .field("col")
-                    .field(SAIL_MAP_VALUE_FIELD_NAME)
+                    .field(value_name.as_str())
                     .alias("value"),
             ],
         };
