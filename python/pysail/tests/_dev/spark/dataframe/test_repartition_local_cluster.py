@@ -66,6 +66,15 @@ def test_range_repartition_samples_input_with_scalar_subquery(local_cluster_spar
     assert sorted((row.id, row.pid) for row in rows) == [(i, i // 4) for i in range(12)]
 
 
+def test_range_repartition_inside_scalar_subquery(local_cluster_spark):
+    rows = local_cluster_spark.sql(
+        "SELECT id, spark_partition_id() AS pid FROM ("
+        "SELECT /*+ REPARTITION_BY_RANGE(3, id) */ id FROM range(12) "
+        "WHERE id < (SELECT max(id) + 1 FROM (SELECT /*+ REPARTITION_BY_RANGE(2, id) */ id FROM range(12))))"
+    ).collect()
+    assert sorted((row.id, row.pid) for row in rows) == [(i, i // 4) for i in range(12)]
+
+
 def test_range_repartition_samples_imbalanced_input_again(local_cluster_spark):
     # Of 201 input partitions only one has rows, so the first sample keeps one key
     # of it. The partition is sampled again in proportion to its rows.

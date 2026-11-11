@@ -190,7 +190,9 @@ struct RangeRepartition {
     subqueries: Vec<Arc<dyn ExecutionPlan>>,
 }
 
-/// Collects the range repartitioning in the plan, each after its ancestors.
+/// Collects the range repartitioning in the plan. Each node comes after every node that
+/// must be sampled after it: after its ancestors, and after the nodes whose sample runs
+/// a scalar subquery that contains it.
 fn collect_range_repartitions(
     plan: &Arc<dyn ExecutionPlan>,
     subqueries: &mut Vec<Arc<dyn ExecutionPlan>>,
@@ -202,15 +204,22 @@ fn collect_range_repartitions(
             subqueries: subqueries.clone(),
         });
     }
-    let is_subquery = plan.is::<ScalarSubqueryExec>();
-    if is_subquery {
-        subqueries.push(Arc::clone(plan));
-    }
-    for child in plan.children() {
-        collect_range_repartitions(child, subqueries, output);
-    }
-    if is_subquery {
-        subqueries.pop();
+    let Some(scalar) = plan.downcast_ref::<ScalarSubqueryExec>() else {
+        for child in plan.children() {
+            collect_range_repartitions(child, subqueries, output);
+        }
+        return;
+    };
+    // Only the input reads the results of the subqueries, so only its samples
+    // compute them, as in the job graph.
+    subqueries.push(Arc::clone(plan));
+    collect_range_repartitions(scalar.input(), subqueries, output);
+    subqueries.pop();
+    // A subquery does not read the results of the scalar subqueries around it. The
+    // samples of the input run the subqueries, so the subqueries come after the input
+    // and are sampled first.
+    for link in scalar.subqueries() {
+        collect_range_repartitions(&link.plan, &mut vec![], output);
     }
 }
 
@@ -279,4 +288,67 @@ async fn execute_sample_job(
         .await?
         .try_collect::<Vec<_>>()
         .await
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use datafusion::arrow::compute::SortOptions;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::logical_expr::physical_planning_context::{
+        ScalarSubqueryResults, SubqueryIndex,
+    };
+    use datafusion::physical_expr::expressions::Column;
+    use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::scalar_subquery::ScalarSubqueryLink;
+    use sail_physical_plan::range_repartition::RangeSample;
+    use sail_physical_plan::range_sample::RangePartitionSampleExec;
+
+    use super::*;
+
+    fn range_repartition() -> Arc<dyn ExecutionPlan> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
+        let options = SortOptions::default();
+        let sample = Arc::new(RangeSample::new(
+            Arc::new(RangePartitionSampleExec::try_new(Arc::clone(&input), 1).unwrap()),
+            40.0,
+            vec![options],
+            2,
+        ));
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("k", 0)),
+            options,
+        )])
+        .unwrap();
+        Arc::new(RangeRepartitionExec::try_new(input, sample, ordering).unwrap())
+    }
+
+    #[test]
+    fn test_scalar_subquery_scope_covers_only_its_input() {
+        let in_input = range_repartition();
+        let in_subquery = range_repartition();
+        let scalar: Arc<dyn ExecutionPlan> = Arc::new(ScalarSubqueryExec::new(
+            Arc::clone(&in_input),
+            vec![ScalarSubqueryLink {
+                plan: Arc::clone(&in_subquery),
+                index: SubqueryIndex::new(0),
+            }],
+            ScalarSubqueryResults::new(1),
+        ));
+        let mut nodes = vec![];
+        collect_range_repartitions(&scalar, &mut vec![], &mut nodes);
+
+        // The input reads the subquery results, so its sample runs the subquery. The
+        // range repartitioning in the subquery comes last, so it is sampled first.
+        let [input, subquery] = nodes.as_slice() else {
+            unreachable!("expected two range repartitions, got {}", nodes.len());
+        };
+        assert!(Arc::ptr_eq(&input.node, &in_input));
+        assert_eq!(input.subqueries.len(), 1);
+        assert!(Arc::ptr_eq(&input.subqueries[0], &scalar));
+        assert!(Arc::ptr_eq(&subquery.node, &in_subquery));
+        assert!(subquery.subqueries.is_empty());
+    }
 }
