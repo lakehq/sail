@@ -201,8 +201,8 @@ fn parse_interval_year_month_string(
     let error = || SqlError::invalid(format!("interval: {s}"));
     let captures = interval_regex.captures(s).ok_or_else(error)?;
     let negated = negated ^ (captures.name("sign").map(|s| s.as_str()) == Some("-"));
-    let years: i32 = extract_match(&captures, "year", error)?.unwrap_or(0);
-    let months: i32 = extract_match(&captures, "month", error)?.unwrap_or(0);
+    let years: i64 = extract_match(&captures, "year", error)?.unwrap_or(0);
+    let months: i64 = extract_match(&captures, "month", error)?.unwrap_or(0);
     if start_field == spec::IntervalFieldType::Year && months > 11 {
         return Err(error());
     }
@@ -217,7 +217,7 @@ fn parse_interval_year_month_string(
         n
     };
     Ok(IntervalValue::YearMonth {
-        months: n,
+        months: n.try_into().map_err(|_| error())?,
         start_field,
         end_field,
     })
@@ -254,14 +254,10 @@ fn parse_interval_day_time_string(
         .ok_or_else(error)?
         .checked_add(&TimeDelta::microseconds(microseconds))
         .ok_or_else(error)?;
-    let microseconds = delta.num_microseconds().ok_or_else(error)?;
-    let n = if negated {
-        microseconds.checked_mul(-1).ok_or_else(error)?
-    } else {
-        microseconds
-    };
+    // Apply the sign before narrowing so that i64::MIN remains representable.
+    let delta = if negated { -delta } else { delta };
     Ok(IntervalValue::Microsecond {
-        microseconds: n,
+        microseconds: delta.num_microseconds().ok_or_else(error)?,
         start_field,
         end_field,
     })

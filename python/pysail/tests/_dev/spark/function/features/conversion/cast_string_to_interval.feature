@@ -51,6 +51,18 @@ Feature: Interval strings use the target qualifiers in casts and CSV
       | explicit year literal        | "INTERVAL '2' YEAR"            | YEAR             | INTERVAL '2' YEAR                           |
       | explicit hour literal        | "INTERVAL '2' HOUR"            | HOUR             | INTERVAL '2' HOUR                           |
       | explicit compound literal    | "INTERVAL '1-2' YEAR TO MONTH" | YEAR TO MONTH    | INTERVAL '1-2' YEAR TO MONTH                |
+      | minimum months               | '-2147483648'                  | MONTH            | INTERVAL '-2147483648' MONTH               |
+      | maximum months               | '2147483647'                   | MONTH            | INTERVAL '2147483647' MONTH                |
+      | minimum year to month        | '-178956970-8'                 | YEAR TO MONTH    | INTERVAL '-178956970-8' YEAR TO MONTH       |
+      | maximum year to month        | '178956970-7'                  | YEAR TO MONTH    | INTERVAL '178956970-7' YEAR TO MONTH        |
+      | minimum seconds              | '-9223372036854.775808'         | SECOND           | INTERVAL '-9223372036854.775808' SECOND     |
+      | maximum seconds              | '9223372036854.775807'          | SECOND           | INTERVAL '9223372036854.775807' SECOND      |
+      | minimum day to second        | '-106751991 04:00:54.775808'    | DAY TO SECOND    | INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND |
+      | maximum day to second        | '106751991 04:00:54.775807'     | DAY TO SECOND    | INTERVAL '106751991 04:00:54.775807' DAY TO SECOND  |
+      | unary plus hour              | "INTERVAL +'2' HOUR"           | HOUR             | INTERVAL '2' HOUR                           |
+      | unary plus negative hour     | "INTERVAL +'-2' HOUR"          | HOUR             | INTERVAL '-2' HOUR                          |
+      | unary plus compound          | "INTERVAL +'1-2' YEAR TO MONTH" | YEAR TO MONTH   | INTERVAL '1-2' YEAR TO MONTH                 |
+      | unary minus negative month   | "INTERVAL -'-2147483647' MONTH" | MONTH           | INTERVAL '2147483647' MONTH                 |
 
   Scenario Outline: Invalid qualified interval strings become null: <case>
     When query
@@ -77,6 +89,14 @@ Feature: Interval strings use the target qualifiers in casts and CSV
       | mismatched literal qualifier     | "INTERVAL '1' DAY"               | HOUR             |
       | invalid value                    | 'not an interval'                | DAY              |
       | overflow                         | '999999999999999999999999999'    | DAY              |
+      | month positive overflow          | '2147483648'                     | MONTH            |
+      | month negative overflow          | '-2147483649'                    | MONTH            |
+      | year to month positive overflow  | '178956970-8'                    | YEAR TO MONTH    |
+      | year to month negative overflow  | '-178956970-9'                   | YEAR TO MONTH    |
+      | second positive overflow         | '9223372036854.775808'            | SECOND           |
+      | second negative overflow         | '-9223372036854.775809'           | SECOND           |
+      | negated minimum month overflow   | "INTERVAL -'-2147483648' MONTH"   | MONTH            |
+      | negated minimum second overflow  | "INTERVAL -'-9223372036854.775808' SECOND" | SECOND    |
       | trailing decimal point           | '1.'                             | SECOND           |
       | day trailing decimal point       | '1 02:03:04.'                    | DAY TO SECOND    |
       | hour trailing decimal point      | '25:03:04.'                      | HOUR TO SECOND   |
@@ -113,6 +133,14 @@ Feature: Interval strings use the target qualifiers in casts and CSV
       | mismatched literal qualifier     | "INTERVAL '1' DAY"               | HOUR             |
       | invalid value                    | 'not an interval'                | DAY              |
       | overflow                         | '999999999999999999999999999'    | DAY              |
+      | month positive overflow          | '2147483648'                     | MONTH            |
+      | month negative overflow          | '-2147483649'                    | MONTH            |
+      | year to month positive overflow  | '178956970-8'                    | YEAR TO MONTH    |
+      | year to month negative overflow  | '-178956970-9'                   | YEAR TO MONTH    |
+      | second positive overflow         | '9223372036854.775808'            | SECOND           |
+      | second negative overflow         | '-9223372036854.775809'           | SECOND           |
+      | negated minimum month overflow   | "INTERVAL -'-2147483648' MONTH"   | MONTH            |
+      | negated minimum second overflow  | "INTERVAL -'-9223372036854.775808' SECOND" | SECOND    |
       | trailing decimal point           | '1.'                             | SECOND           |
       | day trailing decimal point       | '1 02:03:04.'                    | DAY TO SECOND    |
       | hour trailing decimal point      | '25:03:04.'                      | HOUR TO SECOND   |
