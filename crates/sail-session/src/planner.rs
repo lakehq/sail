@@ -698,16 +698,25 @@ async fn plan_range_repartition(
         Some(num_partitions) => num_partitions,
         None => input.output_partitioning().partition_count().max(1),
     };
-    // Step 2: the physical range ordering. `LexOrdering::new` drops repeated keys, so a
-    // shorter ordering means two keys became equal after the resolver removed repeats.
-    let ordering = create_physical_sort_exprs(
+    // Step 2: the physical range ordering. The resolver removes repeated keys, but the
+    // optimizer can still make two keys equal, as it simplifies `id + 0` to `id`.
+    // A repeated key cannot break a tie, so only its first sort order counts, as in
+    // `LexOrdering::new`. The sample computes the same keys, so it keeps the same list.
+    let physical_sorts = create_physical_sort_exprs(
         sorts,
         UserDefinedLogicalNode::schema(node),
         session.execution_props(),
         planning_ctx,
     )?;
+    let mut keys: Vec<(&SortExpr, PhysicalSortExpr)> = vec![];
+    for (sort, physical_sort) in sorts.iter().zip(physical_sorts) {
+        if !keys.iter().any(|(_, key)| key.expr.eq(&physical_sort.expr)) {
+            keys.push((sort, physical_sort));
+        }
+    }
+    let (sorts, ordering): (Vec<_>, Vec<_>) = keys.into_iter().unzip();
     let Some(ordering) = LexOrdering::new(ordering).filter(|x| x.len() == sorts.len()) else {
-        return internal_err!("range repartitioning requires distinct sort keys");
+        return internal_err!("range repartitioning requires at least one sort key");
     };
     // Step 3: the cases that need no sample. One partition needs no split points.
     // The sample size is checked only when Sail samples, as in Spark.
@@ -1798,6 +1807,22 @@ mod tests {
         num_partitions: usize,
         sample_size_per_partition: i32,
     ) -> datafusion_common::Result<(Arc<dyn ExecutionPlan>, SessionState)> {
+        range_repartition_plan_with_sorts(
+            keys,
+            vec![col("k").sort(true, true)],
+            num_partitions,
+            sample_size_per_partition,
+        )
+        .await
+    }
+
+    /// Optimizes and plans `repartitionByRange` with the given sort keys over column `k`.
+    async fn range_repartition_plan_with_sorts(
+        keys: Vec<i64>,
+        sorts: Vec<SortExpr>,
+        num_partitions: usize,
+        sample_size_per_partition: i32,
+    ) -> datafusion_common::Result<(Arc<dyn ExecutionPlan>, SessionState)> {
         let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, true)]));
         let (left, right) = keys.split_at(keys.len() / 2);
         let partitions = [left, right]
@@ -1821,7 +1846,7 @@ mod tests {
                 Arc::new(scan),
                 Some(num_partitions),
                 ExplicitRepartitionKind::Range {
-                    sorts: vec![col("k").sort(true, true)],
+                    sorts,
                     sample_size_per_partition,
                 },
             )),
@@ -1831,19 +1856,15 @@ mod tests {
             .with_default_features()
             .with_query_planner(new_query_planner())
             .build();
-        let physical = state
-            .query_planner()
-            .create_physical_plan(&plan, &state)
-            .await?;
+        let physical = state.create_physical_plan(&plan).await?;
         Ok((physical, state))
     }
 
     /// Runs the plan and returns the sorted keys of each output partition.
-    async fn range_repartition_output(
-        keys: Vec<i64>,
-        num_partitions: usize,
+    async fn partition_keys(
+        plan: Arc<dyn ExecutionPlan>,
+        state: &SessionState,
     ) -> datafusion_common::Result<Vec<Vec<i64>>> {
-        let (plan, state) = range_repartition_plan(keys, num_partitions, 100).await?;
         let partitions = collect_partitioned(plan, state.task_ctx()).await?;
         Ok(partitions
             .iter()
@@ -1862,6 +1883,33 @@ mod tests {
                 keys
             })
             .collect())
+    }
+
+    #[tokio::test]
+    async fn range_repartition_treats_keys_equal_after_simplification_as_one_key() {
+        // The resolver removes repeated keys before optimization, so the planner gets
+        // two equal keys when a rule makes them equal, as simplifying `k + 0` to `k` does.
+        // The first sort order counts, so the descending order of the repeat is ignored.
+        let sorts = vec![col("k").sort(true, true), col("k").sort(false, false)];
+        let (plan, state) =
+            range_repartition_plan_with_sorts((0..12).rev().collect(), sorts, 3, 100)
+                .await
+                .unwrap();
+        let explain = displayable(plan.as_ref()).indent(true).to_string();
+        assert!(explain.contains("ordering=[k@0 ASC]"), "{explain}");
+        assert_eq!(
+            partition_keys(plan, &state).await.unwrap(),
+            vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9, 10, 11]]
+        );
+    }
+
+    /// Runs the plan and returns the sorted keys of each output partition.
+    async fn range_repartition_output(
+        keys: Vec<i64>,
+        num_partitions: usize,
+    ) -> datafusion_common::Result<Vec<Vec<i64>>> {
+        let (plan, state) = range_repartition_plan(keys, num_partitions, 100).await?;
+        partition_keys(plan, &state).await
     }
 
     #[tokio::test]
