@@ -237,7 +237,8 @@ def test_merge_identity_star_evolution_lifecycle(spark, identity_table, mode, ap
         100 if update_action == "*" else None,
     )
     generated = rows[1].id
-    assert generated > before and (generated - 10) % 3 == 0
+    assert generated > before
+    assert (generated - 10) % 3 == 0
     assert tuple(rows[1][1:]) == (2, 22, (22, "inserted"), 200)
     assert _watermark(path) == generated
     actions = [json.loads(line) for line in list(_log(path).values())[-1].splitlines()]
@@ -274,6 +275,7 @@ def test_merge_identity_evolution_update_only_preserves_watermark(spark, identit
 def test_merge_identity_evolution_mixed_insert_first_match(spark, identity_table, matched):
     name, path = identity_table(mode="BY DEFAULT")
     spark.sql(f"INSERT INTO {name} (k,v) VALUES (0,0)").collect()  # noqa: S608
+    initial_watermark = _watermark(path)
     update = "WHEN MATCHED THEN UPDATE SET v=s.v" if matched else ""
     spark.sql(f"""
         MERGE WITH SCHEMA EVOLUTION INTO {name} t
@@ -284,14 +286,14 @@ def test_merge_identity_evolution_mixed_insert_first_match(spark, identity_table
         WHEN NOT MATCHED AND s.k<=2 THEN INSERT (id,k,v) VALUES (NULL,s.k,s.v)
         WHEN NOT MATCHED AND s.k<=3 THEN INSERT (k,v) VALUES (s.k,s.v)
         WHEN NOT MATCHED THEN INSERT *
-    """).collect()
+    """).collect()  # noqa: S608
     rows = spark.read.format("delta").load(str(path)).orderBy("k").collect()
     assert rows[:3] == [(10, 0, 1 if matched else 0, None), (1000000, 1, 10, None), (None, 2, 20, None)]
     assert tuple(rows[3][1:]) == (3, 30, None)
     assert tuple(rows[4][1:]) == (4, 40, 40)
     generated = [row.id for row in rows[3:]]
     assert len(set(generated)) == len(generated)
-    assert all(value > 10 and (value - 10) % 3 == 0 for value in generated)
+    assert all(value > initial_watermark and (value - initial_watermark) % 3 == 0 for value in generated)
     # Omission tracks the whole statement, including explicit values in earlier clauses.
     assert _watermark(path) == max(1000000, *generated)
     before = _watermark(path)
@@ -349,8 +351,8 @@ def test_identity_nested_default_rejected(spark, identity_table, mode, operation
         query = f"INSERT INTO {name} (id,k,v) VALUES (DEFAULT+1,1,10)"  # noqa: S608
     else:
         query = f"""MERGE WITH SCHEMA EVOLUTION INTO {name} t USING (SELECT 1 AS k,10 AS v,20 AS extra) s
-            ON t.k=s.k WHEN NOT MATCHED THEN INSERT (id,k,v) VALUES (DEFAULT+1,s.k,s.v)"""
-    with pytest.raises(Exception, match="DEFAULT|GENERATED ALWAYS AS IDENTITY"):
+            ON t.k=s.k WHEN NOT MATCHED THEN INSERT (id,k,v) VALUES (DEFAULT+1,s.k,s.v)"""  # noqa: S608
+    with pytest.raises(Exception, match=r"DEFAULT|GENERATED ALWAYS AS IDENTITY"):
         spark.sql(query).collect()
     assert _state(spark, name, path) == before
 
@@ -366,7 +368,7 @@ def test_identity_real_default_column_is_explicit(spark, identity_table, mode, o
     else:
         value = "s.`default`" if operation == "merge-qualified" else "`default`"
         query = f"""MERGE INTO {name} t USING ({source}) s ON t.k=s.k
-            WHEN NOT MATCHED THEN INSERT (id,k,v) VALUES ({value},s.k,s.v)"""
+            WHEN NOT MATCHED THEN INSERT (id,k,v) VALUES ({value},s.k,s.v)"""  # noqa: S608
     if mode == "ALWAYS":
         with pytest.raises(Exception, match="GENERATED ALWAYS AS IDENTITY"):
             spark.sql(query).collect()
@@ -473,7 +475,7 @@ def test_identity_cdf_evaluates_once_and_tracks_delete_preimages(
         WHEN MATCHED AND s.k=0 THEN DELETE
         WHEN MATCHED THEN UPDATE SET v=31
         WHEN NOT MATCHED THEN INSERT {insert}
-    """).collect()  # noqa: S608
+    """).collect()
     assert result == [(3, 1, 1, 1)]
     rows = spark.table(name).select("id", "k", "v").orderBy("k").collect()
     if evolution:
@@ -814,7 +816,7 @@ def test_merge_generation_failure_does_not_commit(spark, identity_table, matched
             USING (SELECT 0 AS k,100 AS v,0 AS extra UNION ALL SELECT 1,10,1 UNION ALL SELECT 2,20,2) s
             ON t.k=s.k {update}
             WHEN NOT MATCHED THEN INSERT {insert}
-        """).collect()  # noqa: S608
+        """).collect()
     assert _state(spark, name, path) == before
 
 
