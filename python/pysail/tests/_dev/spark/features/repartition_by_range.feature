@@ -118,7 +118,6 @@ Feature: REPARTITION_BY_RANGE hint
       | 1   | 2 |
       | 2   | 2 |
 
-  @sail-bug
   Scenario: The range hint puts every NaN key in the last partition
     When query
       """

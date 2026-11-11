@@ -5,7 +5,7 @@ use sail_common::spec;
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::normalize_distinct_floats;
+use crate::function::common::normalize_range_floats;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::seeded_random::SeededRandomScope;
@@ -103,9 +103,9 @@ impl PlanResolver<'_> {
             let sorts = sorts
                 .into_iter()
                 .map(|sort| {
-                    // Spark compares -0.0 and 0.0 as equal, so they share a partition.
+                    // Spark's ordering compares every NaN as one value, and -0.0 as 0.0.
                     let data_type = sort.expr.get_type(input.schema())?;
-                    let expr = normalize_distinct_floats(sort.expr.clone(), &data_type);
+                    let expr = normalize_range_floats(sort.expr.clone(), &data_type);
                     Ok(sort.with_expr(expr))
                 })
                 .collect::<PlanResult<Vec<_>>>()?;

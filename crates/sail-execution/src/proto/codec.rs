@@ -4064,6 +4064,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "correlation_cast" => Ok(Arc::new(ScalarUDF::from(CorrelationCast::new()))),
             "normalize_float_keys" => Ok(Arc::new(ScalarUDF::from(NormalizeFloatKeys::new()))),
+            "normalize_nan_and_zero" => Ok(Arc::new(ScalarUDF::from(
+                NormalizeFloatKeys::nan_and_zero(),
+            ))),
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
             "scalar_subquery_result" => Ok(Arc::new(ScalarUDF::from(ScalarSubqueryResult::new()))),
             "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
@@ -8495,6 +8498,9 @@ mod tests {
         let decoded = round_trip_udf(ScalarUDF::from(NormalizeFloatKeys::new()))?;
         downcast_udf::<NormalizeFloatKeys>(&decoded, "NormalizeFloatKeys")?;
         assert_eq!(decoded.name(), "normalize_float_keys");
+        let decoded = round_trip_udf(ScalarUDF::from(NormalizeFloatKeys::nan_and_zero()))?;
+        let decoded = downcast_udf::<NormalizeFloatKeys>(&decoded, "NormalizeFloatKeys")?;
+        assert_eq!(decoded, &NormalizeFloatKeys::nan_and_zero());
         Ok(())
     }
 
