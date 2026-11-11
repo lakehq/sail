@@ -735,8 +735,19 @@ mod tests {
         assert!(parse("'178956970-7' year to month", false).is_ok());
         assert!(parse("'178956970-7' year to month", true).is_ok());
         assert!(parse("'178956970-8' year to month", false).is_err());
-        assert!(parse("'178956970-8' year to month", true).is_err());
-        assert!(parse("-'178956970-8' year to month", false).is_err());
+        let minimum_year_month = IntervalValue::YearMonth {
+            months: i32::MIN,
+            start_field: spec::IntervalFieldType::Year,
+            end_field: Some(spec::IntervalFieldType::Month),
+        };
+        assert_eq!(
+            parse("'178956970-8' year to month", true)?,
+            minimum_year_month
+        );
+        assert_eq!(
+            parse("-'178956970-8' year to month", false)?,
+            minimum_year_month
+        );
         assert!(parse("-'178956970-8' year to month", true).is_err());
         assert!(parse("-'178956970-9' year to month", false).is_err());
         assert!(parse("-'178956970-9' year to month", true).is_err());
@@ -766,8 +777,19 @@ mod tests {
         assert!(parse("'106751991 04:00:54.775807' day to second", false).is_ok());
         assert!(parse("'106751991 04:00:54.775807' day to second", true).is_ok());
         assert!(parse("'106751991 04:00:54.775808' day to second", false).is_err());
-        assert!(parse("'106751991 04:00:54.775808' day to second", true).is_err());
-        assert!(parse("-'106751991 04:00:54.775808' day to second", false).is_err());
+        let minimum_day_time = IntervalValue::Microsecond {
+            microseconds: i64::MIN,
+            start_field: spec::IntervalFieldType::Day,
+            end_field: Some(spec::IntervalFieldType::Second),
+        };
+        assert_eq!(
+            parse("'106751991 04:00:54.775808' day to second", true)?,
+            minimum_day_time
+        );
+        assert_eq!(
+            parse("-'106751991 04:00:54.775808' day to second", false)?,
+            minimum_day_time
+        );
         assert!(parse("-'106751991 04:00:54.775808' day to second", true).is_err());
         assert!(parse("-'106751991 04:00:54.775809' day to second", false).is_err());
         assert!(parse("-'106751991 04:00:54.775809' day to second", true).is_err());
