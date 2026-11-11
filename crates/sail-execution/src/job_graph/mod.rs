@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::physical_expr::{PhysicalExpr, RangePartitioning};
+use datafusion::physical_expr::{LexOrdering, PhysicalExpr, RangePartitioning};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -201,6 +201,13 @@ pub enum OutputDistribution {
         partitioning: RangePartitioning,
         channels: usize,
     },
+    /// Range distribution whose split points are not known yet. The job runner samples
+    /// the input before it runs the job, so this only describes the job for EXPLAIN,
+    /// and the scheduler does not run it.
+    UnsampledRange {
+        ordering: LexOrdering,
+        channels: usize,
+    },
     RoundRobinBatch {
         channels: usize,
     },
@@ -217,6 +224,7 @@ impl OutputDistribution {
         match self {
             OutputDistribution::Hash { channels, .. } => *channels,
             OutputDistribution::Range { channels, .. } => *channels,
+            OutputDistribution::UnsampledRange { channels, .. } => *channels,
             OutputDistribution::RoundRobinBatch { channels } => *channels,
             OutputDistribution::RoundRobinRow { channels } => *channels,
         }
@@ -234,6 +242,10 @@ impl fmt::Display for OutputDistribution {
                 partitioning,
                 channels,
             } => write!(f, "{partitioning}, channels={channels}"),
+            OutputDistribution::UnsampledRange { ordering, channels } => write!(
+                f,
+                "Range([{ordering}], split points sampled at execution, channels={channels})"
+            ),
             OutputDistribution::RoundRobinBatch { channels } => {
                 write!(f, "RoundRobinBatch(channels={})", channels)
             }

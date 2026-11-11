@@ -1061,6 +1061,11 @@ impl<'a> TaskOutputBuilder<'a> {
                     channels,
                 }
             }
+            OutputDistribution::UnsampledRange { .. } => {
+                return Err(ExecutionError::InternalError(
+                    "range repartitioning must be sampled before the job runs".to_string(),
+                ));
+            }
             OutputDistribution::RoundRobinBatch { channels } => {
                 TaskOutputDistribution::RoundRobinBatch {
                     channels: *channels,

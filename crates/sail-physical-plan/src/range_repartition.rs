@@ -203,6 +203,10 @@ impl RangeRepartitionExec {
         self.sample.num_partitions
     }
 
+    pub fn ordering(&self) -> &LexOrdering {
+        &self.ordering
+    }
+
     /// Returns whether the split points are known.
     pub fn is_sampled(&self) -> bool {
         self.sample.is_set()

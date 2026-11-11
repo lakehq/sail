@@ -66,6 +66,13 @@ def test_range_repartition_samples_input_with_scalar_subquery(local_cluster_spar
     assert sorted((row.id, row.pid) for row in rows) == [(i, i // 4) for i in range(12)]
 
 
+def test_range_repartition_explains_the_distributed_plan(local_cluster_spark):
+    # Sail prints the distributed plan in the codegen mode.
+    plan = local_cluster_spark.range(12).repartitionByRange(3, "id")._explain_string(mode="codegen")  # noqa: SLF001
+    assert "Distributed plan error" not in plan, plan
+    assert "split points sampled at execution, channels=3" in plan, plan
+
+
 def test_range_repartition_inside_scalar_subquery(local_cluster_spark):
     rows = local_cluster_spark.sql(
         "SELECT id, spark_partition_id() AS pid FROM ("

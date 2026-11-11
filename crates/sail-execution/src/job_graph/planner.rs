@@ -593,15 +593,17 @@ fn plan_job_graph_stages(
         PlannedSubtree::without_pending_scalar_subquery_expr(plan)
     } else if let Some(repartition) = subtree.plan.downcast_ref::<RangeRepartitionExec>() {
         // The job runner samples the input in a separate job and sets the split points
-        // before it plans the stages.
-        let Some(partitioning) = repartition.range_partitioning()? else {
-            return Err(ExecutionError::InternalError(
-                "range repartitioning must be sampled before distributed planning".to_string(),
-            ));
-        };
-        let distribution = OutputDistribution::Range {
-            partitioning,
-            channels: repartition.num_partitions(),
+        // before it plans the stages to run. EXPLAIN plans the stages without sampling.
+        let channels = repartition.num_partitions();
+        let distribution = match repartition.range_partitioning()? {
+            Some(partitioning) => OutputDistribution::Range {
+                partitioning,
+                channels,
+            },
+            None => OutputDistribution::UnsampledRange {
+                ordering: repartition.ordering().clone(),
+                channels,
+            },
         };
         let properties = repartition.properties().clone();
         let child = subtree.only_child()?;
@@ -1531,13 +1533,19 @@ mod tests {
     }
 
     #[test]
-    fn test_job_graph_rejects_unsampled_range_repartition() {
-        let error =
-            JobGraph::try_new(range_repartition(None), flight_shuffle_options()).unwrap_err();
+    fn test_job_graph_explains_unsampled_range_repartition() {
+        // EXPLAIN plans the stages before the job runner samples the input.
+        let graph = JobGraph::try_new(range_repartition(None), flight_shuffle_options()).unwrap();
+
+        assert_eq!(graph.stages().len(), 2);
+        assert!(matches!(
+            &graph.stages()[0].distribution,
+            OutputDistribution::UnsampledRange { channels: 4, .. }
+        ));
         assert!(
-            error
+            graph
                 .to_string()
-                .contains("range repartitioning must be sampled before distributed planning")
+                .contains("Range([id@0 ASC], split points sampled at execution, channels=4)")
         );
     }
 
