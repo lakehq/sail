@@ -37,7 +37,8 @@ use sail_common_datafusion::catalog::{
 };
 use sail_iceberg::utils::partition_transform::catalog_partition_field_from_iceberg;
 use sail_iceberg::{
-    FormatVersion, Literal, NestedField, StructType, arrow_type_to_iceberg, iceberg_type_to_arrow,
+    FormatVersion, Literal, NestedField, StructType, arrow_field_to_iceberg, arrow_type_to_iceberg,
+    iceberg_field_to_arrow,
 };
 use tokio::sync::OnceCell;
 
@@ -615,14 +616,21 @@ impl IcebergRestCatalogProvider {
             for field in &schema.fields {
                 let iceberg_type =
                     sail_iceberg::spec::types::Type::try_from(field.r#type.as_ref().clone())?;
-                let data_type = iceberg_type_to_arrow(&iceberg_type).map_err(|e| {
-                    CatalogError::External(format!(
-                        "Failed to convert Iceberg type to Arrow type for field '{}': {e}",
-                        field.name
-                    ))
-                })?;
+                let arrow_field = iceberg_field_to_arrow(&NestedField::new(
+                    field.id,
+                    field.name.clone(),
+                    iceberg_type,
+                    field.required,
+                ))
+                .map_err(CatalogError::DataFusionError)?;
+                let data_type = arrow_field.data_type().clone();
                 let field_id = field.id;
                 cols.push(TableColumnStatus {
+                    metadata: arrow_field
+                        .metadata()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
                     name: field.name.clone(),
                     data_type,
                     nullable: !field.required,
@@ -916,13 +924,20 @@ impl IcebergRestCatalogProvider {
             for field in &schema.fields {
                 let iceberg_type =
                     sail_iceberg::spec::types::Type::try_from(field.r#type.as_ref().clone())?;
-                let data_type = iceberg_type_to_arrow(&iceberg_type).map_err(|e| {
-                    CatalogError::External(format!(
-                        "Failed to convert Iceberg type to Arrow type for field '{}': {e}",
-                        field.name
-                    ))
-                })?;
+                let arrow_field = iceberg_field_to_arrow(&NestedField::new(
+                    field.id,
+                    field.name.clone(),
+                    iceberg_type,
+                    field.required,
+                ))
+                .map_err(CatalogError::DataFusionError)?;
+                let data_type = arrow_field.data_type().clone();
                 cols.push(TableColumnStatus {
+                    metadata: arrow_field
+                        .metadata()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
                     name: field.name.clone(),
                     data_type,
                     nullable: !field.required,
@@ -2298,6 +2313,7 @@ fn columns_to_nested_fields(
     let mut fields = Vec::new();
     for col in columns.iter() {
         let CreateTableColumnOptions {
+            metadata,
             name,
             data_type,
             nullable,
@@ -2307,11 +2323,18 @@ fn columns_to_nested_fields(
             identity: _,
         } = col;
 
-        let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {
-            CatalogError::External(format!(
-                "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
-            ))
-        })?;
+        let arrow_field = arrow::datatypes::Field::new(name, data_type.clone(), *nullable)
+            .with_metadata(
+                metadata
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            );
+        let field_type = arrow_field_to_iceberg(&arrow_field)
+            .map_err(CatalogError::DataFusionError)?
+            .field_type
+            .as_ref()
+            .clone();
 
         // `default` is not supported until Iceberg V3.
         let default_literal = if let Some(default) = default {
@@ -2762,6 +2785,7 @@ mod tests {
     fn simple_create_table_options() -> CreateTableOptions {
         CreateTableOptions {
             columns: vec![CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "id".to_string(),
                 data_type: DataType::Int64,
                 nullable: false,

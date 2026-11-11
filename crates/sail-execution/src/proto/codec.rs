@@ -171,6 +171,7 @@ use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithP
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::array::spark_shuffle::SparkShuffle;
+use sail_function::scalar::collection::element::CollectionElement;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
@@ -206,7 +207,7 @@ use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
-use sail_function::scalar::explode::{Explode, explode_name_to_kind};
+use sail_function::scalar::explode::{Explode, MapExplodeEntry, explode_name_to_kind};
 use sail_function::scalar::geo::st_asbinary::StAsBinary;
 use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
 use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
@@ -3885,6 +3886,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkParseJson(r#gen::SparkParseJsonUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkParseJson::new(safe))));
             }
+            UdfKind::UuidCast(r#gen::UuidCastUdf { target, safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(
+                    sail_common_datafusion::uuid::UuidCast::new(
+                        try_decode_field_ref(&target)?,
+                        safe,
+                    ),
+                )));
+            }
             UdfKind::SparkStructRename(r#gen::SparkStructRenameUdf { target_type }) => {
                 let target_type = self.try_decode_data_type(&target_type)?;
                 return Ok(Arc::new(ScalarUDF::from(SparkStructRename::new(
@@ -3894,6 +3903,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         };
         match name {
             "array_element" => Ok(Arc::new(ScalarUDF::from(ArrayElement::new()))),
+            "spark_array_element" => Ok(Arc::new(ScalarUDF::from(CollectionElement::array()))),
+            "spark_map_element" => Ok(Arc::new(ScalarUDF::from(CollectionElement::map()))),
+            "map_explode_entry" => Ok(Arc::new(ScalarUDF::from(MapExplodeEntry::default()))),
             "map_extract" => Ok(Arc::new(ScalarUDF::from(MapExtract::new()))),
             "array_item_with_position" => {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
@@ -4139,6 +4151,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let udf_kind: UdfKind = if (node.as_async().is_some()
             && sail_function::scalar::jev::JevKind::from_name(node.name()).is_some())
             || node_inner.is::<ArrayElement>()
+            || node_inner.is::<CollectionElement>()
+            || node_inner.is::<MapExplodeEntry>()
             || node_inner.is::<DeltaDecodePath>()
             || node_inner.is::<MapExtract>()
             || node_inner.is::<ArrayItemWithPosition>()
@@ -4487,6 +4501,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 null_short_circuit,
                 mode,
                 output_timezone: func.output_timezone().map(|timezone| timezone.to_string()),
+            })
+        } else if let Some(func) = node
+            .inner()
+            .downcast_ref::<sail_common_datafusion::uuid::UuidCast>()
+        {
+            UdfKind::UuidCast(r#gen::UuidCastUdf {
+                target: try_encode_field_ref(func.target())?,
+                safe: func.safe(),
             })
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
@@ -6438,6 +6460,7 @@ mod tests {
     use datafusion::physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode;
     use datafusion::physical_expr_common::physical_expr::proto_encode::PhysicalExprEncode;
     use datafusion_proto::protobuf::PhysicalExprNode;
+    use sail_common_datafusion::uuid::UuidCast;
 
     use super::*;
 
@@ -6473,6 +6496,35 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udaf(&udaf, &mut buf)?;
         codec.try_decode_udaf(&name, &buf)
+    }
+
+    #[test]
+    fn uuid_codec_preserves_nested_metadata_and_error_mode() -> Result<()> {
+        let uuid = Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata(
+            [
+                (
+                    sail_common_datafusion::uuid::UUID_METADATA_KEY.to_string(),
+                    "uuid".to_string(),
+                ),
+                ("PARQUET:field_id".to_string(), "17".to_string()),
+            ]
+            .into(),
+        );
+        let target = Arc::new(Field::new(
+            "s",
+            DataType::Struct(vec![Arc::new(uuid)].into()),
+            true,
+        ));
+        for safe in [false, true] {
+            let decoded = round_trip_udf(ScalarUDF::from(UuidCast::new(target.clone(), safe)))?;
+            let decoded = decoded
+                .inner()
+                .downcast_ref::<UuidCast>()
+                .ok_or_else(|| plan_datafusion_err!("expected UuidCast"))?;
+            assert_eq!(decoded.target(), &target);
+            assert_eq!(decoded.safe(), safe);
+        }
+        Ok(())
     }
 
     #[test]
@@ -7351,13 +7403,18 @@ mod tests {
         use sail_common_datafusion::catalog::{
             CatalogPartitionField, PartitionTransform, TableReplacement,
         };
+        use sail_common_datafusion::uuid::UUID_METADATA_KEY;
         use sail_iceberg::operations::replacement::IcebergTableReplacement;
         let replacement: IcebergTableReplacement = serde_json::from_value(serde_json::json!({
             "catalog": TableReplacement {
                 catalog_table: vec!["catalog".into(), "namespace".into(), "table".into()],
                 catalog_generation: 11, database_generation: 22, table_generation: 33,
                 require_existing: true, existing: true,
-                columns: vec![("id".into(), DataType::Int64, false)],
+                columns: vec![("id".into(), DataType::FixedSizeBinary(16), false,
+                    std::collections::BTreeMap::from([
+                        (UUID_METADATA_KEY.into(), "uuid".into()),
+                        ("custom".into(), "retained".into()),
+                    ]))],
                 location: "file:///tmp/replacement-codec/".into(),
                 partition_by: vec![CatalogPartitionField { column: "id".into(), transform: Some(PartitionTransform::Identity) }],
                 sort_by: vec![], properties: vec![("owner".into(), "test".into())],
@@ -7370,7 +7427,7 @@ mod tests {
                 "format-version":2, "table-uuid":"12345678-1234-1234-1234-123456789abc",
                 "location":"file:///tmp/replacement-codec/", "last-sequence-number":8,
                 "last-updated-ms":100, "last-column-id":5,"current-schema-id":2,
-                "schemas":[{"type":"struct","schema-id":1,"fields":[{"id":1,"name":"old","required":false,"type":"int"}]},{"type":"struct","schema-id":2,"fields":[{"id":5,"name":"id","required":true,"type":"long"}]}],
+                "schemas":[{"type":"struct","schema-id":1,"fields":[{"id":1,"name":"old","required":false,"type":"int"}]},{"type":"struct","schema-id":2,"fields":[{"id":5,"name":"id","required":true,"type":"uuid"}]}],
                 "partition-specs":[{"spec-id":3,"fields":[{"source-id":5,"field-id":1001,"name":"id","transform":"identity"}]}],
                 "default-spec-id":3,"last-partition-id":1001,"current-snapshot-id":null,
                 "snapshots":[{"snapshot-id":42,"sequence-number":8,"timestamp-ms":100,"manifest-list":"file:///tmp/old.avro","summary":{"operation":"append"},"schema-id":1}],
@@ -8151,6 +8208,20 @@ mod tests {
 
         let coalesce = round_trip_udf(ScalarUDF::from(CoalesceFunc::new()))?;
         downcast_udf::<CoalesceFunc>(&coalesce, "CoalesceFunc")?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_collection_element_and_map_entry_udfs() -> Result<()> {
+        for function in [CollectionElement::array(), CollectionElement::map()] {
+            let name = function.name().to_string();
+            let decoded = round_trip_udf(ScalarUDF::from(function))?;
+            downcast_udf::<CollectionElement>(&decoded, "CollectionElement")?;
+            assert_eq!(decoded.name(), name);
+        }
+        let decoded = round_trip_udf(ScalarUDF::from(MapExplodeEntry::default()))?;
+        downcast_udf::<MapExplodeEntry>(&decoded, "MapExplodeEntry")?;
+        assert_eq!(decoded.name(), "map_explode_entry");
         Ok(())
     }
 

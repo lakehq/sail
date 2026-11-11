@@ -31,6 +31,15 @@ def large_dataset(spark):
     spark.catalog.dropTempView("large_dataset")
 
 
+@pytest.mark.timeout(30)
+def test_float16_comparison_in_cluster_mode(spark):
+    rows = spark.sql("""
+        SELECT id, variant_get(parse_json(CAST(id AS STRING)), '$', 'Float16') = 1 AS ok
+        FROM range(0, 2, 1, 2)
+    """).collect()
+    assert sorted((row.id, row.ok) for row in rows) == [(0, False), (1, True)]
+
+
 def test_basic_query_execution(spark):
     """Test basic query execution in local-cluster mode."""
     result = spark.sql("SELECT 1 + 1 AS result").collect()

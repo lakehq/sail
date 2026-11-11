@@ -225,6 +225,7 @@ async fn operation(f: &Fixture, writer: Writer, codec: &str) -> TestResult<Opera
             })?);
             let mut options = CreateTableOptions {
                 columns: vec![CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "old".into(),
                     data_type: DataType::Int64,
                     nullable: false,

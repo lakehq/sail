@@ -41,6 +41,7 @@ serde_arrow = { workspace = true }
 itertools = { workspace = true }
 half = { workspace = true }
 rand = { workspace = true }
+uuid = { workspace = true }
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }

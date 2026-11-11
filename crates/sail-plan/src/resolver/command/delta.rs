@@ -224,6 +224,11 @@ impl PlanResolver<'_> {
             .map(|field| {
                 let features = ColumnFeatures::from_field(field);
                 TableColumnStatus {
+                    metadata: field
+                        .metadata()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
                     name: field.name().clone(),
                     data_type: field.data_type().clone(),
                     nullable: field.is_nullable(),

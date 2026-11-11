@@ -7,7 +7,7 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::metadata::FieldMetadata;
-use datafusion_common::{Result, exec_err, internal_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::conditional_expressions::CaseBuilder;
 use datafusion_expr::expr::ScalarFunction;
@@ -22,6 +22,7 @@ use sail_common_datafusion::metadata::{
     coerced_fields_metadata, type_metadata, widest_interval_metadata,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_datafusion::uuid::{UUID_METADATA_KEY, is_uuid_field};
 
 use crate::scalar::conditional::coalesce_lazy::CoalesceLazy;
 
@@ -76,6 +77,17 @@ impl ScalarUDFImpl for CoalesceFunc {
         // Keep only the type metadata of the arguments; see `type_metadata`. The interval
         // range of the result is the widest range of the arguments, not that of the first one.
         let mut metadata = type_metadata(&metadata).inner().clone();
+        // Untyped NULL is neutral, but typed fixed[16] (even NULL) must agree
+        // on UUID identity. Do not apply this consensus rule to extension types.
+        if return_type != DataType::FixedSizeBinary(16)
+            || !args
+                .arg_fields
+                .iter()
+                .filter(|field| !field.data_type().is_null())
+                .all(|field| is_uuid_field(field))
+        {
+            metadata.remove(UUID_METADATA_KEY);
+        }
         let fields = args
             .arg_fields
             .iter()
@@ -98,6 +110,7 @@ impl ScalarUDFImpl for CoalesceFunc {
     /// Only reached when [`Self::simplify`] keeps the call because an argument
     /// is volatile; evaluates each argument exactly once.
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let return_type = args.return_field.data_type().clone();
         let args = args.args;
         // do not accept 0 arguments.
         if args.is_empty() {
@@ -107,7 +120,6 @@ impl ScalarUDFImpl for CoalesceFunc {
             );
         }
 
-        let return_type = args[0].data_type();
         let mut return_array = args.iter().filter_map(|x| match x {
             ColumnarValue::Array(array) => Some(array.len()),
             _ => None,
@@ -119,6 +131,10 @@ impl ScalarUDFImpl for CoalesceFunc {
             let mut remainder = BooleanArray::from(vec![true; size]);
 
             for arg in args {
+                // Fixed[16] coercion preserves untyped NULL for identity consensus.
+                if arg.data_type().is_null() {
+                    continue;
+                }
                 match arg {
                     ColumnarValue::Array(ref array) => {
                         let to_apply = and(&remainder, &is_not_null(array.as_ref())?)?;
@@ -141,14 +157,13 @@ impl ScalarUDFImpl for CoalesceFunc {
             }
             Ok(ColumnarValue::Array(current_value))
         } else {
-            let result = args
+            match args
                 .iter()
-                .find_map(|x| match x {
-                    ColumnarValue::Scalar(s) if !s.is_null() => Some(x.clone()),
-                    _ => None,
-                })
-                .unwrap_or_else(|| args[0].clone());
-            Ok(result)
+                .find(|x| matches!(x, ColumnarValue::Scalar(s) if !s.is_null()))
+            {
+                Some(value) => Ok(value.clone()),
+                None => Ok(ColumnarValue::Scalar(ScalarValue::try_from(&return_type)?)),
+            }
         }
     }
 
@@ -216,6 +231,15 @@ impl ScalarUDFImpl for CoalesceFunc {
             return exec_err!("coalesce must have at least one argument");
         }
 
+        // DataFusion inserts casts before deriving the return field. Preserve
+        // untyped NULL here so it cannot become a typed fixed[16] UUID veto.
+        if arg_types.contains(&DataType::FixedSizeBinary(16))
+            && arg_types
+                .iter()
+                .all(|t| matches!(t, DataType::Null | DataType::FixedSizeBinary(16)))
+        {
+            return Ok(arg_types.to_vec());
+        }
         try_type_union_resolution(arg_types)
     }
 }
@@ -267,6 +291,314 @@ mod tests {
             .map(String::as_str)
             .collect::<Vec<_>>();
         assert_eq!(keys, vec!["ARROW:extension:name"]);
+        Ok(())
+    }
+
+    #[test]
+    fn coalesce_uuid_requires_typed_input_consensus() -> Result<()> {
+        use arrow::datatypes::Field;
+        use datafusion_expr::{
+            HigherOrderReturnFieldArgs, HigherOrderUDFImpl, ReturnFieldArgs, ScalarUDFImpl,
+            ValueOrLambda,
+        };
+        use sail_common_datafusion::uuid::{UUID_METADATA_KEY, is_uuid_field};
+
+        use crate::scalar::conditional::coalesce_lazy::CoalesceLazy;
+
+        let uuid = Arc::new(
+            Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata(
+                std::collections::HashMap::from([(
+                    UUID_METADATA_KEY.to_string(),
+                    "uuid".to_string(),
+                )]),
+            ),
+        );
+        let fixed = Arc::new(Field::new("f", DataType::FixedSizeBinary(16), true));
+        let null = Arc::new(Field::new("null", DataType::Null, true));
+        let typed_null = ScalarValue::FixedSizeBinary(16, None);
+        for (other, scalar, expected) in [
+            (Arc::clone(&uuid), None, true),
+            (Arc::clone(&uuid), Some(&typed_null), true),
+            (null, Some(&ScalarValue::Null), true),
+            (Arc::clone(&fixed), None, false),
+            (fixed, Some(&typed_null), false),
+        ] {
+            for reverse in [false, true] {
+                let mut fields = [Arc::clone(&uuid), Arc::clone(&other)];
+                let mut scalars = [None, scalar];
+                if reverse {
+                    fields.reverse();
+                    scalars.reverse();
+                }
+                let field = CoalesceFunc::new().return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &fields,
+                    scalar_arguments: &scalars,
+                })?;
+                assert_eq!(field.data_type(), &DataType::FixedSizeBinary(16));
+                assert!(field.is_nullable());
+                assert_eq!(is_uuid_field(&field), expected);
+                assert_eq!(field.metadata().len(), usize::from(expected));
+                let lazy =
+                    CoalesceLazy::new().return_field_from_args(HigherOrderReturnFieldArgs {
+                        arg_fields: &[
+                            ValueOrLambda::Value(Arc::clone(&fields[0])),
+                            ValueOrLambda::Lambda(Arc::clone(&fields[1])),
+                        ],
+                        scalar_arguments: &scalars,
+                    })?;
+                assert_eq!(field, lazy);
+            }
+        }
+        // A stale marker on a different physical type must never survive.
+        let binary = Arc::new(uuid.as_ref().clone().with_data_type(DataType::Binary));
+        let field = CoalesceFunc::new().return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[binary],
+            scalar_arguments: &[None],
+        })?;
+        assert!(!field.metadata().contains_key(UUID_METADATA_KEY));
+        Ok(())
+    }
+
+    #[test]
+    fn coalesce_fixed_null_coercion_preserves_untyped_null() -> Result<()> {
+        use datafusion_expr::ScalarUDFImpl;
+
+        let function = CoalesceFunc::new();
+        for types in [
+            vec![DataType::Null, DataType::FixedSizeBinary(16)],
+            vec![DataType::FixedSizeBinary(16), DataType::Null],
+            vec![DataType::FixedSizeBinary(16)],
+            vec![DataType::FixedSizeBinary(16); 2],
+            vec![
+                DataType::Null,
+                DataType::FixedSizeBinary(16),
+                DataType::Null,
+                DataType::FixedSizeBinary(16),
+            ],
+        ] {
+            assert_eq!(function.coerce_types(&types)?, types);
+        }
+        // Mixed binary inputs still delegate to upstream union resolution.
+        // Its category check currently rejects them before binary widening.
+        for types in [
+            vec![DataType::FixedSizeBinary(16), DataType::Binary],
+            vec![
+                DataType::Null,
+                DataType::FixedSizeBinary(16),
+                DataType::Binary,
+            ],
+            vec![
+                DataType::Binary,
+                DataType::FixedSizeBinary(16),
+                DataType::Null,
+            ],
+        ] {
+            assert_eq!(
+                function.coerce_types(&types).map_err(|e| e.to_string()),
+                datafusion_expr::binary::try_type_union_resolution(&types)
+                    .map_err(|e| e.to_string())
+            );
+        }
+        assert_eq!(
+            function.coerce_types(&[DataType::Null, DataType::Null])?,
+            vec![DataType::Null; 2]
+        );
+        assert_eq!(
+            function.coerce_types(&[DataType::Null, DataType::Int64])?,
+            vec![DataType::Int64; 2]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn coalesce_fixed_null_kernel_uses_return_type() -> Result<()> {
+        use arrow::array::{FixedSizeBinaryArray, NullArray};
+        use arrow::datatypes::Field;
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+
+        let fixed = Arc::new(Field::new("v", DataType::FixedSizeBinary(16), true));
+        let value = [0x5a; 16];
+        let array = Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            [Some(value.as_slice()), None].into_iter(),
+            16,
+        )?) as ArrayRef;
+        for reverse in [false, true] {
+            for null in [
+                ColumnarValue::Scalar(ScalarValue::Null),
+                ColumnarValue::Array(Arc::new(NullArray::new(2))),
+            ] {
+                let mut args = vec![null, ColumnarValue::Array(Arc::clone(&array))];
+                if reverse {
+                    args.reverse();
+                }
+                let arg_fields = args
+                    .iter()
+                    .map(|arg| Arc::new(Field::new("arg", arg.data_type(), true)))
+                    .collect();
+                let result = CoalesceFunc::new()
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args,
+                        arg_fields,
+                        number_rows: 2,
+                        return_field: Arc::clone(&fixed),
+                        config_options: Arc::new(ConfigOptions::default()),
+                    })?
+                    .into_array(2)?;
+                assert_eq!(result.as_ref(), array.as_ref());
+            }
+            let mut args = vec![
+                ColumnarValue::Scalar(ScalarValue::Null),
+                ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(16, None)),
+            ];
+            if reverse {
+                args.reverse();
+            }
+            let arg_fields = args
+                .iter()
+                .map(|arg| Arc::new(Field::new("arg", arg.data_type(), true)))
+                .collect();
+            let result = CoalesceFunc::new().invoke_with_args(ScalarFunctionArgs {
+                args,
+                arg_fields,
+                number_rows: 1,
+                return_field: Arc::clone(&fixed),
+                config_options: Arc::new(ConfigOptions::default()),
+            })?;
+            assert!(matches!(
+                result,
+                ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(16, None))
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn coalesce_lazy_fixed_untyped_null_arguments() -> Result<()> {
+        use arrow::array::{FixedSizeBinaryArray, NullArray};
+        use arrow::datatypes::{Field, FieldRef};
+        use datafusion::physical_expr::expressions::{Column, Literal};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::{
+            ColumnarValue, HigherOrderFunctionArgs, HigherOrderUDFImpl, LambdaArgument,
+            ValueOrLambda,
+        };
+
+        use crate::scalar::conditional::coalesce_lazy::CoalesceLazy;
+
+        let fixed_array = |values: [Option<[u8; 16]>; 4]| -> Result<ArrayRef> {
+            Ok(Arc::new(
+                FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 16)?,
+            ))
+        };
+        let captured = |array: ArrayRef| -> Result<(LambdaArgument, FieldRef)> {
+            let field = Arc::new(Field::new("capture", array.data_type().clone(), true));
+            let captures = RecordBatch::try_from_iter([("capture", array)])?;
+            Ok((
+                LambdaArgument::new(
+                    vec![Arc::new(Field::new("unused", DataType::Null, true))],
+                    Arc::new(Column::new("capture", 0)),
+                    Some(captures),
+                    &[],
+                ),
+                field,
+            ))
+        };
+        let invoke = |first: ArrayRef,
+                      lambdas: Vec<(LambdaArgument, FieldRef)>|
+         -> Result<ArrayRef> {
+            let mut fields = vec![ValueOrLambda::Value(Arc::new(Field::new(
+                "first",
+                first.data_type().clone(),
+                true,
+            )))];
+            let mut args = vec![ValueOrLambda::Value(ColumnarValue::Array(first))];
+            for (lambda, field) in lambdas {
+                args.push(ValueOrLambda::Lambda(lambda));
+                fields.push(ValueOrLambda::Lambda(field));
+            }
+            CoalesceLazy::new()
+                .invoke_with_args(HigherOrderFunctionArgs {
+                    args,
+                    arg_fields: fields,
+                    number_rows: 4,
+                    return_field: Arc::new(Field::new("v", DataType::FixedSizeBinary(16), true)),
+                    config_options: Arc::new(ConfigOptions::default()),
+                })?
+                .into_array(4)
+        };
+        let null = Arc::new(NullArray::new(4)) as ArrayRef;
+        let fallback = fixed_array([Some([1; 16]), Some([2; 16]), None, Some([4; 16])])?;
+        // An untyped NullArray first argument must be cast before interleaving.
+        let result = invoke(Arc::clone(&null), vec![captured(Arc::clone(&fallback))?])?;
+        assert_eq!(result.as_ref(), fallback.as_ref());
+
+        for null_lambda in [
+            captured(Arc::clone(&null))?,
+            (
+                LambdaArgument::new(
+                    vec![Arc::new(Field::new("unused", DataType::Null, true))],
+                    Arc::new(Literal::new(ScalarValue::Null)),
+                    None,
+                    &[],
+                ),
+                Arc::new(Field::new("null", DataType::Null, true)),
+            ),
+        ] {
+            // Both captured NullArray and scalar NULL bodies leave all rows pending.
+            let result = invoke(
+                Arc::clone(&null),
+                vec![null_lambda.clone(), captured(Arc::clone(&fallback))?],
+            )?;
+            assert_eq!(result.as_ref(), fallback.as_ref());
+
+            // The same NULL bodies run only for rows 1 and 2. The fixed fallback
+            // must gather those captured rows, preserving row 2's final NULL.
+            let first = fixed_array([Some([9; 16]), None, None, Some([8; 16])])?;
+            let result = invoke(first, vec![null_lambda, captured(Arc::clone(&fallback))?])?;
+            let expected = fixed_array([Some([9; 16]), Some([2; 16]), None, Some([8; 16])])?;
+            assert_eq!(result.as_ref(), expected.as_ref());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn coalesce_interval_metadata_still_uses_scalar_nulls()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use arrow::datatypes::{Field, IntervalUnit};
+        use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+        use sail_common::spec::{
+            IntervalFieldType, IntervalUnit as SparkIntervalUnit, SAIL_SPARK_INTERVAL_METADATA_KEY,
+            SparkIntervalMetadata,
+        };
+
+        let year = SparkIntervalMetadata::try_new(
+            SparkIntervalUnit::YearMonth,
+            Some(IntervalFieldType::Year),
+            Some(IntervalFieldType::Year),
+        )?
+        .ok_or_else(|| datafusion_common::internal_datafusion_err!("expected interval metadata"))?
+        .to_json()?;
+        let plain = Field::new("i", DataType::Interval(IntervalUnit::YearMonth), true);
+        let qualified = Arc::new(
+            plain
+                .clone()
+                .with_metadata(std::collections::HashMap::from([(
+                    SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    year.clone(),
+                )])),
+        );
+        let null = ScalarValue::IntervalYearMonth(None);
+        for (scalar, expected) in [(Some(&null), Some(&year)), (None, None)] {
+            let field = CoalesceFunc::new().return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[Arc::clone(&qualified), Arc::new(plain.clone())],
+                scalar_arguments: &[None, scalar],
+            })?;
+            assert_eq!(
+                field.metadata().get(SAIL_SPARK_INTERVAL_METADATA_KEY),
+                expected
+            );
+        }
         Ok(())
     }
 
