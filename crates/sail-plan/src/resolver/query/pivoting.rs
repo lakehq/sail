@@ -22,6 +22,7 @@ use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::seeded_random::SeededRandomRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 
 impl PlanResolver<'_> {
@@ -432,6 +433,7 @@ impl PlanResolver<'_> {
             self.rewrite_projection::<MonotonicIdRewriter>(input.clone(), projections, state)?;
         let (input, expr) =
             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
+        let (input, expr) = self.rewrite_projection::<SeededRandomRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
 
         let expr = self.rewrite_multi_expr(expr)?;

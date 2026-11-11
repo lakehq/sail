@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use datafusion::arrow::datatypes::DataType;
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +13,7 @@ pub struct TableReplacement {
     pub authority: ReplacementAuthority,
     pub require_existing: bool,
     pub existing: bool,
-    pub columns: Vec<(String, DataType, bool)>,
+    pub columns: Vec<(String, DataType, bool, BTreeMap<String, String>)>,
     pub location: String,
     pub partition_by: Vec<CatalogPartitionField>,
     pub sort_by: Vec<CatalogTableSort>,

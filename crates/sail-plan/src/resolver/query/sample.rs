@@ -9,8 +9,10 @@ use datafusion_expr::{Expr, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUD
 use rand::{RngExt, rng};
 use sail_common::spec;
 use sail_common::spec::{NullOrdering, SortDirection, SortOrder};
+use sail_function::scalar::math::partition_random::PartitionSeed;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::random::Random;
+use sail_logical_plan::seeded_random::{SeededRandomColumn, SeededRandomNode};
 use sail_logical_plan::sort::SortWithinPartitionsNode;
 
 use crate::error::{PlanError, PlanResult};
@@ -188,29 +190,27 @@ impl PlanResolver<'_> {
             }
         }
 
-        // TODO: Replace these batch-local UDFs with partition-scoped samplers. Spark uses
-        // `seed + partition_index` for Bernoulli sampling and per-partition seeds derived
-        // from `java.util.Random(seed)` for replacement sampling, then advances one sampler
-        // across the whole partition. `Random` and `RandPoisson` currently restart from the
-        // same seed for every Arrow batch in every partition.
+        // Like Spark, the sampler of each partition is seeded once and advances across the
+        // whole partition: Bernoulli sampling uses `seed + partition_index`, and replacement
+        // sampling uses per-partition seeds derived from `java.util.Random(seed)`.
         // TODO: Use a physical sampling boundary. At replacement fraction zero,
         //  Spark's `SampleExec` skips a child's deferred projection evaluation.
         let rand_column_name: String = state.next_field_id();
-        let rand_expr: Expr = if with_replacement {
-            Expr::ScalarFunction(ScalarFunction {
+        let (rand_expr, partition_seed) = if with_replacement {
+            let expr = Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(RandPoisson::new())),
                 args: vec![
                     Expr::Literal(ScalarValue::Float64(Some(fraction.max(0.0))), None),
                     Expr::Literal(ScalarValue::Int64(Some(seed)), None),
                 ],
-            })
-            .alias(&rand_column_name)
+            });
+            (expr, PartitionSeed::JavaRandom)
         } else {
-            Expr::ScalarFunction(ScalarFunction {
+            let expr = Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(Random::new())),
                 args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)), None)],
-            })
-            .alias(&rand_column_name)
+            });
+            (expr, PartitionSeed::Offset)
         };
         let init_exprs: Vec<Expr> = input
             .schema()
@@ -218,11 +218,18 @@ impl PlanResolver<'_> {
             .iter()
             .map(|col| Expr::Column(col.clone()))
             .collect();
-        let mut all_exprs: Vec<Expr> = init_exprs.clone();
-        all_exprs.push(rand_expr);
-        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
-            .project(all_exprs)?
-            .build()?;
+        // The samples depend on the order of the input rows, which must be kept.
+        let (input, _, _) = Self::require_input_sort_inner(input)?;
+        let plan_with_rand = LogicalPlan::Extension(Extension {
+            node: Arc::new(SeededRandomNode::try_new(
+                Arc::new(input),
+                vec![SeededRandomColumn {
+                    name: rand_column_name.clone(),
+                    expr: rand_expr,
+                    seed: partition_seed,
+                }],
+            )?),
+        });
 
         if with_replacement {
             Self::resolve_sample_with_replacement(

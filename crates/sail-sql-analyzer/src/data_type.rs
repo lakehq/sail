@@ -298,6 +298,7 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
                 algorithm: spec::EdgeInterpolationAlgorithm::Spherical,
             })
         }
+        DataType::Uuid(_) => Ok(spec::DataType::Uuid),
         DataType::Variant(_) => Ok(spec::DataType::Variant),
     }
 }

@@ -973,6 +973,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     ));
                 } else {
                     // Bootstrap a new table using the Hadoop/path-table convention.
+                    let base_codec = BaseMetadataCodec::capture(None)?;
                     let bootstrap_result = bootstrap_new_table_with_style(
                         &table_url,
                         &store_ctx,
@@ -992,7 +993,11 @@ impl ExecutionPlan for IcebergCommitExec {
                             catalog_recorded_metadata_location.as_deref(),
                             &new_metadata_location,
                         )
-                        .await?;
+                        .await
+                        .map_err(|error| {
+                            MetadataFileStyle::Versioned(base_codec)
+                                .catalog_publication_error(&bootstrap_result.metadata_file, error)
+                        })?;
                     }
                 }
 
@@ -1254,7 +1259,11 @@ impl ExecutionPlan for IcebergCommitExec {
                             catalog_recorded_metadata_location.as_deref(),
                             &new_metadata_location,
                         )
-                        .await?;
+                        .await
+                        .map_err(|error| {
+                            MetadataFileStyle::Versioned(base_codec)
+                                .catalog_publication_error(&bootstrap_result.metadata_file, error)
+                        })?;
                     }
 
                     return commit_output_batch(
@@ -1497,7 +1506,8 @@ impl ExecutionPlan for IcebergCommitExec {
                         catalog_metadata_location.as_deref(),
                         metadata_location,
                     )
-                    .await?;
+                    .await
+                    .map_err(|error| prepared_metadata.catalog_publication_error(error))?;
                 } else if let Some(catalog_table) = catalog_registered_metadata_table {
                     Self::update_catalog_metadata_location(
                         &context,
@@ -1506,7 +1516,8 @@ impl ExecutionPlan for IcebergCommitExec {
                         catalog_recorded_metadata_location.as_deref(),
                         metadata_location,
                     )
-                    .await?;
+                    .await
+                    .map_err(|error| prepared_metadata.catalog_publication_error(error))?;
                 }
 
                 return commit_output_batch(

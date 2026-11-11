@@ -733,7 +733,12 @@ mod tests {
             },
             require_existing: existing,
             existing,
-            columns: vec![("replacement".into(), DataType::Int64, false)],
+            columns: vec![(
+                "replacement".into(),
+                DataType::Int64,
+                false,
+                Default::default(),
+            )],
             location: "memory:///table".into(),
             partition_by: vec![],
             sort_by: vec![],
@@ -1386,6 +1391,7 @@ mod tests {
                 .task_ctx();
                 let options = CreateTableOptions {
                     columns: vec![CreateTableColumnOptions {
+                        metadata: Default::default(),
                         name: "replacement".into(),
                         data_type: DataType::Int64,
                         nullable: false,
@@ -1693,6 +1699,7 @@ mod tests {
             .task_ctx();
             let mut options = CreateTableOptions {
                 columns: vec![CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "old".into(),
                     data_type: DataType::Int64,
                     nullable: false,

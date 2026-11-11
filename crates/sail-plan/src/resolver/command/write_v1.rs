@@ -1,7 +1,7 @@
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 
-use crate::error::{PlanError, PlanResult};
+use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::command::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
 use crate::resolver::state::PlanResolverState;
@@ -56,29 +56,7 @@ impl PlanResolver<'_> {
                     error_if_absent: false,
                 },
                 Some(SaveMode::Overwrite) => match replace_where {
-                    Some(ref replace_where) => {
-                        let ast_expr =
-                            sail_sql_analyzer::parser::parse_expression(replace_where.as_str())
-                                .map_err(|e| {
-                                    PlanError::invalid(format!(
-                                        "invalid replaceWhere expression: {replace_where} ({e})"
-                                    ))
-                                })?;
-                        let spec_expr = sail_sql_analyzer::expression::from_ast_expression(
-                            ast_expr,
-                        )
-                        .map_err(|e| {
-                            PlanError::invalid(format!(
-                                "invalid replaceWhere expression: {replace_where} ({e})"
-                            ))
-                        })?;
-                        WriteMode::TruncateIf {
-                            condition: Box::new(spec::ExprWithSource {
-                                expr: spec_expr,
-                                source: Some(replace_where.clone()),
-                            }),
-                        }
-                    }
+                    Some(ref replace_where) => WriteMode::truncate_where(replace_where.clone())?,
                     None => WriteMode::Replace {
                         error_if_absent: false,
                     },
@@ -138,9 +116,7 @@ impl PlanResolver<'_> {
                             table,
                             column_match: WriteColumnMatch::ByName,
                         })
-                        .with_mode(WriteMode::Replace {
-                            error_if_absent: false,
-                        });
+                        .with_mode(WriteMode::SaveAsTableOverwrite { replace_where });
                 }
             },
             SaveType::Table {

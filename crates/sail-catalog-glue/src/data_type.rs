@@ -74,6 +74,14 @@ pub fn arrow_to_glue_type(data_type: &DataType) -> CatalogResult<String> {
     }
 }
 
+pub fn arrow_field_to_iceberg_type(field: &Field) -> CatalogResult<Document> {
+    if sail_common_datafusion::uuid::is_uuid_field(field) {
+        Ok(Document::String("uuid".to_string()))
+    } else {
+        arrow_to_iceberg_type(field.data_type())
+    }
+}
+
 /// Converts an Arrow DataType to an Iceberg type representation as Document.
 pub fn arrow_to_iceberg_type(data_type: &DataType) -> CatalogResult<Document> {
     match data_type {
@@ -99,7 +107,6 @@ pub fn arrow_to_iceberg_type(data_type: &DataType) -> CatalogResult<Document> {
         DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
             Ok(Document::String("binary".to_string()))
         }
-        DataType::FixedSizeBinary(16) => Ok(Document::String("uuid".to_string())),
         DataType::FixedSizeBinary(size) => Ok(Document::String(format!("fixed[{size}]"))),
         DataType::Date32 | DataType::Date64 => Ok(Document::String("date".to_string())),
         DataType::Timestamp(_, None) => Ok(Document::String("timestamp".to_string())),
@@ -113,7 +120,7 @@ pub fn arrow_to_iceberg_type(data_type: &DataType) -> CatalogResult<Document> {
         | DataType::LargeList(field)
         | DataType::ListView(field)
         | DataType::LargeListView(field) => {
-            let element_type = arrow_to_iceberg_type(field.data_type())?;
+            let element_type = arrow_field_to_iceberg_type(field)?;
             Ok(Document::Object(
                 vec![
                     ("type".to_string(), Document::String("list".to_string())),
@@ -136,7 +143,7 @@ pub fn arrow_to_iceberg_type(data_type: &DataType) -> CatalogResult<Document> {
                 .iter()
                 .enumerate()
                 .map(|(idx, f)| {
-                    let field_type = arrow_to_iceberg_type(f.data_type())?;
+                    let field_type = arrow_field_to_iceberg_type(f)?;
                     Ok(Document::Object(
                         vec![
                             (
@@ -165,8 +172,8 @@ pub fn arrow_to_iceberg_type(data_type: &DataType) -> CatalogResult<Document> {
             if let DataType::Struct(fields) = field.data_type()
                 && fields.len() == 2
             {
-                let key_type = arrow_to_iceberg_type(fields[0].data_type())?;
-                let value_type = arrow_to_iceberg_type(fields[1].data_type())?;
+                let key_type = arrow_field_to_iceberg_type(&fields[0])?;
+                let value_type = arrow_field_to_iceberg_type(&fields[1])?;
                 return Ok(Document::Object(
                     vec![
                         ("type".to_string(), Document::String("map".to_string())),
@@ -615,7 +622,7 @@ mod tests {
         ));
         assert!(matches!(
             arrow_to_iceberg_type(&DataType::FixedSizeBinary(16)).unwrap(),
-            Document::String(s) if s == "uuid"
+            Document::String(s) if s == "fixed[16]"
         ));
     }
 

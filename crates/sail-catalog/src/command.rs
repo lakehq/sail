@@ -1037,6 +1037,11 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
                     let features =
                         sail_common_datafusion::column_features::ColumnFeatures::from_field(field);
                     crate::provider::CreateTableColumnOptions {
+                        metadata: field
+                            .metadata()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
                         name: field.name().clone(),
                         data_type: field.data_type().clone(),
                         nullable: field.is_nullable(),
@@ -1153,6 +1158,7 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
                 columns: columns
                     .iter()
                     .map(|column| LakeSourceCreateTableColumn {
+                        metadata: column.metadata().clone(),
                         name: column.name().to_string(),
                         data_type: column.data_type().clone(),
                         nullable: column.nullable(),
@@ -1174,6 +1180,7 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
 }
 
 trait CreateTableColumnView {
+    fn metadata(&self) -> &std::collections::BTreeMap<String, String>;
     fn name(&self) -> &str;
     fn data_type(&self) -> &datafusion::arrow::datatypes::DataType;
     fn nullable(&self) -> bool;
@@ -1184,6 +1191,9 @@ trait CreateTableColumnView {
 }
 
 impl CreateTableColumnView for crate::provider::CreateTableColumnOptions {
+    fn metadata(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.metadata
+    }
     fn name(&self) -> &str {
         &self.name
     }
@@ -1214,6 +1224,9 @@ impl CreateTableColumnView for crate::provider::CreateTableColumnOptions {
 }
 
 impl CreateTableColumnView for sail_common_datafusion::catalog::TableColumnStatus {
+    fn metadata(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.metadata
+    }
     fn name(&self) -> &str {
         &self.name
     }
@@ -1711,6 +1724,7 @@ mod tests {
             name: "items".to_string(),
             kind: TableKind::Table {
                 columns: vec![TableColumnStatus {
+                    metadata: Default::default(),
                     name: "id".to_string(),
                     data_type: datafusion::arrow::datatypes::DataType::Int32,
                     nullable: false,
