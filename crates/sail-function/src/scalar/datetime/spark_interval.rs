@@ -12,8 +12,7 @@ use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use sail_common::spec::SparkIntervalMetadata;
@@ -26,31 +25,36 @@ macro_rules! define_interval_udf {
         #[derive(Debug, PartialEq, Eq, Hash)]
         pub struct $udf {
             signature: Signature,
+            qualifier: Option<SparkIntervalMetadata>,
+            safe: bool,
         }
 
         impl Default for $udf {
             fn default() -> Self {
-                Self::new()
+                Self::new(None, false)
             }
         }
 
         impl $udf {
-            pub fn new() -> Self {
+            pub fn new(qualifier: Option<SparkIntervalMetadata>, safe: bool) -> Self {
                 Self {
-                    signature: Signature::one_of(
-                        vec![
-                            TypeSignature::Coercible(vec![Coercion::new_exact(
-                                TypeSignatureClass::Native(logical_string()),
-                            )]),
-                            TypeSignature::Exact(vec![
-                                DataType::Utf8,
-                                DataType::Utf8,
-                                DataType::Boolean,
-                            ]),
-                        ],
+                    signature: Signature::coercible(
+                        vec![Coercion::new_exact(TypeSignatureClass::Native(
+                            logical_string(),
+                        ))],
                         Volatility::Immutable,
                     ),
+                    qualifier,
+                    safe,
                 }
+            }
+
+            pub fn qualifier(&self) -> Option<SparkIntervalMetadata> {
+                self.qualifier
+            }
+
+            pub fn safe(&self) -> bool {
+                self.safe
             }
         }
 
@@ -69,33 +73,14 @@ macro_rules! define_interval_udf {
 
             fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
                 let ScalarFunctionArgs { args, .. } = args;
-                // Qualifiers and error handling are literal arguments so that they survive
-                // serialization without adding state to the UDF.
-                let (arg, qualifier, safe) = match args.as_slice() {
-                    [arg] => (arg, None, false),
-                    [
-                        arg,
-                        ColumnarValue::Scalar(metadata),
-                        ColumnarValue::Scalar(ScalarValue::Boolean(Some(safe))),
-                    ] => {
-                        let metadata = metadata.try_as_str().ok_or_else(|| {
-                            exec_datafusion_err!("interval qualifier must be a constant string")
-                        })?;
-                        let qualifier = metadata
-                            .map(SparkIntervalMetadata::from_json)
-                            .transpose()
-                            .map_err(|e| exec_datafusion_err!("{e}"))?;
-                        (arg, qualifier, *safe)
-                    }
-                    _ => {
-                        return exec_err!(
-                            "expected an interval string and optional constant parsing options"
-                        );
-                    }
-                };
+                let arg = args.one()?;
                 let parse = |value: Option<&str>| {
-                    let result = value.map(|x| $func(x, qualifier)).transpose();
-                    if safe { result.or(Ok(None)) } else { result }
+                    let result = value.map(|x| $func(x, self.qualifier)).transpose();
+                    if self.safe {
+                        result.or(Ok(None))
+                    } else {
+                        result
+                    }
                 };
                 match arg {
                     ColumnarValue::Array(array) => {

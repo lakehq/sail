@@ -280,6 +280,20 @@ fn spark_from_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
     };
 
     let fields: Fields = parse_fields(schema_str, session_timezone)?;
+    // The schema is constant for the batch; decode interval qualifiers before the row loop.
+    let interval_qualifiers = fields
+        .iter()
+        .map(|field| {
+            field
+                .metadata()
+                .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+                .map(|metadata| {
+                    spec::SparkIntervalMetadata::from_json(metadata)
+                        .map_err(|e| DataFusionError::Execution(e.to_string()))
+                })
+                .transpose()
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     let mut children_scalars: Vec<Vec<ScalarValue>> =
         vec![Vec::with_capacity(array.len()); fields.len()];
@@ -294,7 +308,7 @@ fn spark_from_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
         } else {
             let line: &str = array.value(i);
             let values: Vec<ScalarValue> =
-                parse_csv_line_to_scalar_values(line, &options, &fields)?;
+                parse_csv_line_to_scalar_values(line, &options, &fields, &interval_qualifiers)?;
             for (j, value) in values.into_iter().enumerate() {
                 children_scalars[j].push(value);
             }
@@ -324,6 +338,7 @@ fn spark_from_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
 /// - `line`: The string representation of a single CSV line to be parsed.
 /// - `options`: `SparkFromCSVOptions` detailing parsing settings such as separator and timestamp format.
 /// - `fields`: The `Fields` that define the structural and type constraints for each parsed column.
+/// - `interval_qualifiers`: Decoded interval metadata in the same order as `fields`.
 ///
 /// # Returns
 /// A `Result` containing a `Vec<ScalarValue>` after successful parsing of the CSV line.
@@ -336,6 +351,7 @@ fn parse_csv_line_to_scalar_values(
     line: &str,
     options: &SparkFromCSVOptions,
     fields: &Fields,
+    interval_qualifiers: &[Option<spec::SparkIntervalMetadata>],
 ) -> Result<Vec<ScalarValue>> {
     let values: Vec<&str> = line.split(&options.sep).map(|s| s.trim()).collect();
 
@@ -350,15 +366,15 @@ fn parse_csv_line_to_scalar_values(
 
     values
         .iter()
-        .zip(fields.iter())
-        .map(|(value, field)| {
+        .zip(fields.iter().zip(interval_qualifiers))
+        .map(|(value, (field, qualifier))| {
             if value.is_empty() {
                 ScalarValue::try_new_null(field.data_type())
             } else {
                 match field.data_type() {
                     DataType::Duration(TimeUnit::Microsecond)
                     | DataType::Interval(IntervalUnit::YearMonth) => {
-                        parse_csv_interval(value, field, options.fail_fast)
+                        parse_csv_interval(value, field.data_type(), *qualifier, options.fail_fast)
                     }
                     DataType::Timestamp(_, _) => parse_timestamp(field.data_type(), value, options),
                     DataType::Date32 | DataType::Date64 => {
@@ -371,16 +387,13 @@ fn parse_csv_line_to_scalar_values(
         .collect()
 }
 
-fn parse_csv_interval(value: &str, field: &Field, fail_fast: bool) -> Result<ScalarValue> {
-    let qualifier = field
-        .metadata()
-        .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
-        .map(|metadata| {
-            spec::SparkIntervalMetadata::from_json(metadata)
-                .map_err(|e| DataFusionError::Execution(e.to_string()))
-        })
-        .transpose()?;
-    let result = match field.data_type() {
+fn parse_csv_interval(
+    value: &str,
+    data_type: &DataType,
+    qualifier: Option<spec::SparkIntervalMetadata>,
+    fail_fast: bool,
+) -> Result<ScalarValue> {
+    let result = match data_type {
         DataType::Duration(TimeUnit::Microsecond) => string_to_day_time_interval(value, qualifier)
             .map(|value| ScalarValue::DurationMicrosecond(Some(value))),
         DataType::Interval(IntervalUnit::YearMonth) => {
@@ -390,7 +403,7 @@ fn parse_csv_interval(value: &str, field: &Field, fail_fast: bool) -> Result<Sca
         other => return exec_err!("expected an ANSI interval type, got {other}"),
     };
     match result {
-        Err(_) if !fail_fast => ScalarValue::try_new_null(field.data_type()),
+        Err(_) if !fail_fast => ScalarValue::try_new_null(data_type),
         result => result,
     }
 }

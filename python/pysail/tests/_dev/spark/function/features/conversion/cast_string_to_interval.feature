@@ -154,3 +154,53 @@ Feature: Interval strings use the target qualifiers in casts and CSV
     Then query result
       | matches |
       | true    |
+
+  Scenario: Interval casts of the same input keep distinct qualifiers
+    When query
+      """
+      SELECT CAST(value AS INTERVAL HOUR) <=> expected_hour AS hour_matches,
+             CAST(value AS INTERVAL MINUTE) <=> expected_minute AS minute_matches,
+             CAST(value AS INTERVAL YEAR) <=> expected_year AS year_matches,
+             CAST(value AS INTERVAL MONTH) <=> expected_month AS month_matches
+      FROM VALUES ('1', INTERVAL '1' HOUR, INTERVAL '1' MINUTE, INTERVAL '1' YEAR, INTERVAL '1' MONTH),
+                  ('-2', INTERVAL '-2' HOUR, INTERVAL '-2' MINUTE, INTERVAL '-2' YEAR, INTERVAL '-2' MONTH),
+                  (NULL, NULL, NULL, NULL, NULL)
+           AS t(value, expected_hour, expected_minute, expected_year, expected_month)
+      """
+    Then query result
+      | hour_matches | minute_matches | year_matches | month_matches |
+      | true         | true           | true         | true          |
+      | true         | true           | true         | true          |
+      | true         | true           | true         | true          |
+
+  Scenario: Strict interval casts still fail beside try casts of the same input
+    When query
+      """
+      SELECT TRY_CAST(value AS INTERVAL HOUR) AS permissive,
+             CAST(value AS INTERVAL HOUR) AS strict
+      FROM (SELECT concat('invalid', CAST(id AS STRING)) AS value FROM range(2))
+      """
+    Then query error (?i)interval|invalid argument|SQL parser
+
+  Scenario: CSV interval columns keep distinct qualifiers across rows
+    When query
+      """
+      SELECT parsed.h <=> expected_hour AS hour_matches,
+             parsed.n AS unaffected,
+             parsed.m <=> expected_month AS month_matches
+      FROM (
+        SELECT from_csv(value, 'h INTERVAL HOUR, n INT, m INTERVAL MONTH') AS parsed,
+               expected_hour, expected_month
+        FROM VALUES ('1,7,2', INTERVAL '1' HOUR, INTERVAL '2' MONTH),
+                    ('-2,8,3', INTERVAL '-2' HOUR, INTERVAL '3' MONTH),
+                    ('invalid,9,4', NULL, INTERVAL '4' MONTH),
+                    (NULL, NULL, NULL)
+             AS t(value, expected_hour, expected_month)
+      )
+      """
+    Then query result
+      | hour_matches | unaffected | month_matches |
+      | true         | 7          | true          |
+      | true         | 8          | true          |
+      | true         | 9          | true          |
+      | true         | NULL       | true          |
