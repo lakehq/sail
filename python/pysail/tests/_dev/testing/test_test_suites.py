@@ -90,7 +90,7 @@ def test_inferred_integration_marker_is_available_to_pytest_filter(suite_tests):
     [
         ("catalog/hms/test_catalog.py", "integration-hms"),
         ("spark/catalog/unity/test_catalog.py", "integration-unity"),
-        ("catalog/iceberg/test_catalog.py", "integration-iceberg-rest"),
+        ("catalog/iceberg/test_catalog.py", "integration-iceberg"),
         ("spark/catalog/glue/test_catalog.py", "integration-glue"),
         ("celeborn/test_shuffle.py", "integration-celeborn"),
         ("spark/dataframe/test_data.py", "dataframe"),
