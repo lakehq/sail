@@ -3,6 +3,7 @@ pub mod catalog;
 pub mod column_change;
 pub mod column_features;
 pub mod command;
+pub mod data_type;
 pub mod datasource;
 pub mod display;
 pub mod error;
