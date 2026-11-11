@@ -359,6 +359,7 @@ impl DataTypeResolver {
             }
             spec::DataType::Uuid => {
                 metadata.insert(EXTENSION_TYPE_NAME_KEY.to_string(), Uuid::NAME.to_string());
+                metadata.remove(EXTENSION_TYPE_METADATA_KEY);
                 data_type
             }
             spec::DataType::Variant => {
