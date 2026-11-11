@@ -125,6 +125,7 @@ impl DataSource for IcebergLakeSource {
             return plan_err!("missing path in Iceberg table options");
         };
         let SinkInfo {
+            identity_columns_to_track: _,
             input,
             sql_insert,
             mode,

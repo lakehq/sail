@@ -355,6 +355,40 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 node.udf().clone(),
                 UserDefinedLogicalNode::schema(node).inner().clone(),
             ))
+        } else if let Some(node) =
+            node.as_any()
+                .downcast_ref::<sail_logical_plan::identity_generate::IdentityGenerateNode>()
+        {
+            let [input] = physical_inputs else {
+                return internal_err!("IdentityGenerate requires one physical input");
+            };
+            let columns = node
+                .columns()
+                .iter()
+                .map(|column| {
+                    Ok(
+                        sail_physical_plan::identity_generate::IdentityGenerateColumn {
+                            output: column.output.clone(),
+                            column_name: column.column_name.clone(),
+                            mask: column
+                                .mask
+                                .as_ref()
+                                .map(|mask| input.schema().index_of(mask))
+                                .transpose()?,
+                            start: column.start,
+                            step: column.step,
+                            high_water_mark: column.high_water_mark,
+                        },
+                    )
+                })
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
+            Arc::new(
+                sail_physical_plan::identity_generate::IdentityGenerateExec::try_new(
+                    input.clone(),
+                    columns,
+                    None,
+                )?,
+            )
         } else if let Some(node) = node.as_any().downcast_ref::<MonotonicIdNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("MonotonicIdExec requires exactly one physical input");

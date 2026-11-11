@@ -1493,6 +1493,43 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col,
                 source_present_col,
             )?)),
+            NodeKind::IdentityGenerate(r#gen::IdentityGenerateExecNode {
+                input,
+                columns,
+                allocation_partitions,
+            }) => {
+                let columns = columns
+                    .into_iter()
+                    .map(|column| {
+                        Ok(
+                            sail_physical_plan::identity_generate::IdentityGenerateColumn {
+                                output: column.output,
+                                column_name: column.column_name,
+                                mask: column.mask_index.map(usize::try_from).transpose().map_err(
+                                    |_| plan_datafusion_err!("identity mask index too large"),
+                                )?,
+                                start: column.start,
+                                step: column.step,
+                                high_water_mark: column.high_water_mark,
+                            },
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Arc::new(
+                    sail_physical_plan::identity_generate::IdentityGenerateExec::try_new(
+                        try_decode_physical_plan_with_converter(
+                            ctx,
+                            self,
+                            proto_converter,
+                            &input,
+                        )?,
+                        columns,
+                        Some(usize::try_from(allocation_partitions).map_err(|_| {
+                            plan_datafusion_err!("identity partition count too large")
+                        })?),
+                    )?,
+                ))
+            }
             NodeKind::MonotonicId(r#gen::MonotonicIdExecNode {
                 input,
                 column_name,
@@ -3067,6 +3104,29 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_row_id_col: cardinality_check.target_row_id_col().to_string(),
                 target_present_col: cardinality_check.target_present_col().to_string(),
                 source_present_col: cardinality_check.source_present_col().to_string(),
+            })
+        } else if let Some(generator) =
+            node.downcast_ref::<sail_physical_plan::identity_generate::IdentityGenerateExec>()
+        {
+            NodeKind::IdentityGenerate(r#gen::IdentityGenerateExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    generator.input().clone(),
+                )?,
+                allocation_partitions: generator.allocation_partitions() as u64,
+                columns: generator
+                    .columns()
+                    .iter()
+                    .map(|column| r#gen::IdentityGenerateColumn {
+                        output: column.output.clone(),
+                        column_name: column.column_name.clone(),
+                        mask_index: column.mask.map(|index| index as u64),
+                        start: column.start,
+                        step: column.step,
+                        high_water_mark: column.high_water_mark,
+                    })
+                    .collect(),
             })
         } else if let Some(monotonic_id) = node.downcast_ref::<MonotonicIdExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -5397,7 +5457,17 @@ impl RemoteExecutionCodec {
             .as_ref()
             .map(|context| self.try_decode_delta_snapshot_context(context))
             .transpose()?;
-        Ok(DeltaCommitContext { base_snapshot })
+        Ok(DeltaCommitContext {
+            base_snapshot,
+            identity_columns_to_track: context.identity_columns_to_track.clone(),
+            identity_writer_partitions: context
+                .identity_writer_partitions
+                .map(usize::try_from)
+                .transpose()
+                .map_err(|_| {
+                    plan_datafusion_err!("identity writer partition count is too large")
+                })?,
+        })
     }
 
     fn try_encode_delta_commit_context(
@@ -5409,7 +5479,13 @@ impl RemoteExecutionCodec {
             .as_ref()
             .map(|context| self.try_encode_delta_snapshot_context(context))
             .transpose()?;
-        Ok(r#gen::DeltaCommitContext { base_snapshot })
+        Ok(r#gen::DeltaCommitContext {
+            base_snapshot,
+            identity_columns_to_track: context.identity_columns_to_track.clone(),
+            identity_writer_partitions: context
+                .identity_writer_partitions
+                .map(|count| count as u64),
+        })
     }
 
     fn try_decode_delta_write_context(
@@ -6496,6 +6572,120 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udaf(&udaf, &mut buf)?;
         codec.try_decode_udaf(&name, &buf)
+    }
+
+    #[test]
+    fn test_identity_generator_round_trip_and_invalid_codec() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_physical_plan::identity_generate::{IdentityGenerateColumn, IdentityGenerateExec};
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "mask",
+            DataType::Boolean,
+            true,
+        )]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
+        let codec = RemoteExecutionCodec;
+        let context = TaskContext::default();
+        let columns = vec![
+            IdentityGenerateColumn {
+                output: "positive".into(),
+                column_name: "IncreasingId".into(),
+                mask: Some(0),
+                start: 7,
+                step: 3,
+                high_water_mark: Some(100),
+            },
+            IdentityGenerateColumn {
+                output: "negative".into(),
+                column_name: "DecreasingId".into(),
+                mask: None,
+                start: -7,
+                step: -3,
+                high_water_mark: None,
+            },
+        ];
+        for partitions in [1, 3, 19] {
+            let plan = Arc::new(IdentityGenerateExec::try_new(
+                input.clone(),
+                columns.clone(),
+                Some(partitions),
+            )?);
+            let expected_schema = plan.schema();
+            let bytes = try_encode_physical_plan(&codec, plan)?;
+            let decoded = try_decode_physical_plan(&context, &codec, &bytes)?;
+            #[expect(deprecated)]
+            let decoded = decoded.with_new_children(vec![input.clone()])?;
+            let generator = decoded
+                .downcast_ref::<IdentityGenerateExec>()
+                .ok_or_else(|| plan_datafusion_err!("expected generator"))?;
+            assert_eq!(generator.columns(), columns);
+            assert_eq!(generator.allocation_partitions(), partitions);
+            assert_eq!(generator.schema(), expected_schema);
+        }
+        let input = try_encode_physical_plan(&codec, input)?;
+        let converter = crate::proto::converter::RemotePhysicalProtoConverter::default();
+        let valid = r#gen::IdentityGenerateColumn {
+            output: "id".into(),
+            column_name: "CustomerId".into(),
+            mask_index: Some(0),
+            start: 7,
+            step: 3,
+            high_water_mark: None,
+        };
+        for (columns, allocation_partitions) in [
+            (vec![valid.clone()], 0),
+            (vec![], 1),
+            (vec![valid.clone(), valid.clone()], 1),
+            (
+                vec![r#gen::IdentityGenerateColumn {
+                    mask_index: Some(u64::MAX),
+                    ..valid.clone()
+                }],
+                1,
+            ),
+            (
+                vec![r#gen::IdentityGenerateColumn {
+                    step: 0,
+                    ..valid.clone()
+                }],
+                1,
+            ),
+            (
+                vec![r#gen::IdentityGenerateColumn {
+                    output: "mask".into(),
+                    ..valid
+                }],
+                1,
+            ),
+        ] {
+            let node = ExtendedPhysicalPlanNode {
+                node_kind: Some(NodeKind::IdentityGenerate(
+                    r#gen::IdentityGenerateExecNode {
+                        input: input.clone(),
+                        columns,
+                        allocation_partitions,
+                    },
+                )),
+            };
+            assert!(
+                codec
+                    .try_decode(&node.encode_to_vec(), &[], &context, &converter)
+                    .is_err()
+            );
+        }
+        let commit = DeltaCommitContext {
+            identity_columns_to_track: vec!["positive".into()],
+            identity_writer_partitions: Some(19),
+            ..Default::default()
+        };
+        let decoded = codec
+            .try_decode_delta_commit_context(&codec.try_encode_delta_commit_context(&commit)?)?;
+        assert_eq!(
+            decoded.identity_columns_to_track,
+            commit.identity_columns_to_track
+        );
+        assert_eq!(decoded.identity_writer_partitions, Some(19));
+        Ok(())
     }
 
     #[test]
