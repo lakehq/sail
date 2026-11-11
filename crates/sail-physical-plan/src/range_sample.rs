@@ -12,8 +12,7 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExp
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use datafusion_common::utils::compare_rows;
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err, internal_err};
@@ -182,7 +181,13 @@ async fn sample_partition(
 ///
 /// A partition whose rows far outnumber its share of the first sample would be
 /// represented by too few keys, so its keys are sampled again in proportion to its
-/// size. The other partitions emit nothing and do not read their input.
+/// size. The other partitions emit nothing.
+///
+/// Spark computes only the imbalanced partitions, because its shuffles are stored.
+/// Here an exchange in the input can feed every partition from one producer, which
+/// waits for each partition to take its rows. So the other partitions still read their
+/// input to the end and drop it. Otherwise the producer would stop at the first
+/// partition nobody reads, and the imbalanced partitions would never finish.
 #[derive(Debug, Clone)]
 pub struct RangePartitionResampleExec {
     input: Arc<dyn ExecutionPlan>,
@@ -297,7 +302,12 @@ impl ExecutionPlan for RangePartitionResampleExec {
     ) -> Result<SendableRecordBatchStream> {
         let schema = self.schema();
         if !self.partitions.contains(&partition) {
-            return Ok(Box::pin(EmptyRecordBatchStream::new(schema)));
+            let input = self.input.execute(partition, context)?;
+            let output = futures::stream::once(async move {
+                input.try_for_each(|_| futures::future::ready(Ok(()))).await
+            })
+            .try_filter_map(|()| futures::future::ready(Ok(None)));
+            return Ok(Box::pin(RecordBatchStreamAdapter::new(schema, output)));
         }
         let fraction = self.fraction;
         // The seed only needs to keep the sample the same across runs on the same input.
@@ -830,7 +840,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_resample_reads_only_the_imbalanced_partitions() {
+    async fn test_resample_samples_only_the_imbalanced_partitions() {
         let partitions = (0..3)
             .map(|p| vec![key_batch((0..1_000).map(|k| p * 1_000 + k).collect())])
             .collect::<Vec<_>>();
@@ -859,6 +869,41 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert!(keys.iter().all(|k| (1_000..2_000).contains(k)));
+    }
+
+    #[tokio::test]
+    async fn test_resample_of_one_partition_does_not_stop_a_shared_round_robin() {
+        use datafusion::physical_expr::Partitioning;
+
+        use crate::repartition::ExplicitRepartitionExec;
+
+        // One producer sends rows to 8 bounded queues of 16 batches each. If only
+        // partition 0 were read, the producer would stop at the first full queue.
+        let batches = (0..400)
+            .map(|b| key_batch((0..10).map(|r| b * 10 + r).collect()))
+            .collect::<Vec<_>>();
+        let source =
+            TestMemoryExec::try_new_exec(&[batches], key_schema(DataType::Int64), None).unwrap();
+        let input = Arc::new(ExplicitRepartitionExec::new(
+            source,
+            Partitioning::RoundRobinBatch(8),
+        ));
+        let exec = Arc::new(RangePartitionResampleExec::try_new(input, 1.0, vec![0]).unwrap());
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            datafusion::physical_plan::collect_partitioned(exec, SessionContext::new().task_ctx()),
+        )
+        .await;
+        assert!(
+            output.is_ok(),
+            "the resample should not wait for partitions nobody reads"
+        );
+        let output = output.unwrap().unwrap();
+        let rows = output
+            .iter()
+            .map(|batches| batches.iter().map(|b| b.num_rows()).sum::<usize>())
+            .collect::<Vec<_>>();
+        assert_eq!(rows, vec![500, 0, 0, 0, 0, 0, 0, 0]);
     }
 
     async fn run_sample(batches: Vec<RecordBatch>, sample_size: usize) -> Vec<RecordBatch> {
