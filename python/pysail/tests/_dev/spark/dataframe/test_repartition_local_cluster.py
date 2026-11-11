@@ -66,6 +66,17 @@ def test_range_repartition_samples_input_with_scalar_subquery(local_cluster_spar
     assert sorted((row.id, row.pid) for row in rows) == [(i, i // 4) for i in range(12)]
 
 
+def test_range_repartition_samples_imbalanced_input_again(local_cluster_spark):
+    # Of 201 input partitions only one has rows, so the first sample keeps one key
+    # of it. The partition is sampled again in proportion to its rows.
+    source = local_cluster_spark.range(0, 100_000, 1, 1).union(local_cluster_spark.range(0, 0, 1, 200))
+    rows = source.repartitionByRange(2, "id").groupBy(F.spark_partition_id().alias("pid")).count().collect()
+    counts = {row.pid: row["count"] for row in rows}
+    assert sum(counts.values()) == 100_000  # noqa: PLR2004
+    assert len(counts) == 2, counts  # noqa: PLR2004
+    assert all(count > 30_000 for count in counts.values()), counts  # noqa: PLR2004
+
+
 def test_range_repartition_keeps_each_key_in_one_partition(local_cluster_spark):
     source = local_cluster_spark.range(0, 12, 1, 2).withColumn("key", F.col("id") % 3)
     rows = source.repartitionByRange(10, "key").select("key", F.spark_partition_id().alias("pid")).collect()

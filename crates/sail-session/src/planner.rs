@@ -799,6 +799,7 @@ fn plan_range_sample(
     )?);
     Ok(RangeSample::new(
         sample,
+        sample_size,
         ordering.iter().map(|x| x.options).collect(),
         num_partitions,
     ))

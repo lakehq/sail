@@ -1469,34 +1469,40 @@ mod tests {
     }
 
     fn range_repartition(split_points: Option<Vec<i32>>) -> Arc<dyn ExecutionPlan> {
-        use datafusion::arrow::array::{Float32Array, Int32Array, RecordBatch};
+        use datafusion::arrow::array::{Int32Array, RecordBatch, UInt64Array};
         use datafusion::arrow::compute::SortOptions;
         use sail_physical_plan::range_repartition::{RangeRepartitionExec, RangeSample};
+        use sail_physical_plan::range_sample::RangePartitionSampleExec;
 
         let schema = schema();
         let ordering = [PhysicalSortExpr::new_default(col("id", &schema).unwrap())].into();
         let sample = Arc::new(RangeSample::new(
-            empty_plan(),
+            Arc::new(RangePartitionSampleExec::try_new(empty_plan(), 10).unwrap()),
+            80.0,
             vec![SortOptions::default()],
             4,
         ));
-        let node = RangeRepartitionExec::try_new(empty_plan(), sample, ordering).unwrap();
+        let node =
+            RangeRepartitionExec::try_new(empty_plan(), Arc::clone(&sample), ordering).unwrap();
         let Some(keys) = split_points else {
             return Arc::new(node);
         };
-        // A sample with one key per wanted split point and equal weights.
-        let sample = RecordBatch::try_new(
+        // One input partition that read and kept the given keys.
+        let rows = keys.len();
+        let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int32, false),
-                Field::new("__weight", DataType::Float32, false),
+                Field::new("__partition", DataType::UInt64, false),
+                Field::new("__count", DataType::UInt64, false),
             ])),
             vec![
-                Arc::new(Int32Array::from(keys.clone())),
-                Arc::new(Float32Array::from(vec![1.0; keys.len()])),
+                Arc::new(Int32Array::from(keys)),
+                Arc::new(UInt64Array::from(vec![0; rows])),
+                Arc::new(UInt64Array::from(vec![rows as u64; rows])),
             ],
         )
         .unwrap();
-        node.set_sample(&[sample]).unwrap();
+        sample.set(sample.sketch(&[batch]).unwrap()).unwrap();
         Arc::new(node)
     }
 

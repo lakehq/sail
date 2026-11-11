@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use datafusion::arrow::array::RecordBatch;
 use datafusion::common::tree_node::TreeNode;
 use datafusion::common::{DataFusionError, Result, internal_datafusion_err, internal_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -234,33 +235,48 @@ fn sample_range_repartitions(
             if node.is_sampled() {
                 continue;
             }
-            let sample = Arc::clone(node.sample().plan());
+            let sample = node.sample();
             sample_range_repartitions(
                 driver.clone(),
                 Arc::clone(&context),
-                Arc::clone(&sample),
+                sample.plan(),
                 subqueries.clone(),
             )
             .await?;
-            // The sample is a copy of the input, so it reads the results of the scalar
-            // subqueries above the node. The sample job computes them too.
-            let sample = subqueries.iter().rev().try_fold(sample, |plan, subquery| {
-                let Some(subquery) = subquery.downcast_ref::<ScalarSubqueryExec>() else {
-                    return internal_err!("expected a scalar subquery plan");
-                };
-                Ok(Arc::new(ScalarSubqueryExec::new(
-                    plan,
-                    subquery.subqueries().to_vec(),
-                    subquery.results().clone(),
-                )) as Arc<dyn ExecutionPlan>)
-            })?;
-            let batches = execute_job(&driver, sample, Arc::clone(&context))
-                .await?
-                .try_collect::<Vec<_>>()
-                .await?;
-            node.set_sample(&batches)?;
+            let batches = execute_sample_job(&driver, sample.plan(), &subqueries, &context).await?;
+            let mut sketch = sample.sketch(&batches)?;
+            if let Some(resample) = sample.resample_plan(&sketch)? {
+                let batches = execute_sample_job(&driver, resample, &subqueries, &context).await?;
+                sketch.add_resample(&batches)?;
+            }
+            sample.set(sketch)?;
         }
         Ok(())
     }
     .boxed()
+}
+
+/// Runs a sample as a job and collects its output. The sample computes a copy of the
+/// input, so it reads the results of the scalar subqueries above the range
+/// repartitioning. The job computes them too.
+async fn execute_sample_job(
+    driver: &DriverHandle,
+    sample: Arc<dyn ExecutionPlan>,
+    subqueries: &[Arc<dyn ExecutionPlan>],
+    context: &Arc<TaskContext>,
+) -> Result<Vec<RecordBatch>> {
+    let sample = subqueries.iter().rev().try_fold(sample, |plan, subquery| {
+        let Some(subquery) = subquery.downcast_ref::<ScalarSubqueryExec>() else {
+            return internal_err!("expected a scalar subquery plan");
+        };
+        Ok(Arc::new(ScalarSubqueryExec::new(
+            plan,
+            subquery.subqueries().to_vec(),
+            subquery.results().clone(),
+        )) as Arc<dyn ExecutionPlan>)
+    })?;
+    execute_job(driver, sample, Arc::clone(context))
+        .await?
+        .try_collect::<Vec<_>>()
+        .await
 }
