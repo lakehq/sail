@@ -1,7 +1,7 @@
 use datafusion::arrow::datatypes::DataType;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::PyAnyMethods;
-use pyo3::types::PyModule;
+use pyo3::types::{PyList, PyModule};
 use pyo3::{Bound, IntoPyObject, PyAny, Python, intern};
 use sail_common::spec;
 
@@ -31,13 +31,27 @@ impl PySparkUdfPayload {
             .call0()?;
         let worker = PyModule::import(py, intern!(py, "pyspark.worker"))?;
         let read_udfs = worker.getattr(intern!(py, "read_udfs"))?;
-        let tuple = match get_pyspark_version()? {
-            PySparkVersion::V4_2 => {
+        let pyspark_version = get_pyspark_version()?;
+        let tuple = match pyspark_version {
+            PySparkVersion::V4_2 | PySparkVersion::V4_3 => {
                 let runner_conf = worker
                     .getattr(intern!(py, "RunnerConf"))?
                     .call1((&infile,))?;
                 let eval_conf = worker.getattr(intern!(py, "EvalConf"))?.call1((&infile,))?;
-                read_udfs.call1((serializer, infile, eval_type, runner_conf, eval_conf))?
+                let input = if pyspark_version == PySparkVersion::V4_3 {
+                    let read_int = PyModule::import(py, intern!(py, "pyspark.serializers"))?
+                        .getattr(intern!(py, "read_int"))?;
+                    let count: usize = read_int.call1((&infile,))?.extract()?;
+                    let udf_info = PyModule::import(py, intern!(py, "pyspark.worker_message"))?
+                        .getattr(intern!(py, "UDFInfo"))?;
+                    let infos = (0..count)
+                        .map(|_| udf_info.call_method1(intern!(py, "from_stream"), (&infile,)))
+                        .collect::<pyo3::PyResult<Vec<_>>>()?;
+                    PyList::new(py, infos)?.into_any()
+                } else {
+                    infile
+                };
+                read_udfs.call1((serializer, input, eval_type, runner_conf, eval_conf))?
             }
             PySparkVersion::V3 | PySparkVersion::V4_0 | PySparkVersion::V4_1 => {
                 read_udfs.call1((serializer, infile, eval_type))?
@@ -66,7 +80,7 @@ impl PySparkUdfPayload {
         data.extend(i32::from(eval_type).to_be_bytes());
 
         match pyspark_version {
-            PySparkVersion::V4_2 => {
+            PySparkVersion::V4_2 | PySparkVersion::V4_3 => {
                 // Spark 4.2 reads both maps before dispatching to read_udfs.
                 write_conf(&mut data, config.to_key_value_pairs());
                 let mut eval_conf = vec![];
@@ -100,7 +114,7 @@ impl PySparkUdfPayload {
             PySparkVersion::V4_0 | PySparkVersion::V4_1 => {
                 data.extend(0u8.to_be_bytes()); // profiling is not enabled
             }
-            PySparkVersion::V3 | PySparkVersion::V4_2 => {}
+            PySparkVersion::V3 | PySparkVersion::V4_2 | PySparkVersion::V4_3 => {}
         }
 
         data.extend(1i32.to_be_bytes()); // number of UDFs
@@ -112,7 +126,7 @@ impl PySparkUdfPayload {
         data.extend(num_arg_offsets.to_be_bytes()); // number of argument offsets
 
         let allow_kwargs = match pyspark_version {
-            PySparkVersion::V4_2 => true,
+            PySparkVersion::V4_2 | PySparkVersion::V4_3 => true,
             PySparkVersion::V4_0 | PySparkVersion::V4_1 => supports_kwargs(eval_type),
             PySparkVersion::V3 => false,
         };
@@ -132,7 +146,7 @@ impl PySparkUdfPayload {
         data.extend_from_slice(command);
 
         match pyspark_version {
-            PySparkVersion::V4_2 => {
+            PySparkVersion::V4_2 | PySparkVersion::V4_3 => {
                 // Spark 4.2 always sends this field, even with profiling disabled.
                 data.extend(0i64.to_be_bytes());
             }

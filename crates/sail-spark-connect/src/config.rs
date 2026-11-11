@@ -8,7 +8,8 @@ use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::config::{
-    SPARK_CONFIG_V3_5, SPARK_CONFIG_V4_0, SPARK_CONFIG_V4_1, SPARK_CONFIG_V4_2, SparkConfigKey,
+    SPARK_CONFIG_V3_5, SPARK_CONFIG_V4_0, SPARK_CONFIG_V4_1, SPARK_CONFIG_V4_2, SPARK_CONFIG_V4_3,
+    SparkConfigKey,
 };
 use crate::spark::connect;
 
@@ -54,6 +55,7 @@ impl SparkRuntimeConfig {
                     (Some("4"), Some("0")) => &SPARK_CONFIG_V4_0,
                     (Some("4"), Some("1")) => &SPARK_CONFIG_V4_1,
                     (Some("4"), Some("2")) => &SPARK_CONFIG_V4_2,
+                    (Some("4"), Some("3")) => &SPARK_CONFIG_V4_3,
                     _ => {
                         return Err(SparkError::invalid(format!(
                             "unsupported PySpark version: {version}"
@@ -159,6 +161,17 @@ impl SparkRuntimeConfig {
                     "spark.sql.shuffle.partitions must be positive",
                 ));
             }
+        }
+        // Spark rejects a value that is not a boolean instead of storing it. The check belongs here
+        // rather than at the point of use, so that a rejected value leaves both the session
+        // configuration and the mirrored DataFusion Parquet option as they were.
+        if key == SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING
+            && value.trim().to_lowercase().parse::<bool>().is_err()
+        {
+            return Err(SparkError::invalid(format!(
+                "[INVALID_CONF_VALUE.TYPE_MISMATCH] The value '{value}' in the config \"{key}\" \
+                is invalid. It should be a/an 'boolean' value. SQLSTATE: 22022"
+            )));
         }
         self.config.insert(key, value);
         Ok(())

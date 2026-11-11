@@ -79,8 +79,25 @@ message ExtendedPhysicalPlanNode {
     InputFileMetadataExecNode input_file_metadata = 64;
     DeltaMaintenanceExecNode delta_maintenance = 65;
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
-    RangePartitionSampleExecNode range_partition_sample = 67;
+    SeededRandomExecNode seeded_random = 67;
+    IdentityGenerateExecNode identity_generate = 68;
+    RangePartitionSampleExecNode range_partition_sample = 69;
   }
+}
+
+message IdentityGenerateExecNode {
+  bytes input = 1;
+  repeated IdentityGenerateColumn columns = 2;
+  uint64 allocation_partitions = 3;
+}
+
+message IdentityGenerateColumn {
+  string output = 1;
+  optional uint64 mask_index = 2;
+  sint64 start = 3;
+  sint64 step = 4;
+  optional sint64 high_water_mark = 5;
+  string column_name = 6;
 }
 
 message InputFileMetadataExecNode {
@@ -116,7 +133,14 @@ message ExtendedPhysicalExprNode {
     LambdaVariableExprNode lambda_variable = 4;
     IcebergPartitionTransformExprNode iceberg_partition_transform = 5;
     SchemaEvolutionDefaultExprNode schema_evolution_default = 6;
+    Float16LiteralExprNode float16_literal = 7;
   }
+}
+
+message Float16LiteralExprNode {
+  // Absent means null; otherwise the raw IEEE 754 binary16 bits (0..65535).
+  optional uint32 bits = 1;
+  map<string, string> metadata = 2;
 }
 
 message SchemaEvolutionDefaultExprNode {
@@ -272,6 +296,7 @@ message ExtendedScalarUdf {
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
     SparkToStringUdf spark_to_string = 40;
+    UuidCastUdf uuid_cast = 41;
   }
 }
 
@@ -465,6 +490,11 @@ message SparkNegativeUdf {
 
 message SparkFromCsvUdf {
   string session_timezone = 1;
+}
+
+message UuidCastUdf {
+  bytes target = 1;
+  bool safe = 2;
 }
 
 message SparkStructRenameUdf {
@@ -868,6 +898,8 @@ message DeltaSnapshotContext {
 
 message DeltaCommitContext {
   optional DeltaSnapshotContext base_snapshot = 1;
+  repeated string identity_columns_to_track = 2;
+  optional uint64 identity_writer_partitions = 3;
 }
 
 message DeltaWriteContext {
@@ -1027,6 +1059,23 @@ message SparkPartitionIdExecNode {
   bytes schema = 3;
 }
 
+message SeededRandomExecNode {
+  bytes input = 1;
+  repeated SeededRandomColumn columns = 2;
+  bytes schema = 3;
+}
+
+message SeededRandomColumn {
+  string name = 1;
+  bytes expr = 2;
+  PartitionSeed seed = 3;
+}
+
+enum PartitionSeed {
+  PARTITION_SEED_OFFSET = 0;
+  PARTITION_SEED_JAVA_RANDOM = 1;
+}
+
 message RangePartitionSampleExecNode {
   bytes input = 1;
   uint64 sample_size = 2;
@@ -1135,6 +1184,8 @@ message IcebergCommitExecNode {
     CommandOutput command_output = 9;
     IcebergRewriteDataFilesOutput rewrite_data_files_output = 10;
   }
+  // Typed private replacement metadata and staged catalog identity, never a live guard.
+  optional string table_replacement_json = 11;
 }
 
 message IcebergRewriteDataFilesOutput {

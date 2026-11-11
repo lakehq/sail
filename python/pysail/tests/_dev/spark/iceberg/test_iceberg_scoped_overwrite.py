@@ -54,7 +54,11 @@ def _publish_injected_metadata(location: Path) -> None:
     metadata_dir = location / "metadata"
     injected = max(metadata_dir.glob("[0-9]*-*.metadata.json"))
     version = int(injected.name.split("-", maxsplit=1)[0])
-    (metadata_dir / f"v{version}.metadata.json").write_bytes(injected.read_bytes())
+    destination = metadata_dir / f"v{version}.metadata.json"
+    if destination.exists():
+        msg = f"Injected metadata destination already exists: {destination}"
+        raise FileExistsError(msg)
+    injected.rename(destination)
     (metadata_dir / "version-hint.text").write_text(str(version))
 
 

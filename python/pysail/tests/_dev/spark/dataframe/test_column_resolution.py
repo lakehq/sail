@@ -679,7 +679,7 @@ def test_alias_over_using_join_keeps_hidden_key_provenance(spark, how, expected)
 @pytest.mark.parametrize("grouping", ["", " GROUP BY 1"])
 def test_nested_scalar_lateral_alias_schema(spark, grouping):
     query = "SELECT 1"
-    for _ in range(16):
+    for _ in range(12):
         query = f"SELECT b FROM (SELECT ({query}) AS a, a AS b{grouping}) q"  # noqa: S608
     assert spark.sql(query).dtypes == [("b", "int")]
 

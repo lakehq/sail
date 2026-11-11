@@ -164,3 +164,87 @@ impl LabelExtractor {
         attributes
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::{Int64Array, RecordBatch};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion::common::Result;
+    use datafusion::datasource::listing::PartitionedFile;
+    use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
+    use datafusion::datasource::source::DataSourceExec;
+    use datafusion::execution::object_store::ObjectStoreUrl;
+    use datafusion::parquet::arrow::ArrowWriter;
+
+    use crate::execution::metrics::testing::MetricEmitterTester;
+
+    fn write_parquet_file(
+        dir: &Path,
+        name: &str,
+        schema: SchemaRef,
+        rows: i64,
+    ) -> Result<PartitionedFile> {
+        let path = dir.join(name);
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from_iter_values(0..rows))],
+        )?;
+        let mut writer = ArrowWriter::try_new(std::fs::File::create(&path)?, schema, None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        let size = std::fs::metadata(&path)?.len();
+        Ok(PartitionedFile::new(
+            path.to_string_lossy().trim_start_matches('/'),
+            size,
+        ))
+    }
+
+    /// Returns a tester for a scan of two files, with 100 and 50 rows, in one partition.
+    fn two_file_scan_tester(dir: &Path) -> Result<MetricEmitterTester> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let files = vec![
+            write_parquet_file(dir, "a.parquet", schema.clone(), 100)?,
+            write_parquet_file(dir, "b.parquet", schema.clone(), 50)?,
+        ];
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::new(ParquetSource::new(schema)),
+        )
+        .with_file_group(files.into())
+        .build();
+        Ok(MetricEmitterTester::new()
+            .with_plan(DataSourceExec::from_data_source(config))
+            .with_baseline_metrics()
+            .with_unknown_metrics())
+    }
+
+    #[tokio::test]
+    async fn test_scan_output_rows_include_all_files() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        two_file_scan_tester(dir.path())?
+            .with_expected_value(|r| r.execution_output_row_count.name(), |v| v == 150)
+            .run()
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_scan_output_batch_count_includes_all_files() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        two_file_scan_tester(dir.path())?
+            .with_expected_value(|r| r.execution_output_batch_count.name(), |v| v == 2)
+            .run()
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_scan_output_size_includes_all_files() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        two_file_scan_tester(dir.path())?
+            .with_expected_value(|r| r.execution_output_size.name(), |v| v > 0)
+            .run()
+            .await
+    }
+}

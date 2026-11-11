@@ -73,12 +73,18 @@ impl DeltaSnapshotContext {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DeltaCommitContext {
     pub base_snapshot: Option<DeltaSnapshotContext>,
+    #[serde(default)]
+    pub identity_columns_to_track: Vec<String>,
+    #[serde(default)]
+    pub identity_writer_partitions: Option<usize>,
 }
 
 impl DeltaCommitContext {
     pub fn from_snapshot(snapshot: &DeltaSnapshot) -> Self {
         Self {
             base_snapshot: Some(DeltaSnapshotContext::from_snapshot(snapshot)),
+            identity_columns_to_track: Vec::new(),
+            identity_writer_partitions: None,
         }
     }
 
@@ -146,7 +152,10 @@ pub fn prepare_delta_write_context(
 ) -> Result<DeltaWriteContext> {
     let input_schema =
         strip_column_mapping_metadata(&normalize_delta_schema(&apply_target_nullability(
-            &schema_without_writer_metric_columns(input_schema),
+            &schema_without_writer_metric_columns(
+                input_schema,
+                options.merge_change_data_preimage.as_deref(),
+            ),
             &options.target_nullability,
         )));
     let mut initial_actions: Vec<Action> = Vec::new();
@@ -164,7 +173,7 @@ pub fn prepare_delta_write_context(
             Some(DeltaOperation::Create { mode, .. }) => *mode,
             _ => SaveMode::Append,
         };
-        let schema_mode = get_schema_mode(options, save_mode)?;
+        let schema_mode = get_schema_mode(options, save_mode, sink_mode)?;
         handle_schema_evolution(snapshot, &input_schema, schema_mode, partition_columns)?
     } else {
         (input_schema.clone(), Vec::new())
@@ -300,12 +309,10 @@ fn is_writer_metric_column(name: &str) -> bool {
     name == OPERATION_COLUMN || name == MERGE_SOURCE_METRIC_COLUMN
 }
 
-fn schema_without_writer_metric_columns(schema: &SchemaRef) -> SchemaRef {
-    if !schema
-        .fields()
-        .iter()
-        .any(|field| is_writer_metric_column(field.name()))
-    {
+fn schema_without_writer_metric_columns(schema: &SchemaRef, preimage: Option<&str>) -> SchemaRef {
+    if !schema.fields().iter().any(|field| {
+        is_writer_metric_column(field.name()) || preimage == Some(field.name().as_str())
+    }) {
         return Arc::clone(schema);
     }
 
@@ -313,7 +320,9 @@ fn schema_without_writer_metric_columns(schema: &SchemaRef) -> SchemaRef {
         schema
             .fields()
             .iter()
-            .filter(|field| !is_writer_metric_column(field.name()))
+            .filter(|field| {
+                !is_writer_metric_column(field.name()) && preimage != Some(field.name().as_str())
+            })
             .map(|field| field.as_ref().clone())
             .collect::<Vec<_>>(),
     ))
@@ -384,8 +393,12 @@ fn operation_for_sink_mode(
 fn get_schema_mode(
     options: &DeltaWriterExecOptions,
     save_mode: SaveMode,
+    sink_mode: &PhysicalSinkMode,
 ) -> Result<Option<SchemaMode>> {
-    match (options.merge_schema, options.overwrite_schema) {
+    // Conditional overwrites retain the table schema unless schema merging is enabled.
+    let overwrite_schema =
+        options.overwrite_schema && !matches!(sink_mode, PhysicalSinkMode::OverwriteIf { .. });
+    match (options.merge_schema, overwrite_schema) {
         (true, true) => Err(DataFusionError::Plan(
             "Cannot specify both mergeSchema and overwriteSchema options".to_string(),
         )),

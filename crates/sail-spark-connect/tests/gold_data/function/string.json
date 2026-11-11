@@ -1034,6 +1034,28 @@
     },
     {
       "input": {
+        "query": "SELECT from_base32('MZXW6YTBOI======');",
+        "result": [
+          "foobar"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "from_base32(MZXW6YTBOI======)",
+              "nullable": false,
+              "type": "binary",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: from_base32"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT hex(lpad(unhex('aabb'), 5));",
         "result": [
           "000000AABB"
@@ -1166,6 +1188,72 @@
     },
     {
       "input": {
+        "query": "SELECT instr('abcabc', 'b', -1, 1);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "instr(abcabc, b, -1, 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"abcabc\"), None), Literal(Utf8(\"b\"), None), Literal(Int32(-1), None), Literal(Int32(1), None)]"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT instr('abcabc', 'b', 1);",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "instr(abcabc, b, 1, 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"abcabc\"), None), Literal(Utf8(\"b\"), None), Literal(Int32(1), None)]"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT instr('abcabc', 'b', 1, 2);",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "instr(abcabc, b, 1, 2)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"abcabc\"), None), Literal(Utf8(\"b\"), None), Literal(Int32(1), None), Literal(Int32(2), None)]"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT is_valid_utf8('Spark');",
         "result": [
           "true"
@@ -1250,6 +1338,72 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT jaro_winkler_similarity('ABC', 'XYZ');",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "jaro_winkler_similarity(ABC, XYZ)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: jaro_winkler_similarity"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT jaro_winkler_similarity('MARTHA', 'MARHTA');",
+        "result": [
+          "0.9611111111111111"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "jaro_winkler_similarity(MARTHA, MARHTA)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: jaro_winkler_similarity"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT jaro_winkler_similarity('kitten', 'sitting');",
+        "result": [
+          "0.746031746031746"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "jaro_winkler_similarity(kitten, sitting)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: jaro_winkler_similarity"
       }
     },
     {
@@ -3450,6 +3604,50 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_base32('foobar');",
+        "result": [
+          "MZXW6YTBOI======"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_base32(foobar)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: to_base32"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_base32(x'666f6f626172');",
+        "result": [
+          "MZXW6YTBOI======"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_base32(X'666F6F626172')",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: to_base32"
       }
     },
     {

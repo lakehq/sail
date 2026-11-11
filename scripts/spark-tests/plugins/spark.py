@@ -260,6 +260,14 @@ def _spark_major_version() -> int:
 
 
 SKIPPED_SPARK_TESTS = [
+    # These tests manage the Apache Spark local JVM server, outside the Sail parity scope.
+    # Their cleanup closes clients without clearing the active/default session references,
+    # causing later tests on the same worker (especially UDTFs) to fail with
+    # NO_ACTIVE_OR_DEFAULT_SESSION even after creating a new session.
+    TestMarker(
+        keywords=["LocalConnectServerReuseTests"],
+        reason="Tests the Apache Spark local JVM server lifecycle, which Sail does not implement",
+    ),
     TestMarker(
         keywords=["test_can_create_multiple_sessions_to_different_remotes"],
         reason="Client keeps retrying setting session config for invalid remote endpoints",

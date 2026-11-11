@@ -7090,6 +7090,7 @@ dependencies = [
  "dashmap",
  "sail-catalog",
  "sail-common-datafusion",
+ "tokio",
 ]
 
 [[package]]
@@ -7119,6 +7120,7 @@ dependencies = [
  "parquet-variant-compute",
  "sail-catalog",
  "sail-common-datafusion",
+ "sail-function",
  "sail-system-store",
  "serde",
  "tokio",
@@ -7256,6 +7258,7 @@ dependencies = [
  "tonic",
  "tonic-prost-build",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -7547,6 +7550,7 @@ dependencies = [
  "rust_decimal",
  "sail-build-scripts",
  "sail-catalog",
+ "sail-catalog-memory",
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
@@ -7572,6 +7576,7 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-spark",
  "insta",
  "itertools 0.15.0",
  "sail-common",
@@ -7670,6 +7675,7 @@ dependencies = [
  "sail-cache",
  "sail-catalog",
  "sail-common-datafusion",
+ "sail-function",
  "sail-logical-plan",
  "serde",
  "serde_json",
@@ -7806,6 +7812,7 @@ dependencies = [
  "sail-data-source",
  "sail-delta-lake",
  "sail-execution",
+ "sail-function",
  "sail-iceberg",
  "sail-logical-optimizer",
  "sail-logical-plan",
@@ -7813,6 +7820,7 @@ dependencies = [
  "sail-physical-optimizer",
  "sail-physical-plan",
  "sail-plan",
+ "sail-python-udf",
  "sail-sql-analyzer",
  "sail-system-store",
  "sail-telemetry",
@@ -7950,6 +7958,7 @@ dependencies = [
  "fastrace-futures",
  "fastrace-opentelemetry",
  "futures",
+ "indexmap 2.14.2",
  "lazy_static",
  "log",
  "num-traits",
@@ -7974,6 +7983,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "syn 3.0.9",
+ "tempfile",
  "thiserror",
  "tokio",
  "tonic",

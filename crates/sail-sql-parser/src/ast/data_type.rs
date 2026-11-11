@@ -40,6 +40,7 @@ pub enum DataType {
     UInt16(Uint16),
     UInt32(Uint32),
     UInt64(Uint64),
+    Uuid(crate::ast::keywords::Uuid),
     Binary(Binary),
     Bytea(Bytea),
     Float(Float),

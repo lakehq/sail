@@ -72,6 +72,28 @@ impl CatalogManager {
         provider.create_table(&database, &table, options).await
     }
 
+    pub async fn stage_table_replacement<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        options: CreateTableOptions,
+    ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider
+            .stage_table_replacement(&database, &table, options)
+            .await
+    }
+
+    pub async fn publish_table_replacement(
+        &self,
+        replacement: sail_common_datafusion::catalog::TableReplacement,
+        publication: crate::provider::TablePublication,
+    ) -> CatalogResult<()> {
+        let (provider, _, _) = self.resolve_object(&replacement.catalog_table)?;
+        provider
+            .publish_table_replacement(replacement, publication)
+            .await
+    }
+
     pub fn create_table_metadata_requirement<T: AsRef<str>>(
         &self,
         table: &[T],

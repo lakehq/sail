@@ -70,7 +70,9 @@ where
     })
 }
 
-fn deserialize_optional_vec<'de, D, T>(deserializer: D) -> Result<Option<Vec<T>>, D::Error>
+pub(crate) fn deserialize_optional_vec<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<Vec<T>>, D::Error>
 where
     D: Deserializer<'de>,
     T: DeserializeOwned,

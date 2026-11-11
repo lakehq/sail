@@ -30,6 +30,10 @@ pub enum JsonDataType {
     #[serde(alias = "timestamp_ltz")]
     Timestamp,
     TimestampNtz,
+    #[serde(rename = "timestamp_ltz(9)")]
+    TimestampLtzNanos,
+    #[serde(rename = "timestamp_ntz(9)")]
+    TimestampNtzNanos,
     #[serde(rename = "interval")]
     CalendarInterval,
     Variant,
@@ -587,6 +591,12 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataTyp
         JsonDataType::TimestampNtz => sc::DataType {
             kind: Some(dt::Kind::TimestampNtz(dt::TimestampNtz::default())),
         },
+        JsonDataType::TimestampLtzNanos => sc::DataType {
+            kind: Some(dt::Kind::TimestampLtzNanos(dt::TimestampLtzNanos::default())),
+        },
+        JsonDataType::TimestampNtzNanos => sc::DataType {
+            kind: Some(dt::Kind::TimestampNtzNanos(dt::TimestampNtzNanos::default())),
+        },
         JsonDataType::CalendarInterval => sc::DataType {
             kind: Some(dt::Kind::CalendarInterval(dt::CalendarInterval::default())),
         },
@@ -821,6 +831,18 @@ mod tests {
                 r#""timestamp_ntz""#,
                 sc::DataType {
                     kind: Some(dt::Kind::TimestampNtz(dt::TimestampNtz::default())),
+                },
+            ),
+            (
+                r#""timestamp_ltz(9)""#,
+                sc::DataType {
+                    kind: Some(dt::Kind::TimestampLtzNanos(dt::TimestampLtzNanos::default())),
+                },
+            ),
+            (
+                r#""timestamp_ntz(9)""#,
+                sc::DataType {
+                    kind: Some(dt::Kind::TimestampNtzNanos(dt::TimestampNtzNanos::default())),
                 },
             ),
             (

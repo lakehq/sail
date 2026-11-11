@@ -2247,6 +2247,13 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Uuid)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Binary)"
                       }
                     ]
@@ -6822,6 +6829,14 @@
               "node": {
                 "terminal": {
                   "keyword": "USING"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Uuid)",
+              "node": {
+                "terminal": {
+                  "keyword": "UUID"
                 }
               }
             },

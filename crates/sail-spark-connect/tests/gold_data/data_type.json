@@ -101,6 +101,27 @@
       }
     },
     {
+      "input": "\"timestamp_ltz(7)\"",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '\"timestamp_ltz(7)\"'. SQLSTATE: 42601 (line 1, pos 0)\n\n== SQL ==\n\"timestamp_ltz(7)\"\n^^^\n",
+      "output": {
+        "failure": "parse error: error in SQL parser: found \"timestamp_ltz(7)\" at 7:25 expected identifier, or '>'"
+      }
+    },
+    {
+      "input": "\"timestamp_ltz(8)\"",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '\"timestamp_ltz(8)\"'. SQLSTATE: 42601 (line 1, pos 0)\n\n== SQL ==\n\"timestamp_ltz(8)\"\n^^^\n",
+      "output": {
+        "failure": "parse error: error in SQL parser: found \"timestamp_ltz(8)\" at 7:25 expected identifier, or '>'"
+      }
+    },
+    {
+      "input": "\"timestamp_ltz(9)\"",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '\"timestamp_ltz(9)\"'. SQLSTATE: 42601 (line 1, pos 0)\n\n== SQL ==\n\"timestamp_ltz(9)\"\n^^^\n",
+      "output": {
+        "failure": "parse error: error in SQL parser: found \"timestamp_ltz(9)\" at 7:25 expected identifier, or '>'"
+      }
+    },
+    {
       "input": "Array<map<int, tinYint>>",
       "output": {
         "success": {
@@ -128,6 +149,42 @@
       "input": "BooLean",
       "output": {
         "success": "boolean"
+      }
+    },
+    {
+      "input": "CHAR(2147483647)",
+      "output": {
+        "success": {
+          "configuredUtf8": {
+            "utf8Type": {
+              "char": {
+                "length": 2147483647
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "CHAR(2147483648)",
+      "exception": "[DATATYPE_PARAMETER_VALUE_OUT_OF_RANGE] The length value 2147483648 of the CHAR data type is out of the range of a 32-bit integer. SQLSTATE: 22003",
+      "output": {
+        "success": {
+          "configuredUtf8": {
+            "utf8Type": {
+              "char": {
+                "length": 2147483648
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "CHAR(2147483648) COLLATE UTF8_BINARY",
+      "exception": "[DATATYPE_PARAMETER_VALUE_OUT_OF_RANGE] The length value 2147483648 of the CHAR data type is out of the range of a 32-bit integer. SQLSTATE: 22003",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
       }
     },
     {
@@ -165,12 +222,63 @@
       }
     },
     {
+      "input": "DECIMAL(10, 2147483648)",
+      "exception": "[DATATYPE_PARAMETER_VALUE_OUT_OF_RANGE] The scale value 2147483648 of the DECIMAL data type is out of the range of a 32-bit integer. SQLSTATE: 22003",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 14:15 expected ':', or data type"
+      }
+    },
+    {
+      "input": "DECIMAL(2147483648)",
+      "exception": "[DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION] Decimal precision 2147483648 exceeds max precision 38. SQLSTATE: 22003",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 14:15 expected ':', or data type"
+      }
+    },
+    {
+      "input": "DECIMAL(2147483648, 2)",
+      "exception": "[DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION] Decimal precision 2147483648 exceeds max precision 38. SQLSTATE: 22003",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 14:15 expected ':', or data type"
+      }
+    },
+    {
       "input": "Dec(10, 5)",
       "output": {
         "success": {
           "decimal128": {
             "precision": 10,
             "scale": 5
+          }
+        }
+      }
+    },
+    {
+      "input": "FOO(2147483648)",
+      "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"FOO(2147483648)\". SQLSTATE: 0A000 (line 1, pos 0)\n\n== SQL ==\nFOO(2147483648)\n^^^\n",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 10:11 expected ':', or data type"
+      }
+    },
+    {
+      "input": "GEOGRAPHY(2147483648)",
+      "exception": "[ST_INVALID_SRID_VALUE] Invalid or unsupported SRID (spatial reference identifier) value: 2147483648. SQLSTATE: 22023",
+      "output": {
+        "success": {
+          "geography": {
+            "srid": -2147483648,
+            "algorithm": "spherical"
+          }
+        }
+      }
+    },
+    {
+      "input": "GEOMETRY(2147483648)",
+      "exception": "[ST_INVALID_SRID_VALUE] Invalid or unsupported SRID (spatial reference identifier) value: 2147483648. SQLSTATE: 22023",
+      "output": {
+        "success": {
+          "geometry": {
+            "srid": -2147483648
           }
         }
       }
@@ -350,6 +458,13 @@
       }
     },
     {
+      "input": "TIME(2147483648)",
+      "exception": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 2147483648 of the TIME data type is out of the supported range [0, 9]. SQLSTATE: 0A001",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
+      }
+    },
+    {
       "input": "TIME(6)",
       "output": {
         "success": {
@@ -361,6 +476,18 @@
     },
     {
       "input": "TIME(6) WITHOUT TIME ZONE",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIME(8)",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIME(9) WITHOUT TIME ZONE",
       "output": {
         "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
       }
@@ -388,6 +515,285 @@
       }
     },
     {
+      "input": "TIMESTAMP(10) WITH LOCAL TIME ZONE",
+      "exception": "[INVALID_TIMESTAMP_PRECISION] The seconds precision 10 of TIMESTAMP_LTZ is invalid. Expected an integer in [7, 9] for nanosecond precision; use precision 6 or parameterless TIMESTAMP_LTZ for the standard microsecond type. SQLSTATE: 22023",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 16:17 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP(6) WITH LOCAL TIME ZONE",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timestampType": "withLocalTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP(6) WITHOUT TIME ZONE",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP(7) WITH LOCAL TIME ZONE",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 16:17 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP(7) WITHOUT TIME ZONE",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 16:17 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP(8) WITH LOCAL TIME ZONE",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 16:17 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP(8) WITHOUT TIME ZONE",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 16:17 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP(9)",
+      "exception": "[FEATURE_NOT_ENABLED] The feature Nanosecond-precision timestamp types is not enabled. Consider setting the config spark.sql.timestampNanosTypes.enabled to true to enable this capability. SQLSTATE: 56038",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "nanosecond",
+            "timestampType": "configured"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP(9) WITH LOCAL TIME ZONE",
+      "exception": "[FEATURE_NOT_ENABLED] The feature Nanosecond-precision timestamp types is not enabled. Consider setting the config spark.sql.timestampNanosTypes.enabled to true to enable this capability. SQLSTATE: 56038",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "nanosecond",
+            "timestampType": "withLocalTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP(9) WITHOUT TIME ZONE",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "nanosecond",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_LTZ",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timestampType": "withLocalTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_LTZ(-100)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '-'. SQLSTATE: 42601 (line 1, pos 14)\n\n== SQL ==\nTIMESTAMP_LTZ(-100)\n--------------^^^\n",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP_LTZ(0)",
+      "exception": "[INVALID_TIMESTAMP_PRECISION] The seconds precision 0 of TIMESTAMP_LTZ is invalid. Expected an integer in [7, 9] for nanosecond precision; use precision 6 or parameterless TIMESTAMP_LTZ for the standard microsecond type. SQLSTATE: 22023",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "second",
+            "timestampType": "withLocalTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_LTZ(1)",
+      "exception": "[INVALID_TIMESTAMP_PRECISION] The seconds precision 1 of TIMESTAMP_LTZ is invalid. Expected an integer in [7, 9] for nanosecond precision; use precision 6 or parameterless TIMESTAMP_LTZ for the standard microsecond type. SQLSTATE: 22023",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP_LTZ(10)",
+      "exception": "[INVALID_TIMESTAMP_PRECISION] The seconds precision 10 of TIMESTAMP_LTZ is invalid. Expected an integer in [7, 9] for nanosecond precision; use precision 6 or parameterless TIMESTAMP_LTZ for the standard microsecond type. SQLSTATE: 22023",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP_LTZ(5)",
+      "exception": "[INVALID_TIMESTAMP_PRECISION] The seconds precision 5 of TIMESTAMP_LTZ is invalid. Expected an integer in [7, 9] for nanosecond precision; use precision 6 or parameterless TIMESTAMP_LTZ for the standard microsecond type. SQLSTATE: 22023",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP_LTZ(6)",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timestampType": "withLocalTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_LTZ(7)",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP_LTZ(8)",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP_LTZ(9)",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "nanosecond",
+            "timestampType": "withLocalTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_LTZ(99)",
+      "exception": "[INVALID_TIMESTAMP_PRECISION] The seconds precision 99 of TIMESTAMP_LTZ is invalid. Expected an integer in [7, 9] for nanosecond precision; use precision 6 or parameterless TIMESTAMP_LTZ for the standard microsecond type. SQLSTATE: 22023",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ(-1)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '-'. SQLSTATE: 42601 (line 1, pos 14)\n\n== SQL ==\nTIMESTAMP_NTZ(-1)\n--------------^^^\n",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ(0)",
+      "exception": "[INVALID_TIMESTAMP_PRECISION] The seconds precision 0 of TIMESTAMP_NTZ is invalid. Expected an integer in [7, 9] for nanosecond precision; use precision 6 or parameterless TIMESTAMP_NTZ for the standard microsecond type. SQLSTATE: 22023",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "second",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ(1)",
+      "exception": "[INVALID_TIMESTAMP_PRECISION] The seconds precision 1 of TIMESTAMP_NTZ is invalid. Expected an integer in [7, 9] for nanosecond precision; use precision 6 or parameterless TIMESTAMP_NTZ for the standard microsecond type. SQLSTATE: 22023",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ(10)",
+      "exception": "[INVALID_TIMESTAMP_PRECISION] The seconds precision 10 of TIMESTAMP_NTZ is invalid. Expected an integer in [7, 9] for nanosecond precision; use precision 6 or parameterless TIMESTAMP_NTZ for the standard microsecond type. SQLSTATE: 22023",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ(5)",
+      "exception": "[INVALID_TIMESTAMP_PRECISION] The seconds precision 5 of TIMESTAMP_NTZ is invalid. Expected an integer in [7, 9] for nanosecond precision; use precision 6 or parameterless TIMESTAMP_NTZ for the standard microsecond type. SQLSTATE: 22023",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ(6)",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ(7)",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ(8)",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ(9)",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "nanosecond",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ(99)",
+      "exception": "[INVALID_TIMESTAMP_PRECISION] The seconds precision 99 of TIMESTAMP_NTZ is invalid. Expected an integer in [7, 9] for nanosecond precision; use precision 6 or parameterless TIMESTAMP_NTZ for the standard microsecond type. SQLSTATE: 22023",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
+      }
+    },
+    {
+      "input": "TIMESTAMP_NTZ(99999999999)",
+      "exception": "[INVALID_TIMESTAMP_PRECISION] The seconds precision 99999999999 of TIMESTAMP_NTZ is invalid. Expected an integer in [7, 9] for nanosecond precision; use precision 6 or parameterless TIMESTAMP_NTZ for the standard microsecond type. SQLSTATE: 22023",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
+      }
+    },
+    {
       "input": "TimE",
       "output": {
         "success": {
@@ -401,6 +807,39 @@
       "input": "TimE WiTHOUT TiME ZoNE",
       "output": {
         "failure": "parse error: error in SQL parser: found WiTHOUT at 12:19 expected ':', or data type"
+      }
+    },
+    {
+      "input": "Timestamp_Ntz(9)",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "nanosecond",
+            "timestampType": "withoutTimeZone"
+          }
+        }
+      }
+    },
+    {
+      "input": "VARCHAR(2147483648)",
+      "exception": "[DATATYPE_PARAMETER_VALUE_OUT_OF_RANGE] The length value 2147483648 of the VARCHAR data type is out of the range of a 32-bit integer. SQLSTATE: 22003",
+      "output": {
+        "success": {
+          "configuredUtf8": {
+            "utf8Type": {
+              "varChar": {
+                "length": 2147483648
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "VARCHAR(2147483648) COLLATE UTF8_BINARY",
+      "exception": "[DATATYPE_PARAMETER_VALUE_OUT_OF_RANGE] The length value 2147483648 of the VARCHAR data type is out of the range of a 32-bit integer. SQLSTATE: 22003",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 14:15 expected ':', or data type"
       }
     },
     {
@@ -440,6 +879,237 @@
       "input": "bigint",
       "output": {
         "success": "int64"
+      }
+    },
+    {
+      "input": "c TIMESTAMP(7)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP(7)\n--^^^\n",
+      "output": {
+        "failure": "parse error: invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "c TIMESTAMP(7) WITH LOCAL TIME ZONE",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP(7) WITH LOCAL TIME ZONE\n--^^^\n",
+      "output": {
+        "failure": "parse error: invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "c TIMESTAMP(7) WITHOUT TIME ZONE",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP(7) WITHOUT TIME ZONE\n--^^^\n",
+      "output": {
+        "failure": "parse error: invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "c TIMESTAMP(8)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP(8)\n--^^^\n",
+      "output": {
+        "failure": "parse error: invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "c TIMESTAMP(8) WITH LOCAL TIME ZONE",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP(8) WITH LOCAL TIME ZONE\n--^^^\n",
+      "output": {
+        "failure": "parse error: invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "c TIMESTAMP(8) WITHOUT TIME ZONE",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP(8) WITHOUT TIME ZONE\n--^^^\n",
+      "output": {
+        "failure": "parse error: invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "c TIMESTAMP(9)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP(9)\n--^^^\n",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "c",
+                "dataType": {
+                  "timestamp": {
+                    "timeUnit": "nanosecond",
+                    "timestampType": "configured"
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "c TIMESTAMP(9) WITH LOCAL TIME ZONE",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP(9) WITH LOCAL TIME ZONE\n--^^^\n",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "c",
+                "dataType": {
+                  "timestamp": {
+                    "timeUnit": "nanosecond",
+                    "timestampType": "withLocalTimeZone"
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "c TIMESTAMP(9) WITHOUT TIME ZONE",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP(9) WITHOUT TIME ZONE\n--^^^\n",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "c",
+                "dataType": {
+                  "timestamp": {
+                    "timeUnit": "nanosecond",
+                    "timestampType": "withoutTimeZone"
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "c TIMESTAMP_LTZ(6)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP_LTZ'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP_LTZ(6)\n--^^^\n",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "c",
+                "dataType": {
+                  "timestamp": {
+                    "timeUnit": "microsecond",
+                    "timestampType": "withLocalTimeZone"
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "c TIMESTAMP_LTZ(7)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP_LTZ'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP_LTZ(7)\n--^^^\n",
+      "output": {
+        "failure": "parse error: invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "c TIMESTAMP_LTZ(8)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP_LTZ'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP_LTZ(8)\n--^^^\n",
+      "output": {
+        "failure": "parse error: invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "c TIMESTAMP_LTZ(9)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP_LTZ'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP_LTZ(9)\n--^^^\n",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "c",
+                "dataType": {
+                  "timestamp": {
+                    "timeUnit": "nanosecond",
+                    "timestampType": "withLocalTimeZone"
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "c TIMESTAMP_NTZ(6)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP_NTZ'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP_NTZ(6)\n--^^^\n",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "c",
+                "dataType": {
+                  "timestamp": {
+                    "timeUnit": "microsecond",
+                    "timestampType": "withoutTimeZone"
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "input": "c TIMESTAMP_NTZ(7)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP_NTZ'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP_NTZ(7)\n--^^^\n",
+      "output": {
+        "failure": "parse error: invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "c TIMESTAMP_NTZ(8)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP_NTZ'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP_NTZ(8)\n--^^^\n",
+      "output": {
+        "failure": "parse error: invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "c TIMESTAMP_NTZ(9)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP_NTZ'. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\nc TIMESTAMP_NTZ(9)\n--^^^\n",
+      "output": {
+        "success": {
+          "struct": {
+            "fields": [
+              {
+                "name": "c",
+                "dataType": {
+                  "timestamp": {
+                    "timeUnit": "nanosecond",
+                    "timestampType": "withoutTimeZone"
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
+        }
       }
     },
     {
@@ -758,15 +1428,27 @@
       }
     },
     {
-      "input": "time(8) without time zone",
-      "exception": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 8 of the TIME data type is out of the supported range [0, 6]. SQLSTATE: 0A001",
+      "input": "time(10)",
+      "exception": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 10 of the TIME data type is out of the supported range [0, 9]. SQLSTATE: 0A001",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
+      }
+    },
+    {
+      "input": "time(11) without time zone",
+      "exception": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 11 of the TIME data type is out of the supported range [0, 9]. SQLSTATE: 0A001",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
+      }
+    },
+    {
+      "input": "time(7)",
       "output": {
         "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
       }
     },
     {
       "input": "time(9)",
-      "exception": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 9 of the TIME data type is out of the supported range [0, 6]. SQLSTATE: 0A001",
       "output": {
         "success": {
           "time64": {
@@ -828,6 +1510,47 @@
       }
     },
     {
+      "input": "timestamp(10)",
+      "exception": "[INVALID_TIMESTAMP_PRECISION] The seconds precision 10 of TIMESTAMP_NTZ is invalid. Expected an integer in [7, 9] for nanosecond precision; use precision 6 or parameterless TIMESTAMP_NTZ for the standard microsecond type. SQLSTATE: 22023",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 16:17 expected ':', or data type"
+      }
+    },
+    {
+      "input": "timestamp(6)",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timestampType": "configured"
+          }
+        }
+      }
+    },
+    {
+      "input": "timestamp(8) with local time zone",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 16:17 expected ':', or data type"
+      }
+    },
+    {
+      "input": "timestamp(8) without time zone",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 16:17 expected ':', or data type"
+      }
+    },
+    {
+      "input": "timestamp(9)",
+      "output": {
+        "success": {
+          "timestamp": {
+            "timeUnit": "nanosecond",
+            "timestampType": "configured"
+          }
+        }
+      }
+    },
+    {
       "input": "timestamp_ltz",
       "output": {
         "success": {
@@ -836,6 +1559,12 @@
             "timestampType": "withLocalTimeZone"
           }
         }
+      }
+    },
+    {
+      "input": "timestamp_ltz(7)",
+      "output": {
+        "failure": "parse error: error in SQL parser: found ( at 20:21 expected ':', or data type"
       }
     },
     {

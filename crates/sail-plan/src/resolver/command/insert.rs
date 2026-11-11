@@ -248,10 +248,12 @@ impl PlanResolver<'_> {
             bucket_by: None,
             properties: vec![],
         };
+        let tracked = Self::omitted_identity_columns(&input, &column_match, &info)?;
         let input = self
             .rewrite_write_input(input, column_match, &info, state)
             .await?;
         let builder = WritePlanBuilder::new()
+            .with_identity_columns_to_track(tracked)
             .with_sql_insert()
             .with_mode(mode)
             .with_target(WriteTarget::DataSource)

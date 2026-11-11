@@ -218,6 +218,9 @@ impl TryFrom<Literal> for spec::Literal {
             LiteralType::SpecializedArray(_) => {
                 return Err(SparkError::todo("specialized array literal"));
             }
+            LiteralType::TimestampNtzNanos(_) | LiteralType::TimestampLtzNanos(_) => {
+                return Err(SparkError::unsupported("nanosecond timestamp literal"));
+            }
             LiteralType::Time(Time { nano, precision }) => {
                 // Spark TIME literals carry nanoseconds since midnight.
                 // Precision values: 0 = seconds, 3 = milliseconds, 6 = microseconds (default), 9 = nanoseconds.

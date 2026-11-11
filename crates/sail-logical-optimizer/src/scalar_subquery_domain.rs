@@ -6,6 +6,7 @@ use datafusion_common::{Column, Result};
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator};
+use sail_logical_plan::seeded_random::{SeededRandomNode, is_reproducible_seeded_random_call};
 
 /// Evaluate non-equality scalar aggregates over the distinct outer values.
 /// Native decorrelation can then pull up equality on those values without
@@ -54,9 +55,11 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                             // before the aggregate is HAVING, not its input.
                             unsupported |= aggregates == 0;
                             filters += 1;
-                            needs_domain |= split_conjunction(&filter.predicate)
-                                .iter()
-                                .any(|expr| expr.contains_outer() && !native_equality(expr));
+                            needs_domain |=
+                                split_conjunction(&filter.predicate).iter().any(|expr| {
+                                    expr.contains_outer()
+                                        && correlated_equality_key(expr, true).is_none()
+                                });
                         }
                         LogicalPlan::Join(_)
                         | LogicalPlan::Union(_)
@@ -72,13 +75,12 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                 }
                 // The domain reads the outer input again; do not duplicate volatile
                 // evaluations whose values must be shared with the original row.
-                if input.exists(|node| Ok(node.expressions().iter().any(Expr::is_volatile)))? {
+                // Only reproducible seeded calls may be replayed, including calls inside a node.
+                if has_unreproducible_volatile_expression(&input)? {
                     return Ok(Transformed::no(Expr::ScalarSubquery(query)));
                 }
-                if query
-                    .subquery
-                    .exists(|node| Ok(node.expressions().iter().any(Expr::is_volatile)))?
-                {
+                // A node above the correlated filter is evaluated by a projection before this rule.
+                if has_unreproducible_volatile_expression(&query.subquery)? {
                     return datafusion_common::not_impl_err!(
                         "correlated scalar aggregate with volatile inner expressions"
                     );
@@ -304,17 +306,50 @@ fn empty_scalar_value(plan: &LogicalPlan) -> Result<Expr> {
     }
 }
 
-fn native_equality(expr: &Expr) -> bool {
+/// Returns the inner column of a correlated equality of an inner column, or of a cast of one if
+/// `cast` is true, and an outer expression without inner columns, which DataFusion decorrelates
+/// by pulling it up as a join key.
+pub(crate) fn correlated_equality_key(expr: &Expr, cast: bool) -> Option<&Column> {
     let Expr::BinaryExpr(binary) = expr else {
-        return false;
+        return None;
     };
     if binary.op != Operator::Eq {
-        return false;
+        return None;
     }
-    let inner_key = |expr: &Expr| {
-        matches!(expr, Expr::Column(_))
-            || matches!(expr, Expr::Cast(cast) if matches!(cast.expr.as_ref(), Expr::Column(_)))
-    };
-    (inner_key(&binary.left) && !binary.right.any_column_refs())
-        || (inner_key(&binary.right) && !binary.left.any_column_refs())
+    fn key(expr: &Expr, cast: bool) -> Option<&Column> {
+        match expr {
+            Expr::Column(column) => Some(column),
+            Expr::Cast(c) if cast => match c.expr.as_ref() {
+                Expr::Column(column) => Some(column),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    let outer = |expr: &Expr| expr.contains_outer() && !expr.any_column_refs();
+    match (key(&binary.left, cast), key(&binary.right, cast)) {
+        (Some(column), _) if outer(&binary.right) => Some(column),
+        (_, Some(column)) if outer(&binary.left) => Some(column),
+        _ => None,
+    }
+}
+
+fn has_unreproducible_volatile_expression(plan: &LogicalPlan) -> Result<bool> {
+    // Uncorrelated scalar subqueries are evaluated once and their results are shared by both
+    // copies of the plan. Inspect this plan's expressions, not those subquery bodies.
+    plan.exists(|node| {
+        let seeded = matches!(node, LogicalPlan::Extension(extension)
+            if extension.node.as_any().is::<SeededRandomNode>());
+        for expr in node.expressions() {
+            if expr.exists(|expr| {
+                Ok(
+                    expr.is_volatile_node()
+                        && !(seeded && is_reproducible_seeded_random_call(expr)),
+                )
+            })? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })
 }

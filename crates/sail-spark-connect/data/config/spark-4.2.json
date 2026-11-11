@@ -1,5 +1,5 @@
 {
-  "sparkVersion": "4.2.0",
+  "sparkVersion": "4.2.1",
   "comment": "This is a generated file. Do not edit it directly.",
   "entries": [
     {
@@ -102,7 +102,7 @@
     },
     {
       "key": "spark.connect.grpc.interceptor.classes",
-      "doc": "Comma separated list of class names that must implement the io.grpc.ServerInterceptor interface.",
+      "doc": "Comma separated list of class names that must implement the io.grpc.ServerInterceptor interface. When authentication is enabled these interceptors run after it, so they only see calls that have already been authenticated and cannot supply the Authorization header themselves.",
       "isStatic": true
     },
     {
@@ -855,12 +855,12 @@
     },
     {
       "key": "spark.sql.codegen.wholeStage.union.enabled",
-      "doc": "When both this conf and `spark.sql.codegen.wholeStage` are true, UnionExec participates in whole-stage codegen on its non-partitioning-aware path: the parent and all children fuse into a single WholeStageCodegenExec stage.",
+      "doc": "When both this conf and `spark.sql.codegen.wholeStage` are true, an eligible UnionExec on its non-partitioning-aware path takes part in whole-stage codegen. The union's other eligibility checks still apply, and a child that does not support codegen still ends the stage at an InputAdapter. The value is read once per physical preparation, so a union's codegen gate and the copy of it inside the generated stage agree.",
       "defaultValue": "false"
     },
     {
       "key": "spark.sql.codegen.wholeStage.union.maxChildren",
-      "doc": "Maximum number of UnionExec children eligible for whole-stage codegen fusion. Each child is emitted as its own helper method, so this conf bounds class-level costs of the fused stage (total bytecode size, constant pool growth, JIT compilation time) rather than the JVM per-method bytecode limit. Unions with more children fall back to per-child codegen stages. Only effective when `spark.sql.codegen.wholeStage.union.enabled` is true.",
+      "doc": "Maximum number of UnionExec children eligible for whole-stage codegen fusion. Each child is emitted as its own helper method, so this conf bounds class-level costs of the fused stage (total bytecode size, constant pool growth, JIT compilation time) rather than the JVM per-method bytecode limit. Unions with more children fall back to per-child codegen stages. Only effective when `spark.sql.codegen.wholeStage.union.enabled` is true. The value is read once per physical preparation, so a union's codegen gate and the copy of it inside the generated stage agree.",
       "defaultValue": "64"
     },
     {
@@ -2318,8 +2318,13 @@
     },
     {
       "key": "spark.sql.optimizeNullAwareAntiJoin",
-      "doc": "When true, NULL-aware anti join execution will be planed into BroadcastHashJoinExec with flag isNullAwareAntiJoin enabled, optimized from O(M*N) calculation into O(M) calculation using Hash lookup instead of Looping lookup. Only support for singleColumn NAAJ for now.",
+      "doc": "When true, NULL-aware anti join execution can be planned as BroadcastHashJoinExec with flag isNullAwareAntiJoin enabled, optimized from O(M*N) calculation into O(M) calculation using Hash lookup instead of Looping lookup. Only support for singleColumn NAAJ for now. The optimization is also controlled by spark.sql.optimizeNullAwareAntiJoin.broadcastThreshold.",
       "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.optimizeNullAwareAntiJoin.broadcastThreshold",
+      "doc": "Configures a dedicated broadcast threshold for the right side of a single-column null-aware anti join. This configuration takes effect only when spark.sql.optimizeNullAwareAntiJoin is enabled. A negative value allows the broadcast hash join optimization regardless of the estimated size. For a nonnegative value, the applicable automatic broadcast threshold acts as a floor: spark.sql.adaptive.autoBroadcastJoinThreshold is used for runtime statistics when set, and spark.sql.autoBroadcastJoinThreshold is used otherwise. Once either threshold admits the right side, the optimization takes precedence over join hints. The same eligibility decision controls aggregate pushdown, which runs before adaptive execution and uses estimated statistics; join selection may reevaluate it with runtime statistics. A lower adaptive threshold can leave a pushed-down join using a nested-loop plan. Thus, zero alone does not disable the optimization. Set spark.sql.optimizeNullAwareAntiJoin to false to disable it without changing automatic broadcast thresholds.",
+      "defaultValue": "-1b"
     },
     {
       "key": "spark.sql.optimizer.avoidCollapseUDFWithExpensiveExpr",
@@ -2588,7 +2593,7 @@
     },
     {
       "key": "spark.sql.optimizer.pushDownJoinThroughUnion.enabled",
-      "doc": "When true, pushes down Join through Union when the right side is small enough to broadcast. This can improve performance by allowing each Union branch to directly perform a broadcast join, avoiding materializing the entire Union result.",
+      "doc": "When true, pushes down Join through Union when every Union branch would broadcast the right side of the join. This can improve performance by allowing each Union branch to directly perform a broadcast join, avoiding materializing the entire Union result.",
       "defaultValue": "false"
     },
     {
@@ -3389,12 +3394,12 @@
     },
     {
       "key": "spark.sql.sources.v2.bucketing.partitionKeyOrdering.enabled",
-      "doc": "When enabled, Spark derives output ordering from the partition key expressions of a V2 data source that reports a KeyedPartitioning but does not report explicit ordering via SupportsReportOrdering. Within a single partition all rows share the same key value, so the data is trivially sorted by those expressions. Requires spark.sql.sources.v2.bucketing.enabled to be enabled.",
+      "doc": "When enabled, Spark derives output ordering from the partition key expressions of a V2 data source that reports a KeyedPartitioning but does not report explicit ordering via SupportsReportOrdering. Within a single partition all rows share the same key value, so the data is trivially sorted by those expressions. Partition transforms such as `days(ts)` or `bucket(8, id)` are left out of the ordering. Requires spark.sql.sources.v2.bucketing.enabled to be enabled.",
       "defaultValue": "false"
     },
     {
       "key": "spark.sql.sources.v2.bucketing.preserveKeyOrderingOnCoalesce.enabled",
-      "doc": "When enabled, Spark preserves sort orders over partition key expressions when GroupPartitionsExec coalesces multiple input partitions into one output partition. Because all merged partitions share the same partition key value, sort orders over those key expressions remain valid after the merge. This applies to both key-derived ordering (from SupportsReportOrdering) and ordering derived from spark.sql.sources.v2.bucketing.partitionKeyOrdering.enabled. Requires spark.sql.sources.v2.bucketing.enabled to be enabled.",
+      "doc": "When enabled, Spark preserves sort orders over partition key expressions when GroupPartitionsExec coalesces multiple input partitions into one output partition. Because all merged partitions share the same partition key value, sort orders over those key expressions remain valid after the merge. This applies to both the ordering reported via SupportsReportOrdering and the ordering derived from spark.sql.sources.v2.bucketing.partitionKeyOrdering.enabled. Sort orders over partition transforms such as `days(ts)` or `bucket(8, id)` are left out. Requires spark.sql.sources.v2.bucketing.enabled to be enabled.",
       "defaultValue": "false"
     },
     {
@@ -4092,7 +4097,7 @@
     },
     {
       "key": "spark.sql.unionOutputPartitioning",
-      "doc": "When set to true, the output partitioning of UnionExec will be the same as the input partitioning if its children have same partitioning. Otherwise, it will be a default partitioning.",
+      "doc": "When set to true, the output partitioning of UnionExec will be the same as the input partitioning if its children have same partitioning. Otherwise, it will be a default partitioning. The value is read once per physical preparation, and the decision taken with it, so the exchanges planned around a UnionExec and the decision it executes under agree. One decided to concatenate keeps reporting the default partitioning if its children come to share one afterwards.",
       "defaultValue": "true"
     },
     {

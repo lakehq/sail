@@ -223,6 +223,7 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
             encode_actions(
                 output_actions,
                 Some(ExecCommitMeta {
+                    identity_high_water_marks: None,
                     row_count: 0,
                     operation: None,
                     operation_metrics,
