@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from http import HTTPStatus
 
 import pytest
 from pyspark.errors import AnalysisException, PySparkException, SparkRuntimeException
@@ -302,6 +303,85 @@ def test_rest_replacement_concurrent_metadata_race(
     current = spark.table(name)
     numeric = spark.read.option("snapshot-id", metadata["current-snapshot-id"]).table(name)
     assert sorted(numeric.collect()) == sorted(current.collect())
+
+
+@pytest.mark.parametrize("api", ["sql", "replace"])
+@pytest.mark.parametrize(
+    "requested",
+    [
+        pytest.param("old", id="same-as-base"),
+        pytest.param("requested", id="different-from-base"),
+        pytest.param(None, id="unrequested"),
+    ],
+)
+def test_rest_replacement_preserves_explicit_properties_during_concurrent_update(
+    spark, iceberg_rest_endpoint, gated_remote, commit_gate_proxy, api, requested
+):
+    _, gate = commit_gate_proxy
+    table = f"replacement_properties_{api}_{requested or 'unrequested'}"
+    name = f"{NAMESPACE}.{table}"
+    spark.sql(
+        f"CREATE TABLE {name} USING iceberg TBLPROPERTIES "
+        "('changed'='old', 'retained'='original', 'untouched'='yes', 'format-version'='2') AS SELECT 1 AS old"
+    )
+    before = _load_table(iceberg_rest_endpoint, table)
+    gate.arm(NAMESPACE, table, snapshot_only=False)
+    with spark_session_factory(gated_remote) as sessions, ThreadPoolExecutor() as executor:
+        writer = sessions.create()
+
+        def replace():
+            if api == "sql":
+                properties = f"TBLPROPERTIES ('changed'='{requested}')" if requested is not None else ""
+                writer.sql(
+                    f"REPLACE TABLE {name} USING iceberg {properties} AS SELECT CAST(7 AS BIGINT) AS replacement"
+                ).collect()
+            else:
+                operation = writer.sql("SELECT CAST(7 AS BIGINT) AS replacement").writeTo(name).using("iceberg")
+                if requested is not None:
+                    operation = operation.tableProperty("changed", requested)
+                operation.replace()
+
+        future = executor.submit(replace)
+        try:
+            if not gate.arrived.wait(30):
+                if future.done():
+                    future.result()
+                pytest.fail("Replacement did not reach the commit gate")
+            spark.sql(
+                f"ALTER TABLE {name} SET TBLPROPERTIES "
+                "('changed'='concurrent', 'retained'='concurrent', 'concurrent_only'='yes')"
+            ).collect()
+            concurrent = _load_table(iceberg_rest_endpoint, table)
+            assert concurrent["metadata-location"] != before["metadata-location"]
+            for key in ["table-uuid", "current-schema-id", "last-sequence-number", "refs"]:
+                assert concurrent["metadata"][key] == before["metadata"][key]
+            assert concurrent["metadata"]["properties"]["changed"] == "concurrent"
+        finally:
+            gate.release.set()
+        future.result(timeout=30)
+    assert gate.request_count == 1
+    assert gate.response_status == HTTPStatus.OK
+    after = _load_table(iceberg_rest_endpoint, table)
+    assert after["metadata-location"] != concurrent["metadata-location"]
+    assert after["metadata"]["table-uuid"] == before["metadata"]["table-uuid"]
+    assert spark.newSession().table(name).collect() == [(7,)]
+    properties = after["metadata"]["properties"]
+    assert properties["retained"] == "concurrent"
+    assert properties["concurrent_only"] == "yes"
+    assert properties["untouched"] == "yes"
+    assert properties["changed"] == (requested if requested is not None else "concurrent"), gate.request
+    updates = {
+        key: value
+        for update in gate.request["updates"]
+        if update["action"] == "set-properties"
+        for key, value in update["updates"].items()
+    }
+    assert "retained" not in updates
+    assert "untouched" not in updates
+    if requested is not None:
+        assert updates["changed"] == requested
+    else:
+        assert "changed" not in updates
 
 
 @pytest.mark.parametrize("api", ["sql", "createOrReplace"])

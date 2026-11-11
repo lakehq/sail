@@ -620,10 +620,23 @@ fn rest_replacement_changes(
             location: metadata.location.clone(),
         });
     }
+    let requested_properties = replacement
+        .catalog
+        .property_updates
+        .iter()
+        .filter(|(key, _)| !key.starts_with("option."))
+        .cloned()
+        .collect::<Vec<_>>();
+    let (_, explicit_properties) =
+        crate::properties::metadata_properties_from_table_properties(&requested_properties)?;
     let properties = metadata
         .properties
         .iter()
-        .filter(|(key, value)| create || base.properties.get(*key) != Some(*value))
+        .filter(|(key, value)| {
+            create
+                || explicit_properties.contains_key(*key)
+                || base.properties.get(*key) != Some(*value)
+        })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect::<HashMap<_, _>>();
     if !properties.is_empty() {
