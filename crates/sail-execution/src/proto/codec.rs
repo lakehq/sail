@@ -6694,7 +6694,7 @@ mod tests {
             [
                 (
                     sail_common_datafusion::uuid::UUID_METADATA_KEY.to_string(),
-                    "uuid".to_string(),
+                    sail_common_datafusion::uuid::UUID_EXTENSION_NAME.to_string(),
                 ),
                 ("PARQUET:field_id".to_string(), "17".to_string()),
             ]
@@ -7593,7 +7593,7 @@ mod tests {
         use sail_common_datafusion::catalog::{
             CatalogPartitionField, PartitionTransform, TableReplacement,
         };
-        use sail_common_datafusion::uuid::UUID_METADATA_KEY;
+        use sail_common_datafusion::uuid::{UUID_EXTENSION_NAME, UUID_METADATA_KEY};
         use sail_iceberg::operations::replacement::IcebergTableReplacement;
         let replacement: IcebergTableReplacement = serde_json::from_value(serde_json::json!({
             "catalog": TableReplacement {
@@ -7602,7 +7602,7 @@ mod tests {
                 require_existing: true, existing: true,
                 columns: vec![("id".into(), DataType::FixedSizeBinary(16), false,
                     std::collections::BTreeMap::from([
-                        (UUID_METADATA_KEY.into(), "uuid".into()),
+                        (UUID_METADATA_KEY.into(), UUID_EXTENSION_NAME.into()),
                         ("custom".into(), "retained".into()),
                     ]))],
                 location: "file:///tmp/replacement-codec/".into(),
