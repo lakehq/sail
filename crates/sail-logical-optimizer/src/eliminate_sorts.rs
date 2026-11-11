@@ -305,9 +305,7 @@ fn remove_sorts(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                 Ok(Transformed::yes(remove_sorts(input)?.data))
             } else if node
                 .downcast_ref::<ExplicitRepartitionNode>()
-                .is_some_and(|repartition| {
-                    !repartition.expressions().iter().any(Expr::is_volatile)
-                })
+                .is_some_and(|repartition| !repartition.expressions().iter().any(Expr::is_volatile))
             {
                 plan.map_children(remove_sorts)
             } else {

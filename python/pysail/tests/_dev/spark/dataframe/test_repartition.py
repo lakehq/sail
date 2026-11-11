@@ -102,6 +102,20 @@ def test_range_repartition_rejects_non_positive_sample_size(spark):
         spark.conf.unset("spark.sql.execution.rangeExchange.sampleSizePerPartition")
 
 
+def failing_key(_value):
+    msg = "range key computed"
+    raise ValueError(msg)
+
+
+def test_range_repartition_samples_only_when_the_query_runs(spark):
+    key = F.udf(failing_key, "long")("id")
+    df = spark.range(12).withColumn("key", key).repartitionByRange(3, "key")
+    # Spark samples the input when the exchange runs, so EXPLAIN computes no key.
+    df._explain_string(extended=True)  # noqa: SLF001
+    with pytest.raises(Exception, match="range key computed"):
+        df.collect()
+
+
 def assert_range_repartition_plan(df, sorts):
     plan = normalize_plan_text(df._explain_string(extended=True))  # noqa: SLF001
     keys = ", ".join(rf"\S+ {sort}" for sort in sorts)

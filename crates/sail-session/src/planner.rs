@@ -7,7 +7,6 @@ use datafusion::catalog::Session;
 use datafusion::common::config::TableParquetOptions;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
-use datafusion::execution::SessionState;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::physical_expr::expressions::Column;
@@ -18,7 +17,6 @@ use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
-use datafusion::prelude::SessionContext;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
@@ -31,13 +29,11 @@ use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, SortExpr, UserDefinedLogicalNode};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::{Partitioning, RangePartitioning, create_physical_sort_exprs};
-use futures::TryStreamExt;
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
-use sail_common_datafusion::session::job::JobService;
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
@@ -72,7 +68,8 @@ use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
-use sail_physical_plan::range_sample::{RangePartitionSampleExec, range_split_points};
+use sail_physical_plan::range_repartition::RangeRepartitionExec;
+use sail_physical_plan::range_sample::RangePartitionSampleExec;
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
     checkpoint_storage_schema,
@@ -502,15 +499,15 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     "ExplicitRepartitionExec requires exactly one physical input"
                 );
             };
-            let partitioning = if let ExplicitRepartitionKind::Range {
+            if let ExplicitRepartitionKind::Range {
                 sorts,
                 sample_size_per_partition,
             } = node.kind()
             {
-                plan_range_partitioning(
+                plan_range_repartition(
                     planner,
                     node,
-                    input.as_ref(),
+                    input,
                     sorts,
                     *sample_size_per_partition,
                     session,
@@ -518,7 +515,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 )
                 .await?
             } else {
-                plan_explicit_partitioning(
+                let partitioning = plan_explicit_partitioning(
                     planner,
                     UserDefinedLogicalNode::schema(node),
                     input.as_ref(),
@@ -526,9 +523,9 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     node.kind(),
                     session,
                     planning_ctx,
-                )?
-            };
-            Arc::new(ExplicitRepartitionExec::new(input.clone(), partitioning))
+                )?;
+                Arc::new(ExplicitRepartitionExec::new(input.clone(), partitioning))
+            }
         } else if node.as_any().is::<StreamSourceAdapterNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("StreamSourceExec requires exactly one physical input");
@@ -681,19 +678,19 @@ const RANGE_SAMPLE_SIZE_LIMIT: f64 = 1e6;
 /// Plans range repartitioning with split points from a sample of the input,
 /// like Spark's `RangePartitioner`.
 ///
-/// The sample is a separate job that computes the input again, as in Spark.
-/// It is planned from the logical input, so it is optimized and runs on the
-/// cluster like any other job.
+/// The sample is a separate plan that computes the input again, as in Spark.
+/// It is planned from the logical input, so it is optimized like any other plan.
+/// It runs when the query runs, not here, so planning and EXPLAIN do not read the input.
 /// <https://github.com/apache/spark/blob/v4.1.0/core/src/main/scala/org/apache/spark/Partitioner.scala>
-async fn plan_range_partitioning(
+async fn plan_range_repartition(
     planner: &dyn PhysicalPlanner,
     node: &ExplicitRepartitionNode,
-    input: &dyn ExecutionPlan,
+    input: &Arc<dyn ExecutionPlan>,
     sorts: &[SortExpr],
     sample_size_per_partition: i32,
     session: &dyn Session,
     planning_ctx: &PhysicalPlanningContext,
-) -> datafusion_common::Result<Partitioning> {
+) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
     // Step 1: the number of partitions. Without a count, use the input's partition count.
     // The resolver rejects zero, so zero here is an internal error.
     let num_partitions = match node.num_partitions() {
@@ -716,10 +713,10 @@ async fn plan_range_partitioning(
     // The sample size is checked only when Sail samples, as in Spark.
     // Sampling an unbounded input would never finish.
     if num_partitions == 1 {
-        return Ok(Partitioning::Range(RangePartitioning::try_new(
-            ordering,
-            vec![],
-        )?));
+        return Ok(Arc::new(ExplicitRepartitionExec::new(
+            Arc::clone(input),
+            Partitioning::UnknownPartitioning(1),
+        )));
     }
     if sample_size_per_partition <= 0 {
         // Spark fails a `require`, which raises `IllegalArgumentException`.
@@ -764,37 +761,20 @@ async fn plan_range_partitioning(
         sample,
         partition_sample_size.max(1),
     )?);
-
-    // Step 6: run the sample as a job, locally or on the cluster, and collect one batch per
-    // nonempty input partition. Planning waits here until the job has read the whole input.
-    // TODO: Sample when the exchange first runs, as Spark does, not during planning.
-    //  Planning runs before the operation is registered, so an interrupt cannot stop this
-    //  job, no heartbeat is sent while it runs, and EXPLAIN runs it too.
-    let Some(state) = session.as_any().downcast_ref::<SessionState>() else {
-        return internal_err!("range repartitioning requires a session state");
-    };
-    let ctx = SessionContext::new_with_state(state.clone());
-    let service = session.extension::<JobService>()?;
-    let batches = service
-        .runner()
-        .execute(&ctx, sample)
-        .await?
-        .try_collect::<Vec<_>>()
-        .await?;
-    // Step 7: pick the split points from the sample. The query then computes the
-    // planned input again and shuffles it by these split points.
-    let options = ordering.iter().map(|x| x.options).collect::<Vec<_>>();
-    let split_points = range_split_points(&batches, &options, num_partitions)?;
-    Ok(Partitioning::Range(RangePartitioning::try_new(
+    // Step 6: the node runs the sample when the query runs and picks the split points
+    // from it. The query then computes the planned input again and shuffles it.
+    Ok(Arc::new(RangeRepartitionExec::try_new(
+        Arc::clone(input),
+        sample,
         ordering,
-        split_points,
+        num_partitions,
     )?))
 }
 
 /// Plans the explicit repartitioning emitted by the logical planner.
 /// Empty expressions keep round-robin explicit here, while hash repartitioning
 /// and `UnknownPartitioning(1)` are normalized later by `RewriteExplicitRepartition`.
-/// Range repartitioning needs a sample of the input, so `plan_range_partitioning` plans it.
+/// Range repartitioning needs a sample of the input, so `plan_range_repartition` plans it.
 fn plan_explicit_partitioning(
     planner: &dyn PhysicalPlanner,
     schema: &DFSchema,
@@ -855,15 +835,15 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Float64Type, Int64Type, Schema};
     use datafusion::catalog::TableFunctionArgs;
     use datafusion::datasource::{MemTable, provider_as_source};
-    use datafusion::execution::SessionStateBuilder;
     use datafusion::execution::runtime_env::RuntimeEnv;
+    use datafusion::execution::{SessionState, SessionStateBuilder};
     use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_expr::{PhysicalExpr, PhysicalSortExpr};
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::projection::ProjectionExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
-    use datafusion::physical_plan::{collect, displayable};
+    use datafusion::physical_plan::{collect, collect_partitioned, displayable};
     use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_common::{ScalarValue, ToDFSchema};
     use datafusion_expr::{
@@ -1811,14 +1791,13 @@ mod tests {
         }
     }
 
-    /// Plans `repartitionByRange(num_partitions, k)` over keys in two input partitions
-    /// and returns the partitioning of the explicit repartition node.
-    async fn plan_range_repartition(
+    /// Plans `repartitionByRange(num_partitions, k)` over keys in two input partitions.
+    /// The session has no job service, so planning cannot run a job.
+    async fn range_repartition_plan(
         keys: Vec<i64>,
         num_partitions: usize,
         sample_size_per_partition: i32,
-        with_job_service: bool,
-    ) -> datafusion_common::Result<String> {
+    ) -> datafusion_common::Result<(Arc<dyn ExecutionPlan>, SessionState)> {
         let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, true)]));
         let (left, right) = keys.split_at(keys.len() / 2);
         let partitions = [left, right]
@@ -1847,14 +1826,8 @@ mod tests {
                 },
             )),
         });
-        let mut config = SessionConfig::new();
-        if with_job_service {
-            config = config.with_extension(Arc::new(JobService::new(Box::new(
-                sail_execution::job_runner::LocalJobRunner::default(),
-            ))));
-        }
         let state = SessionStateBuilder::new()
-            .with_config(config)
+            .with_config(SessionConfig::new())
             .with_default_features()
             .with_query_planner(new_query_planner())
             .build();
@@ -1862,52 +1835,98 @@ mod tests {
             .query_planner()
             .create_physical_plan(&plan, &state)
             .await?;
-        let mut partitioning = None;
-        physical.apply(|plan| {
-            if let Some(node) = plan.downcast_ref::<ExplicitRepartitionExec>() {
-                partitioning = Some(node.properties().output_partitioning().to_string());
-            }
-            Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
-        })?;
-        partitioning.ok_or_else(|| internal_datafusion_err!("no explicit repartition"))
+        Ok((physical, state))
+    }
+
+    /// Runs the plan and returns the sorted keys of each output partition.
+    async fn range_repartition_output(
+        keys: Vec<i64>,
+        num_partitions: usize,
+    ) -> datafusion_common::Result<Vec<Vec<i64>>> {
+        let (plan, state) = range_repartition_plan(keys, num_partitions, 100).await?;
+        let partitions = collect_partitioned(plan, state.task_ctx()).await?;
+        Ok(partitions
+            .iter()
+            .map(|batches| {
+                let mut keys = batches
+                    .iter()
+                    .flat_map(|batch| {
+                        batch
+                            .column(0)
+                            .as_primitive::<Int64Type>()
+                            .values()
+                            .to_vec()
+                    })
+                    .collect::<Vec<_>>();
+                keys.sort_unstable();
+                keys
+            })
+            .collect())
     }
 
     #[tokio::test]
-    async fn range_repartition_plans_split_points_from_the_sample() {
+    async fn range_repartition_samples_when_the_plan_runs() {
+        let (plan, _) = range_repartition_plan((0..12).collect(), 3, 100)
+            .await
+            .unwrap();
+        let explain = displayable(plan.as_ref()).indent(true).to_string();
+        assert!(
+            explain.contains(
+                "RangeRepartitionExec: ordering=[k@0 ASC], partitions=3, split_points=sampled at execution"
+            ),
+            "{explain}"
+        );
+    }
+
+    #[tokio::test]
+    async fn range_repartition_splits_rows_by_the_sample() {
         // Spark bounds for 0..12 in 3 partitions are 3 and 7: rows up to 3 go to the
         // first partition and rows up to 7 to the second.
-        let partitioning = plan_range_repartition((0..12).rev().collect(), 3, 100, true)
+        let partitions = range_repartition_output((0..12).rev().collect(), 3)
             .await
             .unwrap();
-        assert_eq!(partitioning, "Range([k@0 ASC], [(4), (8)], 3)");
+        assert_eq!(
+            partitions,
+            vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9, 10, 11]]
+        );
     }
 
     #[tokio::test]
-    async fn range_repartition_with_fewer_keys_than_partitions_plans_fewer_partitions() {
-        let partitioning = plan_range_repartition(vec![1, 1, 2, 2, 3, 3], 10, 100, true)
+    async fn range_repartition_with_fewer_keys_than_partitions_leaves_partitions_empty() {
+        let partitions = range_repartition_output(vec![1, 1, 2, 2, 3, 3], 5)
             .await
             .unwrap();
-        assert_eq!(partitioning, "Range([k@0 ASC], [(2), (3)], 3)");
+        assert_eq!(
+            partitions,
+            vec![vec![1, 1], vec![2, 2], vec![3, 3], vec![], vec![]]
+        );
     }
 
     #[tokio::test]
-    async fn range_repartition_of_empty_input_plans_one_partition() {
-        let partitioning = plan_range_repartition(vec![], 4, 100, true).await.unwrap();
-        assert_eq!(partitioning, "Range([k@0 ASC], [], 1)");
+    async fn range_repartition_of_empty_input_returns_empty_partitions() {
+        let partitions = range_repartition_output(vec![], 4).await.unwrap();
+        assert_eq!(partitions, vec![Vec::<i64>::new(); 4]);
     }
 
     #[tokio::test]
     async fn range_repartition_into_one_partition_does_not_sample() {
-        // Without a job service, sampling would fail.
-        let partitioning = plan_range_repartition((0..12).collect(), 1, 0, false)
+        // The sample size is checked only when Sail samples, as in Spark.
+        let (plan, _) = range_repartition_plan((0..12).collect(), 1, 0)
             .await
             .unwrap();
-        assert_eq!(partitioning, "Range([k@0 ASC], [], 1)");
+        let mut sampled = false;
+        plan.apply(|plan| {
+            sampled |= plan.is::<RangeRepartitionExec>();
+            Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+        })
+        .unwrap();
+        assert!(!sampled);
+        assert_eq!(plan.output_partitioning().partition_count(), 1);
     }
 
     #[tokio::test]
     async fn range_repartition_rejects_a_non_positive_sample_size() {
-        let error = plan_range_repartition((0..12).collect(), 3, 0, true)
+        let error = range_repartition_plan((0..12).collect(), 3, 0)
             .await
             .unwrap_err();
         assert!(error.to_string().contains(

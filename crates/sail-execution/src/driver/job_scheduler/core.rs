@@ -1047,8 +1047,11 @@ impl<'a> TaskOutputBuilder<'a> {
                     channels: *channels,
                 }
             }
-            OutputDistribution::Range { partitioning } => {
-                let channels = partitioning.partition_count();
+            OutputDistribution::Range {
+                partitioning,
+                channels,
+            } => {
+                let channels = *channels;
                 let partitioning = encode_remote_partitioning(
                     self.codec,
                     &Partitioning::Range(partitioning.clone()),

@@ -576,13 +576,13 @@ impl TaskOutput {
                             )));
                         }
                     };
-                if partitioning.partition_count() != *channels {
+                if partitioning.partition_count() > *channels {
                     return Err(ExecutionError::InvalidArgument(format!(
-                        "range partition count {} does not match task output channel count {channels}",
+                        "range partition count {} exceeds task output channel count {channels}",
                         partitioning.partition_count()
                     )));
                 }
-                Ok(ShufflePartitioning::Range(partitioning))
+                Ok(ShufflePartitioning::Range(partitioning, *channels))
             }
             TaskOutputDistribution::RoundRobinBatch { channels } => {
                 Ok(ShufflePartitioning::RoundRobinBatch(*channels))

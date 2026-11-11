@@ -195,8 +195,11 @@ pub enum OutputDistribution {
         keys: Vec<Arc<dyn PhysicalExpr>>,
         channels: usize,
     },
+    /// Range distribution into `channels` channels. The partitioning can have fewer
+    /// partitions than channels, and then the last channels receive no rows.
     Range {
         partitioning: RangePartitioning,
+        channels: usize,
     },
     RoundRobinBatch {
         channels: usize,
@@ -213,7 +216,7 @@ impl OutputDistribution {
     pub fn channels(&self) -> usize {
         match self {
             OutputDistribution::Hash { channels, .. } => *channels,
-            OutputDistribution::Range { partitioning } => partitioning.partition_count(),
+            OutputDistribution::Range { channels, .. } => *channels,
             OutputDistribution::RoundRobinBatch { channels } => *channels,
             OutputDistribution::RoundRobinRow { channels } => *channels,
         }
@@ -227,7 +230,10 @@ impl fmt::Display for OutputDistribution {
                 let keys = keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
                 write!(f, "Hash(keys=[{}], channels={})", keys.join(", "), channels)
             }
-            OutputDistribution::Range { partitioning } => write!(f, "{partitioning}"),
+            OutputDistribution::Range {
+                partitioning,
+                channels,
+            } => write!(f, "{partitioning}, channels={channels}"),
             OutputDistribution::RoundRobinBatch { channels } => {
                 write!(f, "RoundRobinBatch(channels={})", channels)
             }

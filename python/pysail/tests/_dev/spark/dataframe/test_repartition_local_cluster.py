@@ -33,6 +33,19 @@ def test_range_repartition_assigns_key_ranges(local_cluster_spark, descending):
     assert len(rows) == 36  # noqa: PLR2004
 
 
+def failing_key(_value):
+    msg = "range key computed"
+    raise ValueError(msg)
+
+
+def test_range_repartition_samples_only_when_the_query_runs(local_cluster_spark):
+    key = F.udf(failing_key, "long")("id")
+    df = local_cluster_spark.range(12).withColumn("key", key).repartitionByRange(3, "key")
+    df._explain_string(extended=True)  # noqa: SLF001
+    with pytest.raises(Exception, match="range key computed"):
+        df.collect()
+
+
 def test_range_repartition_keeps_each_key_in_one_partition(local_cluster_spark):
     source = local_cluster_spark.range(0, 12, 1, 2).withColumn("key", F.col("id") % 3)
     rows = source.repartitionByRange(10, "key").select("key", F.spark_partition_id().alias("pid")).collect()

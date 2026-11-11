@@ -34,7 +34,9 @@ enum ShufflePartitioner {
 #[derive(Debug, Clone)]
 pub(crate) enum ShufflePartitioning {
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
-    Range(RangePartitioning),
+    /// Range partitioning into the given number of channels, which can be more than
+    /// the number of range partitions. The extra channels receive no rows.
+    Range(RangePartitioning, usize),
     RoundRobinBatch(usize),
     RoundRobinRow(usize),
 }
@@ -64,7 +66,7 @@ impl ShufflePartitioning {
     fn partition_count(&self) -> usize {
         match self {
             Self::Hash(_, partitions) => *partitions,
-            Self::Range(partitioning) => partitioning.partition_count(),
+            Self::Range(_, channels) => *channels,
             Self::RoundRobinBatch(partitions) | Self::RoundRobinRow(partitions) => *partitions,
         }
     }
@@ -80,7 +82,7 @@ impl Display for ShufflePartitioning {
                     Partitioning::Hash(expressions.clone(), *partitions)
                 )
             }
-            Self::Range(partitioning) => write!(f, "{partitioning}"),
+            Self::Range(partitioning, channels) => write!(f, "{partitioning}, channels={channels}"),
             Self::RoundRobinBatch(partitions) => {
                 write!(f, "{}", Partitioning::RoundRobinBatch(*partitions))
             }
@@ -166,7 +168,7 @@ impl ExecutionPlan for ShuffleWriteExec {
     ) -> Result<TreeNodeRecursion> {
         match &self.partitioning {
             ShufflePartitioning::Hash(expressions, _) => apply_expression_roots(expressions, f),
-            ShufflePartitioning::Range(range) => {
+            ShufflePartitioning::Range(range, _) => {
                 apply_expression_roots(range.ordering().iter().map(|sort_expr| &sort_expr.expr), f)
             }
             ShufflePartitioning::RoundRobinBatch(_) | ShufflePartitioning::RoundRobinRow(_) => {
@@ -229,7 +231,7 @@ impl ExecutionPlan for ShuffleWriteExec {
                     num_input_partitions,
                 )?)
             }
-            ShufflePartitioning::Range(partitioning) => {
+            ShufflePartitioning::Range(partitioning, _) => {
                 ShufflePartitioner::Batch(BatchPartitioner::try_new(
                     Partitioning::Range(partitioning.clone()),
                     Default::default(),

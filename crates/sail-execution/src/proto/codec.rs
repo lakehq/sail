@@ -9414,7 +9414,9 @@ mod tests {
         let encoded = encode_remote_partitioning(&codec, &Partitioning::Range(expected.clone()))?;
         let wire: task_gen::TaskOutputDistribution = TaskOutputDistribution::Range {
             partitioning: Arc::from(encoded),
-            channels: 3,
+            // Range repartitioning keeps its requested partition count, so a sample
+            // with fewer split points leaves the last channels empty.
+            channels: 4,
         }
         .into();
         let distribution = wire
@@ -9430,11 +9432,12 @@ mod tests {
             .map_err(|error| {
                 plan_datafusion_err!("failed to decode range partitioning: {error}")
             })?;
-        let ShufflePartitioning::Range(actual) = actual else {
+        let ShufflePartitioning::Range(actual, channels) = actual else {
             return plan_err!("expected range partitioning, got {actual}");
         };
 
         assert_eq!(actual, expected);
+        assert_eq!(channels, 4);
         Ok(())
     }
 
