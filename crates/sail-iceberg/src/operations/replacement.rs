@@ -73,6 +73,19 @@ fn replacement_types_compatible(
     }
 }
 
+fn validate_replacement_properties(properties: &HashMap<String, String>) -> Result<()> {
+    for key in ["write.format.default", "write.delete.format.default"] {
+        if let Some(format) = properties.get(key)
+            && !format.eq_ignore_ascii_case("parquet")
+        {
+            return plan_err!(
+                "unsupported Iceberg replacement file format {format} for {key}; only parquet is supported"
+            );
+        }
+    }
+    crate::properties::validate_write_properties(properties)
+}
+
 pub(crate) fn prepare_replacement(
     table_url: &Url,
     mut catalog: TableReplacement,
@@ -99,7 +112,7 @@ pub(crate) fn prepare_replacement(
         if !replacement_fields_compatible(actual.fields(), normalized_input.fields()) {
             return plan_err!("REST staged schema differs from replacement input");
         }
-        crate::properties::validate_write_properties(&metadata.properties)?;
+        validate_replacement_properties(&metadata.properties)?;
         catalog.properties = metadata
             .properties
             .iter()
@@ -198,16 +211,7 @@ pub(crate) fn prepare_replacement(
     });
     metadata.format_version = format_version;
     metadata.properties.extend(properties);
-    for key in ["write.format.default", "write.delete.format.default"] {
-        if let Some(format) = metadata.properties.get(key)
-            && !format.eq_ignore_ascii_case("parquet")
-        {
-            return plan_err!(
-                "unsupported Iceberg replacement file format {format} for {key}; only parquet is supported"
-            );
-        }
-    }
-    crate::properties::validate_write_properties(&metadata.properties)?;
+    validate_replacement_properties(&metadata.properties)?;
     // Spark binds every historical sort order against the replacement schema when writing,
     // even if the new default is unsorted. Keep history intact and reject unbindable changes.
     for order in &metadata.sort_orders {
@@ -518,8 +522,8 @@ fn rest_replacement_changes(
     }];
     if !create {
         // TODO: Iceberg REST has no assertions for global last-sequence-number, highest
-        // schema ID, or the complete ref set. Schema ABA and writes to branches created
-        // after staging cannot be fully guarded with the standard protocol.
+        // schema/spec/sort IDs, or the complete ref set. Metadata ABA and writes to branches
+        // created after staging cannot be fully guarded with the standard protocol.
         // Unlike upstream replacement, fail on observed schema/ref changes: writer artifacts
         // already contain schema IDs and sequence numbers and must never be blindly rebased.
         requirements.push(TableRequirement::CurrentSchemaIdMatch {
@@ -580,6 +584,9 @@ fn rest_replacement_changes(
             requirements.push(TableRequirement::LastAssignedPartitionIdMatch {
                 last_assigned_partition_id: base.last_partition_id,
             });
+            requirements.push(TableRequirement::DefaultSpecIdMatch {
+                default_spec_id: base.default_spec_id,
+            });
         }
     }
     updates.push(TableUpdate::SetDefaultSpec {
@@ -599,6 +606,11 @@ fn rest_replacement_changes(
         updates.push(TableUpdate::AddSortOrder {
             sort_order: order.clone(),
         });
+        if !create {
+            requirements.push(TableRequirement::DefaultSortOrderIdMatch {
+                default_sort_order_id: i64::from(base.default_sort_order_id.unwrap_or(0)),
+            });
+        }
     }
     updates.push(TableUpdate::SetDefaultSortOrder {
         sort_order_id: if added { -1 } else { order.order_id },
@@ -909,6 +921,12 @@ mod tests {
                 TableRequirement::LastAssignedPartitionIdMatch {
                     last_assigned_partition_id: base.last_partition_id
                 },
+                TableRequirement::DefaultSpecIdMatch {
+                    default_spec_id: base.default_spec_id
+                },
+                TableRequirement::DefaultSortOrderIdMatch {
+                    default_sort_order_id: i64::from(base.default_sort_order_id.unwrap_or(0))
+                },
             ]
         );
         assert!(updates.contains(&TableUpdate::SetCurrentSchema { schema_id: -1 }));
@@ -928,6 +946,58 @@ mod tests {
             update,
             TableUpdate::SetLocation { .. } | TableUpdate::AssignUuid { .. }
         )));
+        Ok(())
+    }
+
+    #[test]
+    fn rest_replacement_guards_new_sort_order_ids() -> Result<(), Box<dyn std::error::Error>> {
+        use sail_common_datafusion::catalog::CatalogTableSort;
+
+        let mut base = historical_metadata()?;
+        base.sort_orders = vec![SortOrder {
+            order_id: 0,
+            fields: vec![],
+        }];
+        base.default_sort_order_id = Some(0);
+        let input = ArrowSchema::new(vec![Field::new("old", DataType::Int32, true)]);
+        let url = Url::parse("memory:///table")?;
+        for added in [true, false] {
+            let mut request = rest_catalog(true, &base)?;
+            request.sort_by = vec![CatalogTableSort {
+                column: "old".into(),
+                ascending: true,
+            }];
+            let replacement = prepare_replacement(&url, request, None, Some(&base), &input)?;
+            let (requirements, updates) = rest_replacement_changes(&replacement)?;
+            let order = replacement
+                .metadata
+                .sort_orders
+                .iter()
+                .find(|order| {
+                    Some(order.order_id as i32) == replacement.metadata.default_sort_order_id
+                })
+                .ok_or("missing prepared order")?;
+            assert_eq!(order.order_id, 1);
+            assert_eq!(order.fields[0].direction, SortDirection::Ascending);
+            assert_eq!(
+                requirements.contains(&TableRequirement::DefaultSortOrderIdMatch {
+                    default_sort_order_id: i64::from(base.default_sort_order_id.unwrap_or(0)),
+                }),
+                added
+            );
+            assert_eq!(
+                updates
+                    .iter()
+                    .any(|update| matches!(update, TableUpdate::AddSortOrder { .. })),
+                added
+            );
+            if added {
+                assert!(serde_json::to_value(&requirements)?.as_array().ok_or("requirements array")?.contains(
+                    &serde_json::json!({"type": "assert-default-sort-order-id", "default-sort-order-id": 0})
+                ));
+            }
+            base = replacement.metadata;
+        }
         Ok(())
     }
 

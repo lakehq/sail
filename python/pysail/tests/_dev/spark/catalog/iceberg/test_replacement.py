@@ -29,6 +29,139 @@ namespace = test_commit.namespace
 SERVER_FIELD_ID_OFFSET = 100
 
 
+@pytest.mark.parametrize("property_name", ["write.format.default", "write.delete.format.default"])
+@pytest.mark.parametrize("origin", ["absent_request", "absent_server", "existing_request"])
+def test_rest_replacement_rejects_non_parquet_properties(
+    spark, iceberg_rest_endpoint, seaweedfs_host_endpoint, gated_remote, commit_gate_proxy, property_name, origin
+):
+    import json
+
+    _, gate = commit_gate_proxy
+    table = f"replacement_format_{origin}_{property_name.replace('.', '_')}"
+    name = f"{NAMESPACE}.{table}"
+    before = None
+    if origin == "existing_request":
+        spark.sql(f"CREATE TABLE {name} USING iceberg AS SELECT 1 AS a")
+        before = _load_table(iceberg_rest_endpoint, table)
+    locations = []
+
+    def transform(method, path, body, response):
+        if method == "POST" and path.endswith("/tables") and json.loads(body).get("stage-create"):
+            locations.append(response["metadata"]["location"])
+            if origin == "absent_server":
+                response["metadata"]["properties"][property_name] = "orc"
+        return response
+
+    gate.response_transform = transform
+    gate.arm(NAMESPACE, table, snapshot_only=False)
+    gate.release.set()
+    requested_format = "parquet" if origin == "absent_server" else "orc"
+    with (
+        spark_session_factory(gated_remote) as sessions,
+        pytest.raises(PySparkException, match="only parquet is supported"),
+    ):
+        sessions.create().sql(
+            f"CREATE OR REPLACE TABLE {name} USING iceberg "
+            f"TBLPROPERTIES ('{property_name}'='{requested_format}') AS SELECT 7 AS a"
+        ).collect()
+    assert gate.request_count == 0
+    if before:
+        assert _load_table(iceberg_rest_endpoint, table) == before
+        assert spark.table(name).collect() == [(1,)]
+    else:
+        assert not spark.catalog.tableExists(name)
+        for location in locations:
+            assert not _s3_object_keys(seaweedfs_host_endpoint, location)
+
+
+def test_rest_replacement_rejects_concurrent_partition_spec_id_reuse(
+    spark, iceberg_rest_endpoint, seaweedfs_host_endpoint, gated_remote, commit_gate_proxy
+):
+    import requests
+    from pyiceberg.io.pyarrow import PyArrowFileIO
+    from pyiceberg.manifest import read_manifest_list
+
+    _, gate = commit_gate_proxy
+    table = "replacement_layout_partition_spec"
+    name = f"{NAMESPACE}.{table}"
+    spark.sql(
+        f"CREATE TABLE {name} (a INT, b INT) USING iceberg PARTITIONED BY (a, b) TBLPROPERTIES ('format-version'='2')"
+    )
+    spark.sql(f"INSERT INTO {name} VALUES (1, 10)")
+    before = _load_table(iceberg_rest_endpoint, table)
+    base = before["metadata"]
+    spec = next(spec for spec in base["partition-specs"] if spec["spec-id"] == base["default-spec-id"])
+    updates = [
+        {
+            "action": "add-spec",
+            "spec": {"spec-id": 1, "fields": [field for field in spec["fields"] if field["name"] == "b"]},
+        },
+        {"action": "set-default-spec", "spec-id": -1},
+    ]
+    gate.arm(NAMESPACE, table, snapshot_only=False)
+    with spark_session_factory(gated_remote) as sessions, ThreadPoolExecutor() as executor:
+        writer = sessions.create()
+
+        def replace():
+            source = "SELECT * FROM VALUES (7, 70), (8, 80) AS t(a, b)"
+            writer.sql(f"REPLACE TABLE {name} USING iceberg PARTITIONED BY (a) AS {source}").collect()
+
+        future = executor.submit(replace)
+        try:
+            if not gate.arrived.wait(30):
+                if future.done():
+                    future.result()
+                pytest.fail("Replacement did not reach the commit gate")
+            proposed = next(
+                update["snapshot"] for update in gate.request["updates"] if update["action"] == "add-snapshot"
+            )
+            file_io = PyArrowFileIO(
+                {
+                    "s3.endpoint": seaweedfs_host_endpoint,
+                    "s3.access-key-id": "admin",
+                    "s3.secret-access-key": "password",
+                    "s3.region": "us-east-1",
+                }
+            )
+            manifests = list(read_manifest_list(file_io.new_input(proposed["manifest-list"])))
+            assert manifests
+            assert {manifest.partition_spec_id for manifest in manifests} == {1}
+            response = requests.post(
+                f"{iceberg_rest_endpoint}/v1/namespaces/{NAMESPACE}/tables/{table}",
+                json={"requirements": [{"type": "assert-table-uuid", "uuid": base["table-uuid"]}], "updates": updates},
+                timeout=30,
+            )
+            response.raise_for_status()
+            concurrent = _load_table(iceberg_rest_endpoint, table)
+            for key in [
+                "table-uuid",
+                "current-schema-id",
+                "last-column-id",
+                "last-partition-id",
+                "refs",
+                "last-sequence-number",
+            ]:
+                assert concurrent["metadata"][key] == base[key]
+            assert base["default-spec-id"] == 0
+            assert concurrent["metadata"]["default-spec-id"] == 1
+            requirement = {"type": "assert-default-spec-id", "default-spec-id": base["default-spec-id"]}
+            guarded = requests.post(
+                f"{iceberg_rest_endpoint}/v1/namespaces/{NAMESPACE}/tables/{table}",
+                json={"requirements": [*gate.request["requirements"], requirement], "updates": []},
+                timeout=30,
+            )
+            assert guarded.status_code == test_commit.HTTP_CONFLICT
+            assert "changed" in guarded.json()["error"]["message"]
+        finally:
+            gate.release.set()
+        with pytest.raises(AnalysisException, match="replan"):
+            future.result(timeout=30)
+    assert gate.request_count == 1
+    assert gate.response_status == test_commit.HTTP_CONFLICT
+    assert _load_table(iceberg_rest_endpoint, table) == concurrent
+    assert spark.table(name).collect() == [(1, 10)]
+
+
 def _replace(spark, name, api, *, empty=False):
     source = spark.sql("SELECT CAST(7 AS BIGINT) AS replacement" + (" WHERE false" if empty else ""))
     if api == "sql":
