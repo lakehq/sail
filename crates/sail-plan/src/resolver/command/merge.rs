@@ -662,18 +662,16 @@ impl PlanResolver<'_> {
                     )));
                 }
             }
-            if with_schema_evolution {
-                return Err(PlanError::unsupported(
-                    "MERGE schema evolution with identity columns is not supported",
-                ));
-            }
+            let source_supplies_identity = source_names
+                .iter()
+                .any(|source| self.merge_names_equal(source, name));
             let assigns_identity = |assignments: &[MergeAssignment]| {
                 assignments
                     .iter()
                     .any(|assignment| assignment.column == *field.name())
             };
             if matched.iter().any(|clause| match &clause.action {
-                MergeMatchedAction::UpdateAll => true,
+                MergeMatchedAction::UpdateAll => !with_schema_evolution || source_supplies_identity,
                 MergeMatchedAction::UpdateSet(assignments) => assigns_identity(assignments),
                 MergeMatchedAction::Delete => false,
             }) || target_only.iter().any(|clause| match &clause.action {
@@ -689,15 +687,12 @@ impl PlanResolver<'_> {
             for clause in inserts {
                 let supplied = match &clause.action {
                     MergeNotMatchedByTargetAction::InsertAll => {
-                        if !source_names
-                            .iter()
-                            .any(|source| self.merge_names_equal(source, name))
-                        {
+                        if !source_supplies_identity && !with_schema_evolution {
                             return Err(PlanError::unsupported(
-                                "MERGE INSERT * omitting identity columns is not supported; use named columns",
+                                "MERGE INSERT * omitting identity columns is not supported; use named columns or schema evolution",
                             ));
                         }
-                        true
+                        source_supplies_identity
                     }
                     MergeNotMatchedByTargetAction::InsertColumns { columns, values } => {
                         if let Some(index) =
