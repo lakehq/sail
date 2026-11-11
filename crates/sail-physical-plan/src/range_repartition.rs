@@ -169,8 +169,13 @@ impl RangeRepartitionExec {
         {
             return internal_err!("range repartitioning ordering does not match its sample");
         }
+        // An output partition gets rows from every input partition, so it keeps
+        // neither the input order nor a value that is constant only per input partition.
         let mut equivalence = input.equivalence_properties().clone();
         equivalence.clear_orderings();
+        if input.output_partitioning().partition_count() > 1 {
+            equivalence.clear_per_partition_constants();
+        }
         let properties = Arc::new(PlanProperties::new(
             equivalence,
             Partitioning::UnknownPartitioning(sample.num_partitions),
@@ -404,11 +409,108 @@ mod tests {
     use datafusion::arrow::array::{AsArray, Int64Array};
     use datafusion::arrow::datatypes::{DataType, Field, Int64Type, Schema};
     use datafusion::physical_expr::expressions::Column;
+    use datafusion::physical_expr::{AcrossPartitions, ConstExpr, EquivalenceProperties};
     use datafusion::physical_plan::collect_partitioned;
     use datafusion::physical_plan::test::TestMemoryExec;
     use datafusion::prelude::SessionContext;
 
     use super::*;
+
+    /// A leaf whose column `k` is constant within each of its partitions only.
+    #[derive(Debug)]
+    struct PartitionConstantExec(Arc<PlanProperties>);
+
+    impl PartitionConstantExec {
+        fn new(partitions: usize) -> Self {
+            let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+            let mut equivalence = EquivalenceProperties::new(Arc::clone(&schema));
+            equivalence
+                .add_constants([ConstExpr::new(
+                    Arc::new(Column::new("k", 0)),
+                    AcrossPartitions::Heterogeneous,
+                )])
+                .unwrap();
+            Self(Arc::new(PlanProperties::new(
+                equivalence,
+                Partitioning::UnknownPartitioning(partitions),
+                EmissionType::Incremental,
+                Boundedness::Bounded,
+            )))
+        }
+    }
+
+    impl DisplayAs for PartitionConstantExec {
+        fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "PartitionConstantExec")
+        }
+    }
+
+    impl ExecutionPlan for PartitionConstantExec {
+        fn name(&self) -> &str {
+            "PartitionConstantExec"
+        }
+
+        fn properties(&self) -> &Arc<PlanProperties> {
+            &self.0
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(self)
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            internal_err!("PartitionConstantExec is not executed")
+        }
+    }
+
+    fn has_constants(input_partitions: usize) -> bool {
+        let input: Arc<dyn ExecutionPlan> = Arc::new(PartitionConstantExec::new(input_partitions));
+        let options = SortOptions::default();
+        let sample = Arc::new(RangeSample::new(
+            Arc::new(RangePartitionSampleExec::try_new(Arc::clone(&input), 1).unwrap()),
+            40.0,
+            vec![options],
+            2,
+        ));
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("k", 0)),
+            options,
+        )])
+        .unwrap();
+        assert!(!input.equivalence_properties().constants().is_empty());
+        let node = RangeRepartitionExec::try_new(input, sample, ordering).unwrap();
+        !node
+            .properties()
+            .equivalence_properties()
+            .constants()
+            .is_empty()
+    }
+
+    #[test]
+    fn test_per_partition_constants_are_dropped_for_many_input_partitions() {
+        // Each output partition gets rows from every input partition.
+        assert!(!has_constants(3));
+        // With one input partition, a constant stays constant in every output partition.
+        assert!(has_constants(1));
+    }
 
     #[tokio::test]
     async fn test_imbalanced_input_is_sampled_again() {
