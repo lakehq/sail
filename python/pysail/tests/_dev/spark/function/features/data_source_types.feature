@@ -1,5 +1,28 @@
 Feature: Data source functions preserve data type metadata
 
+  @sail-only
+  Scenario Outline: from_csv rejects geospatial schemas before parsing values
+    When query
+      """
+      SELECT from_csv(<input>, 'g <type>') AS result
+      """
+    Then query error Unsupported data type in from_csv schema
+
+    Examples:
+      | type                           | input                |
+      | GEOMETRY(4326)                 | 'not-wkb'            |
+      | GEOGRAPHY(4326)                | 'not-wkb'            |
+      | GEOMETRY(4326)                 | ''                   |
+      | GEOGRAPHY(4326)                | ''                   |
+      | GEOMETRY(4326)                 | CAST(NULL AS STRING) |
+      | GEOGRAPHY(4326)                | CAST(NULL AS STRING) |
+      | STRUCT<value: GEOMETRY(4326)>  | ''                   |
+      | STRUCT<value: GEOGRAPHY(4326)> | ''                   |
+      | ARRAY<GEOMETRY(4326)>          | ''                   |
+      | ARRAY<GEOGRAPHY(4326)>         | ''                   |
+      | MAP<STRING, GEOMETRY(4326)>    | ''                   |
+      | MAP<GEOGRAPHY(4326), STRING>   | ''                   |
+
   Scenario Outline: <function> preserves interval qualifiers
     When query
       """

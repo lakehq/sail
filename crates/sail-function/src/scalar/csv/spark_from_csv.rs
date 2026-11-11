@@ -562,6 +562,7 @@ fn parse_fields(schema: &str, session_timezone: &str) -> Result<Fields> {
                 "Duplicate field name '{name}'"
             )));
         }
+        validate_csv_data_type(&f.data_type)?;
     }
     data_type_resolver(session_timezone)
         .resolve_fields(&fields)
@@ -590,6 +591,7 @@ fn data_type_resolver(session_timezone: &str) -> DataTypeResolver {
 }
 
 fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
+    validate_csv_data_type(dt)?;
     let dt = match dt {
         spec::DataType::UserDefined { sql_type, .. } => sql_type,
         dt => dt,
@@ -597,6 +599,38 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Resul
     data_type_resolver(session_timezone)
         .resolve_data_type(dt)
         .map_err(|e| DataFusionError::Plan(e.to_string()))
+}
+
+fn validate_csv_data_type(dt: &spec::DataType) -> Result<()> {
+    match dt {
+        // CSV parsing does not decode or validate WKB values.
+        spec::DataType::Geometry { .. } | spec::DataType::Geography { .. } => {
+            plan_err!("Unsupported data type in from_csv schema: {dt:?}")
+        }
+        spec::DataType::List { data_type, .. }
+        | spec::DataType::FixedSizeList { data_type, .. }
+        | spec::DataType::LargeList { data_type, .. } => validate_csv_data_type(data_type),
+        spec::DataType::Struct { fields } => fields
+            .iter()
+            .try_for_each(|field| validate_csv_data_type(&field.data_type)),
+        spec::DataType::Union { union_fields, .. } => union_fields
+            .iter()
+            .try_for_each(|(_, field)| validate_csv_data_type(&field.data_type)),
+        spec::DataType::Map {
+            key_type,
+            value_type,
+            ..
+        }
+        | spec::DataType::Dictionary {
+            key_type,
+            value_type,
+        } => {
+            validate_csv_data_type(key_type)?;
+            validate_csv_data_type(value_type)
+        }
+        spec::DataType::UserDefined { sql_type, .. } => validate_csv_data_type(sql_type),
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]
