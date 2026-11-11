@@ -7,17 +7,18 @@ use arrow::array::{
 };
 use arrow::compute::{CastOptions, cast, cast_with_options};
 use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow_schema::extension::{EXTENSION_TYPE_NAME_KEY, ExtensionType, Uuid};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-pub const UUID_METADATA_KEY: &str = "iceberg.type";
+pub const UUID_METADATA_KEY: &str = EXTENSION_TYPE_NAME_KEY;
+pub const UUID_EXTENSION_NAME: &str = Uuid::NAME;
 
 pub fn is_uuid_field(field: &Field) -> bool {
-    field.data_type() == &DataType::FixedSizeBinary(16)
-        && field.metadata().get(UUID_METADATA_KEY).map(String::as_str) == Some("uuid")
+    field.has_valid_extension_type::<Uuid>()
 }
 
 pub fn contains_uuid(field: &Field) -> bool {
@@ -38,10 +39,16 @@ pub fn uuid_input_field(source: &Field, target: &Field) -> Field {
     if is_uuid_field(target) || (source.data_type() == &DataType::Null && contains_uuid(target)) {
         let mut metadata = source.metadata().clone();
         metadata.extend(target.metadata().clone());
-        return source
+        let field = source
             .clone()
             .with_data_type(target.data_type().clone())
             .with_metadata(metadata);
+        return if is_uuid_field(target) {
+            // Do not carry parameters from the source's former extension type.
+            field.with_extension_type(Uuid)
+        } else {
+            field
+        };
     }
     let data_type = match (source.data_type(), target.data_type()) {
         (DataType::Struct(source), DataType::Struct(target)) => {
@@ -373,8 +380,7 @@ mod tests {
     use super::*;
 
     fn uuid_field() -> Field {
-        Field::new("u", DataType::FixedSizeBinary(16), true)
-            .with_metadata([(UUID_METADATA_KEY.to_string(), "uuid".to_string())].into())
+        Field::new("u", DataType::FixedSizeBinary(16), true).with_extension_type(Uuid)
     }
 
     #[test]
@@ -746,16 +752,101 @@ mod tests {
     }
 
     #[test]
-    fn uuid_identity_requires_metadata() {
-        assert!(is_uuid_field(&uuid_field()));
-        assert!(!is_uuid_field(&Field::new(
-            "f",
-            DataType::FixedSizeBinary(16),
-            true
-        )));
-        assert!(!is_uuid_field(
-            &uuid_field().with_data_type(DataType::Binary)
-        ));
+    fn uuid_identity_requires_canonical_extension() {
+        use arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY;
+
+        let uuid = uuid_field();
+        assert_eq!(
+            uuid.metadata()
+                .get("ARROW:extension:name")
+                .map(String::as_str),
+            Some("arrow.uuid")
+        );
+        assert_eq!(uuid.metadata().len(), 1);
+        assert!(is_uuid_field(&uuid));
+        for data_type in [DataType::Binary, DataType::FixedSizeBinary(8)] {
+            assert!(!is_uuid_field(&uuid.clone().with_data_type(data_type)));
+        }
+        let fixed = Field::new("f", DataType::FixedSizeBinary(16), true);
+        assert!(!is_uuid_field(&fixed));
+        for (key, name) in [
+            ("iceberg.type", "uuid"),
+            (UUID_METADATA_KEY, "uuid"),
+            (UUID_METADATA_KEY, "other.extension"),
+        ] {
+            assert!(!is_uuid_field(
+                &fixed
+                    .clone()
+                    .with_metadata([(key.into(), name.into())].into())
+            ));
+        }
+        // Arrow's canonical UUID permits missing or empty parameters, but nothing else.
+        for (parameters, valid) in [("", true), ("{}", false)] {
+            let mut field = uuid.clone();
+            field
+                .metadata_mut()
+                .insert(EXTENSION_TYPE_METADATA_KEY.into(), parameters.into());
+            assert_eq!(is_uuid_field(&field), valid);
+        }
+    }
+
+    #[test]
+    fn uuid_input_replaces_former_extension_parameters() {
+        use arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY;
+
+        let source = Field::new("source", DataType::FixedSizeBinary(16), true).with_metadata(
+            [
+                (UUID_METADATA_KEY.into(), "other.extension".into()),
+                (EXTENSION_TYPE_METADATA_KEY.into(), "parameters".into()),
+                ("custom".into(), "retained".into()),
+            ]
+            .into(),
+        );
+        let result = uuid_input_field(&source, &uuid_field());
+        assert!(is_uuid_field(&result));
+        assert!(!result.metadata().contains_key(EXTENSION_TYPE_METADATA_KEY));
+        assert_eq!(
+            result.metadata().get("custom"),
+            source.metadata().get("custom")
+        );
+    }
+
+    #[test]
+    fn uuid_ipc_preserves_nested_identity_and_bytes() -> Result<()> {
+        use arrow::array::RecordBatch;
+        use arrow::datatypes::Schema;
+        use arrow::ipc::reader::StreamReader;
+        use arrow::ipc::writer::StreamWriter;
+
+        let strings: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("6f1c2d3e-4b5a-4c6d-8e7f-0123456789ab"),
+            None,
+        ]));
+        let values = convert_uuid_array(&strings, &uuid_field(), false)?;
+        for (array, field) in nested_cases(values.clone(), None)? {
+            let array = convert_uuid_array(&array, &field, false)?;
+            let schema = Arc::new(Schema::new(vec![
+                uuid_field(),
+                Field::new("fixed", DataType::FixedSizeBinary(16), true),
+                field,
+            ]));
+            let batch =
+                RecordBatch::try_new(schema.clone(), vec![values.clone(), values.clone(), array])?;
+            let mut bytes = Vec::new();
+            {
+                let mut writer = StreamWriter::try_new(&mut bytes, &schema)?;
+                writer.write(&batch)?;
+                writer.finish()?;
+            }
+            let mut reader = StreamReader::try_new(std::io::Cursor::new(bytes), None)?;
+            assert_eq!(reader.schema(), schema);
+            assert!(is_uuid_field(reader.schema().field(0)));
+            assert!(!is_uuid_field(reader.schema().field(1)));
+            assert!(contains_uuid(reader.schema().field(2)));
+            assert_eq!(reader.next().transpose()?, Some(batch));
+            assert!(reader.next().is_none());
+        }
+        Ok(())
     }
 
     #[test]

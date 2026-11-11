@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use arrow_schema as adt;
 use arrow_schema::extension::{
-    EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, ExtensionType,
+    EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, ExtensionType, Uuid,
 };
 use parquet_variant_compute::VariantType;
 use sail_common::error::{CommonError, CommonResult};
@@ -357,10 +357,6 @@ impl DataTypeResolver {
                 metadata.insert(EXTENSION_TYPE_METADATA_KEY.to_string(), ext.to_string());
                 data_type
             }
-            spec::DataType::Uuid => {
-                metadata.insert("iceberg.type".to_string(), "uuid".to_string());
-                data_type
-            }
             spec::DataType::Variant => {
                 metadata.insert(
                     EXTENSION_TYPE_NAME_KEY.to_string(),
@@ -370,10 +366,14 @@ impl DataTypeResolver {
             }
             x => x,
         };
-        Ok(
-            adt::Field::new(name, self.resolve_data_type(data_type)?, *nullable)
-                .with_metadata(metadata),
-        )
+        let mut field = adt::Field::new(name, self.resolve_data_type(data_type)?, *nullable)
+            .with_metadata(metadata);
+        if matches!(data_type, spec::DataType::Uuid) {
+            field.try_with_extension_type(Uuid).map_err(|e| {
+                CommonError::internal(format!("failed to set UUID extension type: {e}"))
+            })?;
+        }
+        Ok(field)
     }
 
     pub fn resolve_fields(&self, fields: &spec::Fields) -> CommonResult<adt::Fields> {

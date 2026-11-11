@@ -3570,12 +3570,17 @@ mod test {
 
     #[test]
     fn test_case_result_type_preserves_duplicate_field_metadata() {
-        use sail_common_datafusion::uuid::UUID_METADATA_KEY;
+        use sail_common_datafusion::uuid::{UUID_EXTENSION_NAME, UUID_METADATA_KEY};
 
         use crate::type_coercion::case_result_type;
 
-        let uuid = Field::new("x", DataType::FixedSizeBinary(16), true)
-            .with_metadata([(UUID_METADATA_KEY.to_string(), "uuid".to_string())].into());
+        let uuid = Field::new("x", DataType::FixedSizeBinary(16), true).with_metadata(
+            [(
+                UUID_METADATA_KEY.to_string(),
+                UUID_EXTENSION_NAME.to_string(),
+            )]
+            .into(),
+        );
         let string = Field::new("x", DataType::Utf8, true);
         for fields in [vec![uuid.clone(), string.clone()], vec![string, uuid]] {
             let data_type = DataType::Struct(fields.into());

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from uuid import UUID
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from pyiceberg import types as iceberg_types
@@ -64,7 +65,9 @@ def test_uuid_sql_insert_cast_and_artifacts(spark, tmp_path, partitioned):
             assert column.physical_type == "FIXED_LEN_BYTE_ARRAY"
             assert column.length == UUID_BYTE_LENGTH
             assert column.logical_type.type == "UUID"
+            assert parquet.schema_arrow.field("x").type == pa.uuid()
             assert parquet.schema_arrow.field("x").metadata[b"PARQUET:field_id"] == str(fields[1]["id"]).encode()
+            assert {value.as_py() for value in parquet.read(columns=["x"]).column("x")} <= {UUID(VALUE), None}
         if partitioned:
             metadata_file = next(
                 p for p in (tmp_path / "metadata").glob("*.metadata.json") if json.loads(p.read_text()) == metadata
@@ -150,6 +153,10 @@ def test_uuid_nested_dataframe_write(spark, tmp_path):
         assert fields[3]["type"]["value"] == "uuid"
         for parquet in _data_files(tmp_path):
             assert [parquet.schema.column(i).logical_type.type for i in (1, 2, 4)] == ["UUID"] * 3
+            arrow_schema = parquet.schema_arrow
+            assert arrow_schema.field("s").type.field("u").type == pa.uuid()
+            assert arrow_schema.field("a").type.value_type == pa.uuid()
+            assert arrow_schema.field("m").type.item_type == pa.uuid()
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
@@ -700,6 +707,8 @@ def test_uuid_and_fixed16_keep_distinct_identity(spark, sql_catalog):
         for parquet in _data_files(location):
             assert parquet.schema.column(1).logical_type.type == "UUID"
             assert parquet.schema.column(2).logical_type.type == "NONE"
+            assert parquet.schema_arrow.field("u").type == pa.uuid()
+            assert parquet.schema_arrow.field("f").type == pa.binary(UUID_BYTE_LENGTH)
         with pytest.raises(Exception, match=r"(?i)Column 'f' has type"):
             spark.createDataFrame([(2, VALUE, VALUE)], "id LONG, u STRING, f STRING").write.format("iceberg").mode(
                 "append"
