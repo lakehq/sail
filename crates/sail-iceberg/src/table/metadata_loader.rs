@@ -28,13 +28,22 @@ const METADATA_COMPRESSION_NONE: &str = "none";
 const METADATA_COMPRESSION_GZIP: &str = "gzip";
 const VERSION_HINT_PATH: &str = "metadata/version-hint.text";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum MetadataFileCodec {
     None,
     Gzip,
 }
 
 impl MetadataFileCodec {
+    pub(crate) fn from_properties(properties: &HashMap<String, String>) -> Result<Self> {
+        Self::from_property_value(
+            properties
+                .get(METADATA_COMPRESSION_PROPERTY)
+                .map(String::as_str)
+                .unwrap_or(METADATA_COMPRESSION_NONE),
+        )
+    }
+
     fn from_property_value(value: &str) -> Result<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             METADATA_COMPRESSION_NONE => Ok(Self::None),
@@ -43,7 +52,7 @@ impl MetadataFileCodec {
         }
     }
 
-    fn file_extension(self) -> &'static str {
+    pub(crate) fn file_extension(self) -> &'static str {
         match self {
             Self::None => ".metadata.json",
             Self::Gzip => ".gz.metadata.json",
@@ -178,11 +187,7 @@ pub(crate) fn encode_metadata_file(path: &str, data: &[u8]) -> io::Result<Vec<u8
 pub(crate) fn metadata_file_extension_from_properties(
     properties: &HashMap<String, String>,
 ) -> Result<&'static str> {
-    let codec = properties
-        .get(METADATA_COMPRESSION_PROPERTY)
-        .map(String::as_str)
-        .unwrap_or(METADATA_COMPRESSION_NONE);
-    Ok(MetadataFileCodec::from_property_value(codec)?.file_extension())
+    Ok(MetadataFileCodec::from_properties(properties)?.file_extension())
 }
 
 /// Writes the non-authoritative Iceberg metadata version hint.
@@ -241,7 +246,7 @@ pub async fn find_latest_metadata_file(
             if let Some(filename) = path_str.split('/').next_back()
                 && let Some(metadata_file) = parse_metadata_file_name(filename)
             {
-                return Ok(Some((metadata_file.version, path_str, obj.last_modified)));
+                return Ok(Some((metadata_file.version, path_str)));
             }
             Ok(None)
         })
@@ -251,14 +256,19 @@ pub async fn find_latest_metadata_file(
     match metadata_files {
         Ok(mut files) => {
             log::trace!("find_latest_metadata_file: found files: {:?}", files);
-            files.sort_by(|left, right| {
-                left.0
-                    .cmp(&right.0)
-                    .then_with(|| left.2.cmp(&right.2))
-                    .then_with(|| left.1.cmp(&right.1))
-            });
+            files.sort();
+            // Neither modification time nor the advisory hint establishes commit authority.
+            // Leave ambiguous publications intact for explicit recovery, including old versions.
+            if let Some(pair) = files.windows(2).find(|pair| pair[0].0 == pair[1].0) {
+                return plan_err!(
+                    "Ambiguous Iceberg metadata version {}: {} and {}; explicit recovery required",
+                    pair[0].0,
+                    pair[0].1,
+                    pair[1].1
+                );
+            }
 
-            if let Some((version, latest_file, _)) = files.last() {
+            if let Some((version, latest_file)) = files.last() {
                 log::trace!(
                     "find_latest_metadata_file: selected version {} path={}",
                     version,
@@ -447,6 +457,49 @@ mod tests {
             "zstd".to_string(),
         );
         assert!(metadata_file_extension_from_properties(&properties).is_err());
+    }
+
+    #[tokio::test]
+    async fn ambiguous_versions_require_explicit_recovery() -> Result<()> {
+        for alternate in [
+            "v1.gz.metadata.json",
+            "v1.metadata.json.gz",
+            "00001-other.metadata.json",
+        ] {
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            for file in [
+                "v1.metadata.json",
+                alternate,
+                "v2.metadata.json",
+                "version-hint.text",
+            ] {
+                store
+                    .put(
+                        &ObjectPath::from(format!("table/metadata/{file}")),
+                        Bytes::from_static(b"unchanged").into(),
+                    )
+                    .await?;
+            }
+            let url = Url::parse("memory:///table/")
+                .map_err(|error| DataFusionError::External(Box::new(error)))?;
+            let error = find_latest_metadata_file(&store, &url)
+                .await
+                .err()
+                .ok_or_else(|| DataFusionError::Internal("ambiguous metadata accepted".into()))?;
+            assert!(
+                error.to_string().contains("explicit recovery required"),
+                "{error}"
+            );
+            assert_eq!(
+                store
+                    .get(&ObjectPath::from(format!("table/metadata/{alternate}")))
+                    .await?
+                    .bytes()
+                    .await?,
+                Bytes::from_static(b"unchanged")
+            );
+        }
+        Ok(())
     }
 
     #[test]

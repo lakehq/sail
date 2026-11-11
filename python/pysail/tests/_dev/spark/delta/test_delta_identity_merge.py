@@ -348,6 +348,34 @@ def test_identity_cdf_overwrite_evaluates_inserted_rows_once(spark, identity_tab
     assert spark.table(name).where("k=18").first().id > expected_hwm
 
 
+@pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
+def test_conditional_merge_schema_overwrite_tracks_omitted_identity(spark, identity_table, mode):
+    name, path = identity_table(mode=mode, schema=f"id BIGINT GENERATED {mode} AS IDENTITY, p INT")
+    spark.sql(f"INSERT INTO {name} (p) VALUES (1), (2)").collect()  # noqa: S608
+    before = _watermark(path)
+    retained = spark.table(name).where("p=2").first().id
+    (
+        spark.createDataFrame([(1,)], "p INT")
+        .write.format("delta")
+        .mode("overwrite")
+        .option("replaceWhere", "p=1")
+        .option("mergeSchema", "true")
+        .saveAsTable(name)
+    )
+    replaced = spark.table(name).where("p=1").first().id
+    assert replaced > before
+    assert _watermark(path) == replaced
+    assert spark.table(name).where("p=2").first().id == retained
+    spark.sql(f"INSERT INTO {name} (p) VALUES (3)").collect()  # noqa: S608
+    rows = spark.read.format("delta").load(str(path)).orderBy("p").collect()
+    assert [row.p for row in rows] == [1, 2, 3]
+    assert len({row.id for row in rows}) == 3
+    assert rows[0].id == replaced
+    assert rows[1].id == retained
+    assert rows[2].id > replaced
+    assert _watermark(path) == rows[2].id
+
+
 @pytest.mark.parametrize("deletion_vectors", [False, True])
 def test_identity_cdf_unconditional_delete_deduplicates_target(spark, identity_table, deletion_vectors):
     explicit_id = 100000

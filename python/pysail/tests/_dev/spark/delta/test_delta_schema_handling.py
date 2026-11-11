@@ -10,6 +10,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from pyspark.errors import PySparkException
 from pyspark.sql.types import (
     ArrayType,
     DecimalType,
@@ -27,6 +28,93 @@ from pyspark.sql.types import (
 )
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
+
+
+@pytest.fixture
+def write_target(spark, tmp_path):
+    name = "delta_write_schema"
+    path = tmp_path / "table"
+    try:
+        yield name, path
+    finally:
+        spark.sql("DROP VIEW IF EXISTS delta_write_schema_source")
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def _create_write_target(spark, target, *, default=False):
+    name, path = target
+    spark.sql(
+        f"CREATE TABLE {name} (a INT, b INT) USING delta "
+        f"LOCATION '{escape_sql_string_literal(str(path))}' "
+        "TBLPROPERTIES ('delta.feature.allowColumnDefaults'='supported')"
+    )
+    if default:
+        spark.sql(f"ALTER TABLE {name} ALTER COLUMN b SET DEFAULT 42")
+    spark.sql(f"INSERT INTO {name} VALUES (1, 2)")  # noqa: S608
+
+
+def _write_files(path):
+    return {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()}
+
+
+def _assert_write_rows_and_schema(frame, expected):
+    schema = StructType([StructField(name, IntegerType(), True) for name in ("a", "b")])
+    assert [(f.name, f.dataType, f.nullable) for f in frame.schema] == [
+        (f.name, f.dataType, f.nullable) for f in schema
+    ]
+    assert [tuple(row) for row in frame.orderBy(*schema.fieldNames()).collect()] == sorted(expected)
+
+
+def _append_write_target(spark, target, source, api):
+    name, path = target
+    if api in ("sql_name", "sql_position"):
+        source.createOrReplaceTempView("delta_write_schema_source")
+        clause = " BY NAME" if api == "sql_name" else ""
+        spark.sql(f"INSERT INTO {name}{clause} SELECT * FROM delta_write_schema_source").collect()  # noqa: S608
+    elif api == "insert_into":
+        source.write.mode("append").insertInto(name)
+    elif api == "save_table":
+        source.write.format("delta").mode("append").option("path", str(path)).saveAsTable(name)
+    else:
+        assert api == "v2"
+        source.writeTo(name).append()
+
+
+@pytest.mark.parametrize("api", ["sql_name", "save_table", "v2"])
+@pytest.mark.parametrize("source_schema", ["a INT, c INT", "a INT, b INT, c INT"])
+def test_delta_defaults_do_not_discard_unknown_write_columns(spark, write_target, api, source_schema):
+    # The extended name-matching path is shared with Delta default columns.
+    _create_write_target(spark, write_target, default=True)
+    name, path = write_target
+    before = _write_files(path)
+    source = spark.createDataFrame([tuple(range(10, 10 + len(source_schema.split(","))))], source_schema)
+    with pytest.raises(PySparkException, match="column not found in target table: c"):
+        _append_write_target(spark, write_target, source, api)
+    assert _write_files(path) == before
+    _assert_write_rows_and_schema(spark.table(name), [(1, 2)])
+    _append_write_target(spark, write_target, spark.createDataFrame([(10,)], "a INT"), api)
+    _assert_write_rows_and_schema(spark.table(name), [(1, 2), (10, 42)])
+
+
+@pytest.mark.parametrize("api", ["sql_name", "save_table", "v2"])
+def test_delta_nullable_omission_policy_is_unchanged(spark, write_target, api):
+    # Iceberg's nullable-only omission rule must not widen Delta's fast path.
+    _create_write_target(spark, write_target)
+    name, path = write_target
+    before = _write_files(path)
+    source = spark.createDataFrame([(10,)], "a INT")
+    with pytest.raises(PySparkException, match="input schema for INSERT has 1 fields"):
+        _append_write_target(spark, write_target, source, api)
+    assert _write_files(path) == before
+    _assert_write_rows_and_schema(spark.table(name), [(1, 2)])
+
+
+@pytest.mark.parametrize("api", ["sql_position", "insert_into"])
+def test_delta_positional_default_omission_is_unchanged(spark, write_target, api):
+    _create_write_target(spark, write_target, default=True)
+    source = spark.createDataFrame([(10,)], "a INT")
+    _append_write_target(spark, write_target, source, api)
+    _assert_write_rows_and_schema(spark.table(write_target[0]), [(1, 2), (10, 42)])
 
 
 def _as_utc(dt: datetime) -> datetime:

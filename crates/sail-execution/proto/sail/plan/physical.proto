@@ -79,6 +79,7 @@ message ExtendedPhysicalPlanNode {
     InputFileMetadataExecNode input_file_metadata = 64;
     DeltaMaintenanceExecNode delta_maintenance = 65;
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
+    SeededRandomExecNode seeded_random = 67;
     IdentityGenerateExecNode identity_generate = 68;
   }
 }
@@ -1044,6 +1045,23 @@ message SparkPartitionIdExecNode {
   bytes schema = 3;
 }
 
+message SeededRandomExecNode {
+  bytes input = 1;
+  repeated SeededRandomColumn columns = 2;
+  bytes schema = 3;
+}
+
+message SeededRandomColumn {
+  string name = 1;
+  bytes expr = 2;
+  PartitionSeed seed = 3;
+}
+
+enum PartitionSeed {
+  PARTITION_SEED_OFFSET = 0;
+  PARTITION_SEED_JAVA_RANDOM = 1;
+}
+
 message CoalesceExecNode {
   bytes input = 1;
   uint64 output_partitions = 2;
@@ -1147,6 +1165,8 @@ message IcebergCommitExecNode {
     CommandOutput command_output = 9;
     IcebergRewriteDataFilesOutput rewrite_data_files_output = 10;
   }
+  // Typed private replacement metadata and staged catalog identity, never a live guard.
+  optional string table_replacement_json = 11;
 }
 
 message IcebergRewriteDataFilesOutput {

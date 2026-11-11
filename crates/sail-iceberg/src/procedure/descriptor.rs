@@ -185,6 +185,26 @@ impl IcebergProcedureType {
                 ],
                 LakeProcedureAccess::MetadataCommit,
             ),
+            Self::RewriteManifests => (
+                vec![
+                    LakeProcedureParameter::required("table", string),
+                    LakeProcedureParameter::optional("use_caching", LakeProcedureDataType::Boolean),
+                    LakeProcedureParameter::optional("spec_id", LakeProcedureDataType::Int32),
+                ],
+                vec![
+                    LakeProcedureField::new(
+                        "rewritten_manifests_count",
+                        LakeProcedureDataType::Int32,
+                        false,
+                    ),
+                    LakeProcedureField::new(
+                        "added_manifests_count",
+                        LakeProcedureDataType::Int32,
+                        false,
+                    ),
+                ],
+                LakeProcedureAccess::MetadataCommit,
+            ),
             Self::FastForward => (
                 vec![
                     LakeProcedureParameter::required("table", string),

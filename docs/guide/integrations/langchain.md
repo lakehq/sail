@@ -31,18 +31,18 @@ uv add "langchain-sail[spark]" langchain langchain-openai
 
 :::
 
-The `spark` extra installs `pyspark-client==4.2.0` without the JVM components included in the full PySpark distribution.
+The `spark` extra installs `pyspark-client` without the JVM components included in the full PySpark distribution.
 
 Applications that require the full PySpark distribution should install it separately instead of using the `spark` extra.
 
 ::: code-group
 
 ```bash [pip]
-pip install langchain-sail "pyspark[connect]==4.2.0" langchain langchain-openai
+pip install langchain-sail "pyspark[connect]==4.2.1" langchain langchain-openai
 ```
 
 ```bash [uv]
-uv add langchain-sail "pyspark[connect]==4.2.0" langchain langchain-openai
+uv add langchain-sail "pyspark[connect]==4.2.1" langchain langchain-openai
 ```
 
 :::

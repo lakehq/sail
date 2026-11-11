@@ -116,6 +116,12 @@
       }
     },
     {
+      "input": "SELECT * FROM (SELECT * FROM metrics) BIN BY (\n  RANGE ts_start TO ts_end\n  BIN WIDTH INTERVAL '5' MINUTE\n  DISTRIBUTE UNIFORM (value)\n) WHERE value > 0",
+      "output": {
+        "failure": "invalid argument: found BY at 42:44 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
       "input": "SELECT * FROM (SELECT * FROM t CHANGES FROM VERSION 1 TO VERSION 5) sub",
       "output": {
         "failure": "invalid argument: found FROM at 39:43 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', or ')'"
@@ -227,6 +233,47 @@
       }
     },
     {
+      "input": "SELECT * FROM `t@v1`",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t@v1"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "SELECT * FROM a",
       "output": {
         "success": {
@@ -319,6 +366,12 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c @v123456789",
+      "output": {
+        "failure": "invalid argument: found @ at 20:21 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -1685,6 +1738,57 @@
       }
     },
     {
+      "input": "SELECT * FROM a.b.c@20190129003758000",
+      "output": {
+        "failure": "invalid argument: found @ at 19:20 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c@20190129003758123",
+      "output": {
+        "failure": "invalid argument: found @ at 19:20 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c@V123456789",
+      "output": {
+        "failure": "invalid argument: found @ at 19:20 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c@v'Snapshot123456789'",
+      "output": {
+        "failure": "invalid argument: found @ at 19:20 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a.b.c@v123456789",
+      "output": {
+        "failure": "invalid argument: found @ at 19:20 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a@",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input: missing INTEGER_VALUE. SQLSTATE: 42601 (line 1, pos 16)\n\n== SQL ==\nSELECT * FROM a@\n----------------^^^\n",
+      "output": {
+        "failure": "invalid argument: found @ at 15:16 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a@foo",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'foo': missing INTEGER_VALUE. SQLSTATE: 42601 (line 1, pos 16)\n\n== SQL ==\nSELECT * FROM a@foo\n----------------^^^\n",
+      "output": {
+        "failure": "invalid argument: found @ at 15:16 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM a@v",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input. SQLSTATE: 42601 (line 1, pos 17)\n\n== SQL ==\nSELECT * FROM a@v\n-----------------^^^\n",
+      "output": {
+        "failure": "invalid argument: found @ at 15:16 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
       "input": "SELECT * FROM bernoulli TABLESAMPLE BERNOULLI (10 PERCENT) AS x",
       "output": {
         "failure": "invalid argument: found BERNOULLI at 36:45 expected '('"
@@ -1749,6 +1853,77 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "SELECT * FROM events\nPIVOT (sum(amount) FOR category IN ('a', 'b'))\nBIN BY (\n  RANGE ts_start TO ts_end\n  BIN WIDTH INTERVAL '5' MINUTE\n  DISTRIBUTE UNIFORM (a, b)\n)",
+      "output": {
+        "failure": "invalid argument: found category at 44:52 expected '('"
+      }
+    },
+    {
+      "input": "SELECT * FROM metrics\nBIN BY (\n  RANGE ts_start TO ts_end\n  BIN WIDTH INTERVAL '5' MINUTE\n  DISTRIBUTE UNIFORM (value)\n)\nBIN BY (\n  RANGE bin_start TO bin_end\n  BIN WIDTH INTERVAL '1' HOUR\n  DISTRIBUTE UNIFORM (value)\n  BIN_START AS hr_start\n  BIN_END AS hr_end\n  BIN_DISTRIBUTE_RATIO AS hr_ratio\n)",
+      "output": {
+        "failure": "invalid argument: found BY at 26:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM metrics BIN BY (\n  BIN WIDTH INTERVAL '5' MINUTE\n  DISTRIBUTE UNIFORM (value)\n)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'BIN': missing 'RANGE'. SQLSTATE: 42601 (line 2, pos 2)\n\n== SQL ==\nSELECT * FROM metrics BIN BY (\n  BIN WIDTH INTERVAL '5' MINUTE\n--^^^\n  DISTRIBUTE UNIFORM (value)\n)\n",
+      "output": {
+        "failure": "invalid argument: found BY at 26:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM metrics BIN BY (\n  BIN WIDTH INTERVAL '5' MINUTE\n  RANGE ts_start TO ts_end\n  DISTRIBUTE UNIFORM (value)\n)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'BIN': missing 'RANGE'. SQLSTATE: 42601 (line 2, pos 2)\n\n== SQL ==\nSELECT * FROM metrics BIN BY (\n  BIN WIDTH INTERVAL '5' MINUTE\n--^^^\n  RANGE ts_start TO ts_end\n  DISTRIBUTE UNIFORM (value)\n)\n",
+      "output": {
+        "failure": "invalid argument: found BY at 26:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM metrics BIN BY (\n  RANGE ts_start TO ts_end\n  BIN WIDTH INTERVAL '1' HOUR\n  ALIGN TO TIMESTAMP '2024-01-01 00:30:00'\n  DISTRIBUTE UNIFORM (bytes_sent, requests)\n  BIN_START AS ws\n  BIN_END AS we\n  BIN_DISTRIBUTE_RATIO AS frac\n)",
+      "output": {
+        "failure": "invalid argument: found BY at 26:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM metrics BIN BY (\n  RANGE ts_start TO ts_end\n  BIN WIDTH INTERVAL '5' MINUTE\n  DISTRIBUTE UNIFORM ()\n)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'. SQLSTATE: 42601 (line 4, pos 22)\n\n== SQL ==\nSELECT * FROM metrics BIN BY (\n  RANGE ts_start TO ts_end\n  BIN WIDTH INTERVAL '5' MINUTE\n  DISTRIBUTE UNIFORM ()\n----------------------^^^\n)\n",
+      "output": {
+        "failure": "invalid argument: found BY at 26:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM metrics BIN BY (\n  RANGE ts_start TO ts_end\n  BIN WIDTH INTERVAL '5' MINUTE\n  DISTRIBUTE UNIFORM (value)\n)",
+      "output": {
+        "failure": "invalid argument: found BY at 26:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM metrics BIN BY (\n  RANGE ts_start TO ts_end\n  BIN WIDTH INTERVAL '5' MINUTE\n  DISTRIBUTE UNIFORM (value)\n) AS binned",
+      "output": {
+        "failure": "invalid argument: found BY at 26:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM metrics BIN BY (\n  RANGE ts_start TO ts_end\n  BIN WIDTH INTERVAL '5' MINUTE\n  DISTRIBUTE UNIFORM (value)\n) binned",
+      "output": {
+        "failure": "invalid argument: found BY at 26:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM metrics BIN BY (\n  RANGE ts_start TO ts_end\n  BIN WIDTH INTERVAL '5' MINUTE\n)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'. SQLSTATE: 42601 (line 4, pos 0)\n\n== SQL ==\nSELECT * FROM metrics BIN BY (\n  RANGE ts_start TO ts_end\n  BIN WIDTH INTERVAL '5' MINUTE\n)\n^^^\n",
+      "output": {
+        "failure": "invalid argument: found BY at 26:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM metrics BIN BY (\n  RANGE ts_start TO ts_end\n  DISTRIBUTE UNIFORM (value)\n)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'DISTRIBUTE'. SQLSTATE: 42601 (line 3, pos 2)\n\n== SQL ==\nSELECT * FROM metrics BIN BY (\n  RANGE ts_start TO ts_end\n  DISTRIBUTE UNIFORM (value)\n--^^^\n)\n",
+      "output": {
+        "failure": "invalid argument: found BY at 26:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -2095,6 +2270,54 @@
       }
     },
     {
+      "input": "SELECT * FROM t bin",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "name": "bin",
+                  "columns": []
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "SELECT * FROM t system",
       "output": {
         "success": {
@@ -2140,6 +2363,69 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "SELECT * FROM t@123",
+      "exception": "\n[INVALID_TIME_TRAVEL_TIMESTAMP_FORMAT] The provided timestamp 123 doesn't match the expected syntax yyyyMMddHHmmssSSS. SQLSTATE: 22000\n== SQL (line 1, position 15) ==\nSELECT * FROM t@123\n              ^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found @ at 15:16 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM t@20190129",
+      "exception": "\n[INVALID_TIME_TRAVEL_TIMESTAMP_FORMAT] The provided timestamp 20190129 doesn't match the expected syntax yyyyMMddHHmmssSSS. SQLSTATE: 22000\n== SQL (line 1, position 15) ==\nSELECT * FROM t@20190129\n              ^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found @ at 15:16 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM t@20190129003758",
+      "exception": "\n[INVALID_TIME_TRAVEL_TIMESTAMP_FORMAT] The provided timestamp 20190129003758 doesn't match the expected syntax yyyyMMddHHmmssSSS. SQLSTATE: 22000\n== SQL (line 1, position 15) ==\nSELECT * FROM t@20190129003758\n              ^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found @ at 15:16 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM t@20190129003758000 TIMESTAMP AS OF '2019-01-29'",
+      "exception": "\n[MULTIPLE_TIME_TRAVEL_SPEC] Cannot specify time travel in more than one of: the '@' suffix in the table name, the time travel clause, and the read options. SQLSTATE: 42K0E\n== SQL (line 1, position 35) ==\n...LECT * FROM t@20190129003758000 TIMESTAMP AS OF '2019-01-29'\n                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found @ at 15:16 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM t@20190129003758000 VERSION AS OF 2",
+      "exception": "\n[MULTIPLE_TIME_TRAVEL_SPEC] Cannot specify time travel in more than one of: the '@' suffix in the table name, the time travel clause, and the read options. SQLSTATE: 42K0E\n== SQL (line 1, position 35) ==\n...LECT * FROM t@20190129003758000 VERSION AS OF 2\n                                   ^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found @ at 15:16 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM t@20191301000000000",
+      "exception": "\n[INVALID_TIME_TRAVEL_TIMESTAMP_FORMAT] The provided timestamp 20191301000000000 doesn't match the expected syntax yyyyMMddHHmmssSSS. SQLSTATE: 22000\n== SQL (line 1, position 15) ==\nSELECT * FROM t@20191301000000000\n              ^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found @ at 15:16 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM t@v1",
+      "exception": "\n[UNSUPPORTED_FEATURE.TIME_TRAVEL_AT_SYNTAX] The feature is not supported: Time travel using the '@' suffix in table names. Set \"spark.sql.timeTravel.atSyntax.enabled\" to true to enable it. SQLSTATE: 0A000\n== SQL (line 1, position 15) ==\nSELECT * FROM t@v1\n              ^^^^\n",
+      "output": {
+        "failure": "invalid argument: found @ at 15:16 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM t@v1 TIMESTAMP AS OF '2019-01-29'",
+      "exception": "\n[MULTIPLE_TIME_TRAVEL_SPEC] Cannot specify time travel in more than one of: the '@' suffix in the table name, the time travel clause, and the read options. SQLSTATE: 42K0E\n== SQL (line 1, position 20) ==\nSELECT * FROM t@v1 TIMESTAMP AS OF '2019-01-29'\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found @ at 15:16 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "SELECT * FROM t@v1 VERSION AS OF 2",
+      "exception": "\n[MULTIPLE_TIME_TRAVEL_SPEC] Cannot specify time travel in more than one of: the '@' suffix in the table name, the time travel clause, and the read options. SQLSTATE: 42K0E\n== SQL (line 1, position 20) ==\nSELECT * FROM t@v1 VERSION AS OF 2\n                   ^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found @ at 15:16 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -2922,6 +3208,217 @@
       }
     },
     {
+      "input": "SELECT bin, width, uniform, align, bin_start, bin_end, bin_distribute_ratio FROM t WHERE bin > 0",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "filter": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "condition": {
+                    "unresolvedFunction": {
+                      "functionName": [
+                        ">"
+                      ],
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "bin"
+                            ],
+                            "planId": null,
+                            "isMetadataColumn": false
+                          }
+                        },
+                        {
+                          "literal": {
+                            "int32": {
+                              "value": 0
+                            }
+                          }
+                        }
+                      ],
+                      "namedArguments": [],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false,
+                      "isInternal": null,
+                      "ignoreNulls": null,
+                      "filter": null,
+                      "orderBy": null
+                    }
+                  }
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "bin"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "width"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "uniform"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "align"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "bin_start"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "bin_end"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "bin_distribute_ratio"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT bin.x FROM t bin WHERE bin.x > 0",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "filter": {
+                  "input": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null
+                      },
+                      "name": "bin",
+                      "columns": []
+                    },
+                    "planId": null
+                  },
+                  "condition": {
+                    "unresolvedFunction": {
+                      "functionName": [
+                        ">"
+                      ],
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "bin",
+                              "x"
+                            ],
+                            "planId": null,
+                            "isMetadataColumn": false
+                          }
+                        },
+                        {
+                          "literal": {
+                            "int32": {
+                              "value": 0
+                            }
+                          }
+                        }
+                      ],
+                      "namedArguments": [],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false,
+                      "isInternal": null,
+                      "ignoreNulls": null,
+                      "filter": null,
+                      "orderBy": null
+                    }
+                  }
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "bin",
+                      "x"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "SELECT interval FROM VALUES ('abc') AS tbl(interval);",
       "output": {
         "success": {
@@ -3408,6 +3905,78 @@
       }
     },
     {
+      "input": "select * from `unnest`(array(1, 2))",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "udtf": {
+                    "name": [
+                      "unnest"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "array"
+                          ],
+                          "arguments": [
+                            {
+                              "literal": {
+                                "int32": {
+                                  "value": 1
+                                }
+                              }
+                            },
+                            {
+                              "literal": {
+                                "int32": {
+                                  "value": 2
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "select * from a, lateral (select * from b) bb, lateral (select * from c) cc",
       "output": {
         "success": {
@@ -3555,6 +4124,47 @@
                   "namedTable": {
                     "name": [
                       "approx"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from asof",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "asof"
                     ],
                     "temporal": null,
                     "sample": null,
@@ -4671,6 +5281,13 @@
       }
     },
     {
+      "input": "select * from t distribute by a",
+      "exception": "\n[UNSUPPORTED_FEATURE.DISTRIBUTE_BY] The feature is not supported: DISTRIBUTE BY clause. SQLSTATE: 0A000\n== SQL (line 1, position 17) ==\nselect * from t distribute by a\n                ^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "not implemented: DISTRIBUTE BY"
+      }
+    },
+    {
       "input": "select * from t lateral view explode(x) expl as x",
       "output": {
         "success": {
@@ -4959,7 +5576,7 @@
     },
     {
       "input": "select * from t tablesample system (-10 percent) as x",
-      "exception": "\nSampling fraction (-0.1) must be on interval [0, 1].\n== SQL (line 1, position 17) ==\nselect * from t tablesample system (-10 percent) as x\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "exception": "\n[INVALID_TABLESAMPLE_FRACTION] Sampling fraction (-0.1) must be on interval [0, 1]. SQLSTATE: 22023\n== SQL (line 1, position 17) ==\nselect * from t tablesample system (-10 percent) as x\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found system at 28:34 expected '('"
       }
@@ -4991,7 +5608,7 @@
     },
     {
       "input": "select * from t tablesample system (150 percent) as x",
-      "exception": "\nSampling fraction (1.5) must be on interval [0, 1].\n== SQL (line 1, position 17) ==\nselect * from t tablesample system (150 percent) as x\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "exception": "\n[INVALID_TABLESAMPLE_FRACTION] Sampling fraction (1.5) must be on interval [0, 1]. SQLSTATE: 22023\n== SQL (line 1, position 17) ==\nselect * from t tablesample system (150 percent) as x\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found system at 28:34 expected '('"
       }
@@ -5215,7 +5832,7 @@
     },
     {
       "input": "select * from t tablesample(bucket 11 out of 10) as x",
-      "exception": "\nSampling fraction (1.1) must be on interval [0, 1].\n== SQL (line 1, position 17) ==\nselect * from t tablesample(bucket 11 out of 10) as x\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "exception": "\n[INVALID_TABLESAMPLE_FRACTION] Sampling fraction (1.1) must be on interval [0, 1]. SQLSTATE: 22023\n== SQL (line 1, position 17) ==\nselect * from t tablesample(bucket 11 out of 10) as x\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "query": {
@@ -5618,6 +6235,326 @@
                     }
                   }
                 ]
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from t, lateral unnest(t.arr) with ordinality u(v, o)",
+      "output": {
+        "failure": "invalid argument: found with at 39:43 expected 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "select * from unnest()",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "udtf": {
+                    "name": [
+                      "unnest"
+                    ],
+                    "arguments": [],
+                    "namedArguments": [],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from unnest(a) t",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "udtf": {
+                        "name": [
+                          "unnest"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "name": "t",
+                  "columns": []
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from unnest(a) with ordinality",
+      "output": {
+        "failure": "invalid argument: found with at 24:28 expected 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "select * from unnest(a, b)",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "udtf": {
+                    "name": [
+                      "unnest"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "a"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "b"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from unnest(a, b) t(x, y)",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "udtf": {
+                        "name": [
+                          "unnest"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "name": "t",
+                  "columns": [
+                    "x",
+                    "y"
+                  ]
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select * from unnest(array(1, 2, 3))",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "udtf": {
+                    "name": [
+                      "unnest"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedFunction": {
+                          "functionName": [
+                            "array"
+                          ],
+                          "arguments": [
+                            {
+                              "literal": {
+                                "int32": {
+                                  "value": 1
+                                }
+                              }
+                            },
+                            {
+                              "literal": {
+                                "int32": {
+                                  "value": 2
+                                }
+                              }
+                            },
+                            {
+                              "literal": {
+                                "int32": {
+                                  "value": 3
+                                }
+                              }
+                            }
+                          ],
+                          "namedArguments": [],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false,
+                          "isInternal": null,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
               ]
             },
             "planId": null
@@ -6352,7 +7289,7 @@
       }
     },
     {
-      "input": "select approx, distance, exact, nearest, similarity from t",
+      "input": "select approx, asof, distance, exact, nearest, similarity from t",
       "output": {
         "success": {
           "query": {
@@ -6376,6 +7313,15 @@
                   "unresolvedAttribute": {
                     "name": [
                       "approx"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "asof"
                     ],
                     "planId": null,
                     "isMetadataColumn": false
@@ -6412,6 +7358,43 @@
                   "unresolvedAttribute": {
                     "name": [
                       "similarity"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select asof from t",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "asof"
                     ],
                     "planId": null,
                     "isMetadataColumn": false
@@ -6709,6 +7692,43 @@
       }
     },
     {
+      "input": "select ordinality from unnest",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "unnest"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "ordinality"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "select rtrim(trailing 'S' from 'SS abc S'",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'. SQLSTATE: 42601 (line 1, pos 26)\n\n== SQL ==\nselect rtrim(trailing 'S' from 'SS abc S'\n--------------------------^^^\n",
       "output": {
@@ -6740,6 +7760,44 @@
                   "unresolvedAttribute": {
                     "name": [
                       "similarity"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "select unnest.ordinality from unnest",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "unnest"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "unnest",
+                      "ordinality"
                     ],
                     "planId": null,
                     "isMetadataColumn": false

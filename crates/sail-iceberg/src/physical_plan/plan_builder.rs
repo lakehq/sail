@@ -44,6 +44,7 @@ pub struct IcebergPlanBuilder<'a> {
     sink_mode: PhysicalSinkMode,
     sort_order: Option<Vec<PhysicalSortExpr>>,
     expected_snapshot_id: Option<Option<i64>>,
+    table_replacement: Option<crate::operations::replacement::IcebergTableReplacement>,
     removed_data_file_paths: Vec<String>,
     dynamic_partition_overwrite: bool,
     preserve_input_partitions: bool,
@@ -66,11 +67,20 @@ impl<'a> IcebergPlanBuilder<'a> {
             sink_mode,
             sort_order,
             expected_snapshot_id: None,
+            table_replacement: None,
             removed_data_file_paths: Vec::new(),
             dynamic_partition_overwrite: false,
             preserve_input_partitions: false,
             session,
         }
+    }
+
+    pub fn with_table_replacement(
+        mut self,
+        replacement: Option<crate::operations::replacement::IcebergTableReplacement>,
+    ) -> Self {
+        self.table_replacement = replacement;
+        self
     }
 
     pub fn with_output(mut self, output: CommandOutput) -> Self {
@@ -268,6 +278,7 @@ impl<'a> IcebergPlanBuilder<'a> {
                 snapshot_update_kind,
             )
             .with_output(self.output)
+            .with_table_replacement(self.table_replacement.clone())
             .with_expected_snapshot_id(self.expected_snapshot_id)
             .with_removed_data_file_paths(self.removed_data_file_paths.clone())
             .with_dynamic_partition_overwrite(self.dynamic_partition_overwrite),

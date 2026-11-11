@@ -17,6 +17,7 @@ enum PySparkVersion {
     V4_0,
     V4_1,
     V4_2,
+    V4_3,
 }
 
 fn get_pyspark_version() -> PyUdfResult<PySparkVersion> {
@@ -33,6 +34,7 @@ fn get_pyspark_version() -> PyUdfResult<PySparkVersion> {
                     ["4", "0", ..] => Ok(PySparkVersion::V4_0),
                     ["4", "1", ..] => Ok(PySparkVersion::V4_1),
                     ["4", "2", ..] => Ok(PySparkVersion::V4_2),
+                    ["4", "3", ..] => Ok(PySparkVersion::V4_3),
                     _ => Err(PyUdfError::invalid(format!(
                         "unsupported PySpark version: {version}"
                     ))),

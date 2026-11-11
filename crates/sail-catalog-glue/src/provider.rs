@@ -256,10 +256,16 @@ impl GlueCatalogProvider {
         let view_name = table.name().to_string();
         let comment = table.description().map(|s| s.to_string());
 
+        // Glue Data Catalog views keep their SQL in `ViewDefinition`. Views created
+        // by Athena, Hive or Spark (for example on EMR or in Glue ETL jobs) only
+        // set the table-level `ViewOriginalText`, so fall back to it.
         let definition = table
             .view_definition()
             .and_then(|vd| vd.representations().first())
             .and_then(|rep| rep.view_original_text())
+            .filter(|text| !text.is_empty())
+            .or_else(|| table.view_original_text())
+            .filter(|text| !text.is_empty())
             .ok_or_else(|| CatalogError::External("View has no definition".to_string()))?
             .to_string();
 
@@ -1067,5 +1073,91 @@ mod tests {
             panic!("expected table");
         };
         assert_eq!(format, "delta");
+    }
+
+    fn view_column() -> aws_sdk_glue::types::Column {
+        aws_sdk_glue::types::Column::builder()
+            .name("id")
+            .r#type("int")
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn view_to_status_reads_view_original_text_for_hive_views() {
+        // Views created by Spark or Hive (for example on EMR or Glue ETL) keep
+        // their SQL in ViewOriginalText and have no ViewDefinition.
+        let provider = GlueCatalogProvider::new("glue".to_string(), GlueCatalogConfig::default());
+        let table = Table::builder()
+            .name("hive_view")
+            .table_type("VIRTUAL_VIEW")
+            .view_original_text("SELECT 1 AS id")
+            .view_expanded_text("SELECT 1 AS `id`")
+            .storage_descriptor(StorageDescriptor::builder().columns(view_column()).build())
+            .build()
+            .unwrap();
+
+        let status = provider
+            .view_to_status(&vec!["db".to_string()].try_into().unwrap(), &table)
+            .unwrap();
+        let TableKind::View { definition, .. } = status.kind else {
+            panic!("expected view");
+        };
+        assert_eq!(definition, "SELECT 1 AS id");
+    }
+
+    #[test]
+    fn view_to_status_falls_back_when_view_definition_text_is_empty() {
+        let provider = GlueCatalogProvider::new("glue".to_string(), GlueCatalogConfig::default());
+        let table = Table::builder()
+            .name("hive_view")
+            .table_type("VIRTUAL_VIEW")
+            .view_definition(
+                aws_sdk_glue::types::ViewDefinition::builder()
+                    .representations(
+                        aws_sdk_glue::types::ViewRepresentation::builder()
+                            .view_original_text("")
+                            .build(),
+                    )
+                    .build(),
+            )
+            .view_original_text("SELECT 1 AS id")
+            .storage_descriptor(StorageDescriptor::builder().columns(view_column()).build())
+            .build()
+            .unwrap();
+
+        let status = provider
+            .view_to_status(&vec!["db".to_string()].try_into().unwrap(), &table)
+            .unwrap();
+        let TableKind::View { definition, .. } = status.kind else {
+            panic!("expected view");
+        };
+        assert_eq!(definition, "SELECT 1 AS id");
+    }
+
+    #[test]
+    fn view_to_status_accepts_athena_views() {
+        // Views created in Amazon Athena store a base64-encoded Presto view in
+        // ViewOriginalText and have no ViewDefinition.
+        let provider = GlueCatalogProvider::new("glue".to_string(), GlueCatalogConfig::default());
+        let table = Table::builder()
+            .name("athena_view")
+            .table_type("VIRTUAL_VIEW")
+            .view_original_text(
+                "/* Presto View: eyJvcmlnaW5hbFNxbCI6IlNFTEVDVCAxIEFTIGlkIiwiY2F0YWxvZyI6ImF3c2RhdGFjYXRhbG9nIiwic2NoZW1hIjoic2FsZXMiLCJjb2x1bW5zIjpbeyJuYW1lIjoiaWQiLCJ0eXBlIjoiaW50ZWdlciJ9XX0= */",
+            )
+            .view_expanded_text("/* Presto View */")
+            .set_parameters(Some(HashMap::from([(
+                "presto_view".to_string(),
+                "true".to_string(),
+            )])))
+            .storage_descriptor(StorageDescriptor::builder().columns(view_column()).build())
+            .build()
+            .unwrap();
+
+        if let Err(e) = provider.view_to_status(&vec!["db".to_string()].try_into().unwrap(), &table)
+        {
+            panic!("Athena view should be readable: {e}");
+        }
     }
 }

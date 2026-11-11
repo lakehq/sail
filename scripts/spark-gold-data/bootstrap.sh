@@ -7,7 +7,7 @@ if [ -z "${JAVA_HOME:-}" ]; then
   exit 1
 fi
 
-spark_version="4.2.0"
+spark_version="4.3.0"
 
 project_path="$(git rev-parse --show-toplevel)"
 

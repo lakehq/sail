@@ -237,7 +237,7 @@ def test_inventory_includes_disabled_suites(suite_tests, monkeypatch):
 
 
 def test_matrix_assignment_respects_groups_and_spark_requirements(suite_tests, monkeypatch):
-    versions = ["3.5.9", "4.0.4", "4.1.3", "4.2.0"]
+    versions = ["3.5.9", "4.0.5", "4.1.4", "4.2.1"]
     suite_tests.makeconftest("""
         import json
         from pathlib import Path
@@ -260,7 +260,7 @@ def test_matrix_assignment_respects_groups_and_spark_requirements(suite_tests, m
         @pytest.mark.spark(version="<4.2")
         @pytest.mark.spark(version=">=4.1")
         def test_intersection(): pass
-        @pytest.mark.spark(version="!=4.1.3,>=4", cross_version=True)
+        @pytest.mark.spark(version="!=4.1.4,>=4", cross_version=True)
         def test_exclusion(): pass
         @pytest.mark.spark(version=">=99")
         def test_unsupported(): pass
@@ -279,9 +279,9 @@ def test_matrix_assignment_respects_groups_and_spark_requirements(suite_tests, m
     ]
     assert sum("test_first" in names for names in assignments.values()) == 1
     assert "test_first" not in assignments["3.5.9"]
-    assert [v for v, names in assignments.items() if "test_cross_version" in names] == ["4.1.3", "4.2.0"]
-    assert [v for v, names in assignments.items() if "test_intersection" in names] == ["4.1.3"]
-    assert [v for v, names in assignments.items() if "test_exclusion" in names] == ["4.0.4", "4.2.0"]
+    assert [v for v, names in assignments.items() if "test_cross_version" in names] == ["4.1.4", "4.2.1"]
+    assert [v for v, names in assignments.items() if "test_intersection" in names] == ["4.1.4"]
+    assert [v for v, names in assignments.items() if "test_exclusion" in names] == ["4.0.5", "4.2.1"]
     assert all("test_unsupported" not in names for names in assignments.values())
 
 
@@ -290,26 +290,26 @@ def test_assignment_is_independent_of_filters_collection_order_and_marker_order(
     for item, requirements in [(first, [">=4", "<4.2"]), (second, ["<4.2", ">=4"])]:
         for requirement in requirements:
             item.add_marker(pytest.mark.spark(version=requirement))
-    versions = ["3.5.9", "4.0.4", "4.1.3", "4.2.0"]
+    versions = ["3.5.9", "4.0.5", "4.1.4", "4.2.1"]
     selected = suites.assigned_versions(first, "sql", "seed", versions)
     assert selected == suites.assigned_versions(second, "sql", "seed", versions[::-1])
     assert {tuple(suites.assigned_versions(first, "sql", str(seed), versions)) for seed in range(20)} == {
-        ("4.0.4",),
-        ("4.1.3",),
+        ("4.0.5",),
+        ("4.1.4",),
     }
 
 
 @pytest.mark.parametrize(
     ("seed", "versions"),
     [
-        (None, '["4.2.0"]'),
+        (None, '["4.2.1"]'),
         ("seed", None),
         ("seed", "[]"),
         ("seed", "{}"),
         ("seed", "invalid"),
         ("seed", "[1]"),
         ("seed", '["invalid"]'),
-        ("seed", '["4.2.0", "4.2.0"]'),
+        ("seed", '["4.2.1", "4.2.1"]'),
         ("seed", '["99.0.0"]'),
     ],
 )
@@ -343,8 +343,8 @@ def test_doctest_and_udf_markers_are_resolved_before_assignment(suite_tests, mon
     """)
     suite_tests.makefile(".txt", test_arrow_scalar_udf=">>> 1 + 1\n2\n")
     monkeypatch.setenv("PYSAIL_TEST_SEED", "seed")
-    monkeypatch.setenv("PYSAIL_TEST_SPARK_VERSIONS", '["3.5.9", "4.1.3"]')
-    for version, count in [("3.5.9", 1), ("4.1.3", 2)]:
+    monkeypatch.setenv("PYSAIL_TEST_SPARK_VERSIONS", '["3.5.9", "4.1.4"]')
+    for version, count in [("3.5.9", 1), ("4.1.4", 2)]:
         monkeypatch.setattr(suites, "pyspark_version", lambda v=version: tuple(map(int, v.split("."))))
         result = suite_tests.runpytest(
             "--collect-only", "--doctest-glob=*.txt", "spark/udf", "test_arrow_scalar_udf.txt"

@@ -537,3 +537,184 @@ Feature: Grouping and sort resolution
     Then query result
       | g | min(ts)             | min(to_date(ts)) |
       | 1 | 2024-03-04 10:00:00 | 2024-03-04       |
+
+  Scenario: Grouping by a column and by its date keeps separate outputs
+    When query
+      """
+      WITH e AS (
+        SELECT * FROM VALUES
+          (1, TIMESTAMP'2024-03-04 10:00:00'),
+          (1, TIMESTAMP'2024-03-04 23:00:00'),
+          (2, TIMESTAMP'2024-03-05 11:00:00')
+        AS e(k, ts)
+      )
+      SELECT ts, to_date(ts), count(*) AS n
+      FROM e
+      GROUP BY ts, to_date(ts)
+      """
+    Then query result
+      | ts                  | to_date(ts) | n |
+      | 2024-03-04 10:00:00 | 2024-03-04  | 1 |
+      | 2024-03-04 23:00:00 | 2024-03-04  | 1 |
+      | 2024-03-05 11:00:00 | 2024-03-05  | 1 |
+    Then query column types
+      | column      | type      |
+      | ts          | timestamp |
+      | to_date(ts) | date      |
+      | n           | bigint    |
+
+  Scenario: Grouping by a column and by a widening cast of it keeps separate outputs
+    When query
+      """
+      WITH e AS (
+        SELECT * FROM VALUES (1), (1), (2) AS e(k)
+      )
+      SELECT k, CAST(k AS BIGINT) AS kb, count(*) AS n
+      FROM e
+      GROUP BY k, CAST(k AS BIGINT)
+      """
+    Then query result
+      | k | kb | n |
+      | 1 | 1  | 2 |
+      | 2 | 2  | 1 |
+    Then query column types
+      | column | type   |
+      | k      | int    |
+      | kb     | bigint |
+      | n      | bigint |
+
+  Scenario: Grouping twice by the same cast keeps one group per value
+    When query
+      """
+      WITH e AS (
+        SELECT * FROM VALUES
+          (TIMESTAMP'2024-03-04 10:00:00'),
+          (TIMESTAMP'2024-03-04 23:00:00'),
+          (TIMESTAMP'2024-03-05 11:00:00')
+        AS e(ts)
+      )
+      SELECT to_date(ts) AS d, count(*) AS n
+      FROM e
+      GROUP BY to_date(ts), CAST(ts AS DATE)
+      """
+    Then query result
+      | d          | n |
+      | 2024-03-04 | 2 |
+      | 2024-03-05 | 1 |
+
+  Scenario: Rollup over a column and its date keeps separate outputs
+    When query
+      """
+      WITH e AS (
+        SELECT * FROM VALUES
+          (TIMESTAMP'2024-03-04 10:00:00'),
+          (TIMESTAMP'2024-03-04 23:00:00'),
+          (TIMESTAMP'2024-03-05 11:00:00')
+        AS e(ts)
+      )
+      SELECT ts, to_date(ts) AS d, grouping_id() AS gid, count(*) AS n
+      FROM e
+      GROUP BY ROLLUP(ts, to_date(ts))
+      """
+    Then query result
+      | ts                  | d          | gid | n |
+      | 2024-03-04 10:00:00 | 2024-03-04 | 0   | 1 |
+      | 2024-03-04 23:00:00 | 2024-03-04 | 0   | 1 |
+      | 2024-03-05 11:00:00 | 2024-03-05 | 0   | 1 |
+      | 2024-03-04 10:00:00 | NULL       | 1   | 1 |
+      | 2024-03-04 23:00:00 | NULL       | 1   | 1 |
+      | 2024-03-05 11:00:00 | NULL       | 1   | 1 |
+      | NULL                | NULL       | 3   | 3 |
+
+  Scenario: Cube over a column and its date keeps separate outputs
+    When query
+      """
+      WITH e AS (
+        SELECT * FROM VALUES
+          (TIMESTAMP'2024-03-04 10:00:00'),
+          (TIMESTAMP'2024-03-04 23:00:00'),
+          (TIMESTAMP'2024-03-05 11:00:00')
+        AS e(ts)
+      )
+      SELECT ts, to_date(ts) AS d, grouping_id() AS gid, count(*) AS n
+      FROM e
+      GROUP BY CUBE(ts, to_date(ts))
+      """
+    Then query result
+      | ts                  | d          | gid | n |
+      | 2024-03-04 10:00:00 | 2024-03-04 | 0   | 1 |
+      | 2024-03-04 23:00:00 | 2024-03-04 | 0   | 1 |
+      | 2024-03-05 11:00:00 | 2024-03-05 | 0   | 1 |
+      | 2024-03-04 10:00:00 | NULL       | 1   | 1 |
+      | 2024-03-04 23:00:00 | NULL       | 1   | 1 |
+      | 2024-03-05 11:00:00 | NULL       | 1   | 1 |
+      | NULL                | 2024-03-04 | 2   | 2 |
+      | NULL                | 2024-03-05 | 2   | 1 |
+      | NULL                | NULL       | 3   | 3 |
+
+  Scenario: Grouping sets over a column and its date keep separate outputs
+    When query
+      """
+      WITH e AS (
+        SELECT * FROM VALUES
+          (TIMESTAMP'2024-03-04 10:00:00'),
+          (TIMESTAMP'2024-03-04 23:00:00'),
+          (TIMESTAMP'2024-03-05 11:00:00')
+        AS e(ts)
+      )
+      SELECT ts, to_date(ts) AS d, count(*) AS n
+      FROM e
+      GROUP BY GROUPING SETS ((ts, to_date(ts)), (to_date(ts)), ())
+      """
+    Then query result
+      | ts                  | d          | n |
+      | 2024-03-04 10:00:00 | 2024-03-04 | 1 |
+      | 2024-03-04 23:00:00 | 2024-03-04 | 1 |
+      | 2024-03-05 11:00:00 | 2024-03-05 | 1 |
+      | NULL                | 2024-03-04 | 2 |
+      | NULL                | 2024-03-05 | 1 |
+      | NULL                | NULL       | 3 |
+
+  Scenario: Grouping functions still match a cast grouping column
+    When query
+      """
+      WITH e AS (
+        SELECT * FROM VALUES
+          (TIMESTAMP'2024-03-04 10:00:00'),
+          (TIMESTAMP'2024-03-05 11:00:00')
+        AS e(ts)
+      )
+      SELECT ts, to_date(ts) AS d, grouping(ts) AS gt, grouping(to_date(ts)) AS gd,
+             grouping_id(ts, to_date(ts)) AS gid, count(*) AS n
+      FROM e
+      GROUP BY ROLLUP(ts, to_date(ts))
+      """
+    Then query result
+      | ts                  | d          | gt | gd | gid | n |
+      | 2024-03-04 10:00:00 | 2024-03-04 | 0  | 0  | 0   | 1 |
+      | 2024-03-05 11:00:00 | 2024-03-05 | 0  | 0  | 0   | 1 |
+      | 2024-03-04 10:00:00 | NULL       | 0  | 1  | 1   | 1 |
+      | 2024-03-05 11:00:00 | NULL       | 0  | 1  | 1   | 1 |
+      | NULL                | NULL       | 1  | 1  | 3   | 2 |
+
+  Scenario: Sorting and filtering follow a cast grouping column
+    When query
+      """
+      WITH e AS (
+        SELECT * FROM VALUES
+          (TIMESTAMP'2024-03-04 10:00:00'),
+          (TIMESTAMP'2024-03-04 23:00:00'),
+          (TIMESTAMP'2024-03-05 11:00:00')
+        AS e(ts)
+      )
+      SELECT ts, to_date(ts) AS d
+      FROM e
+      GROUP BY ts, to_date(ts)
+      HAVING count(*) = 1
+      ORDER BY d DESC, ts
+      """
+    Then query result ordered
+      | ts                  | d          |
+      | 2024-03-05 11:00:00 | 2024-03-05 |
+      | 2024-03-04 10:00:00 | 2024-03-04 |
+      | 2024-03-04 23:00:00 | 2024-03-04 |

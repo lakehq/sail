@@ -14,3 +14,4 @@ sail-catalog = { path = "../sail-catalog" }
 arrow = { workspace = true }
 async-trait = { workspace = true }
 dashmap = { workspace = true }
+tokio = { workspace = true }

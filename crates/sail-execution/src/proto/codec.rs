@@ -72,7 +72,6 @@ use datafusion_proto::physical_plan::{
 };
 use datafusion_proto::protobuf::{JoinType as ProtoJoinType, PhysicalSortExprNode};
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
-use datafusion_spark::function::array::shuffle::SparkShuffle;
 use datafusion_spark::function::bitmap::bitmap_count::BitmapCount;
 use datafusion_spark::function::bitwise::bit_count::SparkBitCount;
 use datafusion_spark::function::bitwise::bit_get::SparkBitGet;
@@ -171,6 +170,7 @@ use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
+use sail_function::scalar::array::spark_shuffle::SparkShuffle;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
@@ -217,6 +217,7 @@ use sail_function::scalar::json::{
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
+use sail_function::scalar::math::partition_random::PartitionSeed;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
@@ -243,6 +244,7 @@ use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
+use sail_function::scalar::misc::spark_uuid::SparkUuid;
 use sail_function::scalar::misc::theta_sketch::{
     ThetaDifferenceFunction, ThetaIntersectionFunction, ThetaSketchEstimateFunction,
     ThetaUnionFunction,
@@ -326,6 +328,7 @@ use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
 };
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
+use sail_physical_plan::seeded_random::{SeededRandomExec, SeededRandomExprColumn};
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
@@ -1550,6 +1553,38 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )?))
             }
+            NodeKind::SeededRandom(r#gen::SeededRandomExecNode {
+                input,
+                columns,
+                schema,
+            }) => {
+                let schema = try_decode_schema(&schema)?;
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let input_schema = input.schema();
+                let columns = columns
+                    .into_iter()
+                    .map(|column| {
+                        let r#gen::SeededRandomColumn { name, expr, seed } = column;
+                        Ok(SeededRandomExprColumn {
+                            name,
+                            expr: try_decode_physical_expr_with_converter(
+                                ctx,
+                                self,
+                                proto_converter,
+                                &expr,
+                                &input_schema,
+                            )?,
+                            seed: self.try_decode_partition_seed(seed)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Arc::new(SeededRandomExec::try_new(
+                    input,
+                    columns,
+                    Arc::new(schema),
+                )?))
+            }
             NodeKind::Coalesce(r#gen::CoalesceExecNode {
                 input,
                 output_partitions,
@@ -1697,6 +1732,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url,
                 lakehouse_table_json,
+                table_replacement_json,
                 validate_read_snapshot,
                 expected_snapshot_id,
                 snapshot_update_kind,
@@ -1718,7 +1754,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             validate_read_snapshot.then_some(expected_snapshot_id),
                         )
                         .with_dynamic_partition_overwrite(dynamic_partition_overwrite)
-                        .with_removed_data_file_paths(removed_data_file_paths);
+                        .with_removed_data_file_paths(removed_data_file_paths)
+                        .with_table_replacement(
+                            table_replacement_json
+                                .map(|json| {
+                                    serde_json::from_str(&json).map_err(|error| {
+                                        plan_datafusion_err!("invalid Iceberg replacement: {error}")
+                                    })
+                                })
+                                .transpose()?,
+                        );
                 use r#gen::iceberg_commit_exec_node::Output;
                 let commit = match output {
                     Some(Output::CommandOutput(output)) => {
@@ -3094,6 +3139,33 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 column_name: monotonic_id.column_name().to_string(),
                 schema,
             })
+        } else if let Some(seeded_random) = node.downcast_ref::<SeededRandomExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                seeded_random.input().clone(),
+            )?;
+            let columns = seeded_random
+                .columns()
+                .iter()
+                .map(|column| {
+                    Ok(r#gen::SeededRandomColumn {
+                        name: column.name.clone(),
+                        expr: try_encode_physical_expr_with_converter(
+                            self,
+                            proto_converter,
+                            &column.expr,
+                        )?,
+                        seed: self.try_encode_partition_seed(column.seed)?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let schema = try_encode_schema(seeded_random.schema().as_ref())?;
+            NodeKind::SeededRandom(r#gen::SeededRandomExecNode {
+                input,
+                columns,
+                schema,
+            })
         } else if let Some(spark_partition_id) = node.downcast_ref::<SparkPartitionIdExec>() {
             let input = try_encode_physical_plan_with_converter(
                 self,
@@ -3207,6 +3279,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 ),
                 dynamic_partition_overwrite: iceberg_commit_exec.dynamic_partition_overwrite(),
                 removed_data_file_paths: iceberg_commit_exec.removed_data_file_paths().to_vec(),
+                table_replacement_json: iceberg_commit_exec.table_replacement().map(serde_json::to_string)
+                    .transpose().map_err(|error| plan_datafusion_err!("failed to encode Iceberg replacement: {error}"))?,
                 output: Some(match iceberg_commit_exec.output() {
                     sail_iceberg::physical_plan::commit::commit_exec::CommitOutput::Command(output) =>
                         r#gen::iceberg_commit_exec_node::Output::CommandOutput(Self::encode_command_output(*output)),
@@ -3949,6 +4023,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "schema_of_variant" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfVariantUdf::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
             "randstr" => Ok(Arc::new(ScalarUDF::from(Randstr::new()))),
+            "uuid" => Ok(Arc::new(ScalarUDF::from(SparkUuid::new()))),
             "format_number" => Ok(Arc::new(ScalarUDF::from(FormatNumber::new()))),
             "soundex" => Ok(Arc::new(ScalarUDF::from(Soundex::new()))),
             "quote" => Ok(Arc::new(ScalarUDF::from(SparkQuote::new()))),
@@ -4156,6 +4231,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<FormatNumber>()
             || node_inner.is::<Levenshtein>()
             || node_inner.is::<Randstr>()
+            || node_inner.is::<SparkUuid>()
             || node_inner.is::<Soundex>()
             || node_inner.is::<SparkQuote>()
             || node_inner.is::<StAsBinary>()
@@ -6254,6 +6330,24 @@ impl RemoteExecutionCodec {
         Ok(kind as i32)
     }
 
+    fn try_decode_partition_seed(&self, seed: i32) -> Result<PartitionSeed> {
+        let seed = r#gen::PartitionSeed::try_from(seed)
+            .map_err(|e| plan_datafusion_err!("failed to decode partition seed: {e}"))?;
+        let seed = match seed {
+            r#gen::PartitionSeed::Offset => PartitionSeed::Offset,
+            r#gen::PartitionSeed::JavaRandom => PartitionSeed::JavaRandom,
+        };
+        Ok(seed)
+    }
+
+    fn try_encode_partition_seed(&self, seed: PartitionSeed) -> Result<i32> {
+        let seed = match seed {
+            PartitionSeed::Offset => r#gen::PartitionSeed::Offset,
+            PartitionSeed::JavaRandom => r#gen::PartitionSeed::JavaRandom,
+        };
+        Ok(seed as i32)
+    }
+
     fn try_decode_pyspark_udtf_kind(&self, kind: i32) -> Result<PySparkUdtfKind> {
         let kind = r#gen::PySparkUdtfKind::try_from(kind)
             .map_err(|e| plan_datafusion_err!("failed to decode pyspark UDTF kind: {e}"))?;
@@ -7437,6 +7531,77 @@ mod tests {
                 .as_ref()
                 .and_then(|base| base.current_snapshot_id),
             Some(42)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_round_trip_preserves_catalog_base_and_history() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_common_datafusion::catalog::{
+            CatalogPartitionField, PartitionTransform, TableReplacement,
+        };
+        use sail_iceberg::operations::replacement::IcebergTableReplacement;
+        let replacement: IcebergTableReplacement = serde_json::from_value(serde_json::json!({
+            "catalog": TableReplacement {
+                catalog_table: vec!["catalog".into(), "namespace".into(), "table".into()],
+                catalog_generation: 11, database_generation: 22, table_generation: 33,
+                require_existing: true, existing: true,
+                columns: vec![("id".into(), DataType::Int64, false)],
+                location: "file:///tmp/replacement-codec/".into(),
+                partition_by: vec![CatalogPartitionField { column: "id".into(), transform: Some(PartitionTransform::Identity) }],
+                sort_by: vec![], properties: vec![("owner".into(), "test".into())],
+                property_updates: vec![("owner".into(), "requested".into())], is_external: true,
+            },
+            "base_metadata_file": "tmp/replacement-codec/metadata/v7.metadata.json",
+            // The captured base codec differs from the candidate properties.
+            "base_codec": "Gzip",
+            "metadata": serde_json::json!({
+                "format-version":2, "table-uuid":"12345678-1234-1234-1234-123456789abc",
+                "location":"file:///tmp/replacement-codec/", "last-sequence-number":8,
+                "last-updated-ms":100, "last-column-id":5,"current-schema-id":2,
+                "schemas":[{"type":"struct","schema-id":1,"fields":[{"id":1,"name":"old","required":false,"type":"int"}]},{"type":"struct","schema-id":2,"fields":[{"id":5,"name":"id","required":true,"type":"long"}]}],
+                "partition-specs":[{"spec-id":3,"fields":[{"source-id":5,"field-id":1001,"name":"id","transform":"identity"}]}],
+                "default-spec-id":3,"last-partition-id":1001,"current-snapshot-id":null,
+                "snapshots":[{"snapshot-id":42,"sequence-number":8,"timestamp-ms":100,"manifest-list":"file:///tmp/old.avro","summary":{"operation":"append"},"schema-id":1}],
+                "snapshot-log":[{"timestamp-ms":100,"snapshot-id":42}],
+                "metadata-log":[{"timestamp-ms":90,"metadata-file":"file:///tmp/replacement-codec/metadata/v6.metadata.json"}],
+                "refs":{"audit":{"snapshot-id":42,"type":"tag"}}
+            }),
+        })).map_err(|e| plan_datafusion_err!("{e}"))?;
+        let expected =
+            serde_json::to_value(&replacement).map_err(|e| plan_datafusion_err!("{e}"))?;
+        assert_ne!(
+            replacement.catalog.properties,
+            replacement.catalog.property_updates
+        );
+        let serde_round_trip: IcebergTableReplacement =
+            serde_json::from_value(expected.clone()).map_err(|e| plan_datafusion_err!("{e}"))?;
+        assert_eq!(serde_round_trip.catalog, replacement.catalog);
+        let plan = IcebergCommitExec::new(
+            Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+            Url::parse("file:///tmp/replacement-codec/")
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
+            None,
+            SnapshotUpdateKind::Truncate,
+        )
+        .with_table_replacement(Some(replacement));
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(plan))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let commit = decoded
+            .downcast_ref::<IcebergCommitExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not an IcebergCommitExec"))?;
+        assert_eq!(
+            serde_json::to_value(commit.table_replacement().ok_or_else(|| {
+                plan_datafusion_err!("decoded commit is missing table replacement")
+            })?)
+            .map_err(|e| plan_datafusion_err!("{e}"))?,
+            expected
+        );
+        assert_eq!(
+            commit.properties().output_partitioning().partition_count(),
+            1
         );
         Ok(())
     }

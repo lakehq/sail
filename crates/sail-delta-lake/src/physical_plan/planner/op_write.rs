@@ -180,9 +180,9 @@ async fn build_overwrite_if_plan(
         ctx,
         condition_expr.clone(),
         physical_condition.clone(),
+        true, // No rows survive in a fully replaced partition.
         &snapshot_state,
         table_schema.clone(),
-        false,
     )
     .await?;
 
@@ -199,9 +199,9 @@ async fn build_overwrite_if_plan(
             condition_expr.clone(),
             ctx.session()
                 .create_physical_expr(condition_expr.clone().is_true(), &table_df_schema)?,
+            false, // CDC needs deleted rows even when whole partitions are replaced.
             &snapshot_state,
             table_schema.clone(),
-            true,
         )
         .await?;
         let (_, deleted) = align_schemas_for_union(aligned_new.clone(), deleted)?;
@@ -253,9 +253,9 @@ async fn build_overwrite_if_plan(
             condition_expr.clone(),
             ctx.session()
                 .create_physical_expr(condition_expr.clone().is_true(), &table_df_schema)?,
+            false, // CDC needs deleted rows even when whole partitions are replaced.
             &snapshot_state,
             table_schema.clone(),
-            true,
         )
         .await?;
         let deleted = super::change_data::tag_change_rows(deleted, &table_schema, "delete")?;
@@ -345,9 +345,9 @@ async fn build_old_data_plan(
     ctx: &PlannerContext<'_>,
     condition_expr: Expr,
     condition: Arc<dyn PhysicalExpr>,
+    skip_partition_only: bool,
     snapshot_state: &DeltaSnapshot,
     table_schema: SchemaRef,
-    materialize_partition_rows: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let version = snapshot_state.version();
     let partition_only = !predicate_requires_stats(&condition_expr, ctx.partition_columns());
@@ -370,8 +370,7 @@ async fn build_old_data_plan(
         ctx.table_url().clone(),
         version,
         ctx.partition_columns().to_vec(),
-        // CDC deletes need actual preimages even when whole partitions match.
-        partition_only && !materialize_partition_rows,
+        partition_only && skip_partition_only,
     )?);
 
     // Spread Add actions across partitions so `DeltaScanByAddsExec` can scan files in parallel.

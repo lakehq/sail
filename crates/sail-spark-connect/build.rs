@@ -288,6 +288,6 @@ fn build_spark_config(versions: &[&str]) -> Result<(), Box<dyn std::error::Error
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     build_proto()?;
-    build_spark_config(&["3.5", "4.0", "4.1", "4.2"])?;
+    build_spark_config(&["3.5", "4.0", "4.1", "4.2", "4.3"])?;
     Ok(())
 }
