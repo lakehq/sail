@@ -107,6 +107,19 @@ def failing_key(_value):
     raise ValueError(msg)
 
 
+def test_range_sample_size_rejects_a_value_that_is_not_an_int(spark):
+    key = "spark.sql.execution.rangeExchange.sampleSizePerPartition"
+    try:
+        spark.conf.set(key, "7")
+        with pytest.raises(Exception, match=r"INVALID_CONF_VALUE\.TYPE_MISMATCH"):
+            spark.conf.set(key, "abc")
+        # The rejected value is not stored, so it cannot fail other queries.
+        assert spark.conf.get(key) == "7"
+        assert spark.range(3).count() == 3  # noqa: PLR2004
+    finally:
+        spark.conf.unset(key)
+
+
 def test_range_repartition_samples_only_when_the_query_runs(spark):
     key = F.udf(failing_key, "long")("id")
     df = spark.range(12).withColumn("key", key).repartitionByRange(3, "key")

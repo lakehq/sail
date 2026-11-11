@@ -162,6 +162,16 @@ impl SparkRuntimeConfig {
                 ));
             }
         }
+        // Spark rejects a value that is not an int instead of storing it, so a bad value
+        // cannot fail later queries. It checks that the value is positive only when it samples.
+        if key == SparkConfigKey::SPARK_SQL_EXECUTION_RANGE_EXCHANGE_SAMPLE_SIZE_PER_PARTITION
+            && value.trim().parse::<i32>().is_err()
+        {
+            return Err(SparkError::invalid(format!(
+                "[INVALID_CONF_VALUE.TYPE_MISMATCH] The value '{value}' in the config \"{key}\" \
+                is invalid. It should be a/an 'int' value. SQLSTATE: 22022"
+            )));
+        }
         // Spark rejects a value that is not a boolean instead of storing it. The check belongs here
         // rather than at the point of use, so that a rejected value leaves both the session
         // configuration and the mirrored DataFusion Parquet option as they were.
@@ -288,10 +298,11 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         if let Some(value) = config.get_option(
             SparkConfigKey::SPARK_SQL_EXECUTION_RANGE_EXCHANGE_SAMPLE_SIZE_PER_PARTITION,
         ) {
+            // `set` rejects a value that is not an int, so this does not fail.
             output.range_exchange_sample_size_per_partition =
                 value.trim().parse::<i32>().map_err(|_| {
-                    SparkError::invalid(format!(
-                        "spark.sql.execution.rangeExchange.sampleSizePerPartition should be int, but was {value}"
+                    SparkError::internal(format!(
+                        "spark.sql.execution.rangeExchange.sampleSizePerPartition is not an int: {value}"
                     ))
                 })?;
         }
