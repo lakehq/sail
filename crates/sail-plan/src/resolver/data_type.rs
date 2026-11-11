@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_schema::extension::{
-    EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, ExtensionType,
+    EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, ExtensionType, Uuid,
 };
 use datafusion::arrow::datatypes as adt;
 use parquet_variant_compute::VariantType;
@@ -373,10 +373,6 @@ impl PlanResolver<'_> {
                 metadata.insert(EXTENSION_TYPE_METADATA_KEY.to_string(), ext.to_string());
                 data_type
             }
-            spec::DataType::Uuid => {
-                metadata.insert("iceberg.type".to_string(), "uuid".to_string());
-                data_type
-            }
             spec::DataType::Variant => {
                 metadata.insert(
                     EXTENSION_TYPE_NAME_KEY.to_string(),
@@ -386,10 +382,12 @@ impl PlanResolver<'_> {
             }
             x => x,
         };
-        Ok(
-            adt::Field::new(name, self.resolve_data_type(data_type, state)?, *nullable)
-                .with_metadata(metadata),
-        )
+        let mut field = adt::Field::new(name, self.resolve_data_type(data_type, state)?, *nullable)
+            .with_metadata(metadata);
+        if matches!(data_type, spec::DataType::Uuid) {
+            field.try_with_extension_type(Uuid)?;
+        }
+        Ok(field)
     }
 
     pub(super) fn resolve_fields(
