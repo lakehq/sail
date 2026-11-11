@@ -1470,11 +1470,17 @@ mod tests {
 
     fn range_repartition(split_points: Option<Vec<i32>>) -> Arc<dyn ExecutionPlan> {
         use datafusion::arrow::array::{Float32Array, Int32Array, RecordBatch};
-        use sail_physical_plan::range_repartition::RangeRepartitionExec;
+        use datafusion::arrow::compute::SortOptions;
+        use sail_physical_plan::range_repartition::{RangeRepartitionExec, RangeSample};
 
         let schema = schema();
         let ordering = [PhysicalSortExpr::new_default(col("id", &schema).unwrap())].into();
-        let node = RangeRepartitionExec::try_new(empty_plan(), empty_plan(), ordering, 4).unwrap();
+        let sample = Arc::new(RangeSample::new(
+            empty_plan(),
+            vec![SortOptions::default()],
+            4,
+        ));
+        let node = RangeRepartitionExec::try_new(empty_plan(), sample, ordering).unwrap();
         let Some(keys) = split_points else {
             return Arc::new(node);
         };
@@ -1490,7 +1496,8 @@ mod tests {
             ],
         )
         .unwrap();
-        Arc::new(node.with_sample(&[sample]).unwrap())
+        node.set_sample(&[sample]).unwrap();
+        Arc::new(node)
     }
 
     #[test]

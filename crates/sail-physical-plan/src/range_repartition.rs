@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{
@@ -25,65 +26,118 @@ use crate::range_sample::range_split_points;
 
 type SharedResult<T> = std::result::Result<T, Arc<DataFusionError>>;
 
+/// The sample of a range repartitioning and the split points picked from it.
+///
+/// Every copy of the same range repartitioning shares one `RangeSample`, so the
+/// sample runs at most once. The copies include the nodes that the optimizer
+/// rewrites and the copy of the node inside the sample of a later range
+/// repartitioning, which samples a copy of its input. Without sharing, every nested
+/// range repartitioning would double the number of samples.
+#[derive(Debug)]
+pub struct RangeSample {
+    /// The plan that computes the input again and emits the sampled range keys
+    /// (see `RangePartitionSampleExec`).
+    plan: Arc<dyn ExecutionPlan>,
+    sort_options: Vec<SortOptions>,
+    num_partitions: usize,
+    split_points: OnceCell<SharedResult<Vec<SplitPoint>>>,
+}
+
+impl RangeSample {
+    pub fn new(
+        plan: Arc<dyn ExecutionPlan>,
+        sort_options: Vec<SortOptions>,
+        num_partitions: usize,
+    ) -> Self {
+        Self {
+            plan,
+            sort_options,
+            num_partitions,
+            split_points: OnceCell::new(),
+        }
+    }
+
+    pub fn plan(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.plan
+    }
+
+    fn get(&self) -> Option<Result<&[SplitPoint]>> {
+        self.split_points.get().map(|result| match result {
+            Ok(split_points) => Ok(split_points.as_slice()),
+            Err(error) => Err(DataFusionError::Shared(Arc::clone(error))),
+        })
+    }
+
+    /// Picks the split points from the output of the sample plan, unless they are known.
+    fn set(&self, batches: &[RecordBatch]) -> Result<()> {
+        let split_points = range_split_points(batches, &self.sort_options, self.num_partitions)?;
+        // Another copy may have set the same split points first.
+        let _ = self.split_points.set(Ok(split_points));
+        Ok(())
+    }
+
+    /// Runs the sample plan in this process once, and returns the split points.
+    /// A failed sample fails every later call instead of running again.
+    async fn get_or_run(&self, context: Arc<TaskContext>) -> Result<Vec<SplitPoint>> {
+        self.split_points
+            .get_or_init(|| async {
+                let batches = collect(Arc::clone(&self.plan), context)
+                    .await
+                    .map_err(Arc::new)?;
+                range_split_points(&batches, &self.sort_options, self.num_partitions)
+                    .map_err(Arc::new)
+            })
+            .await
+            .clone()
+            .map_err(DataFusionError::Shared)
+    }
+}
+
 /// Range repartitioning whose split points come from a sample of the input,
 /// like the shuffle exchange of Spark's `RangePartitioner`.
 ///
-/// The `sample` plan computes the input again and emits the sampled range keys
-/// (see `RangePartitionSampleExec`). It runs when the node is first executed,
-/// not when the query is planned, so EXPLAIN does not run it, and it runs
-/// as part of the operation that executes the query.
+/// The sample runs when the node is first executed, not when the query is planned,
+/// so EXPLAIN does not run it, and it runs as part of the operation that executes
+/// the query.
 ///
 /// The node always has `num_partitions` output partitions. When the sample
 /// gives fewer split points, the last partitions are empty.
 ///
 /// For distributed execution, the job runner runs the sample as a separate job
-/// and sets the split points with [`Self::with_sample`] before it plans the stages.
+/// and sets the split points with [`Self::set_sample`] before it plans the stages.
 /// <https://github.com/apache/spark/blob/v4.1.0/core/src/main/scala/org/apache/spark/Partitioner.scala>
 #[derive(Debug)]
 pub struct RangeRepartitionExec {
     input: Arc<dyn ExecutionPlan>,
-    sample: Arc<dyn ExecutionPlan>,
+    sample: Arc<RangeSample>,
     ordering: LexOrdering,
-    num_partitions: usize,
-    split_points: Option<Vec<SplitPoint>>,
     properties: Arc<PlanProperties>,
-    /// The repartitioning of the input, created once for all output partitions.
+    /// The repartitioning of the input, created once for all output partitions
+    /// of this node. Each copy has its own, because a repartitioning runs only once.
     state: Arc<OnceCell<SharedResult<Arc<RepartitionExec>>>>,
 }
 
 impl RangeRepartitionExec {
     pub fn try_new(
         input: Arc<dyn ExecutionPlan>,
-        sample: Arc<dyn ExecutionPlan>,
+        sample: Arc<RangeSample>,
         ordering: LexOrdering,
-        num_partitions: usize,
     ) -> Result<Self> {
-        Self::try_new_with_split_points(input, sample, ordering, num_partitions, None)
-    }
-
-    fn try_new_with_split_points(
-        input: Arc<dyn ExecutionPlan>,
-        sample: Arc<dyn ExecutionPlan>,
-        ordering: LexOrdering,
-        num_partitions: usize,
-        split_points: Option<Vec<SplitPoint>>,
-    ) -> Result<Self> {
-        if num_partitions == 0 {
+        if sample.num_partitions == 0 {
             return internal_err!("range repartitioning requires at least one partition");
         }
-        if let Some(split_points) = &split_points
-            && split_points.len() >= num_partitions
+        if ordering
+            .iter()
+            .map(|x| x.options)
+            .ne(sample.sort_options.iter().copied())
         {
-            return internal_err!(
-                "range repartitioning into {num_partitions} partitions cannot have {} split points",
-                split_points.len()
-            );
+            return internal_err!("range repartitioning ordering does not match its sample");
         }
         let mut equivalence = input.equivalence_properties().clone();
         equivalence.clear_orderings();
         let properties = Arc::new(PlanProperties::new(
             equivalence,
-            Partitioning::UnknownPartitioning(num_partitions),
+            Partitioning::UnknownPartitioning(sample.num_partitions),
             EmissionType::Final,
             Boundedness::Bounded,
         ));
@@ -91,8 +145,6 @@ impl RangeRepartitionExec {
             input,
             sample,
             ordering,
-            num_partitions,
-            split_points,
             properties,
             state: Arc::new(OnceCell::new()),
         })
@@ -102,40 +154,33 @@ impl RangeRepartitionExec {
         &self.input
     }
 
-    pub fn sample(&self) -> &Arc<dyn ExecutionPlan> {
+    pub fn sample(&self) -> &Arc<RangeSample> {
         &self.sample
     }
 
     pub fn num_partitions(&self) -> usize {
-        self.num_partitions
+        self.sample.num_partitions
     }
 
     /// Returns whether the split points are known.
     pub fn is_sampled(&self) -> bool {
-        self.split_points.is_some()
+        self.sample.split_points.initialized()
     }
 
     /// Returns the range partitioning once the split points are known.
     pub fn range_partitioning(&self) -> Result<Option<RangePartitioning>> {
-        self.split_points
-            .as_ref()
+        self.sample
+            .get()
             .map(|split_points| {
-                RangePartitioning::try_new(self.ordering.clone(), split_points.clone())
+                RangePartitioning::try_new(self.ordering.clone(), split_points?.to_vec())
             })
             .transpose()
     }
 
-    /// Returns the node with the split points picked from the output of the sample plan.
-    pub fn with_sample(&self, batches: &[RecordBatch]) -> Result<Self> {
-        let options = self.ordering.iter().map(|x| x.options).collect::<Vec<_>>();
-        let split_points = range_split_points(batches, &options, self.num_partitions)?;
-        Self::try_new_with_split_points(
-            Arc::clone(&self.input),
-            Arc::clone(&self.sample),
-            self.ordering.clone(),
-            self.num_partitions,
-            Some(split_points),
-        )
+    /// Sets the split points from the output of the sample plan, for this node and
+    /// every copy of it.
+    pub fn set_sample(&self, batches: &[RecordBatch]) -> Result<()> {
+        self.sample.set(batches)
     }
 }
 
@@ -144,16 +189,18 @@ impl DisplayAs for RangeRepartitionExec {
         write!(
             f,
             "RangeRepartitionExec: ordering=[{}], partitions={}, split_points=",
-            self.ordering, self.num_partitions
+            self.ordering,
+            self.num_partitions()
         )?;
-        match &self.split_points {
-            Some(split_points) => {
+        match self.sample.get() {
+            Some(Ok(split_points)) => {
                 let split_points = split_points
                     .iter()
                     .map(ToString::to_string)
                     .collect::<Vec<_>>();
                 write!(f, "[{}]", split_points.join(", "))
             }
+            Some(Err(_)) => write!(f, "failed"),
             None => write!(f, "sampled at execution"),
         }
     }
@@ -199,12 +246,10 @@ impl ExecutionPlan for RangeRepartitionExec {
         let [input] = children.as_slice() else {
             return internal_err!("{} requires exactly one child", self.name());
         };
-        Ok(Arc::new(Self::try_new_with_split_points(
+        Ok(Arc::new(Self::try_new(
             Arc::clone(input),
             Arc::clone(&self.sample),
             self.ordering.clone(),
-            self.num_partitions,
-            self.split_points.clone(),
         )?))
     }
 
@@ -213,36 +258,27 @@ impl ExecutionPlan for RangeRepartitionExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition >= self.num_partitions {
+        if partition >= self.num_partitions() {
             return internal_err!(
                 "{} has {} partitions but partition {partition} was requested",
                 self.name(),
-                self.num_partitions
+                self.num_partitions()
             );
         }
         let state = Arc::clone(&self.state);
         let input = Arc::clone(&self.input);
         let sample = Arc::clone(&self.sample);
         let ordering = self.ordering.clone();
-        let num_partitions = self.num_partitions;
-        let split_points = self.split_points.clone();
         let schema = self.schema();
         let output_schema = Arc::clone(&schema);
         let output = futures::stream::once(async move {
-            // The first partition to run samples the input. The others wait for it,
-            // and a failed sample fails them all instead of running it again.
+            // The first partition to run creates the repartitioning. The others wait
+            // for it, and a failure fails them all instead of running it again.
             let repartition = state
                 .get_or_init(|| async {
-                    repartition_by_sample(
-                        input,
-                        sample,
-                        ordering,
-                        num_partitions,
-                        split_points,
-                        Arc::clone(&context),
-                    )
-                    .await
-                    .map_err(Arc::new)
+                    repartition_by_sample(input, &sample, ordering, Arc::clone(&context))
+                        .await
+                        .map_err(Arc::new)
                 })
                 .await
                 .clone()
@@ -308,34 +344,23 @@ impl ExecutionPlan for RangeRepartitionExec {
             return Ok(None);
         };
         // The sample plan computes the keys from its own input, so it stays the same.
-        Ok(Some(Arc::new(Self::try_new_with_split_points(
+        Ok(Some(Arc::new(Self::try_new(
             make_with_child(projection, self.input())?,
             Arc::clone(&self.sample),
             ordering,
-            self.num_partitions,
-            self.split_points.clone(),
         )?)))
     }
 }
 
-/// Repartitions the input by the given split points, or by split points picked
-/// from the output of the sample plan.
+/// Repartitions the input by the split points of the sample, which runs here
+/// unless a copy of the node has run it already.
 async fn repartition_by_sample(
     input: Arc<dyn ExecutionPlan>,
-    sample: Arc<dyn ExecutionPlan>,
+    sample: &RangeSample,
     ordering: LexOrdering,
-    num_partitions: usize,
-    split_points: Option<Vec<SplitPoint>>,
     context: Arc<TaskContext>,
 ) -> Result<Arc<RepartitionExec>> {
-    let split_points = match split_points {
-        Some(split_points) => split_points,
-        None => {
-            let batches = collect(sample, context).await?;
-            let options = ordering.iter().map(|x| x.options).collect::<Vec<_>>();
-            range_split_points(&batches, &options, num_partitions)?
-        }
-    };
+    let split_points = sample.get_or_run(context).await?;
     let partitioning = RangePartitioning::try_new(ordering, split_points)?;
     Ok(Arc::new(RepartitionExec::try_new(
         input,

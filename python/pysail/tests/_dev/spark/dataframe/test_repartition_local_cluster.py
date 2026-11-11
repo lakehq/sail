@@ -46,6 +46,26 @@ def test_range_repartition_samples_only_when_the_query_runs(local_cluster_spark)
         df.collect()
 
 
+def test_nested_range_repartitions_assign_key_ranges(local_cluster_spark):
+    source = local_cluster_spark.range(0, 36, 1, 4).withColumn("key", F.col("id") % 12)
+    # The projection keeps the two repartitions from collapsing into one.
+    inner = source.repartitionByRange(3, "key").withColumn("inner_pid", F.spark_partition_id())
+    rows = inner.repartitionByRange(2, F.col("key").desc()).withColumn("pid", F.spark_partition_id()).collect()
+    for row in rows:
+        assert row.inner_pid == row.key // 4, row
+        assert row.pid == (11 - row.key) // 6, row
+    assert len(rows) == 36  # noqa: PLR2004
+
+
+def test_range_repartition_samples_input_with_scalar_subquery(local_cluster_spark):
+    rows = local_cluster_spark.sql(
+        "SELECT id, spark_partition_id() AS pid FROM ("
+        "SELECT /*+ REPARTITION_BY_RANGE(3, id) */ id FROM range(12) "
+        "WHERE id < (SELECT max(id) + 1 FROM range(12)))"
+    ).collect()
+    assert sorted((row.id, row.pid) for row in rows) == [(i, i // 4) for i in range(12)]
+
+
 def test_range_repartition_keeps_each_key_in_one_partition(local_cluster_spark):
     source = local_cluster_spark.range(0, 12, 1, 2).withColumn("key", F.col("id") % 3)
     rows = source.repartitionByRange(10, "key").select("key", F.spark_partition_id().alias("pid")).collect()

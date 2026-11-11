@@ -7,6 +7,7 @@ use datafusion::catalog::Session;
 use datafusion::common::config::TableParquetOptions;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
+use datafusion::execution::SessionState;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::physical_expr::expressions::Column;
@@ -14,6 +15,8 @@ use datafusion::physical_expr::{
     LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
+use datafusion::physical_plan::execution_plan::reset_plan_states;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
@@ -26,7 +29,7 @@ use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::{DataSource, DataSourceExec};
 use datafusion_datasource::{PartitionedFile, TableSchema};
-use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, SortExpr, UserDefinedLogicalNode};
+use datafusion_expr::{LogicalPlan, SortExpr, UserDefinedLogicalNode};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::{Partitioning, RangePartitioning, create_physical_sort_exprs};
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
@@ -68,7 +71,7 @@ use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
-use sail_physical_plan::range_repartition::RangeRepartitionExec;
+use sail_physical_plan::range_repartition::{RangeRepartitionExec, RangeSample};
 use sail_physical_plan::range_sample::RangePartitionSampleExec;
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
@@ -505,7 +508,6 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             } = node.kind()
             {
                 plan_range_repartition(
-                    planner,
                     node,
                     input,
                     sorts,
@@ -678,12 +680,10 @@ const RANGE_SAMPLE_SIZE_LIMIT: f64 = 1e6;
 /// Plans range repartitioning with split points from a sample of the input,
 /// like Spark's `RangePartitioner`.
 ///
-/// The sample is a separate plan that computes the input again, as in Spark.
-/// It is planned from the logical input, so it is optimized like any other plan.
-/// It runs when the query runs, not here, so planning and EXPLAIN do not read the input.
+/// The sample computes the planned input again, as in Spark. It runs when the
+/// query runs, not here, so planning and EXPLAIN do not read the input.
 /// <https://github.com/apache/spark/blob/v4.1.0/core/src/main/scala/org/apache/spark/Partitioner.scala>
 async fn plan_range_repartition(
-    planner: &dyn PhysicalPlanner,
     node: &ExplicitRepartitionNode,
     input: &Arc<dyn ExecutionPlan>,
     sorts: &[SortExpr],
@@ -700,22 +700,15 @@ async fn plan_range_repartition(
     };
     // Step 2: the physical range ordering. The resolver removes repeated keys, but the
     // optimizer can still make two keys equal, as it simplifies `id + 0` to `id`.
-    // A repeated key cannot break a tie, so only its first sort order counts, as in
-    // `LexOrdering::new`. The sample computes the same keys, so it keeps the same list.
-    let physical_sorts = create_physical_sort_exprs(
+    // A repeated key cannot break a tie, so `LexOrdering::new` keeps only its first
+    // sort order. The sample computes the keys of this ordering.
+    let ordering = create_physical_sort_exprs(
         sorts,
         UserDefinedLogicalNode::schema(node),
         session.execution_props(),
         planning_ctx,
     )?;
-    let mut keys: Vec<(&SortExpr, PhysicalSortExpr)> = vec![];
-    for (sort, physical_sort) in sorts.iter().zip(physical_sorts) {
-        if !keys.iter().any(|(_, key)| key.expr.eq(&physical_sort.expr)) {
-            keys.push((sort, physical_sort));
-        }
-    }
-    let (sorts, ordering): (Vec<_>, Vec<_>) = keys.into_iter().unzip();
-    let Some(ordering) = LexOrdering::new(ordering).filter(|x| x.len() == sorts.len()) else {
+    let Some(ordering) = LexOrdering::new(ordering) else {
         return internal_err!("range repartitioning requires at least one sort key");
     };
     // Step 3: the cases that need no sample. One partition needs no split points.
@@ -741,24 +734,58 @@ async fn plan_range_repartition(
     if input.boundedness().is_unbounded() {
         return not_impl_err!("range repartitioning of unbounded input");
     }
+    // Step 4: the node runs the sample when the query runs and picks the split points
+    // from it. The query then computes the planned input again and shuffles it.
+    let sample = plan_range_sample(
+        input,
+        &ordering,
+        num_partitions,
+        sample_size_per_partition,
+        session,
+    )?;
+    Ok(Arc::new(RangeRepartitionExec::try_new(
+        Arc::clone(input),
+        Arc::new(sample),
+        ordering,
+    )?))
+}
 
-    // Step 4: the sample plan projects only the range keys from the logical input.
-    // The input is already optimized, and the physical planner runs only the physical
-    // optimizer, which pushes the projection into the scan. The whole input subtree is
-    // planned again here. The main query path also runs
-    // `ensure_scalar_subquery_nullability` after planning, and this plan does not go
-    // through that path.
-    let keys = sorts
+/// Plans the sample of a range repartitioning from its planned input.
+fn plan_range_sample(
+    input: &Arc<dyn ExecutionPlan>,
+    ordering: &LexOrdering,
+    num_partitions: usize,
+    sample_size_per_partition: i32,
+    session: &dyn Session,
+) -> datafusion_common::Result<RangeSample> {
+    // Step 1: the sample projects the range keys from a copy of the input. The main
+    // query runs the input too, and a plan node can run only once, so the copy gets
+    // its own execution state. A range repartitioning in the input keeps its sample
+    // in the copy, so that sample still runs once.
+    let keys = ordering
         .iter()
         .enumerate()
-        .map(|(i, sort)| sort.expr.clone().alias(format!("key_{i}")))
+        .map(|(i, sort)| ProjectionExpr::new(Arc::clone(&sort.expr), format!("key_{i}")))
         .collect::<Vec<_>>();
-    let sample = LogicalPlanBuilder::from(node.input().as_ref().clone())
-        .project(keys)?
-        .build()?;
-    let sample = planner.create_physical_plan(&sample, session).await?;
+    let sample: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        keys,
+        reset_plan_states(Arc::clone(input))?,
+    )?);
+    // Step 2: the physical optimizer runs on the main query after this node is planned,
+    // and the sample is not part of it, so the sample is optimized here. This pushes
+    // the projection into the scan. The main query path also runs
+    // `ensure_scalar_subquery_nullability` after optimizing, so the sample does too.
+    let Some(state) = session.as_any().downcast_ref::<SessionState>() else {
+        return internal_err!("range repartitioning requires a session state");
+    };
+    let sample = state
+        .physical_optimizers()
+        .iter()
+        .try_fold(sample, |plan, rule| {
+            rule.optimize(plan, state.config_options())
+        })?;
     let sample = ensure_scalar_subquery_nullability(sample)?;
-    // Step 5: the sample sizes, as in Spark. `sample_size` is the total number of rows
+    // Step 3: the sample sizes, as in Spark. `sample_size` is the total number of rows
     // wanted. Each input partition keeps `partition_sample_size` rows. For example,
     // 200 partitions and 8 input partitions give 20,000 in total and 7,500 per partition.
     let sample_size =
@@ -770,14 +797,11 @@ async fn plan_range_repartition(
         sample,
         partition_sample_size.max(1),
     )?);
-    // Step 6: the node runs the sample when the query runs and picks the split points
-    // from it. The query then computes the planned input again and shuffles it.
-    Ok(Arc::new(RangeRepartitionExec::try_new(
-        Arc::clone(input),
+    Ok(RangeSample::new(
         sample,
-        ordering,
+        ordering.iter().map(|x| x.options).collect(),
         num_partitions,
-    )?))
+    ))
 }
 
 /// Plans the explicit repartitioning emitted by the logical planner.
@@ -1823,6 +1847,19 @@ mod tests {
         num_partitions: usize,
         sample_size_per_partition: i32,
     ) -> datafusion_common::Result<(Arc<dyn ExecutionPlan>, SessionState)> {
+        let plan = range_repartition_node(
+            key_scan(keys)?,
+            sorts,
+            num_partitions,
+            sample_size_per_partition,
+        );
+        let state = range_repartition_state();
+        let physical = state.create_physical_plan(&plan).await?;
+        Ok((physical, state))
+    }
+
+    /// Scans column `k` with the keys in two input partitions.
+    fn key_scan(keys: Vec<i64>) -> datafusion_common::Result<LogicalPlan> {
         let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, true)]));
         let (left, right) = keys.split_at(keys.len() / 2);
         let partitions = [left, right]
@@ -1835,29 +1872,76 @@ mod tests {
                 )?])
             })
             .collect::<datafusion_common::Result<Vec<_>>>()?;
-        let scan = LogicalPlanBuilder::scan(
+        LogicalPlanBuilder::scan(
             "t",
             provider_as_source(Arc::new(MemTable::try_new(schema, partitions)?)),
             None,
         )?
-        .build()?;
-        let plan = LogicalPlan::Extension(datafusion_expr::Extension {
+        .build()
+    }
+
+    fn range_repartition_node(
+        input: LogicalPlan,
+        sorts: Vec<SortExpr>,
+        num_partitions: usize,
+        sample_size_per_partition: i32,
+    ) -> LogicalPlan {
+        LogicalPlan::Extension(datafusion_expr::Extension {
             node: Arc::new(ExplicitRepartitionNode::new(
-                Arc::new(scan),
+                Arc::new(input),
                 Some(num_partitions),
                 ExplicitRepartitionKind::Range {
                     sorts,
                     sample_size_per_partition,
                 },
             )),
-        });
-        let state = SessionStateBuilder::new()
+        })
+    }
+
+    fn range_repartition_state() -> SessionState {
+        SessionStateBuilder::new()
             .with_config(SessionConfig::new())
             .with_default_features()
             .with_query_planner(new_query_planner())
-            .build();
-        let physical = state.create_physical_plan(&plan).await?;
-        Ok((physical, state))
+            .build()
+    }
+
+    #[tokio::test]
+    async fn nested_range_repartitions_sample_each_input_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // The key goes through a function that counts the rows it computes.
+        let rows = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&rows);
+        let count_rows = create_udf(
+            "count_rows",
+            vec![DataType::Int64],
+            DataType::Int64,
+            Volatility::Immutable,
+            Arc::new(move |args: &[ColumnarValue]| {
+                if let ColumnarValue::Array(array) = &args[0] {
+                    counter.fetch_add(array.len(), Ordering::Relaxed);
+                }
+                Ok(args[0].clone())
+            }),
+        );
+        let input = LogicalPlanBuilder::from(key_scan((0..12).collect()).unwrap())
+            .project(vec![count_rows.call(vec![col("k")]).alias("k")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let inner = range_repartition_node(input, vec![col("k").sort(true, true)], 3, 100);
+        let outer = range_repartition_node(inner, vec![col("k").sort(false, false)], 2, 100);
+        let state = range_repartition_state();
+        let plan = state.create_physical_plan(&outer).await.unwrap();
+
+        assert_eq!(
+            partition_keys(plan, &state).await.unwrap(),
+            vec![(6..12).collect::<Vec<_>>(), (0..6).collect()]
+        );
+        // The inner sample, the inner repartitioning, and the outer sample each compute
+        // the input once. The outer sample reuses the split points of the inner sample.
+        assert_eq!(rows.load(Ordering::Relaxed), 36);
     }
 
     /// Runs the plan and returns the sorted keys of each output partition.

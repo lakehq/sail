@@ -116,6 +116,15 @@ def test_range_repartition_samples_only_when_the_query_runs(spark):
         df.collect()
 
 
+def test_range_repartition_samples_input_with_scalar_subquery(spark):
+    rows = spark.sql(
+        "SELECT id, spark_partition_id() AS pid FROM ("
+        "SELECT /*+ REPARTITION_BY_RANGE(3, id) */ id FROM range(12) "
+        "WHERE id < (SELECT max(id) + 1 FROM range(12)))"
+    ).collect()
+    assert sorted((row.id, row.pid) for row in rows) == [(i, i // 4) for i in range(12)]
+
+
 def assert_range_repartition_plan(df, sorts):
     plan = normalize_plan_text(df._explain_string(extended=True))  # noqa: SLF001
     keys = ", ".join(rf"\S+ {sort}" for sort in sorts)

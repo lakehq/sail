@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use datafusion::common::tree_node::TreeNode;
 use datafusion::common::{DataFusionError, Result, internal_datafusion_err, internal_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_plan::scalar_subquery::ScalarSubqueryExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::{ExecutionPlan, execute_stream, replace_children_if_necessary};
+use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::SessionContext;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryStreamExt};
@@ -137,8 +138,13 @@ impl JobRunner for ClusterJobRunner {
         let context = ctx.task_ctx();
         let schema = plan.schema();
         let output = futures::stream::once(async move {
-            let plan =
-                sample_range_repartitions(driver.clone(), Arc::clone(&context), plan).await?;
+            sample_range_repartitions(
+                driver.clone(),
+                Arc::clone(&context),
+                Arc::clone(&plan),
+                vec![],
+            )
+            .await?;
             execute_job(&driver, plan, context).await
         })
         .try_flatten();
@@ -177,40 +183,84 @@ fn has_unsampled_range_repartition(plan: &Arc<dyn ExecutionPlan>) -> Result<bool
     })
 }
 
+/// A range repartitioning and the scalar subqueries above it, outermost first.
+struct RangeRepartition {
+    node: Arc<dyn ExecutionPlan>,
+    subqueries: Vec<Arc<dyn ExecutionPlan>>,
+}
+
+/// Collects the range repartitioning in the plan, each after its ancestors.
+fn collect_range_repartitions(
+    plan: &Arc<dyn ExecutionPlan>,
+    subqueries: &mut Vec<Arc<dyn ExecutionPlan>>,
+    output: &mut Vec<RangeRepartition>,
+) {
+    if plan.is::<RangeRepartitionExec>() {
+        output.push(RangeRepartition {
+            node: Arc::clone(plan),
+            subqueries: subqueries.clone(),
+        });
+    }
+    let is_subquery = plan.is::<ScalarSubqueryExec>();
+    if is_subquery {
+        subqueries.push(Arc::clone(plan));
+    }
+    for child in plan.children() {
+        collect_range_repartitions(child, subqueries, output);
+    }
+    if is_subquery {
+        subqueries.pop();
+    }
+}
+
 /// Sets the split points of every range repartitioning in the plan, from the bottom up.
-/// Each sample runs as a separate job on the cluster. A sample plan can contain range
-/// repartitioning of its own, which is sampled first.
+/// Each sample runs as a separate job on the cluster. A sample can contain range
+/// repartitioning of its own, which is sampled first. Copies of a range repartitioning
+/// share their sample, so each sample job runs once.
 fn sample_range_repartitions(
     driver: DriverHandle,
     context: Arc<TaskContext>,
     plan: Arc<dyn ExecutionPlan>,
-) -> BoxFuture<'static, Result<Arc<dyn ExecutionPlan>>> {
+    subqueries: Vec<Arc<dyn ExecutionPlan>>,
+) -> BoxFuture<'static, Result<()>> {
     async move {
-        let mut children = vec![];
-        for child in plan.children() {
-            children.push(
-                sample_range_repartitions(driver.clone(), Arc::clone(&context), Arc::clone(child))
-                    .await?,
-            );
-        }
-        let plan = replace_children_if_necessary(plan, children)?;
-        let Some(node) = plan.downcast_ref::<RangeRepartitionExec>() else {
-            return Ok(plan);
-        };
-        if node.is_sampled() {
-            return Ok(plan);
-        }
-        let sample = sample_range_repartitions(
-            driver.clone(),
-            Arc::clone(&context),
-            Arc::clone(node.sample()),
-        )
-        .await?;
-        let batches = execute_job(&driver, sample, context)
-            .await?
-            .try_collect::<Vec<_>>()
+        let mut nodes = vec![];
+        collect_range_repartitions(&plan, &mut subqueries.clone(), &mut nodes);
+        // Reversing the order samples every input before the node that reads it.
+        for RangeRepartition { node, subqueries } in nodes.into_iter().rev() {
+            let Some(node) = node.downcast_ref::<RangeRepartitionExec>() else {
+                continue;
+            };
+            if node.is_sampled() {
+                continue;
+            }
+            let sample = Arc::clone(node.sample().plan());
+            sample_range_repartitions(
+                driver.clone(),
+                Arc::clone(&context),
+                Arc::clone(&sample),
+                subqueries.clone(),
+            )
             .await?;
-        Ok(Arc::new(node.with_sample(&batches)?) as Arc<dyn ExecutionPlan>)
+            // The sample is a copy of the input, so it reads the results of the scalar
+            // subqueries above the node. The sample job computes them too.
+            let sample = subqueries.iter().rev().try_fold(sample, |plan, subquery| {
+                let Some(subquery) = subquery.downcast_ref::<ScalarSubqueryExec>() else {
+                    return internal_err!("expected a scalar subquery plan");
+                };
+                Ok(Arc::new(ScalarSubqueryExec::new(
+                    plan,
+                    subquery.subqueries().to_vec(),
+                    subquery.results().clone(),
+                )) as Arc<dyn ExecutionPlan>)
+            })?;
+            let batches = execute_job(&driver, sample, Arc::clone(&context))
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+            node.set_sample(&batches)?;
+        }
+        Ok(())
     }
     .boxed()
 }
