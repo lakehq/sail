@@ -311,6 +311,7 @@ pub fn parse_interval_with_qualifier(
     };
     let end_field = (start != end).then_some(end);
     if regex.is_match(value) {
+        validate_interval_fraction(value)?;
         return match qualifier {
             spec::SparkIntervalMetadata::YearMonth { .. } => {
                 parse_interval_year_month_string(value, false, regex, start, end_field)
@@ -336,9 +337,12 @@ pub fn parse_interval_with_qualifier(
         }
         value => value,
     };
-    if !matches!(literal_value, Expr::Atom(AtomExpr::StringLiteral(_, tail)) if tail.is_empty()) {
-        return Err(SqlError::invalid(format!("interval: {value}")));
-    }
+    match literal_value {
+        Expr::Atom(AtomExpr::StringLiteral(head, tail)) if tail.is_empty() => {
+            validate_interval_fraction(&from_ast_string(head.clone())?)?;
+        }
+        _ => return Err(SqlError::invalid(format!("interval: {value}"))),
+    };
     let interval = from_ast_signed_interval(Signed::Positive(literal.value))?;
     match &interval {
         IntervalValue::YearMonth {
@@ -355,6 +359,17 @@ pub fn parse_interval_with_qualifier(
             "interval does not match target qualifier: {value}"
         ))),
     }
+}
+
+fn validate_interval_fraction(value: &str) -> SqlResult<()> {
+    // Casts require 1–9 fractional digits, whereas SQL interval literals also
+    // allow a trailing decimal point.
+    if let Some((_, fraction)) = value.trim_end().split_once('.')
+        && !(1..=9).contains(&fraction.len())
+    {
+        return Err(SqlError::invalid(format!("interval: {value}")));
+    }
+    Ok(())
 }
 
 fn from_ast_interval_qualifier(qualifier: IntervalQualifier) -> SqlResult<StandardIntervalKind> {
