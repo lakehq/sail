@@ -367,6 +367,97 @@ def test_checkpoint_compacted_tail_version_reads_do_not_require_original_commits
         assert reader.load(str(tmp_path)).collect() == [Row(id=expected_version, value=names[expected_version])]
 
 
+@pytest.mark.parametrize("metadata_as_data", ["false", "true"])
+def test_time_travel_before_latest_checkpoint(spark, tmp_path: Path, metadata_as_data: str):
+    spark.range(0).write.format("delta").option("delta.checkpointInterval", "10").save(str(tmp_path))
+    for value in range(21):
+        spark.range(value, value + 1).write.format("delta").mode("append").save(str(tmp_path))
+    hint = json.loads((tmp_path / "_delta_log" / "_last_checkpoint").read_text())
+    assert hint["version"] == 20
+    _checkpoint_file(tmp_path, 20)
+
+    # Read an early version first, then every boundary including checkpoints and latest.
+    for version in [3, *[v for v in range(22) if v != 3]]:
+        rows = (
+            spark.read.format("delta")
+            .option("metadataAsDataRead", metadata_as_data)
+            .option("versionAsOf", version)
+            .load(str(tmp_path))
+            .orderBy("id")
+            .collect()
+        )
+        assert rows == [Row(id=value) for value in range(version)], f"version={version}"
+
+
+@pytest.mark.parametrize("metadata_as_data", ["false", "true"])
+@pytest.mark.parametrize(
+    "hint", [None, "malformed", 0, 2, 20, -1], ids=["absent", "malformed", "stale", "missing", "future", "negative"]
+)
+def test_checkpoint_hint_is_only_a_listing_hint(spark, tmp_path: Path, metadata_as_data: str, hint):
+    _write_checkpoint_with_compacted_tail(tmp_path, "commit-only")
+    log_path = tmp_path / "_delta_log"
+    # A usable older checkpoint must still work after its original JSON has been pruned.
+    (log_path / "00000000000000000000.json").unlink()
+    hint_path = log_path / "_last_checkpoint"
+    if hint is None:
+        hint_path.unlink()
+    else:
+        hint_path.write_text("{" if hint == "malformed" else json.dumps({"version": hint, "size": 3}))
+    rows = (
+        spark.read.format("delta")
+        .option("metadataAsDataRead", metadata_as_data)
+        .option("versionAsOf", 3)
+        .load(str(tmp_path))
+        .collect()
+    )
+    assert rows == [Row(id=3, value="new")]
+
+
+@pytest.mark.parametrize("metadata_as_data", ["false", "true"])
+@pytest.mark.parametrize("exact_checksum", [False, True], ids=["replay-header", "checksum-header"])
+@pytest.mark.parametrize("missing_version", [0, 2, 3], ids=["prefix", "interior", "tail"])
+def test_time_travel_rejects_uncovered_commits(
+    spark, tmp_path: Path, metadata_as_data: str, exact_checksum: bool, missing_version: int
+):
+    _write_checkpoint_with_compacted_tail(tmp_path, "commit-only")
+    log_path = tmp_path / "_delta_log"
+    if exact_checksum:
+        actions = [json.loads(line) for line in (log_path / "00000000000000000000.json").read_text().splitlines()]
+        checksum = {
+            "tableSizeBytes": 0,
+            "numFiles": 1,
+            "numMetadata": 1,
+            "numProtocol": 1,
+            "metadata": next(action["metaData"] for action in actions if "metaData" in action),
+            "protocol": next(action["protocol"] for action in actions if "protocol" in action),
+        }
+        (log_path / "00000000000000000003.crc").write_text(json.dumps(checksum))
+    # Keep a later commit so a missing tail is a replay gap, not a nonexistent target version.
+    (log_path / "00000000000000000004.json").write_bytes((log_path / "00000000000000000003.json").read_bytes())
+    if missing_version == 0:
+        _checkpoint_file(tmp_path, 0).unlink()
+    (log_path / f"{missing_version:020d}.json").unlink()
+    with pytest.raises(Exception, match="Missing commit file"):
+        (
+            spark.read.format("delta")
+            .option("metadataAsDataRead", metadata_as_data)
+            .option("versionAsOf", 3)
+            .load(str(tmp_path))
+            .collect()
+        )
+
+
+@pytest.mark.parametrize("metadata_as_data", ["false", "true"])
+def test_future_ending_compaction_cannot_cover_historical_gap(spark, tmp_path: Path, metadata_as_data: str):
+    _write_checkpoint_with_compacted_tail(tmp_path, "compaction-then-commit")
+    (tmp_path / "_delta_log" / "00000000000000000001.json").unlink()
+    reader = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data)
+    # The selected compaction covers the missing JSON at its endpoint, but not inside its range.
+    assert reader.option("versionAsOf", 2).load(str(tmp_path)).collect() == [Row(id=2, value="middle")]
+    with pytest.raises(Exception, match="Missing commit file"):
+        reader.option("versionAsOf", 1).load(str(tmp_path)).collect()
+
+
 def test_delta_write_to_table_properties_materialize_metadata(spark, tmp_path: Path):
     """Test that .writeTo().tableProperty() materializes Delta table properties on first commit.
 
