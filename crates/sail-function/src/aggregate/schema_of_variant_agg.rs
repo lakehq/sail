@@ -1,18 +1,18 @@
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef};
+use arrow::array::{ArrayRef, BinaryArray};
 use arrow_schema::{DataType, Field, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion::scalar::ScalarValue;
+use datafusion_common::cast::as_binary_array;
 use parquet_variant_compute::VariantArray;
 
 use crate::scalar::variant::spark_schema_of_variant::{
-    merge_variant_types, variant_to_inferred_type, variant_type_from_spark_type,
-    variant_type_to_spark_type,
+    merge_variant_types, variant_to_inferred_type, variant_type_to_spark_type,
 };
-use crate::schema_inference::InferredType;
+use crate::utils::schema_inference::InferredType;
 
 /// Aggregate function that merges variant schemas across rows.
 ///
@@ -54,11 +54,10 @@ impl AggregateUDFImpl for SchemaOfVariantAggFunction {
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        // We store the merged schema as a single UTF-8 string in the state.
-        // This is a serialized representation of the merged type.
+        // Serialize the inferred type directly, independently of its display format.
         Ok(vec![Arc::new(Field::new(
             "merged_schema",
-            DataType::Utf8,
+            DataType::Binary,
             true,
         ))])
     }
@@ -91,28 +90,20 @@ impl Accumulator for SchemaOfVariantAggAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let schema_str = self
+        let state = self
             .merged_schema
             .as_ref()
-            .map_or_else(|| "VOID".to_string(), variant_type_to_spark_type);
-        Ok(vec![ScalarValue::Utf8(Some(schema_str))])
+            .map(serde_json::to_vec)
+            .transpose()
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        Ok(vec![ScalarValue::Binary(state)])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let schema_arr = states[0]
-            .as_any()
-            .downcast_ref::<arrow::array::StringArray>()
-            .ok_or_else(|| {
-                datafusion::common::DataFusionError::Internal(
-                    "schema_of_variant_agg: expected StringArray state".to_string(),
-                )
-            })?;
-
-        for i in 0..schema_arr.len() {
-            if schema_arr.is_null(i) {
-                continue;
-            }
-            let other_schema = variant_type_from_spark_type(schema_arr.value(i))?;
+        let schemas: &BinaryArray = as_binary_array(&states[0])?;
+        for state in schemas.iter().flatten() {
+            let other_schema = serde_json::from_slice(state)
+                .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
             self.merged_schema = Some(match self.merged_schema.take() {
                 Some(existing) => merge_variant_types(existing, other_schema),
                 None => other_schema,

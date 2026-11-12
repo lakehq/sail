@@ -165,3 +165,31 @@ Feature: schema_of_variant_agg
         | case                                    | values              | result                       |
         | schema_of_variant_agg single row        | ('42')              | BIGINT                       |
         | schema_of_variant_agg single row object | ('{"a":1,"b":"x"}') | OBJECT<a: BIGINT, b: STRING> |
+
+  Rule: Aggregate state preserves field names
+
+    Scenario: schema_of_variant_agg merges nested schemas with punctuation in field names
+      When query
+        """
+        SELECT schema_of_variant_agg(parse_json(v)) AS result
+        FROM (
+          SELECT '{"a, b":{"x: y":[1]},"tick`name":1,"":true}' AS v FROM range(8)
+          UNION ALL
+          SELECT '{"a, b":{"x: y":[2]},"tick`name":2,"":false}' AS v FROM range(8)
+        )
+        """
+      Then query result
+        | result                                                                               |
+        | OBJECT<``: BOOLEAN, `a, b`: OBJECT<`x: y`: ARRAY<BIGINT>>, `tick``name`: BIGINT> |
+
+    Scenario: schema_of_variant_agg preserves decimal types in partial states
+      When query
+        """
+        SELECT schema_of_variant_agg(to_variant_object(
+          named_struct('a, b', CAST(id + 1.25 AS DECIMAL(5,2)))
+        )) AS result
+        FROM range(8)
+        """
+      Then query result
+        | result                       |
+        | OBJECT<`a, b`: DECIMAL(3,2)> |

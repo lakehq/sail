@@ -2,19 +2,19 @@ use std::sync::Arc;
 
 use chrono::NaiveDate;
 use datafusion::arrow::array::{Array, ArrayRef, MapArray, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{DataFusionError, Result, plan_err};
+use datafusion::arrow::datatypes::DataType;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
 use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
-use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
 use crate::scalar::csv::options::{
     CsvFunction, find_option, find_option_with_alias, reject_null_entries, validate_options,
 };
 use crate::scalar::datetime::format::DateTimeFormat;
+use crate::utils::schema_inference::{type_coercion, validation};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSchemaOfCsv {
@@ -35,81 +35,6 @@ impl SparkSchemaOfCsv {
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
-
-    fn validate_args_len<T>(args: &[T]) -> Result<()> {
-        if args.is_empty() || args.len() > 2 {
-            return plan_err!(
-                "function `{}` expected 1 to 2 args but got {}",
-                Self::SCHEMA_OF_CSV_NAME,
-                args.len()
-            );
-        }
-        Ok(())
-    }
-
-    fn validate_args_are_literal(cols: &[ColumnarValue]) -> Result<()> {
-        if let Some(ColumnarValue::Array(_)) = cols.first() {
-            return Err(DataFusionError::Execution(format!(
-                "Expected a literal value for the first arg of `{}`, instead got a column",
-                Self::SCHEMA_OF_CSV_NAME,
-            )));
-        }
-        if let Some(ColumnarValue::Array(_)) = cols.get(1) {
-            return Err(DataFusionError::Execution(format!(
-                "Expected a literal value for the second arg of `{}`, instead got a column",
-                Self::SCHEMA_OF_CSV_NAME,
-            )));
-        }
-        Ok(())
-    }
-
-    fn validate_arg_types(arg_types: &[DataType]) -> Result<()> {
-        fn is_valid_csv_arg(arg_type: &DataType) -> bool {
-            matches!(
-                arg_type,
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null
-            )
-        }
-
-        fn validate_options_arg(arg_type: &DataType) -> Result<()> {
-            match arg_type {
-                DataType::Null => Ok(()),
-                DataType::Map(map_field, _) => match map_field.data_type() {
-                    DataType::Struct(fields) => {
-                        let key = fields[0].clone();
-                        let value = fields[1].clone();
-                        if !key.data_type().is_string() || !value.data_type().is_string() {
-                            return Err(DataFusionError::Plan(format!(
-                                "For function `{}`, the options map keys/values should both be type string. Instead got key: {}, value: {}",
-                                SparkSchemaOfCsv::SCHEMA_OF_CSV_NAME,
-                                key.data_type(),
-                                value.data_type(),
-                            )));
-                        }
-                        Ok(())
-                    }
-                    _ => unreachable!(),
-                },
-                _ => plan_err!(
-                    "For function `{}` found invalid options arg type: {:?}",
-                    SparkSchemaOfCsv::SCHEMA_OF_CSV_NAME,
-                    arg_type
-                ),
-            }
-        }
-
-        match arg_types {
-            [arg_type] if is_valid_csv_arg(arg_type) => Ok(()),
-            [csv_arg_type, options_arg_type] if is_valid_csv_arg(csv_arg_type) => {
-                validate_options_arg(options_arg_type)
-            }
-            _ => plan_err!(
-                "For function `{}` found invalid arg types: {:?}",
-                Self::SCHEMA_OF_CSV_NAME,
-                arg_types
-            ),
-        }
-    }
 }
 
 impl ScalarUDFImpl for SparkSchemaOfCsv {
@@ -126,28 +51,11 @@ impl ScalarUDFImpl for SparkSchemaOfCsv {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        Self::validate_args_len(arg_types)?;
-        Self::validate_arg_types(arg_types)?;
-        let mut coerce_to = vec![DataType::Utf8];
-        if arg_types.len() > 1 {
-            coerce_to.push(DataType::Map(
-                Arc::new(Field::new(
-                    "entries",
-                    DataType::Struct(Fields::from(vec![
-                        Field::new(SAIL_MAP_KEY_FIELD_NAME, DataType::Utf8, false),
-                        Field::new(SAIL_MAP_VALUE_FIELD_NAME, DataType::Utf8, true),
-                    ])),
-                    false,
-                )),
-                false,
-            ));
-        }
-        Ok(coerce_to)
+        type_coercion::coerce_types(self.name(), arg_types, true)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        Self::validate_args_len(&args.args)?;
-        Self::validate_args_are_literal(&args.args)?;
+        validation::validate_literal_args(self.name(), &args.args)?;
         let hints = vec![Hint::AcceptsSingular, Hint::AcceptsSingular];
         make_scalar_function(schema_of_csv_inner, hints)(&args.args)
     }
@@ -202,7 +110,7 @@ impl SparkSchemaOfCsvOptions {
 }
 
 fn schema_of_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    SparkSchemaOfCsv::validate_args_len(args)?;
+    validation::validate_args_len(SparkSchemaOfCsv::SCHEMA_OF_CSV_NAME, args)?;
     let rows = downcast_arg!(&args[0], StringArray);
     let options = if let Some(arg) = args.get(1) {
         SparkSchemaOfCsvOptions::from_map(downcast_arg!(arg, MapArray))?

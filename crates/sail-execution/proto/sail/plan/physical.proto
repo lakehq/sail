@@ -297,6 +297,7 @@ message ExtendedScalarUdf {
     SparkToStringUdf spark_to_string = 40;
     UuidCastUdf uuid_cast = 41;
     SparkIntervalUdf spark_interval = 42;
+    SparkSchemaOfXmlUdf spark_schema_of_xml = 43;
   }
 }
 
@@ -1406,4 +1407,9 @@ message DeltaOptimizeRewriteExecNode {
 
 message DeltaOptimizeGroupAssignment {
   repeated uint64 groups = 1;
+}
+
+message SparkSchemaOfXmlUdf {
+  bool case_sensitive = 1;
+  bool timestamp_ntz = 2;
 }
