@@ -19,6 +19,8 @@ F = TypeVar("F", bound="Callable")
 
 @dataclass(frozen=True)
 class Resource:
+    """A named fixture resource and its priority for choosing an affinity."""
+
     name: str
     weight: float
 
@@ -26,7 +28,7 @@ class Resource:
 def resource(*, name: str, weight: float) -> Callable[[F], F]:
     """Declare a fixture resource, placing this decorator below ``@pytest.fixture``.
 
-    Weights are positive, finite scheduling priorities. A resource overrides
+    Weights are positive, finite priorities for choosing an affinity. A resource overrides
     feature-file or module affinity only when its weight exceeds 1. Consumers of the same name
     prefer the same PySpark version, subject to Spark compatibility markers.
 
@@ -87,8 +89,12 @@ def fixture_resources(item: pytest.Item) -> Iterator[Resource]:
         yield from visit(name)
 
 
-def affinity_key(item: pytest.Item, default: tuple[str, str]) -> tuple[str, str]:
-    """Choose the strongest resource, rejecting conflicting declarations."""
+def resource_affinity(item: pytest.Item) -> tuple[str, str] | None:
+    """Return the strongest resource affinity if its weight exceeds 1.
+
+    Return ``None`` when no resource outweighs the default affinity.
+    Reject conflicting declarations even when they do not determine the affinity.
+    """
     resources = {}
     weights = {}
     for declared in fixture_resources(item):
@@ -106,4 +112,4 @@ def affinity_key(item: pytest.Item, default: tuple[str, str]) -> tuple[str, str]
         name = max(resources, key=resources.get)
         if resources[name] > 1:
             return "resource", name
-    return default
+    return None

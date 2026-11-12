@@ -14,7 +14,7 @@ pytest_plugins = ["pytester"]
 
 
 @pytest.fixture
-def resource_tests(pytester, monkeypatch):
+def affinity_tests(pytester, monkeypatch):
     monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
     for name in (
         "PYSAIL_TEST_SUITE_MANIFEST",
@@ -31,7 +31,7 @@ def resource_tests(pytester, monkeypatch):
         pytest_plugins = ["pysail.testing.suites", "pysail.testing.spark.markers"]
 
         def pytest_collection_finish(session):
-            Path("selected.json").write_text(json.dumps({
+            Path("affinities.json").write_text(json.dumps({
                 item.nodeid: item_affinity(item)
                 for item in session.items
             }))
@@ -42,12 +42,12 @@ def resource_tests(pytester, monkeypatch):
 def collect_affinities(pytester, *args):
     result = pytester.runpytest("--collect-only", "-q", *args)
     assert result.ret in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED)
-    return json.loads((pytester.path / "selected.json").read_text())
+    return json.loads((pytester.path / "affinities.json").read_text())
 
 
 @pytest.fixture
-def bdd_resource_tests(resource_tests):
-    with (resource_tests.path / "conftest.py").open("a") as file:
+def bdd_affinity_tests(affinity_tests):
+    with (affinity_tests.path / "conftest.py").open("a") as file:
         file.write('\npytest_plugins.append("pytest_bdd.plugin")\n')
     for directory, content in [
         (
@@ -64,15 +64,15 @@ def bdd_resource_tests(resource_tests):
         ),
         ("two", "Feature: Second feature\n  Scenario: Second case\n    Given a service\n"),
     ]:
-        path = resource_tests.path / directory
+        path = affinity_tests.path / directory
         path.mkdir()
         (path / "shared.feature").write_text(content)
-    return resource_tests
+    return affinity_tests
 
 
 @pytest.mark.parametrize("weight", [0.5, 1, 10])
-def test_bdd_affinity_uses_feature_paths_and_preserves_resource_overrides(bdd_resource_tests, weight):
-    bdd_resource_tests.makepyfile(
+def test_feature_affinity_uses_feature_paths_unless_outweighed_by_a_resource(bdd_affinity_tests, weight):
+    bdd_affinity_tests.makepyfile(
         test_loader=f"""
         import pytest
         from pytest_bdd import scenarios
@@ -104,20 +104,20 @@ def test_bdd_affinity_uses_feature_paths_and_preserves_resource_overrides(bdd_re
     }
     if weight > 1:
         expected = {
-            nodeid: ["resource", "service"] if nodeid.startswith("test_loader.py::") else key
-            for nodeid, key in expected.items()
+            nodeid: ["resource", "service"] if nodeid.startswith("test_loader.py::") else affinity
+            for nodeid, affinity in expected.items()
         }
-    assert collect_affinities(bdd_resource_tests) == expected
-    filtered = collect_affinities(bdd_resource_tests, "test_loader.py", "-k", "one/shared.feature")
+    assert collect_affinities(bdd_affinity_tests) == expected
+    filtered = collect_affinities(bdd_affinity_tests, "test_loader.py", "-k", "one/shared.feature")
     assert filtered == {
-        nodeid: key
-        for nodeid, key in expected.items()
+        nodeid: affinity
+        for nodeid, affinity in expected.items()
         if nodeid.startswith(("test_loader.py::test_first_case", "test_loader.py::test_outlined_case"))
     }
 
 
-def test_bdd_assignment_preserves_version_requirements_and_cross_version(bdd_resource_tests, monkeypatch):
-    bdd_resource_tests.makepyfile(
+def test_bdd_assignment_preserves_version_requirements_and_cross_version(bdd_affinity_tests, monkeypatch):
+    bdd_affinity_tests.makepyfile(
         test_loader="""
         import pytest
         from pytest_bdd import scenario
@@ -141,16 +141,16 @@ def test_bdd_assignment_preserves_version_requirements_and_cross_version(bdd_res
     assignments = {}
     for version in versions:
         monkeypatch.setattr(suites, "pyspark_version", lambda v=version: tuple(map(int, v.split("."))))
-        for nodeid, key in collect_affinities(bdd_resource_tests).items():
-            assert key == ["feature", "one/shared.feature"]
+        for nodeid, affinity in collect_affinities(bdd_affinity_tests).items():
+            assert affinity == ["feature", "one/shared.feature"]
             assignments.setdefault(nodeid.split("::")[-1], []).append(version)
     assert len(assignments["test_unrestricted"]) == 1
     assert assignments["test_restricted"] == ["4.1.4"]
     assert assignments["test_cross_version"] == ["4.1.4", "4.2.1"]
 
 
-def test_module_affinity_includes_parameters_classes_and_doctests(resource_tests):
-    resource_tests.makepyfile(
+def test_module_affinity_includes_parameters_classes_and_doctests(affinity_tests):
+    affinity_tests.makepyfile(
         test_first="""
         import pytest
         @pytest.mark.parametrize("value", [1, 2])
@@ -160,9 +160,9 @@ def test_module_affinity_includes_parameters_classes_and_doctests(resource_tests
         """,
         test_second="def test_other(): pass",
     )
-    resource_tests.makefile(".txt", test_example=">>> 1 + 1\n2\n")
-    selected = collect_affinities(resource_tests, "--doctest-glob=*.txt")
-    assert selected == {
+    affinity_tests.makefile(".txt", test_example=">>> 1 + 1\n2\n")
+    affinities = collect_affinities(affinity_tests, "--doctest-glob=*.txt")
+    assert affinities == {
         "test_first.py::test_parameter[1]": ["module", "test_first.py"],
         "test_first.py::test_parameter[2]": ["module", "test_first.py"],
         "test_first.py::TestMethods::test_method": ["module", "test_first.py"],
@@ -171,8 +171,8 @@ def test_module_affinity_includes_parameters_classes_and_doctests(resource_tests
     }
 
 
-def test_resources_propagate_through_indirect_autouse_and_usefixtures_dependencies(resource_tests):
-    with (resource_tests.path / "conftest.py").open("a") as file:
+def test_resources_propagate_through_indirect_autouse_and_usefixtures_dependencies(affinity_tests):
+    with (affinity_tests.path / "conftest.py").open("a") as file:
         file.write("""
 import pytest
 from pysail.testing.resources import resource
@@ -185,7 +185,7 @@ def cluster():
 @pytest.fixture
 def client(cluster): pass
 """)
-    resource_tests.makepyfile(
+    affinity_tests.makepyfile(
         test_direct="def test_direct(cluster): pass",
         test_indirect="""
         import pytest
@@ -200,21 +200,21 @@ def client(cluster): pass
         def test_automatic(): pass
         """,
     )
-    selected = collect_affinities(resource_tests)
-    assert set(selected) == {
+    affinities = collect_affinities(affinity_tests)
+    assert set(affinities) == {
         "test_direct.py::test_direct",
         "test_indirect.py::test_indirect",
         "test_indirect.py::test_marked",
         "test_autouse.py::test_automatic",
     }
-    assert all(key == ["resource", "cluster"] for key in selected.values())
-    assert collect_affinities(resource_tests, "test_indirect.py", "-k", "marked") == {
+    assert all(affinity == ["resource", "cluster"] for affinity in affinities.values())
+    assert collect_affinities(affinity_tests, "test_indirect.py", "-k", "marked") == {
         "test_indirect.py::test_marked": ["resource", "cluster"]
     }
 
 
-def test_highest_weight_wins_without_merging_modules(resource_tests):
-    resource_tests.makepyfile("""
+def test_resource_affinity_is_resolved_per_item(affinity_tests):
+    affinity_tests.makepyfile("""
         import pytest
         from pysail.testing.resources import resource
 
@@ -230,16 +230,16 @@ def test_highest_weight_wins_without_merging_modules(resource_tests):
         def test_delta(delta): pass
         def test_plain(): pass
     """)
-    selected = collect_affinities(resource_tests)
-    by_name = {nodeid.split("::")[-1]: key for nodeid, key in selected.items()}
+    affinities = collect_affinities(affinity_tests)
+    by_name = {nodeid.split("::")[-1]: affinity for nodeid, affinity in affinities.items()}
     assert by_name["test_hms"] == ["resource", "hms"]
     assert by_name["test_delta"] == ["resource", "delta"]
     assert by_name["test_plain"][0] == "module"
 
 
 @pytest.mark.parametrize("weight", [0.5, 1, 1.5])
-def test_module_has_weight_one(resource_tests, weight):
-    resource_tests.makepyfile(
+def test_resource_affinity_must_outweigh_module_affinity(affinity_tests, weight):
+    affinity_tests.makepyfile(
         test_weight=f"""
         import pytest
         from pysail.testing.resources import resource
@@ -250,13 +250,13 @@ def test_module_has_weight_one(resource_tests, weight):
     """
     )
     expected = ["resource", "service"] if weight > 1 else ["module", "test_weight.py"]
-    assert collect_affinities(resource_tests) == {"test_weight.py::test_example": expected}
+    assert collect_affinities(affinity_tests) == {"test_weight.py::test_example": expected}
 
 
 @pytest.mark.parametrize("cross_version", [False, True])
 @pytest.mark.parametrize("weight", [0.5, 10])
-def test_equal_resource_weights_are_rejected_even_below_the_winner(resource_tests, weight, cross_version):
-    resource_tests.makepyfile(
+def test_equal_resource_weights_are_rejected_even_below_the_winner(affinity_tests, weight, cross_version):
+    affinity_tests.makepyfile(
         test_conflict=f"""
         import pytest
         from pysail.testing.resources import resource
@@ -273,14 +273,14 @@ def test_equal_resource_weights_are_rejected_even_below_the_winner(resource_test
         def test_example(first, second, winner): pass
     """
     )
-    result = resource_tests.runpytest("--collect-only", "-q")
+    result = affinity_tests.runpytest("--collect-only", "-q")
     assert result.ret == pytest.ExitCode.USAGE_ERROR
     result.stderr.fnmatch_lines([f"*test_conflict.py::test_example: resources have equal weight {weight}: a, b*"])
 
 
 @pytest.mark.parametrize("second_weight", [10, 20])
-def test_repeated_resource_names_must_agree_on_weight(resource_tests, second_weight):
-    resource_tests.makepyfile(
+def test_repeated_resource_names_must_agree_on_weight(affinity_tests, second_weight):
+    affinity_tests.makepyfile(
         test_repeated=f"""
         import pytest
         from pysail.testing.resources import resource
@@ -294,23 +294,25 @@ def test_repeated_resource_names_must_agree_on_weight(resource_tests, second_wei
     """
     )
     if second_weight == 10:  # noqa: PLR2004
-        assert collect_affinities(resource_tests) == {"test_repeated.py::test_example": ["resource", "cluster"]}
+        assert collect_affinities(affinity_tests) == {"test_repeated.py::test_example": ["resource", "cluster"]}
     else:
-        result = resource_tests.runpytest("--collect-only", "-q")
+        result = affinity_tests.runpytest("--collect-only", "-q")
         assert result.ret == pytest.ExitCode.USAGE_ERROR
         result.stderr.fnmatch_lines(["*resource 'cluster' has conflicting weights:*"])
 
 
-def test_fixture_overrides_parent_requests_aliases_and_direct_parameters(resource_tests):
-    with (resource_tests.path / "conftest.py").open("a") as file:
+def test_fixture_overrides_parent_requests_aliases_and_direct_parameters(affinity_tests):
+    with (affinity_tests.path / "conftest.py").open("a") as file:
         file.write("""
 import pytest
 from pysail.testing.resources import resource
 @pytest.fixture
 @resource(name="parent", weight=10)
-def service(): pass
+def cluster(): pass
+@pytest.fixture
+def service(cluster): pass
 """)
-    resource_tests.makepyfile(
+    affinity_tests.makepyfile(
         test_override="""
         import pytest
         @pytest.fixture
@@ -321,6 +323,14 @@ def service(): pass
         import pytest
         @pytest.fixture
         def service(service): pass
+        def test_example(service): pass
+        """,
+        test_indirect_parent="""
+        import pytest
+        @pytest.fixture
+        def client(service): pass
+        @pytest.fixture
+        def service(client): pass
         def test_example(service): pass
         """,
         test_parameter="""
@@ -338,16 +348,17 @@ def service(): pass
             def test_example(self, service): pass
         """,
     )
-    assert collect_affinities(resource_tests) == {
+    assert collect_affinities(affinity_tests) == {
         "test_override.py::test_example": ["module", "test_override.py"],
         "test_parent.py::test_example": ["resource", "parent"],
+        "test_indirect_parent.py::test_example": ["resource", "parent"],
         "test_parameter.py::test_example[1]": ["module", "test_parameter.py"],
         "test_class.py::TestExample::test_example": ["resource", "child"],
     }
 
 
-def test_resource_assignment_preserves_version_preferences_and_cross_version(resource_tests, monkeypatch):
-    with (resource_tests.path / "conftest.py").open("a") as file:
+def test_resource_assignment_preserves_version_preferences_and_cross_version(affinity_tests, monkeypatch):
+    with (affinity_tests.path / "conftest.py").open("a") as file:
         file.write("""
 import pytest
 from pysail.testing.resources import resource
@@ -355,7 +366,7 @@ from pysail.testing.resources import resource
 @resource(name="shared", weight=10)
 def service(): pass
 """)
-    resource_tests.makepyfile(
+    affinity_tests.makepyfile(
         test_first="""
         import pytest
         def test_unrestricted(service): pass
@@ -378,11 +389,11 @@ def service(): pass
         assignments = {}
         for version in versions:
             monkeypatch.setattr(suites, "pyspark_version", lambda v=version: tuple(map(int, v.split("."))))
-            selected = collect_affinities(resource_tests)
-            for nodeid in selected:
+            affinities = collect_affinities(affinity_tests)
+            for nodeid in affinities:
                 assignments.setdefault(nodeid.split("::")[-1], []).append(version)
-            filtered = collect_affinities(resource_tests, "test_second.py", "-k", "other_module")
-            assert filtered == {nodeid: key for nodeid, key in selected.items() if "other_module" in nodeid}
+            filtered = collect_affinities(affinity_tests, "test_second.py", "-k", "other_module")
+            assert filtered == {nodeid: affinity for nodeid, affinity in affinities.items() if "other_module" in nodeid}
         preferred = assignments["test_unrestricted"]
         assert len(preferred) == 1
         assert assignments["test_other_module"] == preferred

@@ -1,4 +1,4 @@
-"""Infer suites before pytest applies its standard marker and keyword filters."""
+"""Select tests by suite and assign PySpark versions by affinity."""
 
 import json
 import os
@@ -12,7 +12,7 @@ import pytest
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
-from pysail.testing.resources import affinity_key
+from pysail.testing.resources import resource_affinity
 from pysail.testing.spark.markers import resolve_spark_markers
 from pysail.testing.spark.utils.common import pyspark_version
 
@@ -90,6 +90,7 @@ def matrix_versions() -> tuple[str | None, list[str]]:
 
 
 def assigned_versions(item: pytest.Item, affinity: tuple[str, str], seed: str, versions: list[str]) -> list[str]:
+    """Assign compatible versions using the affinity and cross-version markers."""
     try:
         supports = resolve_spark_markers(item.iter_markers("spark"))
     except (TypeError, ValueError) as error:
@@ -133,10 +134,16 @@ def scenario_feature_path(item: pytest.Item) -> Path | None:
 
 
 def item_affinity(item: pytest.Item) -> tuple[str, str]:
-    """Prefer a BDD feature file or Python module, unless a resource outweighs it."""
+    """Return the (kind, identifier) used to share a version preference order.
+
+    Prefer a resource with weight above 1, otherwise a BDD feature file or module.
+    """
+    affinity = resource_affinity(item)
+    if affinity is not None:
+        return affinity
     feature = scenario_feature_path(item)
     kind, path = ("feature", feature) if feature is not None else ("module", item.path.resolve())
-    return affinity_key(item, (kind, relative_test_path(path, strip_dev=False).as_posix()))
+    return kind, relative_test_path(path, strip_dev=False).as_posix()
 
 
 def path_group(path: Path, groups: dict[str, tuple[str, ...]], default: str) -> str:
