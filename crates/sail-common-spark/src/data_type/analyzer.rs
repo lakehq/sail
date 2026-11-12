@@ -30,7 +30,6 @@ impl TryFrom<JsonDataType> for spec::DataType {
 
     fn try_from(data_type: JsonDataType) -> CommonResult<Self> {
         Ok(match data_type {
-            JsonDataType::Type { r#type } => return (*r#type).try_into(),
             JsonDataType::Null => Self::Null,
             JsonDataType::String => Self::ConfiguredUtf8 {
                 utf8_type: spec::Utf8Type::Configured,
@@ -240,9 +239,9 @@ mod tests {
     }
 
     #[test]
-    fn nullable_defaults_and_simple_type_objects() -> Result<(), Box<dyn std::error::Error>> {
+    fn array_with_primitive_element() -> Result<(), Box<dyn std::error::Error>> {
         let data_type: JsonDataType = serde_json::from_value(json!({
-            "type": "array", "elementType": {"type": "integer"}
+            "type": "array", "elementType": "integer", "containsNull": true
         }))?;
         assert_eq!(
             spec::DataType::try_from(data_type)?,
@@ -252,6 +251,20 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[test]
+    fn rejects_type_wrappers() {
+        for schema in [
+            r#"{"type":"integer"}"#,
+            r#"{"type":"decimal(10,2)"}"#,
+            r#"{"type":{"type":"array","elementType":"integer","containsNull":true}}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<JsonDataType>(schema).is_err(),
+                "{schema}"
+            );
+        }
     }
 
     #[test]

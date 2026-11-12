@@ -11,7 +11,6 @@ pub(crate) fn parse_spark_json_data_type(schema: &str) -> SparkResult<sc::DataTy
 
 fn json_data_type_to_proto(data_type: JsonDataType) -> SparkResult<sc::DataType> {
     let proto_data_type = match data_type {
-        JsonDataType::Type { r#type } => return json_data_type_to_proto(*r#type),
         JsonDataType::Null => sc::DataType {
             kind: Some(dt::Kind::Null(dt::Null::default())),
         },

@@ -102,11 +102,6 @@ pub enum JsonDataType {
         #[serde(alias = "sql_type")]
         sql_type: Option<Box<JsonDataType>>,
     },
-    /// The object form of a simple type, such as `{"type": "integer"}`.
-    #[serde(untagged)]
-    Type {
-        r#type: Box<JsonDataType>,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

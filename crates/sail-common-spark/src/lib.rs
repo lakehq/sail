@@ -1,3 +1,3 @@
-//! Spark data types shared by protocol adapters, SQL analysis, and schema readers.
+//! Shared types and utilities for Spark compatibility.
 
 pub mod data_type;

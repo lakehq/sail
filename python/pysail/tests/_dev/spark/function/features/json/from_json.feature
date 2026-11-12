@@ -658,6 +658,21 @@ Feature: from_json function parses JSON strings into structured types
         | Whitespace-only schema string produces error | '   '        |
 
   Rule: Spark JSON schema format
+    Scenario Outline: Reject type wrappers in JSON schemas: <case>
+      When query
+        """
+        SELECT from_json('null', '<schema>') AS result
+        """
+      Then query error .*
+
+      Examples:
+        | case          | schema                                                                                            |
+        | struct field  | {"type":"struct","fields":[{"name":"v","type":{"type":"integer"},"nullable":true,"metadata":{}}]} |
+        | array element | {"type":"array","elementType":{"type":"integer"},"containsNull":true}                             |
+        | map key       | {"type":"map","keyType":{"type":"string"},"valueType":"integer","valueContainsNull":true}         |
+        | map value     | {"type":"map","keyType":"string","valueType":{"type":"integer"},"valueContainsNull":true}         |
+        | wrapped array | {"type":{"type":"array","elementType":"integer","containsNull":true}}                             |
+
     @sail-only
     Scenario: Unknown type in JSON schema reports a parsing error
       When query

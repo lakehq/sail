@@ -44,7 +44,6 @@ pub struct FunctionTestSuite {
 
 fn clean_up_schema(schema: &mut JsonDataType) {
     match schema {
-        JsonDataType::Type { r#type } => clean_up_schema(r#type),
         JsonDataType::Array { element_type, .. } => {
             clean_up_schema(element_type);
         }

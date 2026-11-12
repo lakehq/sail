@@ -1000,7 +1000,6 @@ fn normalize_json_schema_for_decoding(
     use sail_common_spark::data_type::JsonDataType;
 
     match data_type {
-        JsonDataType::Type { r#type } => normalize_json_schema_for_decoding(r#type)?,
         JsonDataType::Struct { fields, .. } => {
             for field in fields {
                 field.metadata = None;
