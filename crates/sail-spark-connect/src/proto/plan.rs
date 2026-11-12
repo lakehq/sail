@@ -487,7 +487,7 @@ impl TryFrom<RelType> for RelationNode {
                             .into_iter()
                             .map(|x| {
                                 let GroupingSets { grouping_set } = x;
-                                grouping_set.into_iter().map(|x| x.try_into()).collect()
+                                to_output(grouping_set)
                             })
                             .collect::<SparkResult<Vec<_>>>()?;
                         spec::QueryNode::Aggregate(spec::Aggregate {
