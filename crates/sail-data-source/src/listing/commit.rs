@@ -360,8 +360,11 @@ async fn commit_partitions(
         let attempt_root = attempts.clone().join(relative[0].clone());
         let key = partition_key(&source, &attempt_root, columns)
             .ok_or_else(|| exec_datafusion_err!("invalid staged partition file: {source}"))?;
+        let filename = source
+            .filename()
+            .ok_or_else(|| exec_datafusion_err!("missing staged Parquet filename: {source}"))?;
         let destination = canonical_partition_path(table, columns, &key)?
-            .join(format!("{}.parquet", Uuid::new_v4()));
+            .join(format!("{}-{filename}", Uuid::new_v4()));
         touched.insert(typed_partition_key(&key, partition_schema)?);
         copies.push((source, destination));
     }
@@ -556,7 +559,7 @@ mod tests {
                 )
                 .await?;
         }
-        let source = Path::from("staging/attempts/success/p=a=b/q=one/new.parquet");
+        let source = Path::from("staging/attempts/success/p=a=b/q=one/new.gz.parquet");
         store
             .put(&source, bytes::Bytes::from_static(b"new").into())
             .await?;
@@ -571,6 +574,11 @@ mod tests {
         .await?;
         let files = store.list(Some(&table)).try_collect::<Vec<_>>().await?;
         assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|file| {
+            file.location
+                .filename()
+                .is_some_and(|name| name.ends_with("-new.gz.parquet"))
+        }));
         assert!(
             !files
                 .iter()

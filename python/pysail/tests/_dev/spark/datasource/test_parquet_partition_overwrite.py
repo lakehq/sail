@@ -109,6 +109,33 @@ def test_dataframe_partition_overwrite_option_precedes_session(spark, tmp_path, 
     assert spark.conf.get(OVERWRITE_MODE) == session_mode
 
 
+@pytest.mark.parametrize(("compression", "suffix"), [("gzip", "gz.parquet"), ("snappy", "snappy.parquet")])
+def test_dynamic_overwrite_preserves_compression_suffix(spark, tmp_path, compression, suffix):
+    path = tmp_path / "data"
+    schema = "msg STRING, id INT"
+    spark.createDataFrame([("hello", 1), ("old", 2)], schema).write.partitionBy("id").option(
+        "compression", compression
+    ).parquet(str(path))
+    untouched = parquet_files(path / "id=1")
+    spark.conf.set(OVERWRITE_MODE, "DYNAMIC")
+    spark.createDataFrame([("new", 2), ("added", 3)], schema).write.partitionBy("id").option(
+        "compression", compression
+    ).mode("overwrite").parquet(str(path))
+    rows = (
+        spark.read.schema(schema)
+        .option("pathGlobFilter", f"*.{suffix}")
+        .parquet(str(path))
+        .select("id", "msg")
+        .orderBy("id")
+        .collect()
+    )
+    assert rows == [(1, "hello"), (2, "new"), (3, "added")]
+    assert parquet_files(path / "id=1") == untouched
+    for file in path.rglob("*.parquet"):
+        assert file.name.endswith(f".{suffix}")
+        assert pq.ParquetFile(file).metadata.row_group(0).column(0).compression == compression.upper()
+
+
 def test_invalid_partition_overwrite_mode_preserves_data(spark, tmp_path):
     path = tmp_path / "data"
     spark.createDataFrame([(1, "hello")], "id INT, msg STRING").write.partitionBy("id").parquet(str(path))
