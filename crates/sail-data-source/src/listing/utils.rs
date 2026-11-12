@@ -2,14 +2,19 @@ use std::sync::Arc;
 
 use arrow_schema::FieldRef;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use datafusion::datasource::listing::helpers::{
+    evaluate_partition_prefix, filter_partitioned_file,
+};
 use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::cache::cache_manager::CachedFileList;
 use datafusion::logical_expr::{Expr, Volatility};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::tree_node::TreeNode;
-use datafusion_common::{DataFusionError, GetExt, Result, internal_datafusion_err, plan_err};
-use datafusion_datasource::ListingTableUrl;
+use datafusion_common::{
+    DFSchema, DataFusionError, GetExt, Result, ScalarValue, internal_datafusion_err, plan_err,
+};
 use datafusion_datasource::file_compression_type::FileCompressionType;
+use datafusion_datasource::{ListingTableUrl, PartitionedFile};
 use datafusion_session::Session;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -17,6 +22,7 @@ use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
+use crate::listing::commit::partition_key;
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
 
@@ -184,11 +190,12 @@ pub async fn sample_listing_files<'a>(
 pub fn validate_partitions(
     files: &[ListingFileSample<'_>],
     table_partition_fields: &[FieldRef],
+    decode_names: bool,
 ) -> Result<()> {
     if table_partition_fields.is_empty() {
         return Ok(());
     }
-    let inferred = infer_partitions(files)?;
+    let inferred = infer_partitions(files, decode_names)?;
     if inferred.is_empty() {
         return Ok(());
     }
@@ -228,7 +235,10 @@ pub fn validate_partitions(
     Ok(())
 }
 
-pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<String>> {
+pub fn infer_partitions(
+    files: &[ListingFileSample<'_>],
+    decode_names: bool,
+) -> Result<Vec<String>> {
     let mut inferred: Option<Vec<String>> = None;
     for group in files {
         for file in &group.objects {
@@ -249,7 +259,16 @@ pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<String>> 
                 .skip(1) // get parents only and skip the file itself
                 .rev()
                 .filter(|s| s.contains('='))
-                .map(|s| s.split('=').next().unwrap_or("").to_string())
+                .map(|s| {
+                    let name = s.split('=').next().unwrap_or("");
+                    if decode_names {
+                        percent_encoding::percent_decode_str(name)
+                            .decode_utf8_lossy()
+                            .into_owned()
+                    } else {
+                        name.to_string()
+                    }
+                })
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>();
 
@@ -264,6 +283,106 @@ pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<String>> 
     }
 
     Ok(inferred.unwrap_or_default())
+}
+
+/// Choose only an unambiguous leading prefix. NULLs, escaped spellings, and
+/// floating-point directory aliases must be decoded before predicate evaluation.
+fn hive_partition_prefix(columns: &[(String, DataType)], filters: &[Expr]) -> Option<Path> {
+    if filters.iter().any(|filter| {
+        filter
+            .exists(|expr| Ok(matches!(expr, Expr::Literal(value, _) if value.is_null())))
+            .unwrap_or(true)
+    }) {
+        return None;
+    }
+    let columns = columns
+        .iter()
+        .take_while(|(name, dt)| {
+            name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                && !matches!(
+                    dt,
+                    DataType::Float16
+                        | DataType::Float32
+                        | DataType::Float64
+                        | DataType::Timestamp(_, _)
+                )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let prefix = evaluate_partition_prefix(&columns, filters)?;
+    let parts = prefix
+        .parts()
+        .take_while(|part| {
+            let Some((_, value)) = part.as_ref().split_once('=') else {
+                return false;
+            };
+            !value.is_empty()
+                && value != "__HIVE_DEFAULT_PARTITION__"
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+        })
+        .collect::<Vec<_>>();
+    (!parts.is_empty()).then(|| Path::from_iter(parts))
+}
+
+/// Decode Hive nulls before type conversion and predicate evaluation, retaining
+/// prefix pruning for ordinary unambiguous partition equalities.
+pub async fn hive_partitioned_files<'a>(
+    ctx: &'a dyn Session,
+    store: &'a dyn ObjectStore,
+    table_path: &'a ListingTableUrl,
+    filters: &'a [Expr],
+    columns: &'a [(String, DataType)],
+) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
+    let names = columns
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    let schema = DFSchema::from_unqualified_fields(
+        columns
+            .iter()
+            .map(|(name, dt)| Field::new(name, dt.clone(), true))
+            .collect(),
+        Default::default(),
+    )?;
+    let prefix = hive_partition_prefix(columns, filters);
+    let filters = datafusion_expr::utils::conjunction(filters.iter().cloned())
+        .map(|filter| vec![Expr::IsTrue(Box::new(filter))])
+        .unwrap_or_default();
+    let files = table_path
+        .list_prefixed_files(ctx, store, prefix, "")
+        .await?
+        .try_filter(|meta| futures::future::ready(meta.size > 0))
+        .map_ok(|meta| {
+            let mut file = PartitionedFile::from(meta);
+            file.table_reference.clone_from(table_path.get_table_ref());
+            file
+        });
+    Ok(files
+        .try_filter_map(move |mut file| {
+            let result = (|| {
+                let Some(values) =
+                    partition_key(&file.object_meta.location, table_path.prefix(), &names)
+                else {
+                    return Ok(None);
+                };
+                file.partition_values = values
+                    .into_iter()
+                    .zip(columns)
+                    .map(|(value, (_, dt))| {
+                        if value == "__HIVE_DEFAULT_PARTITION__" {
+                            ScalarValue::try_from(dt)
+                        } else {
+                            ScalarValue::try_from_string(value, dt)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                filter_partitioned_file(file, &filters, &schema)
+            })();
+            futures::future::ready(result)
+        })
+        .boxed())
 }
 
 pub async fn list_all_files<'a>(
@@ -385,6 +504,189 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+
+    #[derive(Debug, Default)]
+    struct CountingListingStore {
+        inner: object_store::memory::InMemory,
+        listed: Arc<std::sync::atomic::AtomicUsize>,
+        prefixes: std::sync::Mutex<Vec<Option<Path>>>,
+    }
+
+    impl std::fmt::Display for CountingListingStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "CountingListingStore")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for CountingListingStore {
+        async fn put_opts(
+            &self,
+            path: &Path,
+            payload: object_store::PutPayload,
+            options: object_store::PutOptions,
+        ) -> object_store::Result<object_store::PutResult> {
+            self.inner.put_opts(path, payload, options).await
+        }
+        async fn put_multipart_opts(
+            &self,
+            path: &Path,
+            options: object_store::PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+            self.inner.put_multipart_opts(path, options).await
+        }
+        async fn get_opts(
+            &self,
+            path: &Path,
+            options: object_store::GetOptions,
+        ) -> object_store::Result<object_store::GetResult> {
+            self.inner.get_opts(path, options).await
+        }
+        fn delete_stream(
+            &self,
+            paths: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.inner.delete_stream(paths)
+        }
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.prefixes.lock().unwrap().push(prefix.cloned());
+            let count = self.listed.clone();
+            self.inner
+                .list(prefix)
+                .map_ok(move |meta| {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    meta
+                })
+                .boxed()
+        }
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<object_store::ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: object_store::CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    #[tokio::test]
+    async fn hive_listing_prunes_safe_equalities_and_lists_ambiguous_keys() -> Result<()> {
+        use datafusion::logical_expr::{col, lit};
+        use datafusion::prelude::SessionContext;
+        use std::sync::atomic::Ordering;
+        let store = CountingListingStore::default();
+        for path in [
+            "ints/p=1/file",
+            "ints/p=2/file",
+            "ints/p=__HIVE_DEFAULT_PARTITION__/file",
+            "strings/p=a%3Db/file",
+            "strings/p=other/file",
+            "floats/p=1/file",
+            "floats/p=1.0/file",
+            "floats/p=2/file",
+        ] {
+            store
+                .put(
+                    &Path::parse(path)?,
+                    bytes::Bytes::from_static(b"data").into(),
+                )
+                .await?;
+        }
+        for (table, dt, filter, rows, listed, prefix) in [
+            (
+                "ints",
+                DataType::Int32,
+                col("p").eq(lit(1_i32)),
+                1,
+                1,
+                "ints/p=1",
+            ),
+            ("ints", DataType::Int32, col("p").is_null(), 1, 3, "ints"),
+            (
+                "strings",
+                DataType::Utf8,
+                col("p").eq(lit("a=b")),
+                1,
+                2,
+                "strings",
+            ),
+            (
+                "floats",
+                DataType::Float64,
+                col("p").eq(lit(1.0_f64)),
+                2,
+                3,
+                "floats",
+            ),
+        ] {
+            store.listed.store(0, Ordering::SeqCst);
+            let runtime = datafusion::execution::runtime_env::RuntimeEnvBuilder::new()
+                .with_cache_manager(
+                    datafusion::execution::cache::cache_manager::CacheManagerConfig::default()
+                        .with_list_files_cache_limit(0),
+                )
+                .build_arc()?;
+            let state = SessionContext::new_with_config_rt(Default::default(), runtime).state();
+            let url = ListingTableUrl::parse(format!("memory://bucket/{table}/"))?;
+            let filters = [filter];
+            let columns = [("p".into(), dt)];
+            let files = hive_partitioned_files(&state, &store, &url, &filters, &columns)
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+            assert_eq!(files.len(), rows);
+            assert_eq!(store.listed.load(Ordering::SeqCst), listed);
+            assert_eq!(
+                store.prefixes.lock().unwrap().last(),
+                Some(&Some(Path::parse(prefix)?))
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hive_partition_nulls_are_decoded_before_cast_and_pruning() -> Result<()> {
+        use datafusion::logical_expr::{col, lit};
+        use datafusion::prelude::SessionContext;
+        use object_store::memory::InMemory;
+        let store = InMemory::new();
+        let url = ListingTableUrl::parse("memory://bucket/table/")?;
+        for path in [
+            "table/p=__HIVE_DEFAULT_PARTITION__/file.parquet",
+            "table/p=2/file.parquet",
+        ] {
+            store
+                .put(
+                    &Path::parse(path)?,
+                    bytes::Bytes::from_static(b"data").into(),
+                )
+                .await?;
+        }
+        let state = SessionContext::new().state();
+        let columns = vec![("p".into(), DataType::Int32)];
+        for (filter, expected) in [
+            (col("p").is_null(), ScalarValue::Int32(None)),
+            (col("p").eq(lit(2_i32)), ScalarValue::Int32(Some(2))),
+        ] {
+            let filters = [filter];
+            let files = hive_partitioned_files(&state, &store, &url, &filters, &columns)
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].partition_values, vec![expected]);
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_partition_pruning_function_volatility() {

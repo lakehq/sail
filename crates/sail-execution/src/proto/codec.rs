@@ -126,7 +126,9 @@ use sail_data_source::formats::rate::RateSourceExec;
 use sail_data_source::formats::socket::{SocketReadOptions, SocketSourceExec};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
+use sail_data_source::listing::commit::FilePartitionCommitExec;
 use sail_data_source::listing::delete::FileDeleteExec;
+use sail_data_source::listing::staged::ParquetPartitionWriteExec;
 use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
@@ -1438,6 +1440,41 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input,
                     Arc::new(data_sink),
                     sort_order,
+                )))
+            }
+            NodeKind::ParquetPartitionWrite(r#gen::ParquetPartitionWriteExecNode {
+                input,
+                staged,
+            }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                Ok(Arc::new(ParquetPartitionWriteExec::new(input, staged)))
+            }
+            NodeKind::FilePartitionCommit(r#gen::FilePartitionCommitExecNode {
+                input,
+                object_store_url,
+                table_path,
+                staging_path,
+                partition_columns,
+                partition_schema,
+            }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let object_store_url =
+                    datafusion::execution::object_store::ObjectStoreUrl::parse(object_store_url)?;
+                let table_path = object_store::path::Path::parse(table_path).map_err(|e| {
+                    plan_datafusion_err!("invalid partition commit table path: {e}")
+                })?;
+                let staging_path = object_store::path::Path::parse(staging_path).map_err(|e| {
+                    plan_datafusion_err!("invalid partition commit staging path: {e}")
+                })?;
+                Ok(Arc::new(FilePartitionCommitExec::new(
+                    input,
+                    object_store_url,
+                    table_path,
+                    staging_path,
+                    partition_columns,
+                    Arc::new(try_decode_schema(&partition_schema)?),
                 )))
             }
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
@@ -3628,6 +3665,28 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 planned_table,
                 input,
                 rewrite_data_files,
+            })
+        } else if let Some(exec) = node.downcast_ref::<ParquetPartitionWriteExec>() {
+            NodeKind::ParquetPartitionWrite(r#gen::ParquetPartitionWriteExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    exec.input().clone(),
+                )?,
+                staged: exec.staged(),
+            })
+        } else if let Some(exec) = node.downcast_ref::<FilePartitionCommitExec>() {
+            NodeKind::FilePartitionCommit(r#gen::FilePartitionCommitExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    exec.input().clone(),
+                )?,
+                object_store_url: exec.object_store_url().as_str().to_string(),
+                table_path: exec.table_path().to_string(),
+                staging_path: exec.staging_path().to_string(),
+                partition_columns: exec.partition_columns().to_vec(),
+                partition_schema: try_encode_schema(exec.partition_schema())?,
             })
         } else if let Some(file_delete_exec) = node.downcast_ref::<FileDeleteExec>() {
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
@@ -6613,6 +6672,54 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udaf(&udaf, &mut buf)?;
         codec.try_decode_udaf(&name, &buf)
+    }
+
+    #[test]
+    fn test_partition_write_commit_round_trip() -> Result<()> {
+        use datafusion::execution::object_store::ObjectStoreUrl;
+        use datafusion::physical_plan::empty::EmptyExec;
+        use object_store::path::Path;
+        let codec = RemoteExecutionCodec;
+        let context = TaskContext::default();
+        for staged in [false, true] {
+            let writer: Arc<dyn ExecutionPlan> = Arc::new(ParquetPartitionWriteExec::new(
+                Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+                staged,
+            ));
+            let bytes = try_encode_physical_plan(&codec, writer)?;
+            let writer = try_decode_physical_plan(&context, &codec, &bytes)?;
+            assert_eq!(
+                writer
+                    .downcast_ref::<ParquetPartitionWriteExec>()
+                    .map(|w| w.staged()),
+                Some(staged)
+            );
+            let commit = Arc::new(FilePartitionCommitExec::new(
+                writer,
+                ObjectStoreUrl::local_filesystem(),
+                Path::from("table"),
+                Path::from(".sail-staging-operation"),
+                vec!["p".into(), "q".into()],
+                Arc::new(Schema::new(vec![
+                    Field::new("p", DataType::Float64, true),
+                    Field::new("q", DataType::Utf8, true),
+                ])),
+            ));
+            let bytes = try_encode_physical_plan(&codec, commit)?;
+            let plan = try_decode_physical_plan(&context, &codec, &bytes)?;
+            let commit = plan
+                .downcast_ref::<FilePartitionCommitExec>()
+                .ok_or_else(|| plan_datafusion_err!("expected partition commit"))?;
+            assert_eq!(commit.staging_path().as_ref(), ".sail-staging-operation");
+            assert_eq!(commit.table_path().as_ref(), "table");
+            assert_eq!(commit.partition_columns(), &["p", "q"]);
+            assert_eq!(
+                commit.partition_schema().field(0).data_type(),
+                &DataType::Float64
+            );
+            assert!(commit.schema().fields().is_empty());
+        }
+        Ok(())
     }
 
     #[test]

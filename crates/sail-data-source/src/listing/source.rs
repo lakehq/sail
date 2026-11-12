@@ -84,6 +84,11 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
     /// Build a scan configuration for listing reads.
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
 
+    /// Whether partition paths follow Spark's Hive escaping and null convention.
+    fn hive_partition_paths(&self) -> bool {
+        false
+    }
+
     /// Whether validating an explicit schema requires the physical file schema.
     fn requires_explicit_schema_validation(&self) -> bool {
         false
@@ -174,6 +179,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
         } = info;
 
         let read_format = T::read(ctx, options)?;
+        let hive_partition_paths = read_format.hive_partition_paths();
         let path_glob_filter = read_format
             .path_glob_filter()
             .map(PathGlobFilter::parse)
@@ -216,7 +222,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 // are treated as file columns, and the file reader fails
                 // because the file itself does not contain them.
                 let partition_by = if partition_by.is_empty() {
-                    infer_partitions(&sampled_files)?
+                    infer_partitions(&sampled_files, hive_partition_paths)?
                         .into_iter()
                         .filter(|name| {
                             schema
@@ -242,7 +248,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 let schema = rewrite_unsupported_fields(schema);
 
                 let partition_by = if partition_by.is_empty() {
-                    infer_partitions(&sampled_files)?
+                    infer_partitions(&sampled_files, hive_partition_paths)?
                 } else {
                     partition_by
                 };
@@ -251,13 +257,13 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 //   the `spark.sql.sources.partitionColumnTypeInference.enabled` option.
                 let partition_fields = partition_by
                     .into_iter()
-                    .map(|col| Arc::new(Field::new(col, DataType::Utf8, false)))
+                    .map(|col| Arc::new(Field::new(col, DataType::Utf8, hive_partition_paths)))
                     .collect();
                 (schema, partition_fields)
             }
         };
 
-        validate_partitions(&sampled_files, &partition_fields)?;
+        validate_partitions(&sampled_files, &partition_fields, hive_partition_paths)?;
 
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
             table_paths: urls,
@@ -298,6 +304,12 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             return not_impl_err!("partition transforms for writing listing data source");
         }
         let url = resolve_listing_writer_url(path.clone())?;
+        let parquet = T::name().eq_ignore_ascii_case("parquet");
+        let dynamic = parquet && dynamic_partition_overwrite(&options)?;
+        let overwrite_partitions = parquet
+            && !partition_by.is_empty()
+            && (matches!(mode, SinkMode::OverwritePartitions)
+                || (matches!(mode, SinkMode::Overwrite) && dynamic));
         let overwrite = match mode {
             SinkMode::ErrorIfExists => {
                 if (!catalog_managed && listing_target_exists(ctx, &url).await?)
@@ -315,6 +327,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             }
             SinkMode::Append => false,
             SinkMode::Overwrite => true,
+            SinkMode::OverwritePartitions if parquet => true,
             mode => return not_impl_err!("unsupported sink mode for listing table: {mode:?}"),
         };
         let write_format = T::write(ctx, options)?;
@@ -325,6 +338,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                     format: Arc::new(write_format),
                     url,
                     overwrite,
+                    overwrite_partitions,
                     partition_by,
                     sort_by: sort_order,
                 },
@@ -332,6 +346,34 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
         }))
     }
 }
+fn dynamic_partition_overwrite(options: &[OptionLayer]) -> Result<bool> {
+    let mut mode = None;
+    for layer in options {
+        let (OptionLayer::OptionList { items } | OptionLayer::TablePropertyList { items }) = layer
+        else {
+            continue;
+        };
+        for (key, value) in items {
+            let key = if matches!(layer, OptionLayer::TablePropertyList { .. }) {
+                key.strip_prefix("option.").unwrap_or(key)
+            } else {
+                key
+            };
+            if key.eq_ignore_ascii_case("partitionOverwriteMode") {
+                mode = Some(value);
+            }
+        }
+    }
+    match mode {
+        None => Ok(false),
+        Some(mode) if mode.eq_ignore_ascii_case("static") => Ok(false),
+        Some(mode) if mode.eq_ignore_ascii_case("dynamic") => Ok(true),
+        Some(mode) => {
+            plan_err!("invalid partitionOverwriteMode: {mode}; expected STATIC or DYNAMIC")
+        }
+    }
+}
+
 async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
     // For file systems, treat the target as existing even if it is an empty directory.
     if url.scheme() == "file"
@@ -379,4 +421,28 @@ fn reconcile_schema_names_case_insensitive(schema: Schema, physical: &Schema) ->
         fields.push(reconciled);
     }
     Ok(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+#[cfg(test)]
+mod overwrite_option_tests {
+    use super::*;
+
+    #[test]
+    fn layers_and_keys_are_case_insensitive() -> Result<()> {
+        let session = OptionLayer::OptionList {
+            items: vec![("partitionOverwriteMode".into(), "DYNAMIC".into())],
+        };
+        let write = OptionLayer::OptionList {
+            items: vec![("PARTITIONOVERWRITEMODE".into(), "static".into())],
+        };
+        assert!(!dynamic_partition_overwrite(&[session.clone(), write])?);
+        assert!(dynamic_partition_overwrite(&[session])?);
+        assert!(
+            dynamic_partition_overwrite(&[OptionLayer::OptionList {
+                items: vec![("partitionOverwriteMode".into(), "invalid".into())]
+            }])
+            .is_err()
+        );
+        Ok(())
+    }
 }

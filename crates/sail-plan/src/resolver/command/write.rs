@@ -696,7 +696,9 @@ impl PlanResolver<'_> {
             .rewrite_delta_check_constraints_from_options(input, &write_format, &sink_info, state)
             .await?;
         if use_session_overwrite_mode && matches!(sink_info.mode, SinkMode::Overwrite) {
-            let option = if write_format.eq_ignore_ascii_case("delta") {
+            let option = if write_format.eq_ignore_ascii_case("delta")
+                || write_format.eq_ignore_ascii_case("parquet")
+            {
                 Some("partitionOverwriteMode")
             } else if write_format.eq_ignore_ascii_case("iceberg") {
                 Some("overwrite-mode")

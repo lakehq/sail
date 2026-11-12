@@ -10,6 +10,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::FileFormat;
 
 use crate::listing::source::{ListingSinkInput, WriteFormat};
+use crate::listing::staged::ParquetPartitionWriteExec;
 use crate::options::r#gen::ParquetWriteOptions;
 use crate::utils::split_parquet_compression_string;
 
@@ -32,9 +33,15 @@ impl WriteFormat for ParquetWriteFormat {
             .map_err(DataFusionError::from)?;
         let format = ParquetFormat::default().with_options(options);
         input.sink.file_extension = self.file_extension()?;
-        format
+        let partitioned = !input.sink.table_partition_cols.is_empty();
+        let plan = format
             .create_writer_physical_plan(input.input, ctx, input.sink, input.sort_order)
-            .await
+            .await?;
+        if partitioned {
+            Ok(Arc::new(ParquetPartitionWriteExec::new(plan, false)))
+        } else {
+            Ok(plan)
+        }
     }
 }
 

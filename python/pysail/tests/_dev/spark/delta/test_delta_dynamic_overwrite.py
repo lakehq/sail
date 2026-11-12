@@ -105,9 +105,8 @@ def test_insert_partition_clause_failure_preserves_state(spark, tmp_path, partit
         spark.sql(f"INSERT OVERWRITE {table} PARTITION ({clause}) SELECT 3, 'new', 'c'")
 
 
-def test_insert_partition_clause_keeps_non_delta_unsupported(spark, tmp_path, partition_table):
-    # Parquet represents the non-Delta provider guard.
-    table = partition_table("(id INT, msg STRING) USING parquet PARTITIONED BY (id)")
+def test_insert_partition_clause_keeps_other_formats_unsupported(spark, tmp_path, partition_table):
+    table = partition_table("(id INT, msg STRING) USING json PARTITIONED BY (id)")
     spark.sql(f"INSERT INTO {table} VALUES (1, 'old')")
     with _reject_unchanged(spark, table, tmp_path, "PARTITION for write"):
         spark.sql(f"INSERT OVERWRITE {table} PARTITION (id) SELECT 2, 'new'")
