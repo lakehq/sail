@@ -473,7 +473,7 @@ impl JobScheduler {
             if let Some(attempt) = Self::get_latest_task_attempt(job, t.stage, t.partition) {
                 let stage = &job.graph.stages()[t.stage];
                 let output = match stage.mode {
-                    OutputMode::Pipelined => TaskOutputKind::Local,
+                    OutputMode::Pipelined | OutputMode::Replayed => TaskOutputKind::Local,
                     OutputMode::Blocking => match job.graph.shuffle_backend() {
                         ShuffleBackendKind::Storage { .. } => TaskOutputKind::Storage,
                         ShuffleBackendKind::Celeborn { .. } => TaskOutputKind::External,
@@ -800,7 +800,7 @@ impl<'a> TaskInputBuilder<'a> {
 
     fn build(&self) -> ExecutionResult<TaskInput> {
         let locator = match self.producer.mode {
-            OutputMode::Pipelined => match self.producer.placement {
+            OutputMode::Pipelined | OutputMode::Replayed => match self.producer.placement {
                 TaskPlacement::Driver => self.build_driver_locator()?,
                 TaskPlacement::Worker => self.build_worker_locator()?,
             },
@@ -873,13 +873,24 @@ impl<'a> TaskInputBuilder<'a> {
                 let channels = (0..input_channels).collect::<Vec<_>>();
                 vec![channels; output_partitions]
             }
+            InputMode::Rescale { partitions } => {
+                let input_partitions = self.producer.plan.output_partitioning().partition_count();
+                let channels = (0..input_channels).collect::<Vec<_>>();
+                return Ok(TaskInputLocator::ShuffleService {
+                    channels: vec![channels; partitions],
+                    maps: Some(rescale_ranges(input_partitions, partitions)),
+                });
+            }
             mode => {
                 return Err(ExecutionError::InvalidArgument(format!(
                     "Celeborn shuffle service does not support {mode} input"
                 )));
             }
         };
-        Ok(TaskInputLocator::ShuffleService { channels })
+        Ok(TaskInputLocator::ShuffleService {
+            channels,
+            maps: None,
+        })
     }
 
     fn assignment(&self, key: &TaskInputKey) -> Option<&TaskAssignment> {
@@ -974,9 +985,7 @@ impl<'a> TaskInputBuilder<'a> {
                 // grouping. A parent such as UnionExec can change the containing stage's
                 // partition count, so use the target count recorded on this input edge.
                 let mut groups = Vec::with_capacity(output_partitions);
-                for output_partition in 0..output_partitions {
-                    let start = output_partition * input_partitions / output_partitions;
-                    let end = (output_partition + 1) * input_partitions / output_partitions;
+                for (start, end) in rescale_ranges(input_partitions, output_partitions) {
                     let mut group =
                         Vec::with_capacity((end.saturating_sub(start)) * input_channels);
                     for partition in start..end {
@@ -1073,6 +1082,9 @@ impl<'a> TaskOutputBuilder<'a> {
             OutputMode::Pipelined => TaskOutputLocator::Pipelined {
                 replicas: self.job.graph.replicas(self.key.stage),
             },
+            OutputMode::Replayed => TaskOutputLocator::Replayed {
+                replicas: self.job.graph.replicas(self.key.stage),
+            },
             OutputMode::Blocking => TaskOutputLocator::Blocking,
         };
         Ok(TaskOutput {
@@ -1122,13 +1134,35 @@ impl StageGroup {
     }
 }
 
+/// Returns the contiguous range of input partitions that each output partition of a
+/// rescaled input reads, aligned with the partition grouping of `CoalesceExec`.
+fn rescale_ranges(input_partitions: usize, output_partitions: usize) -> Vec<(usize, usize)> {
+    (0..output_partitions)
+        .map(|partition| {
+            (
+                partition * input_partitions / output_partitions,
+                (partition + 1) * input_partitions / output_partitions,
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
-    use super::StageGroup;
+    use super::{StageGroup, rescale_ranges};
     use crate::id::{JobId, TaskKey};
     use crate::task::scheduling::{TaskOutputKind, TaskSetEntry};
+
+    #[test]
+    fn rescale_ranges_cover_the_input_partitions_in_order() {
+        assert_eq!(rescale_ranges(4, 2), vec![(0, 2), (2, 4)]);
+        assert_eq!(rescale_ranges(5, 2), vec![(0, 2), (2, 5)]);
+        assert_eq!(rescale_ranges(3, 3), vec![(0, 1), (1, 2), (2, 3)]);
+        // An output partition can read no input partition.
+        assert_eq!(rescale_ranges(2, 4), vec![(0, 0), (0, 1), (1, 1), (1, 2)]);
+    }
 
     #[tokio::test]
     async fn late_unknown_commit_cancels_queued_retry() -> Result<(), Box<dyn std::error::Error>> {

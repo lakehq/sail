@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion_expr::{LogicalPlan, SubqueryAlias};
+use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias};
 use sail_common::spec;
 use sail_data_source::reuse::is_reusable_source;
 use sail_logical_plan::range::RangeNode;
@@ -314,9 +314,35 @@ impl PlanResolver<'_> {
 ///
 /// Each reference evaluates the definition itself if the definition refers to outer
 /// columns, if its output depends on when or in which partitions it is evaluated, if a
-/// source is read once for each reference, or if its consumers can depend on the order
-/// of its rows.
+/// source is read once for each reference, if its consumers can depend on the order
+/// of its rows, or if it only projects and filters the rows of one source, which is
+/// not worth keeping for another reference.
 fn is_shareable_definition(plan: &Arc<LogicalPlan>, nested: bool) -> PlanResult<bool> {
+    let mut input = plan.as_ref();
+    let mut subquery = false;
+    loop {
+        input.apply_expressions(|expr| {
+            subquery |= expr.exists(|expr| {
+                Ok(matches!(
+                    expr,
+                    Expr::ScalarSubquery(_)
+                        | Expr::Exists(_)
+                        | Expr::InSubquery(_)
+                        | Expr::SetComparison(_)
+                ))
+            })?;
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        input = match input {
+            LogicalPlan::Projection(projection) => &projection.input,
+            LogicalPlan::Filter(filter) => &filter.input,
+            LogicalPlan::SubqueryAlias(alias) => &alias.input,
+            _ => break,
+        };
+    }
+    if input.inputs().is_empty() && !subquery {
+        return Ok(false);
+    }
     let mut shareable = true;
     plan.apply_with_subqueries(|plan| {
         shareable = !(nested && plan.contains_outer_reference())

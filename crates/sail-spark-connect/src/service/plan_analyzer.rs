@@ -9,6 +9,7 @@ use sail_common_datafusion::rename::schema::rename_schema;
 use sail_plan::explain::{ExplainOptions, explain_string};
 use sail_plan::resolver::PlanResolver;
 use sail_plan::resolver::plan::NamedPlan;
+use sail_plan::shared_cte::analyze_shared_ctes;
 
 use crate::config::get_pyspark_version;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
@@ -38,8 +39,10 @@ use crate::spark::connect::{StorageLevel, plan};
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
     let spark = ctx.extension::<SparkSession>()?;
-    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
-    let NamedPlan { mut plan, fields } = resolver
+    // The schema of a CTE reference is the schema of its definition, so a CTE that is
+    // referenced more than once is analyzed once.
+    let resolver = PlanResolver::new(ctx, spark.plan_config()?).with_shared_ctes();
+    let NamedPlan { plan, fields } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
     let session_state = ctx.state();
@@ -50,16 +53,19 @@ async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc:
     // DataFusion recursively checks subqueries both explicitly and through
     // apply_with_subqueries, making that validation exponential in nesting depth.
     // Execution still performs its normal validation before optimization.
-    plan.check_invariants(InvariantLevel::Always)?;
-    if !analyzer.function_rewrites.is_empty() {
-        plan = ApplyFunctionRewrites::new(analyzer.function_rewrites.clone())
-            .analyze(plan, config.as_ref())?;
-    }
-    for rule in &analyzer.rules {
-        plan = rule
-            .analyze(plan, config.as_ref())
-            .map_err(|error| error.context(rule.name()))?;
-    }
+    let plan = analyze_shared_ctes(plan, &mut |mut plan| {
+        plan.check_invariants(InvariantLevel::Always)?;
+        if !analyzer.function_rewrites.is_empty() {
+            plan = ApplyFunctionRewrites::new(analyzer.function_rewrites.clone())
+                .analyze(plan, config.as_ref())?;
+        }
+        for rule in &analyzer.rules {
+            plan = rule
+                .analyze(plan, config.as_ref())
+                .map_err(|error| error.context(rule.name()))?;
+        }
+        Ok(plan)
+    })?;
     let schema = if let Some(fields) = fields {
         rename_schema(plan.schema().inner(), fields.as_slice())?
     } else {

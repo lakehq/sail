@@ -110,17 +110,20 @@ impl Actor for ShuffleClientActor {
             ShuffleClientMessage::ReadPartitionStream {
                 shuffle_id,
                 partition_id,
+                maps,
                 result,
-            } => self.handle_read_partition_stream(ctx, shuffle_id, partition_id, result),
+            } => self.handle_read_partition_stream(ctx, shuffle_id, partition_id, maps, result),
             ShuffleClientMessage::ReadPartitionStreamComplete {
                 shuffle_id,
                 partition_id,
+                maps,
                 result,
                 reply,
             } => self.handle_read_partition_stream_complete(
                 ctx,
                 shuffle_id,
                 partition_id,
+                maps,
                 result,
                 reply,
             ),

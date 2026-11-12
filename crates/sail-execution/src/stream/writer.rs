@@ -23,6 +23,13 @@ pub trait TaskStreamSink: Send {
     async fn write(&mut self, batches: Vec<Option<RecordBatch>>) -> Result<TaskStreamWriteState>;
     async fn commit(self: Box<Self>) -> Result<()>;
     async fn abort(self: Box<Self>) -> Result<()>;
+    /// Ends the stream with an error that is returned to the readers that reach it,
+    /// and returns whether the sink does so. Otherwise the sink is aborted, and the
+    /// error fails the task.
+    async fn fail(self: Box<Self>, _error: &DataFusionError) -> Result<bool> {
+        self.abort().await?;
+        Ok(false)
+    }
 }
 
 /// A physical sink for exactly one channel of the task stream.
@@ -31,6 +38,12 @@ pub trait TaskStreamChannelSink: Send {
     async fn write(&mut self, batch: RecordBatch) -> Result<TaskStreamWriteState>;
     async fn commit(self: Box<Self>) -> Result<()>;
     async fn abort(self: Box<Self>) -> Result<()>;
+    /// Ends the stream with an error that is returned to the readers that reach it,
+    /// and returns whether the sink does so. Otherwise the sink is aborted.
+    async fn fail(self: Box<Self>, _error: &DataFusionError) -> Result<bool> {
+        self.abort().await?;
+        Ok(false)
+    }
 }
 
 pub(crate) struct MultiChannelTaskStreamSink {
@@ -85,6 +98,15 @@ impl TaskStreamSink for MultiChannelTaskStreamSink {
             sink.abort().await?;
         }
         Ok(())
+    }
+
+    async fn fail(self: Box<Self>, error: &DataFusionError) -> Result<bool> {
+        // The channels of a task have the same kind of output.
+        let mut failed = true;
+        for sink in self.sinks.into_iter().flatten() {
+            failed &= sink.fail(error).await?;
+        }
+        Ok(failed)
     }
 }
 

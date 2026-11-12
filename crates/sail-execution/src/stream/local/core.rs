@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::execution::TaskContext;
 use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
@@ -31,10 +33,16 @@ impl LocalStreamManager {
         &mut self,
         key: TaskStreamKey,
         replicas: usize,
-        _schema: SchemaRef,
+        replay: Option<Arc<TaskContext>>,
+        schema: SchemaRef,
     ) -> ExecutionResult<Box<dyn TaskStreamChannelSink>> {
         let create = |senders: Vec<_>| -> ExecutionResult<_> {
-            let mut stream = Self::create_stream_with_senders(replicas, senders, &self.options);
+            let mut stream = MemoryStream::new(
+                self.options.task_stream_buffer,
+                replicas,
+                senders,
+                replay.clone().map(|context| (context, schema.clone())),
+            );
             let sink = stream.publish()?;
             Ok((stream, sink))
         };
@@ -147,13 +155,5 @@ impl LocalStreamManager {
             // So we do not need to spawn a task to send the error asynchronously.
             let _ = tx.try_send(Err(TaskStreamError::from(cause.clone())));
         }
-    }
-
-    fn create_stream_with_senders(
-        replicas: usize,
-        senders: Vec<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
-        options: &LocalStreamManagerOptions,
-    ) -> MemoryStream {
-        MemoryStream::new(options.task_stream_buffer, replicas, senders)
     }
 }

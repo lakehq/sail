@@ -177,6 +177,9 @@ impl fmt::Display for InputMode {
 #[derive(Debug, Clone, Copy)]
 pub enum OutputMode {
     Pipelined,
+    /// The output is pipelined to its consumers after it is buffered in full, so that
+    /// each consumer reads it at its own pace.
+    Replayed,
     Blocking,
 }
 
@@ -184,6 +187,7 @@ impl fmt::Display for OutputMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             OutputMode::Pipelined => write!(f, "Pipelined"),
+            OutputMode::Replayed => write!(f, "Replayed"),
             OutputMode::Blocking => write!(f, "Blocking"),
         }
     }

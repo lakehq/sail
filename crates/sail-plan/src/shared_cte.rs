@@ -10,7 +10,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, Tre
 use datafusion_common::{Result, TableReference};
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
-    Distinct, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Projection,
+    Distinct, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, SubqueryAlias,
     TableProviderFilterPushDown, TableScan, TableScanBuilder, TableSource,
 };
 use indexmap::IndexMap;
@@ -148,6 +148,47 @@ impl SharedCteBody {
     }
 }
 
+/// Analyzes a resolved plan in which the references to shareable CTE definitions are
+/// scans, for the schema of the plan. The references are replaced by their definitions
+/// if the analysis changes the schema of a definition.
+pub fn analyze_shared_ctes(
+    plan: LogicalPlan,
+    analyze: &mut dyn FnMut(LogicalPlan) -> Result<LogicalPlan>,
+) -> Result<LogicalPlan> {
+    let mut definitions: IndexMap<usize, Arc<CteDefinition>> = IndexMap::new();
+    fn collect(
+        plan: &LogicalPlan,
+        definitions: &mut IndexMap<usize, Arc<CteDefinition>>,
+    ) -> Result<()> {
+        plan.apply_with_subqueries(|plan| {
+            if let LogicalPlan::TableScan(scan) = plan
+                && let Some(reference) = CteReference::try_from_scan(scan)
+                && !definitions.contains_key(&reference.definition.index)
+            {
+                definitions.insert(
+                    reference.definition.index,
+                    Arc::clone(&reference.definition),
+                );
+                collect(reference.definition.plan(), definitions)?;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(())
+    }
+    collect(&plan, &mut definitions)?;
+    if !definitions.is_empty() && reads_input_layout(&plan)? {
+        return analyze(inline_references(plan, &|_| true)?);
+    }
+    for definition in definitions.values() {
+        let stable = analyze(definition.plan().as_ref().clone())
+            .is_ok_and(|analyzed| analyzed.schema().inner() == &definition.schema);
+        if !stable {
+            return analyze(inline_references(plan, &|_| true)?);
+        }
+    }
+    analyze(plan)
+}
+
 /// Returns the session state for optimizing the query again, after a CTE reference is
 /// replaced by its definition, so that the optimizer generates the aliases that it
 /// generates for the query with its CTEs inlined.
@@ -263,14 +304,14 @@ type Members = BTreeMap<usize, (Arc<CteDefinition>, Vec<Member>)>;
 /// Optimizes a resolved plan in which the references to shareable CTE definitions
 /// are scans, and decides for each reference whether it shares a body.
 ///
-/// References share a body when the optimizer records the same filters and limit
-/// for them, and the filters above each of them are all recorded. The shared body
-/// is optimized once under these filters and this limit, and computes the columns
-/// that any of the references reads. A reference that shares with no other
-/// reference is replaced by its definition in the resolved plan, which is then
-/// optimized again, so that the plan of a query without shared bodies is the plan
-/// of the query with all its CTEs inlined. The same holds for a query or a body that
-/// the optimizer fails on with references in it.
+/// References share a body when the optimizer records the same filters for them, no
+/// filter is left above them, and they are not read through a limit. The shared body
+/// is optimized once under these filters, and computes the columns that any of the
+/// references reads. A reference that shares with no other reference is replaced by
+/// its definition in the resolved plan, which is then optimized again, so that the
+/// plan of a query without shared bodies is the plan of the query with all its CTEs
+/// inlined. The same holds for a query that the optimizer fails on with references
+/// in it.
 ///
 /// The `optimize` function receives the plan and whether it is the plan of the query.
 pub fn optimize_shared_ctes(
@@ -289,15 +330,23 @@ pub fn optimize_shared_ctes(
         let has_references = contains_reference(&root)?;
         let root = match optimize(root, true) {
             Ok(root) => root,
-            // The query is optimized as if its CTEs were never shared.
-            Err(_) if has_references => {
+            // The query is optimized as if its CTEs were never shared. The optimizer
+            // can fail on a query that it simplifies, and then accepts, when the CTEs are
+            // in the place of their references (e.g. when a CTE is empty).
+            Err(error) if has_references => {
+                log::warn!("optimizing the query without sharing its CTEs: {error}");
                 return optimize(inline_references(plan, &|_| true)?, true);
             }
             Err(error) => return Err(error),
         };
         match share_references(root, &inlined, optimize)? {
-            Ok(plan) => return Ok(plan),
-            Err(sites) => inlined.extend(sites),
+            Sharing::Shared(plan) => return Ok(plan),
+            Sharing::Inline(sites) => inlined.extend(sites),
+            // The optimizer fails on a shared body, as it can on the query above.
+            Sharing::Failed(error) => {
+                log::warn!("optimizing the query without sharing its CTEs: {error}");
+                return optimize(inline_references(plan, &|_| true)?, true);
+            }
         }
     }
 }
@@ -349,15 +398,19 @@ fn reads_input_layout(plan: &LogicalPlan) -> Result<bool> {
     Ok(found)
 }
 
-/// Returns the names that the projection gives to the columns of the reference below it,
-/// if the projection only renames the columns, as for a repeated reference to a CTE.
-fn renamed_reference(projection: &Projection) -> Option<(&TableScan, Vec<String>)> {
+/// Returns the names that a repeated reference to a CTE gives to the columns of its scan:
+/// the scan is renamed by a projection below an alias, as the definition is renamed
+/// when it is in the place of the reference.
+fn renamed_reference(alias: &SubqueryAlias) -> Option<(&TableScan, Vec<String>)> {
+    let LogicalPlan::Projection(projection) = alias.input.as_ref() else {
+        return None;
+    };
     let LogicalPlan::TableScan(scan) = projection.input.as_ref() else {
         return None;
     };
     CteReference::try_from_scan(scan)?;
     let schema = &scan.projected_schema;
-    if projection.expr.len() != schema.fields().len() {
+    if alias.alias != scan.table_name || projection.expr.len() != schema.fields().len() {
         return None;
     }
     let names = projection
@@ -388,7 +441,7 @@ pub fn inline_references(
 ) -> Result<LogicalPlan> {
     plan.transform_down_with_subqueries(|plan| {
         let inlined = match &plan {
-            LogicalPlan::Projection(projection) => match renamed_reference(projection) {
+            LogicalPlan::SubqueryAlias(alias) => match renamed_reference(alias) {
                 Some((scan, names)) if selected(site(scan)) => {
                     let definition = definition(scan);
                     Some(rename_logical_plan_reusing_projection(
@@ -538,9 +591,16 @@ fn collect_members(plan: &LogicalPlan, context: Context, members: &mut Members) 
     // The same nodes as in the join elimination of the optimizer.
     let distinct = match plan {
         LogicalPlan::Distinct(_) => vec![true],
-        LogicalPlan::Projection(_) | LogicalPlan::Filter(_) | LogicalPlan::SubqueryAlias(_) => {
-            vec![context.distinct]
+        LogicalPlan::Aggregate(aggregate)
+            if !aggregate.group_expr.is_empty() && aggregate.aggr_expr.is_empty() =>
+        {
+            vec![true]
         }
+        LogicalPlan::Sort(sort) if sort.fetch.is_none() => vec![context.distinct],
+        LogicalPlan::Projection(_)
+        | LogicalPlan::Filter(_)
+        | LogicalPlan::SubqueryAlias(_)
+        | LogicalPlan::Repartition(_) => vec![context.distinct],
         LogicalPlan::Join(join) => match join.join_type {
             JoinType::Inner => vec![context.distinct; 2],
             JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
@@ -560,6 +620,60 @@ fn collect_members(plan: &LogicalPlan, context: Context, members: &mut Members) 
     Ok(())
 }
 
+/// Returns the references that cannot share a body or that read different rows than
+/// every other reference.
+fn single_references(references: &[Member]) -> Vec<Site> {
+    let mut counts: HashMap<&Demand, usize> = HashMap::new();
+    for demand in references
+        .iter()
+        .filter_map(|member| member.demand.as_ref())
+    {
+        *counts.entry(demand).or_default() += 1;
+    }
+    references
+        .iter()
+        .filter(|member| match &member.demand {
+            Some(demand) => counts[demand] == 1,
+            None => true,
+        })
+        .map(|member| member.site)
+        .collect()
+}
+
+/// Returns the positions of the definitions that the given definitions refer to,
+/// directly or through other definitions.
+fn referenced_definitions<'a>(
+    definitions: impl Iterator<Item = &'a Arc<CteDefinition>>,
+) -> Result<HashSet<usize>> {
+    fn visit(definition: &CteDefinition, referenced: &mut HashSet<usize>) -> Result<()> {
+        definition.plan().apply_with_subqueries(|plan| {
+            if let LogicalPlan::TableScan(scan) = plan
+                && let Some(reference) = CteReference::try_from_scan(scan)
+                && referenced.insert(reference.definition.index)
+            {
+                visit(&reference.definition, referenced)?;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(())
+    }
+    let mut referenced = HashSet::new();
+    for definition in definitions {
+        visit(definition, &mut referenced)?;
+    }
+    Ok(referenced)
+}
+
+/// The outcome of sharing the references of an optimized plan.
+enum Sharing {
+    /// The plan in which every reference shares a body.
+    Shared(LogicalPlan),
+    /// The references that share with no other reference.
+    Inline(Vec<Site>),
+    /// The error of optimizing a shared body.
+    Failed(datafusion_common::DataFusionError),
+}
+
 /// Gives the references of the optimized plan that read the same rows of a definition
 /// one shared body. Returns the references that share with no other reference instead,
 /// if there are any.
@@ -567,29 +681,37 @@ fn share_references(
     plan: LogicalPlan,
     inlined: &HashSet<Site>,
     optimize: &mut dyn FnMut(LogicalPlan, bool) -> Result<LogicalPlan>,
-) -> Result<std::result::Result<LogicalPlan, Vec<Site>>> {
+) -> Result<Sharing> {
     let mut members = Members::new();
     collect_members(&plan, Context::default(), &mut members)?;
     let mut bodies = vec![];
     // The references to a definition are in the plan and in the bodies of later
     // definitions, so the definitions are visited from the last one.
     while let Some((_, (definition, references))) = members.pop_last() {
+        let mut single = single_references(&references);
         let mut groups: IndexMap<Demand, Vec<Member>> = IndexMap::new();
-        let mut single = vec![];
         for member in references {
-            match &member.demand {
-                Some(demand) => groups.entry(demand.clone()).or_default().push(member),
-                None => single.push(member.site),
+            if let Some(demand) = &member.demand {
+                groups.entry(demand.clone()).or_default().push(member);
             }
         }
-        single.extend(
-            groups
-                .values()
-                .filter(|group| group.len() == 1)
-                .map(|group| group[0].site),
-        );
         if !single.is_empty() {
-            return Ok(Err(single));
+            // No more references to a definition appear when other references are
+            // replaced by their definitions, unless a definition refers to it. So the
+            // references to the other definitions that share with no other reference
+            // are known as well.
+            let nested = referenced_definitions(
+                members
+                    .values()
+                    .map(|(definition, _)| definition)
+                    .chain(std::iter::once(&definition)),
+            )?;
+            for (index, (_, references)) in &members {
+                if !nested.contains(index) {
+                    single.extend(single_references(references));
+                }
+            }
+            return Ok(Sharing::Inline(single));
         }
         let sites = groups
             .values()
@@ -612,8 +734,9 @@ fn share_references(
             })?;
             let body = demand.apply(body, columns.as_deref())?;
             let schema = Arc::clone(body.schema());
-            let Ok(body) = optimize(body, false) else {
-                return Ok(Err(group.iter().map(|member| member.site).collect()));
+            let body = match optimize(body, false) {
+                Ok(body) => body,
+                Err(error) => return Ok(Sharing::Failed(error)),
             };
             // The references read the body with the types of the definition.
             let same_types = schema.fields().len() == body.schema().fields().len()
@@ -631,13 +754,15 @@ fn share_references(
                     .rewrite(distinct, &OptimizerContext::new())?
                     .transformed
                 {
-                    return Ok(Err(sites));
+                    return Ok(Sharing::Inline(sites));
                 }
             }
             // The optimizer simplifies the consumers of an empty definition only if it
             // is in their place.
             if !same_types || matches!(body, LogicalPlan::EmptyRelation(_)) {
-                return Ok(Err(group.iter().map(|member| member.site).collect()));
+                return Ok(Sharing::Inline(
+                    group.iter().map(|member| member.site).collect(),
+                ));
             }
             collect_members(&body, Context::default(), &mut members)?;
             bodies.push((Arc::clone(&definition), demand, columns, body));
@@ -660,9 +785,9 @@ fn share_references(
     }
     let plan = bind_references(plan, &sources, &mut missing)?;
     Ok(if missing.is_empty() {
-        Ok(plan)
+        Sharing::Shared(plan)
     } else {
-        Err(missing)
+        Sharing::Inline(missing)
     })
 }
 

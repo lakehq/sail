@@ -90,10 +90,14 @@ impl PlanResolver<'_> {
             }
             let mut plan = cte.plan.as_ref().clone();
             if let Some(names) = cte.renew_reference(state)? {
-                if let Some(scan) = cte.scan(state)? {
-                    plan = scan;
-                }
-                plan = rename_logical_plan_reusing_projection(plan, &names)?;
+                plan = match cte.scan(state)? {
+                    // The scan is renamed below an alias, as the definition is.
+                    Some(scan) => LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+                        Arc::new(rename_logical_plan_reusing_projection(scan, &names)?),
+                        table_reference.clone(),
+                    )?),
+                    None => rename_logical_plan_reusing_projection(plan, &names)?,
+                };
                 state.register_missing_input_boundary(&plan);
             }
             return if let Some(table_sample) = sample {

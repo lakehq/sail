@@ -72,7 +72,11 @@ impl SharedCtePlanner {
     ) -> Result<()> {
         let statistics = StatisticsContext::new().compute(plan.as_ref(), &StatisticsArgs::new())?;
         let planned = PlannedCte {
-            cte: Arc::new(SharedCte::new(self.ctes.len(), name)),
+            cte: Arc::new(SharedCte::new(
+                self.ctes.len(),
+                name,
+                plan.output_partitioning().clone(),
+            )),
             plan,
             statistics,
         };
@@ -179,7 +183,6 @@ impl ExtensionPlanner for SharedCtePlanner {
         Ok(Some(Arc::new(SharedCteScanExec::new(
             Arc::clone(&planned.cte),
             Arc::clone(scan.projected_schema.inner()),
-            planned.plan.output_partitioning().partition_count(),
             &planned.statistics,
             projection,
         ))))

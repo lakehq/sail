@@ -352,6 +352,7 @@ impl ShuffleClientActor {
         ctx: &mut ActorContext<Self>,
         shuffle_id: i32,
         partition_id: i32,
+        maps: Option<(i32, i32)>,
         reply: oneshot::Sender<BoxStream<'static, CelebornResult<Bytes>>>,
     ) -> ActorAction {
         if !self
@@ -375,6 +376,7 @@ impl ShuffleClientActor {
                 .send(ShuffleClientMessage::ReadPartitionStreamComplete {
                     shuffle_id,
                     partition_id,
+                    maps,
                     result,
                     reply,
                 })
@@ -388,6 +390,7 @@ impl ShuffleClientActor {
         ctx: &mut ActorContext<Self>,
         shuffle_id: i32,
         partition_id: i32,
+        maps: Option<(i32, i32)>,
         result: CelebornResult<SlotReservation>,
         reply: oneshot::Sender<BoxStream<'static, CelebornResult<Bytes>>>,
     ) -> ActorAction {
@@ -437,7 +440,7 @@ impl ShuffleClientActor {
                     let shuffle_key = shuffle_key.clone();
                     async move {
                         client
-                            .read_partition_stream(&shuffle_key, compression)
+                            .read_partition_stream(&shuffle_key, compression, maps)
                             .await
                     }
                 })

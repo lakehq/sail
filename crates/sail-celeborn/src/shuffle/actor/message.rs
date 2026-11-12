@@ -80,11 +80,15 @@ pub enum ShuffleClientMessage {
     ReadPartitionStream {
         shuffle_id: i32,
         partition_id: i32,
+        /// The range of map indices to read, start inclusive and end exclusive, or
+        /// `None` for all map indices.
+        maps: Option<(i32, i32)>,
         result: oneshot::Sender<BoxStream<'static, CelebornResult<Bytes>>>,
     },
     ReadPartitionStreamComplete {
         shuffle_id: i32,
         partition_id: i32,
+        maps: Option<(i32, i32)>,
         result: CelebornResult<SlotReservation>,
         reply: oneshot::Sender<BoxStream<'static, CelebornResult<Bytes>>>,
     },

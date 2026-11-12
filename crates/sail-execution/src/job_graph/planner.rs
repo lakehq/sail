@@ -763,13 +763,19 @@ fn build_shared_cte_job_graph(
             })
             .data()
     };
-    // A reference reads the partitions of the stage, which only the shuffle service
-    // cannot serve from a materialized output.
+    // A reference reads the partitions of the stage at its own pace. A shuffle backend
+    // that materializes the output of a stage (shared storage, or the shuffle service,
+    // which serves a range of the producer partitions to each reference) serves it as
+    // is, while the Flight backend replays the output from the worker that produces it.
+    // The replayed output is kept in memory under an unbounded memory pool, and written
+    // to disk beyond a small size under a bounded one (see `shared_cte_memory_limit`).
+    // A replayed stage returns its error only to the stages that read its output, while
+    // a materialized one fails the job when it fails, even if no stage would read it.
     let mode = match graph.options.shuffle_backend {
-        ShuffleBackendKind::Storage { .. } => OutputMode::Blocking,
-        ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Celeborn { .. } => {
-            OutputMode::Pipelined
+        ShuffleBackendKind::Storage { .. } | ShuffleBackendKind::Celeborn { .. } => {
+            OutputMode::Blocking
         }
+        ShuffleBackendKind::Flight { .. } => OutputMode::Replayed,
     };
     for (cte, plan) in shared.ctes() {
         let plan = plan_job_graph_stages(
@@ -798,27 +804,52 @@ fn build_shared_cte_job_graph(
 }
 
 /// Reads the stage of a shared CTE for one of its references.
+///
+/// Each partition of the reference reads the same partition of the stage, so the
+/// reference keeps the partitioning that it reported when the query was planned. If the
+/// plan of the stage does not have this partitioning anymore, its output is
+/// repartitioned for the reference.
 fn create_shared_cte_input(
     reference: &StageInputExec<SharedCteStage>,
     usage: PartitionUsage,
-    graph: &JobGraph,
+    graph: &mut JobGraph,
 ) -> ExecutionResult<PlannedSubtree> {
     let SharedCteStage { stage, projection } = reference.input();
-    let partitions = reference
-        .properties()
-        .output_partitioning()
-        .partition_count();
+    let partitioning = reference.properties().output_partitioning();
+    let schema = graph.stages[*stage].plan.schema();
+    let stage_partitioning = graph.stages[*stage].plan.output_partitioning().clone();
+    // The partitioning of the reference in terms of the columns of the stage.
+    let expected = match partitioning {
+        Partitioning::Hash(keys, partitions) => keys
+            .iter()
+            .map(|key| {
+                let position = key.downcast_ref::<Column>()?.index();
+                let index = match projection {
+                    Some(projection) => *projection.get(position)?,
+                    None => position,
+                };
+                let name = schema.fields().get(index)?.name();
+                Some(Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>)
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|keys| Partitioning::Hash(keys, *partitions)),
+        partitioning => Some(partitioning.clone()),
+    };
+    let preserved = match &expected {
+        Some(Partitioning::Hash(_, _)) => expected.as_ref() == Some(&stage_partitioning),
+        _ => partitioning.partition_count() == stage_partitioning.partition_count(),
+    };
+    let partitions = stage_partitioning.partition_count();
     let mode = match usage {
         // The only partition of the reference is read by every task of its stage.
-        PartitionUsage::Shared if partitions == 1 => InputMode::Broadcast,
-        // Each partition of the reference reads the same partition of the CTE.
+        PartitionUsage::Shared if preserved && partitions == 1 => InputMode::Broadcast,
         _ => InputMode::Rescale { partitions },
     };
-    let input = stage_input_exec(
-        *stage,
-        mode,
-        stage_properties_with_unknown_partitioning(graph, *stage, partitions),
-    );
+    let mut properties = stage_properties_with_unknown_partitioning(graph, *stage, partitions);
+    if preserved && let Some(expected) = expected {
+        properties = Arc::new(properties.as_ref().clone().with_partitioning(expected));
+    }
+    let input = stage_input_exec(*stage, mode, properties);
     let input = match projection {
         Some(projection) => {
             let schema = input.schema();
@@ -833,7 +864,20 @@ fn create_shared_cte_input(
         }
         None => input,
     };
-    Ok(PlannedSubtree::without_pending_scalar_subquery_expr(input))
+    if preserved {
+        return Ok(PlannedSubtree::without_pending_scalar_subquery_expr(input));
+    }
+    let partitioning = match partitioning {
+        Partitioning::UnknownPartitioning(partitions) => Partitioning::RoundRobinBatch(*partitions),
+        partitioning => partitioning.clone(),
+    };
+    plan_job_graph_stages(
+        Arc::new(RepartitionExec::try_new(input, partitioning)?),
+        usage,
+        graph,
+        DriverStageHandling::CreateStage,
+        None,
+    )
 }
 
 fn build_barrier_job_graph(

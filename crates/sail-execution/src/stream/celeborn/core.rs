@@ -119,8 +119,12 @@ impl CelebornStreamManager {
         job_id: JobId,
         stage: usize,
         channels: Vec<usize>,
+        maps: Option<(usize, usize)>,
         schema: SchemaRef,
     ) -> Result<TaskStreamSource> {
+        let Some(maps) = map_range(maps)? else {
+            return Ok(Box::pin(futures::stream::empty()));
+        };
         let shuffle_id = self
             .client
             .get_shuffle_id(job_id.into(), stage as u64)
@@ -138,11 +142,10 @@ impl CelebornStreamManager {
             .register_shuffle(shuffle_id, partition_ids.clone(), false, 0)
             .await
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        let streams = futures::future::join_all(
-            partition_ids
-                .into_iter()
-                .map(|partition_id| self.client.read_partition_stream(shuffle_id, partition_id)),
-        )
+        let streams = futures::future::join_all(partition_ids.into_iter().map(|partition_id| {
+            self.client
+                .read_partition_stream(shuffle_id, partition_id, maps)
+        }))
         .await;
         let streams = streams
             .into_iter()
@@ -166,6 +169,27 @@ impl CelebornStreamManager {
             .collect::<Vec<TaskStreamSource>>();
         Ok(Box::pin(futures::stream::select_all(streams)))
     }
+}
+
+/// Returns the range of map indices to read, where the map indices are the partitions
+/// of the producer stage, as `Some(None)` for all map indices, or `None` if the range is
+/// empty, since the shuffle service reads an empty range as the whole partition. The
+/// end of a range is less than `i32::MAX`, which the shuffle service also reads as the
+/// whole partition.
+fn map_range(maps: Option<(usize, usize)>) -> Result<Option<Option<(i32, i32)>>> {
+    let Some((start, end)) = maps else {
+        return Ok(Some(None));
+    };
+    if start >= end {
+        return Ok(None);
+    }
+    let index = |x: usize| {
+        i32::try_from(x)
+            .ok()
+            .filter(|x| *x < i32::MAX)
+            .ok_or_else(|| DataFusionError::Internal(format!("invalid map index {x}")))
+    };
+    Ok(Some(Some((index(start)?, index(end)?))))
 }
 
 struct CelebornStreamSink {
@@ -281,4 +305,20 @@ fn decode_batches(data: Bytes, _schema: &SchemaRef) -> Result<Vec<RecordBatch>> 
         offset += length;
     }
     Ok(batches)
+}
+
+#[cfg(test)]
+mod map_range_tests {
+    use super::map_range;
+
+    #[test]
+    fn map_ranges_are_read_by_the_shuffle_service() -> datafusion::common::Result<()> {
+        assert_eq!(map_range(None)?, Some(None));
+        assert_eq!(map_range(Some((0, 2)))?, Some(Some((0, 2))));
+        // An empty range is not read.
+        assert_eq!(map_range(Some((1, 1)))?, None);
+        // The end of a range is never the value that stands for all map indices.
+        assert!(map_range(Some((0, i32::MAX as usize))).is_err());
+        Ok(())
+    }
 }

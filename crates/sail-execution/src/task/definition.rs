@@ -37,6 +37,9 @@ pub enum TaskInputLocator {
     },
     ShuffleService {
         channels: Vec<Vec<usize>>,
+        /// The range of producer partitions that each partition reads, or `None` if
+        /// every partition reads all producer partitions.
+        maps: Option<Vec<(usize, usize)>>,
     },
 }
 
@@ -85,7 +88,15 @@ pub enum TaskOutputDistribution {
 
 #[derive(Debug, Clone)]
 pub enum TaskOutputLocator {
-    Pipelined { replicas: usize },
+    Pipelined {
+        replicas: usize,
+    },
+    /// The output is buffered in full (in memory under an unbounded memory pool, and on
+    /// disk beyond a small size under a bounded one), and then read by each replica at
+    /// its own pace.
+    Replayed {
+        replicas: usize,
+    },
     Blocking,
 }
 
@@ -176,13 +187,21 @@ impl From<TaskInputLocator> for r#gen::TaskInputLocator {
                     keys: keys.into_iter().map(|x| x.into()).collect(),
                 })
             }
-            TaskInputLocator::ShuffleService { channels } => {
+            TaskInputLocator::ShuffleService { channels, maps } => {
                 r#gen::task_input_locator::Kind::ShuffleService(
                     r#gen::TaskInputShuffleServiceLocator {
                         channels: channels
                             .into_iter()
                             .map(|channels| r#gen::TaskInputChannelList {
                                 channels: channels.into_iter().map(|x| x as u64).collect(),
+                            })
+                            .collect(),
+                        maps: maps
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|(start, end)| r#gen::TaskInputMapRange {
+                                start: start as u64,
+                                end: end as u64,
                             })
                             .collect(),
                     },
@@ -226,12 +245,17 @@ impl TryFrom<r#gen::TaskInputLocator> for TaskInputLocator {
                 Ok(TaskInputLocator::Storage { keys })
             }
             Some(r#gen::task_input_locator::Kind::ShuffleService(
-                r#gen::TaskInputShuffleServiceLocator { channels },
+                r#gen::TaskInputShuffleServiceLocator { channels, maps },
             )) => Ok(TaskInputLocator::ShuffleService {
                 channels: channels
                     .into_iter()
                     .map(|x| x.channels.into_iter().map(|x| x as usize).collect())
                     .collect(),
+                maps: (!maps.is_empty()).then(|| {
+                    maps.into_iter()
+                        .map(|x| (x.start as usize, x.end as usize))
+                        .collect()
+                }),
             }),
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task input locator".to_string(),
@@ -508,6 +532,11 @@ impl From<TaskOutputLocator> for r#gen::TaskOutputLocator {
                     replicas: replicas as u64,
                 })
             }
+            TaskOutputLocator::Replayed { replicas } => {
+                r#gen::task_output_locator::Kind::Replayed(r#gen::TaskOutputReplayedLocator {
+                    replicas: replicas as u64,
+                })
+            }
             TaskOutputLocator::Blocking => {
                 r#gen::task_output_locator::Kind::Blocking(r#gen::TaskOutputBlockingLocator {})
             }
@@ -524,6 +553,11 @@ impl TryFrom<r#gen::TaskOutputLocator> for TaskOutputLocator {
             Some(r#gen::task_output_locator::Kind::Pipelined(
                 r#gen::TaskOutputPipelinedLocator { replicas },
             )) => Ok(TaskOutputLocator::Pipelined {
+                replicas: replicas as usize,
+            }),
+            Some(r#gen::task_output_locator::Kind::Replayed(
+                r#gen::TaskOutputReplayedLocator { replicas },
+            )) => Ok(TaskOutputLocator::Replayed {
                 replicas: replicas as usize,
             }),
             Some(r#gen::task_output_locator::Kind::Blocking(_)) => Ok(TaskOutputLocator::Blocking),
@@ -591,5 +625,38 @@ impl TaskOutput {
                 Ok(ShufflePartitioning::RoundRobinRow(*channels))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round_trip(locator: TaskInputLocator) -> ExecutionResult<TaskInputLocator> {
+        r#gen::TaskInputLocator::from(locator).try_into()
+    }
+
+    #[test]
+    fn shuffle_service_locator_round_trip() -> ExecutionResult<()> {
+        let locator = round_trip(TaskInputLocator::ShuffleService {
+            channels: vec![vec![0], vec![0]],
+            maps: Some(vec![(0, 2), (2, 5)]),
+        })?;
+        let TaskInputLocator::ShuffleService { channels, maps } = locator else {
+            return Err(ExecutionError::InternalError("unexpected locator".into()));
+        };
+        assert_eq!(channels, vec![vec![0], vec![0]]);
+        assert_eq!(maps, Some(vec![(0, 2), (2, 5)]));
+        // Without a range, every partition reads all map indices.
+        let locator = round_trip(TaskInputLocator::ShuffleService {
+            channels: vec![vec![0, 1]],
+            maps: None,
+        })?;
+        let TaskInputLocator::ShuffleService { channels, maps } = locator else {
+            return Err(ExecutionError::InternalError("unexpected locator".into()));
+        };
+        assert_eq!(channels, vec![vec![0, 1]]);
+        assert_eq!(maps, None);
+        Ok(())
     }
 }

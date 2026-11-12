@@ -294,9 +294,11 @@ async fn shuffle_write(
             // TODO: model successful early-stop separately from error-triggered aborts
             sink.abort().await
         }
-        Err(error) => {
-            let _ = sink.abort().await;
-            Err(error)
-        }
+        // A sink that returns the error to its readers ends the task normally, so that
+        // the error fails only the tasks that read it.
+        Err(error) => match sink.fail(&error).await {
+            Ok(true) => Ok(()),
+            _ => Err(error),
+        },
     }
 }

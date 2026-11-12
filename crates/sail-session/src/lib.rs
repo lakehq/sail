@@ -550,7 +550,8 @@ mod tests {
             Ok((references, bodies.len()))
         }
 
-        let cte = "WITH c AS (SELECT a, a + 1 AS b FROM VALUES (1), (2), (3) AS t(a))";
+        let cte =
+            "WITH c AS (SELECT a, count(*) AS b FROM VALUES (1), (2), (3) AS t(a) GROUP BY a)";
         for (query, expected) in [
             // The references read the same rows.
             ("SELECT x.a, y.b FROM c x JOIN c y ON x.a = y.a", (2, 1)),
@@ -628,10 +629,12 @@ mod tests {
         let plan = resolver.resolve_named_plan(plan).await?.plan;
         assert!(!plan.display_indent().to_string().contains("TableScan"));
 
-        // Each reference evaluates a CTE that is volatile, sorted, or refers to outer columns.
+        // Each reference evaluates a CTE that is volatile, sorted, refers to outer columns,
+        // or only projects and filters one source.
         for query in [
-            "WITH c AS (SELECT a, random() AS r FROM VALUES (1), (2) AS t(a)) SELECT x.r FROM c x JOIN c y ON x.a = y.a",
-            "WITH c AS (SELECT a FROM VALUES (1), (2) AS t(a) ORDER BY a) SELECT x.a FROM c x JOIN c y ON x.a = y.a",
+            "WITH c AS (SELECT a, a + 1 AS b FROM VALUES (1), (2) AS t(a) WHERE a > 0) SELECT x.b FROM c x JOIN c y ON x.a = y.a",
+            "WITH c AS (SELECT a, random() AS r FROM VALUES (1), (2) AS t(a) GROUP BY a) SELECT x.r FROM c x JOIN c y ON x.a = y.a",
+            "WITH c AS (SELECT a FROM VALUES (1), (2) AS t(a) GROUP BY a ORDER BY a) SELECT x.a FROM c x JOIN c y ON x.a = y.a",
             "SELECT (WITH c AS (SELECT a + t.b AS a FROM VALUES (1), (2) AS s(a)) SELECT max(x.a) FROM c x JOIN c y ON x.a = y.a) FROM VALUES (1) AS t(b)",
         ] {
             let plan = optimize(query, true).await?;
@@ -658,6 +661,28 @@ mod tests {
             plan.display_indent().to_string(),
             optimize(&query, false).await?.display_indent().to_string()
         );
+
+        // A consumer that removes duplicate rows turns the join into a semi join as well.
+        let query = format!("{join} SELECT DISTINCT a FROM j UNION ALL SELECT DISTINCT a FROM j");
+        let plan = optimize(&query, true).await?;
+        assert_eq!(shared(&plan)?, (0, 0), "{}", plan.display_indent());
+        assert_eq!(
+            plan.display_indent().to_string(),
+            optimize(&query, false).await?.display_indent().to_string()
+        );
+
+        // The references to one definition share, those to another one read different
+        // rows, and a third definition is shared.
+        let query = "WITH d AS (SELECT * FROM VALUES (1, 10L, 'a'), (1, 11L, 'b'), (3, 30L, 'c') AS x(k, v, s)), \
+             a AS (SELECT x.k, x.v, y.s FROM d x JOIN d y ON x.v = y.v), \
+             b AS (SELECT k, count(*) c FROM d GROUP BY k), \
+             c AS (SELECT s, sum(v) t FROM d GROUP BY s) \
+             SELECT k, v FROM a WHERE k = 1 UNION ALL SELECT k, v FROM a WHERE k = 1 \
+             UNION ALL SELECT k, v FROM a WHERE k = 3 \
+             UNION ALL SELECT k, c FROM b UNION ALL SELECT k, c FROM b WHERE c > 1 \
+             UNION ALL SELECT x.t, y.t FROM c x, c y WHERE x.t = y.t";
+        let plan = optimize(query, true).await?;
+        assert_eq!(shared(&plan)?, (4, 2), "{}", plan.display_indent());
 
         // A CTE that refers twice to a shared CTE is shared as well.
         let query = format!(

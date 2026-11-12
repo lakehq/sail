@@ -214,37 +214,54 @@ impl WorkerClient {
         })
     }
 
-    /// Open a lazy stream of committed batches for this primary partition.
+    /// Opens a stream of the committed batches of this primary partition for a range of
+    /// map indices, where `0..i32::MAX` stands for all map indices.
+    async fn open_stream(
+        &self,
+        shuffle_key: &str,
+        start_index: i32,
+        end_index: i32,
+    ) -> CelebornResult<PbStreamHandler> {
+        let request = PbOpenStream {
+            shuffle_key: shuffle_key.to_string(),
+            file_name: format!("{}-{}-0", self.location.id, self.location.epoch),
+            start_index,
+            end_index,
+            initial_credit: 0,
+            read_local_shuffle: false,
+        };
+        let response = self
+            .request_fetch(MessageType::OpenStream, request.encode_to_vec())
+            .await?;
+        if response.message_type != MessageType::StreamHandler {
+            return Err(CelebornError::Protocol(
+                "invalid open stream response".to_string(),
+            ));
+        }
+        Ok(PbStreamHandler::decode(response.payload.as_slice())?)
+    }
+
+    /// Open a lazy stream of committed batches for this primary partition, for the
+    /// given range of map indices (start inclusive, end exclusive) or for all of them.
     pub async fn read_partition_stream(
         &self,
         shuffle_key: &str,
         compression: CompressionCodec,
+        maps: Option<(i32, i32)>,
     ) -> BoxStream<'static, CelebornResult<Bytes>> {
-        let request = PbOpenStream {
-            shuffle_key: shuffle_key.to_string(),
-            file_name: format!("{}-{}-0", self.location.id, self.location.epoch),
-            start_index: 0,
-            end_index: i32::MAX,
-            initial_credit: 0,
-            read_local_shuffle: false,
+        let handler = match maps {
+            // The shuffle service cannot read a range of map indices from a file without
+            // batches, so the range is read only if the whole file has chunks.
+            Some((start, end)) => match self.open_stream(shuffle_key, 0, i32::MAX).await {
+                Ok(handler) if handler.num_chunks == 0 => Ok(handler),
+                Ok(_) => self.open_stream(shuffle_key, start, end).await,
+                Err(error) => Err(error),
+            },
+            None => self.open_stream(shuffle_key, 0, i32::MAX).await,
         };
-        let response = match self
-            .request_fetch(MessageType::OpenStream, request.encode_to_vec())
-            .await
-        {
-            Ok(response) => response,
-            Err(error) => return Box::pin(stream::once(async move { Err(error) })),
-        };
-        if response.message_type != MessageType::StreamHandler {
-            return Box::pin(stream::once(async {
-                Err(CelebornError::Protocol(
-                    "invalid open stream response".to_string(),
-                ))
-            }));
-        }
-        let handler = match PbStreamHandler::decode(response.payload.as_slice()) {
+        let handler = match handler {
             Ok(handler) => handler,
-            Err(error) => return Box::pin(stream::once(async move { Err(error.into()) })),
+            Err(error) => return Box::pin(stream::once(async move { Err(error) })),
         };
         let client = self.clone();
         Box::pin(stream::try_unfold(
@@ -515,7 +532,7 @@ fn take_batch(buffered: &mut BytesMut) -> CelebornResult<Option<Bytes>> {
     if buffered.len() < HEADER_LENGTH {
         return Ok(None);
     }
-    let length = i32::from_be_bytes(
+    let length = i32::from_le_bytes(
         buffered[12..HEADER_LENGTH]
             .try_into()
             .map_err(|_| CelebornError::Protocol("invalid batch header".to_string()))?,
@@ -547,8 +564,20 @@ fn endpoint(
 mod tests {
     use bytes::Bytes;
 
-    use super::{WorkerClientOptions, WorkerClientPool, compress, decompress};
+    use super::{WorkerClientOptions, WorkerClientPool, compress, decompress, take_batch};
     use crate::common::{CompressionCodec, PartitionLocation};
+    use crate::protocol::transport::batch_header;
+
+    #[test]
+    fn batch_header_is_little_endian() {
+        let header = batch_header(1, 2, 3, 4);
+        assert_eq!(header, [1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0]);
+        let mut buffered = bytes::BytesMut::from(&header[..]);
+        buffered.extend_from_slice(b"dataNEXT");
+        let batch = take_batch(&mut buffered).unwrap();
+        assert_eq!(batch, Some(Bytes::from_static(b"data")));
+        assert_eq!(&buffered[..], b"NEXT");
+    }
 
     fn location(id: i32) -> PartitionLocation {
         PartitionLocation {

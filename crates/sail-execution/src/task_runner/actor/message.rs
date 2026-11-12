@@ -40,6 +40,8 @@ pub enum TaskRunnerMessage {
     CreateLocalStream {
         key: TaskStreamKey,
         replicas: usize,
+        /// The context for buffering the stream before it is read, if it is replayed.
+        replay: Option<Arc<TaskContext>>,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     },
@@ -81,6 +83,8 @@ pub enum TaskRunnerMessage {
         job_id: JobId,
         stage: usize,
         channels: Vec<usize>,
+        /// The range of producer partitions to read, or `None` for all.
+        maps: Option<(usize, usize)>,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },

@@ -8,6 +8,7 @@ from urllib.request import urlopen
 
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
+from pyspark.errors import PySparkException
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
@@ -131,3 +132,61 @@ def test_consumed_celeborn_shuffle_data_is_removed(spark, celeborn_master: Maste
         time.sleep(0.05)
 
     assert shuffle_ids == [], "the Celeborn shuffle was not removed after the query completed"
+
+
+_SHARED_CTE = "c AS (SELECT id % 7 AS k, count(*) AS n FROM range(1000) GROUP BY 1)"
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (f"WITH {_SHARED_CTE} SELECT count(*), sum(a.n + b.n) FROM c a JOIN c b ON a.k = b.k", [(7, 2000)]),
+        (f"WITH {_SHARED_CTE} SELECT count(*), sum(n) FROM (SELECT * FROM c UNION ALL SELECT * FROM c)", [(14, 2000)]),
+        (
+            f"WITH {_SHARED_CTE} SELECT count(*) FROM (SELECT id FROM range(10) WHERE id < 0) e "
+            "JOIN c a ON e.id = a.k JOIN c b ON a.k = b.k",
+            [(0,)],
+        ),
+        (f"WITH {_SHARED_CTE} SELECT a.k FROM c a JOIN c b ON a.k = b.k ORDER BY 1 LIMIT 3", [(0,), (1,), (2,)]),
+        # The output of the shared CTE is empty in most partitions, which are read as ranges
+        # without batches of a file with batches.
+        (
+            "WITH c AS (SELECT id % 2 AS k, count(*) AS n FROM range(100) GROUP BY 1) "
+            "SELECT count(*), sum(a.n + b.n) FROM c a JOIN c b ON a.k = b.k",
+            [(2, 200)],
+        ),
+        # The output of the shared CTE is empty in every partition.
+        (
+            "WITH a AS (SELECT count(*) AS q FROM range(0, 12, 1, 3) HAVING count(*) < 0) "
+            "SELECT count(*) FROM a x JOIN a y ON x.q = y.q",
+            [(0,)],
+        ),
+        (
+            "WITH a AS (SELECT max(id) AS p, count(*) AS q FROM range(0, 12, 1, 3)) "
+            "SELECT x.q FROM (SELECT * FROM a WHERE p IN (1, 2)) x JOIN (SELECT * FROM a WHERE p IN (1, 2)) y "
+            "ON x.q = y.q",
+            [],
+        ),
+    ],
+)
+def test_shared_cte_with_celeborn_shuffle(spark, query, expected):
+    assert [tuple(row) for row in spark.sql(query).collect()] == expected
+    assert "SharedCteExec" in spark.sql(f"EXPLAIN {query}").collect()[0][0]
+
+
+def test_shared_cte_error_with_celeborn_shuffle(spark):
+    cte = "c AS (SELECT id % 7 AS k, max(100 DIV (id - 3)) AS q FROM range(1000) GROUP BY 1)"
+    query = f"WITH {cte} SELECT sum(a.q + b.q) FROM c a JOIN c b ON a.k = b.k"
+    with pytest.raises(PySparkException, match="(?i)divi"):
+        spark.sql(query).collect()
+
+
+def test_celeborn_shuffle_is_usable_after_a_shared_cte_without_output(spark):
+    query = (
+        "WITH a AS (SELECT count(*) AS q FROM range(0, 12, 1, 3) HAVING count(*) < 0) "
+        "SELECT count(*) FROM a x JOIN a y ON x.q = y.q"
+    )
+    for _ in range(2):
+        assert [tuple(row) for row in spark.sql(query).collect()] == [(0,)]
+        query_with_output = f"WITH {_SHARED_CTE} SELECT count(*), sum(a.n + b.n) FROM c a JOIN c b ON a.k = b.k"
+        assert [tuple(row) for row in spark.sql(query_with_output).collect()] == [(7, 2000)]

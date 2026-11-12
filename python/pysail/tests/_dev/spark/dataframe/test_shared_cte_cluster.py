@@ -1,4 +1,5 @@
 import pytest
+from pyspark.errors import PySparkException
 
 from pysail.testing.spark.session import spark_connect_server
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -38,3 +39,66 @@ def test_nested_shared_ctes(spark, depth):
     )
     query = f"WITH {', '.join(ctes)} SELECT count(*) FROM c{depth}"
     assert spark.sql(query).collect() == [(10,)]
+
+
+def test_shared_cte_with_non_nullable_scalar_subquery(spark):
+    query = """
+        WITH c AS (SELECT id AS k, (SELECT count(*) FROM range(2)) AS v FROM range(3) GROUP BY id)
+        SELECT sum(a.v) FROM c a JOIN c b ON a.k = b.k
+    """
+    assert spark.sql(query).collect() == [(6,)]
+
+
+def test_insert_and_merge_from_shared_cte(spark, tmp_path):
+    spark.sql(f"CREATE TABLE shared_cte_target (k BIGINT, n BIGINT) USING delta LOCATION '{tmp_path / 't'}'")
+    cte = "c AS (SELECT id % 7 AS k, count(*) AS n FROM range(1000) GROUP BY 1)"
+    try:
+        spark.sql(f"INSERT INTO shared_cte_target WITH {cte} SELECT a.k, a.n + b.n FROM c a JOIN c b ON a.k = b.k")
+        assert spark.sql("SELECT count(*), sum(n) FROM shared_cte_target").collect() == [(7, 2000)]
+        spark.sql(f"""
+            MERGE INTO shared_cte_target t
+            USING (WITH {cte} SELECT a.k, a.n + b.n AS n FROM c a JOIN c b ON a.k = b.k) s
+            ON t.k = s.k
+            WHEN MATCHED THEN UPDATE SET n = t.n + s.n
+        """)
+        assert spark.sql("SELECT count(*), sum(n) FROM shared_cte_target").collect() == [(7, 4000)]
+    finally:
+        spark.sql("DROP TABLE IF EXISTS shared_cte_target")
+
+
+def test_shared_cte_with_outer_join_feeds_a_join_on_its_key(spark):
+    query = """
+        WITH j AS (
+            SELECT a.k, b.n
+            FROM (SELECT id % 50 AS k FROM range(1000) GROUP BY 1) a
+            LEFT JOIN (SELECT id % 10 AS k, count(*) AS n FROM range(1000) GROUP BY 1) b ON a.k = b.k
+        )
+        SELECT count(*), sum(x.n + y.n) FROM j x JOIN j y ON x.k = y.k
+    """
+    assert spark.sql(query).collect() == [(50, 2000)]
+
+
+def test_shared_cte_error_fails_only_the_stages_that_read_it(spark):
+    """The division fails for `v = 0`, and the CTE is read only if `e` is not empty."""
+    spark.sql("CREATE OR REPLACE TEMP VIEW shared_cte_e AS SELECT id AS k FROM range(0, 1, 1, 2) WHERE id < 0")
+    spark.sql(
+        "CREATE OR REPLACE TEMP VIEW shared_cte_t AS "
+        "SELECT CAST(id % 3 AS INT) AS k, CAST(id % 4 AS BIGINT) AS v FROM range(0, 10, 1, 2)"
+    )
+    cte = (
+        "c AS (SELECT a.k, 100 DIV b.v AS q "
+        "FROM shared_cte_t a JOIN shared_cte_t b ON a.k <=> b.k AND a.v <=> b.v)"
+    )
+    join = "JOIN c a ON e.k = a.k JOIN c b ON a.k = b.k AND a.q = b.q"
+    try:
+        query = f"WITH {cte} SELECT count(*) FROM shared_cte_e e {join}"
+        assert spark.sql(query).collect() == [(0,)]
+        assert "SharedCteExec" in spark.sql(f"EXPLAIN {query}").collect()[0][0]
+        query = f"WITH {cte} SELECT count(*) FROM shared_cte_t e {join}"
+        # The error can be reported as a conflict between task attempts, since the
+        # failed stage is retried after the query has received partial output.
+        with pytest.raises(PySparkException):
+            spark.sql(query).collect()
+    finally:
+        spark.sql("DROP VIEW IF EXISTS shared_cte_e")
+        spark.sql("DROP VIEW IF EXISTS shared_cte_t")
