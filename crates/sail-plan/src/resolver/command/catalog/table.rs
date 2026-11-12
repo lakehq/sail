@@ -15,6 +15,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
+use crate::resolver::command::write::normalize_parquet_column_order;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -100,6 +101,13 @@ impl PlanResolver<'_> {
         let format = self.resolve_catalog_data_source_format(file_format)?;
         let partition_by =
             self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
+        normalize_parquet_column_order(
+            &format,
+            &mut columns,
+            &partition_by,
+            self.config.case_sensitive,
+            |column| &column.name,
+        );
         for partition in &partition_by {
             if columns.iter().any(|column| {
                 column.identity.is_some() && column.name.eq_ignore_ascii_case(&partition.column)

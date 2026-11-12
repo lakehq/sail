@@ -18,6 +18,7 @@ use sail_catalog::provider::{
     PartitionTransform,
 };
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
+use sail_common::utils::string::spark_case_insensitive_name_eq;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableSort, LakehouseExecutionContext, LakehouseOperation,
     TableColumnStatus, TableKind,
@@ -42,6 +43,36 @@ use super::delta::parse_delta_generation_expr;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
+
+/// Parquet exposes data columns first, then identity partition columns in partition-spec order.
+// [CREDIT]: https://github.com/apache/spark/blob/v4.3.0/sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/rules.scala#L266-L308
+pub(super) fn normalize_parquet_column_order<T>(
+    format: &str,
+    columns: &mut [T],
+    partition_by: &[CatalogPartitionField],
+    case_sensitive: bool,
+    name: impl Fn(&T) -> &str,
+) {
+    if !format.eq_ignore_ascii_case("parquet") || partition_by.is_empty() {
+        return;
+    }
+    // Stable sorting retains declaration order and all metadata on data columns.
+    columns.sort_by_key(|column| {
+        partition_by
+            .iter()
+            .position(|partition| {
+                matches!(
+                    partition.transform,
+                    None | Some(PartitionTransform::Identity)
+                ) && if case_sensitive {
+                    partition.column == name(column)
+                } else {
+                    spark_case_insensitive_name_eq(&partition.column, name(column))
+                }
+            })
+            .map_or(0, |index| index + 1)
+    });
+}
 
 /// The write modes for all targets.
 ///
@@ -340,7 +371,7 @@ impl PlanResolver<'_> {
                 table,
                 column_match,
             } => {
-                let info = self.resolve_table_info(&table).await?;
+                let mut info = self.resolve_table_info(&table).await?;
                 let mode = match mode {
                     WriteMode::SaveAsTableOverwrite { replace_where } => {
                         let conditional_delta = info.as_ref().is_some_and(|info| {
@@ -402,7 +433,16 @@ impl PlanResolver<'_> {
                         | WriteMode::TruncateIf { .. }
                         | WriteMode::TruncatePartitions
                 );
-                if let Some(info) = info.as_ref().filter(|_| use_existing) {
+                if let Some(info) = info.as_mut().filter(|_| use_existing) {
+                    if matches!(&column_match, WriteColumnMatch::ByPosition) {
+                        normalize_parquet_column_order(
+                            &info.format,
+                            &mut info.columns,
+                            &info.partition_by,
+                            self.config.case_sensitive,
+                            |column| &column.name,
+                        );
+                    }
                     self.validate_insert_partition(&insert_partition, info)?;
                     if !table_properties.is_empty() {
                         return Err(PlanError::invalid(
@@ -566,7 +606,7 @@ impl PlanResolver<'_> {
                         // ErrorIfExists or IgnoreIfExists
                         _ => CreateTableMode::Create,
                     };
-                    let columns = input
+                    let mut columns = input
                         .schema()
                         .inner()
                         .fields()
@@ -585,7 +625,14 @@ impl PlanResolver<'_> {
                             generated_always_as: None,
                             identity: None,
                         })
-                        .collect();
+                        .collect::<Vec<_>>();
+                    normalize_parquet_column_order(
+                        &write_format,
+                        &mut columns,
+                        &partition_by,
+                        self.config.case_sensitive,
+                        |column| &column.name,
+                    );
                     let is_iceberg = write_format.eq_ignore_ascii_case("iceberg");
                     // TODO: Revisit passing write options as table properties.
                     let properties: Vec<(String, String)> = sink_info
@@ -2186,5 +2233,63 @@ impl TableInfo {
             }
         };
         bucket_by_match && sort_by_match
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parquet_column_order_preserves_case_distinct_columns() {
+        let mut columns = ["p", "P", "msg"];
+        let partition_by = [CatalogPartitionField {
+            column: "p".to_string(),
+            transform: None,
+        }];
+        normalize_parquet_column_order("parquet", &mut columns, &partition_by, true, |c| c);
+        assert_eq!(columns, ["P", "msg", "p"]);
+    }
+
+    #[test]
+    fn parquet_column_order_preserves_features_and_partition_spec_order() {
+        let original = ["q", "a", "p", "b"]
+            .into_iter()
+            .map(|name| CreateTableColumnOptions {
+                metadata: [("custom".to_string(), name.to_string())].into(),
+                name: name.to_string(),
+                data_type: DataType::Int32,
+                nullable: false,
+                comment: Some(format!("comment for {name}")),
+                default: Some("42".to_string()),
+                generated_always_as: None,
+                identity: None,
+            })
+            .collect::<Vec<_>>();
+        let partition_by = vec![
+            CatalogPartitionField {
+                column: "P".to_string(),
+                transform: Some(PartitionTransform::Identity),
+            },
+            CatalogPartitionField {
+                column: "q".to_string(),
+                transform: None,
+            },
+        ];
+        for format in ["parquet", "PARQUET", "delta", "iceberg", "csv"] {
+            let mut columns = original.clone();
+            normalize_parquet_column_order(format, &mut columns, &partition_by, false, |c| &c.name);
+            let expected = if format.eq_ignore_ascii_case("parquet") {
+                [1, 3, 2, 0].map(|index| original[index].clone()).to_vec()
+            } else {
+                original.clone()
+            };
+            assert_eq!(columns, expected);
+            normalize_parquet_column_order(format, &mut columns, &partition_by, false, |c| &c.name);
+            assert_eq!(columns, expected);
+        }
+        let mut columns = original.clone();
+        normalize_parquet_column_order("parquet", &mut columns, &[], false, |c| &c.name);
+        assert_eq!(columns, original);
     }
 }
