@@ -136,10 +136,10 @@ impl HiveTypeDialect {
         }
     }
 
-    pub fn parse_arrow_type(self, type_string: &str) -> CatalogResult<DataType> {
+    pub fn parse_arrow_type(self, raw: &str) -> CatalogResult<DataType> {
         self.create_data_type_parser()
             .then_ignore(end())
-            .parse(type_string)
+            .parse(raw)
             .into_result()
             .map_err(|errors| {
                 CatalogError::InvalidArgument(format!(

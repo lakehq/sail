@@ -9,6 +9,7 @@ use datafusion_common::Result;
 use once_cell::sync::OnceCell;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use sail_common_datafusion::data_type::DataTypeResolver;
 
 use super::arrow_utils::py_schema_to_rust;
 use super::error::{PythonDataSourceContext, PythonDataSourceError, import_cloudpickle};
@@ -361,49 +362,16 @@ impl PythonDataSource {
             );
         }
 
-        let arrow_fields: Vec<arrow_schema::Field> = fields
-            .iter()
-            .map(|field| {
-                let data_type = resolve_arrow_data_type(&field.data_type)?;
-                Ok(arrow_schema::Field::new(
-                    field.name.clone(),
-                    data_type,
-                    field.nullable,
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(std::sync::Arc::new(arrow_schema::Schema::new(arrow_fields)))
-    }
-}
-
-/// Convert a `spec::DataType` to an Arrow `DataType` for DDL schema parsing.
-fn resolve_arrow_data_type(
-    data_type: &sail_common::spec::DataType,
-) -> Result<arrow_schema::DataType> {
-    use arrow_schema::{DataType, TimeUnit};
-    use sail_common::spec;
-
-    match data_type {
-        spec::DataType::Null => Ok(DataType::Null),
-        spec::DataType::Boolean => Ok(DataType::Boolean),
-        spec::DataType::Int8 => Ok(DataType::Int8),
-        spec::DataType::Int16 => Ok(DataType::Int16),
-        spec::DataType::Int32 => Ok(DataType::Int32),
-        spec::DataType::Int64 => Ok(DataType::Int64),
-        spec::DataType::Float32 => Ok(DataType::Float32),
-        spec::DataType::Float64 => Ok(DataType::Float64),
-        spec::DataType::Binary | spec::DataType::ConfiguredBinary => Ok(DataType::Binary),
-        spec::DataType::Utf8 | spec::DataType::ConfiguredUtf8 { .. } => Ok(DataType::Utf8),
-        spec::DataType::Date32 => Ok(DataType::Date32),
-        spec::DataType::Timestamp { .. } => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-        spec::DataType::Decimal128 { precision, scale } => {
-            Ok(DataType::Decimal128(*precision, *scale))
-        }
-        other => Err(PythonDataSourceError::SchemaError(format!(
-            "Unsupported type in DDL schema: {other:?}. Use PyArrow Schema for complex types.",
-        ))
-        .into()),
+        // Use UTC for Spark timestamps at the Python data source boundary.
+        let resolver = DataTypeResolver {
+            session_timezone: Arc::from("UTC"),
+            default_timestamp_ltz: true,
+            use_large_var_types: false,
+        };
+        let fields = resolver
+            .resolve_fields(&fields)
+            .map_err(|e| PythonDataSourceError::SchemaError(e.to_string()))?;
+        Ok(Arc::new(arrow_schema::Schema::new(fields)))
     }
 }
 

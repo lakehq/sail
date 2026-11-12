@@ -149,8 +149,8 @@ impl ScalarUDFImpl for SparkFromJson {
             );
         };
 
-        let data_type = parse_json_schema(schema_str, &self.session_timezone)?;
-        Ok(Arc::new(Field::new(self.name(), data_type, true)))
+        let dt = parse_json_schema(schema_str, &self.session_timezone)?;
+        Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -1035,18 +1035,18 @@ fn normalize_json_schema_for_decoding(
     Ok(())
 }
 
-fn resolve_arrow_data_type(data_type: &spec::DataType, session_timezone: &str) -> Result<DataType> {
+fn resolve_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
     let resolver = sail_common_datafusion::data_type::DataTypeResolver {
         session_timezone: Arc::from(session_timezone),
         default_timestamp_ltz: true,
         use_large_var_types: false,
     };
-    let data_type = match data_type {
+    let dt = match dt {
         spec::DataType::UserDefined { sql_type, .. } => sql_type,
-        data_type => data_type,
+        dt => dt,
     };
     resolver
-        .resolve_data_type(data_type)
+        .resolve_data_type(dt)
         .map_err(|e| DataFusionError::Plan(e.to_string()))
 }
 
@@ -1179,8 +1179,8 @@ mod tests {
 
     #[test]
     fn test_parse_bare_decimal_json_schema_string() -> Result<()> {
-        let data_type = parse_json_schema(r#""decimal""#, "UTC")?;
-        assert_eq!(data_type, DataType::Decimal128(10, 0));
+        let dt = parse_json_schema(r#""decimal""#, "UTC")?;
+        assert_eq!(dt, DataType::Decimal128(10, 0));
         Ok(())
     }
 
@@ -1330,15 +1330,15 @@ mod tests {
 
     #[test]
     fn test_parse_timestamp_json_respects_timezone() -> Result<()> {
-        let data_type = parse_json_schema(r#""timestamp""#, "America/New_York")?;
+        let dt = parse_json_schema(r#""timestamp""#, "America/New_York")?;
         assert_eq!(
-            data_type,
+            dt,
             DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("America/New_York")))
         );
 
-        let data_type = parse_json_schema(r#""timestamp_ltz""#, "Europe/London")?;
+        let dt = parse_json_schema(r#""timestamp_ltz""#, "Europe/London")?;
         assert_eq!(
-            data_type,
+            dt,
             DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("Europe/London")))
         );
         Ok(())
@@ -1354,7 +1354,7 @@ mod tests {
             .map(|e| e.to_string())
             .unwrap_or_default();
         assert!(
-            err_msg.contains("Unsupported JSON schema type"),
+            err_msg.contains("Failed to parse JSON schema"),
             "unexpected error message: {err_msg}"
         );
     }
@@ -1381,9 +1381,9 @@ mod tests {
                 "metadata":{}
             }]
         }"#;
-        let data_type = parse_json_schema(schema, "UTC")?;
+        let dt = parse_json_schema(schema, "UTC")?;
         assert_eq!(
-            data_type,
+            dt,
             DataType::Struct(Fields::from(vec![Arc::new(Field::new(
                 "outer",
                 DataType::Struct(Fields::from(vec![Arc::new(Field::new(
@@ -1400,9 +1400,9 @@ mod tests {
     #[test]
     fn test_parse_ddl_schema_fallback() -> Result<()> {
         // DDL-style schemas should still work
-        let data_type = parse_json_schema("a INT, b DOUBLE", "UTC")?;
+        let dt = parse_json_schema("a INT, b DOUBLE", "UTC")?;
         assert_eq!(
-            data_type,
+            dt,
             DataType::Struct(Fields::from(vec![
                 Arc::new(Field::new("a", DataType::Int32, true)),
                 Arc::new(Field::new("b", DataType::Float64, true)),
@@ -1413,15 +1413,15 @@ mod tests {
 
     #[test]
     fn test_parse_ddl_array_schema() -> Result<()> {
-        let data_type = parse_json_schema("ARRAY<INT>", "UTC")?;
-        assert!(matches!(data_type, DataType::List(_)));
+        let dt = parse_json_schema("ARRAY<INT>", "UTC")?;
+        assert!(matches!(dt, DataType::List(_)));
         Ok(())
     }
 
     #[test]
     fn test_parse_ddl_map_schema() -> Result<()> {
-        let data_type = parse_json_schema("MAP<STRING, INT>", "UTC")?;
-        assert!(matches!(data_type, DataType::Map(_, _)));
+        let dt = parse_json_schema("MAP<STRING, INT>", "UTC")?;
+        assert!(matches!(dt, DataType::Map(_, _)));
         Ok(())
     }
 }

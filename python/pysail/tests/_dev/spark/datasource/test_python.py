@@ -700,6 +700,80 @@ def test_python_ddl_schema_fallback(spark):
     assert rows[0].id == 0
 
 
+@pytest.mark.parametrize("struct_schema", [False, True])
+def test_python_ddl_schema_complex_types(spark, struct_schema):
+    from pyspark.sql import Row
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
+    ddl = "payload STRUCT<values: ARRAY<INT> NOT NULL, labels: MAP<STRING, STRING>> NOT NULL"
+    if struct_schema:
+        ddl = f"STRUCT<{ddl}>"
+    schema = pa.schema(
+        [
+            pa.field(
+                "payload",
+                pa.struct(
+                    [
+                        pa.field("values", pa.list_(pa.int32()), nullable=False),
+                        pa.field("labels", pa.map_(pa.string(), pa.string())),
+                    ]
+                ),
+                nullable=False,
+            )
+        ]
+    )
+
+    class ComplexDDLDataSource(DataSource):
+        @classmethod
+        def name(cls):
+            return "complex_ddl_test"
+
+        def schema(self):
+            return ddl
+
+        def reader(self, schema):  # noqa: ARG002
+            return ComplexDDLReader()
+
+    class ComplexDDLReader(DataSourceReader):
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            yield pa.RecordBatch.from_pydict(
+                {"payload": [{"values": [1, None], "labels": {"a": "b", "c": None}}]}, schema=schema
+            )
+
+    spark.dataSource.register(ComplexDDLDataSource)
+    df = spark.read.format("complex_ddl_test").load()
+    assert df.schema.simpleString() == "struct<payload:struct<values:array<int>,labels:map<string,string>>>"
+    assert not df.schema["payload"].nullable
+    assert not df.schema["payload"].dataType["values"].nullable
+    assert df.collect() == [Row(payload=Row(values=[1, None], labels={"a": "b", "c": None}))]
+
+
+def test_python_ddl_schema_timestamp_types(spark):
+    from pyspark.sql.datasource import DataSource
+    from pyspark.sql.types import StructField, StructType, TimestampNTZType, TimestampType
+
+    class TimestampDDLDataSource(DataSource):
+        @classmethod
+        def name(cls):
+            return "timestamp_ddl_test"
+
+        def schema(self):
+            return "default_time TIMESTAMP, local_time TIMESTAMP_LTZ, wall_time TIMESTAMP_NTZ"
+
+    spark.dataSource.register(TimestampDDLDataSource)
+    df = spark.read.format("timestamp_ddl_test").load()
+    assert df.schema == StructType(
+        [
+            StructField("default_time", TimestampType()),
+            StructField("local_time", TimestampType()),
+            StructField("wall_time", TimestampNTZType()),
+        ]
+    )
+
+
 def test_python_datasource_options_are_case_insensitive(spark):
     from pysail.testing._dev.spark.datasource import RangeDataSource
 

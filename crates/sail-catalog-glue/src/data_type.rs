@@ -145,8 +145,8 @@ pub fn arrow_to_iceberg_type(data_type: &DataType) -> CatalogResult<Document> {
 }
 
 /// Converts a Glue/Hive type string to an Arrow DataType.
-pub fn glue_type_to_arrow(type_str: &str) -> CatalogResult<DataType> {
-    sail_catalog::data_type::hive::HiveTypeDialect::Glue.parse_arrow_type(type_str)
+pub fn glue_type_to_arrow(raw: &str) -> CatalogResult<DataType> {
+    sail_catalog::data_type::hive::HiveTypeDialect::Glue.parse_arrow_type(raw)
 }
 
 #[cfg(test)]

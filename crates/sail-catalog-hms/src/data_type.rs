@@ -9,8 +9,8 @@ pub fn arrow_to_hive_type(data_type: &DataType) -> CatalogResult<String> {
     sail_catalog::data_type::hive::HiveTypeDialect::Hive.format_arrow_type(data_type)
 }
 
-pub fn hive_type_to_arrow(type_str: &str) -> CatalogResult<DataType> {
-    sail_catalog::data_type::hive::HiveTypeDialect::Hive.parse_arrow_type(type_str)
+pub fn hive_type_to_arrow(raw: &str) -> CatalogResult<DataType> {
+    sail_catalog::data_type::hive::HiveTypeDialect::Hive.parse_arrow_type(raw)
 }
 
 pub fn spark_struct_json_from_fields(fields: &[Field]) -> CatalogResult<Value> {

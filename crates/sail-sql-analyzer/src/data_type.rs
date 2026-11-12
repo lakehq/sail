@@ -13,8 +13,8 @@ pub const SQL_DECIMAL_DEFAULT_PRECISION: u8 = 10;
 pub const SQL_DECIMAL_DEFAULT_SCALE: i8 = 0;
 
 /// Parse a SQL data type into the plan specification.
-pub fn parse_data_type(type_string: &str) -> SqlResult<spec::DataType> {
-    crate::parser::parse_data_type(type_string).and_then(from_ast_data_type)
+pub fn parse_data_type(raw: &str) -> SqlResult<spec::DataType> {
+    crate::parser::parse_data_type(raw).and_then(from_ast_data_type)
 }
 
 /// Parse a SQL data type or a comma-separated list of fields.
@@ -74,7 +74,7 @@ fn from_ast_day_time_interval_field(
 fn timestamp_precision_to_time_unit(
     precision: Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
 ) -> SqlResult<spec::TimeUnit> {
-    let precision = precision.as_ref().map(|(_, precision, _)| precision.value);
+    let precision = precision.as_ref().map(|(_, p, _)| p.value);
     match precision {
         Some(0) => Ok(spec::TimeUnit::Second),
         Some(3) => Ok(spec::TimeUnit::Millisecond),
@@ -87,7 +87,7 @@ fn timestamp_precision_to_time_unit(
 fn time_precision_to_time_unit(
     precision: Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
 ) -> SqlResult<spec::TimeUnit> {
-    let precision = precision.as_ref().map(|(_, precision, _)| precision.value);
+    let precision = precision.as_ref().map(|(_, p, _)| p.value);
     match precision {
         Some(0) => Ok(spec::TimeUnit::Second),
         Some(3) => Ok(spec::TimeUnit::Millisecond),

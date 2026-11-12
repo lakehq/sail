@@ -658,6 +658,14 @@ Feature: from_json function parses JSON strings into structured types
         | Whitespace-only schema string produces error | '   '        |
 
   Rule: Spark JSON schema format
+    @sail-only
+    Scenario: Unknown type in JSON schema reports a parsing error
+      When query
+        """
+        SELECT from_json('{"v":1}', '{"type":"struct","fields":[{"name":"v","type":"unsupported_type","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query error Failed to parse JSON schema
+
     Scenario Outline: Reject SQL-only type expressions in JSON schemas: <type>
       When query
         """

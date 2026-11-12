@@ -193,8 +193,8 @@ impl ScalarUDFImpl for SparkFromXml {
                 );
             }
         };
-        let data_type = parse_xml_schema(schema_str, &self.session_timezone)?;
-        Ok(Arc::new(Field::new(self.name(), data_type, true)))
+        let dt = parse_xml_schema(schema_str, &self.session_timezone)?;
+        Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -305,18 +305,18 @@ fn parse_xml_schema(schema: &str, session_timezone: &str) -> Result<DataType> {
     resolve_arrow_data_type(&data_type, session_timezone)
 }
 
-fn resolve_arrow_data_type(data_type: &spec::DataType, session_timezone: &str) -> Result<DataType> {
+fn resolve_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
     let resolver = sail_common_datafusion::data_type::DataTypeResolver {
         session_timezone: Arc::from(session_timezone),
         default_timestamp_ltz: true,
         use_large_var_types: false,
     };
-    let data_type = match data_type {
+    let dt = match dt {
         spec::DataType::UserDefined { sql_type, .. } => sql_type,
-        data_type => data_type,
+        dt => dt,
     };
     resolver
-        .resolve_data_type(data_type)
+        .resolve_data_type(dt)
         .map_err(|e| DataFusionError::Plan(e.to_string()))
 }
 
