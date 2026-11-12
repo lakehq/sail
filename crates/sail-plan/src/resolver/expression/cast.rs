@@ -2,7 +2,7 @@ use std::ops::{Div, Mul};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{DFSchemaRef, ScalarValue};
+use datafusion_common::DFSchemaRef;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast};
 use sail_common::spec;
 use sail_common::utils::datetime::time_unit_to_multiplier;
