@@ -37,6 +37,7 @@ use sail_physical_plan::barrier::BarrierExec;
 
 use crate::listing::commit::FilePartitionCommitExec;
 use crate::listing::delete::FileDeleteExec;
+use crate::listing::internal::{ListingPolicy, STAGING_DIRECTORY, TableListingStore};
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::staged::ParquetPartitionWriteExec;
 use crate::listing::table::ListingTableSource;
@@ -227,20 +228,7 @@ async fn plan_file_write(
     let table_path = ListingTableUrl::try_new(url.clone(), None)?;
     let object_store_url = table_path.object_store();
     let sink_path = if *overwrite_partitions {
-        if table_path.prefix().as_ref().is_empty() {
-            return plan_err!(
-                "dynamic partition overwrite cannot stage outside an object-store root"
-            );
-        }
-        let mut staging_url = url.clone();
-        staging_url
-            .path_segments_mut()
-            .map_err(|_| plan_datafusion_err!("invalid listing write URL"))?
-            .pop_if_empty()
-            .pop()
-            .push(&format!(".sail-staging-{}", uuid::Uuid::new_v4()))
-            .push("");
-        ListingTableUrl::try_new(staging_url, None)?
+        partition_staging_path(url)?
     } else {
         table_path.clone()
     };
@@ -313,6 +301,18 @@ async fn plan_file_write(
     } else {
         Ok(plan)
     }
+}
+
+fn partition_staging_path(url: &url::Url) -> datafusion_common::Result<ListingTableUrl> {
+    let mut staging_url = url.clone();
+    staging_url
+        .path_segments_mut()
+        .map_err(|_| plan_datafusion_err!("invalid listing write URL"))?
+        .pop_if_empty()
+        .push(STAGING_DIRECTORY)
+        .push(&uuid::Uuid::new_v4().to_string())
+        .push("");
+    ListingTableUrl::try_new(staging_url, None)
 }
 
 fn try_create_output_ordering(
@@ -414,32 +414,52 @@ async fn list_files_for_scan<'a>(
         .map(|field| (field.name().clone(), field.data_type().clone()))
         .collect();
 
-    let store_ref = store.as_ref();
+    let listing_stores = source
+        .config()
+        .table_paths
+        .iter()
+        .map(|path| {
+            TableListingStore::new(
+                store.clone(),
+                path.prefix().clone(),
+                ListingPolicy::from_url(path.get_url()),
+            )
+        })
+        .collect::<Vec<_>>();
     let partition_cols_ref = partition_cols.as_slice();
     let path_glob_filter = source.config().path_glob_filter.as_ref();
-    let file_list = future::try_join_all(source.config().table_paths.iter().map(
-        |table_path| async move {
-            let files = if source.config().read_format.hive_partition_paths()
-                && !partition_cols_ref.is_empty()
-            {
-                hive_partitioned_files(ctx, store_ref, table_path, filters, partition_cols_ref)
+    let file_list =
+        future::try_join_all(source.config().table_paths.iter().zip(&listing_stores).map(
+            |(table_path, listing)| async move {
+                let store_ref: &dyn ObjectStore = listing;
+                let files = if source.config().read_format.hive_partition_paths()
+                    && !partition_cols_ref.is_empty()
+                {
+                    hive_partitioned_files(ctx, store_ref, table_path, filters, partition_cols_ref)
+                        .await?
+                } else {
+                    pruned_partition_list(
+                        ctx,
+                        store_ref,
+                        table_path,
+                        filters,
+                        "",
+                        partition_cols_ref,
+                    )
                     .await?
-            } else {
-                pruned_partition_list(ctx, store_ref, table_path, filters, "", partition_cols_ref)
-                    .await?
-            };
-            // Apply listing-level file-name filters so scans agree with `inputFiles` and sampling.
-            let files = files.try_filter(move |file| {
-                let location = &file.object_meta.location;
-                futures::future::ready(
-                    !has_hidden_path_component(table_path, location)
-                        && matches_path_glob_filter(path_glob_filter, location),
-                )
-            });
-            Ok::<_, datafusion_common::DataFusionError>(files.boxed())
-        },
-    ))
-    .await?;
+                };
+                // Apply listing-level file-name filters so scans agree with `inputFiles` and sampling.
+                let files = files.try_filter(move |file| {
+                    let location = &file.object_meta.location;
+                    futures::future::ready(
+                        !has_hidden_path_component(table_path, location)
+                            && matches_path_glob_filter(path_glob_filter, location),
+                    )
+                });
+                Ok::<_, datafusion_common::DataFusionError>(files.boxed())
+            },
+        ))
+        .await?;
 
     let meta_fetch_concurrency: usize =
         ctx.config_options().execution.meta_fetch_concurrency.into();
@@ -624,4 +644,40 @@ async fn get_files_with_limit(
 
     let inexact_stats = all_files.next().await.is_some();
     Ok((file_group, inexact_stats))
+}
+
+#[cfg(test)]
+mod staging_path_tests {
+    use super::*;
+
+    #[test]
+    fn stage_is_a_reserved_child_including_local_and_bucket_roots() -> datafusion_common::Result<()>
+    {
+        for input in [
+            "s3://bucket/",
+            "s3://bucket/table",
+            "s3://bucket/table/",
+            "file:///",
+            "file:///warehouse/table/",
+            "hdfs://namenode/table/",
+            "s3://bucket/escaped%20table/",
+        ] {
+            let table = ListingTableUrl::parse(input)?;
+            let staging = partition_staging_path(table.get_url())?;
+            assert_eq!(staging.object_store(), table.object_store());
+            let relative = staging
+                .prefix()
+                .prefix_match(table.prefix())
+                .ok_or_else(|| plan_datafusion_err!("stage outside table"))?
+                .collect::<Vec<_>>();
+            assert_eq!(relative.len(), 2);
+            assert_eq!(relative[0].as_ref(), STAGING_DIRECTORY);
+            assert!(
+                uuid::Uuid::parse_str(relative[1].as_ref())
+                    .is_ok_and(|id| id.to_string() == relative[1].as_ref())
+            );
+            assert!(staging.is_collection());
+        }
+        Ok(())
+    }
 }

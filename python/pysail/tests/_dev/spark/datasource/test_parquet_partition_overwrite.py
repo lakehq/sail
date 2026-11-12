@@ -1,4 +1,6 @@
 # ruff: noqa: S608
+import os
+import stat
 from collections import Counter
 from contextlib import contextmanager
 from urllib.parse import unquote
@@ -38,14 +40,18 @@ def partitioned_table(spark, path, *, schema="msg STRING, id INT", partitions="i
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
+def data_files(path):
+    return (file for file in path.rglob("*.parquet") if file.relative_to(path).parts[0] != ".sail-staging")
+
+
 def parquet_files(path):
-    return {file.relative_to(path): file.read_bytes() for file in path.rglob("*.parquet")}
+    return {file.relative_to(path): file.read_bytes() for file in data_files(path)}
 
 
 def partition_rows(path, columns):
     """Decode files and Hive partition paths independently of Sail's reader."""
     rows = []
-    for file in path.rglob("*.parquet"):
+    for file in data_files(path):
         partitions = {}
         for segment in file.relative_to(path).parts[:-1]:
             key, value = segment.split("=", 1)
@@ -54,6 +60,100 @@ def partition_rows(path, columns):
             row.update(partitions)
             rows.append(tuple(row[column] for column in columns))
     return Counter(rows)
+
+
+@pytest.mark.parametrize("empty", [False, True], ids=["nonempty-input", "empty-input"])
+@pytest.mark.parametrize("entry", ["sql", "dataframe"])
+def test_dynamic_overwrite_needs_only_table_write_permission(spark, tmp_path, empty, entry):
+    if os.name != "posix" or os.geteuid() == 0:
+        pytest.skip("Requires a non-root POSIX writer to enforce directory permissions")
+    parent = tmp_path / "warehouse"
+    parent.mkdir()
+    path = parent / "table"
+    with partitioned_table(spark, path) as table:
+        spark.sql(f"INSERT INTO {table} VALUES ('keep', 1), ('old', 2)")
+        untouched = parquet_files(path / "id=1")
+        original = stat.S_IMODE(parent.stat().st_mode)
+        spark.conf.set(OVERWRITE_MODE, "DYNAMIC")
+        try:
+            parent.chmod(0o555)
+            with pytest.raises(PermissionError):
+                (parent / "permission-probe").mkdir()
+            if entry == "sql":
+                condition = " WHERE FALSE" if empty else ""
+                spark.sql(f"INSERT OVERWRITE {table} SELECT 'new', 2{condition}")
+            else:
+                rows = [] if empty else [("new", 2)]
+                spark.createDataFrame(rows, "msg STRING, id INT").write.partitionBy("id").mode("overwrite").parquet(
+                    str(path)
+                )
+            expected = [("keep", 1), ("old" if empty else "new", 2)]
+            assert spark.table(table).select("msg", "id").orderBy("id").collect() == expected
+            assert parquet_files(path / "id=1") == untouched
+            assert partition_rows(path, ["msg", "id"]) == Counter((msg, str(key)) for msg, key in expected)
+        finally:
+            parent.chmod(original)
+        assert sorted(child.name for child in parent.iterdir()) == ["table"]
+
+
+def test_reserved_attempts_are_excluded_from_table_reads(spark, tmp_path):
+    path = tmp_path / "table"
+    spark.createDataFrame([("keep", "one"), ("old", "two")], "msg STRING, id STRING").write.partitionBy("id").parquet(
+        str(path)
+    )
+    stage = path / ".sail-staging" / str(uuid4())
+    attempt = stage / "attempts" / str(uuid4()) / "id=999"
+    attempt.mkdir(parents=True)
+    (stage / "commit.json").write_text("incomplete commit")
+    (attempt / "corrupt.parquet").write_bytes(b"not parquet")
+    valid = attempt / "valid.parquet"
+    pq.write_table(pa.table({"msg": ["uncommitted"]}), valid)
+    expected = [("keep", "one"), ("old", "two")]
+    for reader, target in [
+        (spark.read, str(path)),
+        (spark.read.schema("msg STRING, id STRING"), str(path)),
+        (spark.read.option("pathGlobFilter", "*.parquet"), str(path)),
+        (spark.read.option("basePath", str(path)), str(path / "**" / "*.parquet")),
+    ]:
+        data = reader.parquet(target)
+        assert data.select("msg", "id").orderBy("id").collect() == expected
+        files = data.inputFiles()
+        assert files
+        assert all(".sail-staging" not in file for file in files)
+        assert len(files) == len(parquet_files(path))
+    # Hidden names are not an ACL: explicitly granted attempt files remain readable.
+    assert spark.read.parquet(str(valid)).select("msg").collect() == [("uncommitted",)]
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail retains operation fences across static overwrite")
+def test_static_overwrite_preserves_dynamic_operation_records_and_failed_sources(spark, tmp_path):
+    path = tmp_path / "table"
+    schema = "msg STRING, id INT"
+    spark.createDataFrame([("keep", 1), ("old", 2)], schema).write.partitionBy("id").parquet(str(path))
+    untouched = parquet_files(path / "id=1")
+    spark.conf.set(OVERWRITE_MODE, "DYNAMIC")
+    spark.createDataFrame([("dynamic", 2)], schema).write.partitionBy("id").mode("overwrite").parquet(str(path))
+    assert parquet_files(path / "id=1") == untouched
+    assert partition_rows(path, ["msg", "id"]) == Counter([("keep", "1"), ("dynamic", "2")])
+    reserved = path / ".sail-staging"
+    assert list(reserved.glob("*/complete"))
+    unknown = reserved / str(uuid4())
+    attempt = unknown / "attempts" / str(uuid4()) / "id=2"
+    attempt.mkdir(parents=True)
+    (unknown / "commit.json").write_text("unknown publication")
+    (attempt / "failed.parquet").write_bytes(b"retained source")
+    before = {file.relative_to(reserved): file.read_bytes() for file in reserved.rglob("*") if file.is_file()}
+    spark.createDataFrame([("static", 3)], schema).write.partitionBy("id").mode("overwrite").option(
+        "partitionOverwriteMode", "static"
+    ).parquet(str(path))
+    assert {file.relative_to(reserved): file.read_bytes() for file in reserved.rglob("*") if file.is_file()} == before
+    assert partition_rows(path, ["msg", "id"]) == Counter([("static", "3")])
+    assert spark.read.schema(schema).parquet(str(path)).select("msg", "id").collect() == [("static", 3)]
+    assert not parquet_files(path / "id=1")
+    assert not parquet_files(path / "id=2")
+    spark.createDataFrame([("again", 3)], schema).write.partitionBy("id").mode("overwrite").parquet(str(path))
+    assert partition_rows(path, ["msg", "id"]) == Counter([("again", "3")])
+    assert {name: (reserved / name).read_bytes() for name in before} == before
 
 
 # [CREDIT]: https://github.com/apache/spark/blob/32f7299601108917fb01920a54e084595b7b3bf8/sql/core/src/test/scala/org/apache/spark/sql/sources/InsertSuite.scala#L575-L618
@@ -131,7 +231,7 @@ def test_dynamic_overwrite_preserves_compression_suffix(spark, tmp_path, compres
     )
     assert rows == [(1, "hello"), (2, "new"), (3, "added")]
     assert parquet_files(path / "id=1") == untouched
-    for file in path.rglob("*.parquet"):
+    for file in data_files(path):
         assert file.name.endswith(f".{suffix}")
         assert pq.ParquetFile(file).metadata.row_group(0).column(0).compression == compression.upper()
 
@@ -259,7 +359,7 @@ def test_dynamic_overwrite_matches_existing_numeric_partition(spark, tmp_path, p
         expected = [("new", 1.0), ("keep", 2.0)]
         assert spark.table(table).select("msg", "p").orderBy("p").collect() == expected
         assert parquet_files(path / "p=2") == untouched
-        assert sum(pq.ParquetFile(file).metadata.num_rows for file in path.rglob("*.parquet")) == len(expected)
+        assert sum(pq.ParquetFile(file).metadata.num_rows for file in data_files(path)) == len(expected)
 
 
 @pytest.mark.parametrize("partition_type", ["TIMESTAMP", "TIMESTAMP_NTZ"])

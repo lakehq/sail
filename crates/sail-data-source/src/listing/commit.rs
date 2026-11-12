@@ -23,6 +23,8 @@ use sail_common_datafusion::error::CommitStateUnknownError;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::listing::internal::{STAGING_DIRECTORY, is_reserved_path};
+
 /// Publishes completed worker manifests on the coordinator. Copies precede all
 /// deletes, but this is not a multi-object transaction or concurrent-writer isolation.
 /// Durable operation records fence retries after an interrupted publication.
@@ -219,20 +221,22 @@ pub(super) fn partition_key(path: &Path, root: &Path, columns: &[String]) -> Opt
     parts
         .iter()
         .zip(columns)
-        .map(|(part, column)| {
-            let (name, value) = part.as_ref().split_once('=')?;
-            if percent_decode_str(name).decode_utf8().ok()? != column.as_str() {
-                return None;
-            }
-            let value = percent_decode_str(value).decode_utf8().ok()?;
-            // Legacy empty partition paths have the same identity as Hive null partitions.
-            Some(if value.is_empty() {
-                "__HIVE_DEFAULT_PARTITION__".into()
-            } else {
-                value.into_owned()
-            })
-        })
+        .map(|(part, column)| decode_partition_component(part.as_ref(), column))
         .collect()
+}
+
+fn decode_partition_component(part: &str, column: &str) -> Option<String> {
+    let (name, value) = part.split_once('=')?;
+    if percent_decode_str(name).decode_utf8().ok()? != column {
+        return None;
+    }
+    let value = percent_decode_str(value).decode_utf8().ok()?;
+    // Legacy empty partition paths have the same identity as Hive null partitions.
+    Some(if value.is_empty() {
+        "__HIVE_DEFAULT_PARTITION__".into()
+    } else {
+        value.into_owned()
+    })
 }
 
 // [CREDIT]: https://github.com/apache/spark/blob/32f7299601108917fb01920a54e084595b7b3bf8/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/catalog/ExternalCatalogUtils.scala#L44-L98
@@ -289,7 +293,16 @@ pub(super) fn canonical_partition_path(
 }
 
 fn validate_paths(table: &Path, staging: &Path, columns: &[String]) -> Result<()> {
-    if columns.is_empty() || staging.prefix_matches(table) || table.prefix_matches(staging) {
+    let reserved_operation = staging.prefix_match(table).is_some_and(|parts| {
+        let parts = parts.collect::<Vec<_>>();
+        matches!(parts.as_slice(), [reserved, id]
+            if reserved.as_ref() == STAGING_DIRECTORY
+                && Uuid::parse_str(id.as_ref()).is_ok_and(|uuid| uuid.to_string() == id.as_ref()))
+    });
+    if columns.is_empty()
+        || table.prefix_matches(staging)
+        || (staging.prefix_matches(table) && !reserved_operation)
+    {
         return exec_err!("invalid partition overwrite staging path or partition columns");
     }
     Ok(())
@@ -321,14 +334,106 @@ fn typed_partition_key(values: &[String], schema: &Schema) -> Result<Vec<ScalarV
     values
         .iter()
         .zip(schema.fields())
-        .map(|(value, field)| {
-            if value == "__HIVE_DEFAULT_PARTITION__" {
-                ScalarValue::try_from(field.data_type())
-            } else {
-                ScalarValue::try_from_string(value.clone(), field.data_type())
-            }
-        })
+        .map(|(value, field)| typed_partition_value(value, field.data_type()))
         .collect()
+}
+
+fn typed_partition_value(
+    value: &str,
+    data_type: &arrow::datatypes::DataType,
+) -> Result<ScalarValue> {
+    if value == "__HIVE_DEFAULT_PARTITION__" {
+        ScalarValue::try_from(data_type)
+    } else {
+        ScalarValue::try_from_string(value.to_owned(), data_type)
+    }
+}
+
+/// Index partial keys once; complete keys keep using the original touched set.
+fn touched_partition_prefixes(
+    touched: &HashSet<Vec<ScalarValue>>,
+    depth: usize,
+) -> Vec<HashSet<Vec<ScalarValue>>> {
+    (1..depth)
+        .map(|length| touched.iter().map(|key| key[..length].to_vec()).collect())
+        .collect()
+}
+
+/// Discover actual directory spellings, pruning only classified typed prefixes.
+/// Corruption under pruned, unrelated prefixes is not inspected; errors in visited
+/// branches propagate. Unclassifiable branches retain the full object matcher.
+async fn old_partition_files(
+    store: &dyn ObjectStore,
+    table: &Path,
+    columns: &[String],
+    schema: &Schema,
+    touched: &HashSet<Vec<ScalarValue>>,
+) -> Result<Vec<Path>> {
+    if touched.is_empty() {
+        return Ok(vec![]);
+    }
+    if columns.len() != schema.fields().len() {
+        return exec_err!("partition column/schema length mismatch");
+    }
+    let touched_prefixes = touched_partition_prefixes(touched, columns.len());
+    let mut old = HashSet::new();
+    let mut visited = HashSet::new();
+    let mut pending = vec![(table.clone(), vec![])];
+    let mut include = |path: Path| -> Result<()> {
+        if !is_reserved_path(table, &path)
+            && let Some(key) = partition_key(&path, table, columns)
+            && touched.contains(&typed_partition_key(&key, schema)?)
+        {
+            old.insert(path);
+        }
+        Ok(())
+    };
+    while let Some((prefix, values)) = pending.pop() {
+        if !visited.insert(prefix.clone()) {
+            continue;
+        }
+        let listed = store.list_with_delimiter(Some(&prefix)).await?;
+        for meta in listed.objects {
+            include(meta.location)?;
+        }
+        for child in listed.common_prefixes {
+            if is_reserved_path(table, &child) {
+                continue;
+            }
+            let classified = child.prefix_match(&prefix).and_then(|mut parts| {
+                let part = parts.next()?;
+                if parts.next().is_some() {
+                    return None;
+                }
+                let value = decode_partition_component(part.as_ref(), &columns[values.len()])?;
+                typed_partition_value(&value, schema.field(values.len()).data_type()).ok()
+            });
+            if let Some(value) = classified {
+                let mut key = values.clone();
+                key.push(value);
+                if key.len() < columns.len() {
+                    if touched_prefixes[key.len() - 1].contains(&key) {
+                        pending.push((child, key));
+                    }
+                    continue;
+                }
+                if !touched.contains(&key) {
+                    continue;
+                }
+            }
+            // Full matched partition, or a branch we cannot soundly classify.
+            if !visited.insert(child.clone()) {
+                continue;
+            }
+            let mut files = store.list(Some(&child));
+            while let Some(meta) = files.try_next().await? {
+                include(meta.location)?;
+            }
+        }
+    }
+    let mut old = old.into_iter().collect::<Vec<_>>();
+    old.sort_unstable();
+    Ok(old)
 }
 
 async fn commit_partitions(
@@ -374,25 +479,7 @@ async fn commit_partitions(
         touched.insert(typed_partition_key(&key, partition_schema)?);
         copies.push((source, destination));
     }
-    let old = if touched.is_empty() {
-        vec![]
-    } else {
-        store
-            .list(Some(table))
-            .map_err(DataFusionError::from)
-            .try_filter_map(|file| {
-                let result = (|| {
-                    let Some(key) = partition_key(&file.location, table, columns) else {
-                        return Ok(None);
-                    };
-                    let key = typed_partition_key(&key, partition_schema)?;
-                    Ok(touched.contains(&key).then_some(file.location))
-                })();
-                futures::future::ready(result)
-            })
-            .try_collect::<Vec<_>>()
-            .await?
-    };
+    let old = old_partition_files(store, table, columns, partition_schema, &touched).await?;
     let record = CommitRecord {
         table: table.to_string(),
         old_files: old.iter().map(ToString::to_string).collect(),
@@ -417,9 +504,17 @@ async fn commit_partitions(
         .await
         .map_err(unknown)?;
     publish_files(store, copies).await.map_err(unknown)?;
-    // Never roll back new files after deletion has begun.
-    for path in old {
-        store.delete(&path).await.map_err(unknown)?;
+    // Delete the captured snapshot in one stream, never re-listing published files.
+    // Drain even on per-object errors; never roll back once deletion has begun.
+    let mut deleted = store.delete_stream(futures::stream::iter(old.into_iter().map(Ok)).boxed());
+    let mut deletion_error = None;
+    while let Some(result) = deleted.next().await {
+        if let Err(error) = result {
+            deletion_error.get_or_insert(error);
+        }
+    }
+    if let Some(error) = deletion_error {
+        return Err(unknown(error));
     }
     store
         .put_opts(
@@ -470,6 +565,15 @@ mod tests {
 
     use super::*;
 
+    fn attempt_file(staging: &Path, attempt: &str) -> Path {
+        staging
+            .clone()
+            .join("attempts")
+            .join(attempt)
+            .join("p=one")
+            .join("new")
+    }
+
     fn string_schema(columns: &[String]) -> Schema {
         Schema::new(
             columns
@@ -477,6 +581,633 @@ mod tests {
                 .map(|name| Field::new(name, DataType::Utf8, true))
                 .collect::<Vec<_>>(),
         )
+    }
+
+    #[test]
+    fn staging_paths_allow_only_exact_reserved_operations_or_legacy_disjoint_paths() -> Result<()> {
+        let id = "12345678-1234-4234-abcd-123456789abc";
+        let columns = ["p".into()];
+        for table in [
+            Path::from("table"),
+            Path::default(),
+            Path::from("local/warehouse/table"),
+        ] {
+            let stage = table.clone().join(STAGING_DIRECTORY).join(id);
+            validate_paths(&table, &stage, &columns)?;
+            for suffix in [
+                String::new(),
+                STAGING_DIRECTORY.into(),
+                format!("nested/{STAGING_DIRECTORY}/{id}"),
+                format!("%2Esail-staging/{id}"),
+                format!("{STAGING_DIRECTORY}/{}", id.to_uppercase()),
+                format!("{STAGING_DIRECTORY}/not-a-uuid"),
+                format!("{STAGING_DIRECTORY}/{id}/attempts"),
+            ] {
+                let candidate = Path::parse(format!("{table}/{suffix}"))?;
+                assert!(
+                    validate_paths(&table, &candidate, &columns).is_err(),
+                    "{candidate}"
+                );
+            }
+            assert!(validate_paths(&table, &stage, &[]).is_err());
+        }
+        validate_paths(&Path::from("table"), &Path::from("legacy-stage"), &columns)?;
+        assert!(
+            validate_paths(&Path::from("parent/table"), &Path::from("parent"), &columns).is_err()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discovery_matches_typed_aliases_without_listing_unrelated_objects() -> Result<()> {
+        use std::sync::atomic::Ordering;
+
+        use arrow::datatypes::TimeUnit;
+
+        use crate::listing::internal::tests::{Event, RecordingStore};
+
+        for (data_type, column, aliases, value, other) in [
+            (
+                DataType::Utf8,
+                "p=key",
+                vec!["p%3Dkey=a=b", "%70%3dkey=%61%3Db", "p%3dkey=a%3db"],
+                "a=b",
+                "other",
+            ),
+            (
+                DataType::Float64,
+                "p",
+                vec!["p=1", "%70=1.0", "p=%31.00"],
+                "1.0",
+                "2.0",
+            ),
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                "p",
+                vec![
+                    "p=2026-01-02 03:04:05",
+                    "p=2026-01-02%2003%3A04%3A05.000000",
+                ],
+                "2026-01-02 03:04:05",
+                "2027-01-02 03:04:05",
+            ),
+            (
+                DataType::Utf8,
+                "p",
+                vec![
+                    "p=",
+                    "%70=__HIVE_DEFAULT_PARTITION__",
+                    "p=%5F_HIVE_DEFAULT_PARTITION__",
+                ],
+                "__HIVE_DEFAULT_PARTITION__",
+                "other",
+            ),
+        ] {
+            let store = RecordingStore::default();
+            let table = Path::from("table");
+            let columns = [column.into(), "q".into()];
+            let schema = Schema::new(vec![
+                Field::new(column, data_type, true),
+                Field::new("q", DataType::Utf8, true),
+            ]);
+            let touched =
+                HashSet::from([typed_partition_key(&[value.into(), "one".into()], &schema)?]);
+            let mut expected = vec![];
+            for alias in &aliases {
+                let old = Path::parse(format!("table/{alias}/q=one/old"))?;
+                store
+                    .put(&old, bytes::Bytes::from_static(b"old").into())
+                    .await?;
+                expected.push(old);
+                for index in 0..20 {
+                    store
+                        .put(
+                            &Path::parse(format!("table/{alias}/q=two/{index}"))?,
+                            bytes::Bytes::from_static(b"keep").into(),
+                        )
+                        .await?;
+                }
+            }
+            let unrelated =
+                canonical_partition_path(&table, &columns, &[other.into(), "one".into()])?;
+            for index in 0..100 {
+                store
+                    .put(
+                        &unrelated.clone().join(index.to_string()),
+                        bytes::Bytes::from_static(b"keep").into(),
+                    )
+                    .await?;
+            }
+            store
+                .put(
+                    &Path::from("table/.sail-staging/operation/attempts/file"),
+                    bytes::Bytes::from_static(b"stage").into(),
+                )
+                .await?;
+            let old = old_partition_files(&store, &table, &columns, &schema, &touched).await?;
+            expected.sort_unstable();
+            assert_eq!(old, expected);
+            assert_eq!(store.yielded.load(Ordering::SeqCst), aliases.len());
+            for event in store
+                .events
+                .lock()
+                .map_err(|e| exec_datafusion_err!("{e}"))?
+                .iter()
+            {
+                if let Event::List(prefix) = event {
+                    assert!(expected.iter().any(|path| path.prefix_matches(prefix)));
+                    assert_ne!(prefix, &table);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discovery_indexes_many_touched_and_disjoint_single_column_keys() -> Result<()> {
+        use std::sync::atomic::Ordering;
+
+        use crate::listing::internal::tests::{Event, RecordingStore};
+        let store = RecordingStore::default();
+        let table = Path::from("table");
+        let columns = ["p".into()];
+        let schema = Schema::new(vec![Field::new("p", DataType::Int32, true)]);
+        for index in 0..256 {
+            store
+                .put(
+                    &Path::from(format!("table/p={index}/file")),
+                    bytes::Bytes::from_static(b"old").into(),
+                )
+                .await?;
+        }
+        for offset in [0, 1000] {
+            store.yielded.store(0, Ordering::SeqCst);
+            store
+                .events
+                .lock()
+                .map_err(|e| exec_datafusion_err!("{e}"))?
+                .clear();
+            let touched = (offset..offset + 256)
+                .map(|index| vec![ScalarValue::Int32(Some(index))])
+                .collect::<HashSet<_>>();
+            // Single-column discovery reuses the full-key set, without copying an index.
+            assert!(touched_partition_prefixes(&touched, 1).is_empty());
+            let old = old_partition_files(&store, &table, &columns, &schema, &touched).await?;
+            let expected = if offset == 0 { 256 } else { 0 };
+            assert_eq!(old.len(), expected);
+            assert_eq!(store.yielded.load(Ordering::SeqCst), expected);
+            let events = store
+                .events
+                .lock()
+                .map_err(|e| exec_datafusion_err!("{e}"))?;
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, Event::Delimiter(_)))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, Event::List(_)))
+                    .count(),
+                expected
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discovery_indexes_partial_prefixes_without_cross_matching_siblings() -> Result<()> {
+        use std::sync::atomic::Ordering;
+
+        use crate::listing::internal::tests::{Event, RecordingStore};
+        let store = RecordingStore::default();
+        let table = Path::from("table");
+        let columns = ["p".into(), "q".into(), "r".into()];
+        let schema = Schema::new(
+            columns
+                .iter()
+                .map(|name| Field::new(name, DataType::Int32, true))
+                .collect::<Vec<_>>(),
+        );
+        let mut expected = vec![];
+        for p in 0..64 {
+            for q in 0..8 {
+                for r in 1..=2 {
+                    let path = Path::from(format!("table/p={p}/q={q}/r={r}/file"));
+                    store
+                        .put(&path, bytes::Bytes::from_static(b"old").into())
+                        .await?;
+                    if p < 32 && q < 4 && r == 1 {
+                        expected.push(path);
+                    }
+                }
+            }
+        }
+        expected.sort_unstable();
+        for offset in [0, 1000] {
+            store.yielded.store(0, Ordering::SeqCst);
+            store
+                .events
+                .lock()
+                .map_err(|e| exec_datafusion_err!("{e}"))?
+                .clear();
+            let touched = (0..128)
+                .map(|index| {
+                    vec![
+                        ScalarValue::Int32(Some(offset + index / 4)),
+                        ScalarValue::Int32(Some(index % 4)),
+                        ScalarValue::Int32(Some(1)),
+                    ]
+                })
+                .collect::<HashSet<_>>();
+            let prefixes = touched_partition_prefixes(&touched, 3);
+            assert_eq!(
+                prefixes.iter().map(HashSet::len).collect::<Vec<_>>(),
+                vec![32, 128]
+            );
+            assert!(prefixes[0].contains(&vec![ScalarValue::Int32(Some(offset))]));
+            assert!(!prefixes[1].contains(&vec![
+                ScalarValue::Int32(Some(offset)),
+                ScalarValue::Int32(Some(7))
+            ]));
+            let old = old_partition_files(&store, &table, &columns, &schema, &touched).await?;
+            assert_eq!(
+                old,
+                if offset == 0 {
+                    expected.clone()
+                } else {
+                    vec![]
+                }
+            );
+            assert_eq!(store.yielded.load(Ordering::SeqCst), old.len());
+            let events = store
+                .events
+                .lock()
+                .map_err(|e| exec_datafusion_err!("{e}"))?;
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, Event::Delimiter(_)))
+                    .count(),
+                if offset == 0 { 1 + 32 + 128 } else { 1 }
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, Event::List(_)))
+                    .count(),
+                old.len()
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discovery_falls_back_and_limits_corruption_checks_to_visited_branches() -> Result<()> {
+        use crate::listing::internal::tests::{Event, RecordingStore};
+        let store = RecordingStore::default();
+        let table = Path::from("table");
+        let columns = ["p".into(), "q".into()];
+        let schema = Schema::new(vec![
+            Field::new("p", DataType::Int32, true),
+            Field::new("q", DataType::Int32, true),
+        ]);
+        let touched = HashSet::from([typed_partition_key(&["1".into(), "2".into()], &schema)?]);
+        for path in [
+            "table/p=1/q=2/old",
+            "table/p=9/q=invalid/untouched",
+            "table/not-a-partition/file",
+        ] {
+            store
+                .put(&Path::from(path), bytes::Bytes::from_static(b"old").into())
+                .await?;
+        }
+        assert_eq!(
+            old_partition_files(&store, &table, &columns, &schema, &touched).await?,
+            vec![Path::from("table/p=1/q=2/old")]
+        );
+        assert!(
+            store
+                .events
+                .lock()
+                .map_err(|e| exec_datafusion_err!("{e}"))?
+                .contains(&Event::List(Path::from("table/not-a-partition")))
+        );
+        store
+            .put(
+                &Path::from("table/p=1/q=invalid/file"),
+                bytes::Bytes::from_static(b"bad").into(),
+            )
+            .await?;
+        assert!(
+            old_partition_files(&store, &table, &columns, &schema, &touched)
+                .await
+                .is_err()
+        );
+        let denied = RecordingStore {
+            inner: store.inner,
+            denied_listing: Some(Path::from("table/p=1/q=2")),
+            ..Default::default()
+        };
+        assert!(
+            old_partition_files(&denied, &table, &columns, &schema, &touched)
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn one_deletion_stream_uses_snapshot_after_all_copies() -> Result<()> {
+        use std::sync::atomic::Ordering;
+
+        use crate::listing::internal::tests::{Event, RecordingStore};
+        for count in [0, 1, 1001] {
+            let store = RecordingStore {
+                allowed: Some(Path::from("table")),
+                ..Default::default()
+            };
+            let table = Path::from("table");
+            let staging = table
+                .clone()
+                .join(STAGING_DIRECTORY)
+                .join(Uuid::new_v4().to_string());
+            let mut old = vec![];
+            for index in 0..count {
+                let path = Path::from(format!("table/p=one/{index}"));
+                store
+                    .put(&path, bytes::Bytes::from_static(b"old").into())
+                    .await?;
+                old.push(path);
+            }
+            let keep = Path::from("table/p=two/keep");
+            store
+                .put(&keep, bytes::Bytes::from_static(b"keep").into())
+                .await?;
+            let files = vec![attempt_file(&staging, "a"), attempt_file(&staging, "b")];
+            for file in &files {
+                store
+                    .put(file, bytes::Bytes::from_static(b"new").into())
+                    .await?;
+            }
+            let columns = ["p".into()];
+            commit_partitions(
+                &store,
+                &table,
+                &staging,
+                &columns,
+                &string_schema(&columns),
+                files.clone(),
+            )
+            .await?;
+            assert_eq!(store.deletion_streams.load(Ordering::SeqCst), 1);
+            let events = store
+                .events
+                .lock()
+                .map_err(|e| exec_datafusion_err!("{e}"))?
+                .clone();
+            let deleted = events
+                .iter()
+                .filter_map(|event| {
+                    if let Event::Delete(paths) = event {
+                        Some(paths)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            old.sort_unstable();
+            assert_eq!(deleted, vec![&old]);
+            let mut copies = 0;
+            let mut deleting = false;
+            for event in &events {
+                match event {
+                    Event::Copy(_, destination) => {
+                        assert!(!deleting);
+                        assert!(store.head(destination).await.is_ok());
+                        copies += 1;
+                    }
+                    Event::Delete(_) => {
+                        assert_eq!(copies, 2);
+                        deleting = true;
+                    }
+                    Event::List(_) | Event::Delimiter(_) => assert!(!deleting),
+                }
+            }
+            assert_eq!(store.get(&keep).await?.bytes().await?, "keep");
+            assert!(exists(&store, &staging.clone().join("complete")).await?);
+            commit_partitions(
+                &store,
+                &table,
+                &staging,
+                &columns,
+                &string_schema(&columns),
+                files,
+            )
+            .await?;
+            assert_eq!(
+                *store
+                    .events
+                    .lock()
+                    .map_err(|e| exec_datafusion_err!("{e}"))?,
+                events
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn deletion_failures_are_drained_and_fence_replay_without_rollback() -> Result<()> {
+        use crate::listing::internal::tests::{DeleteFailure, Event, RecordingStore};
+        for failure in [DeleteFailure::PerObject(1), DeleteFailure::Transport] {
+            let store = RecordingStore {
+                delete_failure: Some(failure),
+                ..Default::default()
+            };
+            let table = Path::from("table");
+            let staging = table
+                .clone()
+                .join(STAGING_DIRECTORY)
+                .join(Uuid::new_v4().to_string());
+            for index in 0..3 {
+                store
+                    .put(
+                        &Path::from(format!("table/p=one/{index}")),
+                        bytes::Bytes::from_static(b"old").into(),
+                    )
+                    .await?;
+            }
+            let source = attempt_file(&staging, "a");
+            store
+                .put(&source, bytes::Bytes::from_static(b"new").into())
+                .await?;
+            let columns = ["p".into()];
+            for _ in 0..2 {
+                let error = commit_partitions(
+                    &store,
+                    &table,
+                    &staging,
+                    &columns,
+                    &string_schema(&columns),
+                    vec![source.clone()],
+                )
+                .await
+                .err()
+                .ok_or_else(|| exec_datafusion_err!("deletion must fail"))?;
+                assert!(
+                    matches!(error, DataFusionError::External(error) if error.downcast_ref::<CommitStateUnknownError>().is_some())
+                );
+            }
+            assert!(exists(&store, &staging.clone().join("commit.json")).await?);
+            assert!(!exists(&store, &staging.clone().join("complete")).await?);
+            let events = store
+                .events
+                .lock()
+                .map_err(|e| exec_datafusion_err!("{e}"))?
+                .clone();
+            let published = events
+                .iter()
+                .filter_map(|event| {
+                    if let Event::Copy(_, to) = event {
+                        Some(to)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(published.len(), 1);
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, Event::Delete(_)))
+                    .count(),
+                1
+            );
+            assert_eq!(store.get(published[0]).await?.bytes().await?, "new");
+            assert_eq!(store.get(&source).await?.bytes().await?, "new");
+            if matches!(failure, DeleteFailure::PerObject(_)) {
+                assert!(!exists(&store, &Path::from("table/p=one/0")).await?);
+                assert!(exists(&store, &Path::from("table/p=one/1")).await?);
+                assert!(!exists(&store, &Path::from("table/p=one/2")).await?);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn static_overwrite_preserves_complete_and_unknown_replay_state() -> Result<()> {
+        use datafusion::prelude::SessionContext;
+
+        use crate::listing::delete::FileDeleteExec;
+        use crate::listing::internal::tests::RecordingStore;
+        let store = Arc::new(RecordingStore {
+            allowed: Some(Path::from("table")),
+            ..Default::default()
+        });
+        let table = Path::from("table");
+        let staging = table
+            .clone()
+            .join(STAGING_DIRECTORY)
+            .join(Uuid::new_v4().to_string());
+        let unknown_stage = table
+            .clone()
+            .join(STAGING_DIRECTORY)
+            .join(Uuid::new_v4().to_string());
+        let source = attempt_file(&staging, "a");
+        for path in [
+            &source,
+            &unknown_stage.clone().join("commit.json"),
+            &attempt_file(&unknown_stage, "a"),
+            &table.clone().join(".ordinary").join("file"),
+        ] {
+            store
+                .put(path, bytes::Bytes::from_static(b"data").into())
+                .await?;
+        }
+        let columns = ["p".into()];
+        commit_partitions(
+            store.as_ref(),
+            &table,
+            &staging,
+            &columns,
+            &string_schema(&columns),
+            vec![source.clone()],
+        )
+        .await?;
+        cleanup_staging(store.as_ref(), &staging.clone().join("attempts")).await?;
+        assert!(!exists(store.as_ref(), &source).await?);
+        assert!(exists(store.as_ref(), &attempt_file(&unknown_stage, "a")).await?);
+        let reserved = table.clone().join(STAGING_DIRECTORY);
+        let before = store
+            .inner
+            .list(Some(&reserved))
+            .try_collect::<Vec<_>>()
+            .await?;
+        let ctx = SessionContext::new();
+        let url = datafusion_datasource::ListingTableUrl::parse("memory://bucket/")?
+            .get_url()
+            .clone();
+        ctx.runtime_env().register_object_store(&url, store.clone());
+        let delete = Arc::new(FileDeleteExec::new(
+            ObjectStoreUrl::parse(url.as_str())?,
+            table.clone(),
+        ));
+        execute_stream(delete, ctx.task_ctx())?
+            .try_collect::<Vec<_>>()
+            .await?;
+        assert_eq!(
+            store
+                .inner
+                .list(Some(&reserved))
+                .try_collect::<Vec<_>>()
+                .await?,
+            before
+        );
+        assert!(
+            !exists(
+                store.as_ref(),
+                &table.clone().join(".ordinary").join("file")
+            )
+            .await?
+        );
+        let replacement = table.clone().join("p=two").join("static");
+        store
+            .put(&replacement, bytes::Bytes::from_static(b"static").into())
+            .await?;
+        commit_partitions(
+            store.as_ref(),
+            &table,
+            &staging,
+            &columns,
+            &string_schema(&columns),
+            vec![source],
+        )
+        .await?;
+        assert!(
+            commit_partitions(
+                store.as_ref(),
+                &table,
+                &unknown_stage,
+                &columns,
+                &string_schema(&columns),
+                vec![]
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(store.get(&replacement).await?.bytes().await?, "static");
+        assert_eq!(
+            store
+                .inner
+                .list(Some(&reserved))
+                .try_collect::<Vec<_>>()
+                .await?,
+            before
+        );
+        Ok(())
     }
 
     #[test]
@@ -625,7 +1356,8 @@ mod tests {
 
     #[tokio::test]
     async fn empty_manifest_does_not_touch_table_objects() -> Result<()> {
-        let store = InMemory::new();
+        use crate::listing::internal::tests::{Event, RecordingStore};
+        let store = RecordingStore::default();
         let table = Path::from("table");
         let old = Path::from("table/p=1/old.parquet");
         store
@@ -643,6 +1375,14 @@ mod tests {
         .await?;
         assert_eq!(store.head(&old).await?, before);
         assert_eq!(store.get(&old).await?.bytes().await?, "old");
+        assert!(
+            !store
+                .events
+                .lock()
+                .map_err(|e| exec_datafusion_err!("{e}"))?
+                .iter()
+                .any(|event| matches!(event, Event::List(_) | Event::Delimiter(_)))
+        );
         Ok(())
     }
 

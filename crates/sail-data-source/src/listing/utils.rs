@@ -23,6 +23,7 @@ use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use crate::listing::commit::partition_key;
+use crate::listing::internal::{ListingPolicy, TableListingStore};
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
 
@@ -171,7 +172,12 @@ pub async fn sample_listing_files<'a>(
     let mut samples = vec![];
     for url in urls {
         let store = ctx.runtime_env().object_store(url)?;
-        let objects: Vec<_> = list_all_files(url, ctx, store.as_ref(), path_glob_filter)
+        let listing = TableListingStore::new(
+            store.clone(),
+            url.prefix().clone(),
+            ListingPolicy::from_url(url.get_url()),
+        );
+        let objects: Vec<_> = list_all_files(url, ctx, &listing, path_glob_filter)
             .await?
             // Empty files can't contribute to schema / partition inference and may error when read.
             .try_filter(|meta| futures::future::ready(meta.size > 0))

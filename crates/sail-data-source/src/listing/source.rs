@@ -24,6 +24,7 @@ use sail_common_datafusion::datasource::{
 };
 use url::Url;
 
+use crate::listing::internal::{ListingPolicy, TableListingStore};
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
 use crate::listing::utils::{
     infer_partitions, rewrite_unsupported_fields, sample_listing_files, validate_partitions,
@@ -387,7 +388,13 @@ async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
 async fn listing_target_nonempty(ctx: &dyn Session, url: &Url) -> Result<bool> {
     let path = ListingTableUrl::try_new(url.clone(), None)?;
     let store = ctx.runtime_env().object_store(&path)?;
-    Ok(store.list(Some(path.prefix())).try_next().await?.is_some())
+    let listing =
+        TableListingStore::new(store, path.prefix().clone(), ListingPolicy::from_url(url));
+    Ok(listing
+        .list(Some(path.prefix()))
+        .try_next()
+        .await?
+        .is_some())
 }
 
 // Reconciles a user-specified schema's field names with the physical file schema
@@ -426,6 +433,94 @@ fn reconcile_schema_names_case_insensitive(schema: Schema, physical: &Schema) ->
 #[cfg(test)]
 mod overwrite_option_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn reserved_only_is_logically_empty_but_ordinary_hidden_objects_count() -> Result<()> {
+        use datafusion::prelude::SessionContext;
+        use object_store::ObjectStoreExt;
+        use object_store::path::Path;
+
+        use crate::listing::internal::tests::RecordingStore;
+        let store = Arc::new(RecordingStore::default());
+        let ctx = SessionContext::new();
+        let url = ListingTableUrl::parse("memory://bucket/table/")?
+            .get_url()
+            .clone();
+        ctx.runtime_env().register_object_store(&url, store.clone());
+        store
+            .put(
+                &Path::from("table/.sail-staging/operation/complete"),
+                bytes::Bytes::from_static(b"complete").into(),
+            )
+            .await?;
+        assert!(!listing_target_nonempty(&ctx.state(), &url).await?);
+        assert!(!listing_target_exists(&ctx.state(), &url).await?);
+        for file in [".ordinary", "_SUCCESS", "%2Esail-staging/file"] {
+            let path = Path::parse(format!("table/{file}"))?;
+            store.put(&path, bytes::Bytes::new().into()).await?;
+            assert!(listing_target_nonempty(&ctx.state(), &url).await?);
+            store.delete(&path).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn flat_nonempty_check_stops_at_first_visible_object() -> Result<()> {
+        use std::sync::atomic::Ordering;
+
+        use object_store::ObjectStoreExt;
+        use object_store::path::Path;
+
+        use crate::listing::internal::tests::{Event, RecordingStore};
+
+        let store = Arc::new(RecordingStore {
+            delimiter_not_implemented: true,
+            ..Default::default()
+        });
+        store
+            .put(
+                &Path::from("table/.sail-staging/operation/file"),
+                bytes::Bytes::from_static(b"stage").into(),
+            )
+            .await?;
+        for index in 0..500 {
+            store
+                .put(
+                    &Path::from(format!("table/file-{index:04}")),
+                    bytes::Bytes::from_static(b"data").into(),
+                )
+                .await?;
+        }
+        let ctx = datafusion::prelude::SessionContext::new();
+        let url = ListingTableUrl::parse("hf://datasets/table/")?;
+        ctx.runtime_env()
+            .register_object_store(url.get_url(), store.clone());
+        assert!(listing_target_nonempty(&ctx.state(), url.get_url()).await?);
+        assert_eq!(store.yielded.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            *store
+                .events
+                .lock()
+                .map_err(|e| datafusion_common::exec_datafusion_err!("{e}"))?,
+            vec![Event::List(url.prefix().clone())]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn existing_empty_local_directory_still_exists() -> Result<()> {
+        let ctx = datafusion::prelude::SessionContext::new();
+        let directory = std::env::temp_dir().join(format!("sail-listing-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory)?;
+        let url = Url::from_directory_path(&directory)
+            .map_err(|()| datafusion_common::exec_datafusion_err!("invalid local directory"))?;
+        let exists = listing_target_exists(&ctx.state(), &url).await;
+        let nonempty = listing_target_nonempty(&ctx.state(), &url).await;
+        std::fs::remove_dir(&directory)?;
+        assert!(exists?);
+        assert!(!nonempty?);
+        Ok(())
+    }
 
     #[test]
     fn layers_and_keys_are_case_insensitive() -> Result<()> {
