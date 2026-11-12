@@ -22,7 +22,7 @@ def suite_tests(pytester, monkeypatch):
         monkeypatch.delenv(name, raising=False)
     pytester.makeini("[pytest]\nmarkers =\n    function(group)")
     pytester.makeconftest('pytest_plugins = ["pysail.testing.suites", "pysail.testing.spark.markers"]')
-    monkeypatch.setattr(suites, "relative_test_path", lambda path: path.relative_to(pytester.path))
+    monkeypatch.setattr(suites, "relative_test_path", lambda path, **_: path.relative_to(pytester.path))
     pytester.makepyfile(
         test_cases="""
         import pytest
@@ -291,9 +291,10 @@ def test_assignment_is_independent_of_filters_collection_order_and_marker_order(
         for requirement in requirements:
             item.add_marker(pytest.mark.spark(version=requirement))
     versions = ["3.5.9", "4.0.5", "4.1.4", "4.2.1"]
-    selected = suites.assigned_versions(first, "sql", "seed", versions)
-    assert selected == suites.assigned_versions(second, "sql", "seed", versions[::-1])
-    assert {tuple(suites.assigned_versions(first, "sql", str(seed), versions)) for seed in range(20)} == {
+    affinity = ("module", "test.py")
+    selected = suites.assigned_versions(first, affinity, "seed", versions)
+    assert selected == suites.assigned_versions(second, affinity, "seed", versions[::-1])
+    assert {tuple(suites.assigned_versions(first, affinity, str(seed), versions)) for seed in range(20)} == {
         ("4.0.5",),
         ("4.1.4",),
     }
