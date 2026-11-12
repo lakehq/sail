@@ -52,7 +52,8 @@ pub async fn list_log_segment_files(
     let store = log_store.object_store(None);
     let offset_version = read_last_checkpoint_version_from_store(store.clone())
         .await
-        .map(|v| v.min(max_version).saturating_sub(1))
+        .filter(|v| *v >= 0 && *v <= max_version)
+        .map(|v| v.saturating_sub(1).max(0))
         .unwrap_or(0);
 
     let (_, checkpoint_meta, commit_metas, compaction_metas) =

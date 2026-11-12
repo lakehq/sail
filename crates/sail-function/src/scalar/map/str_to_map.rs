@@ -150,6 +150,7 @@ fn str_to_map_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<ArrayRef
                 keys.nulls(),
                 values.nulls(),
                 last_value_wins,
+                &map_type_from_key_value_types(&DataType::Utf8, &DataType::Utf8),
             )
         }
         _ => internal_err!("str_to_map: failed to downcast arguments to StringArrays"),

@@ -823,6 +823,17 @@ impl DeltaWriterExec {
             } else {
                 writer_path
             };
+            let integrated_change_data =
+                options.change_data_row_tags || options.merge_change_data_preimage.is_some();
+            let mut change_writer = integrated_change_data.then(|| {
+                let mut config = writer_config.clone();
+                config.table_schema = change_data_schema(&writer_schema);
+                DeltaWriter::new_unordered(
+                    object_store.clone(),
+                    writer_path.clone().join("_change_data"),
+                    config,
+                )
+            });
             let mut writer =
                 DeltaWriter::new(object_store.clone(), writer_path.clone(), writer_config);
 
@@ -840,6 +851,33 @@ impl DeltaWriterExec {
                     }
                 });
 
+            let mut identity_candidates = write_context
+                .commit_context
+                .identity_columns_to_track
+                .iter()
+                .map(|name| (name.clone(), None))
+                .collect::<HashMap<String, Option<i64>>>();
+            let identity_steps = write_context
+                .final_schema
+                .fields()
+                .filter_map(|field| {
+                    let step = field
+                        .metadata
+                        .get(crate::spec::ColumnMetadataKey::IdentityStep.as_ref())?;
+                    match step {
+                        crate::spec::MetadataValue::Number(step) => {
+                            Some((field.name.clone(), *step))
+                        }
+                        _ => None,
+                    }
+                })
+                .collect::<HashMap<_, _>>();
+            if identity_candidates
+                .keys()
+                .any(|name| !identity_steps.contains_key(name))
+            {
+                return internal_err!("tracked identity missing from Delta writer schema");
+            }
             let mut total_rows = 0u64;
             let mut data = stream;
             let mut write_time_ms: u64 = 0;
@@ -848,6 +886,40 @@ impl DeltaWriterExec {
             while let Some(batch_result) = data.next().await {
                 let batch_start = Instant::now();
                 let batch = batch_result?;
+                let batch = if integrated_change_data {
+                    let (main, changes) = super::merge_change_data::split_merge_change_data(
+                        batch,
+                        options.merge_change_data_preimage.as_deref(),
+                        &write_context.final_schema_ref()?,
+                        options.merge_on_read,
+                    )?;
+                    let change_writer = change_writer.as_mut().ok_or_else(|| {
+                        DataFusionError::Internal("missing integrated CDC writer".into())
+                    })?;
+                    let logical_cdc_schema =
+                        logical_schema_for_mapping.as_ref().map(change_data_schema);
+                    for change in changes {
+                        accumulate_identity_candidates(
+                            &change,
+                            &identity_steps,
+                            &mut identity_candidates,
+                        )?;
+                        let change = Self::validate_and_adapt_batch(
+                            change,
+                            &change_data_schema(&writer_schema),
+                            logical_cdc_schema.as_ref(),
+                            kernel_mode,
+                            timezone.as_deref(),
+                        )?;
+                        change_writer
+                            .write(&change)
+                            .await
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    }
+                    main
+                } else {
+                    batch
+                };
                 merge_row_metrics.accumulate_batch(&batch)?;
                 let batch = Self::filter_metric_only_operation_rows(batch)?;
                 let batch = Self::strip_metric_columns(batch)?;
@@ -856,6 +928,7 @@ impl DeltaWriterExec {
                     continue;
                 }
                 total_rows += rows;
+                accumulate_identity_candidates(&batch, &identity_steps, &mut identity_candidates)?;
 
                 // Debug: input vs target schema field names for each batch
                 let input_names: Vec<String> = batch
@@ -941,10 +1014,57 @@ impl DeltaWriterExec {
                         row_count: 0,
                         operation: None,
                         operation_metrics,
+                        identity_high_water_marks: None,
                     }),
                 );
             }
 
+            let mut cdc_actions = Vec::new();
+            if let Some(change_writer) = change_writer {
+                cdc_actions = change_writer
+                    .close()
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .into_iter()
+                    .map(|add| {
+                        Action::Cdc(crate::spec::AddCDCFile {
+                            path: format!("_change_data/{}", add.path),
+                            partition_values: add.partition_values,
+                            size: add.size,
+                            data_change: false,
+                            tags: None,
+                        })
+                    })
+                    .collect();
+                if cdc_actions.is_empty() {
+                    // Suppress Add/Remove inference for a rewrite with no change events.
+                    let file_name = format!("cdc-{}.parquet", uuid::Uuid::new_v4());
+                    let parquet = parquet::arrow::ArrowWriter::try_new(
+                        Vec::new(),
+                        change_data_schema(&writer_schema),
+                        None,
+                    )?;
+                    let bytes = parquet.into_inner()?;
+                    let size = i64::try_from(bytes.len())
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    object_store
+                        .put(
+                            &writer_path.join("_change_data").join(file_name.as_str()),
+                            bytes.into(),
+                        )
+                        .await?;
+                    cdc_actions.push(Action::Cdc(crate::spec::AddCDCFile {
+                        path: format!("_change_data/{file_name}"),
+                        size,
+                        data_change: false,
+                        partition_values: physical_partition_columns
+                            .iter()
+                            .map(|name| (name.clone(), None))
+                            .collect(),
+                        tags: None,
+                    }));
+                }
+            }
             let num_added_files: u64 = add_actions.len() as u64;
             let num_added_bytes: u64 = add_actions
                 .iter()
@@ -1000,6 +1120,10 @@ impl DeltaWriterExec {
                 operation_metrics.num_copied_rows = Some(merge_row_metrics.copied);
             }
 
+            if integrated_change_data {
+                operation_metrics.merge(Self::change_data_metrics(&cdc_actions)?);
+                actions.extend(cdc_actions);
+            }
             output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));
             output_bytes.add(usize::try_from(num_added_bytes).unwrap_or(usize::MAX));
 
@@ -1031,8 +1155,8 @@ impl DeltaWriterExec {
             }
 
             for action in actions {
-                if let Action::Add(add) = action {
-                    output_actions.push(Action::Add(add));
+                if matches!(action, Action::Add(_) | Action::Cdc(_)) {
+                    output_actions.push(action);
                 }
             }
 
@@ -1042,6 +1166,12 @@ impl DeltaWriterExec {
                     row_count: total_rows,
                     operation,
                     operation_metrics,
+                    identity_high_water_marks: (!identity_candidates.is_empty()).then_some(
+                        crate::physical_plan::action_schema::IdentityHighWaterMarks {
+                            partition,
+                            candidates: identity_candidates,
+                        },
+                    ),
                 }),
             )
         };
@@ -1371,7 +1501,32 @@ impl DisplayAs for DeltaWriterExec {
     }
 }
 
-fn change_data_schema(schema: &SchemaRef) -> SchemaRef {
+fn accumulate_identity_candidates(
+    batch: &RecordBatch,
+    steps: &HashMap<String, i64>,
+    candidates: &mut HashMap<String, Option<i64>>,
+) -> Result<()> {
+    for (name, candidate) in candidates {
+        let values = batch
+            .column_by_name(name)
+            .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
+            .ok_or_else(|| {
+                DataFusionError::Execution(format!(
+                    "missing BIGINT identity column `{name}` in accepted batch"
+                ))
+            })?;
+        for value in values.iter().flatten() {
+            *candidate = Some(match *candidate {
+                Some(current) if steps[name] > 0 => current.max(value),
+                Some(current) => current.min(value),
+                None => value,
+            });
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn change_data_schema(schema: &SchemaRef) -> SchemaRef {
     let mut fields = schema.fields().to_vec();
     fields.push(Arc::new(datafusion::arrow::datatypes::Field::new(
         crate::change_data_feed::CHANGE_TYPE_COLUMN,

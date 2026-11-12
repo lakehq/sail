@@ -86,6 +86,30 @@ Feature: Repeated scalar subqueries over catalog tables
       """
     Then query plan matches snapshot
 
+  @sail-only
+  Scenario: Repeated scalar subqueries over ranges and sorts share one result
+    When query
+      """
+      SELECT
+        (SELECT sum(id) FROM range(10)) AS a,
+        (SELECT sum(id) FROM range(10)) AS b,
+        (SELECT max(id) FROM (SELECT id FROM range(5) SORT BY id)) AS c,
+        (SELECT max(id) FROM (SELECT id FROM range(5) SORT BY id)) AS d
+      """
+    Then query result
+      | a  | b  | c | d |
+      | 45 | 45 | 4 | 4 |
+    When query
+      """
+      EXPLAIN
+      SELECT
+        (SELECT sum(id) FROM range(10)) AS a,
+        (SELECT sum(id) FROM range(10)) AS b,
+        (SELECT max(id) FROM (SELECT id FROM range(5) SORT BY id)) AS c,
+        (SELECT max(id) FROM (SELECT id FROM range(5) SORT BY id)) AS d
+      """
+    Then query plan matches snapshot
+
   Scenario: Shared catalog table sources do not outlive the query
     When query
       """

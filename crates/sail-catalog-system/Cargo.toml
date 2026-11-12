@@ -11,6 +11,7 @@ workspace = true
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-catalog = { path = "../sail-catalog" }
 sail-system-store = { path = "../sail-system-store" }
+sail-function = { path = "../sail-function" }
 
 serde = { workspace = true }
 chrono = { workspace = true }

@@ -10,10 +10,8 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
-use sail_common::spec::{
-    self, SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME,
-    SAIL_MAP_VALUE_FIELD_NAME,
-};
+use sail_common::spec;
+use sail_common_datafusion::data_type::DataTypeResolver;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_sql_analyzer::data_type::from_ast_data_type;
 use sail_sql_analyzer::parser as sail_parser;
@@ -24,6 +22,9 @@ use crate::scalar::csv::options::{
     CsvFunction, find_option, find_option_with_alias, reject_null_entries, validate_options,
 };
 use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::spark_interval::{
+    string_to_day_time_interval, string_to_year_month_interval,
+};
 
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
 
@@ -51,6 +52,7 @@ struct SparkFromCSVOptions {
     timestamp_format: DateTimeFormat,
     date_format: DateTimeFormat,
     timezone: Option<String>,
+    fail_fast: bool,
 }
 
 impl SparkFromCSVOptions {
@@ -92,12 +94,15 @@ impl SparkFromCSVOptions {
             });
 
         let timezone = find_option(map, Self::TIMEZONE_OPTION).map(str::to_string);
+        let fail_fast =
+            find_option(map, "mode").is_some_and(|mode| mode.eq_ignore_ascii_case("FAILFAST"));
 
         Ok(Self {
             sep,
             timestamp_format,
             date_format,
             timezone,
+            fail_fast,
         })
     }
 }
@@ -113,6 +118,7 @@ impl Default for SparkFromCSVOptions {
             date_format: DateTimeFormat::for_parsing(Self::DATE_FORMAT_DEFAULT)
                 .expect("default date format should be valid"),
             timezone: None,
+            fail_fast: false,
         }
     }
 }
@@ -274,6 +280,20 @@ fn spark_from_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
     };
 
     let fields: Fields = parse_fields(schema_str, session_timezone)?;
+    // The schema is constant for the batch; decode interval qualifiers before the row loop.
+    let interval_qualifiers = fields
+        .iter()
+        .map(|field| {
+            field
+                .metadata()
+                .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+                .map(|metadata| {
+                    spec::SparkIntervalMetadata::from_json(metadata)
+                        .map_err(|e| DataFusionError::Execution(e.to_string()))
+                })
+                .transpose()
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     let mut children_scalars: Vec<Vec<ScalarValue>> =
         vec![Vec::with_capacity(array.len()); fields.len()];
@@ -288,7 +308,7 @@ fn spark_from_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
         } else {
             let line: &str = array.value(i);
             let values: Vec<ScalarValue> =
-                parse_csv_line_to_scalar_values(line, &options, &fields)?;
+                parse_csv_line_to_scalar_values(line, &options, &fields, &interval_qualifiers)?;
             for (j, value) in values.into_iter().enumerate() {
                 children_scalars[j].push(value);
             }
@@ -318,6 +338,7 @@ fn spark_from_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
 /// - `line`: The string representation of a single CSV line to be parsed.
 /// - `options`: `SparkFromCSVOptions` detailing parsing settings such as separator and timestamp format.
 /// - `fields`: The `Fields` that define the structural and type constraints for each parsed column.
+/// - `interval_qualifiers`: Decoded interval metadata in the same order as `fields`.
 ///
 /// # Returns
 /// A `Result` containing a `Vec<ScalarValue>` after successful parsing of the CSV line.
@@ -330,6 +351,7 @@ fn parse_csv_line_to_scalar_values(
     line: &str,
     options: &SparkFromCSVOptions,
     fields: &Fields,
+    interval_qualifiers: &[Option<spec::SparkIntervalMetadata>],
 ) -> Result<Vec<ScalarValue>> {
     let values: Vec<&str> = line.split(&options.sep).map(|s| s.trim()).collect();
 
@@ -344,12 +366,16 @@ fn parse_csv_line_to_scalar_values(
 
     values
         .iter()
-        .zip(fields.iter())
-        .map(|(value, field)| {
+        .zip(fields.iter().zip(interval_qualifiers))
+        .map(|(value, (field, qualifier))| {
             if value.is_empty() {
                 ScalarValue::try_new_null(field.data_type())
             } else {
                 match field.data_type() {
+                    DataType::Duration(TimeUnit::Microsecond)
+                    | DataType::Interval(IntervalUnit::YearMonth) => {
+                        parse_csv_interval(value, field.data_type(), *qualifier, options.fail_fast)
+                    }
                     DataType::Timestamp(_, _) => parse_timestamp(field.data_type(), value, options),
                     DataType::Date32 | DataType::Date64 => {
                         parse_date(field.data_type(), value, options)
@@ -359,6 +385,27 @@ fn parse_csv_line_to_scalar_values(
             }
         })
         .collect()
+}
+
+fn parse_csv_interval(
+    value: &str,
+    data_type: &DataType,
+    qualifier: Option<spec::SparkIntervalMetadata>,
+    fail_fast: bool,
+) -> Result<ScalarValue> {
+    let result = match data_type {
+        DataType::Duration(TimeUnit::Microsecond) => string_to_day_time_interval(value, qualifier)
+            .map(|value| ScalarValue::DurationMicrosecond(Some(value))),
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            string_to_year_month_interval(value, qualifier)
+                .map(|value| ScalarValue::IntervalYearMonth(Some(value)))
+        }
+        other => return exec_err!("expected an ANSI interval type, got {other}"),
+    };
+    match result {
+        Err(_) if !fail_fast => ScalarValue::try_new_null(data_type),
+        result => result,
+    }
 }
 
 /// Parses a timestamp from a string value using a specified format.
@@ -556,7 +603,6 @@ fn parse_fields(schema: &str, session_timezone: &str) -> Result<Fields> {
         )));
     };
 
-    let mut out: Vec<Arc<Field>> = Vec::with_capacity(fields.len());
     let mut seen: HashSet<String> = HashSet::with_capacity(fields.len());
     for f in fields.iter() {
         let name = f.name.clone();
@@ -565,10 +611,11 @@ fn parse_fields(schema: &str, session_timezone: &str) -> Result<Fields> {
                 "Duplicate field name '{name}'"
             )));
         }
-        let dt = spec_to_arrow_data_type(&f.data_type, session_timezone)?;
-        out.push(Arc::new(Field::new(name, dt, f.nullable)));
+        validate_csv_data_type(&f.data_type)?;
     }
-    Ok(Fields::from(out))
+    data_type_resolver(session_timezone)
+        .resolve_fields(&fields)
+        .map_err(|e| DataFusionError::Plan(e.to_string()))
 }
 
 /// Parses a raw SQL type string into an Arrow `DataType`.
@@ -584,132 +631,54 @@ fn parse_data_type_with_session_timezone(raw: &str, session_timezone: &str) -> R
     spec_to_arrow_data_type(&spec_dt, session_timezone)
 }
 
-fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
-    use spec::DataType as SDT;
-
-    fn to_time_unit(unit: &spec::TimeUnit) -> TimeUnit {
-        match unit {
-            spec::TimeUnit::Second => TimeUnit::Second,
-            spec::TimeUnit::Millisecond => TimeUnit::Millisecond,
-            spec::TimeUnit::Microsecond => TimeUnit::Microsecond,
-            spec::TimeUnit::Nanosecond => TimeUnit::Nanosecond,
-        }
+fn data_type_resolver(session_timezone: &str) -> DataTypeResolver {
+    DataTypeResolver {
+        session_timezone: Arc::from(session_timezone),
+        default_timestamp_ltz: true,
+        use_large_var_types: false,
     }
+}
 
+fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
+    validate_csv_data_type(dt)?;
+    let dt = match dt {
+        spec::DataType::UserDefined { sql_type, .. } => sql_type,
+        dt => dt,
+    };
+    data_type_resolver(session_timezone)
+        .resolve_data_type(dt)
+        .map_err(|e| DataFusionError::Plan(e.to_string()))
+}
+
+fn validate_csv_data_type(dt: &spec::DataType) -> Result<()> {
     match dt {
-        SDT::Null => Ok(DataType::Null),
-        SDT::Boolean => Ok(DataType::Boolean),
-        SDT::Int8 => Ok(DataType::Int8),
-        SDT::Int16 => Ok(DataType::Int16),
-        SDT::Int32 => Ok(DataType::Int32),
-        SDT::Int64 => Ok(DataType::Int64),
-        SDT::UInt8 => Ok(DataType::UInt8),
-        SDT::UInt16 => Ok(DataType::UInt16),
-        SDT::UInt32 => Ok(DataType::UInt32),
-        SDT::UInt64 => Ok(DataType::UInt64),
-        SDT::Float16 => Ok(DataType::Float16),
-        SDT::Float32 => Ok(DataType::Float32),
-        SDT::Float64 => Ok(DataType::Float64),
-        SDT::Binary | SDT::ConfiguredBinary => Ok(DataType::Binary),
-        SDT::FixedSizeBinary { size } => Ok(DataType::FixedSizeBinary(*size)),
-        SDT::LargeBinary => Ok(DataType::LargeBinary),
-        SDT::BinaryView => Ok(DataType::BinaryView),
-        SDT::Utf8 | SDT::ConfiguredUtf8 { .. } => Ok(DataType::Utf8),
-        SDT::LargeUtf8 => Ok(DataType::LargeUtf8),
-        SDT::Utf8View => Ok(DataType::Utf8View),
-        SDT::Date32 => Ok(DataType::Date32),
-        SDT::Date64 => Ok(DataType::Date64),
-        SDT::Timestamp {
-            time_unit,
-            timestamp_type,
-        } => Ok(DataType::Timestamp(
-            to_time_unit(time_unit),
-            match timestamp_type {
-                spec::TimestampType::Configured | spec::TimestampType::WithLocalTimeZone => {
-                    Some(Arc::from(session_timezone))
-                }
-                spec::TimestampType::WithoutTimeZone => None,
-            },
-        )),
-        SDT::Time32 { time_unit: u } => Ok(DataType::Time32(to_time_unit(u))),
-        SDT::Time64 { time_unit: u } => Ok(DataType::Time64(to_time_unit(u))),
-        SDT::Duration { time_unit: u } => Ok(DataType::Duration(to_time_unit(u))),
-        SDT::Interval { interval_unit, .. } => Ok(DataType::Interval(match interval_unit {
-            spec::IntervalUnit::YearMonth => IntervalUnit::YearMonth,
-            spec::IntervalUnit::DayTime => IntervalUnit::DayTime,
-            spec::IntervalUnit::MonthDayNano => IntervalUnit::MonthDayNano,
-        })),
-        SDT::Decimal128 { precision, scale } => Ok(DataType::Decimal128(*precision, *scale)),
-        SDT::Decimal256 { precision, scale } => Ok(DataType::Decimal256(*precision, *scale)),
-        SDT::List {
-            data_type,
-            nullable,
-        } => Ok(DataType::List(Arc::new(Field::new(
-            SAIL_LIST_FIELD_NAME,
-            spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
-            *nullable,
-        )))),
-        SDT::FixedSizeList {
-            data_type,
-            nullable,
-            length,
-        } => Ok(DataType::FixedSizeList(
-            Arc::new(Field::new(
-                SAIL_LIST_FIELD_NAME,
-                spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
-                *nullable,
-            )),
-            *length,
-        )),
-        SDT::LargeList {
-            data_type,
-            nullable,
-        } => Ok(DataType::LargeList(Arc::new(Field::new(
-            SAIL_LIST_FIELD_NAME,
-            spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
-            *nullable,
-        )))),
-        SDT::Struct { fields } => {
-            let mut out: Vec<Arc<Field>> = Vec::with_capacity(fields.len());
-            for f in fields.iter() {
-                out.push(Arc::new(Field::new(
-                    f.name.clone(),
-                    spec_to_arrow_data_type(&f.data_type, session_timezone)?,
-                    f.nullable,
-                )));
-            }
-            Ok(DataType::Struct(Fields::from(out)))
+        // CSV parsing does not decode or validate WKB values.
+        spec::DataType::Geometry { .. } | spec::DataType::Geography { .. } => {
+            plan_err!("Unsupported data type in from_csv schema: {dt:?}")
         }
-        SDT::Map {
+        spec::DataType::List { data_type, .. }
+        | spec::DataType::FixedSizeList { data_type, .. }
+        | spec::DataType::LargeList { data_type, .. } => validate_csv_data_type(data_type),
+        spec::DataType::Struct { fields } => fields
+            .iter()
+            .try_for_each(|field| validate_csv_data_type(&field.data_type)),
+        spec::DataType::Union { union_fields, .. } => union_fields
+            .iter()
+            .try_for_each(|(_, field)| validate_csv_data_type(&field.data_type)),
+        spec::DataType::Map {
             key_type,
             value_type,
-            value_type_nullable,
-            keys_sorted,
-        } => {
-            let fields = Fields::from(vec![
-                Arc::new(Field::new(
-                    SAIL_MAP_KEY_FIELD_NAME,
-                    spec_to_arrow_data_type(key_type.as_ref(), session_timezone)?,
-                    false,
-                )),
-                Arc::new(Field::new(
-                    SAIL_MAP_VALUE_FIELD_NAME,
-                    spec_to_arrow_data_type(value_type.as_ref(), session_timezone)?,
-                    *value_type_nullable,
-                )),
-            ]);
-            Ok(DataType::Map(
-                Arc::new(Field::new(
-                    SAIL_MAP_FIELD_NAME,
-                    DataType::Struct(fields),
-                    false,
-                )),
-                *keys_sorted,
-            ))
+            ..
         }
-        other => Err(DataFusionError::Plan(format!(
-            "Unsupported data type in from_csv schema: {other:?}"
-        ))),
+        | spec::DataType::Dictionary {
+            key_type,
+            value_type,
+        } => {
+            validate_csv_data_type(key_type)?;
+            validate_csv_data_type(value_type)
+        }
+        spec::DataType::UserDefined { sql_type, .. } => validate_csv_data_type(sql_type),
+        _ => Ok(()),
     }
 }
 
@@ -717,6 +686,9 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Resul
 #[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion_common::internal_err;
+    use sail_common::spec::{
+        SAIL_LIST_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
+    };
 
     use super::*;
 

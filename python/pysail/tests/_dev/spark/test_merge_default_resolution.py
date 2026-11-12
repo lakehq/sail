@@ -7,10 +7,9 @@ import pytest
 from pyspark.sql.dataframe import DataFrame as SparkDataFrame
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Lake-format merge tests for JVM Spark")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Lake-format merge tests for JVM Spark")
 
 MERGE_APIS = [
     "sql",

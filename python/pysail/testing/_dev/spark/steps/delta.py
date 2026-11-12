@@ -287,7 +287,7 @@ def _normalize_delta_log_json_file_for_snapshot(filename: str, obj: object) -> o
 
 @pytest.fixture
 def delta_log_cache() -> dict[str, dict]:
-    """Per-scenario cache for normalized delta log objects."""
+    """Per-scenario cache for immutable first-commit delta log objects."""
     return {}
 
 
@@ -307,9 +307,11 @@ def append_query_to_delta_table_with_merge_schema(
 
 
 def _delta_log_compute(which: str, variables: dict, delta_log_cache: dict[str, dict]) -> dict:
-    cached = delta_log_cache.get(which)
-    if isinstance(cached, dict):
-        return cached
+    cacheable = which == "first commit protocol and metadata"
+    if cacheable:
+        cached = delta_log_cache.get(which)
+        if isinstance(cached, dict):
+            return cached
 
     if which == "latest commit info":
         obj = _latest_commit_info_from_variables(variables)
@@ -327,7 +329,8 @@ def _delta_log_compute(which: str, variables: dict, delta_log_cache: dict[str, d
         assert "metaData" in obj, "metaData action not found in first commit"
         obj["metaData"] = _normalize_delta_metadata_for_snapshot(obj["metaData"])
 
-    delta_log_cache[which] = obj
+    if cacheable:
+        delta_log_cache[which] = obj
     return obj
 
 

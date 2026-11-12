@@ -7,6 +7,7 @@ pub use crate::delta_log::segment_files::{
     LogSegmentFiles, LogSegmentResolveOptions,
     list_log_segment_files as kernel_list_log_segment_files,
 };
+use crate::delta_log::validate_commit_contiguity_with_compactions;
 use crate::snapshot::{CatalogManagedCommitSet, catalog_managed_commit_file_name};
 use crate::spec::{parse_commit_version, parse_compacted_json_versions, parse_version_prefix};
 
@@ -105,6 +106,30 @@ pub async fn resolve_log_segment_files(
         files.commit_files.extend(compaction_filenames);
         files.commit_files.sort();
     }
+
+    let mut start_version = latest_checkpoint_version
+        .map(|v| v.saturating_add(1))
+        .unwrap_or(0);
+    let mut end_version = max_version;
+    if let Some((start, end)) = options.commit_version_range {
+        start_version = start_version.max(start);
+        end_version = end_version.min(end);
+    }
+    // Validate the selected replay inputs, not compaction candidates or replaced JSONs.
+    let mut commits: Vec<_> = files
+        .commit_files
+        .iter()
+        .filter(|f| parse_compacted_json_versions(f).is_none())
+        .filter_map(|f| parse_log_file_version(f).map(|v| (v, f)))
+        .collect();
+    commits.sort_by_key(|(version, _)| *version);
+    let compactions: Vec<_> = files
+        .commit_files
+        .iter()
+        .filter_map(|f| parse_compacted_json_versions(f).map(|range| (range, f)))
+        .collect();
+    validate_commit_contiguity_with_compactions(&commits, &compactions, start_version, end_version)
+        .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
 
     Ok(files)
 }

@@ -91,7 +91,14 @@ impl MemoryCatalogProvider {
             columns: options
                 .columns
                 .into_iter()
-                .map(|column| (column.name, column.data_type, column.nullable))
+                .map(|column| {
+                    (
+                        column.name,
+                        column.data_type,
+                        column.nullable,
+                        column.metadata,
+                    )
+                })
                 .collect(),
             location,
             partition_by: options.partition_by,
@@ -176,7 +183,8 @@ fn prepared_status(
             columns: replacement
                 .columns
                 .iter()
-                .map(|(name, data_type, nullable)| TableColumnStatus {
+                .map(|(name, data_type, nullable, metadata)| TableColumnStatus {
+                    metadata: metadata.clone(),
                     name: name.clone(),
                     data_type: data_type.clone(),
                     nullable: *nullable,
@@ -211,6 +219,7 @@ mod tests {
     use std::time::Duration;
 
     use arrow::datatypes::DataType;
+    use sail_common_datafusion::uuid::{UUID_EXTENSION_NAME, UUID_METADATA_KEY, is_uuid_field};
     use tokio::sync::Barrier;
 
     use super::*;
@@ -222,6 +231,7 @@ mod tests {
     fn options() -> CreateTableOptions {
         CreateTableOptions {
             columns: vec![CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "new_column".into(),
                 data_type: DataType::Int64,
                 nullable: false,
@@ -258,6 +268,33 @@ mod tests {
             provider.create_table(&namespace, "t", old).await?;
         }
         Ok((provider, namespace))
+    }
+
+    #[tokio::test]
+    async fn replacement_preserves_top_level_uuid_metadata() -> CatalogResult<()> {
+        for existing in [false, true] {
+            let (provider, namespace) = fixture(existing).await?;
+            let mut request = options();
+            let metadata = std::collections::BTreeMap::from([
+                (UUID_METADATA_KEY.into(), UUID_EXTENSION_NAME.into()),
+                ("custom".into(), "retained".into()),
+            ]);
+            request.columns[0].data_type = DataType::FixedSizeBinary(16);
+            request.columns[0].metadata = metadata.clone();
+            let staged = provider.stage_replacement(&namespace, "t", request).await?;
+            assert_eq!(staged.columns[0].3, metadata);
+            provider
+                .publish_replacement(staged, Box::pin(async { Ok(()) }))
+                .await?;
+            let TableKind::Table { columns, .. } = provider.get_table(&namespace, "t").await?.kind
+            else {
+                return Err(CatalogError::InvalidArgument("expected table".into()));
+            };
+            assert_eq!(columns[0].data_type, DataType::FixedSizeBinary(16));
+            assert_eq!(columns[0].metadata, metadata);
+            assert!(is_uuid_field(&columns[0].field()));
+        }
+        Ok(())
     }
 
     #[tokio::test]

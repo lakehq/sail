@@ -130,6 +130,7 @@ impl DataSource for DeltaLakeSource {
         };
         let SinkInfo {
             input,
+            identity_columns_to_track,
             sql_insert,
             mode,
             partition_by,
@@ -162,6 +163,7 @@ impl DataSource for DeltaLakeSource {
             node: Arc::new(DeltaWriteNode::new(
                 Arc::new(input),
                 DeltaWriteNodeOptions {
+                    identity_columns_to_track,
                     output: if sql_insert {
                         CommandOutput::Empty
                     } else {
@@ -697,6 +699,7 @@ fn delta_alter_operation_name(operation: &LakeSourceAlterTableOperation) -> &'st
 #[derive(Clone, Debug, Educe)]
 #[educe(PartialEq, Eq, Hash, PartialOrd)]
 pub struct DeltaWriteNodeOptions {
+    pub identity_columns_to_track: Vec<String>,
     pub output: CommandOutput,
     pub path: String,
     pub mode: SinkMode,
@@ -769,6 +772,7 @@ pub(crate) async fn plan_delta_write(
     node: &DeltaWriteNode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let DeltaWriteNodeOptions {
+        identity_columns_to_track,
         output,
         path,
         mode,
@@ -970,6 +974,7 @@ pub(crate) async fn plan_delta_write(
     .with_target_nullability(extract_target_nullability(Some(logical_schema)))
     .with_metadata_schema(extract_metadata_schema(Some(logical_schema)))
     .with_identity_columns(extract_identity_columns(Some(logical_schema)))
+    .with_identity_columns_to_track(identity_columns_to_track)
     .with_table_snapshot(table_snapshot)
     .with_lakehouse_table(lakehouse_table);
     let planner_ctx = PlannerContext::new(ctx, table_config);

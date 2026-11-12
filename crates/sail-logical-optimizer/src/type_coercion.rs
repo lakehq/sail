@@ -1699,14 +1699,24 @@ fn with_nested_field_metadata(data_type: DataType, source: &DataType) -> DataTyp
     };
     match (&data_type, source) {
         (DataType::Struct(fields), DataType::Struct(sources)) => {
-            let sources = match fields
-                .iter()
-                .map(|field| sources.find(field.name()).map(|(_, source)| source))
-                .collect::<Option<Vec<_>>>()
-            {
-                Some(sources) => sources,
-                None if fields.len() == sources.len() => sources.iter().collect(),
-                None => return data_type,
+            let aligned = fields.len() == sources.len()
+                && fields
+                    .iter()
+                    .zip(sources)
+                    .all(|(f, s)| f.name() == s.name());
+            let sources = if aligned {
+                // Repeated names identify different fields when their positions agree.
+                sources.iter().collect()
+            } else {
+                match fields
+                    .iter()
+                    .map(|field| sources.find(field.name()).map(|(_, source)| source))
+                    .collect::<Option<Vec<_>>>()
+                {
+                    Some(sources) => sources,
+                    None if fields.len() == sources.len() => sources.iter().collect(),
+                    None => return data_type,
+                }
             };
             DataType::Struct(
                 fields
@@ -3555,6 +3565,34 @@ mod test {
                     "THEN {then_type} and ELSE {else_type} have the common type {common_type:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_case_result_type_preserves_duplicate_field_metadata() {
+        use sail_common_datafusion::uuid::{UUID_EXTENSION_NAME, UUID_METADATA_KEY};
+
+        use crate::type_coercion::case_result_type;
+
+        let uuid = Field::new("x", DataType::FixedSizeBinary(16), true).with_metadata(
+            [(
+                UUID_METADATA_KEY.to_string(),
+                UUID_EXTENSION_NAME.to_string(),
+            )]
+            .into(),
+        );
+        let string = Field::new("x", DataType::Utf8, true);
+        for fields in [vec![uuid.clone(), string.clone()], vec![string, uuid]] {
+            let data_type = DataType::Struct(fields.into());
+            assert_eq!(
+                case_result_type(std::slice::from_ref(&data_type), Some(&data_type)),
+                Some(data_type.clone())
+            );
+            let nested = DataType::List(Arc::new(Field::new_list_field(data_type, true)));
+            assert_eq!(
+                case_result_type(std::slice::from_ref(&nested), Some(&nested)),
+                Some(nested)
+            );
         }
     }
 
