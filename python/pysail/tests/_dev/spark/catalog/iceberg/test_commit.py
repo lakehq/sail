@@ -8,6 +8,7 @@ import time
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
@@ -53,6 +54,8 @@ class _CommitGate:
         self.apply_commit = True
         self.response_payload: dict | None = None
         self.request_count = 0
+        self.table_hints: dict | None = None
+        self.table_posts = 0
 
     def arm(self, namespace: str, table: str, *, snapshot_only: bool = True) -> None:
         with self._lock:
@@ -119,6 +122,8 @@ def _commit_gate_handler(
         def _forward(self) -> None:
             length = int(self.headers.get("content-length", "0"))
             body = self.rfile.read(length) if length else b""
+            if self.command == "POST" and "/tables/" in self.path:
+                gate.table_posts += 1
             gated_request = gate.claim(self.command, body)
             if gated_request is not None:
                 gate.arrived.set()
@@ -173,6 +178,18 @@ def _commit_gate_handler(
                     self._send_fault()
                     return
 
+            content = response.content
+            if (
+                self.command == "GET"
+                and "/tables/" in self.path
+                and response.status_code == HTTPStatus.OK
+                and gate.table_hints
+            ):
+                payload = response.json()
+                payload.pop("config", None)
+                payload.pop("storage-credentials", None)
+                payload.update(gate.table_hints)
+                content = json.dumps(payload).encode()
             self.send_response(response.status_code)
             for key, value in response.headers.items():
                 if key.lower() not in {
@@ -182,10 +199,10 @@ def _commit_gate_handler(
                     "transfer-encoding",
                 }:
                     self.send_header(key, value)
-            self.send_header("content-length", str(len(response.content)))
+            self.send_header("content-length", str(len(content)))
             self.end_headers()
             if self.command != "HEAD":
-                self.wfile.write(response.content)
+                self.wfile.write(content)
 
         def _send_fault(self) -> None:
             if gate.response_fault == "disconnect":
@@ -1218,12 +1235,12 @@ def test_unknown_alter_does_not_report_success(
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
 
 
-@pytest.mark.parametrize("apply_commit", [False, True], ids=["not_applied", "applied"])
-@pytest.mark.parametrize("fault", [503, "disconnect", "malformed", "unchanged"])
-def test_unknown_expiration_preserves_files_without_replay(
-    spark, gated_remote, commit_gate_proxy, iceberg_rest_endpoint, seaweedfs_host_endpoint, apply_commit, fault, request
+@pytest.mark.parametrize("hint", ["none", "endpoint", "credentials", "signing"])
+@pytest.mark.parametrize("new_tag", [False, True], ids=["absent_ref", "new_tag"])
+def test_rest_expiration_rejects_before_publication_and_preserves_state(
+    spark, gated_remote, commit_gate_proxy, iceberg_rest_endpoint, seaweedfs_host_endpoint, hint, new_tag
 ):
-    table_name = "unknown_expiration_" + request.node.callspec.id.replace("-", "_")
+    table_name = f"unsupported_expiration_{hint}_{new_tag}"
     table_fqn = f"{NAMESPACE}.{table_name}"
     spark.sql(f"CREATE TABLE {table_fqn} (id INT) USING iceberg")
     try:
@@ -1231,26 +1248,63 @@ def test_unknown_expiration_preserves_files_without_replay(
         expired = _load_table(iceberg_rest_endpoint, table_name)["metadata"]["current-snapshot-id"]
         spark.sql(f"INSERT OVERWRITE {table_fqn} VALUES (2)")  # noqa: S608
         before = _load_table(iceberg_rest_endpoint, table_name)
+        assert "hold" not in before["metadata"].get("refs", {})
+        if new_tag:
+            response = requests.post(
+                f"{iceberg_rest_endpoint}/v1/namespaces/{NAMESPACE}/tables/{table_name}",
+                json={
+                    "requirements": [{"type": "assert-table-uuid", "uuid": before["metadata"]["table-uuid"]}],
+                    "updates": [
+                        {"action": "set-snapshot-ref", "ref-name": "hold", "type": "tag", "snapshot-id": expired}
+                    ],
+                },
+                timeout=30,
+            )
+            response.raise_for_status()
+            before = _load_table(iceberg_rest_endpoint, table_name)
         location = before["metadata"]["location"]
+        file_io = PyArrowFileIO(
+            {
+                "s3.endpoint": seaweedfs_host_endpoint,
+                "s3.access-key-id": "admin",
+                "s3.secret-access-key": "password",
+                "s3.region": "us-east-1",
+            }
+        )
+        # Unreferenced objects may belong to an unknown commit and must also survive.
+        with file_io.new_output(f"{location}/metadata/unknown-commit.metadata.json").create() as output:
+            output.write(b"unconfirmed commit artifact")
         original_files = _s3_object_keys(seaweedfs_host_endpoint, location)
+        bucket = urllib.parse.urlparse(location).netloc
+        original_bytes = {}
+        for key in original_files:
+            with file_io.new_input(f"s3://{bucket}/{key}").open() as source:
+                original_bytes[key] = source.read()
         _, gate = commit_gate_proxy
-        if fault == "unchanged":
-            gate.response_payload = before
-        gate.response_fault = fault
-        gate.apply_commit = apply_commit
-        gate.arm(NAMESPACE, table_name)
+        gate.table_hints = _rest_access_hints(hint, seaweedfs_host_endpoint)
+        gate.arm(NAMESPACE, table_name, snapshot_only=False)
         gate.release.set()
         with (
             spark_session_factory(gated_remote) as sessions,
-            pytest.raises(PySparkException, match="commit state unknown"),
+            pytest.raises(
+                PySparkException, match="atomic whole-metadata conditional publication or server-side retention"
+            ),
         ):
             sessions.create().sql(
                 f"CALL system.expire_snapshots('{table_fqn}', snapshot_ids => array(CAST({expired} AS BIGINT)))"
             ).collect()
-        assert gate.request_count == 1
+        assert gate.request_count == 0
+        assert gate.table_posts == 0
+        assert not gate.arrived.is_set()
         after = _load_table(iceberg_rest_endpoint, table_name)
-        assert (expired not in {s["snapshot-id"] for s in after["metadata"]["snapshots"]}) == apply_commit
-        assert original_files <= _s3_object_keys(seaweedfs_host_endpoint, location)
+        assert after["metadata-location"] == before["metadata-location"]
+        assert after["metadata"] == before["metadata"]
+        assert original_files == _s3_object_keys(seaweedfs_host_endpoint, location)
+        for key, expected_bytes in original_bytes.items():
+            with file_io.new_input(f"s3://{bucket}/{key}").open() as source:
+                assert source.read() == expected_bytes
+        history = spark.sql(f"SELECT id FROM {table_fqn} VERSION AS OF {expired}").collect()  # noqa: S608
+        assert [row.id for row in history] == [1]
         assert [row.id for row in spark.table(table_fqn).collect()] == [2]
         spark.sql(f"INSERT INTO {table_fqn} VALUES (3)")  # noqa: S608
         assert [row.id for row in spark.table(table_fqn).orderBy("id").collect()] == [2, 3]
@@ -1258,100 +1312,46 @@ def test_unknown_expiration_preserves_files_without_replay(
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
 
 
-def test_expiration_replans_after_concurrent_rest_append(
-    spark, gated_remote, commit_gate_proxy, iceberg_rest_endpoint, seaweedfs_host_endpoint
+def _rest_access_hints(hint, endpoint):
+    if hint == "endpoint":
+        return {"config": {"s3.endpoint": endpoint}}
+    if hint == "credentials":
+        return {
+            "storage-credentials": [
+                {"prefix": "s3://", "config": {"s3.access-key-id": "admin", "s3.secret-access-key": "password"}}
+            ]
+        }
+    if hint == "signing":
+        return {"config": {"s3.remote-signing-enabled": "true"}}
+    return {"config": {}}
+
+
+@pytest.mark.parametrize("hint", ["endpoint", "credentials", "signing"])
+def test_rest_procedures_use_configured_access_with_advertised_hints(
+    spark, gated_remote, commit_gate_proxy, iceberg_rest_endpoint, seaweedfs_host_endpoint, hint
 ):
-    table_name = "expiration_concurrent_append"
+    table_name = f"procedure_access_{hint}"
     table_fqn = f"{NAMESPACE}.{table_name}"
     spark.sql(f"CREATE TABLE {table_fqn} (id INT) USING iceberg")
     try:
         spark.sql(f"INSERT INTO {table_fqn} VALUES (1)")  # noqa: S608
-        expired = _load_table(iceberg_rest_endpoint, table_name)["metadata"]["current-snapshot-id"]
+        first = _load_table(iceberg_rest_endpoint, table_name)["metadata"]["current-snapshot-id"]
         spark.sql(f"INSERT INTO {table_fqn} VALUES (2)")  # noqa: S608
-        _, gate = commit_gate_proxy
-        gate.arm(NAMESPACE, table_name)
-        with spark_session_factory(gated_remote) as sessions:
-            slow = sessions.create()
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
-                    lambda: slow.sql(
-                        f"CALL system.expire_snapshots('{table_fqn}', snapshot_ids => array(CAST({expired} AS BIGINT)))"
-                    ).collect()
-                )
-                try:
-                    assert gate.arrived.wait(timeout=60), "expiration did not reach publication"
-                    spark.sql(f"INSERT INTO {table_fqn} VALUES (3)")  # noqa: S608
-                finally:
-                    gate.release.set()
-                result = future.result(timeout=60)
-        assert len(result) == 1
-        assert result[0].deleted_manifest_lists_count >= 1
-        assert gate.response_status == HTTP_CONFLICT
-        expected_commit_attempts = 2
-        assert gate.request_count == expected_commit_attempts
-        after = _load_table(iceberg_rest_endpoint, table_name)
-        assert expired not in {snapshot["snapshot-id"] for snapshot in after["metadata"]["snapshots"]}
-        assert [row.id for row in spark.table(table_fqn).orderBy("id").collect()] == [1, 2, 3]
-        assert _s3_object_keys(seaweedfs_host_endpoint, after["metadata"]["location"])
-        spark.sql(f"INSERT INTO {table_fqn} VALUES (4)")  # noqa: S608
-        assert [row.id for row in spark.table(table_fqn).orderBy("id").collect()] == [1, 2, 3, 4]
-    finally:
-        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-
-
-def test_expiration_replans_when_an_observed_ref_moves_to_the_selected_snapshot(
-    spark, gated_remote, commit_gate_proxy, iceberg_rest_endpoint, seaweedfs_host_endpoint
-):
-    table_name = "expiration_ref_move"
-    table_fqn = f"{NAMESPACE}.{table_name}"
-    spark.sql(f"CREATE TABLE {table_fqn} (id INT) USING iceberg")
-    try:
-        spark.sql(f"INSERT INTO {table_fqn} VALUES (1)")  # noqa: S608
-        expired = _load_table(iceberg_rest_endpoint, table_name)["metadata"]["current-snapshot-id"]
-        spark.sql(f"INSERT OVERWRITE {table_fqn} VALUES (2)")  # noqa: S608
         before = _load_table(iceberg_rest_endpoint, table_name)
-        location = before["metadata"]["location"]
-        files = _s3_object_keys(seaweedfs_host_endpoint, location)
-        endpoint = f"{iceberg_rest_endpoint}/v1/namespaces/{NAMESPACE}/tables/{table_name}"
-
-        def set_ref(snapshot_id):
-            response = requests.post(
-                endpoint,
-                json={
-                    "requirements": [{"type": "assert-table-uuid", "uuid": before["metadata"]["table-uuid"]}],
-                    "updates": [
-                        {"action": "set-snapshot-ref", "ref-name": "hold", "type": "tag", "snapshot-id": snapshot_id}
-                    ],
-                },
-                timeout=30,
-            )
-            response.raise_for_status()
-
-        set_ref(before["metadata"]["current-snapshot-id"])
+        current = before["metadata"]["current-snapshot-id"]
         _, gate = commit_gate_proxy
-        gate.arm(NAMESPACE, table_name)
+        gate.table_hints = _rest_access_hints(hint, seaweedfs_host_endpoint)
         with spark_session_factory(gated_remote) as sessions:
-            slow = sessions.create()
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
-                    lambda: slow.sql(
-                        f"CALL system.expire_snapshots('{table_fqn}', snapshot_ids => array(CAST({expired} AS BIGINT)))"
-                    ).collect()
-                )
-                try:
-                    assert gate.arrived.wait(timeout=60), "expiration did not reach publication"
-                    set_ref(expired)
-                finally:
-                    gate.release.set()
-                with pytest.raises(PySparkException, match="Still referenced"):
-                    future.result(timeout=60)
-        assert gate.response_status == HTTP_CONFLICT
-        assert gate.request_count == 1
+            client = sessions.create()
+            ancestors = client.sql(f"CALL system.ancestors_of('{table_fqn}')").collect()
+            assert {row.snapshot_id for row in ancestors} == {first, current}
+            client.sql(f"CALL system.set_current_snapshot(table => '{table_fqn}', snapshot_id => {first})").collect()
+            assert [row.id for row in client.table(table_fqn).collect()] == [1]
         after = _load_table(iceberg_rest_endpoint, table_name)
-        assert after["metadata"]["refs"]["hold"]["snapshot-id"] == expired
-        assert expired in {snapshot["snapshot-id"] for snapshot in after["metadata"]["snapshots"]}
-        assert files <= _s3_object_keys(seaweedfs_host_endpoint, location)
-        assert [row.id for row in spark.table(table_fqn).collect()] == [2]
+        assert after["metadata-location"] != before["metadata-location"]
+        assert after["metadata"]["current-snapshot-id"] == first
+        assert {s["snapshot-id"] for s in after["metadata"]["snapshots"]} == {first, current}
+        assert gate.table_posts > 0
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
 

@@ -185,6 +185,9 @@ pub(crate) async fn commit_snapshot_operation(
             {
                 return plan_err!("Catalog UUID does not match expiration metadata");
             }
+            // Legacy filesystem metadata may lack a UUID. Capture the identity that will
+            // actually be published, rather than letting serialization initialize a clone.
+            metadata.ensure_required_format_fields();
         }
         let mut expiration: Option<Expiration> = None;
         let prepared = match &operation {

@@ -1253,25 +1253,43 @@ impl CatalogProvider for HmsCatalogProvider {
     ) -> CatalogResult<()> {
         let db_name = validate_namespace(database)?;
         let target_db = validate_namespace(destination_database)?;
-        self.with_failover(|client| {
-            let db_name = db_name.clone();
-            let target_db = target_db.clone();
-            let table = table.to_string();
-            let target_table = destination_table.to_string();
-            async move {
-                let mut metadata = Self::get_table_with_client(
-                    &client,
-                    &db_name,
-                    &table,
-                    "Failed to fetch HMS table for rename",
-                )
-                .await?;
-                metadata.db_name = Some(target_db);
-                metadata.table_name = Some(target_table);
-                Self::alter_table_with_client(&client, &db_name, &table, metadata).await
-            }
-        })
-        .await
+        let iceberg_table = self
+            .with_failover(|client| {
+                let db_name = db_name.clone();
+                let target_db = target_db.clone();
+                let table = table.to_string();
+                let target_table = destination_table.to_string();
+                async move {
+                    let mut metadata = Self::get_table_with_client(
+                        &client,
+                        &db_name,
+                        &table,
+                        "Failed to fetch HMS table for rename",
+                    )
+                    .await?;
+                    if managed_table::is_iceberg_table(&metadata) {
+                        return Ok(Some(metadata));
+                    }
+                    metadata.db_name = Some(target_db);
+                    metadata.table_name = Some(target_table);
+                    Self::alter_table_with_client(&client, &db_name, &table, metadata).await?;
+                    Ok(None)
+                }
+            })
+            .await?;
+        if let Some(classified) = iceberg_table {
+            // Keep publication outside failover: an ambiguous rename must never be replayed.
+            managed_table::rename_iceberg_table_with_lock(
+                self,
+                &db_name,
+                table,
+                &target_db,
+                destination_table,
+                &classified,
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     async fn alter_table(

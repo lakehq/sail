@@ -39,6 +39,7 @@ struct PointerCatalog {
     fault: CasFault,
     paused: tokio::sync::Notify,
     typed_cas: AtomicBool,
+    rest_commit: AtomicBool,
     classification: AtomicBool,
     location: String,
     replacement: Mutex<Option<(StoreContext, TableMetadata)>>,
@@ -89,7 +90,9 @@ impl CatalogProvider for PointerCatalog {
         })
     }
     fn lakehouse_capabilities(&self) -> Vec<sail_catalog::lakehouse::LakehouseCapability> {
-        if self.typed_cas.load(Ordering::SeqCst) {
+        if self.rest_commit.load(Ordering::SeqCst) {
+            vec![sail_catalog::lakehouse::LakehouseCapability::IcebergRestCommit]
+        } else if self.typed_cas.load(Ordering::SeqCst) {
             vec![sail_catalog::lakehouse::LakehouseCapability::IcebergMetadataLocationCas]
         } else {
             vec![]
@@ -273,6 +276,7 @@ fn pointer_fixture(
         fault: cas_fault,
         paused: tokio::sync::Notify::new(),
         typed_cas: AtomicBool::new(false),
+        rest_commit: AtomicBool::new(false),
         classification: AtomicBool::new(false),
         location: url.to_string(),
         replacement: Mutex::new(None),
@@ -356,6 +360,43 @@ async fn expiration_rejects_unconfirmed_catalog_authorities_without_touching_sta
     }
 }
 
+#[tokio::test]
+async fn expiration_rejects_confirmed_rest_before_staging_or_publication() {
+    let (store, catalog, ctx, url, mut context) = fixture(CasFault::NoPublication, None).await;
+    catalog.rest_commit.store(true, Ordering::SeqCst);
+    context.commit = CommitAuthority::IcebergRestCommit;
+    let before = store
+        .inner
+        .list(None)
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("inventory");
+    let pointer = catalog.pointer.lock().expect("pointer").clone();
+    let (operation, schema) = expiration_operation();
+    let error = commit_snapshot_operation(&ctx, &url, &[], Some(&context), operation, schema)
+        .await
+        .expect_err("generic REST cannot atomically validate retention");
+    assert!(
+        error
+            .to_string()
+            .contains("atomic whole-metadata conditional publication or server-side retention"),
+        "{error}"
+    );
+    assert_eq!(catalog.attempts.load(Ordering::SeqCst), 0);
+    assert_eq!(store.puts.load(Ordering::SeqCst), 0);
+    assert!(store.deletes.lock().expect("deletes").is_empty());
+    assert_eq!(*catalog.pointer.lock().expect("pointer"), pointer);
+    assert_eq!(
+        store
+            .inner
+            .list(None)
+            .try_collect::<Vec<_>>()
+            .await
+            .expect("inventory"),
+        before
+    );
+}
+
 fn expiration_operation() -> (ExpireSnapshots, datafusion::arrow::datatypes::SchemaRef) {
     use sail_common_datafusion::lakeprocedure::{LakeProcedureInvocation, LakeProcedureValue};
 
@@ -415,7 +456,7 @@ async fn classification_marker_never_downgrades_a_nonpublishing_catalog_to_files
     assert!(
         error
             .to_string()
-            .contains("confirmed filesystem, REST or typed metadata CAS"),
+            .contains("confirmed filesystem or typed metadata CAS"),
         "{error}"
     );
     assert_eq!(catalog.attempts.load(Ordering::SeqCst), 0);

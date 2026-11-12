@@ -112,6 +112,42 @@ pub(crate) async fn alter_table_with_lock(
     .await
 }
 
+pub(crate) fn is_iceberg_table(table: &Table) -> bool {
+    crate::convert::table_format(table).eq_ignore_ascii_case("iceberg")
+}
+
+pub(crate) async fn rename_iceberg_table_with_lock(
+    provider: &HmsCatalogProvider,
+    database: &str,
+    table: &str,
+    destination_database: &str,
+    destination_table: &str,
+    classified: &Table,
+) -> CatalogResult<()> {
+    alter_under_lock(provider, database, table, |mut current| {
+        // Classification is only a routing hint, never the table to publish. HMS does not
+        // expose a stable table ID here; reject observable replacement/type changes.
+        let location = crate::convert::table_location;
+        if !is_iceberg_table(&current)
+            || current.create_time != classified.create_time
+            || location(&current) != location(classified)
+            || current.parameters.as_ref().and_then(|p| p.get("uuid"))
+                != classified.parameters.as_ref().and_then(|p| p.get("uuid"))
+        {
+            return Err(CatalogError::Conflict(format!(
+                "HMS table '{database}.{table}' changed identity before rename"
+            )));
+        }
+        // Rename only changes HMS metadata; it does not load Iceberg data or metadata files.
+        // Require the cooperative lock policy exposed by HMS, as for other HMS alterations.
+        validate_lock_enabled(&current)?;
+        current.db_name = Some(destination_database.into());
+        current.table_name = Some(destination_table.into());
+        Ok(current)
+    })
+    .await
+}
+
 // [CREDIT]: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/hive-metastore/src/main/java/org/apache/iceberg/hive/HiveTableOperations.java#L250-L344
 pub(crate) async fn compare_and_swap_iceberg_metadata(
     provider: &HmsCatalogProvider,
@@ -280,9 +316,10 @@ async fn locked_alter(
         result = &mut monitor => return result,
         result = preparation => result?,
     };
-    let dispatched = std::sync::atomic::AtomicBool::new(false);
+    let publication_started = std::sync::atomic::AtomicBool::new(false);
     let publication = async {
-        dispatched.store(true, std::sync::atomic::Ordering::Relaxed);
+        // Polling may only queue for a pool permit or connection, not send any bytes.
+        publication_started.store(true, std::sync::atomic::Ordering::Relaxed);
         let result = locked_publication(client, database, table, replacement).await;
         heartbeat(heartbeat_client, lock_id)
             .await
@@ -297,12 +334,12 @@ async fn locked_alter(
     tokio::select! {
         biased;
         health = &mut monitor => {
-            if !dispatched.load(std::sync::atomic::Ordering::Relaxed) {
+            if !publication_started.load(std::sync::atomic::Ordering::Relaxed) {
                 return health;
             }
-            // Poll the dispatched request to its bounded outcome, but never confirm success
-            // after losing the lock. A stale read would not prove it failed either.
-            let _ = publication.await;
+            // Drop the call immediately: awaiting it could send a queued RPC after lock loss.
+            // Cancellation owns/drops the Thrift connection, but bytes may already have escaped.
+            // Without transport progress information, conservatively retain an unknown outcome.
             Err(CatalogError::CommitStateUnknown("HMS lock health lost during publication".to_string().into()))
         }
         result = &mut publication => result,

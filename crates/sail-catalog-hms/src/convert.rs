@@ -100,11 +100,7 @@ pub(crate) fn table_to_status(
         None => columns_from_hms(storage, table.partition_keys.as_ref())?,
     };
     let location = table_location(table);
-    let format = if is_iceberg_table_parameters(table.parameters.as_ref()) {
-        ICEBERG_TABLE_TYPE_VALUE.to_string()
-    } else {
-        resolve_data_source_format(table.parameters.as_ref(), storage)
-    };
+    let format = table_format(table);
     let partition_by = table
         .partition_keys
         .as_ref()
@@ -501,6 +497,14 @@ fn spark_datasource_provider(logical_format: &str) -> Option<String> {
     match provider.as_str() {
         "textfile" | ICEBERG_TABLE_TYPE_VALUE => None,
         _ => Some(provider),
+    }
+}
+
+pub(crate) fn table_format(table: &Table) -> String {
+    if is_iceberg_table_parameters(table.parameters.as_ref()) {
+        ICEBERG_TABLE_TYPE_VALUE.to_string()
+    } else {
+        resolve_data_source_format(table.parameters.as_ref(), table.sd.as_ref())
     }
 }
 

@@ -189,15 +189,17 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
             )
             .await
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        if resolved.execution.commit == CommitAuthority::IcebergRestCommit {
+            return plan_err!(
+                "expire_snapshots requires atomic whole-metadata conditional publication or server-side retention; generic Iceberg REST commits are unsupported"
+            );
+        }
         let capabilities = manager
             .lakehouse_capabilities(catalog_table)
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
         let supported = match resolved.execution.commit {
             CommitAuthority::Filesystem => {
                 !catalog_managed_iceberg_from_properties(&resolved.status.display_properties)
-            }
-            CommitAuthority::IcebergRestCommit => {
-                capabilities.contains(&LakehouseCapability::IcebergRestCommit)
             }
             CommitAuthority::IcebergMetadataLocationCas => {
                 capabilities.contains(&LakehouseCapability::IcebergMetadataLocationCas)
@@ -206,19 +208,7 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
         };
         if !supported || resolved.execution.format != LakehouseFormat::Iceberg {
             return plan_err!(
-                "expire_snapshots requires a confirmed filesystem, REST or typed metadata CAS authority"
-            );
-        }
-        if resolved
-            .execution
-            .rest_session
-            .as_ref()
-            .is_some_and(|session| {
-                session.remote_signing_enabled || session.storage_credential_count > 0
-            })
-        {
-            return plan_err!(
-                "expire_snapshots does not support REST credential vending or remote signing"
+                "expire_snapshots requires a confirmed filesystem or typed metadata CAS authority"
             );
         }
         Ok(resolved)

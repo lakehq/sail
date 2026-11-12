@@ -1027,32 +1027,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .load_table_result(database, table, config.access_delegation())
             .await?;
         let session = Self::rest_table_session_ref(&self.name, database, table, config, &result)?;
-        let unsupported_storage_config = result
-            .config
-            .iter()
-            .flat_map(|config| config.iter())
-            .chain(config.properties.iter())
-            .any(|(key, value)| {
-                let key = key.to_ascii_lowercase();
-                if key == REST_REMOTE_SIGNING_ENABLED_KEY && value.eq_ignore_ascii_case("false") {
-                    return false;
-                }
-                ["s3.", "s3a.", "adls.", "azure.", "gcs.", "gs."]
-                    .iter()
-                    .any(|prefix| key.starts_with(prefix))
-                    || matches!(key.as_str(), "io-impl" | "client.region")
-            });
-        if matches!(
-            request.operation,
-            sail_common_datafusion::catalog::LakehouseOperation::Maintenance
-        ) && (session.remote_signing_enabled
-            || session.storage_credential_count > 0
-            || unsupported_storage_config)
-        {
-            return Err(CatalogError::UnsupportedCapability(
-                "Iceberg maintenance requires configured storage access; REST storage overrides, vending and signing are not implemented".into(),
-            ));
-        }
         let status = Self::load_table_result_to_status(&self.name, database, table, result)?;
         let mut resolved = sail_catalog::lakehouse::resolve_lakehouse_table_status(
             &self.name,
@@ -4341,9 +4315,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn maintenance_reloads_and_rejects_new_storage_access_requirements() {
+    async fn maintenance_reloads_access_hints_without_rejecting_configured_access() {
         use sail_catalog::lakehouse::ResolveLakehouseTableRequest;
-        for signing in [false, true] {
+        for hint in ["endpoint", "credentials", "signing"] {
             let ctx = TestContext::new(Some("test")).await;
             let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
             let mut initial = create_table_response_with_access_session_hints();
@@ -4353,13 +4327,17 @@ mod tests {
                 .remove("storage-credentials");
             initial.as_object_mut().unwrap().remove("config");
             let mut refreshed = create_table_response_with_access_session_hints();
-            if signing {
+            if hint != "credentials" {
                 refreshed
                     .as_object_mut()
                     .unwrap()
                     .remove("storage-credentials");
-            } else {
-                refreshed.as_object_mut().unwrap().remove("config");
+            }
+            refreshed.as_object_mut().unwrap().remove("config");
+            if hint == "endpoint" {
+                refreshed["config"] = serde_json::json!({"s3.endpoint": "http://configured-store"});
+            } else if hint == "signing" {
+                refreshed["config"] = serde_json::json!({"s3.remote-signing-enabled": "true"});
             }
             Mock::given(method("GET"))
                 .and(path(ctx.path("/namespaces/db1/tables/table1")))
@@ -4386,13 +4364,24 @@ mod tests {
                 .resolve_lakehouse_table(&namespace, "table1", request.clone())
                 .await
                 .unwrap();
-            let error = ctx
+            let resolved = ctx
                 .catalog
                 .resolve_lakehouse_table(&namespace, "table1", request)
                 .await
-                .unwrap_err();
-            assert!(matches!(error, CatalogError::UnsupportedCapability(_)));
-            assert!(!error.to_string().contains("storage-secret"));
+                .unwrap();
+            assert_eq!(
+                resolved.execution.commit,
+                CommitAuthority::IcebergRestCommit
+            );
+            let session = resolved.execution.rest_session.as_ref().unwrap();
+            assert_eq!(session.remote_signing_enabled, hint == "signing");
+            assert_eq!(
+                session.storage_credential_count,
+                usize::from(hint == "credentials")
+            );
+            let serialized = serde_json::to_string(&resolved.execution).unwrap();
+            assert!(!serialized.contains("storage-secret"));
+            assert!(!serialized.contains("http://configured-store"));
         }
     }
 
