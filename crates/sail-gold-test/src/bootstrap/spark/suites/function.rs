@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use sail_spark_connect::JsonDataType;
+use sail_common_spark::data_type::JsonDataType;
 use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::spark::common::{TestData, TestDataObject};

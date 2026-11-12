@@ -9,6 +9,7 @@ use datafusion_common::Result;
 use once_cell::sync::OnceCell;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use sail_common_datafusion::data_type::DataTypeResolver;
 
 use super::arrow_utils::py_schema_to_rust;
 use super::error::{PythonDataSourceContext, PythonDataSourceError, import_cloudpickle};
@@ -343,30 +344,14 @@ impl PythonDataSource {
     /// DDL format: "id INT, name STRING, age INT"
     fn parse_ddl_schema(ddl: &str) -> Result<SchemaRef> {
         use sail_common::spec;
-        use sail_sql_analyzer::data_type::from_ast_data_type;
-        use sail_sql_analyzer::parser as sail_parser;
 
         let ddl = ddl.trim();
-        let type_str = if ddl
-            .get(..6)
-            .is_some_and(|p| p.eq_ignore_ascii_case("struct"))
-            && ddl.get(6..).is_some_and(|p| p.starts_with('<'))
-            && ddl.ends_with('>')
-        {
-            ddl.to_string()
-        } else {
-            format!("STRUCT<{ddl}>")
-        };
-
-        let ast = sail_parser::parse_data_type(&type_str).map_err(|e| {
+        let data_type = sail_sql_analyzer::data_type::parse_schema(ddl).map_err(|e| {
             PythonDataSourceError::SchemaError(format!("Failed to parse DDL schema '{ddl}': {e}"))
         })?;
-        let spec_dt = from_ast_data_type(ast).map_err(|e| {
-            PythonDataSourceError::SchemaError(format!("Failed to analyze DDL schema '{ddl}': {e}"))
-        })?;
-        let spec::DataType::Struct { fields } = spec_dt else {
+        let spec::DataType::Struct { fields } = data_type else {
             return Err(PythonDataSourceError::SchemaError(format!(
-                "Expected STRUCT schema, got: {spec_dt:?}"
+                "Expected STRUCT schema, got: {data_type:?}"
             ))
             .into());
         };
@@ -377,41 +362,16 @@ impl PythonDataSource {
             );
         }
 
-        let arrow_fields: Vec<arrow_schema::Field> = fields
-            .iter()
-            .map(|f| {
-                let dt = spec_data_type_to_arrow(&f.data_type)?;
-                Ok(arrow_schema::Field::new(f.name.clone(), dt, f.nullable))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(std::sync::Arc::new(arrow_schema::Schema::new(arrow_fields)))
-    }
-}
-
-/// Convert a `spec::DataType` to an Arrow `DataType` for DDL schema parsing.
-fn spec_data_type_to_arrow(dt: &sail_common::spec::DataType) -> Result<arrow_schema::DataType> {
-    use arrow_schema::{DataType, TimeUnit};
-    use sail_common::spec::DataType as SDT;
-
-    match dt {
-        SDT::Null => Ok(DataType::Null),
-        SDT::Boolean => Ok(DataType::Boolean),
-        SDT::Int8 => Ok(DataType::Int8),
-        SDT::Int16 => Ok(DataType::Int16),
-        SDT::Int32 => Ok(DataType::Int32),
-        SDT::Int64 => Ok(DataType::Int64),
-        SDT::Float32 => Ok(DataType::Float32),
-        SDT::Float64 => Ok(DataType::Float64),
-        SDT::Binary | SDT::ConfiguredBinary => Ok(DataType::Binary),
-        SDT::Utf8 | SDT::ConfiguredUtf8 { .. } => Ok(DataType::Utf8),
-        SDT::Date32 => Ok(DataType::Date32),
-        SDT::Timestamp { .. } => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-        SDT::Decimal128 { precision, scale } => Ok(DataType::Decimal128(*precision, *scale)),
-        other => Err(PythonDataSourceError::SchemaError(format!(
-            "Unsupported type in DDL schema: {other:?}. Use PyArrow Schema for complex types.",
-        ))
-        .into()),
+        // Use UTC for Spark timestamps at the Python data source boundary.
+        let resolver = DataTypeResolver {
+            session_timezone: Arc::from("UTC"),
+            default_timestamp_ltz: true,
+            use_large_var_types: false,
+        };
+        let fields = resolver
+            .resolve_fields(&fields)
+            .map_err(|e| PythonDataSourceError::SchemaError(e.to_string()))?;
+        Ok(Arc::new(arrow_schema::Schema::new(fields)))
     }
 }
 

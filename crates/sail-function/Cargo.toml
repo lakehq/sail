@@ -13,6 +13,7 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
+sail-common-spark = { path = "../sail-common-spark" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }

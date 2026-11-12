@@ -6905,6 +6905,7 @@ version = "0.7.3"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
+ "chumsky 0.13.0",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
@@ -7039,6 +7040,7 @@ dependencies = [
  "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
+ "sail-sql-analyzer",
  "secrecy",
  "serde",
  "serde_json",
@@ -7169,6 +7171,17 @@ dependencies = [
  "sail-thrift",
  "thrift",
  "tokio",
+]
+
+[[package]]
+name = "sail-common-spark"
+version = "0.7.3"
+dependencies = [
+ "chumsky 0.13.0",
+ "monostate",
+ "sail-common",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -7394,6 +7407,7 @@ dependencies = [
  "reqwest 0.12.28",
  "sail-common",
  "sail-common-datafusion",
+ "sail-common-spark",
  "sail-sql-analyzer",
  "serde",
  "serde_json",
@@ -7411,6 +7425,7 @@ version = "0.7.3"
 dependencies = [
  "clap",
  "regex",
+ "sail-common-spark",
  "sail-spark-connect",
  "serde",
  "serde_json",
@@ -7739,7 +7754,6 @@ dependencies = [
  "futures",
  "lazy_static",
  "log",
- "monostate",
  "parquet-variant-compute",
  "pbjson",
  "pbjson-build",
@@ -7755,6 +7769,7 @@ dependencies = [
  "sail-cache",
  "sail-common",
  "sail-common-datafusion",
+ "sail-common-spark",
  "sail-data-source",
  "sail-execution",
  "sail-plan",
@@ -7784,7 +7799,9 @@ dependencies = [
  "lazy_static",
  "regex",
  "sail-common",
+ "sail-common-spark",
  "sail-sql-parser",
+ "serde_json",
  "thiserror",
 ]
 
