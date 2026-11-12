@@ -55,6 +55,22 @@ pub enum LakeSourceCreateMetadataMode {
     CatalogCoordinated,
 }
 
+/// Storage metadata that must be validated before a catalog rename.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum RenameTableMetadataRequirement {
+    None,
+    Iceberg {
+        table_location: String,
+        metadata_location: String,
+    },
+}
+
+/// Binds rename publication to the exact metadata validated by the lake source.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum RenameTablePrecondition {
+    Iceberg { metadata_location: String },
+}
+
 pub fn plain_lakehouse_create_table_metadata_requirement(
     options: &CreateTableOptions,
 ) -> CreateTableMetadataRequirement {

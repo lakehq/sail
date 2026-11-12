@@ -169,6 +169,7 @@ impl MemoryCatalogProvider {
                     properties,
                     partition_by,
                     location,
+                    format,
                     ..
                 } => match options {
                     AlterTableOptions::AlterSnapshotReference { .. }
@@ -241,9 +242,19 @@ impl MemoryCatalogProvider {
                     AlterTableOptions::SetTableProperties {
                         properties: new_props,
                     } => {
-                        managed_table::validate_metadata_location_precondition(
-                            table, properties, &new_props,
-                        )?;
+                        let pointer_update = if format.eq_ignore_ascii_case("iceberg") {
+                            managed_table::validate_iceberg_metadata_update(
+                                properties.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                                &new_props,
+                            )?
+                        } else {
+                            None
+                        };
+                        if pointer_update.is_none() {
+                            managed_table::validate_metadata_location_precondition(
+                                table, properties, &new_props,
+                            )?;
+                        }
                         for (key, value) in new_props {
                             if key == "comment" {
                                 *comment = Some(value.clone());
@@ -253,6 +264,13 @@ impl MemoryCatalogProvider {
                             } else {
                                 properties.push((key, value));
                             }
+                        }
+                        if let Some((replacement, previous)) = pointer_update {
+                            managed_table::update_metadata_properties(
+                                properties,
+                                &replacement,
+                                previous.as_deref(),
+                            );
                         }
                         Ok(())
                     }
@@ -707,7 +725,6 @@ impl CatalogProvider for MemoryCatalogProvider {
         request: sail_catalog::lakehouse::IcebergMetadataCasRequest,
     ) -> CatalogResult<sail_catalog::lakehouse::IcebergMetadataCasOutcome> {
         use sail_catalog::lakehouse::IcebergMetadataCasOutcome as Outcome;
-        use sail_common_datafusion::catalog::managed::is_metadata_location_key;
         let _access = self.publication_gate.read().await;
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
             CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
@@ -735,17 +752,11 @@ impl CatalogProvider for MemoryCatalogProvider {
         {
             return Ok(outcome);
         }
-        properties.retain(|(key, _)| {
-            !is_metadata_location_key(key.trim())
-                && !key
-                    .trim()
-                    .eq_ignore_ascii_case("previous_metadata_location")
-        });
-        properties.push(("metadata_location".into(), request.replacement().into()));
-        properties.push((
-            "previous_metadata_location".into(),
-            request.expected().into(),
-        ));
+        managed_table::update_metadata_properties(
+            properties,
+            request.replacement(),
+            Some(request.expected()),
+        );
         db.changed(table);
         Ok(Outcome::Committed)
     }

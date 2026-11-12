@@ -46,8 +46,14 @@ pub(crate) struct Expiration {
 
 #[derive(Default)]
 struct Inventory {
-    paths: HashMap<Path, usize>,
+    paths: HashMap<Path, InventoryEntry>,
+    // Specs referenced by unselected (retained) snapshots.
     specs: HashSet<i32>,
+}
+
+struct InventoryEntry {
+    kind: usize,
+    selected: bool,
 }
 
 pub(crate) struct PreparedExpiration {
@@ -219,18 +225,9 @@ impl ExpireSnapshots {
     ) -> Result<PreparedExpiration> {
         let (expired, removed_refs) = self.select(metadata)?;
         // Validate every snapshot, including retained/staged branches, before publication.
-        let all = inventory(store, url, metadata, None).await?;
         let candidates = inventory(store, url, metadata, Some(&expired)).await?;
-        let retained_ids = metadata
-            .snapshots
-            .iter()
-            .map(|s| s.snapshot_id)
-            .filter(|id| !expired.contains(id))
-            .collect();
-        let retained = inventory(store, url, metadata, Some(&retained_ids)).await?;
-        // Keep the full expired inventory until fresh post-publication reachability is known.
-        // Concurrent, disjoint expirations can remove the last other reference to a shared file.
-        drop(all);
+        // Keep shared expired paths until fresh post-publication reachability is known.
+        // Concurrent, disjoint expirations can remove their last other reference.
         let mut requirements: Vec<_> = metadata
             .refs
             .iter()
@@ -308,7 +305,7 @@ impl ExpireSnapshots {
                 .partition_specs
                 .iter()
                 .map(|s| s.spec_id())
-                .filter(|id| *id != metadata.default_spec_id && !retained.specs.contains(id))
+                .filter(|id| *id != metadata.default_spec_id && !candidates.specs.contains(id))
                 .collect();
             if !spec_ids.is_empty() {
                 updates.push(TableUpdate::RemovePartitionSpecs { spec_ids });
@@ -370,14 +367,24 @@ pub(crate) fn checked_path(store: &StoreContext, table: &Url, raw: &str) -> Resu
 }
 
 impl Inventory {
-    fn insert(&mut self, store: &StoreContext, url: &Url, raw: &str, kind: usize) -> Result<Path> {
+    fn insert(
+        &mut self,
+        store: &StoreContext,
+        url: &Url,
+        raw: &str,
+        entry: InventoryEntry,
+        max_paths: usize,
+    ) -> Result<Path> {
         let path = checked_path(store, url, raw)?;
-        if self.paths.len() >= MAX_PATHS && !self.paths.contains_key(&path) {
+        if self.paths.len() >= max_paths && !self.paths.contains_key(&path) {
             return plan_err!(
-                "expire_snapshots exceeds the coordinator inventory limit of {MAX_PATHS} physical paths"
+                "expire_snapshots exceeds the coordinator inventory limit of {max_paths} physical paths"
             );
         }
-        self.paths.entry(path.clone()).or_insert(kind);
+        self.paths
+            .entry(path.clone())
+            .and_modify(|existing| existing.selected |= entry.selected)
+            .or_insert(entry);
         Ok(path)
     }
 }
@@ -388,75 +395,135 @@ async fn inventory(
     metadata: &TableMetadata,
     ids: Option<&HashSet<i64>>,
 ) -> Result<Inventory> {
+    inventory_with_limit(store, url, metadata, ids, MAX_PATHS).await
+}
+
+async fn inventory_with_limit(
+    store: &StoreContext,
+    url: &Url,
+    metadata: &TableMetadata,
+    ids: Option<&HashSet<i64>>,
+    max_paths: usize,
+) -> Result<Inventory> {
     if !metadata.encryption_keys.is_empty() {
         return plan_err!("expire_snapshots does not support encrypted tables");
     }
     let mut result = Inventory::default();
     let mut manifests = HashSet::new();
-    for snapshot in metadata
-        .snapshots
-        .iter()
-        .filter(|s| ids.is_none_or(|ids| ids.contains(&s.snapshot_id)))
-    {
-        if snapshot.key_id.is_some()
-            || snapshot.manifest_list.is_empty()
-            || snapshot.manifests.is_some()
+    let mut lists: HashMap<Path, HashSet<i32>> = HashMap::new();
+    // Selected snapshots come first: cached manifests' live files are already selected
+    // if any selected snapshot references them. Never cache decoded manifests.
+    for selected in [true, false] {
+        let is_selected = |id: i64| ids.is_none_or(|ids| ids.contains(&id));
+        for snapshot in metadata
+            .snapshots
+            .iter()
+            .filter(|s| is_selected(s.snapshot_id) == selected)
         {
-            return plan_err!(
-                "expire_snapshots requires unencrypted manifest lists; legacy inline manifests are unsupported"
-            );
-        }
-        let path = result.insert(store, url, &snapshot.manifest_list, 4)?;
-        let bytes = store.base.get(&path).await?.bytes().await?;
-        let list = ManifestList::parse_with_version(&bytes, metadata.format_version)
-            .map_err(DataFusionError::Execution)?;
-        for descriptor in list.entries() {
-            if descriptor.key_metadata.is_some() {
-                return plan_err!("expire_snapshots does not support encrypted manifests");
+            if snapshot.key_id.is_some()
+                || snapshot.manifest_list.is_empty()
+                || snapshot.manifests.is_some()
+            {
+                return plan_err!(
+                    "expire_snapshots requires unencrypted manifest lists; legacy inline manifests are unsupported"
+                );
             }
-            result.specs.insert(descriptor.partition_spec_id);
-            let path = result.insert(store, url, &descriptor.manifest_path, 3)?;
-            if !manifests.insert(path.clone()) {
+            let path = result.insert(
+                store,
+                url,
+                &snapshot.manifest_list,
+                InventoryEntry { kind: 4, selected },
+                max_paths,
+            )?;
+            if let Some(specs) = lists.get(&path) {
+                if !selected {
+                    result.specs.extend(specs);
+                }
                 continue;
             }
+            let list_path = path.clone();
+            let mut specs = HashSet::new();
             let bytes = store.base.get(&path).await?.bytes().await?;
-            let manifest = Manifest::parse_avro(&bytes).map_err(DataFusionError::Execution)?;
-            for entry in manifest.entries() {
-                if entry.data_file.key_metadata.is_some() {
-                    return plan_err!("expire_snapshots does not support encrypted files");
+            let list = ManifestList::parse_with_version(&bytes, metadata.format_version)
+                .map_err(DataFusionError::Execution)?;
+            for descriptor in list.entries() {
+                if descriptor.key_metadata.is_some() {
+                    return plan_err!("expire_snapshots does not support encrypted manifests");
                 }
-                if matches!(
-                    entry.status,
-                    ManifestStatus::Added | ManifestStatus::Existing
-                ) {
-                    let kind = match entry.data_file.content {
-                        DataContentType::Data => 0,
-                        DataContentType::PositionDeletes => 1,
-                        DataContentType::EqualityDeletes => 2,
-                    };
-                    // Deletion vectors share physical Puffin containers: offsets are not identities.
-                    result.insert(store, url, &entry.data_file.file_path, kind)?;
+                specs.insert(descriptor.partition_spec_id);
+                let path = result.insert(
+                    store,
+                    url,
+                    &descriptor.manifest_path,
+                    InventoryEntry { kind: 3, selected },
+                    max_paths,
+                )?;
+                if !manifests.insert(path.clone()) {
+                    continue;
+                }
+                let bytes = store.base.get(&path).await?.bytes().await?;
+                let manifest = Manifest::parse_avro(&bytes).map_err(DataFusionError::Execution)?;
+                for entry in manifest.entries() {
+                    if entry.data_file.key_metadata.is_some() {
+                        return plan_err!("expire_snapshots does not support encrypted files");
+                    }
+                    if matches!(
+                        entry.status,
+                        ManifestStatus::Added | ManifestStatus::Existing
+                    ) {
+                        let kind = match entry.data_file.content {
+                            DataContentType::Data => 0,
+                            DataContentType::PositionDeletes => 1,
+                            DataContentType::EqualityDeletes => 2,
+                        };
+                        // Deletion vectors share physical Puffin containers: offsets are not identities.
+                        result.insert(
+                            store,
+                            url,
+                            &entry.data_file.file_path,
+                            InventoryEntry { kind, selected },
+                            max_paths,
+                        )?;
+                    }
                 }
             }
+            if !selected {
+                result.specs.extend(&specs);
+            }
+            lists.insert(list_path, specs);
+        }
+        for file in metadata
+            .statistics
+            .iter()
+            .filter(|s| is_selected(s.snapshot_id) == selected)
+        {
+            if file.key_metadata.is_some() {
+                return plan_err!("expire_snapshots does not support encrypted statistics");
+            }
+            result.insert(
+                store,
+                url,
+                &file.statistics_path,
+                InventoryEntry { kind: 5, selected },
+                max_paths,
+            )?;
+        }
+        for file in metadata
+            .partition_statistics
+            .iter()
+            .filter(|s| is_selected(s.snapshot_id) == selected)
+        {
+            result.insert(
+                store,
+                url,
+                &file.statistics_path,
+                InventoryEntry { kind: 5, selected },
+                max_paths,
+            )?;
         }
     }
-    for file in metadata
-        .statistics
-        .iter()
-        .filter(|s| ids.is_none_or(|ids| ids.contains(&s.snapshot_id)))
-    {
-        if file.key_metadata.is_some() {
-            return plan_err!("expire_snapshots does not support encrypted statistics");
-        }
-        result.insert(store, url, &file.statistics_path, 5)?;
-    }
-    for file in metadata
-        .partition_statistics
-        .iter()
-        .filter(|s| ids.is_none_or(|ids| ids.contains(&s.snapshot_id)))
-    {
-        result.insert(store, url, &file.statistics_path, 5)?;
-    }
+    // Bound the global union before discarding unselected paths.
+    result.paths.retain(|_, entry| entry.selected);
     Ok(result)
 }
 
@@ -504,7 +571,8 @@ impl Expiration {
                 .into_iter()
                 .filter(|(path, _)| !reachable.paths.contains_key(path)),
         )
-        .map(|(path, kind)| async move {
+        .map(|(path, entry)| async move {
+            let kind = entry.kind;
             for attempt in 0..3 {
                 match store.base.delete(&path).await {
                     Ok(()) => return Some(kind),

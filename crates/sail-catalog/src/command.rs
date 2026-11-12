@@ -457,7 +457,7 @@ impl CatalogCommand {
                 destination,
                 if_exists,
             } => {
-                match manager.rename_table(&table, &destination).await {
+                match manager.rename_table(ctx, &table, &destination).await {
                     Err(CatalogError::NotFound(CatalogObject::Table, _)) if if_exists => {}
                     result => result?,
                 };

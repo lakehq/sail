@@ -12,7 +12,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use sail_catalog::lakehouse::{
     IcebergMetadataCasOutcome as Outcome, IcebergMetadataCasRequest as Request,
 };
-use sail_catalog::provider::{CatalogProvider, Namespace};
+use sail_catalog::provider::{
+    CatalogProvider, Namespace, RenameTableMetadataRequirement, RenameTablePrecondition,
+};
 use sail_common_hms::hms::{
     EnvironmentContext, GetTableRequest, GetTableResult, InvalidOperationException, LockResponse,
     MetaException, NoSuchLockException, NoSuchObjectException,
@@ -186,6 +188,21 @@ impl Harness {
     }
 
     async fn rename(&self, destination_database: &str) -> CatalogResult<()> {
+        self.provider
+            .rename_table_with_precondition(
+                &Namespace::try_from(vec!["db".to_string()]).expect("source namespace"),
+                "items",
+                &Namespace::try_from(vec![destination_database.to_string()])
+                    .expect("destination namespace"),
+                "renamed",
+                RenameTablePrecondition::Iceberg {
+                    metadata_location: "old".into(),
+                },
+            )
+            .await
+    }
+
+    async fn rename_unguarded(&self, destination_database: &str) -> CatalogResult<()> {
         self.provider
             .rename_table(
                 &Namespace::try_from(vec!["db".to_string()]).expect("source namespace"),
@@ -663,7 +680,7 @@ async fn queued_publication_is_cancelled_before_capacity_returns_on_lock_loss() 
 }
 
 #[tokio::test]
-async fn rename_waits_for_pointer_commit_and_preserves_latest_metadata() {
+async fn rename_rejects_pointer_advanced_while_waiting_for_lock() {
     for (destination, datasource_only) in [
         ("db", false),
         ("other_db", false),
@@ -711,21 +728,21 @@ async fn rename_waits_for_pointer_commit_and_preserves_latest_metadata() {
         assert_eq!(h.state.alters.load(Ordering::SeqCst), 1);
         h.state.release_alters.add_permits(1);
         assert_eq!(commit.await.expect("commit"), Outcome::Committed);
-        tokio::select! {
-            result = &mut rename => panic!("rename completed before gate: {result:?}"),
-            () = wait_count(&h.state.alters, 2) => {}
-        }
+        assert!(matches!(rename.await, Err(CatalogError::Conflict(_))));
         assert_eq!(
             h.state.reads.load(Ordering::SeqCst),
             3,
             "rename reloads under lock"
         );
-        h.state.release_alters.add_permits(1);
-        rename.await.expect("rename");
+        assert_eq!(
+            h.state.alters.load(Ordering::SeqCst),
+            1,
+            "only the competing commit publishes"
+        );
         assert_eq!(h.pointer(), "new");
         let table = h.state.table.lock().expect("table");
-        assert_eq!(table.db_name.as_deref(), Some(destination));
-        assert_eq!(table.table_name.as_deref(), Some("renamed"));
+        assert_eq!(table.db_name.as_deref(), Some("db"));
+        assert_eq!(table.table_name.as_deref(), Some("items"));
         assert_eq!(
             table
                 .parameters
@@ -735,6 +752,156 @@ async fn rename_waits_for_pointer_commit_and_preserves_latest_metadata() {
                 .map(String::as_str),
             Some("old")
         );
+    }
+}
+
+#[tokio::test]
+async fn unguarded_iceberg_rename_never_publishes() {
+    for datasource_only in [false, true] {
+        let h = Harness::new(Behavior::default()).await;
+        if datasource_only {
+            h.state
+                .table
+                .lock()
+                .expect("table")
+                .parameters
+                .as_mut()
+                .expect("parameters")
+                .insert("spark.sql.sources.provider".into(), "iceberg".into());
+            h.state
+                .table
+                .lock()
+                .expect("table")
+                .parameters
+                .as_mut()
+                .expect("parameters")
+                .remove("table_type");
+        }
+        let before = h.state.table.lock().expect("table").clone();
+        assert!(matches!(
+            h.rename_unguarded("other_db").await,
+            Err(CatalogError::CommitRejected(_))
+        ));
+        assert_eq!(h.state.locks.load(Ordering::SeqCst), 0);
+        assert_eq!(h.state.alters.load(Ordering::SeqCst), 0);
+        assert_eq!(*h.state.table.lock().expect("table"), before);
+    }
+}
+
+#[tokio::test]
+async fn rename_rejects_removed_pointer_or_inconsistent_aliases_under_lock() {
+    for inconsistent in [false, true] {
+        let h = Harness::new(Behavior {
+            read_gate_at: 1,
+            ..Default::default()
+        })
+        .await;
+        let rename = h.rename("db");
+        tokio::pin!(rename);
+        tokio::select! {
+            result = &mut rename => panic!("rename completed before classification: {result:?}"),
+            () = wait_count(&h.state.reads, 1) => {}
+        }
+        {
+            let mut table = h.state.table.lock().expect("table");
+            let parameters = table.parameters.as_mut().expect("parameters");
+            if inconsistent {
+                parameters.insert("metadata-location".into(), "different".into());
+            } else {
+                parameters.remove("metadata_location");
+            }
+        }
+        let before = h.state.table.lock().expect("table").clone();
+        h.state.release_read.add_permits(1);
+        let result = rename.await;
+        if inconsistent {
+            assert!(matches!(result, Err(CatalogError::CommitRejected(_))));
+        } else {
+            assert!(matches!(result, Err(CatalogError::Conflict(_))));
+        }
+        assert_eq!(h.state.alters.load(Ordering::SeqCst), 0);
+        assert_eq!(*h.state.table.lock().expect("table"), before);
+    }
+}
+
+#[tokio::test]
+async fn rename_preserves_current_parameters_when_pointer_is_unchanged() {
+    let h = Harness::new(Behavior {
+        read_gate_at: 1,
+        ..Default::default()
+    })
+    .await;
+    let rename = h.rename("db");
+    tokio::pin!(rename);
+    tokio::select! {
+        result = &mut rename => panic!("rename completed before classification: {result:?}"),
+        () = wait_count(&h.state.reads, 1) => {}
+    }
+    h.state
+        .table
+        .lock()
+        .expect("table")
+        .parameters
+        .as_mut()
+        .expect("parameters")
+        .insert("concurrent_property".into(), "preserved".into());
+    h.state.release_read.add_permits(1);
+    rename.await.expect("rename");
+    let table = h.state.table.lock().expect("table");
+    assert_eq!(table.table_name.as_deref(), Some("renamed"));
+    assert_eq!(
+        table
+            .parameters
+            .as_ref()
+            .expect("parameters")
+            .get("concurrent_property")
+            .map(String::as_str),
+        Some("preserved")
+    );
+    assert_eq!(h.state.alters.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn rename_preflight_uses_raw_hms_metadata() {
+    for datasource_only in [false, true] {
+        let h = Harness::new(Behavior::default()).await;
+        {
+            let mut table = h.state.table.lock().expect("table");
+            let location = "file:///warehouse/items";
+            table.sd = Some(sail_common_hms::hms::StorageDescriptor {
+                location: Some(
+                    if datasource_only {
+                        "file:///unused-hms-location"
+                    } else {
+                        location
+                    }
+                    .into(),
+                ),
+                serde_info: Some(sail_common_hms::hms::SerDeInfo {
+                    parameters: Some(HashMap::from([("path".into(), location.into())])),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+            if datasource_only {
+                let parameters = table.parameters.as_mut().expect("parameters");
+                parameters.remove("table_type");
+                parameters.insert("spark.sql.sources.provider".into(), "iceberg".into());
+            }
+        }
+        let namespace = Namespace::try_from(vec!["db".to_string()]).expect("namespace");
+        assert_eq!(
+            h.provider
+                .rename_table_metadata_requirement(&namespace, "items")
+                .await
+                .expect("requirement"),
+            RenameTableMetadataRequirement::Iceberg {
+                table_location: "file:///warehouse/items".into(),
+                metadata_location: "old".into(),
+            }
+        );
+        assert_eq!(h.state.locks.load(Ordering::SeqCst), 0);
+        assert_eq!(h.state.alters.load(Ordering::SeqCst), 0);
     }
 }
 
@@ -899,7 +1066,7 @@ async fn rename_rejects_disabled_locks_and_occupied_destination() {
 async fn non_iceberg_rename_keeps_unlocked_path() {
     let h = Harness::new(Behavior::default()).await;
     h.state.table.lock().expect("table").parameters = None;
-    h.rename("other_db").await.expect("rename");
+    h.rename_unguarded("other_db").await.expect("rename");
     assert_eq!(h.state.locks.load(Ordering::SeqCst), 0);
     assert_eq!(h.state.reads.load(Ordering::SeqCst), 1);
     assert_eq!(h.state.alters.load(Ordering::SeqCst), 1);

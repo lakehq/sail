@@ -234,6 +234,22 @@ pub trait LakeSource: DataSource {
         }
     }
 
+    /// Load policy-relevant properties from the exact catalog metadata pointer.
+    /// The caller validates these through the provider retained for the guarded rename.
+    /// This must not change storage or discover metadata by directory listing.
+    async fn load_rename_table_properties(
+        &self,
+        ctx: &TaskContext,
+        table_location: &str,
+        metadata_location: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let _ = (ctx, table_location, metadata_location);
+        not_impl_err!(
+            "RENAME TABLE metadata loading is unsupported for lake source '{}'",
+            self.name()
+        )
+    }
+
     /// Alters storage metadata for an existing lake source.
     async fn alter_table(
         &self,

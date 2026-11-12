@@ -452,6 +452,40 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         self.inner.validate_alter_table(options)
     }
 
+    async fn rename_table_metadata_requirement(
+        &self,
+        database: &Namespace,
+        table: &str,
+    ) -> CatalogResult<super::RenameTableMetadataRequirement> {
+        self.inner
+            .rename_table_metadata_requirement(database, table)
+            .await
+    }
+
+    async fn rename_table_with_precondition(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+        precondition: super::RenameTablePrecondition,
+    ) -> CatalogResult<()> {
+        self.inner
+            .rename_table_with_precondition(
+                database,
+                table,
+                destination_database,
+                destination_table,
+                precondition,
+            )
+            .await?;
+        if let Some(cache) = &self.table_cache {
+            cache.invalidate(database).await;
+            cache.invalidate(destination_database).await;
+        }
+        Ok(())
+    }
+
     async fn rename_table(
         &self,
         database: &Namespace,
@@ -581,6 +615,9 @@ mod tests {
     use crate::provider::{CreateDatabaseOptions, CreateTableOptions, Namespace};
 
     struct MockProvider {
+        name: &'static str,
+        reject_disabled_locks: bool,
+        policy_calls: AtomicUsize,
         db_calls: AtomicUsize,
         table_calls: AtomicUsize,
         view_calls: AtomicUsize,
@@ -589,11 +626,16 @@ mod tests {
         commit_calls: AtomicUsize,
         delta_commit_calls: AtomicUsize,
         last_commit_format: Mutex<Option<String>>,
+        rename_requirements: AtomicUsize,
+        guarded_renames: AtomicUsize,
     }
 
     impl MockProvider {
         fn new() -> Self {
             Self {
+                name: "mock",
+                reject_disabled_locks: false,
+                policy_calls: AtomicUsize::new(0),
                 db_calls: AtomicUsize::new(0),
                 table_calls: AtomicUsize::new(0),
                 view_calls: AtomicUsize::new(0),
@@ -602,6 +644,8 @@ mod tests {
                 commit_calls: AtomicUsize::new(0),
                 delta_commit_calls: AtomicUsize::new(0),
                 last_commit_format: Mutex::new(None),
+                rename_requirements: AtomicUsize::new(0),
+                guarded_renames: AtomicUsize::new(0),
             }
         }
     }
@@ -609,7 +653,22 @@ mod tests {
     #[async_trait::async_trait]
     impl CatalogProvider for MockProvider {
         fn get_name(&self) -> &str {
-            "mock"
+            self.name
+        }
+
+        fn validate_alter_table(&self, options: &AlterTableOptions) -> CatalogResult<()> {
+            self.policy_calls.fetch_add(1, Ordering::SeqCst);
+            if self.reject_disabled_locks
+                && let AlterTableOptions::SetTableProperties { properties } = options
+                && properties
+                    .iter()
+                    .any(|(key, value)| key == "engine.hive.lock-enabled" && value != "true")
+            {
+                return Err(crate::error::CatalogError::CommitRejected(
+                    "disabled locks".into(),
+                ));
+            }
+            Ok(())
         }
 
         fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
@@ -810,6 +869,44 @@ mod tests {
             _table: &str,
             _options: AlterTableOptions,
         ) -> CatalogResult<()> {
+            Ok(())
+        }
+
+        async fn rename_table_metadata_requirement(
+            &self,
+            database: &Namespace,
+            table: &str,
+        ) -> CatalogResult<crate::provider::RenameTableMetadataRequirement> {
+            assert_eq!(database, &Namespace::try_from(vec!["db1"]).unwrap());
+            assert_eq!(table, "t1");
+            self.rename_requirements.fetch_add(1, Ordering::SeqCst);
+            Ok(crate::provider::RenameTableMetadataRequirement::Iceberg {
+                table_location: "file:///table".into(),
+                metadata_location: "file:///table/metadata.json".into(),
+            })
+        }
+
+        async fn rename_table_with_precondition(
+            &self,
+            database: &Namespace,
+            table: &str,
+            destination_database: &Namespace,
+            destination_table: &str,
+            precondition: crate::provider::RenameTablePrecondition,
+        ) -> CatalogResult<()> {
+            assert_eq!(database, &Namespace::try_from(vec!["db1"]).unwrap());
+            assert_eq!(table, "t1");
+            assert_eq!(
+                destination_database,
+                &Namespace::try_from(vec!["db2"]).unwrap()
+            );
+            assert_eq!(destination_table, "t2");
+            self.guarded_renames.fetch_add(1, Ordering::SeqCst);
+            let crate::provider::RenameTablePrecondition::Iceberg { metadata_location } =
+                precondition;
+            if metadata_location != "file:///table/metadata.json" {
+                return Err(crate::error::CatalogError::Conflict("stale pointer".into()));
+            }
             Ok(())
         }
 
@@ -1091,6 +1188,221 @@ mod tests {
         // Second call - should hit cache (meaning max_capacity(0) was NOT applied)
         provider.list_databases(None).await.unwrap();
         assert_eq!(mock.db_calls.load(Ordering::SeqCst), 1);
+    }
+
+    struct GatedRenameSource {
+        enabled: bool,
+        started: tokio::sync::Notify,
+        resume: tokio::sync::Semaphore,
+    }
+
+    #[async_trait::async_trait]
+    impl sail_common_datafusion::datasource::DataSource for GatedRenameSource {
+        fn name(&self) -> &str {
+            "iceberg"
+        }
+
+        fn as_lake_source(
+            self: Arc<Self>,
+        ) -> Option<Arc<dyn sail_common_datafusion::lakesource::LakeSource>> {
+            Some(self)
+        }
+
+        async fn create_source(
+            &self,
+            _ctx: &dyn datafusion::catalog::Session,
+            _info: sail_common_datafusion::datasource::SourceInfo,
+        ) -> datafusion_common::Result<Arc<dyn datafusion_expr::TableSource>> {
+            datafusion_common::not_impl_err!("unused in rename test")
+        }
+
+        async fn create_writer(
+            &self,
+            _ctx: &dyn datafusion::catalog::Session,
+            _info: sail_common_datafusion::datasource::SinkInfo,
+        ) -> datafusion_common::Result<datafusion_expr::LogicalPlan> {
+            datafusion_common::not_impl_err!("unused in rename test")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl sail_common_datafusion::lakesource::LakeSource for GatedRenameSource {
+        async fn load_rename_table_properties(
+            &self,
+            _ctx: &datafusion::execution::TaskContext,
+            table_location: &str,
+            metadata_location: &str,
+        ) -> datafusion_common::Result<Vec<(String, String)>> {
+            assert_eq!(table_location, "file:///table");
+            assert_eq!(metadata_location, "file:///table/metadata.json");
+            self.started.notify_one();
+            self.resume.acquire().await.unwrap().forget();
+            Ok(vec![(
+                "engine.hive.lock-enabled".into(),
+                self.enabled.to_string(),
+            )])
+        }
+    }
+
+    #[tokio::test]
+    async fn rename_policy_and_publication_keep_original_provider_after_catalog_switch() {
+        use datafusion::prelude::{SessionConfig, SessionContext};
+        use sail_common_datafusion::datasource::DataSourceRegistry;
+
+        use crate::manager::{CatalogManager, CatalogManagerOptions};
+
+        for enabled in [false, true] {
+            let original = Arc::new(MockProvider {
+                name: "original",
+                reject_disabled_locks: true,
+                ..MockProvider::new()
+            });
+            let permissive = Arc::new(MockProvider {
+                name: "permissive",
+                ..MockProvider::new()
+            });
+            let manager = Arc::new(
+                CatalogManager::try_new(CatalogManagerOptions {
+                    catalogs: HashMap::from([
+                        (
+                            "original".into(),
+                            original.clone() as Arc<dyn CatalogProvider>,
+                        ),
+                        (
+                            "permissive".into(),
+                            permissive.clone() as Arc<dyn CatalogProvider>,
+                        ),
+                    ]),
+                    default_catalog: "original".into(),
+                    default_database: vec!["db1".into()],
+                    global_temporary_database: vec!["global_temp".into()],
+                })
+                .unwrap(),
+            );
+            let source = Arc::new(GatedRenameSource {
+                enabled,
+                started: tokio::sync::Notify::new(),
+                resume: tokio::sync::Semaphore::new(0),
+            });
+            let registry = Arc::new(DataSourceRegistry::new());
+            registry.register_data_source(source.clone()).unwrap();
+            let session = SessionContext::new_with_config(
+                SessionConfig::new()
+                    .with_extension(registry)
+                    .with_extension(manager.clone()),
+            );
+            let task = {
+                let manager = manager.clone();
+                let ctx = session.task_ctx();
+                tokio::spawn(async move {
+                    manager
+                        .rename_table(
+                            &ctx,
+                            &["db1".into(), "t1".into()],
+                            &["db2".into(), "t2".into()],
+                        )
+                        .await
+                })
+            };
+            tokio::time::timeout(Duration::from_secs(5), source.started.notified())
+                .await
+                .unwrap();
+            manager.set_default_catalog("permissive").unwrap();
+            source.resume.add_permits(1);
+            let result = task.await.unwrap();
+            if enabled {
+                result.unwrap();
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(crate::error::CatalogError::CommitRejected(_))
+                ));
+            }
+            assert_eq!(original.rename_requirements.load(Ordering::SeqCst), 1);
+            assert_eq!(original.policy_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                original.guarded_renames.load(Ordering::SeqCst),
+                usize::from(enabled)
+            );
+            assert_eq!(permissive.rename_requirements.load(Ordering::SeqCst), 0);
+            assert_eq!(permissive.policy_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(permissive.guarded_renames.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn guarded_rename_forwards_through_runtime_and_invalidates_both_namespaces() {
+        use crate::provider::{
+            RenameTableMetadataRequirement, RenameTablePrecondition, RuntimeAwareCatalogProvider,
+        };
+
+        let mock = mock_provider();
+        let config = CatalogCacheConfig {
+            table_cache_type: sail_common::config::CacheType::Session,
+            table_cache_size: Some(10),
+            table_cache_ttl_secs: Some(60),
+            ..Default::default()
+        };
+        let provider = RuntimeAwareCatalogProvider::try_new(
+            || Ok(CachingCatalogProvider::new(mock.clone(), config, None)),
+            tokio::runtime::Handle::current(),
+        )
+        .unwrap();
+        let source = Namespace::try_from(vec!["db1"]).unwrap();
+        let target = Namespace::try_from(vec!["db2"]).unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                provider
+                    .rename_table_metadata_requirement(&source, "t1")
+                    .await
+                    .unwrap(),
+                RenameTableMetadataRequirement::Iceberg {
+                    table_location: "file:///table".into(),
+                    metadata_location: "file:///table/metadata.json".into(),
+                }
+            );
+        }
+        assert_eq!(mock.rename_requirements.load(Ordering::SeqCst), 2);
+        for ns in [&source, &target] {
+            provider.list_tables(ns).await.unwrap();
+        }
+        assert_eq!(mock.table_calls.load(Ordering::SeqCst), 2);
+        let error = provider
+            .rename_table_with_precondition(
+                &source,
+                "t1",
+                &target,
+                "t2",
+                RenameTablePrecondition::Iceberg {
+                    metadata_location: "stale".into(),
+                },
+            )
+            .await;
+        assert!(matches!(
+            error,
+            Err(crate::error::CatalogError::Conflict(_))
+        ));
+        for ns in [&source, &target] {
+            provider.list_tables(ns).await.unwrap();
+        }
+        assert_eq!(mock.table_calls.load(Ordering::SeqCst), 2);
+        provider
+            .rename_table_with_precondition(
+                &source,
+                "t1",
+                &target,
+                "t2",
+                RenameTablePrecondition::Iceberg {
+                    metadata_location: "file:///table/metadata.json".into(),
+                },
+            )
+            .await
+            .unwrap();
+        for ns in [&source, &target] {
+            provider.list_tables(ns).await.unwrap();
+        }
+        assert_eq!(mock.table_calls.load(Ordering::SeqCst), 4);
+        assert_eq!(mock.guarded_renames.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

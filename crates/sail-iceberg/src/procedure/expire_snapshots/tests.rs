@@ -49,6 +49,234 @@ async fn fixture() -> (StoreContext, Url, TableMetadata) {
 }
 
 #[tokio::test]
+async fn preparation_reads_each_physical_manifest_once_and_preserves_retained_specs() {
+    use crate::io::test_store::TestStore;
+    use crate::spec::{ManifestListWriteContext, ManifestListWriter};
+
+    for shared_list in [false, true] {
+        for noop in [false, true] {
+            let (store, url, mut metadata, descriptors) = rewrite_fixture(
+                FormatVersion::V3,
+                vec![
+                    (2, vec![entry(1, FormatVersion::V3)]),
+                    (1, vec![entry(2, FormatVersion::V3)]),
+                    (3, vec![entry(3, FormatVersion::V3)]),
+                ],
+                false,
+            )
+            .await;
+            for (name, range, id) in [
+                ("metadata/list.avro", 0..2, 10),
+                ("metadata/new-list.avro", 1..3, 20),
+            ] {
+                let mut writer = ManifestListWriter::new();
+                for descriptor in &descriptors[range] {
+                    writer.append(descriptor.clone());
+                }
+                let bytes = writer
+                    .to_bytes_with_context(ManifestListWriteContext {
+                        version: FormatVersion::V3,
+                        snapshot_id: id,
+                        parent_snapshot_id: None,
+                        sequence_number: 0,
+                        first_row_id: None,
+                    })
+                    .expect("list");
+                store
+                    .prefixed
+                    .put(&Path::from(name), bytes.into())
+                    .await
+                    .expect("write list");
+            }
+            let mut retained = metadata.snapshots[0].clone();
+            retained.snapshot_id = 20;
+            retained.timestamp_ms = 500;
+            retained.parent_snapshot_id = Some(10);
+            if !shared_list {
+                retained.manifest_list = "metadata/new-list.avro".into();
+            }
+            // Metadata order must not determine which paths become candidates.
+            metadata.snapshots.insert(0, retained);
+            metadata.current_snapshot_id = Some(20);
+            let counted = Arc::new(TestStore::new(store.base));
+            let store = StoreContext::new(counted.clone(), &url).expect("counted store");
+            let mut op = operation();
+            op.clean_metadata = true;
+            if noop {
+                op.older_than_ms = Some(0);
+            }
+            let prepared = op.prepare(&store, &url, &metadata).await.expect("prepare");
+            let mut expected = HashMap::from([
+                ("table/metadata/list.avro".to_string(), 1),
+                ("table/metadata/input-0.avro".to_string(), 1),
+                ("table/metadata/input-1.avro".to_string(), 1),
+            ]);
+            if !shared_list {
+                expected.insert("table/metadata/new-list.avro".into(), 1);
+                expected.insert("table/metadata/input-2.avro".into(), 1);
+            }
+            assert_eq!(*counted.gets.lock().expect("counts"), expected);
+            let candidates = &prepared.expiration.candidates;
+            assert_eq!(candidates.paths.len(), if noop { 0 } else { 5 });
+            if !noop {
+                for (raw, kind) in [
+                    ("metadata/list.avro", 4),
+                    ("metadata/input-0.avro", 3),
+                    ("metadata/input-1.avro", 3),
+                    ("data/1.parquet", 0),
+                    ("data/2.parquet", 0),
+                ] {
+                    let path = checked_path(&store, &url, raw).expect("path");
+                    let candidate = candidates
+                        .paths
+                        .get(&path)
+                        .expect("candidate including shared file");
+                    assert_eq!(candidate.kind, kind);
+                    assert!(candidate.selected);
+                }
+            }
+            let removed_specs: Vec<_> = prepared
+                .updates
+                .iter()
+                .filter_map(|update| {
+                    if let TableUpdate::RemovePartitionSpecs { spec_ids } = update {
+                        Some(spec_ids.clone())
+                    } else {
+                        None
+                    }
+                })
+                .flatten()
+                .collect();
+            assert_eq!(
+                removed_specs,
+                if shared_list {
+                    vec![3]
+                } else if noop {
+                    vec![]
+                } else {
+                    vec![2]
+                }
+            );
+
+            // The post-publication scan is independent, not satisfied by preparation's cache.
+            let mut current = metadata;
+            if !noop {
+                current.snapshots.retain(|s| s.snapshot_id == 20);
+            }
+            counted.gets.lock().expect("counts").clear();
+            prepared
+                .expiration
+                .finish(
+                    &store,
+                    &url,
+                    Ok(current),
+                    IcebergProcedureType::ExpireSnapshots
+                        .descriptor()
+                        .expect("descriptor")
+                        .schema(),
+                )
+                .await
+                .expect("finish");
+            if !noop && !shared_list {
+                expected.remove("table/metadata/list.avro");
+                expected.remove("table/metadata/input-0.avro");
+            }
+            assert_eq!(*counted.gets.lock().expect("counts"), expected);
+            assert!(
+                !counted
+                    .deletes
+                    .lock()
+                    .expect("deletes")
+                    .contains(&Path::from("table/data/2.parquet"))
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn selected_inventory_preserves_file_kinds_and_shared_statistics() {
+    let mut position = entry(2, FormatVersion::V3);
+    position.data_file.content = DataContentType::PositionDeletes;
+    let mut equality = entry(3, FormatVersion::V3);
+    equality.data_file.content = DataContentType::EqualityDeletes;
+    let (store, url, mut metadata, _) = rewrite_fixture(
+        FormatVersion::V3,
+        vec![(0, vec![entry(1, FormatVersion::V3), position, equality])],
+        false,
+    )
+    .await;
+    let mut retained = metadata.snapshots[0].clone();
+    retained.snapshot_id = 20;
+    retained.timestamp_ms = 500;
+    retained.parent_snapshot_id = Some(10);
+    metadata.snapshots.insert(0, retained);
+    metadata.current_snapshot_id = Some(20);
+    for id in [20, 10] {
+        metadata.statistics.push(
+            serde_json::from_value(serde_json::json!({
+                "snapshot-id": id, "statistics-path": "metadata/shared.puffin",
+                "file-size-in-bytes": 1, "file-footer-size-in-bytes": 0, "blob-metadata": []
+            }))
+            .expect("statistics"),
+        );
+    }
+    let prepared = operation()
+        .prepare(&store, &url, &metadata)
+        .await
+        .expect("prepare");
+    for (raw, kind) in [
+        ("data/1.parquet", 0),
+        ("data/2.parquet", 1),
+        ("data/3.parquet", 2),
+        ("metadata/input-0.avro", 3),
+        ("metadata/list.avro", 4),
+        ("metadata/shared.puffin", 5),
+    ] {
+        let path = checked_path(&store, &url, raw).expect("path");
+        assert_eq!(
+            prepared
+                .expiration
+                .candidates
+                .paths
+                .get(&path)
+                .expect("candidate")
+                .kind,
+            kind
+        );
+    }
+    assert_eq!(prepared.expiration.candidates.paths.len(), 6);
+}
+
+#[tokio::test]
+async fn inventory_limit_counts_retained_paths_and_noop_validates_them() {
+    let (store, url, mut metadata) = fixture().await;
+    for ids in [HashSet::from([10]), HashSet::new()] {
+        assert!(
+            inventory_with_limit(&store, &url, &metadata, Some(&ids), 3)
+                .await
+                .is_err()
+        );
+        let result = inventory_with_limit(&store, &url, &metadata, Some(&ids), 4)
+            .await
+            .expect("global union fits");
+        assert_eq!(result.paths.len(), if ids.is_empty() { 0 } else { 3 });
+    }
+    let mut op = operation();
+    op.older_than_ms = Some(0);
+    metadata.statistics.push(
+        serde_json::from_value(serde_json::json!({
+            "snapshot-id": 20, "statistics-path": "memory://foreign/table/stats.puffin",
+            "file-size-in-bytes": 1, "file-footer-size-in-bytes": 0, "blob-metadata": []
+        }))
+        .expect("statistics"),
+    );
+    assert!(op.prepare(&store, &url, &metadata).await.is_err());
+    metadata.statistics.clear();
+    metadata.snapshots[1].key_id = Some("encrypted".into());
+    assert!(op.prepare(&store, &url, &metadata).await.is_err());
+}
+
+#[tokio::test]
 async fn retention_strict_boundary_explicit_ids_and_staged_snapshots() {
     let (_, _, mut metadata) = fixture().await;
     let mut op = operation();
@@ -258,7 +486,13 @@ async fn literal_percent_aliases_preserve_live_paths_and_do_not_touch_double_esc
     // Once genuinely unreachable, remove exactly the literal key, not its encoded sibling.
     Expiration {
         candidates: Inventory {
-            paths: HashMap::from([(literal.clone(), 5)]),
+            paths: HashMap::from([(
+                literal.clone(),
+                InventoryEntry {
+                    kind: 5,
+                    selected: true,
+                },
+            )]),
             specs: HashSet::new(),
         },
         concurrency: 1,

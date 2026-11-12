@@ -4,6 +4,7 @@ use aws_sdk_glue::types::TableInput;
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::AlterTableOptions;
 use sail_common_datafusion::catalog::managed::{
+    METADATA_LOCATION_UNDERSCORE_KEY, PREVIOUS_METADATA_LOCATION_KEY, is_metadata_location_key,
     metadata_location_update, metadata_location_value, previous_metadata_location_update,
 };
 use sail_common_datafusion::column_features::ColumnFeatureKey;
@@ -144,8 +145,18 @@ pub(crate) fn apply_alter_table_options(
         }
 
         AlterTableOptions::SetTableProperties { properties } => {
-            validate_metadata_location_precondition(database, table, &parameters, &properties)?;
+            let pointer_update = if crate::iceberg::is_iceberg_parameters(Some(&parameters)) {
+                validate_iceberg_metadata_update(&parameters, &properties)?
+            } else {
+                None
+            };
+            if pointer_update.is_none() {
+                validate_metadata_location_precondition(database, table, &parameters, &properties)?;
+            }
             parameters.extend(properties);
+            if let Some((replacement, previous)) = pointer_update {
+                update_metadata_parameters(&mut parameters, &replacement, previous.as_deref());
+            }
         }
         AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
             for key in keys {
@@ -174,6 +185,63 @@ pub(crate) fn apply_alter_table_options(
         }
     }
     Ok(parameters)
+}
+
+/// Validate every alias before the caller merges any properties.
+fn validate_iceberg_metadata_update(
+    parameters: &HashMap<String, String>,
+    incoming: &[(String, String)],
+) -> CatalogResult<Option<(String, Option<String>)>> {
+    fn unique<'a>(values: impl Iterator<Item = &'a str>) -> CatalogResult<Option<&'a str>> {
+        let mut values = values;
+        let first = values.next();
+        if values.any(|value| Some(value) != first) {
+            return Err(CatalogError::CommitRejected(
+                "Inconsistent Iceberg metadata pointer aliases".into(),
+            ));
+        }
+        Ok(first)
+    }
+    let replacement = unique(incoming.iter().filter_map(|(key, value)| {
+        is_metadata_location_key(key.trim()).then_some(value.as_str())
+    }))?;
+    let Some(replacement) = replacement else {
+        return Ok(None);
+    };
+    let expected = unique(incoming.iter().filter_map(|(key, value)| {
+        key.trim()
+            .eq_ignore_ascii_case(PREVIOUS_METADATA_LOCATION_KEY)
+            .then_some(value.as_str())
+    }))?;
+    let current = unique(parameters.iter().filter_map(|(key, value)| {
+        is_metadata_location_key(key.trim()).then_some(value.as_str())
+    }))?;
+    if let Some(expected) = expected
+        && current != Some(expected)
+    {
+        return Err(CatalogError::Conflict(
+            "Iceberg metadata pointer changed".into(),
+        ));
+    }
+    Ok(Some((replacement.into(), expected.map(Into::into))))
+}
+
+pub(crate) fn update_metadata_parameters(
+    parameters: &mut HashMap<String, String>,
+    replacement: &str,
+    previous: Option<&str>,
+) {
+    parameters.retain(|key, _| {
+        !is_metadata_location_key(key.trim())
+            && !(previous.is_some()
+                && key
+                    .trim()
+                    .eq_ignore_ascii_case(PREVIOUS_METADATA_LOCATION_KEY))
+    });
+    parameters.insert(METADATA_LOCATION_UNDERSCORE_KEY.into(), replacement.into());
+    if let Some(previous) = previous {
+        parameters.insert(PREVIOUS_METADATA_LOCATION_KEY.into(), previous.into());
+    }
 }
 
 fn validate_metadata_location_precondition(
@@ -329,6 +397,46 @@ mod tests {
 
     use sail_catalog::error::CatalogError;
     use sail_catalog::provider::AlterTableOptions;
+
+    #[test]
+    fn generic_and_non_iceberg_updates_preserve_exact_keys() {
+        let parameters = HashMap::from([
+            ("table_type".into(), "ICEBERG".into()),
+            ("metadata_location".into(), "A".into()),
+            ("metadata-location".into(), "B".into()),
+        ]);
+        let mut expected = parameters.clone();
+        expected.insert("owner".into(), "updated".into());
+        assert_eq!(
+            super::apply_alter_table_options(
+                "db",
+                "t",
+                parameters,
+                AlterTableOptions::SetTableProperties {
+                    properties: vec![("owner".into(), "updated".into())],
+                }
+            )
+            .unwrap(),
+            expected
+        );
+        let parameters = HashMap::from([("owner".into(), "preserved".into())]);
+        assert!(!crate::iceberg::is_iceberg_parameters(Some(&parameters)));
+        assert_eq!(
+            super::apply_alter_table_options(
+                "db",
+                "t",
+                parameters,
+                AlterTableOptions::SetTableProperties {
+                    properties: vec![("metadata-location".into(), "B".into())],
+                }
+            )
+            .unwrap(),
+            HashMap::from([
+                ("owner".into(), "preserved".into()),
+                ("metadata-location".into(), "B".into())
+            ])
+        );
+    }
 
     #[test]
     fn test_apply_alter_table_options_rejects_stale_metadata_location() {

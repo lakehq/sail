@@ -55,6 +55,68 @@ fn inconsistent_metadata_aliases_are_not_normalized() {
     }
 }
 
+#[test]
+fn rename_preflight_rejects_missing_or_inconsistent_metadata() {
+    use std::collections::HashMap;
+
+    use sail_catalog::provider::RenameTableMetadataRequirement;
+    use sail_common_hms::hms::StorageDescriptor;
+
+    for invalid in [
+        "missing_pointer",
+        "empty_pointer",
+        "aliases",
+        "location",
+        "locks",
+    ] {
+        let mut table = Table {
+            parameters: Some(HashMap::from([
+                ("table_type".into(), "ICEBERG".into()),
+                ("metadata_location".into(), "old".into()),
+            ])),
+            sd: Some(StorageDescriptor {
+                location: Some("file:///warehouse/items".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(matches!(
+            rename_metadata_requirement(&table),
+            Ok(RenameTableMetadataRequirement::Iceberg { .. })
+        ));
+        let parameters = table.parameters.as_mut().expect("parameters");
+        match invalid {
+            "missing_pointer" => {
+                parameters.remove("metadata_location");
+            }
+            "empty_pointer" => {
+                parameters.insert("metadata_location".into(), " ".into());
+            }
+            "aliases" => {
+                parameters.insert("MeTaDaTa-LoCaTiOn".into(), "different".into());
+            }
+            "location" => {
+                table.sd = None;
+            }
+            "locks" => {
+                parameters.insert("engine.hive.lock-enabled".into(), "false".into());
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(
+                rename_metadata_requirement(&table),
+                Err(CatalogError::CommitRejected(_))
+            ),
+            "{invalid}"
+        );
+    }
+    assert_eq!(
+        rename_metadata_requirement(&Table::default()).expect("non-Iceberg"),
+        RenameTableMetadataRequirement::None
+    );
+}
+
 #[tokio::test]
 async fn hms_advertises_lock_backed_publication_by_default() {
     use sail_catalog::lakehouse::LakehouseCapability;

@@ -26,6 +26,11 @@ async fn cas_requires_version_and_never_replays_an_ambiguous_mutation() {
         let endpoint = format!("http://{}", listener.local_addr().expect("address"));
         let writes = Arc::new(Mutex::new(Vec::<Value>::new()));
         let recorded = writes.clone();
+        let state = Arc::new(Mutex::new(
+            json!({"Name":"t", "VersionId":"version-7", "StorageDescriptor":{"Location":"s3://bucket/t"},
+            "Parameters":{"table_type":"ICEBERG", "metadata_location":"old", "metadata-location":"old", " MeTaDaTa-LoCaTiOn ":"old", "owner":"preserved"}}),
+        ));
+        let server_state = state.clone();
         let server = tokio::spawn(async move {
             loop {
                 let (mut socket, _) = listener.accept().await.expect("accept");
@@ -53,6 +58,10 @@ async fn cas_requires_version_and_never_replays_an_ambiguous_mutation() {
                     .expect("body");
                 let request: Value = serde_json::from_slice(&bytes[header_end..]).expect("JSON");
                 let (status, response) = if is_update {
+                    if fault == "success" {
+                        server_state.lock().expect("state")["Parameters"] =
+                            request["TableInput"]["Parameters"].clone();
+                    }
                     recorded.lock().expect("writes").push(request);
                     if fault == "disconnect" {
                         continue;
@@ -64,8 +73,7 @@ async fn cas_requires_version_and_never_replays_an_ambiguous_mutation() {
                         _ => (200, "{}".into()),
                     }
                 } else {
-                    let mut table = json!({"Name":"t", "VersionId":"version-7", "StorageDescriptor":{"Location":"s3://bucket/t"},
-                        "Parameters":{"table_type":"ICEBERG", "metadata_location":"old", "metadata-location":"old", "MeTaDaTa-LoCaTiOn":"old", "owner":"preserved"}});
+                    let mut table = server_state.lock().expect("state").clone();
                     if fault == "aliases" {
                         table["Parameters"]["metadata-location"] = json!("inconsistent");
                     }
@@ -121,11 +129,126 @@ async fn cas_requires_version_and_never_replays_an_ambiguous_mutation() {
             }
             _ => assert!(matches!(outcome, Outcome::Unknown { .. }), "{outcome:?}"),
         }
+        if fault == "success" {
+            let namespace = Namespace::try_from(vec!["db".to_string()]).expect("namespace");
+            let update = |key: &str, expected: Option<&str>, replacement: &str| {
+                let mut properties = vec![(key.into(), replacement.into())];
+                if let Some(expected) = expected {
+                    properties.push((" PrEvIoUs_MeTaDaTa_LoCaTiOn ".into(), expected.into()));
+                }
+                AlterTableOptions::SetTableProperties { properties }
+            };
+            for captured_key in [
+                "metadata-location",
+                "metadata_location",
+                " MeTaDaTa-LoCaTiOn ",
+            ] {
+                provider
+                    .alter_table_atomically(
+                        &namespace,
+                        "t",
+                        vec![update(captured_key, Some("new"), "C")],
+                    )
+                    .await
+                    .expect("ordinary publication");
+                assert_eq!(
+                    state.lock().expect("state")["Parameters"],
+                    json!({"table_type":"ICEBERG", "metadata_location":"C", "previous_metadata_location":"new", "owner":"preserved"})
+                );
+                assert_eq!(
+                    provider
+                        .compare_and_swap_iceberg_metadata(
+                            &namespace,
+                            "t",
+                            IcebergMetadataCasRequest::new("C".into(), "new".into())
+                                .expect("request")
+                        )
+                        .await
+                        .expect("CAS"),
+                    Outcome::Committed
+                );
+            }
+            state.lock().expect("state")["Parameters"][" metadata-location "] = json!("new");
+            provider
+                .alter_table_atomically(
+                    &namespace,
+                    "t",
+                    vec![
+                        AlterTableOptions::SetTableProperties {
+                            properties: vec![
+                                ("metadata-location".into(), "D".into()),
+                                (" METADATA_LOCATION ".into(), "D".into()),
+                                ("previous_metadata_location".into(), "new".into()),
+                            ],
+                        },
+                        update("metadata-location", Some("D"), "E"),
+                        update("metadata-location", None, "new"),
+                    ],
+                )
+                .await
+                .expect("chained publication");
+            assert_eq!(
+                state.lock().expect("state")["Parameters"],
+                json!({"table_type":"ICEBERG", "metadata_location":"new", "previous_metadata_location":"D", "owner":"preserved"})
+            );
+            for failure in ["stale", "later", "incoming", "previous", "current"] {
+                if failure == "current" {
+                    state.lock().expect("state")["Parameters"][" metadata-location "] =
+                        json!("conflict");
+                }
+                let before = state.lock().expect("state").clone();
+                let count = writes.lock().expect("writes").len();
+                let mut options = vec![update(
+                    "metadata-location",
+                    Some(if failure == "stale" { "old" } else { "new" }),
+                    "next",
+                )];
+                match failure {
+                    "later" => options.push(AlterTableOptions::UnsetTableProperties {
+                        keys: vec!["missing".into()],
+                        if_exists: false,
+                    }),
+                    "incoming" | "previous" => {
+                        if let AlterTableOptions::SetTableProperties { properties } =
+                            &mut options[0]
+                        {
+                            properties.push((
+                                if failure == "incoming" {
+                                    "METADATA_LOCATION"
+                                } else {
+                                    "previous_metadata_location"
+                                }
+                                .into(),
+                                "conflict".into(),
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+                assert!(
+                    provider
+                        .alter_table_atomically(&namespace, "t", options)
+                        .await
+                        .is_err(),
+                    "{failure}"
+                );
+                assert_eq!(*state.lock().expect("state"), before);
+                assert_eq!(
+                    writes.lock().expect("writes").len(),
+                    count,
+                    "{failure}: no RPC"
+                );
+            }
+        }
         server.abort();
         let writes = writes.lock().expect("writes");
         assert_eq!(
             writes.len(),
-            usize::from(!matches!(fault, "missing-version" | "aliases" | "stale")),
+            if fault == "success" {
+                8
+            } else {
+                usize::from(!matches!(fault, "missing-version" | "aliases" | "stale"))
+            },
             "{fault}: publication must not be replayed"
         );
         if let Some(write) = writes.first() {

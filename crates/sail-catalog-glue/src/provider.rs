@@ -789,7 +789,6 @@ impl CatalogProvider for GlueCatalogProvider {
         request: sail_catalog::lakehouse::IcebergMetadataCasRequest,
     ) -> CatalogResult<sail_catalog::lakehouse::IcebergMetadataCasOutcome> {
         use sail_catalog::lakehouse::IcebergMetadataCasOutcome as Outcome;
-        use sail_common_datafusion::catalog::managed::is_metadata_location_key;
         let client = self.get_client().await?;
         let database = Self::database_name(database)?;
         let response = client
@@ -824,16 +823,10 @@ impl CatalogProvider for GlueCatalogProvider {
         {
             return Ok(outcome);
         }
-        parameters.retain(|key, _| {
-            !is_metadata_location_key(key.trim())
-                && !key
-                    .trim()
-                    .eq_ignore_ascii_case("previous_metadata_location")
-        });
-        parameters.insert("metadata_location".into(), request.replacement().into());
-        parameters.insert(
-            "previous_metadata_location".into(),
-            request.expected().into(),
+        managed_table::update_metadata_parameters(
+            &mut parameters,
+            request.replacement(),
+            Some(request.expected()),
         );
         let input = Self::table_input_with_parameters(current, parameters)?;
         // [CREDIT]: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/aws/src/main/java/org/apache/iceberg/aws/glue/GlueTableOperations.java#L316-L339

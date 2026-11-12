@@ -227,6 +227,29 @@ pub trait CatalogProvider: Send + Sync {
         options: DropTableOptions,
     ) -> CatalogResult<()>;
 
+    /// Inspect authoritative catalog metadata without loading format metadata.
+    async fn rename_table_metadata_requirement(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+    ) -> CatalogResult<RenameTableMetadataRequirement> {
+        Ok(RenameTableMetadataRequirement::None)
+    }
+
+    /// Rename only if the metadata validated by the lake source is still current.
+    async fn rename_table_with_precondition(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _destination_database: &Namespace,
+        _destination_table: &str,
+        _precondition: RenameTablePrecondition,
+    ) -> CatalogResult<()> {
+        Err(CatalogError::UnsupportedCapability(
+            "guarded table rename".into(),
+        ))
+    }
+
     async fn rename_table(
         &self,
         _database: &Namespace,

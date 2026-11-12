@@ -116,6 +116,49 @@ pub(crate) fn is_iceberg_table(table: &Table) -> bool {
     crate::convert::table_format(table).eq_ignore_ascii_case("iceberg")
 }
 
+pub(crate) fn rename_metadata_requirement(
+    table: &Table,
+) -> CatalogResult<sail_catalog::provider::RenameTableMetadataRequirement> {
+    use sail_catalog::provider::RenameTableMetadataRequirement;
+    if !is_iceberg_table(table) {
+        return Ok(RenameTableMetadataRequirement::None);
+    }
+    validate_lock_enabled(table)?;
+    let metadata_location = rename_metadata_location(table)?
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            CatalogError::CommitRejected("HMS Iceberg rename requires a metadata location".into())
+        })?
+        .to_string();
+    let table_location = crate::convert::table_location(table)
+        .filter(|location| !location.trim().is_empty())
+        .ok_or_else(|| {
+            CatalogError::CommitRejected("HMS Iceberg rename requires a table location".into())
+        })?;
+    Ok(RenameTableMetadataRequirement::Iceberg {
+        table_location,
+        metadata_location,
+    })
+}
+
+fn rename_metadata_location(table: &Table) -> CatalogResult<Option<&str>> {
+    let mut pointers = table
+        .parameters
+        .iter()
+        .flatten()
+        .filter(|(key, _)| {
+            sail_common_datafusion::catalog::managed::is_metadata_location_key(key.trim())
+        })
+        .map(|(_, value)| value.as_str());
+    let pointer = pointers.next();
+    if pointers.any(|value| Some(value) != pointer) {
+        return Err(CatalogError::CommitRejected(
+            "Inconsistent Iceberg metadata pointer aliases".into(),
+        ));
+    }
+    Ok(pointer)
+}
+
 pub(crate) async fn rename_iceberg_table_with_lock(
     provider: &HmsCatalogProvider,
     database: &str,
@@ -123,6 +166,7 @@ pub(crate) async fn rename_iceberg_table_with_lock(
     destination_database: &str,
     destination_table: &str,
     classified: &Table,
+    expected_metadata_location: &str,
 ) -> CatalogResult<()> {
     alter_under_lock(provider, database, table, |mut current| {
         // Classification is only a routing hint, never the table to publish. HMS does not
@@ -138,8 +182,13 @@ pub(crate) async fn rename_iceberg_table_with_lock(
                 "HMS table '{database}.{table}' changed identity before rename"
             )));
         }
-        // Rename only changes HMS metadata; it does not load Iceberg data or metadata files.
-        // Require the cooperative lock policy exposed by HMS, as for other HMS alterations.
+        // The lake source validated this exact metadata file before lock acquisition.
+        // A newer pointer needs fresh validation, never a transparent rename retry.
+        if rename_metadata_location(&current)? != Some(expected_metadata_location) {
+            return Err(CatalogError::Conflict(format!(
+                "HMS table '{database}.{table}' changed metadata location before rename"
+            )));
+        }
         validate_lock_enabled(&current)?;
         current.db_name = Some(destination_database.into());
         current.table_name = Some(destination_table.into());
