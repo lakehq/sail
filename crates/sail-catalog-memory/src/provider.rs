@@ -21,6 +21,8 @@ use tokio::sync::RwLock;
 
 use crate::managed_table;
 
+#[cfg(test)]
+mod metadata_cas_tests;
 mod replacement;
 
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
@@ -682,6 +684,60 @@ impl CatalogProvider for MemoryCatalogProvider {
     ) -> CatalogResult<()> {
         let _access = self.publication_gate.read().await;
         self.apply_table_alterations(database, table, vec![options], Some(schema.as_ref()))
+    }
+
+    fn lakehouse_capabilities(&self) -> Vec<sail_catalog::lakehouse::LakehouseCapability> {
+        vec![sail_catalog::lakehouse::LakehouseCapability::IcebergMetadataLocationCas]
+    }
+
+    async fn compare_and_swap_iceberg_metadata(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: sail_catalog::lakehouse::IcebergMetadataCasRequest,
+    ) -> CatalogResult<sail_catalog::lakehouse::IcebergMetadataCasOutcome> {
+        use sail_catalog::lakehouse::IcebergMetadataCasOutcome as Outcome;
+        use sail_common_datafusion::catalog::managed::is_metadata_location_key;
+        let _access = self.publication_gate.read().await;
+        let mut db = self.databases.get_mut(database).ok_or_else(|| {
+            CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
+        })?;
+        db.check_known(table)?;
+        let status = db
+            .tables
+            .get_mut(table)
+            .ok_or_else(|| CatalogError::NotFound(CatalogObject::Table, table.into()))?;
+        let TableKind::Table {
+            format, properties, ..
+        } = &mut status.kind
+        else {
+            return Ok(Outcome::Rejected {
+                message: "Iceberg CAS requires a table".into(),
+            });
+        };
+        if !format.eq_ignore_ascii_case("iceberg") {
+            return Ok(Outcome::Rejected {
+                message: "Iceberg CAS requires Iceberg format".into(),
+            });
+        }
+        if let Err(outcome) =
+            request.validate_base(properties.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        {
+            return Ok(outcome);
+        }
+        properties.retain(|(key, _)| {
+            !is_metadata_location_key(key.trim())
+                && !key
+                    .trim()
+                    .eq_ignore_ascii_case("previous_metadata_location")
+        });
+        properties.push(("metadata_location".into(), request.replacement().into()));
+        properties.push((
+            "previous_metadata_location".into(),
+            request.expected().into(),
+        ));
+        db.changed(table);
+        Ok(Outcome::Committed)
     }
 
     async fn alter_table_atomically(

@@ -53,6 +53,8 @@ pub(crate) async fn alter_catalog_table(
     let bytes = load_metadata_file_bytes(&store, &metadata_path).await?;
     let mut metadata = TableMetadata::from_json(&bytes)
         .map_err(|error| DataFusionError::External(Box::new(error)))?;
+    IcebergCatalogCommitCoordinator::new(ctx, context.catalog_table())
+        .validate_base_metadata(&metadata)?;
     let previous_entry = previous_metadata_log_entry(
         &table_url,
         PreviousMetadataFile::CatalogLocation(&previous),

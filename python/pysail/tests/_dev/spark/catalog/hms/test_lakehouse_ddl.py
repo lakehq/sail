@@ -9,7 +9,11 @@ import boto3
 import pytest
 
 from pysail.tests._dev.spark.catalog.hms.conftest import _describe_extended_properties, _reference_catalog_table
-from pysail.tests._dev.spark.catalog.hms.test_iceberg_catalog_commit import _metadata_location
+from pysail.tests._dev.spark.catalog.hms.test_iceberg_catalog_commit import (
+    _catalog_properties,
+    _metadata_location,
+    _set_catalog_properties,
+)
 
 
 def test_hms_identifier_fields(spark, jvm_spark, hms_s3_database, hms_s3_env):
@@ -96,6 +100,40 @@ def _iceberg_metadata(jvm_spark, database, table, env):
     url = urlparse(location)
     client = _s3_client(env)
     return location, json.loads(client.get_object(Bucket=url.netloc, Key=url.path.lstrip("/"))["Body"].read())
+
+
+@pytest.mark.parametrize("operation", ["SET TBLPROPERTIES ('custom'='updated')", "ADD COLUMNS (extra INT)"])
+def test_iceberg_ddl_rejects_metadata_only_disabled_locks(spark, jvm_spark, hms_s3_database, hms_s3_env, operation):
+    table = "metadata_only_disabled_locks"
+    name = f"{hms_s3_database}.{table}"
+    reference = f"iceberg.{name}"
+    jvm_spark.sql(f"CREATE TABLE {reference} (id INT) USING iceberg")
+    jvm_spark.sql(f"INSERT INTO {reference} VALUES (1)")
+    jvm_spark.sql(f"ALTER TABLE {reference} SET TBLPROPERTIES ('engine.hive.lock-enabled'='false')")
+    properties = _catalog_properties(jvm_spark, hms_s3_database, table)
+    properties.pop("engine.hive.lock-enabled", None)
+    _set_catalog_properties(jvm_spark, hms_s3_database, table, properties)
+    assert "engine.hive.lock-enabled" not in _catalog_properties(jvm_spark, hms_s3_database, table)
+    pointer, metadata = _iceberg_metadata(jvm_spark, hms_s3_database, table, hms_s3_env)
+    assert metadata["properties"]["engine.hive.lock-enabled"] == "false"
+    location = urlparse(metadata["location"])
+    client = _s3_client(hms_s3_env)
+
+    def inventory():
+        return {
+            item["Key"]: client.get_object(Bucket=location.netloc, Key=item["Key"])["Body"].read()
+            for page in client.get_paginator("list_objects_v2").paginate(
+                Bucket=location.netloc, Prefix=location.path.lstrip("/").rstrip("/") + "/"
+            )
+            for item in page.get("Contents", [])
+        }
+
+    before = inventory()
+    with pytest.raises(Exception, match="engine.hive.lock-enabled"):
+        spark.sql(f"ALTER TABLE {name} {operation}").collect()
+    assert _metadata_location(jvm_spark, hms_s3_database, table) == pointer
+    assert inventory() == before
+    assert [row.id for row in spark.table(name).collect()] == [1]
 
 
 @pytest.mark.parametrize("fmt", ["delta", "iceberg"])

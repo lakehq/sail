@@ -17,4 +17,6 @@ aws-config = { workspace = true }
 aws-credential-types = { workspace = true }
 aws-sdk-glue = { workspace = true }
 aws-smithy-types = { workspace = true }
+aws-smithy-runtime-api = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }

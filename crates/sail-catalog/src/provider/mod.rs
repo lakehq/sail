@@ -188,6 +188,19 @@ pub trait CatalogProvider: Send + Sync {
         ))
     }
 
+    /// Atomically replace an Iceberg metadata pointer. Unsupported providers never mutate.
+    async fn compare_and_swap_iceberg_metadata(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: crate::lakehouse::IcebergMetadataCasRequest,
+    ) -> CatalogResult<crate::lakehouse::IcebergMetadataCasOutcome> {
+        let _ = (database, table, request);
+        Ok(crate::lakehouse::IcebergMetadataCasOutcome::Rejected {
+            message: "atomic Iceberg metadata pointer CAS is unsupported".into(),
+        })
+    }
+
     async fn get_delta_ratified_commits(
         &self,
         database: &Namespace,

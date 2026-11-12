@@ -1001,6 +1001,55 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         ]
     }
 
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: sail_catalog::lakehouse::ResolveLakehouseTableRequest,
+    ) -> CatalogResult<sail_catalog::lakehouse::LakehouseResolvedTable> {
+        let config = self.resolved_catalog_config().await?;
+        let result = self
+            .load_table_result(database, table, config.access_delegation())
+            .await?;
+        let session = Self::rest_table_session_ref(&self.name, database, table, config, &result)?;
+        let unsupported_storage_config = result
+            .config
+            .iter()
+            .flat_map(|config| config.iter())
+            .chain(config.properties.iter())
+            .any(|(key, value)| {
+                let key = key.to_ascii_lowercase();
+                if key == REST_REMOTE_SIGNING_ENABLED_KEY && value.eq_ignore_ascii_case("false") {
+                    return false;
+                }
+                ["s3.", "s3a.", "adls.", "azure.", "gcs.", "gs."]
+                    .iter()
+                    .any(|prefix| key.starts_with(prefix))
+                    || matches!(key.as_str(), "io-impl" | "client.region")
+            });
+        if matches!(
+            request.operation,
+            sail_common_datafusion::catalog::LakehouseOperation::Maintenance
+        ) && (session.remote_signing_enabled
+            || session.storage_credential_count > 0
+            || unsupported_storage_config)
+        {
+            return Err(CatalogError::UnsupportedCapability(
+                "Iceberg maintenance requires configured storage access; REST storage overrides, vending and signing are not implemented".into(),
+            ));
+        }
+        let status = Self::load_table_result_to_status(&self.name, database, table, result)?;
+        let mut resolved = sail_catalog::lakehouse::resolve_lakehouse_table_status(
+            &self.name,
+            request.catalog_table,
+            &status,
+            request.operation,
+            &self.lakehouse_capabilities(),
+        );
+        resolved.execution.rest_session = Some(session);
+        Ok(resolved)
+    }
+
     fn create_table_metadata_requirement(
         &self,
         options: &CreateTableOptions,
@@ -4265,6 +4314,62 @@ mod tests {
         assert!(!serialized.contains("session-token-secret"));
         assert!(!serialized.contains("AKIA-SECRET"));
         assert!(!serialized.contains("storage-secret"));
+    }
+
+    #[tokio::test]
+    async fn maintenance_reloads_and_rejects_new_storage_access_requirements() {
+        use sail_catalog::lakehouse::ResolveLakehouseTableRequest;
+        for signing in [false, true] {
+            let ctx = TestContext::new(Some("test")).await;
+            let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+            let mut initial = create_table_response_with_access_session_hints();
+            initial
+                .as_object_mut()
+                .unwrap()
+                .remove("storage-credentials");
+            initial.as_object_mut().unwrap().remove("config");
+            let mut refreshed = create_table_response_with_access_session_hints();
+            if signing {
+                refreshed
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("storage-credentials");
+            } else {
+                refreshed.as_object_mut().unwrap().remove("config");
+            }
+            Mock::given(method("GET"))
+                .and(path(ctx.path("/namespaces/db1/tables/table1")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(initial))
+                .up_to_n_times(1)
+                .with_priority(1)
+                .expect(1)
+                .mount(&ctx.server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(ctx.path("/namespaces/db1/tables/table1")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(refreshed))
+                .with_priority(2)
+                .expect(1)
+                .mount(&ctx.server)
+                .await;
+            let request = ResolveLakehouseTableRequest {
+                catalog_table: vec!["test".into(), "db1".into(), "table1".into()],
+                operation: sail_common_datafusion::catalog::LakehouseOperation::Maintenance,
+                requested_format: Some(sail_common_datafusion::catalog::LakehouseFormat::Iceberg),
+                options: vec![],
+            };
+            ctx.catalog
+                .resolve_lakehouse_table(&namespace, "table1", request.clone())
+                .await
+                .unwrap();
+            let error = ctx
+                .catalog
+                .resolve_lakehouse_table(&namespace, "table1", request)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, CatalogError::UnsupportedCapability(_)));
+            assert!(!error.to_string().contains("storage-secret"));
+        }
     }
 
     fn view_result() -> crate::r#gen::LoadViewResult {

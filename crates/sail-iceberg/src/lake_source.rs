@@ -881,6 +881,13 @@ pub(crate) async fn plan_iceberg_write(
     } else {
         None
     };
+    if let (Some(context), Some(table)) = (lakehouse_table.as_ref(), table.as_ref()) {
+        crate::catalog_support::commit::IcebergCatalogCommitCoordinator::new(
+            &ctx,
+            context.catalog_table(),
+        )
+        .validate_base_metadata(table.metadata())?;
+    }
     let existing_partition_columns = table
         .as_ref()
         .map(IcebergLakeSource::partition_columns_from_metadata)

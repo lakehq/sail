@@ -153,7 +153,7 @@ async fn shared_manifests_refresh_and_missing_files_are_safe() {
         .prepare(&store, &url, &metadata)
         .await
         .expect("prepare");
-    assert_eq!(prepared.expiration.candidates.paths.len(), 1);
+    assert_eq!(prepared.expiration.candidates.paths.len(), 3);
     // A concurrent restoration observed by refresh protects the candidate.
     let batch = prepared
         .expiration
@@ -239,7 +239,7 @@ async fn literal_percent_aliases_preserve_live_paths_and_do_not_touch_double_esc
         .prepare(&store, &url, &metadata)
         .await
         .expect("prepare aliases");
-    assert!(!prepared.expiration.candidates.paths.contains_key(&literal));
+    assert!(prepared.expiration.candidates.paths.contains_key(&literal));
     let mut current = metadata.clone();
     current.snapshots.remove(0);
     current.statistics.remove(0);
@@ -261,6 +261,8 @@ async fn literal_percent_aliases_preserve_live_paths_and_do_not_touch_double_esc
             specs: HashSet::new(),
         },
         concurrency: 1,
+        table_uuid: metadata.table_uuid,
+        location: metadata.location.clone(),
     }
     .finish(
         &store,
@@ -342,6 +344,168 @@ async fn azure_container_is_part_of_storage_identity() {
     ] {
         assert!(checked_path(&store, &url, path).is_err());
     }
+}
+
+#[tokio::test]
+async fn disjoint_expirations_keep_shared_candidates_until_fresh_reachability() {
+    let (store, url, mut metadata) = fixture().await;
+    // A statistics container belongs only to the two disjoint expired snapshots.
+    let mut head = metadata.snapshots[1].clone();
+    head.snapshot_id = 30;
+    head.timestamp_ms = 1000;
+    head.parent_snapshot_id = Some(20);
+    // Statistics containers model physical sharing independently of manifest encoding.
+    metadata.snapshots.push(head);
+    metadata.current_snapshot_id = Some(30);
+    let shared = "memory://bucket/table/metadata/shared.puffin";
+    for id in [10, 20] {
+        metadata.statistics.push(
+            serde_json::from_value(serde_json::json!({
+                "snapshot-id": id, "statistics-path": shared, "file-size-in-bytes": 1,
+                "file-footer-size-in-bytes": 1, "blob-metadata": []
+            }))
+            .expect("statistics"),
+        );
+    }
+    let path = checked_path(&store, &url, shared).expect("path");
+    store
+        .base
+        .put(&path, vec![0].into())
+        .await
+        .expect("statistics");
+    let mut op = operation();
+    op.older_than_ms = Some(0);
+    op.snapshot_ids = HashSet::from([10]);
+    let first = op
+        .prepare(&store, &url, &metadata)
+        .await
+        .expect("first inventory");
+    op.snapshot_ids = HashSet::from([20]);
+    let second = op
+        .prepare(&store, &url, &metadata)
+        .await
+        .expect("second inventory");
+    assert!(first.expiration.candidates.paths.contains_key(&path));
+    assert!(second.expiration.candidates.paths.contains_key(&path));
+    let schema = IcebergProcedureType::ExpireSnapshots
+        .descriptor()
+        .expect("descriptor")
+        .schema();
+    metadata
+        .snapshots
+        .retain(|snapshot| snapshot.snapshot_id != 10);
+    metadata.statistics.retain(|file| file.snapshot_id != 10);
+    first
+        .expiration
+        .finish(&store, &url, Ok(metadata.clone()), schema.clone())
+        .await
+        .expect("first finish");
+    assert!(store.base.get(&path).await.is_ok());
+    metadata
+        .snapshots
+        .retain(|snapshot| snapshot.snapshot_id != 20);
+    metadata.statistics.clear();
+    second
+        .expiration
+        .finish(&store, &url, Ok(metadata), schema)
+        .await
+        .expect("second finish");
+    assert!(store.base.get(&path).await.is_err());
+}
+
+#[tokio::test]
+async fn changed_identity_and_unreadable_retained_inventory_preserve_candidates() {
+    for fault in 0..3 {
+        let (store, url, mut metadata) = fixture().await;
+        let prepared = operation()
+            .prepare(&store, &url, &metadata)
+            .await
+            .expect("prepare");
+        metadata.snapshots.remove(0);
+        match fault {
+            0 => metadata.table_uuid = Some(uuid::Uuid::new_v4()),
+            1 => metadata.location.push_str("/other"),
+            _ => metadata.snapshots[0].manifest_list = "metadata/unreadable.avro".into(),
+        }
+        let batch = prepared
+            .expiration
+            .finish(
+                &store,
+                &url,
+                Ok(metadata),
+                IcebergProcedureType::ExpireSnapshots
+                    .descriptor()
+                    .expect("descriptor")
+                    .schema(),
+            )
+            .await
+            .expect("safe finish");
+        for column in batch.columns() {
+            assert_eq!(
+                column
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .expect("count")
+                    .value(0),
+                0
+            );
+        }
+        assert!(
+            store
+                .prefixed
+                .get(&Path::from("metadata/list.avro"))
+                .await
+                .is_ok()
+        );
+    }
+}
+
+#[tokio::test]
+async fn expiration_requirements_guard_observed_heads_but_not_unseen_refs_or_properties() {
+    let (store, url, mut metadata) = fixture().await;
+    metadata.refs.insert(
+        "tag".into(),
+        SnapshotReference {
+            snapshot_id: 20,
+            retention: SnapshotRetention::Tag {
+                max_ref_age_ms: None,
+            },
+        },
+    );
+    let mut op = operation();
+    op.clean_metadata = true;
+    let prepared = op.prepare(&store, &url, &metadata).await.expect("prepare");
+    assert!(
+        prepared
+            .requirements
+            .contains(&TableRequirement::RefSnapshotIdMatch {
+                r#ref: "main".into(),
+                snapshot_id: Some(20)
+            })
+    );
+    assert!(
+        prepared
+            .requirements
+            .contains(&TableRequirement::RefSnapshotIdMatch {
+                r#ref: "tag".into(),
+                snapshot_id: Some(20)
+            })
+    );
+    assert!(
+        prepared
+            .requirements
+            .contains(&TableRequirement::CurrentSchemaIdMatch {
+                current_schema_id: metadata.current_schema_id
+            })
+    );
+    assert!(
+        prepared
+            .requirements
+            .contains(&TableRequirement::DefaultSpecIdMatch {
+                default_spec_id: metadata.default_spec_id
+            })
+    );
+    assert_eq!(prepared.requirements.len(), 4);
 }
 
 #[tokio::test]

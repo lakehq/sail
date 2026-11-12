@@ -769,6 +769,97 @@ impl CatalogProvider for GlueCatalogProvider {
         }
     }
 
+    fn lakehouse_capabilities(&self) -> Vec<sail_catalog::lakehouse::LakehouseCapability> {
+        vec![sail_catalog::lakehouse::LakehouseCapability::IcebergMetadataLocationCas]
+    }
+
+    async fn compare_and_swap_iceberg_metadata(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: sail_catalog::lakehouse::IcebergMetadataCasRequest,
+    ) -> CatalogResult<sail_catalog::lakehouse::IcebergMetadataCasOutcome> {
+        use sail_catalog::lakehouse::IcebergMetadataCasOutcome as Outcome;
+        use sail_common_datafusion::catalog::managed::is_metadata_location_key;
+        let client = self.get_client().await?;
+        let database = Self::database_name(database)?;
+        let response = client
+            .get_table()
+            .set_catalog_id(self.catalog_id())
+            .database_name(&database)
+            .name(table)
+            .send()
+            .await
+            .map_err(|error| {
+                CatalogError::External(format!("Failed to load Glue CAS base: {error}"))
+            })?;
+        let current = response
+            .table()
+            .ok_or_else(|| CatalogError::External("Missing Glue table".into()))?;
+        let Some(version) = current.version_id().filter(|version| !version.is_empty()) else {
+            return Ok(Outcome::Rejected {
+                message: "Glue Iceberg CAS requires VersionId".into(),
+            });
+        };
+        let mut parameters = current.parameters().cloned().unwrap_or_default();
+        if !parameters
+            .get("table_type")
+            .is_some_and(|value| value.eq_ignore_ascii_case("ICEBERG"))
+        {
+            return Ok(Outcome::Rejected {
+                message: "Glue Iceberg CAS requires an Iceberg table".into(),
+            });
+        }
+        if let Err(outcome) =
+            request.validate_base(parameters.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        {
+            return Ok(outcome);
+        }
+        parameters.retain(|key, _| {
+            !is_metadata_location_key(key.trim())
+                && !key
+                    .trim()
+                    .eq_ignore_ascii_case("previous_metadata_location")
+        });
+        parameters.insert("metadata_location".into(), request.replacement().into());
+        parameters.insert(
+            "previous_metadata_location".into(),
+            request.expected().into(),
+        );
+        let input = Self::table_input_with_parameters(current, parameters)?;
+        // [CREDIT]: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/aws/src/main/java/org/apache/iceberg/aws/glue/GlueTableOperations.java#L316-L339
+        match client
+            .update_table()
+            .set_catalog_id(self.catalog_id())
+            .database_name(database)
+            .table_input(input)
+            .version_id(version)
+            // A retry after a lost success could turn publication into a false conflict.
+            .customize()
+            .interceptor(ValidateCasResponse)
+            .config_override(
+                aws_sdk_glue::config::Builder::new()
+                    .retry_config(aws_sdk_glue::config::retry::RetryConfig::disabled()),
+            )
+            .send()
+            .await
+        {
+            Ok(_) => Ok(Outcome::Committed),
+            Err(error)
+                if error
+                    .as_service_error()
+                    .is_some_and(|error| error.is_concurrent_modification_exception()) =>
+            {
+                Ok(Outcome::Conflict {
+                    message: error.to_string(),
+                })
+            }
+            Err(error) => Ok(Outcome::Unknown {
+                message: format!("Glue CAS publication may have succeeded: {error}"),
+            }),
+        }
+    }
+
     async fn alter_table_atomically(
         &self,
         database: &Namespace,
@@ -1022,6 +1113,41 @@ impl CatalogProvider for GlueCatalogProvider {
         }
     }
 }
+
+#[derive(Debug)]
+struct ValidateCasResponse;
+
+impl aws_smithy_runtime_api::client::interceptors::Intercept for ValidateCasResponse {
+    fn name(&self) -> &'static str {
+        "ValidateIcebergCasResponse"
+    }
+
+    fn read_after_deserialization(
+        &self,
+        context: &aws_smithy_runtime_api::client::interceptors::context::AfterDeserializationInterceptorContextRef<'_>,
+        _: &aws_smithy_runtime_api::client::runtime_components::RuntimeComponents,
+        _: &mut aws_smithy_types::config_bag::ConfigBag,
+    ) -> Result<(), aws_smithy_runtime_api::box_error::BoxError> {
+        let response = context.response();
+        if response.status().is_success() {
+            let body = response
+                .body()
+                .bytes()
+                .ok_or("Unreadable Glue CAS response")?;
+            // UpdateTable has an empty output shape; the SDK otherwise ignores even invalid JSON.
+            if !body.is_empty()
+                && !serde_json::from_slice::<serde_json::Value>(body)
+                    .is_ok_and(|value| value.is_object())
+            {
+                return Err("Malformed Glue CAS success response".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod metadata_cas_tests;
 
 #[cfg(test)]
 mod tests {

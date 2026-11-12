@@ -21,5 +21,9 @@ chrono = { workspace = true }
 datafusion = { workspace = true }
 futures = { workspace = true }
 libloading = { workspace = true }
+log = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+thrift = { workspace = true }

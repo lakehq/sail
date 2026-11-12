@@ -211,6 +211,27 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             })?
     }
 
+    async fn compare_and_swap_iceberg_metadata(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: crate::lakehouse::IcebergMetadataCasRequest,
+    ) -> CatalogResult<crate::lakehouse::IcebergMetadataCasOutcome> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .compare_and_swap_iceberg_metadata(&database, &table, request)
+                    .await
+            })
+            .await
+            .map_err(|error| {
+                CatalogError::CommitStateUnknown(format!("Iceberg CAS task failed: {error}").into())
+            })?
+    }
+
     async fn get_delta_ratified_commits(
         &self,
         database: &Namespace,

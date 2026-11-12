@@ -16,7 +16,8 @@ use super::arguments::{optional_bool, optional_i32};
 use crate::io::StoreContext;
 use crate::spec::snapshots::{SnapshotReference, SnapshotRetention};
 use crate::spec::{
-    DataContentType, Manifest, ManifestList, ManifestStatus, TableMetadata, TableUpdate,
+    DataContentType, Manifest, ManifestList, ManifestStatus, TableMetadata, TableRequirement,
+    TableUpdate,
 };
 
 // The coordinator holds path inventories, not file contents. Bound both inventory and fan-out.
@@ -39,6 +40,8 @@ pub(crate) struct ExpireSnapshots {
 pub(crate) struct Expiration {
     candidates: Inventory,
     concurrency: usize,
+    table_uuid: Option<uuid::Uuid>,
+    location: String,
 }
 
 #[derive(Default)]
@@ -48,6 +51,7 @@ struct Inventory {
 }
 
 pub(crate) struct PreparedExpiration {
+    pub(crate) requirements: Vec<TableRequirement>,
     pub(crate) updates: Vec<TableUpdate>,
     pub(crate) expiration: Expiration,
 }
@@ -216,7 +220,7 @@ impl ExpireSnapshots {
         let (expired, removed_refs) = self.select(metadata)?;
         // Validate every snapshot, including retained/staged branches, before publication.
         let all = inventory(store, url, metadata, None).await?;
-        let mut candidates = inventory(store, url, metadata, Some(&expired)).await?;
+        let candidates = inventory(store, url, metadata, Some(&expired)).await?;
         let retained_ids = metadata
             .snapshots
             .iter()
@@ -224,10 +228,25 @@ impl ExpireSnapshots {
             .filter(|id| !expired.contains(id))
             .collect();
         let retained = inventory(store, url, metadata, Some(&retained_ids)).await?;
-        candidates
-            .paths
-            .retain(|path, _| !retained.paths.contains_key(path));
+        // Keep the full expired inventory until fresh post-publication reachability is known.
+        // Concurrent, disjoint expirations can remove the last other reference to a shared file.
         drop(all);
+        let mut requirements: Vec<_> = metadata
+            .refs
+            .iter()
+            .map(|(name, reference)| TableRequirement::RefSnapshotIdMatch {
+                r#ref: name.clone(),
+                snapshot_id: Some(reference.snapshot_id),
+            })
+            .collect();
+        if !metadata.refs.contains_key("main") {
+            requirements.push(TableRequirement::RefSnapshotIdMatch {
+                r#ref: "main".into(),
+                snapshot_id: metadata.current_snapshot_id.filter(|id| *id != -1),
+            });
+        }
+        // REST cannot assert the absence of unseen refs or unchanged retention properties.
+        // These are standard observed-head guards, not a global metadata CAS.
         let mut updates: Vec<_> = removed_refs
             .into_iter()
             .map(|ref_name| TableUpdate::RemoveSnapshotRef { ref_name })
@@ -237,7 +256,31 @@ impl ExpireSnapshots {
                 snapshot_ids: expired.iter().copied().collect(),
             });
         }
+        updates.extend(
+            metadata
+                .statistics
+                .iter()
+                .filter(|file| expired.contains(&file.snapshot_id))
+                .map(|file| TableUpdate::RemoveStatistics {
+                    snapshot_id: file.snapshot_id,
+                }),
+        );
+        updates.extend(
+            metadata
+                .partition_statistics
+                .iter()
+                .filter(|file| expired.contains(&file.snapshot_id))
+                .map(|file| TableUpdate::RemovePartitionStatistics {
+                    snapshot_id: file.snapshot_id,
+                }),
+        );
         if self.clean_metadata {
+            requirements.push(TableRequirement::CurrentSchemaIdMatch {
+                current_schema_id: metadata.current_schema_id,
+            });
+            requirements.push(TableRequirement::DefaultSpecIdMatch {
+                default_spec_id: metadata.default_spec_id,
+            });
             let mut schemas: HashSet<_> = metadata
                 .snapshots
                 .iter()
@@ -272,10 +315,13 @@ impl ExpireSnapshots {
             }
         }
         Ok(PreparedExpiration {
+            requirements,
             updates,
             expiration: Expiration {
                 candidates,
                 concurrency: self.concurrency,
+                table_uuid: metadata.table_uuid,
+                location: metadata.location.clone(),
             },
         })
     }
@@ -434,7 +480,12 @@ impl Expiration {
         schema: SchemaRef,
     ) -> Result<RecordBatch> {
         let reachable = match current {
-            Ok(metadata) => inventory(store, url, &metadata, None).await,
+            Ok(metadata)
+                if metadata.table_uuid == self.table_uuid && metadata.location == self.location =>
+            {
+                inventory(store, url, &metadata, None).await
+            }
+            Ok(_) => plan_err!("Iceberg table UUID or location changed after expiration"),
             Err(error) => Err(error),
         };
         let reachable = match reachable {

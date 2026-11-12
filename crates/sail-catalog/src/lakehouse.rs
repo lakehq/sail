@@ -28,6 +28,9 @@ pub enum LakehouseCapability {
     CatalogCommit,
     DeltaRatifiedCommits,
     IcebergRestCommit,
+    /// Conditional pointer publication, including cooperative lock-backed providers.
+    /// HMS requires every writer to use exclusive table locks; it does not fence late RPCs.
+    IcebergMetadataLocationCas,
     IcebergRestScanPlanning,
     VersionedCatalogReferences,
     CrossFormatMetadata,
@@ -152,6 +155,80 @@ pub enum LakehouseCommitOutcome {
     Rejected {
         message: String,
     },
+}
+
+/// A metadata pointer replacement, never an unconditional table alteration.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct IcebergMetadataCasRequest {
+    expected: String,
+    replacement: String,
+    base_properties: Vec<(String, String)>,
+}
+
+impl IcebergMetadataCasRequest {
+    pub fn new(expected: String, replacement: String) -> crate::error::CatalogResult<Self> {
+        if expected.trim().is_empty() || replacement.trim().is_empty() || expected == replacement {
+            return Err(crate::error::CatalogError::CommitRejected(
+                "Iceberg CAS requires distinct, nonempty expected and replacement pointers".into(),
+            ));
+        }
+        Ok(Self {
+            expected,
+            replacement,
+            base_properties: vec![],
+        })
+    }
+
+    /// Properties from the metadata identified by `expected`, not catalog display hints.
+    pub fn with_base_properties(mut self, properties: Vec<(String, String)>) -> Self {
+        self.base_properties = properties;
+        self
+    }
+
+    pub fn base_properties(&self) -> &[(String, String)] {
+        &self.base_properties
+    }
+
+    pub fn expected(&self) -> &str {
+        &self.expected
+    }
+    pub fn replacement(&self) -> &str {
+        &self.replacement
+    }
+
+    /// All spelling aliases must identify one base; ambiguous aliases are never repaired by CAS.
+    pub fn validate_base<'a>(
+        &self,
+        properties: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Result<(), IcebergMetadataCasOutcome> {
+        let mut pointers = properties
+            .into_iter()
+            .filter(|(key, _)| {
+                sail_common_datafusion::catalog::managed::is_metadata_location_key(key.trim())
+            })
+            .map(|(_, value)| value);
+        let first = pointers.next();
+        if pointers.any(|value| Some(value) != first) {
+            return Err(IcebergMetadataCasOutcome::Rejected {
+                message: "Inconsistent Iceberg metadata pointer aliases".into(),
+            });
+        }
+        if first != Some(self.expected()) {
+            return Err(IcebergMetadataCasOutcome::Conflict {
+                message: "Iceberg metadata pointer changed".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Only Committed confirms publication. Unknown must not be replayed or cleaned up.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum IcebergMetadataCasOutcome {
+    Committed,
+    Conflict { message: String },
+    Rejected { message: String },
+    Unknown { message: String },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -442,7 +519,10 @@ fn is_unity_delta_table(properties: &[(String, String)]) -> bool {
 fn has_iceberg_catalog_marker(properties: &[(String, String)]) -> bool {
     properties.iter().any(|(key, value)| {
         let key = key.trim();
-        (key.eq_ignore_ascii_case("table_type") && value.eq_ignore_ascii_case("ICEBERG"))
-            || key.starts_with("metadata.")
+        sail_common_datafusion::catalog::managed::is_lake_source_marker(
+            key,
+            value.trim(),
+            "iceberg",
+        ) || key.starts_with("metadata.")
     })
 }

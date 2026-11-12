@@ -7030,9 +7030,11 @@ dependencies = [
  "aws-config",
  "aws-credential-types",
  "aws-sdk-glue",
+ "aws-smithy-runtime-api",
  "aws-smithy-types",
  "sail-catalog",
  "sail-common-datafusion",
+ "serde_json",
  "tokio",
 ]
 
@@ -7047,12 +7049,14 @@ dependencies = [
  "datafusion",
  "futures",
  "libloading",
+ "log",
  "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
  "sail-common-hms",
  "sail-thrift",
  "serde_json",
+ "thrift",
  "tokio",
 ]
 

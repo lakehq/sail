@@ -309,6 +309,25 @@ impl CatalogManager {
             .await
     }
 
+    pub fn lakehouse_capabilities<T: AsRef<str>>(
+        &self,
+        table: &[T],
+    ) -> CatalogResult<Vec<crate::lakehouse::LakehouseCapability>> {
+        let (provider, _, _) = self.resolve_object(table)?;
+        Ok(provider.lakehouse_capabilities())
+    }
+
+    pub async fn compare_and_swap_iceberg_metadata<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: crate::lakehouse::IcebergMetadataCasRequest,
+    ) -> CatalogResult<crate::lakehouse::IcebergMetadataCasOutcome> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider
+            .compare_and_swap_iceberg_metadata(&database, &table, request)
+            .await
+    }
+
     pub async fn get_delta_ratified_commits<T: AsRef<str>>(
         &self,
         table: &[T],

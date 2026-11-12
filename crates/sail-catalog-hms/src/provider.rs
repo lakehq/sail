@@ -50,6 +50,8 @@ pub struct HmsCatalogProvider {
     min_sasl_qop: SaslQop,
     endpoints: Vec<HmsEndpoint>,
     state: Mutex<HmsClientState>,
+    // Separate bounded pools: blocked publications must not consume heartbeat capacity.
+    heartbeat_clients: Mutex<HashMap<usize, ThriftHiveMetastoreClient>>,
 }
 
 #[derive(Debug, Clone)]
@@ -406,6 +408,7 @@ impl HmsCatalogProvider {
             config,
             min_sasl_qop,
             endpoints,
+            heartbeat_clients: Mutex::new(HashMap::new()),
             state: Mutex::new(HmsClientState {
                 active_index: 0,
                 client: None,
@@ -491,6 +494,24 @@ impl HmsCatalogProvider {
             transport,
         ));
         Ok(client)
+    }
+
+    pub(crate) async fn lock_clients(
+        &self,
+    ) -> CatalogResult<(ThriftHiveMetastoreClient, ThriftHiveMetastoreClient)> {
+        let (index, client) = self.current_client().await?;
+        let mut pools = self.heartbeat_clients.lock().await;
+        let heartbeat = match pools.get(&index) {
+            Some(client) => client.clone(),
+            None => {
+                // Construct a new Client, not a clone sharing the publication semaphore.
+                // Keep authentication, transport and endpoint identical; never fail over a lock.
+                let client = self.build_client_for_endpoint(index).await?;
+                pools.insert(index, client.clone());
+                client
+            }
+        };
+        Ok((client, heartbeat))
     }
 
     pub(crate) async fn current_client(&self) -> CatalogResult<(usize, ThriftHiveMetastoreClient)> {
@@ -878,6 +899,14 @@ impl HmsCatalogProvider {
 }
 
 fn validate_create_table_options(options: &CreateTableOptions) -> CatalogResult<()> {
+    if options.format.eq_ignore_ascii_case("iceberg") {
+        managed_table::validate_lock_property(
+            options
+                .properties
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str())),
+        )?;
+    }
     if options.mode.is_replace() {
         return Err(CatalogError::NotSupported(
             "Hive Metastore catalog does not support REPLACE".to_string(),
@@ -1186,6 +1215,9 @@ impl CatalogProvider for HmsCatalogProvider {
     fn validate_alter_table(&self, options: &AlterTableOptions) -> CatalogResult<()> {
         match options {
             AlterTableOptions::SetTableProperties { properties } => {
+                managed_table::validate_lock_property(
+                    properties.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                )?;
                 reject_spark_properties(properties)
             }
             AlterTableOptions::UnsetTableProperties { keys, .. } => {
@@ -1281,6 +1313,21 @@ impl CatalogProvider for HmsCatalogProvider {
             }
         })
         .await
+    }
+
+    fn lakehouse_capabilities(&self) -> Vec<sail_catalog::lakehouse::LakehouseCapability> {
+        // Conditional publication requires every writer to use HMS exclusive table locks.
+        vec![sail_catalog::lakehouse::LakehouseCapability::IcebergMetadataLocationCas]
+    }
+
+    async fn compare_and_swap_iceberg_metadata(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: sail_catalog::lakehouse::IcebergMetadataCasRequest,
+    ) -> CatalogResult<sail_catalog::lakehouse::IcebergMetadataCasOutcome> {
+        let db_name = validate_namespace(database)?;
+        managed_table::compare_and_swap_iceberg_metadata(self, &db_name, table, request).await
     }
 
     async fn alter_table_atomically(

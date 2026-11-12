@@ -387,6 +387,23 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         Ok(outcome)
     }
 
+    async fn compare_and_swap_iceberg_metadata(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: crate::lakehouse::IcebergMetadataCasRequest,
+    ) -> CatalogResult<crate::lakehouse::IcebergMetadataCasOutcome> {
+        let result = self
+            .inner
+            .compare_and_swap_iceberg_metadata(database, table, request)
+            .await;
+        // Invalidate even on errors: a transport error may hide a successful publication.
+        if let Some(cache) = self.table_cache.as_ref() {
+            cache.invalidate(database).await;
+        }
+        result
+    }
+
     async fn get_delta_ratified_commits(
         &self,
         database: &Namespace,
