@@ -20,6 +20,7 @@ use datafusion::physical_plan::{
     PlanProperties, ReplaceChildrenOptions, apply_expression_roots,
 };
 use futures::StreamExt;
+use sail_function::aggregate::array_agg::compact_payload;
 use sail_physical_plan::repartition::RowRoundRobinPartitioner;
 
 use crate::stream::writer::{TaskStreamSink, TaskStreamWriteState, TaskStreamWriter};
@@ -313,10 +314,7 @@ async fn shuffle_write(
             }
         }
         if let Some(coalescers) = &mut coalescers {
-            for coalescer in coalescers.channels.iter_mut() {
-                coalescer.finish_buffered_batch()?;
-            }
-            return write_completed(sink.as_mut(), &mut coalescers.channels).await;
+            return write_buffered(sink.as_mut(), &mut coalescers.channels).await;
         }
         Ok(true)
     }
@@ -401,7 +399,30 @@ fn copy_array(array: &ArrayRef) -> Result<ArrayRef> {
     let data = array.to_data();
     let mut copy = MutableArrayData::new(vec![&data], false, data.len());
     copy.try_extend(0, 0, data.len())?;
-    Ok(make_array(copy.freeze()))
+    // The copy still shares view payloads and dictionary values with the input.
+    compact_payload(make_array(copy.freeze()))
+}
+
+/// Writes the batch still buffered in each channel, returning `false` if every channel is closed.
+async fn write_buffered(
+    sink: &mut dyn TaskStreamSink,
+    coalescers: &mut [BatchCoalescer],
+) -> Result<bool> {
+    let batches = coalescers
+        .iter_mut()
+        .map(|coalescer| {
+            coalescer.finish_buffered_batch()?;
+            // The buffered batch keeps the capacity reserved for a full batch.
+            coalescer
+                .next_completed_batch()
+                .map(|batch| copy_columns(&batch, |_| true))
+                .transpose()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if batches.iter().all(Option::is_none) {
+        return Ok(true);
+    }
+    Ok(sink.write(batches).await? == TaskStreamWriteState::Active)
 }
 
 /// Writes the completed batches of all channels, returning `false` once every channel is closed.
@@ -425,7 +446,12 @@ async fn write_completed(
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::{BooleanArray, Int64Array, ListArray, StringArray, UInt32Array};
+    use std::ops::Range;
+
+    use datafusion::arrow::array::{
+        ArrayData, BooleanArray, Int64Array, ListArray, ListBuilder, StringArray, StringViewArray,
+        StringViewBuilder, UInt32Array,
+    };
     use datafusion::arrow::compute::{concat_batches, take_record_batch};
     use datafusion::arrow::datatypes::{Field, Int64Type, SchemaRef};
     use datafusion::datasource::memory::MemorySourceConfig;
@@ -530,13 +556,16 @@ mod tests {
             .collect()
     }
 
-    /// Batches with string, boolean, and list columns, which the coalescer does not copy as they arrive.
+    /// Batches with string, boolean, and list columns, including views with strings too long to inline.
     fn nested_input(batches: usize, rows: i64) -> Result<Vec<RecordBatch>> {
         let item = Arc::new(Field::new_list_field(DataType::Int64, true));
+        let view_item = Arc::new(Field::new_list_field(DataType::Utf8View, true));
         let schema = Arc::new(Schema::new(vec![
             Field::new("s", DataType::Utf8, false),
             Field::new("b", DataType::Boolean, false),
             Field::new("l", DataType::List(item), false),
+            Field::new("v", DataType::Utf8View, false),
+            Field::new("lv", DataType::List(view_item), false),
         ]));
         (0..batches as i64)
             .map(|i| {
@@ -544,11 +573,27 @@ mod tests {
                 let s = StringArray::from_iter_values(values.clone().map(|x| format!("{x:024}")));
                 let b = BooleanArray::from_iter(values.clone().map(|x| Some(x % 3 == 0)));
                 let l = ListArray::from_iter_primitive::<Int64Type, _, _>(
-                    values.map(|x| Some(vec![Some(x), Some(x + 1), Some(x + 2)])),
+                    values
+                        .clone()
+                        .map(|x| Some(vec![Some(x), Some(x + 1), Some(x + 2)])),
                 );
+                let v =
+                    StringViewArray::from_iter_values(values.clone().map(|x| format!("{x:032}")));
+                let mut lv = ListBuilder::new(StringViewBuilder::new());
+                for x in values {
+                    lv.values().append_value(format!("{x:020}"));
+                    lv.values().append_value(format!("{:020}", x + 1));
+                    lv.append(true);
+                }
                 Ok(RecordBatch::try_new(
                     schema.clone(),
-                    vec![Arc::new(s), Arc::new(b), Arc::new(l)],
+                    vec![
+                        Arc::new(s),
+                        Arc::new(b),
+                        Arc::new(l),
+                        Arc::new(v),
+                        Arc::new(lv.finish()),
+                    ],
                 )?)
             })
             .collect()
@@ -615,13 +660,29 @@ mod tests {
         Ok(expected)
     }
 
-    /// Checks that a channel's batches keep at most twice the memory of a copy of their rows.
+    /// Checks that a channel's batches share no memory with the input and keep at most
+    /// twice the memory of a copy of their rows.
     ///
     /// A consumer that falls behind holds on to the batches of one channel
     /// while the others are released, so this must hold for each channel.
-    fn assert_compact(schema: &SchemaRef, channel: usize, output: &[RecordBatch]) -> Result<()> {
+    fn assert_compact(input: &[RecordBatch], channel: usize, output: &[RecordBatch]) -> Result<()> {
+        let input_ranges = batch_ranges(input);
+        let shared = batch_ranges(output)
+            .into_iter()
+            .filter(|out| {
+                input_ranges
+                    .iter()
+                    .any(|r| out.start < r.end && r.start < out.end)
+            })
+            .count();
+        assert_eq!(
+            shared, 0,
+            "channel {channel} shares {shared} buffers with the input"
+        );
+
+        let schema = input[0].schema();
         let retained: usize = output.iter().map(|b| b.get_array_memory_size()).sum();
-        let rows = concat_batches(schema, output)?;
+        let rows = concat_batches(&schema, output)?;
         let indices = UInt32Array::from_iter_values(0..rows.num_rows() as u32);
         // Concatenating a single batch returns it unchanged, so `take` makes the copy.
         let compact = take_record_batch(&rows, &indices)?.get_array_memory_size();
@@ -630,6 +691,27 @@ mod tests {
             "channel {channel} retains {retained} bytes for {compact} bytes of rows"
         );
         Ok(())
+    }
+
+    /// Returns the memory ranges of every buffer in the batches, including child arrays.
+    fn batch_ranges(batches: &[RecordBatch]) -> Vec<Range<usize>> {
+        fn add(data: &ArrayData, ranges: &mut Vec<Range<usize>>) {
+            let nulls = data.nulls().map(|nulls| nulls.buffer());
+            for buffer in data.buffers().iter().chain(nulls) {
+                if !buffer.is_empty() {
+                    let start = buffer.as_ptr() as usize;
+                    ranges.push(start..start + buffer.len());
+                }
+            }
+            for child in data.child_data() {
+                add(child, ranges);
+            }
+        }
+        let mut ranges = vec![];
+        for column in batches.iter().flat_map(|batch| batch.columns()) {
+            add(&column.to_data(), &mut ranges);
+        }
+        ranges
     }
 
     fn memory(batches: &[RecordBatch]) -> Result<Arc<dyn ExecutionPlan>> {
@@ -645,7 +727,7 @@ mod tests {
         let input = input(64)?;
         let capture = shuffle(memory(&input)?, TaskStreamWriteState::Active).await?;
         for (channel, output) in capture.channels.iter().enumerate() {
-            assert_compact(&input[0].schema(), channel, output)?;
+            assert_compact(&input, channel, output)?;
         }
         Ok(())
     }
@@ -653,19 +735,20 @@ mod tests {
     /// Each channel's only batch holds part of the single input batch.
     #[tokio::test]
     async fn hash_shuffle_output_of_one_input_batch_does_not_retain_it() -> Result<()> {
-        let input = nested_input(1, ROWS)?;
-        let schema = input[0].schema();
-        let partitioning = hash(&schema, "s", CHANNELS)?;
-        let capture =
-            shuffle_with(memory(&input)?, partitioning, TaskStreamWriteState::Active).await?;
-        let expected = expected(&input, vec![col("s", &schema)?], CHANNELS)?;
-        for (channel, (output, expected)) in capture.channels.iter().zip(expected).enumerate() {
-            assert_eq!(output.len(), 1);
-            assert_eq!(
-                concat_batches(&schema, output)?,
-                concat_batches(&schema, &expected)?
-            );
-            assert_compact(&schema, channel, output)?;
+        for (input, column) in [(input(1)?, "a"), (nested_input(1, ROWS)?, "s")] {
+            let schema = input[0].schema();
+            let partitioning = hash(&schema, column, CHANNELS)?;
+            let capture =
+                shuffle_with(memory(&input)?, partitioning, TaskStreamWriteState::Active).await?;
+            let expected = expected(&input, vec![col(column, &schema)?], CHANNELS)?;
+            for (channel, (output, expected)) in capture.channels.iter().zip(expected).enumerate() {
+                assert_eq!(output.len(), 1);
+                assert_eq!(
+                    concat_batches(&schema, output)?,
+                    concat_batches(&schema, &expected)?
+                );
+                assert_compact(&input, channel, output)?;
+            }
         }
         Ok(())
     }
@@ -691,7 +774,7 @@ mod tests {
                     concat_batches(&schema, output)?,
                     concat_batches(&schema, &expected)?
                 );
-                assert_compact(&schema, channel, output)?;
+                assert_compact(&input, channel, output)?;
             }
         }
         Ok(())
