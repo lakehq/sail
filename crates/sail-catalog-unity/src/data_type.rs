@@ -594,28 +594,20 @@ pub(crate) fn parse_from_text_or_json(
 }
 
 pub(crate) fn parse_simple_type_from_string(type_str: &str) -> CatalogResult<DataType> {
-    match type_str.trim().to_uppercase().as_str() {
-        "BOOLEAN" | "BOOL" => Ok(DataType::Boolean),
-        "BYTE" | "TINYINT" | "INT8" => Ok(DataType::Int8),
-        "SHORT" | "SMALLINT" | "INT16" => Ok(DataType::Int16),
-        "INT" | "INTEGER" | "INT32" => Ok(DataType::Int32),
-        "LONG" | "BIGINT" | "INT64" => Ok(DataType::Int64),
-        "FLOAT" | "REAL" | "FLOAT32" => Ok(DataType::Float32),
-        "DOUBLE" | "FLOAT64" => Ok(DataType::Float64),
-        "DATE" | "DATE32" => Ok(DataType::Date32),
-        "TIMESTAMP" | "TIMESTAMP_LTZ" => Ok(DataType::Timestamp(
-            TimeUnit::Microsecond,
-            Some(Arc::from("UTC".to_string())),
-        )),
-        "TIMESTAMP_NTZ" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-        "STRING" | "CHAR" | "CHARACTER" | "VARCHAR" => Ok(DataType::Utf8),
-        "TEXT" => Ok(DataType::LargeUtf8),
-        "BINARY" | "BYTEA" => Ok(DataType::Binary),
-        "NULL" | "VOID" => Ok(DataType::Null),
-        _ => Err(CatalogError::InvalidArgument(format!(
-            "Unable to parse simple type from string: {type_str}"
-        ))),
+    // Catalogs may omit the length of character types.
+    let type_str = match type_str.trim().to_ascii_lowercase().as_str() {
+        "char" | "character" | "varchar" => "string",
+        _ => type_str,
+    };
+    let data_type = sail_sql_analyzer::data_type::parse_data_type(type_str)
+        .map_err(|e| CatalogError::InvalidArgument(e.to_string()))?;
+    sail_common_datafusion::data_type::DataTypeResolver {
+        session_timezone: Arc::from("UTC"),
+        default_timestamp_ltz: true,
+        use_large_var_types: false,
     }
+    .resolve_data_type(&data_type)
+    .map_err(|e| CatalogError::InvalidArgument(e.to_string()))
 }
 
 pub(crate) fn parse_unity_type_json(json_str: &str) -> CatalogResult<DataType> {

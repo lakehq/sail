@@ -11,8 +11,6 @@ use datafusion_expr::{
 use datafusion_expr_common::signature::Volatility;
 use sail_common::spec::{self, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
-use sail_sql_analyzer::data_type::from_ast_data_type;
-use sail_sql_analyzer::parser as sail_parser;
 use xee_xpath::Documents;
 
 use crate::functions_utils::make_scalar_function;
@@ -195,8 +193,8 @@ impl ScalarUDFImpl for SparkFromXml {
                 );
             }
         };
-        let dt = parse_xml_schema(schema_str, &self.session_timezone)?;
-        Ok(Arc::new(Field::new(self.name(), dt, true)))
+        let data_type = parse_xml_schema(schema_str, &self.session_timezone)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -302,27 +300,23 @@ fn spark_from_xml_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
 
 fn parse_xml_schema(schema: &str, session_timezone: &str) -> Result<DataType> {
     let schema = schema.trim();
-    let ast_result = sail_parser::parse_data_type(schema)
-        .or_else(|_| sail_parser::parse_data_type(&format!("STRUCT<{schema}>")));
-    let ast = ast_result
+    let data_type = sail_sql_analyzer::data_type::parse_schema(schema)
         .map_err(|e| DataFusionError::Plan(format!("Failed to parse schema '{schema}': {e}")))?;
-    let spec_dt = from_ast_data_type(ast)
-        .map_err(|e| DataFusionError::Plan(format!("Failed to analyze schema '{schema}': {e}")))?;
-    spec_to_arrow_data_type(&spec_dt, session_timezone)
+    resolve_arrow_data_type(&data_type, session_timezone)
 }
 
-fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
+fn resolve_arrow_data_type(data_type: &spec::DataType, session_timezone: &str) -> Result<DataType> {
     let resolver = sail_common_datafusion::data_type::DataTypeResolver {
         session_timezone: Arc::from(session_timezone),
         default_timestamp_ltz: true,
         use_large_var_types: false,
     };
-    let dt = match dt {
+    let data_type = match data_type {
         spec::DataType::UserDefined { sql_type, .. } => sql_type,
-        dt => dt,
+        data_type => data_type,
     };
     resolver
-        .resolve_data_type(dt)
+        .resolve_data_type(data_type)
         .map_err(|e| DataFusionError::Plan(e.to_string()))
 }
 

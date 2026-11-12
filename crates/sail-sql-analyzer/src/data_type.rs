@@ -12,6 +12,35 @@ use crate::value::from_ast_string;
 pub const SQL_DECIMAL_DEFAULT_PRECISION: u8 = 10;
 pub const SQL_DECIMAL_DEFAULT_SCALE: i8 = 0;
 
+/// Parse a SQL data type into the plan specification.
+pub fn parse_data_type(type_string: &str) -> SqlResult<spec::DataType> {
+    crate::parser::parse_data_type(type_string).and_then(from_ast_data_type)
+}
+
+/// Parse a SQL data type or a comma-separated list of fields.
+pub fn parse_schema(schema: &str) -> SqlResult<spec::DataType> {
+    parse_data_type(schema).or_else(|_| {
+        let data_type = parse_data_type(&format!("struct<{schema}>"))?;
+        if matches!(&data_type, spec::DataType::Struct { fields } if fields.is_empty()) {
+            return Err(SqlError::invalid("empty data type"));
+        }
+        Ok(data_type)
+    })
+}
+
+/// Parse a Spark JSON data type without depending on the Spark Connect protocol.
+pub fn parse_spark_json_data_type(schema: &str) -> SqlResult<spec::DataType> {
+    let json_data_type: sail_common_spark::data_type::JsonDataType =
+        serde_json::from_str(schema)
+            .map_err(|e| SqlError::invalid(format!("invalid Spark JSON data type: {e}")))?;
+    Ok(json_data_type.try_into()?)
+}
+
+/// Parse a SQL type, a field list, or a Spark JSON data type.
+pub fn parse_spark_data_type(schema: &str) -> SqlResult<spec::DataType> {
+    parse_schema(schema).or_else(|e| parse_spark_json_data_type(schema).map_err(|_| e))
+}
+
 fn from_ast_char_length(length: Option<&IntegerLiteral>) -> SqlResult<u32> {
     let Some(length) = length else {
         return Err(SqlError::invalid("missing character length"));
@@ -42,10 +71,10 @@ fn from_ast_day_time_interval_field(
     }
 }
 
-fn from_ast_timestamp_precision(
+fn timestamp_precision_to_time_unit(
     precision: Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
 ) -> SqlResult<spec::TimeUnit> {
-    let precision = precision.as_ref().map(|(_, p, _)| p.value);
+    let precision = precision.as_ref().map(|(_, precision, _)| precision.value);
     match precision {
         Some(0) => Ok(spec::TimeUnit::Second),
         Some(3) => Ok(spec::TimeUnit::Millisecond),
@@ -55,10 +84,10 @@ fn from_ast_timestamp_precision(
     }
 }
 
-fn from_ast_time_precision(
+fn time_precision_to_time_unit(
     precision: Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
 ) -> SqlResult<spec::TimeUnit> {
-    let precision = precision.as_ref().map(|(_, p, _)| p.value);
+    let precision = precision.as_ref().map(|(_, precision, _)| precision.value);
     match precision {
         Some(0) => Ok(spec::TimeUnit::Second),
         Some(3) => Ok(spec::TimeUnit::Millisecond),
@@ -157,28 +186,28 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
                 }
                 None => spec::TimestampType::Configured,
             };
-            let time_unit = from_ast_timestamp_precision(precision)?;
+            let time_unit = timestamp_precision_to_time_unit(precision)?;
             Ok(spec::DataType::Timestamp {
                 time_unit,
                 timestamp_type,
             })
         }
         DataType::TimestampNtz(_, precision) => {
-            let time_unit = from_ast_timestamp_precision(precision)?;
+            let time_unit = timestamp_precision_to_time_unit(precision)?;
             Ok(spec::DataType::Timestamp {
                 time_unit,
                 timestamp_type: spec::TimestampType::WithoutTimeZone,
             })
         }
         DataType::TimestampLtz(_, precision) => {
-            let time_unit = from_ast_timestamp_precision(precision)?;
+            let time_unit = timestamp_precision_to_time_unit(precision)?;
             Ok(spec::DataType::Timestamp {
                 time_unit,
                 timestamp_type: spec::TimestampType::WithLocalTimeZone,
             })
         }
         DataType::Time(_, precision) => {
-            let time_unit = from_ast_time_precision(precision)?;
+            let time_unit = time_precision_to_time_unit(precision)?;
             match time_unit {
                 spec::TimeUnit::Second | spec::TimeUnit::Millisecond => {
                     Ok(spec::DataType::Time32 { time_unit })
@@ -300,5 +329,26 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
         }
         DataType::Uuid(_) => Ok(spec::DataType::Uuid),
         DataType::Variant(_) => Ok(spec::DataType::Variant),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_sql_fields_and_spark_json_consistently() -> SqlResult<()> {
+        let expected = parse_schema("STRUCT<Id INT, Amount DECIMAL(10,2)>")?;
+        assert_eq!(parse_schema("Id INT, Amount DECIMAL(10,2)")?, expected);
+        assert_eq!(
+            parse_spark_data_type(
+                r#"{"type":"struct","fields":[{"name":"Id","type":"integer"},{"name":"Amount","type":"decimal(10,2)"}]}"#
+            )?,
+            expected
+        );
+        assert_eq!(parse_spark_data_type(r#""int""#)?, spec::DataType::Int32);
+        assert!(parse_schema("").is_err());
+        assert!(parse_spark_data_type("array<int").is_err());
+        Ok(())
     }
 }

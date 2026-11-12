@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use sail_spark_connect::JsonDataType;
+use sail_common_spark::data_type::JsonDataType;
 use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::spark::common::{TestData, TestDataObject};
@@ -44,6 +44,7 @@ pub struct FunctionTestSuite {
 
 fn clean_up_schema(schema: &mut JsonDataType) {
     match schema {
+        JsonDataType::Type { r#type } => clean_up_schema(r#type),
         JsonDataType::Array { element_type, .. } => {
             clean_up_schema(element_type);
         }

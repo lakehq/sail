@@ -13,8 +13,6 @@ use datafusion_expr_common::signature::Volatility;
 use sail_common::spec;
 use sail_common_datafusion::data_type::DataTypeResolver;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
-use sail_sql_analyzer::data_type::from_ast_data_type;
-use sail_sql_analyzer::parser as sail_parser;
 
 use crate::functions_nested_utils::*;
 use crate::functions_utils::make_scalar_function;
@@ -185,8 +183,8 @@ impl ScalarUDFImpl for SparkFromCSV {
             );
         };
 
-        let dt = DataType::Struct(parse_fields(schema_str, &self.session_timezone)?);
-        Ok(Arc::new(Field::new(self.name(), dt, true)))
+        let data_type = DataType::Struct(parse_csv_schema(schema_str, &self.session_timezone)?);
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     /// Executes the function with given arguments and produces the resulting array
@@ -279,7 +277,7 @@ fn spark_from_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
         SparkFromCSVOptions::default()
     };
 
-    let fields: Fields = parse_fields(schema_str, session_timezone)?;
+    let fields: Fields = parse_csv_schema(schema_str, session_timezone)?;
     // The schema is constant for the batch; decode interval qualifiers before the row loop.
     let interval_qualifiers = fields
         .iter()
@@ -579,59 +577,47 @@ fn parse_date(
 /// # Errors
 /// Returns an error if the schema string is invalid, such as if it contains
 /// duplicate field names or uses an unsupported field type syntax.
-fn parse_fields(schema: &str, session_timezone: &str) -> Result<Fields> {
+fn parse_csv_schema(schema: &str, session_timezone: &str) -> Result<Fields> {
     let schema = schema.trim();
-    let type_str = if schema
-        .get(..6)
-        .is_some_and(|p| p.eq_ignore_ascii_case("struct"))
-        && schema.get(6..).is_some_and(|p| p.starts_with('<'))
-        && schema.ends_with('>')
-    {
-        schema.to_string()
-    } else {
-        // Schema string is a list of fields. Wrap it into `STRUCT<...>`.
-        format!("STRUCT<{schema}>")
-    };
-
-    let ast = sail_parser::parse_data_type(&type_str)
+    let data_type = sail_sql_analyzer::data_type::parse_schema(schema)
         .map_err(|e| DataFusionError::Plan(format!("Failed to parse schema '{schema}': {e}")))?;
-    let spec_dt = from_ast_data_type(ast)
-        .map_err(|e| DataFusionError::Plan(format!("Failed to analyze schema '{schema}': {e}")))?;
-    let spec::DataType::Struct { fields } = spec_dt else {
+    let spec::DataType::Struct { fields } = data_type else {
         return Err(DataFusionError::Plan(format!(
-            "Expected STRUCT schema, got: {spec_dt:?}"
+            "Expected STRUCT schema, got: {data_type:?}"
         )));
     };
 
-    let mut seen: HashSet<String> = HashSet::with_capacity(fields.len());
-    for f in fields.iter() {
-        let name = f.name.clone();
-        if !seen.insert(name.clone()) {
+    let mut field_names: HashSet<String> = HashSet::with_capacity(fields.len());
+    for field in fields.iter() {
+        let name = field.name.clone();
+        if !field_names.insert(name.clone()) {
             return Err(DataFusionError::Plan(format!(
                 "Duplicate field name '{name}'"
             )));
         }
-        validate_csv_data_type(&f.data_type)?;
+        validate_csv_data_type(&field.data_type)?;
     }
-    data_type_resolver(session_timezone)
+    create_data_type_resolver(session_timezone)
         .resolve_fields(&fields)
         .map_err(|e| DataFusionError::Plan(e.to_string()))
 }
 
 /// Parses a raw SQL type string into an Arrow `DataType`.
-pub fn parse_data_type(raw: &str) -> Result<DataType> {
-    parse_data_type_with_session_timezone(raw, DEFAULT_SESSION_TIMEZONE)
+pub fn parse_data_type(type_string: &str) -> Result<DataType> {
+    parse_data_type_with_session_timezone(type_string, DEFAULT_SESSION_TIMEZONE)
 }
 
-fn parse_data_type_with_session_timezone(raw: &str, session_timezone: &str) -> Result<DataType> {
-    let ast = sail_parser::parse_data_type(raw)
-        .map_err(|e| DataFusionError::Plan(format!("Failed to parse SQL type '{raw}': {e}")))?;
-    let spec_dt = from_ast_data_type(ast)
-        .map_err(|e| DataFusionError::Plan(format!("Failed to analyze SQL type '{raw}': {e}")))?;
-    spec_to_arrow_data_type(&spec_dt, session_timezone)
+fn parse_data_type_with_session_timezone(
+    type_string: &str,
+    session_timezone: &str,
+) -> Result<DataType> {
+    let data_type = sail_sql_analyzer::data_type::parse_data_type(type_string).map_err(|e| {
+        DataFusionError::Plan(format!("Failed to parse SQL type '{type_string}': {e}"))
+    })?;
+    resolve_arrow_data_type(&data_type, session_timezone)
 }
 
-fn data_type_resolver(session_timezone: &str) -> DataTypeResolver {
+fn create_data_type_resolver(session_timezone: &str) -> DataTypeResolver {
     DataTypeResolver {
         session_timezone: Arc::from(session_timezone),
         default_timestamp_ltz: true,
@@ -639,22 +625,22 @@ fn data_type_resolver(session_timezone: &str) -> DataTypeResolver {
     }
 }
 
-fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
-    validate_csv_data_type(dt)?;
-    let dt = match dt {
+fn resolve_arrow_data_type(data_type: &spec::DataType, session_timezone: &str) -> Result<DataType> {
+    validate_csv_data_type(data_type)?;
+    let data_type = match data_type {
         spec::DataType::UserDefined { sql_type, .. } => sql_type,
-        dt => dt,
+        data_type => data_type,
     };
-    data_type_resolver(session_timezone)
-        .resolve_data_type(dt)
+    create_data_type_resolver(session_timezone)
+        .resolve_data_type(data_type)
         .map_err(|e| DataFusionError::Plan(e.to_string()))
 }
 
-fn validate_csv_data_type(dt: &spec::DataType) -> Result<()> {
-    match dt {
+fn validate_csv_data_type(data_type: &spec::DataType) -> Result<()> {
+    match data_type {
         // CSV parsing does not decode or validate WKB values.
         spec::DataType::Geometry { .. } | spec::DataType::Geography { .. } => {
-            plan_err!("Unsupported data type in from_csv schema: {dt:?}")
+            plan_err!("Unsupported data type in from_csv schema: {data_type:?}")
         }
         spec::DataType::List { data_type, .. }
         | spec::DataType::FixedSizeList { data_type, .. }
@@ -866,17 +852,17 @@ mod tests {
     #[test]
     fn test_parse_data_type_array_struct_map() -> Result<()> {
         // ARRAY<INT> -> List(Int32)
-        let dt = parse_data_type("ARRAY<INT>")?;
-        let DataType::List(field) = &dt else {
-            return internal_err!("expected List, got {:?}", dt);
+        let data_type = parse_data_type("ARRAY<INT>")?;
+        let DataType::List(field) = &data_type else {
+            return internal_err!("expected List, got {:?}", data_type);
         };
         assert_eq!(field.name(), SAIL_LIST_FIELD_NAME);
         assert_eq!(field.data_type(), &DataType::Int32);
 
         // STRUCT<a INT, b STRING> -> Struct with fields a, b
-        let dt = parse_data_type("STRUCT<a INT, b STRING>")?;
-        let DataType::Struct(fields) = &dt else {
-            return internal_err!("expected Struct, got {:?}", dt);
+        let data_type = parse_data_type("STRUCT<a INT, b STRING>")?;
+        let DataType::Struct(fields) = &data_type else {
+            return internal_err!("expected Struct, got {:?}", data_type);
         };
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].name(), "a");
@@ -885,9 +871,9 @@ mod tests {
         assert_eq!(fields[1].data_type(), &DataType::Utf8);
 
         // MAP<STRING, INT> -> Map with key Utf8, value Int32
-        let dt = parse_data_type("MAP<STRING, INT>")?;
-        let DataType::Map(field, _) = &dt else {
-            return internal_err!("expected Map, got {:?}", dt);
+        let data_type = parse_data_type("MAP<STRING, INT>")?;
+        let DataType::Map(field, _) = &data_type else {
+            return internal_err!("expected Map, got {:?}", data_type);
         };
         let DataType::Struct(entries) = field.data_type() else {
             return internal_err!("Map entries should be Struct");
@@ -908,27 +894,27 @@ mod tests {
 
     #[test]
     fn test_parse_data_type_timestamp_respects_time_unit_and_timezone() -> Result<()> {
-        let dt = parse_data_type("TIMESTAMP")?;
+        let data_type = parse_data_type("TIMESTAMP")?;
         assert_eq!(
-            dt,
+            data_type,
             DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")))
         );
 
-        let dt = parse_data_type_with_session_timezone("TIMESTAMP(3)", "Asia/Shanghai")?;
+        let data_type = parse_data_type_with_session_timezone("TIMESTAMP(3)", "Asia/Shanghai")?;
         assert_eq!(
-            dt,
+            data_type,
             DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("Asia/Shanghai")))
         );
 
-        let dt = parse_data_type_with_session_timezone("TIMESTAMP_NTZ(9)", "Asia/Shanghai")?;
-        assert_eq!(dt, DataType::Timestamp(TimeUnit::Nanosecond, None));
+        let data_type = parse_data_type_with_session_timezone("TIMESTAMP_NTZ(9)", "Asia/Shanghai")?;
+        assert_eq!(data_type, DataType::Timestamp(TimeUnit::Nanosecond, None));
 
         Ok(())
     }
 
     #[test]
-    fn test_parse_fields_nested_struct() -> Result<()> {
-        let fields = parse_fields(
+    fn test_parse_csv_schema_nested_struct() -> Result<()> {
+        let fields = parse_csv_schema(
             "id INT, addr STRUCT<city STRING, zip INT>",
             DEFAULT_SESSION_TIMEZONE,
         )?;

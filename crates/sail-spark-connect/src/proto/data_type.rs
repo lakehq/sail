@@ -1,12 +1,8 @@
 use std::sync::Arc;
 
 use sail_common::spec;
-use sail_common::spec::ARROW_DECIMAL128_MAX_PRECISION;
-use sail_sql_analyzer::data_type::from_ast_data_type;
-use sail_sql_analyzer::parser::parse_data_type;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::proto::data_type_json::parse_spark_json_data_type;
 use crate::spark::connect::{DataType, data_type as sdt};
 
 pub(crate) const DEFAULT_FIELD_NAME: &str = "value";
@@ -22,27 +18,15 @@ pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_PRECISION: u8 = 38;
 #[expect(dead_code)]
 pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i8 = 18;
 
-/// Parse a Spark data type string of various forms.
-/// Reference: org.apache.spark.sql.connect.planner.SparkConnectPlanner#parseDatatypeString
 pub(crate) fn parse_spark_data_type(schema: &str) -> SparkResult<spec::DataType> {
-    if let Ok(dt) = parse_data_type(schema).and_then(from_ast_data_type) {
-        Ok(dt)
-    } else {
-        match parse_data_type(format!("struct<{schema}>").as_str()).and_then(from_ast_data_type) {
-            Ok(dt) => match dt {
-                spec::DataType::Struct { fields } if fields.is_empty() => {
-                    Err(SparkError::invalid("empty data type"))
-                }
-                // The SQL parser supports both `struct<name: type, ...>` and `struct<name type, ...>` syntax.
-                // Therefore, by wrapping the input with `struct<...>`, we do not need separate logic
-                // to parse table schema input (`name type, ...`).
-                _ => Ok(dt),
-            },
-            Err(ddl_error) => parse_spark_json_data_type(schema)
-                .and_then(|dt| dt.try_into())
-                .map_err(|_| SparkError::ParseError(ddl_error.to_string())),
+    sail_sql_analyzer::data_type::parse_spark_data_type(schema).map_err(|e| match e {
+        sail_sql_analyzer::error::SqlError::InvalidArgument(message)
+            if message == "empty data type" =>
+        {
+            SparkError::invalid(message)
         }
-    }
+        e => SparkError::ParseError(e.to_string()),
+    })
 }
 
 impl TryFrom<sdt::StructField> for spec::FieldRef {
@@ -70,85 +54,58 @@ impl TryFrom<sdt::StructField> for spec::FieldRef {
     }
 }
 
-/// Reference: https://github.com/apache/spark/blob/bb17665955ad536d8c81605da9a59fb94b6e0162/sql/api/src/main/scala/org/apache/spark/sql/util/ArrowUtils.scala
+/// Convert protocol types through the shared Spark type model.
 impl TryFrom<DataType> for spec::DataType {
     type Error = SparkError;
 
     fn try_from(data_type: DataType) -> SparkResult<spec::DataType> {
+        use sail_common_spark::data_type::JsonDataType;
+
         use crate::spark::connect::data_type::Kind;
 
-        let DataType { kind } = data_type;
-        let kind = kind.required("data type kind")?;
-        match kind {
-            Kind::Null(_) => Ok(spec::DataType::Null),
-            Kind::Binary(_) => Ok(spec::DataType::ConfiguredBinary),
-            Kind::Boolean(_) => Ok(spec::DataType::Boolean),
-            Kind::Byte(_) => Ok(spec::DataType::Int8),
-            Kind::Short(_) => Ok(spec::DataType::Int16),
-            Kind::Integer(_) => Ok(spec::DataType::Int32),
-            Kind::Long(_) => Ok(spec::DataType::Int64),
-            Kind::Float(_) => Ok(spec::DataType::Float32),
-            Kind::Double(_) => Ok(spec::DataType::Float64),
-            Kind::Decimal(sdt::Decimal {
-                scale,
-                precision,
-                type_variation_reference: _,
-            }) => {
-                let scale = scale
-                    .map(i8::try_from)
-                    .transpose()
-                    .map_err(|_| SparkError::invalid("decimal scale"))?
-                    .unwrap_or(SPARK_DECIMAL_USER_DEFAULT_SCALE);
-                let precision = precision
-                    .map(u8::try_from)
-                    .transpose()
-                    .map_err(|_| SparkError::invalid("decimal precision"))?
-                    .unwrap_or(SPARK_DECIMAL_USER_DEFAULT_PRECISION);
-                if precision > ARROW_DECIMAL128_MAX_PRECISION {
-                    Ok(spec::DataType::Decimal256 { precision, scale })
-                } else {
-                    Ok(spec::DataType::Decimal128 { precision, scale })
-                }
-            }
-            Kind::String(_) => Ok(spec::DataType::ConfiguredUtf8 {
-                utf8_type: spec::Utf8Type::Configured,
-            }),
-            Kind::Char(sdt::Char {
-                length,
-                type_variation_reference: _,
-            }) => {
-                let length = length
-                    .try_into()
-                    .map_err(|_| SparkError::invalid("char length"))?;
-                Ok(spec::DataType::ConfiguredUtf8 {
-                    utf8_type: spec::Utf8Type::Char { length },
-                })
-            }
-            Kind::VarChar(sdt::VarChar {
-                length,
-                type_variation_reference: _,
-            }) => {
-                let length = length
-                    .try_into()
-                    .map_err(|_| SparkError::invalid("varchar length"))?;
-                Ok(spec::DataType::ConfiguredUtf8 {
-                    utf8_type: spec::Utf8Type::VarChar { length },
-                })
-            }
-            Kind::Date(_) => Ok(spec::DataType::Date32),
-            Kind::Timestamp(_) => Ok(spec::DataType::Timestamp {
-                time_unit: spec::TimeUnit::Microsecond,
-                timestamp_type: spec::TimestampType::WithLocalTimeZone,
-            }),
-            Kind::TimestampNtz(_) => Ok(spec::DataType::Timestamp {
-                time_unit: spec::TimeUnit::Microsecond,
-                timestamp_type: spec::TimestampType::WithoutTimeZone,
-            }),
-            Kind::CalendarInterval(_) => Ok(spec::DataType::Interval {
-                interval_unit: spec::IntervalUnit::MonthDayNano,
-                start_field: None,
-                end_field: None,
-            }),
+        let kind = data_type.kind.required("data type kind")?;
+        let data_type = match kind {
+            Kind::Null(_) => JsonDataType::Null,
+            Kind::Binary(_) => JsonDataType::Binary,
+            Kind::Boolean(_) => JsonDataType::Boolean,
+            Kind::Byte(_) => JsonDataType::Byte,
+            Kind::Short(_) => JsonDataType::Short,
+            Kind::Integer(_) => JsonDataType::Integer,
+            Kind::Long(_) => JsonDataType::Long,
+            Kind::Float(_) => JsonDataType::Float,
+            Kind::Double(_) => JsonDataType::Double,
+            Kind::Decimal(decimal) => JsonDataType::FixedDecimal {
+                precision: decimal
+                    .precision
+                    .unwrap_or(i32::from(SPARK_DECIMAL_USER_DEFAULT_PRECISION)),
+                scale: decimal
+                    .scale
+                    .unwrap_or(i32::from(SPARK_DECIMAL_USER_DEFAULT_SCALE)),
+            },
+            Kind::String(_) => JsonDataType::String,
+            Kind::Char(char_type) => JsonDataType::Char {
+                length: char_type.length,
+            },
+            Kind::VarChar(varchar_type) => JsonDataType::Varchar {
+                length: varchar_type.length,
+            },
+            Kind::Date(_) => JsonDataType::Date,
+            Kind::Timestamp(_) => JsonDataType::Timestamp,
+            Kind::TimestampNtz(_) => JsonDataType::TimestampNtz,
+            Kind::TimestampLtzNanos(_) => JsonDataType::TimestampLtzNanos,
+            Kind::TimestampNtzNanos(_) => JsonDataType::TimestampNtzNanos,
+            Kind::Time(time) => JsonDataType::Time {
+                precision: time.precision,
+            },
+            Kind::CalendarInterval(_) => JsonDataType::CalendarInterval,
+            Kind::Variant(_) => JsonDataType::Variant,
+            Kind::Geometry(geometry) => JsonDataType::Geometry {
+                srid: geometry.srid,
+            },
+            Kind::Geography(geography) => JsonDataType::Geography {
+                srid: geography.srid,
+                algorithm: "spherical".to_string(),
+            },
             Kind::YearMonthInterval(sdt::YearMonthInterval {
                 start_field,
                 end_field,
@@ -164,11 +121,11 @@ impl TryFrom<DataType> for spec::DataType {
                     .map(spec::IntervalFieldType::from);
                 let start_field = Some(start_field.unwrap_or(spec::IntervalFieldType::Year));
                 let end_field = Some(end_field.unwrap_or(spec::IntervalFieldType::Month));
-                Ok(spec::DataType::Interval {
+                return Ok(spec::DataType::Interval {
                     interval_unit: spec::IntervalUnit::YearMonth,
                     start_field,
                     end_field,
-                })
+                });
             }
             Kind::DayTimeInterval(sdt::DayTimeInterval {
                 start_field,
@@ -185,11 +142,11 @@ impl TryFrom<DataType> for spec::DataType {
                     .map(spec::IntervalFieldType::from);
                 let start_field = Some(start_field.unwrap_or(spec::IntervalFieldType::Day));
                 let end_field = Some(end_field.unwrap_or(spec::IntervalFieldType::Second));
-                Ok(spec::DataType::Interval {
+                return Ok(spec::DataType::Interval {
                     interval_unit: spec::IntervalUnit::DayTime,
                     start_field,
                     end_field,
-                })
+                });
             }
             Kind::Array(array) => {
                 let sdt::Array {
@@ -198,10 +155,10 @@ impl TryFrom<DataType> for spec::DataType {
                     type_variation_reference: _,
                 } = *array;
                 let element_type = element_type.required("array element type")?;
-                Ok(spec::DataType::List {
+                return Ok(spec::DataType::List {
                     data_type: Box::new(spec::DataType::try_from(*element_type)?),
                     nullable: contains_null,
-                })
+                });
             }
             Kind::Struct(sdt::Struct {
                 fields,
@@ -211,9 +168,9 @@ impl TryFrom<DataType> for spec::DataType {
                     .into_iter()
                     .map(spec::FieldRef::try_from)
                     .collect::<SparkResult<_>>()?;
-                Ok(spec::DataType::Struct {
+                return Ok(spec::DataType::Struct {
                     fields: spec::Fields::from(fields),
-                })
+                });
             }
             Kind::Map(map) => {
                 let sdt::Map {
@@ -224,14 +181,13 @@ impl TryFrom<DataType> for spec::DataType {
                 } = *map;
                 let key_type = key_type.required("map key type")?;
                 let value_type = value_type.required("map value type")?;
-                Ok(spec::DataType::Map {
+                return Ok(spec::DataType::Map {
                     key_type: Box::new(spec::DataType::try_from(*key_type)?),
                     value_type: Box::new(spec::DataType::try_from(*value_type)?),
                     value_type_nullable: value_contains_null,
                     keys_sorted: false,
-                })
+                });
             }
-            Kind::Variant(_) => Ok(spec::DataType::Variant),
             Kind::Udt(udt) => {
                 let sdt::Udt {
                     r#type: _,
@@ -241,61 +197,18 @@ impl TryFrom<DataType> for spec::DataType {
                     sql_type,
                 } = *udt;
                 let sql_type = sql_type.required("UDT sql type")?;
-                Ok(spec::DataType::UserDefined {
+                return Ok(spec::DataType::UserDefined {
                     jvm_class,
                     python_class,
                     serialized_python_class,
                     sql_type: Box::new(spec::DataType::try_from(*sql_type)?),
-                })
-            }
-            Kind::Geometry(geometry) => {
-                let sdt::Geometry {
-                    srid,
-                    type_variation_reference: _,
-                } = geometry;
-                Ok(spec::DataType::Geometry { srid })
-            }
-            Kind::Geography(geography) => {
-                let sdt::Geography {
-                    srid,
-                    type_variation_reference: _,
-                } = geography;
-                Ok(spec::DataType::Geography {
-                    srid,
-                    algorithm: spec::EdgeInterpolationAlgorithm::Spherical,
-                })
+                });
             }
             Kind::Unparsed(sdt::Unparsed { data_type_string }) => {
-                Ok(parse_spark_data_type(data_type_string.as_str())?)
+                return parse_spark_data_type(&data_type_string);
             }
-            Kind::TimestampNtzNanos(_) | Kind::TimestampLtzNanos(_) => {
-                Err(SparkError::unsupported("nanosecond timestamp type"))
-            }
-            Kind::Time(sdt::Time {
-                precision,
-                type_variation_reference: _,
-            }) => {
-                let precision = precision.unwrap_or(6); // Default to microsecond if not specified
-                match precision {
-                    0 => Ok(spec::DataType::Time32 {
-                        time_unit: spec::TimeUnit::Second,
-                    }),
-                    3 => Ok(spec::DataType::Time32 {
-                        time_unit: spec::TimeUnit::Millisecond,
-                    }),
-                    6 => Ok(spec::DataType::Time64 {
-                        time_unit: spec::TimeUnit::Microsecond,
-                    }),
-                    9 => Ok(spec::DataType::Time64 {
-                        time_unit: spec::TimeUnit::Nanosecond,
-                    }),
-                    _ => Err(SparkError::invalid(format!(
-                        "unsupported TIME precision: {}. Only 0, 3, 6, and 9 are supported",
-                        precision
-                    ))),
-                }
-            }
-        }
+        };
+        Ok(data_type.try_into()?)
     }
 }
 

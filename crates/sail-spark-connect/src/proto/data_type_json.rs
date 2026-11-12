@@ -1,529 +1,17 @@
-use std::collections::HashMap;
-use std::fmt::Display;
-use std::str::FromStr;
-
-use monostate::MustBe;
-use serde::{Deserialize, Serialize};
+use sail_common_spark::data_type::JsonDataType;
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::connect as sc;
 use crate::spark::connect::data_type as dt;
 
-/// References:
-///   org.apache.spark.sql.types.DataType#parseDataType
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum JsonDataType {
-    #[serde(alias = "void")]
-    Null,
-    String,
-    Binary,
-    Boolean,
-    Decimal,
-    Float,
-    Double,
-    Byte,
-    Short,
-    Integer,
-    Long,
-    Date,
-    #[serde(alias = "timestamp_ltz")]
-    Timestamp,
-    TimestampNtz,
-    #[serde(rename = "timestamp_ltz(9)")]
-    TimestampLtzNanos,
-    #[serde(rename = "timestamp_ntz(9)")]
-    TimestampNtzNanos,
-    #[serde(rename = "interval")]
-    CalendarInterval,
-    Variant,
-    #[serde(untagged, with = "serde_geometry")]
-    Geometry {
-        srid: i32,
-    },
-    #[serde(untagged, with = "serde_geography")]
-    Geography {
-        srid: i32,
-        algorithm: String,
-    },
-    #[serde(untagged, with = "serde_char")]
-    Char {
-        length: i32,
-    },
-    #[serde(untagged, with = "serde_varchar")]
-    Varchar {
-        length: i32,
-    },
-    #[serde(untagged, with = "serde_fixed_decimal")]
-    FixedDecimal {
-        precision: i32,
-        scale: i32,
-    },
-    #[serde(untagged, with = "serde_day_time_interval")]
-    DayTimeInterval {
-        start: Option<DayTimeIntervalField>,
-        end: Option<DayTimeIntervalField>,
-    },
-    #[serde(untagged, with = "serde_year_month_interval")]
-    YearMonthInterval {
-        start: Option<YearMonthIntervalField>,
-        end: Option<YearMonthIntervalField>,
-    },
-    #[serde(untagged, with = "serde_time")]
-    Time {
-        precision: Option<i32>,
-    },
-    #[serde(untagged, rename_all = "camelCase")]
-    Array {
-        r#type: MustBe!("array"),
-        element_type: Box<JsonDataType>,
-        contains_null: bool,
-    },
-    #[serde(untagged, rename_all = "camelCase")]
-    Map {
-        r#type: MustBe!("map"),
-        key_type: Box<JsonDataType>,
-        value_type: Box<JsonDataType>,
-        value_contains_null: bool,
-    },
-    #[serde(untagged, rename_all = "camelCase")]
-    Struct {
-        r#type: MustBe!("struct"),
-        fields: Vec<JsonStructField>,
-    },
-    #[serde(untagged, rename_all = "camelCase")]
-    Udt {
-        r#type: MustBe!("udt"),
-        class: Option<String>,
-        py_class: Option<String>,
-        serialized_class: Option<String>,
-        sql_type: Option<Box<JsonDataType>>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct JsonStructField {
-    pub name: String,
-    pub nullable: bool,
-    pub r#type: JsonDataType,
-    pub metadata: Option<HashMap<String, String>>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum DayTimeIntervalField {
-    Day = 0,
-    Hour = 1,
-    Minute = 2,
-    Second = 3,
-}
-
-impl FromStr for DayTimeIntervalField {
-    type Err = serde::de::value::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "day" => Ok(DayTimeIntervalField::Day),
-            "hour" => Ok(DayTimeIntervalField::Hour),
-            "minute" => Ok(DayTimeIntervalField::Minute),
-            "second" => Ok(DayTimeIntervalField::Second),
-            _ => Err(serde::de::Error::custom(format!(
-                "invalid day time interval field: {s}"
-            ))),
-        }
-    }
-}
-
-impl Display for DayTimeIntervalField {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DayTimeIntervalField::Day => write!(f, "day"),
-            DayTimeIntervalField::Hour => write!(f, "hour"),
-            DayTimeIntervalField::Minute => write!(f, "minute"),
-            DayTimeIntervalField::Second => write!(f, "second"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum YearMonthIntervalField {
-    Year = 0,
-    Month = 1,
-}
-
-impl FromStr for YearMonthIntervalField {
-    type Err = serde::de::value::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "year" => Ok(YearMonthIntervalField::Year),
-            "month" => Ok(YearMonthIntervalField::Month),
-            _ => Err(serde::de::Error::custom(format!(
-                "invalid year month interval field: {s}"
-            ))),
-        }
-    }
-}
-
-impl Display for YearMonthIntervalField {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            YearMonthIntervalField::Year => write!(f, "year"),
-            YearMonthIntervalField::Month => write!(f, "month"),
-        }
-    }
-}
-
-fn create_regex(regex: Result<regex::Regex, regex::Error>) -> regex::Regex {
-    #[expect(clippy::unwrap_used)]
-    regex.unwrap()
-}
-
-mod serde_time {
-    use lazy_static::lazy_static;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    use crate::proto::data_type_json::create_regex;
-
-    lazy_static! {
-        static ref TIME_PRECISION: regex::Regex =
-            create_regex(regex::Regex::new(r"^time(\(\s*(\d+)\s*\))?$"));
-    }
-
-    pub fn serialize<S>(precision: &Option<i32>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match precision {
-            Some(p) => format!("time({})", *p).serialize(serializer),
-            None => "time".to_string().serialize(serializer),
-        }
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<i32>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let caps = TIME_PRECISION
-            .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid time type: {s}")))?;
-        if let Some(m) = caps.get(2) {
-            Ok(Some(m.as_str().parse().map_err(serde::de::Error::custom)?))
-        } else {
-            Ok(None)
-        }
-    }
-}
-
-mod serde_char {
-    use lazy_static::lazy_static;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    use crate::proto::data_type_json::create_regex;
-
-    lazy_static! {
-        static ref CHAR_LENGTH: regex::Regex =
-            create_regex(regex::Regex::new(r"^char\(\s*(\d+)\s*\)$"));
-    }
-
-    pub fn serialize<S>(length: &i32, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        format!("char({})", *length).serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<i32, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let caps = CHAR_LENGTH
-            .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid char type: {s}")))?;
-        caps[1].parse().map_err(serde::de::Error::custom)
-    }
-}
-
-mod serde_varchar {
-    use lazy_static::lazy_static;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    use crate::proto::data_type_json::create_regex;
-
-    lazy_static! {
-        static ref VARCHAR_LENGTH: regex::Regex =
-            create_regex(regex::Regex::new(r"^varchar\(\s*(\d+)\s*\)$"));
-    }
-
-    pub fn serialize<S>(length: &i32, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        format!("varchar({})", *length).serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<i32, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let caps = VARCHAR_LENGTH
-            .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid varchar type: {s}")))?;
-        caps[1].parse().map_err(serde::de::Error::custom)
-    }
-}
-
-mod serde_fixed_decimal {
-    use lazy_static::lazy_static;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    use crate::proto::data_type_json::create_regex;
-
-    lazy_static! {
-        static ref FIXED_DECIMAL: regex::Regex =
-            create_regex(regex::Regex::new(r"^decimal\(\s*(\d+)\s*,\s*(-?\d+)\s*\)$"));
-    }
-
-    pub fn serialize<S>(precision: &i32, scale: &i32, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        format!("decimal({}, {})", *precision, *scale).serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<(i32, i32), D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let caps = FIXED_DECIMAL
-            .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid decimal type: {s}")))?;
-        Ok((
-            caps[1].parse().map_err(serde::de::Error::custom)?,
-            caps[2].parse().map_err(serde::de::Error::custom)?,
-        ))
-    }
-}
-
-mod serde_geometry {
-    use lazy_static::lazy_static;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    use crate::proto::data_type_json::create_regex;
-
-    lazy_static! {
-        static ref GEOMETRY: regex::Regex =
-            create_regex(regex::Regex::new(r"^geometry\(\s*(\d+|ANY)\s*\)$"));
-    }
-
-    pub fn serialize<S>(srid: &i32, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if *srid == -1 {
-            "geometry(ANY)".serialize(serializer)
-        } else {
-            format!("geometry({})", *srid).serialize(serializer)
-        }
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<i32, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let caps = GEOMETRY
-            .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid geometry type: {s}")))?;
-        let srid_str = &caps[1];
-        if srid_str == "ANY" {
-            Ok(-1)
-        } else {
-            srid_str.parse().map_err(serde::de::Error::custom)
-        }
-    }
-}
-
-mod serde_geography {
-    use lazy_static::lazy_static;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    use crate::proto::data_type_json::create_regex;
-
-    lazy_static! {
-        static ref GEOGRAPHY: regex::Regex = create_regex(regex::Regex::new(
-            r"^geography\(\s*(\d+|ANY)\s*(?:,\s*(\w+)\s*)?\)$"
-        ));
-    }
-
-    pub fn serialize<S>(srid: &i32, algorithm: &str, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if *srid == -1 {
-            format!("geography(ANY, {})", algorithm).serialize(serializer)
-        } else {
-            format!("geography({}, {})", *srid, algorithm).serialize(serializer)
-        }
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<(i32, String), D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let caps = GEOGRAPHY
-            .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid geography type: {s}")))?;
-        let srid_str = &caps[1];
-        let srid = if srid_str == "ANY" {
-            -1
-        } else {
-            srid_str.parse().map_err(serde::de::Error::custom)?
-        };
-        let algorithm = caps
-            .get(2)
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_else(|| "spherical".to_string());
-        Ok((srid, algorithm))
-    }
-}
-
-mod serde_day_time_interval {
-    use std::str::FromStr;
-
-    use lazy_static::lazy_static;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    use crate::proto::data_type_json::create_regex;
-
-    lazy_static! {
-        static ref DAY_TIME_INTERVAL: regex::Regex = create_regex(regex::Regex::new(
-            r"^interval\s+(day|hour|minute|second)(\s+to\s+(day|hour|minute|second))?$"
-        ));
-    }
-
-    pub fn serialize<S>(
-        start: &Option<super::DayTimeIntervalField>,
-        end: &Option<super::DayTimeIntervalField>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let start = start.as_ref().map(|f| f.to_string());
-        let end = end.as_ref().map(|f| f.to_string());
-        let interval = match (start, end) {
-            (Some(start), Some(end)) => format!("interval {start} to {end}"),
-            (Some(start), None) => format!("interval {start}"),
-            _ => return Err(serde::ser::Error::custom("invalid day time interval")),
-        };
-        interval.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<
-        (
-            Option<super::DayTimeIntervalField>,
-            Option<super::DayTimeIntervalField>,
-        ),
-        D::Error,
-    >
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let caps = DAY_TIME_INTERVAL
-            .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid day time interval: {s}")))?;
-        let start = caps
-            .get(1)
-            .map(|m| super::DayTimeIntervalField::from_str(m.as_str()))
-            .transpose()
-            .map_err(serde::de::Error::custom)?;
-        let end = caps
-            .get(3)
-            .map(|m| super::DayTimeIntervalField::from_str(m.as_str()))
-            .transpose()
-            .map_err(serde::de::Error::custom)?;
-        Ok((start, end))
-    }
-}
-
-mod serde_year_month_interval {
-    use std::str::FromStr;
-
-    use lazy_static::lazy_static;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    use crate::proto::data_type_json::create_regex;
-
-    lazy_static! {
-        static ref YEAR_MONTH_INTERVAL: regex::Regex = create_regex(regex::Regex::new(
-            r"^interval\s+(year|month)(\s+to\s+(year|month))?$"
-        ));
-    }
-
-    pub fn serialize<S>(
-        start: &Option<super::YearMonthIntervalField>,
-        end: &Option<super::YearMonthIntervalField>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let start = start.as_ref().map(|f| f.to_string());
-        let end = end.as_ref().map(|f| f.to_string());
-        let interval = match (start, end) {
-            (Some(start), Some(end)) => format!("interval {start} to {end}"),
-            (Some(start), None) => format!("interval {start}"),
-            _ => return Err(serde::ser::Error::custom("invalid year month interval")),
-        };
-        interval.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<
-        (
-            Option<super::YearMonthIntervalField>,
-            Option<super::YearMonthIntervalField>,
-        ),
-        D::Error,
-    >
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let caps = YEAR_MONTH_INTERVAL
-            .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid year month interval: {s}")))?;
-        let start = caps
-            .get(1)
-            .map(|m| super::YearMonthIntervalField::from_str(m.as_str()))
-            .transpose()
-            .map_err(serde::de::Error::custom)?;
-        let end = caps
-            .get(3)
-            .map(|m| super::YearMonthIntervalField::from_str(m.as_str()))
-            .transpose()
-            .map_err(serde::de::Error::custom)?;
-        Ok((start, end))
-    }
-}
-
 pub(crate) fn parse_spark_json_data_type(schema: &str) -> SparkResult<sc::DataType> {
-    let schema: JsonDataType = serde_json::from_str(schema)?;
-    from_spark_json_data_type(schema)
+    let json_data_type: JsonDataType = serde_json::from_str(schema)?;
+    json_data_type_to_proto(json_data_type)
 }
 
-fn from_spark_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataType> {
-    let out = match data_type {
+fn json_data_type_to_proto(data_type: JsonDataType) -> SparkResult<sc::DataType> {
+    let proto_data_type = match data_type {
+        JsonDataType::Type { r#type } => return json_data_type_to_proto(*r#type),
         JsonDataType::Null => sc::DataType {
             kind: Some(dt::Kind::Null(dt::Null::default())),
         },
@@ -643,7 +131,7 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataTyp
             contains_null,
         } => sc::DataType {
             kind: Some(dt::Kind::Array(Box::new(dt::Array {
-                element_type: Some(Box::new(from_spark_json_data_type(*element_type)?)),
+                element_type: Some(Box::new(json_data_type_to_proto(*element_type)?)),
                 contains_null,
                 type_variation_reference: 0,
             }))),
@@ -655,8 +143,8 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataTyp
             value_contains_null,
         } => sc::DataType {
             kind: Some(dt::Kind::Map(Box::new(dt::Map {
-                key_type: Some(Box::new(from_spark_json_data_type(*key_type)?)),
-                value_type: Some(Box::new(from_spark_json_data_type(*value_type)?)),
+                key_type: Some(Box::new(json_data_type_to_proto(*key_type)?)),
+                value_type: Some(Box::new(json_data_type_to_proto(*value_type)?)),
                 value_contains_null,
                 type_variation_reference: 0,
             }))),
@@ -668,7 +156,7 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataTyp
                     .map(|field| {
                         Ok(dt::StructField {
                             name: field.name,
-                            data_type: Some(from_spark_json_data_type(field.r#type)?),
+                            data_type: Some(json_data_type_to_proto(field.r#type)?),
                             nullable: field.nullable,
                             metadata: field
                                 .metadata
@@ -693,12 +181,14 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataTyp
                 python_class: py_class,
                 serialized_python_class: serialized_class,
                 sql_type: sql_type
-                    .map(|t| Ok(Box::new(from_spark_json_data_type(*t)?)) as SparkResult<_>)
+                    .map(|sql_type| {
+                        Ok(Box::new(json_data_type_to_proto(*sql_type)?)) as SparkResult<_>
+                    })
                     .transpose()?,
             }))),
         },
     };
-    Ok(out)
+    Ok(proto_data_type)
 }
 
 #[expect(clippy::unwrap_used)]
@@ -1214,12 +704,19 @@ mod tests {
         ];
         for (schema, expected) in data {
             // test serde roundtrip
-            let d: JsonDataType = serde_json::from_str(schema).unwrap();
-            let s = serde_json::to_string(&d).unwrap();
-            assert_eq!(d, serde_json::from_str(&s).unwrap());
+            let json_data_type: JsonDataType = serde_json::from_str(schema).unwrap();
+            let serialized = serde_json::to_string(&json_data_type).unwrap();
+            assert_eq!(json_data_type, serde_json::from_str(&serialized).unwrap());
             // test data type conversion
             let data_type = parse_spark_json_data_type(schema).unwrap();
             assert_eq!(data_type, expected);
+            // Both input formats use the same conversion to the plan specification.
+            let from_proto = sail_common::spec::DataType::try_from(data_type);
+            let from_json = sail_common::spec::DataType::try_from(json_data_type);
+            match from_proto {
+                Ok(expected) => assert_eq!(from_json.unwrap(), expected),
+                Err(_) => assert!(from_json.is_err()),
+            }
         }
     }
 }
