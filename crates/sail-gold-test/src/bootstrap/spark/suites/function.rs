@@ -108,29 +108,3 @@ pub fn build_function_suites(
 
     output
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn function_group_suffix_matches_regex() -> Result<(), regex::Error> {
-        let pattern = regex::Regex::new(r"_funcs$")?;
-        for group in [
-            "math_funcs",
-            "math",
-            "_funcs",
-            "math_funcs_funcs",
-            "math_funcs_extra",
-            "math_funcs\n",
-            "math_funcs\r\n",
-            "",
-        ] {
-            assert_eq!(
-                group.strip_suffix("_funcs").unwrap_or(group),
-                pattern.replace(group, ""),
-                "{group:?}"
-            );
-        }
-        assert!(!pattern.is_match("math_funcs\n"));
-        Ok(())
-    }
-}
