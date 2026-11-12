@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use sail_common_datafusion::catalog::TableStatus;
+use sail_common_datafusion::catalog::{TableKind, TableStatus, normalize_parquet_column_order};
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::lakehouse::{
@@ -17,6 +17,9 @@ use crate::provider::{
 };
 use crate::utils::match_pattern;
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ResolvedCatalogTableReference {
     catalog: Arc<str>,
@@ -31,6 +34,21 @@ impl ResolvedCatalogTableReference {
 }
 
 impl CatalogManager {
+    fn normalize_table_status(mut status: TableStatus) -> CatalogResult<TableStatus> {
+        if let TableKind::Table {
+            columns,
+            format,
+            partition_by,
+            ..
+        } = &mut status.kind
+        {
+            // Providers normally return resolved names. Older metadata can retain reference
+            // casing, so allow only unambiguous fallback after checking exact identities.
+            normalize_parquet_column_order(format, columns, partition_by, false, |c| &c.name)?;
+        }
+        Ok(status)
+    }
+
     pub async fn rename_table(
         &self,
         table: &[String],
@@ -69,7 +87,7 @@ impl CatalogManager {
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
         let (provider, database, table) = self.resolve_object(table)?;
-        provider.create_table(&database, &table, options).await
+        Self::normalize_table_status(provider.create_table(&database, &table, options).await?)
     }
 
     pub async fn stage_table_replacement<T: AsRef<str>>(
@@ -105,7 +123,7 @@ impl CatalogManager {
 
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {
         let (provider, database, table) = self.resolve_object(table)?;
-        provider.get_table(&database, &table).await
+        Self::normalize_table_status(provider.get_table(&database, &table).await?)
     }
 
     /// Resolves a table reference using `catalog` when no registered catalog is named.
@@ -130,9 +148,11 @@ impl CatalogManager {
         reference: &ResolvedCatalogTableReference,
     ) -> CatalogResult<TableStatus> {
         let provider = self.state()?.get_catalog(&reference.catalog)?;
-        provider
-            .get_table(&reference.database, &reference.table)
-            .await
+        Self::normalize_table_status(
+            provider
+                .get_table(&reference.database, &reference.table)
+                .await?,
+        )
     }
 
     pub async fn resolve_lakehouse_table<T: AsRef<str>>(
@@ -207,12 +227,13 @@ impl CatalogManager {
         } else {
             self.resolve_database(database)?
         };
-        Ok(provider
+        provider
             .list_tables(&database)
             .await?
             .into_iter()
             .filter(|x| match_pattern(&x.name, pattern))
-            .collect())
+            .map(Self::normalize_table_status)
+            .collect()
     }
 
     pub async fn list_tables_and_views<T: AsRef<str>>(

@@ -146,6 +146,42 @@ def test_name_based_insert_ignores_column_order(spark, tmp_path, table, entry):
     assert_rows(spark, table, path, ["p", "msg"], ["p"], expected)
 
 
+# [CREDIT]: https://github.com/apache/spark/blob/v4.3.0/sql/core/src/test/scala/org/apache/spark/sql/execution/command/DDLSuite.scala#L1978-L2006
+@pytest.mark.parametrize("metadata", ["describe", "listColumns"])
+@pytest.mark.parametrize("mode", ["append", "overwrite"])
+def test_alter_metadata_order_matches_positional_insert(spark, tmp_path, table, metadata, mode):
+    path = tmp_path / "table"
+    create_table(spark, table, path, "a INT, p INT")
+    spark.sql(f"ALTER TABLE {table} ADD COLUMNS (b INT)")
+    described = []
+    for row in spark.sql(f"DESCRIBE TABLE {table}").collect():
+        if not row.col_name or row.col_name.startswith("#"):
+            break
+        described.append(row.col_name)
+    listed = spark.catalog.listColumns(table)
+    expected_columns = ["a", "b", "p"]
+    assert described == expected_columns
+    assert [column.name for column in listed] == expected_columns
+    assert [column.isPartition for column in listed] == [False, False, True]
+    assert spark.table(table).columns == expected_columns
+
+    spark.sql(f"INSERT INTO {table} (a, p, b) VALUES (1, 7, 2), (3, 8, 4)")
+    view = f"source_{uuid4().hex}"
+    spark.createDataFrame([(101, 7, 202)], "a INT, p INT, b INT").createOrReplaceTempView(view)
+    try:
+        columns = described if metadata == "describe" else [column.name for column in listed]
+        projection = ", ".join(f"`{column}`" for column in columns)
+        operation = "INSERT INTO" if mode == "append" else "INSERT OVERWRITE"
+        spark.sql(f"{operation} {table} SELECT {projection} FROM {view}")
+    finally:
+        spark.catalog.dropTempView(view)
+    expected = [(101, 202, 7), (3, 4, 8)]
+    if mode == "append":
+        expected.append((1, 2, 7))
+    assert_rows(spark, table, path, expected_columns, ["p"], expected)
+    assert {file.relative_to(path).parts[0] for file in path.rglob("*.parquet")} == {"p=7", "p=8"}
+
+
 # [CREDIT]: https://github.com/apache/spark/blob/v4.3.0/sql/core/src/test/scala/org/apache/spark/sql/execution/command/DDLSuite.scala#L753-L763
 @pytest.mark.parametrize("entry", ["create", "ctas", "saveAsTable"])
 def test_catalog_column_order_matches_scan_and_positional_insert(spark, tmp_path, table, entry):

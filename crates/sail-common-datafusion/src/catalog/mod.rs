@@ -1,3 +1,4 @@
+mod column_order;
 pub mod delta;
 pub mod display;
 pub mod iceberg;
@@ -6,6 +7,7 @@ pub mod managed;
 mod replacement;
 mod status;
 
+pub use column_order::normalize_parquet_column_order;
 use datafusion_common::Column;
 use datafusion_expr::expr;
 pub use lakehouse::*;

@@ -8,6 +8,7 @@ use sail_catalog::provider::{
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
+    normalize_parquet_column_order,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
@@ -15,7 +16,6 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
-use crate::resolver::command::write::normalize_parquet_column_order;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -107,7 +107,7 @@ impl PlanResolver<'_> {
             &partition_by,
             self.config.case_sensitive,
             |column| &column.name,
-        );
+        )?;
         for partition in &partition_by {
             if columns.iter().any(|column| {
                 column.identity.is_some() && column.name.eq_ignore_ascii_case(&partition.column)
