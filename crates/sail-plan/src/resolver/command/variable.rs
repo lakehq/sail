@@ -1,5 +1,4 @@
-#[expect(clippy::disallowed_types)]
-use datafusion_expr::{LogicalPlan, ResetVariable, SetVariable, Statement};
+use datafusion_expr::{LogicalPlan, ResetVariable, SetVariable};
 use sail_sql_analyzer::parser::parse_native_config_value;
 
 use crate::error::PlanResult;
@@ -13,13 +12,13 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let value = parse_native_config_value(&value).unwrap_or(value);
         let variable = normalize_variable_name(variable);
-        let statement = Statement::SetVariable(SetVariable { variable, value });
+        let statement = datafusion_expr::Statement::SetVariable(SetVariable { variable, value });
 
         Ok(LogicalPlan::Statement(statement))
     }
 
     pub(super) fn resolve_command_reset_variable(&self, variable: String) -> LogicalPlan {
-        LogicalPlan::Statement(Statement::ResetVariable(ResetVariable {
+        LogicalPlan::Statement(datafusion_expr::Statement::ResetVariable(ResetVariable {
             variable: normalize_variable_name(variable),
         }))
     }

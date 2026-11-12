@@ -1,8 +1,16 @@
 [package]
 name = "sail-gold-test"
 version = { workspace = true }
+authors = { workspace = true }
 edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+repository = { workspace = true }
 rust-version = { workspace = true }
+
+[lints]
+workspace = true
 
 [dependencies]
 sail-spark-connect = { path = "../sail-spark-connect" }
@@ -10,5 +18,4 @@ sail-spark-connect = { path = "../sail-spark-connect" }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-lazy_static = { workspace = true }
 regex = { workspace = true }

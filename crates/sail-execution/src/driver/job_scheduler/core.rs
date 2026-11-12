@@ -526,8 +526,8 @@ impl JobScheduler {
             }
             let partitions = stage.plan.output_partitioning().partition_count();
             let channels = stage.distribution.channels();
-            for p in 0..partitions {
-                let Some((attempt, head)) = job.stages[s].tasks[p].attempts.split_last_mut() else {
+            for (p, task) in job.stages[s].tasks[..partitions].iter_mut().enumerate() {
+                let Some((attempt, head)) = task.attempts.split_last_mut() else {
                     continue;
                 };
                 if !matches!(attempt.state, TaskState::Running | TaskState::Succeeded)

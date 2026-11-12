@@ -1,7 +1,12 @@
 [package]
 name = "sail-function"
 version = { workspace = true }
+authors = { workspace = true }
 edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+repository = { workspace = true }
 rust-version = { workspace = true }
 
 [lints]
@@ -36,7 +41,6 @@ chrono-tz = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 rand = { workspace = true }
-rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
 ordered-float = { workspace = true }
 lazy_static = { workspace = true }
