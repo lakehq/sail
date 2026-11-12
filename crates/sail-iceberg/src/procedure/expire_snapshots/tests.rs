@@ -1,10 +1,11 @@
 #![expect(clippy::expect_used)]
 
+use object_store::ObjectStoreExt;
+
 use super::*;
 use crate::procedure::descriptor::IcebergProcedureType;
 use crate::procedure::rewrite_manifests::tests::{entry, rewrite_fixture};
 use crate::spec::FormatVersion;
-use object_store::ObjectStoreExt;
 
 fn operation() -> ExpireSnapshots {
     ExpireSnapshots {

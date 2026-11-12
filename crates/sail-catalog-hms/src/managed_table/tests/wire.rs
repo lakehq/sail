@@ -2,6 +2,8 @@
 // [CREDIT]: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/hive-metastore/src/test/java/org/apache/iceberg/hive/TestHiveCommitLocks.java
 // [CREDIT]: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/hive-metastore/src/test/java/org/apache/iceberg/hive/TestHiveCommits.java
 
+#![expect(clippy::panic, reason = "unexpected RPCs must fail the test server")]
+
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Mutex;

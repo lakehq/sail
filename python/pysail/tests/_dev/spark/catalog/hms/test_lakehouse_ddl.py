@@ -129,7 +129,7 @@ def test_iceberg_ddl_rejects_metadata_only_disabled_locks(spark, jvm_spark, hms_
         }
 
     before = inventory()
-    with pytest.raises(Exception, match="engine.hive.lock-enabled"):
+    with pytest.raises(Exception, match=r"engine\.hive\.lock-enabled"):
         spark.sql(f"ALTER TABLE {name} {operation}").collect()
     assert _metadata_location(jvm_spark, hms_s3_database, table) == pointer
     assert inventory() == before

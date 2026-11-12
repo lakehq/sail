@@ -1,4 +1,4 @@
-#![expect(clippy::expect_used, clippy::panic)]
+#![expect(clippy::expect_used)]
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

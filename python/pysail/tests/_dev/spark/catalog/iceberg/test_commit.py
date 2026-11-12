@@ -1240,11 +1240,13 @@ def test_unknown_expiration_preserves_files_without_replay(
         gate.apply_commit = apply_commit
         gate.arm(NAMESPACE, table_name)
         gate.release.set()
-        with spark_session_factory(gated_remote) as sessions:
-            with pytest.raises(PySparkException, match="commit state unknown"):
-                sessions.create().sql(
-                    f"CALL system.expire_snapshots('{table_fqn}', snapshot_ids => array(CAST({expired} AS BIGINT)))"
-                ).collect()
+        with (
+            spark_session_factory(gated_remote) as sessions,
+            pytest.raises(PySparkException, match="commit state unknown"),
+        ):
+            sessions.create().sql(
+                f"CALL system.expire_snapshots('{table_fqn}', snapshot_ids => array(CAST({expired} AS BIGINT)))"
+            ).collect()
         assert gate.request_count == 1
         after = _load_table(iceberg_rest_endpoint, table_name)
         assert (expired not in {s["snapshot-id"] for s in after["metadata"]["snapshots"]}) == apply_commit
@@ -1285,7 +1287,8 @@ def test_expiration_replans_after_concurrent_rest_append(
         assert len(result) == 1
         assert result[0].deleted_manifest_lists_count >= 1
         assert gate.response_status == HTTP_CONFLICT
-        assert gate.request_count == 2
+        expected_commit_attempts = 2
+        assert gate.request_count == expected_commit_attempts
         after = _load_table(iceberg_rest_endpoint, table_name)
         assert expired not in {snapshot["snapshot-id"] for snapshot in after["metadata"]["snapshots"]}
         assert [row.id for row in spark.table(table_fqn).orderBy("id").collect()] == [1, 2, 3]

@@ -3,6 +3,7 @@
 # NULL IDs and missing-file counts confirmed with Spark 4.1.4 + Iceberg 1.12.0.
 
 import pytest
+from pyspark.errors import PySparkException
 from pyspark.sql.types import LongType, StructField, StructType
 
 from pysail.testing._dev.spark.steps.iceberg import _find_latest_metadata
@@ -21,6 +22,7 @@ FIELDS = [
 ]
 ZERO = (0,) * len(FIELDS)
 FUTURE = "TIMESTAMP '2999-01-01 00:00:00'"
+DEFAULT_FORMAT_VERSION = 2
 
 
 def expire(spark, name, args=""):
@@ -44,7 +46,7 @@ def table(spark, tmp_path):
 @pytest.mark.parametrize("missing", [False, True])
 def test_expiration_overwrite_inventory_and_reopen(spark, table, version, missing):
     name, path = table
-    if version != 2:
+    if version != DEFAULT_FORMAT_VERSION:
         # New empty table may be upgraded, but cannot be downgraded from v2.
         spark.sql(f"DROP TABLE {name}")
         path = path.parent / f"v{version}"
@@ -122,7 +124,7 @@ def test_defaults_null_arrays_explicit_ids_and_head_atomicity(spark, table):
 def test_invalid_arguments_preserve_state(spark, table, args):
     name, path = table
     before = _find_latest_metadata(path)
-    with pytest.raises(Exception):
+    with pytest.raises(PySparkException):
         expire(spark, name, args)
     assert _find_latest_metadata(path) == before
 
@@ -188,7 +190,8 @@ def test_schema_cleanup_and_statistics_paths(spark, table, clean):
     before = _find_latest_metadata(path)
     counts = expire(spark, name, f", older_than => {FUTURE}, clean_expired_metadata => {str(clean).lower()}")
     assert counts[5] == 1
-    assert shared.exists() and not expired.exists()
+    assert shared.exists()
+    assert not expired.exists()
     after = _find_latest_metadata(path)
     assert len(after["schemas"]) == (1 if clean else len(before["schemas"]))
     assert len(after["statistics"]) == 1
@@ -281,6 +284,6 @@ def test_preflight_rejections_preserve_metadata_and_files(spark, table, invalid)
 
     _edit_latest_metadata(path, corrupt)
     before = {str(p): p.read_bytes() for p in path.rglob("*") if p.is_file()}
-    with pytest.raises(Exception, match="object store|inline|unencrypted"):
+    with pytest.raises(Exception, match=r"object store|inline|unencrypted"):
         expire(spark, name, f", older_than => {FUTURE}")
     assert {str(p): p.read_bytes() for p in path.rglob("*") if p.is_file()} == before

@@ -1,9 +1,11 @@
 #![expect(clippy::expect_used)]
+#![expect(clippy::panic, reason = "unexpected test outcomes must fail the test")]
 
-use super::*;
 use sail_catalog::lakehouse::{
     IcebergMetadataCasOutcome as Outcome, IcebergMetadataCasRequest as Request,
 };
+
+use super::*;
 
 #[tokio::test]
 async fn competing_pointer_replacements_have_exactly_one_winner() {

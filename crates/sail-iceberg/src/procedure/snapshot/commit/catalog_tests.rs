@@ -307,8 +307,9 @@ fn pointer_fixture(
 
 #[tokio::test]
 async fn expiration_rejects_unconfirmed_catalog_authorities_without_touching_state() {
-    use crate::procedure::descriptor::IcebergProcedureType;
     use sail_common_datafusion::lakeprocedure::{LakeProcedureInvocation, LakeProcedureValue};
+
+    use crate::procedure::descriptor::IcebergProcedureType;
     for authority in [
         CommitAuthority::IcebergRestCommit,
         CommitAuthority::VersionedCatalogCommit,
@@ -356,8 +357,9 @@ async fn expiration_rejects_unconfirmed_catalog_authorities_without_touching_sta
 }
 
 fn expiration_operation() -> (ExpireSnapshots, datafusion::arrow::datatypes::SchemaRef) {
-    use crate::procedure::descriptor::IcebergProcedureType;
     use sail_common_datafusion::lakeprocedure::{LakeProcedureInvocation, LakeProcedureValue};
+
+    use crate::procedure::descriptor::IcebergProcedureType;
     let procedure = IcebergProcedureType::ExpireSnapshots
         .descriptor()
         .expect("descriptor");
