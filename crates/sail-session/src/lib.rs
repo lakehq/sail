@@ -503,6 +503,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_cte_references_share_without_spilling() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+        use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+        use sail_common_datafusion::session::shared_cte::SharedCteConfig;
+        use sail_plan::shared_cte::{CteReference, optimize_shared_ctes};
+
+        // A memory limit without temporary files lets only the volatile CTEs be shared.
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(64 << 20, 1.0)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+            )
+            .build_arc()?;
+        let state = SessionStateBuilder::new_from_existing(create_session()?.state())
+            .with_runtime_env(runtime)
+            .build();
+        let session = SessionContext::new_with_state(state);
+        session
+            .state_ref()
+            .write()
+            .config_mut()
+            .set_extension(Arc::new(SharedCteConfig::new(true)));
+        for (body, expected) in [("count(*)", 0), ("rand()", 2)] {
+            let query = format!(
+                "WITH c AS (SELECT a, {body} AS b FROM VALUES (1), (2) AS t(a) GROUP BY a) \
+                 SELECT x.b FROM c x JOIN c y ON x.a = y.a"
+            );
+            let resolver =
+                PlanResolver::new(&session, Arc::new(PlanConfig::default())).with_shared_ctes();
+            let plan = from_ast_statement(parse_one_statement(&query)?)?;
+            let plan = resolver.resolve_named_plan(plan).await?.plan;
+            let state = session.state();
+            let plan = optimize_shared_ctes(plan, &mut |plan, _| state.optimize(&plan))?;
+            let mut references = 0;
+            plan.apply_with_subqueries(|plan| {
+                if let LogicalPlan::TableScan(scan) = plan
+                    && CteReference::try_from_scan(scan).is_some_and(|x| x.body().is_some())
+                {
+                    references += 1;
+                }
+                Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+            })?;
+            assert_eq!(references, expected, "{query}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_cte_references_share_or_inline() -> Result<(), Box<dyn std::error::Error>> {
         use sail_common_datafusion::session::shared_cte::SharedCteConfig;
         use sail_plan::shared_cte::{
@@ -596,6 +645,8 @@ mod tests {
             ),
             // The CTE is referenced once.
             ("SELECT a FROM c", (0, 0)),
+            ("SELECT a FROM c WHERE b > 0 ORDER BY b DESC", (0, 0)),
+            ("SELECT a % 2 FROM c GROUP BY 1 HAVING max(b) > 0", (0, 0)),
         ] {
             let query = format!("{cte} {query}");
             let plan = optimize(&query, true).await?;
@@ -629,17 +680,139 @@ mod tests {
         let plan = resolver.resolve_named_plan(plan).await?.plan;
         assert!(!plan.display_indent().to_string().contains("TableScan"));
 
-        // Each reference evaluates a CTE that is volatile, sorted, refers to outer columns,
-        // or only projects and filters one source.
+        // Each reference evaluates a CTE that is sorted, refers to outer columns, only
+        // projects and filters one source, or is repartitioned explicitly.
         for query in [
+            "WITH c AS (SELECT a FROM (SELECT /*+ REPARTITION(2) */ a FROM VALUES (1), (2) AS t(a)) GROUP BY a) SELECT x.a FROM c x JOIN c y ON x.a = y.a",
             "WITH c AS (SELECT a, a + 1 AS b FROM VALUES (1), (2) AS t(a) WHERE a > 0) SELECT x.b FROM c x JOIN c y ON x.a = y.a",
-            "WITH c AS (SELECT a, random() AS r FROM VALUES (1), (2) AS t(a) GROUP BY a) SELECT x.r FROM c x JOIN c y ON x.a = y.a",
             "WITH c AS (SELECT a FROM VALUES (1), (2) AS t(a) GROUP BY a ORDER BY a) SELECT x.a FROM c x JOIN c y ON x.a = y.a",
             "SELECT (WITH c AS (SELECT a + t.b AS a FROM VALUES (1), (2) AS s(a)) SELECT max(x.a) FROM c x JOIN c y ON x.a = y.a) FROM VALUES (1) AS t(b)",
         ] {
             let plan = optimize(query, true).await?;
             assert_eq!(shared(&plan)?, (0, 0), "{query}");
         }
+
+        // The references to a volatile CTE share one evaluation, even if they read different
+        // rows, read through a limit, or the CTE is sorted or only projects one source. A
+        // CTE that refers to a volatile CTE in place is volatile as well.
+        let volatile = "WITH v AS (SELECT a, random() AS r FROM VALUES (1), (2) AS t(a))";
+        for query in [
+            "SELECT x.r FROM v x JOIN v y ON x.a = y.a",
+            "SELECT r FROM v WHERE a > 1 UNION ALL SELECT r FROM v WHERE r > 0.5",
+            "(SELECT r FROM v LIMIT 1) UNION ALL (SELECT r FROM v)",
+            "SELECT DISTINCT a FROM v UNION ALL SELECT DISTINCT a FROM v",
+            "SELECT spark_partition_id(), x.r FROM v x JOIN v y ON x.a = y.a",
+            ", d AS (SELECT a, r FROM v WHERE a > 0) SELECT x.r FROM d x JOIN d y ON x.a = y.a WHERE x.a = 1",
+            ", s AS (SELECT a, r FROM v ORDER BY r) SELECT x.r FROM s x JOIN s y ON x.a = y.a",
+            "SELECT a, r FROM v EXCEPT ALL SELECT a, r FROM v",
+            "SELECT a, r FROM v INTERSECT SELECT a, r FROM v",
+        ] {
+            let query = format!("{volatile} {query}");
+            let plan = optimize(&query, true).await?;
+            assert_eq!(shared(&plan)?, (2, 1), "{query}\n{}", plan.display_indent());
+        }
+        // A volatile CTE that is referenced once is evaluated in place.
+        for query in [
+            "SELECT a FROM v ORDER BY r",
+            "SELECT a % 2 FROM v GROUP BY 1 HAVING max(r) >= 0",
+            ", d AS (SELECT a, r FROM v WHERE a > 0) SELECT a FROM d ORDER BY r",
+        ] {
+            let query = format!("{volatile} {query}");
+            let plan = optimize(&query, true).await?;
+            assert_eq!(shared(&plan)?, (0, 0), "{query}");
+            assert_eq!(
+                plan.display_indent().to_string(),
+                optimize(&query, false).await?.display_indent().to_string(),
+                "{query}"
+            );
+        }
+        // The shared body of a volatile CTE skips the rows that no reference reads, and
+        // each reference keeps its filter.
+        let query =
+            format!("{volatile} SELECT r FROM v WHERE a > 1 UNION ALL SELECT r FROM v WHERE a < 0");
+        let plan = optimize(&query, true).await?;
+        assert_eq!(shared(&plan)?, (2, 1), "{}", plan.display_indent());
+        let mut bodies = vec![];
+        let mut filtered = 0;
+        plan.apply_with_subqueries(|plan| {
+            match plan {
+                LogicalPlan::Filter(filter)
+                    if matches!(filter.input.as_ref(), LogicalPlan::TableScan(scan)
+                        if CteReference::try_from_scan(scan).is_some()) =>
+                {
+                    filtered += 1;
+                }
+                LogicalPlan::TableScan(scan) => {
+                    if let Some(body) = CteReference::try_from_scan(scan).and_then(|x| x.body()) {
+                        bodies.push(body.plan().display_indent().to_string());
+                    }
+                }
+                _ => {}
+            }
+            Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(filtered, 2, "{}", plan.display_indent());
+        assert!(
+            bodies[0].contains("> Int32(1) OR ") && bodies[0].contains(" < Int32(0)"),
+            "{}",
+            bodies[0]
+        );
+        // A reference that reads all the rows reads them from the shared body as well.
+        let query = format!("{volatile} SELECT r FROM v WHERE a > 1 UNION ALL SELECT r FROM v");
+        let plan = optimize(&query, true).await?;
+        plan.apply_with_subqueries(|plan| {
+            if let LogicalPlan::TableScan(scan) = plan
+                && let Some(body) = CteReference::try_from_scan(scan).and_then(|x| x.body())
+            {
+                assert!(
+                    !body.plan().display_indent().to_string().contains("Filter"),
+                    "{}",
+                    body.plan().display_indent()
+                );
+            }
+            Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+        })?;
+        // A call of an external service does not make a CTE volatile, but it does not keep
+        // a volatile CTE from being shared.
+        for (expr, expected) in [
+            ("jev_models()", (0, 0)),
+            ("struct(jev_models(), rand())", (2, 1)),
+        ] {
+            let query = format!(
+                "WITH v AS (SELECT a, {expr} AS r FROM VALUES (1), (2) AS t(a) GROUP BY a) \
+                 SELECT x.r FROM v x JOIN v y ON x.a = y.a"
+            );
+            let plan = optimize(&query, true).await?;
+            assert_eq!(
+                shared(&plan)?,
+                expected,
+                "{query}\n{}",
+                plan.display_indent()
+            );
+        }
+        // A CTE is volatile if its output depends on the partitions of its input.
+        for expr in [
+            "rand(7)",
+            "monotonically_increasing_id()",
+            "spark_partition_id()",
+        ] {
+            let query = format!(
+                "WITH v AS (SELECT a, {expr} AS r FROM (SELECT /*+ REPARTITION(2) */ a FROM VALUES (1), (2) AS t(a))) \
+                 SELECT x.r FROM v x JOIN v y ON x.a = y.a"
+            );
+            let plan = optimize(&query, true).await?;
+            assert_eq!(shared(&plan)?, (2, 1), "{query}\n{}", plan.display_indent());
+        }
+        let query = format!(
+            "{volatile}, c AS (SELECT a FROM VALUES (1), (2) AS t(a) GROUP BY a) \
+             SELECT x.r FROM v x JOIN v y ON x.a = y.a JOIN c p ON x.a = p.a JOIN c q ON x.a = q.a"
+        );
+        let plan = optimize(&query, true).await?;
+        assert_eq!(shared(&plan)?, (4, 2), "{}", plan.display_indent());
+        // A query that reads the partitions of its input inlines the other CTEs.
+        let query = format!("{query} WHERE spark_partition_id() = 0");
+        let plan = optimize(&query, true).await?;
+        assert_eq!(shared(&plan)?, (2, 1), "{}", plan.display_indent());
 
         // A join in a CTE is evaluated in full for references that read both of its sides,
         // while references that ignore duplicate rows of one side turn it into a semi join.

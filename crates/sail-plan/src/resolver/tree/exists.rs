@@ -167,6 +167,23 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
 }
 
 impl ExistsRewriter<'_> {
+    /// Returns whether the rewrite of a correlated EXISTS subquery stops in the plan,
+    /// without a decision from an aggregation or a limit at the top of the plan.
+    fn stops_in(plan: &LogicalPlan) -> bool {
+        match plan {
+            LogicalPlan::Projection(projection) => Self::stops_in(&projection.input),
+            LogicalPlan::SubqueryAlias(alias) => Self::stops_in(&alias.input),
+            LogicalPlan::Sort(sort) => Self::stops_in(&sort.input),
+            LogicalPlan::Aggregate(aggregate) => !aggregate.group_expr.is_empty(),
+            LogicalPlan::Limit(_) => false,
+            LogicalPlan::TableScan(scan) => match CteReference::try_from_scan(scan) {
+                Some(reference) => Self::stops_in(reference.definition().resolved()),
+                None => true,
+            },
+            _ => true,
+        }
+    }
+
     fn count_rows(&mut self, query: LogicalPlan, skip: usize) -> Result<Expr> {
         let output = self.state.register_field_name("");
         exists_by_count(query, skip, &output, Self::validate_correlated_operators)
@@ -226,10 +243,18 @@ impl ExistsRewriter<'_> {
                         }
                     }
                 }
-                // The rewrite looks at a CTE reference as at its definition.
+                // The rewrite looks at a CTE reference as at its definition, except that
+                // a reference to a volatile definition is kept when the rewrite would
+                // stop in the definition, so that it reads the evaluation of the other
+                // references.
                 LogicalPlan::TableScan(scan) => match CteReference::try_from_scan(&scan) {
-                    Some(reference) => reference.definition().resolved().as_ref().clone(),
-                    None => break LogicalPlan::TableScan(scan),
+                    Some(reference)
+                        if !(reference.definition().volatile()
+                            && Self::stops_in(reference.definition().resolved())) =>
+                    {
+                        reference.definition().resolved().as_ref().clone()
+                    }
+                    _ => break LogicalPlan::TableScan(scan),
                 },
                 query => break query,
             };

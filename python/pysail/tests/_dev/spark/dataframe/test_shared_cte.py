@@ -151,9 +151,102 @@ def test_filtered_rows_are_not_evaluated(spark):
         spark.sql(query).collect()
 
 
-def test_volatile_cte_is_inlined(spark):
-    query = "WITH c AS (SELECT id, rand() AS r FROM range(10)) SELECT count(*) FROM c a JOIN c b ON a.id = b.id"
-    check(spark, query, [(10,)], shared=False, scans=2)
+def test_volatile_cte_is_shared(spark):
+    query = (
+        "WITH c AS (SELECT id, rand() AS r FROM range(10)) "
+        "SELECT count(*) FROM c a JOIN c b ON a.id = b.id AND a.r = b.r"
+    )
+    check(spark, query, [(10,)], shared=True, scans=1)
+
+
+def test_volatile_cte_in_projected_exists_is_shared(spark):
+    query = (
+        "WITH c AS (SELECT id, rand() AS r FROM range(10)) "
+        "SELECT count_if(e), count(*) FROM (SELECT EXISTS (SELECT a.r FROM c b) AS e FROM c a)"
+    )
+    check(spark, query, [(10, 10)], shared=True, scans=1)
+    query = (
+        "WITH c AS (SELECT id, rand() AS r FROM range(10)) "
+        "SELECT count_if(e), count(*) FROM (SELECT EXISTS (SELECT 1 FROM c b WHERE b.r = a.r) AS e FROM c a)"
+    )
+    check(spark, query, [(10, 10)], shared=True, scans=1)
+
+
+def test_deterministic_cte_in_view_is_inlined(spark):
+    spark.sql(
+        "CREATE OR REPLACE TEMPORARY VIEW shared_cte_view AS "  # noqa: S608
+        f"WITH {CTE} SELECT a.k, a.n + b.n AS n FROM c a JOIN c b ON a.k = b.k"
+    )
+    try:
+        check(spark, "SELECT sum(n) FROM shared_cte_view", [(2000,)], shared=False, scans=2)
+    finally:
+        spark.sql("DROP VIEW IF EXISTS shared_cte_view")
+
+
+def test_nested_ctes_over_outer_join_views(spark):
+    """A CTE that only projects a CTE that is referenced once, in a chain over an outer join."""
+    spark.sql(
+        "CREATE OR REPLACE TEMPORARY VIEW shared_cte_t1 AS "
+        "SELECT CAST(CASE id WHEN 0 THEN 1 WHEN 1 THEN 1 WHEN 2 THEN 2 WHEN 3 THEN 2 WHEN 4 THEN 3 WHEN 7 "
+        "THEN 4 WHEN 8 THEN 5 WHEN 9 THEN 3 END AS INT) AS k, CAST(CASE id WHEN 0 THEN 10 WHEN 1 THEN 10 "
+        "WHEN 2 THEN 20 WHEN 4 THEN 30 WHEN 5 THEN 40 WHEN 7 THEN 0 WHEN 8 THEN -5 WHEN 9 THEN 30 END AS "
+        "BIGINT) AS v, CAST(CASE id WHEN 0 THEN 'a' WHEN 1 THEN 'a' WHEN 2 THEN 'b' WHEN 3 THEN 'B' WHEN "
+        "5 THEN 'd' WHEN 7 THEN '' WHEN 8 THEN 'e' WHEN 9 THEN 'c' END AS STRING) AS s FROM range(0, 10, "
+        "1, 2)"
+    )
+    spark.sql(
+        "CREATE OR REPLACE TEMPORARY VIEW shared_cte_t2 AS "
+        "SELECT CAST(CASE id WHEN 0 THEN 1 WHEN 1 THEN 2 WHEN 2 THEN 2 WHEN 3 THEN 6 WHEN 5 THEN 4 END AS "
+        "INT) AS k, CAST(CASE id WHEN 0 THEN 100 WHEN 1 THEN 200 WHEN 2 THEN 201 WHEN 3 THEN 600 WHEN 4 "
+        "THEN 700 WHEN 5 THEN 0 END AS BIGINT) AS v, CAST(CASE id WHEN 0 THEN 'x' WHEN 1 THEN 'y' WHEN 2 "
+        "THEN 'y' WHEN 3 THEN 'z' WHEN 5 THEN 'a' END AS STRING) AS s FROM range(0, 6, 1, 2)"
+    )
+    ctes = (
+        "WITH c0 AS (SELECT a.k, b.v, b.s FROM shared_cte_t1 a LEFT JOIN shared_cte_t2 b ON a.k = b.k AND a.v < b.v), "
+        "c1 AS (SELECT k, v, s FROM c0), "
+        "c2 AS (SELECT k, v, s FROM c1 a WHERE EXISTS (SELECT 1 FROM c1 b WHERE a.k = b.k)), "
+    )
+    try:
+        query = (
+            f"{ctes} c3 AS (SELECT a.k, b.v, a.s FROM c2 a "  # noqa: S608
+            "JOIN (SELECT DISTINCT k, v FROM c2 WHERE s IN ('a', 'b', 'x')) b ON a.k = b.k) "
+            "SELECT a.k, a.v, a.s, (SELECT count(*) FROM c1 x WHERE x.v >= a.v) AS q0 FROM c3 a"
+        )
+        assert sorted(tuple(row) for row in spark.sql(query).collect()) == [(1, 100, "x", 4)] * 2
+        query = (
+            f"{ctes} c3 AS (SELECT a.k, b.v, a.s FROM c2 a "  # noqa: S608
+            "JOIN (SELECT DISTINCT k, v FROM c2 WHERE s IN ('a', 'b', 'x')) b ON a.k = b.k "
+            "ORDER BY a.k DESC NULLS LAST, b.v DESC NULLS LAST, a.s DESC NULLS LAST LIMIT 10) "
+            "SELECT a.k, a.v, a.s, (SELECT count(DISTINCT x.s) FROM c1 x WHERE x.v >= a.v) AS q0 "
+            "FROM (SELECT k, v, concat(s, '_') AS s FROM c3) a "
+            "WHERE EXISTS (SELECT 1 FROM (SELECT k, coalesce(v, -1) AS v, coalesce(s, 'n') AS s FROM c0) x "
+            "WHERE x.k <=> a.k AND x.s <> a.s)"
+        )
+        assert sorted(tuple(row) for row in spark.sql(query).collect()) == [(1, 100, "x_", 2)] * 2
+    finally:
+        spark.sql("DROP VIEW IF EXISTS shared_cte_t1")
+        spark.sql("DROP VIEW IF EXISTS shared_cte_t2")
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark rejects the cast")
+def test_column_that_the_optimizer_finds_not_nullable_is_not_computed(spark):
+    """The optimizer removes a column that a reference only tests for null, when it finds the
+    column not nullable, as it does with the CTE in place of the reference."""
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    q = "CAST(CASE WHEN id = 3 THEN 'x' ELSE CAST(id AS STRING) END AS INT)"
+    try:
+        query = (
+            f"WITH c AS (SELECT id, {q} AS q, rand() AS r FROM range(0, 20, 1, 2)) "  # noqa: S608
+            "SELECT count(*) FROM c a JOIN c b ON a.id = b.id AND a.r = b.r WHERE a.q IS NOT NULL AND b.q IS NOT NULL"
+        )
+        assert spark.sql(query).collect() == [(20,)]
+        query = (
+            f"WITH c AS (SELECT id, {q} AS q FROM range(0, 20, 1, 2) GROUP BY id) "  # noqa: S608
+            "SELECT count_if(a.q IS NULL) FROM c a JOIN c b ON a.id = b.id"
+        )
+        assert spark.sql(query).collect() == [(0,)]
+    finally:
+        spark.conf.unset("spark.sql.ansi.enabled")
 
 
 def test_sorted_cte_is_inlined(spark):

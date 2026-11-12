@@ -20,3 +20,28 @@ def test_cte_references_are_inlined_when_sharing_is_disabled(spark):
     plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
     assert "SharedCteExec" not in plan
     assert plan.count("RangeExec") == 2  # noqa: PLR2004
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail configuration")
+def test_volatile_cte_references_are_evaluated_separately_when_sharing_is_disabled(spark):
+    query = (
+        "WITH c AS (SELECT id, rand() AS r FROM range(0, 200, 1, 4)) "
+        "SELECT count(*) FROM c a JOIN c b ON a.id = b.id WHERE a.r = b.r"
+    )
+    assert spark.sql(query).collect() == [(0,)]
+    plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
+    assert "SharedCteExec" not in plan
+    assert plan.count("RangeExec") == 2  # noqa: PLR2004
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail configuration")
+def test_volatile_cte_in_view_is_evaluated_separately_when_sharing_is_disabled(spark):
+    spark.sql(
+        "CREATE OR REPLACE TEMPORARY VIEW shared_cte_disabled_view AS "
+        "WITH c AS (SELECT id, rand() AS r FROM range(0, 200, 1, 4)) "
+        "SELECT count(*) FROM c a JOIN c b ON a.id = b.id WHERE a.r = b.r"
+    )
+    try:
+        assert spark.sql("SELECT * FROM shared_cte_disabled_view").collect() == [(0,)]
+    finally:
+        spark.sql("DROP VIEW IF EXISTS shared_cte_disabled_view")

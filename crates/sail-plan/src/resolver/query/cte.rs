@@ -1,18 +1,27 @@
+use std::any::Any;
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias};
 use sail_common::spec;
-use sail_data_source::reuse::is_reusable_source;
+use sail_common_datafusion::input_file::is_input_file_metadata_function;
+use sail_data_source::reuse::{is_python_source, is_reusable_source};
+use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
+use sail_logical_plan::map_partitions::MapPartitionsNode;
+use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::range::RangeNode;
+use sail_logical_plan::repartition::ExplicitRepartitionNode;
+use sail_logical_plan::seeded_random::SeededRandomNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
+use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
+use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
 
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 use crate::scalar_subquery_key::is_volatile_call;
-use crate::shared_cte::{CteDefinition, CteReference, inline_references};
+use crate::shared_cte::{CteDefinition, CteReference, inline_references, renew_cte_definitions};
 
 /// Whether a named relation is a CTE definition or a parameter view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,8 +54,13 @@ struct CteSharing {
     name: datafusion_common::TableReference,
     /// Whether the definition is inside a subquery, where it can refer to outer columns.
     nested: bool,
-    /// The shareable definition, decided when the CTE is referenced again.
-    definition: OnceLock<Option<Arc<CteDefinition>>>,
+    /// Whether a definition that is not volatile can be shared.
+    deterministic: bool,
+    /// Whether the references can share one evaluation of the definition, as
+    /// `Some(volatile)`, decided when the CTE is first referenced.
+    shareable: OnceLock<Option<bool>>,
+    /// The shareable definition.
+    definition: OnceLock<Arc<CteDefinition>>,
 }
 
 impl CteInfo {
@@ -78,44 +92,59 @@ impl CteInfo {
     fn with_sharing(
         mut self,
         name: datafusion_common::TableReference,
+        deterministic: bool,
         state: &mut PlanResolverState,
     ) -> Self {
         self.sharing = Some(CteSharing {
             index: state.next_cte_definition_index(),
             name,
             nested: state.get_outer_query_schema().is_some(),
+            deterministic,
+            shareable: OnceLock::new(),
             definition: OnceLock::new(),
         });
         self
     }
 
-    /// Returns a scan of the CTE definition for a repeated reference, or `None` if each
-    /// reference must evaluate the definition itself.
-    pub(super) fn scan(&self, state: &mut PlanResolverState) -> PlanResult<Option<LogicalPlan>> {
+    /// Returns a scan of the CTE definition for a reference, or `None` if the reference
+    /// must evaluate the definition itself. The first reference to a definition that is
+    /// not volatile is the definition itself, which becomes a scan only if the definition
+    /// is referenced again, so that a CTE that is referenced once is resolved as if it was
+    /// written in place. The first reference to a volatile definition is a scan, so that
+    /// no rewrite of the plan can separate it from the other references.
+    pub(super) fn scan(
+        &self,
+        first: bool,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Option<LogicalPlan>> {
         let Some(sharing) = &self.sharing else {
             return Ok(None);
         };
-        let definition = match sharing.definition.get() {
-            Some(definition) => definition,
+        let shareable = match sharing.shareable.get() {
+            Some(shareable) => *shareable,
             None => {
-                let definition = if is_shareable_definition(&self.plan, sharing.nested)? {
-                    let definition = Arc::new(CteDefinition::new(
-                        sharing.index,
-                        sharing.name.clone(),
-                        Arc::clone(&self.plan),
-                    ));
-                    state.register_shared_cte_definition(Arc::clone(&definition));
-                    Some(definition)
-                } else {
-                    None
-                };
-                sharing.definition.get_or_init(|| definition)
+                let shareable = shareable_definition(&self.plan, sharing.nested)?
+                    .filter(|volatile| *volatile || sharing.deterministic);
+                *sharing.shareable.get_or_init(|| shareable)
             }
         };
-        Ok(definition
-            .as_ref()
-            .map(|definition| definition.scan())
-            .transpose()?)
+        let Some(volatile) = shareable else {
+            return Ok(None);
+        };
+        if first && !volatile {
+            return Ok(None);
+        }
+        let definition = sharing.definition.get_or_init(|| {
+            let definition = Arc::new(CteDefinition::new(
+                sharing.index,
+                sharing.name.clone(),
+                Arc::clone(&self.plan),
+                volatile,
+            ));
+            state.register_shared_cte_definition(Arc::clone(&definition));
+            definition
+        });
+        Ok(Some(definition.scan()?))
     }
 
     /// Spark renews repeated CTERelationRef and parameter-view attributes
@@ -198,7 +227,7 @@ impl PlanResolver<'_> {
             };
             let cte = CteInfo::try_new(plan, CteKind::Definition, state)?;
             let cte = if share {
-                cte.with_sharing(reference.clone(), state)
+                cte.with_sharing(reference.clone(), self.share_deterministic_ctes, state)
             } else {
                 cte
             };
@@ -301,6 +330,26 @@ impl PlanResolver<'_> {
         Self::scan_shared_cte_references(plan, state)
     }
 
+    /// Returns the plan of a stored view in which the references to shared CTE definitions
+    /// refer to copies of the definitions, which the query evaluates with its own CTEs.
+    pub(in crate::resolver) fn renew_shared_cte_definitions(
+        &self,
+        plan: LogicalPlan,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let mut definitions = vec![];
+        let plan = renew_cte_definitions(
+            plan,
+            self.share_deterministic_ctes,
+            &mut || state.next_cte_definition_index(),
+            &mut |definition| definitions.push(definition),
+        )?;
+        for definition in definitions {
+            state.register_shared_cte_definition(definition);
+        }
+        Ok(plan)
+    }
+
     /// Replaces the references to shared CTE definitions by the definitions, for a plan
     /// that is not optimized with its shared CTEs.
     pub(in crate::resolver) fn inline_shared_cte_references(
@@ -310,14 +359,17 @@ impl PlanResolver<'_> {
     }
 }
 
-/// Returns whether the references to the CTE definition can share one evaluation of it.
+/// Returns whether the references to the CTE definition can share one evaluation of it,
+/// as `Some(volatile)`. A volatile definition is evaluated once for all its references,
+/// since each evaluation can return different rows.
 ///
 /// Each reference evaluates the definition itself if the definition refers to outer
-/// columns, if its output depends on when or in which partitions it is evaluated, if a
-/// source is read once for each reference, if its consumers can depend on the order
-/// of its rows, or if it only projects and filters the rows of one source, which is
-/// not worth keeping for another reference.
-fn is_shareable_definition(plan: &Arc<LogicalPlan>, nested: bool) -> PlanResult<bool> {
+/// columns, or, unless the definition is volatile, if it reads the files or the
+/// partitions of its input, calls an external service, depends on the evaluation of a
+/// correlated subquery, if a source is read once for each reference, if its consumers can
+/// depend on the order of its rows, or if it only projects and filters the rows of one
+/// source, which is not worth keeping for another reference.
+fn shareable_definition(plan: &Arc<LogicalPlan>, nested: bool) -> PlanResult<Option<bool>> {
     let mut input = plan.as_ref();
     let mut subquery = false;
     loop {
@@ -340,19 +392,38 @@ fn is_shareable_definition(plan: &Arc<LogicalPlan>, nested: bool) -> PlanResult<
             _ => break,
         };
     }
-    if input.inputs().is_empty() && !subquery {
-        return Ok(false);
-    }
+    let trivial = input.inputs().is_empty() && !subquery;
     let mut shareable = true;
+    let mut volatile = false;
+    // Whether each reference evaluates the definition itself unless it is volatile.
+    let mut per_reference = false;
     plan.apply_with_subqueries(|plan| {
         shareable = !(nested && plan.contains_outer_reference())
             && match plan {
                 LogicalPlan::TableScan(scan) => {
-                    CteReference::try_from_scan(scan).is_some() || is_reusable_source(&scan.source)
+                    let python = is_python_source(&scan.source);
+                    per_reference |= python;
+                    python
+                        || CteReference::try_from_scan(scan).is_some()
+                        || is_reusable_source(&scan.source)
                 }
                 LogicalPlan::Extension(extension) => {
                     let node = extension.node.as_any();
-                    node.is::<RangeNode>()
+                    // The output of these nodes depends on the partitions of their input.
+                    let partitioned = node.is::<SeededRandomNode>()
+                        || node.is::<MonotonicIdNode>()
+                        || node.is::<SparkPartitionIdNode>();
+                    let udtf = is_nondeterministic_udtf(node);
+                    volatile |= partitioned || udtf;
+                    // Each reference evaluates these nodes itself, unless the definition is
+                    // volatile and must be evaluated once.
+                    let per_reference_node = (node.is::<MapPartitionsNode>() && !udtf)
+                        || node.is::<ExplicitRepartitionNode>();
+                    per_reference |= per_reference_node;
+                    partitioned
+                        || udtf
+                        || per_reference_node
+                        || node.is::<RangeNode>()
                         || node.is::<RequiredSortNode>()
                         || node.is::<SortWithinPartitionsNode>()
                 }
@@ -363,8 +434,11 @@ fn is_shareable_definition(plan: &Arc<LogicalPlan>, nested: bool) -> PlanResult<
             plan.apply_expressions(|expr| {
                 expr.apply(|expr| {
                     if is_volatile_call(expr) {
-                        shareable = false;
-                        return Ok(TreeNodeRecursion::Stop);
+                        if is_evaluated_once_call(expr) {
+                            volatile = true;
+                        } else {
+                            per_reference = true;
+                        }
                     }
                     Ok(TreeNodeRecursion::Continue)
                 })
@@ -377,8 +451,37 @@ fn is_shareable_definition(plan: &Arc<LogicalPlan>, nested: bool) -> PlanResult<
         })
     })?;
     if !shareable {
-        return Ok(false);
+        return Ok(None);
+    }
+    if volatile {
+        return Ok(Some(true));
+    }
+    if per_reference || trivial {
+        return Ok(None);
     }
     let (_, sorted, _) = PlanResolver::require_input_sort_inner(plan.as_ref().clone())?;
-    Ok(!sorted)
+    Ok((!sorted).then_some(false))
+}
+
+/// Returns whether the volatile call returns different values for each evaluation, which
+/// Spark evaluates once for all the references to a CTE. The other volatile calls depend
+/// on the input files or on the evaluation of a correlated subquery, or call an external
+/// service, and do not make a definition volatile by themselves.
+fn is_evaluated_once_call(expr: &Expr) -> bool {
+    match expr {
+        Expr::ScalarFunction(function) => {
+            function.func.as_async().is_none()
+                && !function.func.inner().is::<ScalarSubqueryResult>()
+                && !is_input_file_metadata_function(&function.func)
+        }
+        _ => true,
+    }
+}
+
+/// Returns whether the node calls a nondeterministic Python UDTF, which Spark evaluates
+/// once for all the references to a CTE.
+fn is_nondeterministic_udtf(node: &dyn Any) -> bool {
+    node.downcast_ref::<MapPartitionsNode>()
+        .and_then(|node| (node.udf().as_ref() as &dyn Any).downcast_ref::<PySparkUDTF>())
+        .is_some_and(|udtf| !udtf.deterministic())
 }

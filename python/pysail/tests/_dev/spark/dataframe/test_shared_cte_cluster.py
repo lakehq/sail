@@ -1,8 +1,11 @@
+import random
+
 import pytest
 from pyspark.errors import PySparkException
 
 from pysail.testing.spark.session import spark_connect_server
 from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.tests._dev.spark.dataframe.test_shared_cte_volatile import ROWS, VOLATILE, cte, query
 
 
 @pytest.fixture(scope="module")
@@ -102,3 +105,25 @@ def test_shared_cte_error_fails_only_the_stages_that_read_it(spark):
     finally:
         spark.sql("DROP VIEW IF EXISTS shared_cte_e")
         spark.sql("DROP VIEW IF EXISTS shared_cte_t")
+
+
+@pytest.fixture
+def nondeterministic_udf(spark):
+    from pyspark.sql.functions import udf
+
+    spark.udf.register("nondeterministic_udf", udf(lambda: random.random(), "double").asNondeterministic())  # noqa: S311
+
+
+@pytest.mark.parametrize("shape", ["join", "union-all", "different-filters", "sorted-limit", "nested"])
+@pytest.mark.parametrize("function", ["rand", "uuid", "udf"])
+def test_stages_read_one_evaluation_of_volatile_cte(spark, nondeterministic_udf, function, shape):  # noqa: ARG001
+    sql, expected = query(VOLATILE[function], shape)
+    assert tuple(spark.sql(sql).collect()[0]) == expected
+
+
+@pytest.mark.parametrize("function", ["rand", "uuid"])
+def test_scalar_subquery_stage_reads_the_same_evaluation(spark, function):
+    sql = f"{cte(VOLATILE[function])} SELECT count(*) FROM c WHERE r = (SELECT max(r) FROM c)"  # noqa: S608
+    assert spark.sql(sql).collect()[0][0] >= 1
+    sql = f"{cte(VOLATILE[function])} SELECT count_if(a.r <=> b.r) FROM c a JOIN c b ON a.id = b.id"  # noqa: S608
+    assert spark.sql(sql).collect() == [(ROWS,)]
