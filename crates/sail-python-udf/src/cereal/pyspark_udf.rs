@@ -2,7 +2,7 @@ use datafusion::arrow::datatypes::DataType;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::{PyList, PyModule};
-use pyo3::{Bound, IntoPyObject, PyAny, Python, intern};
+use pyo3::{Bound, PyAny, Python, intern};
 use sail_common::spec;
 
 use crate::cereal::{
@@ -57,10 +57,7 @@ impl PySparkUdfPayload {
                 read_udfs.call1((serializer, infile, eval_type))?
             }
         };
-        tuple
-            .get_item(0)?
-            .into_pyobject(py)
-            .map_err(|e| PyUdfError::PythonError(e.into()))
+        Ok(tuple.get_item(0)?)
     }
 
     pub fn build(

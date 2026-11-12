@@ -1,15 +1,9 @@
 use std::collections::HashMap;
 
-use lazy_static::lazy_static;
-use regex::Regex;
 use sail_spark_connect::JsonDataType;
 use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::spark::common::{TestData, TestDataObject};
-
-lazy_static! {
-    static ref FUNCTION_GROUP_SUFFIX: Regex = Regex::new(r"_funcs$").unwrap();
-}
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -89,8 +83,10 @@ pub fn build_function_suites(
             let Some(function) = x.data.into_object() else {
                 return;
             };
-            let group = FUNCTION_GROUP_SUFFIX
-                .replace(&function.group, "")
+            let group = function
+                .group
+                .strip_suffix("_funcs")
+                .unwrap_or(&function.group)
                 .to_string();
             let suite: &mut FunctionTestSuite = output.entry(group).or_default();
             function.examples.into_iter().for_each(|mut example| {
@@ -111,4 +107,30 @@ pub fn build_function_suites(
     });
 
     output
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn function_group_suffix_matches_regex() -> Result<(), regex::Error> {
+        let pattern = regex::Regex::new(r"_funcs$")?;
+        for group in [
+            "math_funcs",
+            "math",
+            "_funcs",
+            "math_funcs_funcs",
+            "math_funcs_extra",
+            "math_funcs\n",
+            "math_funcs\r\n",
+            "",
+        ] {
+            assert_eq!(
+                group.strip_suffix("_funcs").unwrap_or(group),
+                pattern.replace(group, ""),
+                "{group:?}"
+            );
+        }
+        assert!(!pattern.is_match("math_funcs\n"));
+        Ok(())
+    }
 }

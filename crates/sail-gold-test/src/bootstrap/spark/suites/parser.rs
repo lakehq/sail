@@ -1,61 +1,131 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
-use lazy_static::lazy_static;
 use regex::Regex;
 use serde::Serialize;
 
 use crate::bootstrap::spark::common::TestData;
 
-lazy_static! {
-    /// Patterns to classify SQL expressions so that we can better organize test data.
-    /// New patterns can be added when a single test data file becomes too large.
-    static ref EXPRESSION_GROUP_PATTERNS: Vec<(&'static str, Regex)> = vec![
+/// Patterns to classify SQL expressions so that we can better organize test data.
+/// New patterns can be added when a single test data file becomes too large.
+#[expect(
+    clippy::unwrap_used,
+    reason = "literal patterns are valid regular expressions"
+)]
+static EXPRESSION_GROUP_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
+    vec![
         ("case", Regex::new(r"(?is)^\s*CASE\b").unwrap()),
         ("cast", Regex::new(r"(?is)^\s*CAST\b").unwrap()),
         ("current", Regex::new(r"(?is)^\s*CURRENT_[A-Z]+").unwrap()),
         ("date", Regex::new(r"(?is)^\s*DATE\b").unwrap()),
-        ("timestamp", Regex::new(r"(?is)^\s*TIMESTAMP(_NTZ|_LTZ)?\b").unwrap()),
+        (
+            "timestamp",
+            Regex::new(r"(?is)^\s*TIMESTAMP(_NTZ|_LTZ)?\b").unwrap(),
+        ),
         ("interval", Regex::new(r"(?is)^\s*-?INTERVAL\b").unwrap()),
-        ("numeric", Regex::new(r"(?is)^\s*[0-9.+-][0-9A-Z.+-]+\s*$").unwrap()),
+        (
+            "numeric",
+            Regex::new(r"(?is)^\s*[0-9.+-][0-9A-Z.+-]+\s*$").unwrap(),
+        ),
         ("string", Regex::new(r#"(?is)^['"]"#).unwrap()),
         ("like", Regex::new(r"(?is)\b[IR]?LIKE\b").unwrap()),
         ("window", Regex::new(r"(?is)\bOVER\b").unwrap()),
-        ("large", Regex::new(r"(?is)\b1\s+==\s+1\s+(AND|OR)\s+2\s+==\s+2\b").unwrap()),
-    ];
+        (
+            "large",
+            Regex::new(r"(?is)\b1\s+==\s+1\s+(AND|OR)\s+2\s+==\s+2\b").unwrap(),
+        ),
+    ]
+});
 
-    /// Patterns to classify SQL statements so that we can better organize test data.
-    /// The patterns here are not exhaustive. New patterns can be added when more test cases
-    /// are added in Spark, or when a single test data file becomes too large.
-    static ref PLAN_GROUP_PATTERNS: Vec<(&'static str, Regex)> = vec![
-        ("create_table", Regex::new(r"(?is)^\s*CREATE\s+TABLE\b").unwrap()),
-        ("alter_table", Regex::new(r"(?is)^\s*ALTER\s+TABLE\b").unwrap()),
-        ("analyze_table", Regex::new(r"(?is)^\s*ANALYZE\s+TABLES?\b").unwrap()),
-        ("replace_table", Regex::new(r"(?is)^\s*REPLACE\s+TABLE\b").unwrap()),
-        ("create_view", Regex::new(r"(?is)^\s*CREATE\s+VIEW\b").unwrap()),
-        ("alter_view", Regex::new(r"(?is)^\s*ALTER\s+VIEW\b").unwrap()),
+/// Patterns to classify SQL statements so that we can better organize test data.
+/// The patterns here are not exhaustive. New patterns can be added when more test cases
+/// are added in Spark, or when a single test data file becomes too large.
+#[expect(
+    clippy::unwrap_used,
+    reason = "literal patterns are valid regular expressions"
+)]
+static PLAN_GROUP_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
+    vec![
+        (
+            "create_table",
+            Regex::new(r"(?is)^\s*CREATE\s+TABLE\b").unwrap(),
+        ),
+        (
+            "alter_table",
+            Regex::new(r"(?is)^\s*ALTER\s+TABLE\b").unwrap(),
+        ),
+        (
+            "analyze_table",
+            Regex::new(r"(?is)^\s*ANALYZE\s+TABLES?\b").unwrap(),
+        ),
+        (
+            "replace_table",
+            Regex::new(r"(?is)^\s*REPLACE\s+TABLE\b").unwrap(),
+        ),
+        (
+            "create_view",
+            Regex::new(r"(?is)^\s*CREATE\s+VIEW\b").unwrap(),
+        ),
+        (
+            "alter_view",
+            Regex::new(r"(?is)^\s*ALTER\s+VIEW\b").unwrap(),
+        ),
         ("drop_view", Regex::new(r"(?is)^\s*DROP\s+VIEW\b").unwrap()),
-        ("show_views", Regex::new(r"(?is)^\s*SHOW\s+VIEWS\b").unwrap()),
+        (
+            "show_views",
+            Regex::new(r"(?is)^\s*SHOW\s+VIEWS\b").unwrap(),
+        ),
         ("cache", Regex::new(r"(?is)^\s*CACHE\b").unwrap()),
         ("uncache", Regex::new(r"(?is)^\s*UNCACHE\b").unwrap()),
-        ("create_index", Regex::new(r"(?is)^\s*CREATE\s+INDEX\b").unwrap()),
-        ("drop_index", Regex::new(r"(?is)^\s*DROP\s+INDEX\b").unwrap()),
-        ("delete_from", Regex::new(r"(?is)^\s*DELETE\s+FROM\b").unwrap()),
-        ("describe", Regex::new(r"(?is)^\s*(DESC|DESCRIBE)\b").unwrap()),
-        ("insert_into", Regex::new(r"(?is)^\s*INSERT\s+INTO\b").unwrap()),
-        ("insert_overwrite", Regex::new(r"(?is)^\s*INSERT\s+OVERWRITE\b").unwrap()),
+        (
+            "create_index",
+            Regex::new(r"(?is)^\s*CREATE\s+INDEX\b").unwrap(),
+        ),
+        (
+            "drop_index",
+            Regex::new(r"(?is)^\s*DROP\s+INDEX\b").unwrap(),
+        ),
+        (
+            "delete_from",
+            Regex::new(r"(?is)^\s*DELETE\s+FROM\b").unwrap(),
+        ),
+        (
+            "describe",
+            Regex::new(r"(?is)^\s*(DESC|DESCRIBE)\b").unwrap(),
+        ),
+        (
+            "insert_into",
+            Regex::new(r"(?is)^\s*INSERT\s+INTO\b").unwrap(),
+        ),
+        (
+            "insert_overwrite",
+            Regex::new(r"(?is)^\s*INSERT\s+OVERWRITE\b").unwrap(),
+        ),
         ("load_data", Regex::new(r"(?is)^\s*LOAD\s+DATA\b").unwrap()),
-        ("merge_into", Regex::new(r"(?is)^\s*MERGE\s+INTO\b").unwrap()),
+        (
+            "merge_into",
+            Regex::new(r"(?is)^\s*MERGE\s+INTO\b").unwrap(),
+        ),
         ("update", Regex::new(r"(?is)^\s*UPDATE\b").unwrap()),
         ("explain", Regex::new(r"(?is)^\s*EXPLAIN\b").unwrap()),
         ("with", Regex::new(r"(?is)^\s*WITH\b.*\bSELECT\b").unwrap()),
         ("hint", Regex::new(r"(?is)^\s*SELECT\b.*/\*\+").unwrap()),
         ("join", Regex::new(r"(?is)^\s*SELECT\b.*\bJOIN\b").unwrap()),
-        ("order_by", Regex::new(r"(?is)^\s*SELECT\b.*\b(ORDER|SORT)\s+BY\b").unwrap()),
-        ("group_by", Regex::new(r"(?is)^\s*SELECT\b.*\bGROUP\s+BY\b").unwrap()),
-        ("set_operation", Regex::new(r"(?is)^\s*SELECT\b.*\b(UNION|EXCEPT|MINUS|INTERSECT)\b").unwrap()),
+        (
+            "order_by",
+            Regex::new(r"(?is)^\s*SELECT\b.*\b(ORDER|SORT)\s+BY\b").unwrap(),
+        ),
+        (
+            "group_by",
+            Regex::new(r"(?is)^\s*SELECT\b.*\bGROUP\s+BY\b").unwrap(),
+        ),
+        (
+            "set_operation",
+            Regex::new(r"(?is)^\s*SELECT\b.*\b(UNION|EXCEPT|MINUS|INTERSECT)\b").unwrap(),
+        ),
         ("select", Regex::new(r"(?is)^\s*SELECT\b").unwrap()),
-    ];
-}
+    ]
+});
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -136,4 +206,45 @@ pub fn build_expression_parser_suites(
 
 pub fn build_plan_parser_suites(data: Vec<TestData<String>>) -> HashMap<String, ParserTestSuite> {
     build_grouped_parser_suites(data, "plan", &PLAN_GROUP_PATTERNS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EXPRESSION_GROUP_PATTERNS, PLAN_GROUP_PATTERNS, classify};
+
+    #[test]
+    fn classify_literal_patterns() {
+        for (input, expected) in [
+            (" CASE WHEN a LIKE 'x' THEN 1 END", "case"),
+            ("cast(sum(x) OVER () AS INT)", "cast"),
+            ("TIMESTAMP_NTZ '2024-01-01'", "timestamp"),
+            ("-INTERVAL '1' DAY", "interval"),
+            ("12.5", "numeric"),
+            ("'LIKE OVER'", "string"),
+            ("a LIKE 'x'", "like"),
+            ("sum(x) OVER ()", "window"),
+            ("1 == 1 AND 2 == 2", "large"),
+            ("unknown_expression", "misc"),
+        ] {
+            assert_eq!(
+                classify(input, &EXPRESSION_GROUP_PATTERNS),
+                expected,
+                "{input}"
+            );
+        }
+        for (input, expected) in [
+            (" create table t AS SELECT 1", "create_table"),
+            ("ANALYZE TABLES", "analyze_table"),
+            ("WITH t AS (SELECT 1) SELECT * FROM t", "with"),
+            ("SELECT /*+ hint */ * FROM a JOIN b ON a.x = b.x", "hint"),
+            ("SELECT * FROM a JOIN b ON a.x = b.x ORDER BY a.x", "join"),
+            ("SELECT x FROM t GROUP BY x ORDER BY x", "order_by"),
+            ("SELECT x FROM t GROUP BY x UNION SELECT 1", "group_by"),
+            ("SELECT 1 UNION SELECT 2", "set_operation"),
+            ("SELECT 1", "select"),
+            ("unknown_statement", "misc"),
+        ] {
+            assert_eq!(classify(input, &PLAN_GROUP_PATTERNS), expected, "{input}");
+        }
+    }
 }
