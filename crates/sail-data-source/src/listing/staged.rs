@@ -10,6 +10,7 @@ use datafusion::common::runtime::SpawnedTask;
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::datasource::physical_plan::parquet::ParquetSink;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::parquet::arrow::{ArrowSchemaConverter, parquet_column};
 use datafusion::parquet::file::metadata::SortingColumn;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr};
@@ -222,13 +223,18 @@ fn parquet_sorting_columns(exec: &DataSinkExec) -> Option<Vec<SortingColumn>> {
     let input_schema = parquet.config().output_schema();
     let writer_schema = datafusion_datasource::write::get_writer_schema(parquet.config());
     let ordering: LexOrdering = exec.sort_order().as_ref()?.clone().into();
+    let parquet_schema = ArrowSchemaConverter::new().convert(&writer_schema).ok()?;
     let mut columns = vec![];
     for sort in ordering.iter() {
         let column = sort.expr.downcast_ref::<Column>()?;
         let field = input_schema.fields().get(column.index())?;
-        let Some((index, _)) = writer_schema.column_with_name(field.name()) else {
+        if writer_schema.column_with_name(field.name()).is_none() {
+            // Removed partition keys are constant within each file.
             continue;
-        };
+        }
+        // An unsupported in-file key invalidates the ordering: later keys need
+        // not be independently sorted when an earlier key is omitted.
+        let (index, _) = parquet_column(&parquet_schema, &writer_schema, field.name())?;
         columns.push(SortingColumn {
             column_idx: index.try_into().ok()?,
             descending: sort.options.descending,
@@ -391,14 +397,128 @@ async fn demux_partitions(
 #[cfg(test)]
 mod tests {
     use arrow::array::Int32Array;
+    use arrow::compute::SortOptions;
     use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
     use datafusion::execution::object_store::ObjectStoreUrl;
     use datafusion::logical_expr::dml::InsertOp;
+    use datafusion::physical_expr::{LexRequirement, PhysicalSortRequirement};
     use datafusion_common::config::TableParquetOptions;
     use datafusion_datasource::memory::MemorySourceConfig;
     use object_store::memory::InMemory;
 
     use super::*;
+
+    fn sorting_columns(
+        nested: bool,
+        keys: &[usize],
+        options: SortOptions,
+    ) -> Result<Option<Vec<SortingColumn>>> {
+        let payload = if nested {
+            DataType::Struct(
+                vec![
+                    Field::new("x", DataType::Int32, true),
+                    Field::new("y", DataType::Int32, true),
+                ]
+                .into(),
+            )
+        } else {
+            DataType::Int32
+        };
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("payload", payload, true),
+            Field::new("value", DataType::Int32, true),
+            Field::new("p", DataType::Int32, true),
+        ]));
+        let input = MemorySourceConfig::try_new_exec(&[vec![]], schema.clone(), None)?;
+        let ordering = LexRequirement::new(
+            keys.iter()
+                .map(|&index| {
+                    PhysicalSortRequirement::new(
+                        Arc::new(Column::new(schema.field(index).name(), index)),
+                        Some(options),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+        let url = ListingTableUrl::parse("memory://bucket/data/")?;
+        let sink = ParquetSink::new(
+            FileSinkConfig {
+                original_url: url.as_str().to_string(),
+                object_store_url: ObjectStoreUrl::parse("memory://bucket")?,
+                file_group: Default::default(),
+                table_paths: vec![url],
+                output_schema: schema,
+                table_partition_cols: vec![("p".into(), DataType::Int32)],
+                insert_op: InsertOp::Append,
+                keep_partition_by_columns: false,
+                file_extension: "parquet".into(),
+                file_output_mode: FileOutputMode::Automatic,
+            },
+            TableParquetOptions::default(),
+        );
+        Ok(parquet_sorting_columns(&DataSinkExec::new(
+            input,
+            Arc::new(sink),
+            ordering,
+        )))
+    }
+
+    #[test]
+    fn sorting_columns_use_leaf_indices_and_preserve_options() -> Result<()> {
+        for descending in [false, true] {
+            for nulls_first in [false, true] {
+                let options = SortOptions {
+                    descending,
+                    nulls_first,
+                };
+                assert_eq!(
+                    sorting_columns(true, &[1], options)?,
+                    Some(vec![SortingColumn {
+                        column_idx: 2,
+                        descending,
+                        nulls_first,
+                    }])
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sorting_columns_preserve_flat_indices() -> Result<()> {
+        assert_eq!(
+            sorting_columns(false, &[1], SortOptions::default())?,
+            Some(vec![SortingColumn {
+                column_idx: 1,
+                descending: false,
+                nulls_first: true,
+            }])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sorting_columns_skip_removed_partition_keys() -> Result<()> {
+        assert_eq!(
+            sorting_columns(true, &[2, 1], SortOptions::default())?,
+            Some(vec![SortingColumn {
+                column_idx: 2,
+                descending: false,
+                nulls_first: true,
+            }])
+        );
+        assert_eq!(sorting_columns(true, &[2], SortOptions::default())?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn sorting_columns_reject_unsupported_nested_leading_key() -> Result<()> {
+        assert_eq!(
+            sorting_columns(true, &[0, 1], SortOptions::default())?,
+            None
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn repeated_execution_emits_only_fresh_attempt_files() -> Result<()> {
