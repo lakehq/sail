@@ -367,6 +367,18 @@ impl CatalogProvider for OneLakeCatalogProvider {
         self.inner.drop_table(database, table, options).await
     }
 
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+    ) -> CatalogResult<()> {
+        self.inner
+            .rename_table(database, table, destination_database, destination_table)
+            .await
+    }
+
     async fn alter_table(
         &self,
         database: &Namespace,
@@ -408,7 +420,184 @@ impl CatalogProvider for OneLakeCatalogProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_onelake_location;
+    use std::sync::Mutex;
+
+    use sail_catalog::error::CatalogError;
+
+    use super::*;
+
+    type RenameCall = (Namespace, String, Namespace, String);
+
+    struct RecordingCatalog {
+        calls: Mutex<Vec<RenameCall>>,
+        result: Mutex<Option<CatalogResult<()>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl CatalogProvider for RecordingCatalog {
+        fn get_name(&self) -> &str {
+            "recording"
+        }
+
+        async fn rename_table(
+            &self,
+            database: &Namespace,
+            table: &str,
+            destination_database: &Namespace,
+            destination_table: &str,
+        ) -> CatalogResult<()> {
+            self.calls.lock().unwrap().push((
+                database.clone(),
+                table.into(),
+                destination_database.clone(),
+                destination_table.into(),
+            ));
+            self.result.lock().unwrap().take().unwrap()
+        }
+
+        async fn create_database(
+            &self,
+            _: &Namespace,
+            _: CreateDatabaseOptions,
+        ) -> CatalogResult<DatabaseStatus> {
+            unreachable!()
+        }
+
+        async fn get_database(&self, _: &Namespace) -> CatalogResult<DatabaseStatus> {
+            unreachable!()
+        }
+
+        async fn list_databases(
+            &self,
+            _: Option<&Namespace>,
+        ) -> CatalogResult<Vec<DatabaseStatus>> {
+            unreachable!()
+        }
+
+        async fn drop_database(&self, _: &Namespace, _: DropDatabaseOptions) -> CatalogResult<()> {
+            unreachable!()
+        }
+
+        async fn create_table(
+            &self,
+            _: &Namespace,
+            _: &str,
+            _: CreateTableOptions,
+        ) -> CatalogResult<TableStatus> {
+            unreachable!()
+        }
+
+        async fn get_table(&self, _: &Namespace, _: &str) -> CatalogResult<TableStatus> {
+            unreachable!()
+        }
+
+        async fn list_tables(&self, _: &Namespace) -> CatalogResult<Vec<TableStatus>> {
+            unreachable!()
+        }
+
+        async fn drop_table(
+            &self,
+            _: &Namespace,
+            _: &str,
+            _: DropTableOptions,
+        ) -> CatalogResult<()> {
+            unreachable!()
+        }
+
+        async fn alter_table(
+            &self,
+            _: &Namespace,
+            _: &str,
+            _: AlterTableOptions,
+        ) -> CatalogResult<()> {
+            unreachable!()
+        }
+
+        async fn create_view(
+            &self,
+            _: &Namespace,
+            _: &str,
+            _: CreateViewOptions,
+        ) -> CatalogResult<TableStatus> {
+            unreachable!()
+        }
+
+        async fn get_view(&self, _: &Namespace, _: &str) -> CatalogResult<TableStatus> {
+            unreachable!()
+        }
+
+        async fn list_views(&self, _: &Namespace) -> CatalogResult<Vec<TableStatus>> {
+            unreachable!()
+        }
+
+        async fn drop_view(&self, _: &Namespace, _: &str, _: DropViewOptions) -> CatalogResult<()> {
+            unreachable!()
+        }
+    }
+
+    async fn recorded_rename(api: OneLakeApiKind, result: CatalogResult<()>) -> CatalogResult<()> {
+        let inner = Arc::new(RecordingCatalog {
+            calls: Mutex::new(Vec::new()),
+            result: Mutex::new(Some(result)),
+        });
+        let provider = OneLakeCatalogProvider {
+            name: "onelake".into(),
+            config: OneLakeCatalogConfig {
+                workspace: "workspace".into(),
+                item_name: "item".into(),
+                item_type: Some("Lakehouse".into()),
+                api,
+            },
+            inner: inner.clone(),
+        };
+        let source = Namespace {
+            head: "item.Lakehouse".into(),
+            tail: vec!["Source.Schema".into(), "nested".into()],
+        };
+        let destination = Namespace {
+            head: "Other.Item".into(),
+            tail: vec!["Destination Schema".into(), "leaf".into()],
+        };
+        let result = provider
+            .rename_table(&source, "Source.Table", &destination, "Destination Table")
+            .await;
+        assert_eq!(
+            *inner.calls.lock().unwrap(),
+            vec![(
+                source,
+                "Source.Table".into(),
+                destination,
+                "Destination Table".into()
+            )]
+        );
+        result
+    }
+
+    #[tokio::test]
+    async fn rename_table_forwards_identifiers_and_success() {
+        for api in [OneLakeApiKind::Delta, OneLakeApiKind::Iceberg] {
+            recorded_rename(api, Ok(())).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn rename_table_preserves_inner_errors() {
+        for api in [OneLakeApiKind::Delta, OneLakeApiKind::Iceberg] {
+            let error =
+                recorded_rename(api, Err(CatalogError::NotSupported("remote rename".into())))
+                    .await
+                    .unwrap_err();
+            assert!(
+                matches!(error, CatalogError::NotSupported(message) if message == "remote rename")
+            );
+            let error = recorded_rename(api, Err(CatalogError::External("remote failure".into())))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, CatalogError::External(message) if message == "remote failure")
+            );
+        }
+    }
 
     #[test]
     fn normalize_onelake_location_handles_each_form() {
