@@ -155,9 +155,6 @@ pub(crate) async fn commit_snapshot_operation(
         let bytes = load_metadata_file_bytes(&object_store, &metadata_file).await?;
         let mut metadata = TableMetadata::from_json(&bytes)
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        if let Some(table) = catalog_table.as_ref() {
-            IcebergCatalogCommitCoordinator::new(ctx, table).validate_base_metadata(&metadata)?;
-        }
         if is_expiration {
             if let Some(uuid) = initial_uuid {
                 if metadata.table_uuid != uuid {
@@ -371,36 +368,7 @@ pub(crate) async fn commit_snapshot_operation(
             }
         }
         cleanup.publication_started();
-        if is_expiration && use_metadata_location_fallback {
-            let table = catalog_table
-                .as_ref()
-                .ok_or_else(|| DataFusionError::Internal("Missing CAS catalog table".into()))?;
-            let expected = metadata_location
-                .as_deref()
-                .ok_or_else(|| DataFusionError::Plan("Missing authoritative CAS pointer".into()))?;
-            match IcebergCatalogCommitCoordinator::new(ctx, table)
-                .compare_and_swap_metadata(
-                    expected,
-                    prepared_metadata.location(),
-                    &metadata.properties,
-                )
-                .await?
-            {
-                CatalogCommitOutcome::Committed(_) => {}
-                CatalogCommitOutcome::Conflict => {
-                    cleanup.cleanup().await;
-                    if attempt < MAX_PROCEDURE_COMMIT_RETRIES {
-                        continue;
-                    }
-                    return Err(procedure_commit_conflict());
-                }
-                CatalogCommitOutcome::NotSupported => {
-                    return plan_err!("Typed Iceberg CAS is unsupported");
-                }
-            }
-        }
         if let Some(table) = catalog_table.as_ref()
-            && !(is_expiration && use_metadata_location_fallback)
             && (use_metadata_location_fallback
                 || matches!(commit_mode, IcebergCatalogCommitMode::Filesystem))
             && let Err(error) = IcebergCatalogCommitCoordinator::new(ctx, table)

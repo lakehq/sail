@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::execution::TaskContext;
 use sail_common_datafusion::catalog::TableStatus;
-use sail_common_datafusion::datasource::DataSourceRegistry;
-use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::lakehouse::{
@@ -16,7 +13,7 @@ use crate::lakehouse::{
 use crate::manager::CatalogManager;
 use crate::provider::{
     AlterTableOptions, CreateTableMetadataRequirement, CreateTableOptions, DropTableOptions,
-    Namespace, RenameTableMetadataRequirement, RenameTablePrecondition,
+    Namespace,
 };
 use crate::utils::match_pattern;
 
@@ -36,7 +33,6 @@ impl ResolvedCatalogTableReference {
 impl CatalogManager {
     pub async fn rename_table(
         &self,
-        ctx: &TaskContext,
         table: &[String],
         destination: &[String],
     ) -> CatalogResult<()> {
@@ -62,44 +58,9 @@ impl CatalogManager {
                 "Cannot rename a table across catalogs".into(),
             ));
         }
-        match provider
-            .rename_table_metadata_requirement(&database, &name)
-            .await?
-        {
-            RenameTableMetadataRequirement::None => {
-                provider
-                    .rename_table(&database, &name, &target_database, &target_name)
-                    .await
-            }
-            RenameTableMetadataRequirement::Iceberg {
-                table_location,
-                metadata_location,
-            } => {
-                let registry = ctx
-                    .extension::<DataSourceRegistry>()
-                    .map_err(|error| CatalogError::External(error.to_string()))?;
-                let source = registry
-                    .get_lake_source("iceberg")
-                    .map_err(|error| CatalogError::External(error.to_string()))?;
-                let properties = source
-                    .load_rename_table_properties(ctx, &table_location, &metadata_location)
-                    .await
-                    .map_err(|error| CatalogError::External(error.to_string()))?;
-                // Session defaults can change during metadata I/O. Policy and publication
-                // must use the same retained provider, without resolving the name again.
-                provider
-                    .validate_alter_table(&AlterTableOptions::SetTableProperties { properties })?;
-                provider
-                    .rename_table_with_precondition(
-                        &database,
-                        &name,
-                        &target_database,
-                        &target_name,
-                        RenameTablePrecondition::Iceberg { metadata_location },
-                    )
-                    .await
-            }
-        }
+        provider
+            .rename_table(&database, &name, &target_database, &target_name)
+            .await
     }
 
     pub async fn create_table<T: AsRef<str>>(
@@ -345,25 +306,6 @@ impl CatalogManager {
         let (provider, database, table) = self.resolve_object(table)?;
         provider
             .commit_lakehouse_table(&database, &table, request)
-            .await
-    }
-
-    pub fn lakehouse_capabilities<T: AsRef<str>>(
-        &self,
-        table: &[T],
-    ) -> CatalogResult<Vec<crate::lakehouse::LakehouseCapability>> {
-        let (provider, _, _) = self.resolve_object(table)?;
-        Ok(provider.lakehouse_capabilities())
-    }
-
-    pub async fn compare_and_swap_iceberg_metadata<T: AsRef<str>>(
-        &self,
-        table: &[T],
-        request: crate::lakehouse::IcebergMetadataCasRequest,
-    ) -> CatalogResult<crate::lakehouse::IcebergMetadataCasOutcome> {
-        let (provider, database, table) = self.resolve_object(table)?;
-        provider
-            .compare_and_swap_iceberg_metadata(&database, &table, request)
             .await
     }
 

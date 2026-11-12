@@ -91,16 +91,6 @@ fn test_deserialize_hms_catalog_defaults_to_none_auth() {
 }
 
 #[test]
-fn test_deserialize_hms_catalog_rejects_removed_cas_setting() {
-    let error = serde_json::from_str::<CatalogType>(
-        r#"{"type":"hms","name":"hms","uris":["localhost:9083"],"conditional_iceberg_cas":true}"#,
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains("unknown field"));
-    assert!(error.to_string().contains("conditional_iceberg_cas"));
-}
-
-#[test]
 fn test_deserialize_hms_catalog_rejects_legacy_uri_field() {
     let error = serde_json::from_str::<CatalogType>(
         r#"{

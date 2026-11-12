@@ -17,10 +17,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "get_table_objects_by_name",
             "get_table_req",
             "alter_table",
-            "alter_table_with_environment_context",
             "lock",
             "check_lock",
-            "heartbeat",
             "unlock",
         ],
     )?;

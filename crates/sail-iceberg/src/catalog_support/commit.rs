@@ -132,22 +132,6 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
         }
     }
 
-    /// Validate protocol-affecting properties from the base metadata before staging files.
-    pub(crate) fn validate_base_metadata(&self, metadata: &TableMetadata) -> Result<()> {
-        if let Some(value) = metadata.properties.get("engine.hive.lock-enabled") {
-            self.context
-                .extension::<CatalogManager>()?
-                .validate_alter_table(
-                    self.catalog_table,
-                    &AlterTableOptions::SetTableProperties {
-                        properties: vec![("engine.hive.lock-enabled".into(), value.clone())],
-                    },
-                )
-                .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        }
-        Ok(())
-    }
-
     pub(crate) async fn load_table_info(
         context: &C,
         catalog_table: &[String],
@@ -174,7 +158,7 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
         context: &C,
         catalog_table: &[String],
     ) -> Result<sail_catalog::lakehouse::LakehouseResolvedTable> {
-        use sail_catalog::lakehouse::{LakehouseCapability, ResolveLakehouseTableRequest};
+        use sail_catalog::lakehouse::ResolveLakehouseTableRequest;
         use sail_common_datafusion::catalog::{LakehouseFormat, LakehouseOperation};
         let manager = context.extension::<CatalogManager>()?;
         let resolved = manager
@@ -189,65 +173,19 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
             )
             .await
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        if resolved.execution.commit == CommitAuthority::IcebergRestCommit {
-            return plan_err!(
-                "expire_snapshots requires atomic whole-metadata conditional publication or server-side retention; generic Iceberg REST commits are unsupported"
-            );
-        }
-        let capabilities = manager
-            .lakehouse_capabilities(catalog_table)
-            .map_err(|error| DataFusionError::External(Box::new(error)))?;
         let supported = match resolved.execution.commit {
             CommitAuthority::Filesystem => {
                 !catalog_managed_iceberg_from_properties(&resolved.status.display_properties)
             }
-            CommitAuthority::IcebergMetadataLocationCas => {
-                capabilities.contains(&LakehouseCapability::IcebergMetadataLocationCas)
-            }
+            CommitAuthority::IcebergRestCommit => true,
             _ => false,
         };
         if !supported || resolved.execution.format != LakehouseFormat::Iceberg {
             return plan_err!(
-                "expire_snapshots requires a confirmed filesystem or typed metadata CAS authority"
+                "expire_snapshots supports only filesystem-authoritative tables and Iceberg REST catalogs; pointer-authoritative registrations (including Glue and HMS) are unsupported"
             );
         }
         Ok(resolved)
-    }
-
-    pub(crate) async fn compare_and_swap_metadata(
-        &self,
-        expected: &str,
-        replacement: &str,
-        base_properties: &std::collections::HashMap<String, String>,
-    ) -> Result<CatalogCommitOutcome> {
-        use sail_catalog::lakehouse::{IcebergMetadataCasOutcome, IcebergMetadataCasRequest};
-        let manager = self.context.extension::<CatalogManager>()?;
-        let request = IcebergMetadataCasRequest::new(expected.into(), replacement.into())
-            .map_err(|error| DataFusionError::External(Box::new(error)))?
-            .with_base_properties(
-                base_properties
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-            );
-        match manager
-            .compare_and_swap_iceberg_metadata(self.catalog_table, request)
-            .await
-            .map_err(|error| DataFusionError::External(Box::new(error)))?
-        {
-            IcebergMetadataCasOutcome::Committed => Ok(CatalogCommitOutcome::Committed(
-                CatalogCommittedTable::from_payload(Some(
-                    serde_json::json!({"metadata-location": replacement}),
-                )),
-            )),
-            IcebergMetadataCasOutcome::Conflict { .. } => Ok(CatalogCommitOutcome::Conflict),
-            IcebergMetadataCasOutcome::Rejected { message } => Err(DataFusionError::External(
-                Box::new(CatalogError::CommitRejected(message)),
-            )),
-            IcebergMetadataCasOutcome::Unknown { message } => Err(DataFusionError::External(
-                Box::new(CatalogError::CommitStateUnknown(message.into())),
-            )),
-        }
     }
 
     pub(crate) async fn load_metadata_location(

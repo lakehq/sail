@@ -243,7 +243,9 @@ impl ExpireSnapshots {
             });
         }
         // REST cannot assert the absence of unseen refs or unchanged retention properties.
-        // These are standard observed-head guards, not a global metadata CAS.
+        // A concurrently added tag can therefore disappear with its expired snapshot, and
+        // retention-only changes need not conflict. These guards are not a metadata CAS.
+        // [CREDIT]: https://github.com/apache/iceberg/blob/212aa894e919ff9fdf89160da4aadcbe6858ac01/core/src/main/java/org/apache/iceberg/TableMetadata.java#L1429-L1469
         let mut updates: Vec<_> = removed_refs
             .into_iter()
             .map(|ref_name| TableUpdate::RemoveSnapshotRef { ref_name })
@@ -356,14 +358,28 @@ pub(crate) fn checked_path(store: &StoreContext, table: &Url, raw: &str) -> Resu
     if raw.is_empty() {
         return plan_err!("Empty Iceberg expiration path");
     }
-    // Path::from/join encode '%' again. Preserve literal partition escapes exactly,
-    // as url_to_object_path does; use this same key for reads, reachability and deletion.
+    // Non-URI data paths and manifest paths have different reader normalization.
+    // Refuse ambiguous identities rather than deleting an object a reader still uses.
     let key = if raw.starts_with('/') {
         raw.trim_start_matches('/').to_string()
     } else {
         format!("{}/{raw}", store.prefix_path)
     };
-    Path::parse(key).map_err(|error| DataFusionError::External(Box::new(error)))
+    let path = Path::parse(key).map_err(|error| DataFusionError::External(Box::new(error)))?;
+    let data_path = store.resolve_to_absolute_path(raw)?;
+    let (_, manifest_path) = store.resolve(raw)?;
+    let manifest_path = if raw.starts_with('/') {
+        manifest_path
+    } else {
+        Path::parse(format!("{}/{manifest_path}", store.prefix_path))
+            .map_err(|error| DataFusionError::External(Box::new(error)))?
+    };
+    if path != data_path || path != manifest_path {
+        return plan_err!(
+            "expire_snapshots does not support an ambiguous non-URI path: {raw}; use a URI with the reader's physical object identity"
+        );
+    }
+    Ok(path)
 }
 
 impl Inventory {

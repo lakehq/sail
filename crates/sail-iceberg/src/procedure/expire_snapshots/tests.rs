@@ -433,7 +433,7 @@ async fn shared_manifests_refresh_and_missing_files_are_safe() {
 }
 
 #[tokio::test]
-async fn literal_percent_aliases_preserve_live_paths_and_do_not_touch_double_escaped_keys() {
+async fn encoded_uri_paths_preserve_live_paths_and_do_not_touch_double_escaped_keys() {
     let (store, url, mut metadata) = fixture().await;
     let literal = Path::parse("table/metadata/shared%3A.puffin").expect("literal path");
     let double = Path::parse("table/metadata/shared%253A.puffin").expect("double escaped path");
@@ -446,13 +446,15 @@ async fn literal_percent_aliases_preserve_live_paths_and_do_not_touch_double_esc
             .await
             .expect("put");
     }
-    for alias in [
-        "memory://bucket/table/metadata/shared%3A.puffin",
-        "/table/metadata/shared%3A.puffin",
-        "metadata/shared%3A.puffin",
-    ] {
-        assert_eq!(checked_path(&store, &url, alias).expect("alias"), literal);
-    }
+    assert_eq!(
+        checked_path(
+            &store,
+            &url,
+            "memory://bucket/table/metadata/shared%3A.puffin"
+        )
+        .expect("encoded URI"),
+        literal
+    );
     let stats = |id, path: &str| {
         serde_json::from_value(serde_json::json!({
             "snapshot-id": id, "statistics-path": path, "file-size-in-bytes": 8,
@@ -462,7 +464,7 @@ async fn literal_percent_aliases_preserve_live_paths_and_do_not_touch_double_esc
     };
     metadata.statistics = vec![
         stats(10, "memory://bucket/table/metadata/shared%3A.puffin"),
-        stats(20, "/table/metadata/shared%3A.puffin"),
+        stats(20, "memory://bucket/table/metadata/shared%3A.puffin"),
     ];
     let prepared = operation()
         .prepare(&store, &url, &metadata)
@@ -514,6 +516,122 @@ async fn literal_percent_aliases_preserve_live_paths_and_do_not_touch_double_esc
     .expect("finish unreachable");
     assert!(store.base.get(&literal).await.is_err());
     assert!(store.base.get(&double).await.is_ok());
+}
+
+#[tokio::test]
+async fn non_uri_paths_must_match_both_data_and_manifest_readers() {
+    let (store, url, _) = fixture().await;
+    for raw in [
+        "/table/data/shared%3A.parquet",
+        "data/shared%3A.parquet",
+        "/table/data/part=a?b/file.parquet",
+        "data/part=a?b/file.parquet",
+    ] {
+        let error = checked_path(&store, &url, raw).expect_err("ambiguous path");
+        assert!(
+            error.to_string().contains("ambiguous non-URI path"),
+            "{error}"
+        );
+    }
+    let relative = "data/shared%3A.parquet";
+    assert_ne!(
+        store.resolve(relative).expect("manifest path").1,
+        Path::from(relative),
+        "relative manifest reads preserve escapes whereas data reads encode them"
+    );
+    for raw in [
+        "/table/data/shared.parquet",
+        "data/shared.parquet",
+        "memory://bucket/table/data/part=a%3Ab/file.parquet",
+        "memory://bucket/table/data/shared%253A.parquet",
+    ] {
+        let path = checked_path(&store, &url, raw).expect("unambiguous path");
+        assert_eq!(
+            path,
+            store.resolve_to_absolute_path(raw).expect("data path")
+        );
+        let (reader, manifest_path) = store.resolve(raw).expect("manifest path");
+        let physical = if Arc::ptr_eq(reader, &store.base) {
+            manifest_path
+        } else {
+            Path::parse(format!("{}/{manifest_path}", store.prefix_path)).expect("absolute key")
+        };
+        assert_eq!(path, physical);
+    }
+}
+
+#[tokio::test]
+async fn ambiguous_inventory_paths_fail_preflight_without_mutation() {
+    use futures::TryStreamExt;
+
+    use crate::spec::{ManifestListWriteContext, ManifestListWriter};
+
+    for raw in ["/table/data/shared%3A.parquet", "data/shared%3A.parquet"] {
+        for kind in ["data", "manifest", "list", "statistics"] {
+            let mut input = entry(1, FormatVersion::V3);
+            if kind == "data" {
+                input.data_file.file_path = raw.into();
+            }
+            let (store, url, mut metadata, mut descriptors) =
+                rewrite_fixture(FormatVersion::V3, vec![(0, vec![input])], false).await;
+            if kind == "manifest" {
+                descriptors[0].manifest_path = raw.into();
+                let mut writer = ManifestListWriter::new();
+                writer.append(descriptors[0].clone());
+                let bytes = writer
+                    .to_bytes_with_context(ManifestListWriteContext {
+                        version: FormatVersion::V3,
+                        snapshot_id: 10,
+                        parent_snapshot_id: None,
+                        sequence_number: 0,
+                        first_row_id: None,
+                    })
+                    .expect("list");
+                store
+                    .prefixed
+                    .put(&Path::from("metadata/list.avro"), bytes.into())
+                    .await
+                    .expect("list");
+            } else if kind == "list" {
+                metadata.snapshots[0].manifest_list = raw.into();
+            } else if kind == "statistics" {
+                metadata.statistics.push(
+                    serde_json::from_value(serde_json::json!({
+                        "snapshot-id": 10, "statistics-path": raw, "file-size-in-bytes": 8,
+                        "file-footer-size-in-bytes": 0, "blob-metadata": []
+                    }))
+                    .expect("statistics"),
+                );
+            }
+            let before = store
+                .base
+                .list(None)
+                .try_collect::<Vec<_>>()
+                .await
+                .expect("inventory");
+            metadata.ensure_required_format_fields();
+            let metadata_before = metadata.to_json().expect("metadata");
+            let error = operation()
+                .prepare(&store, &url, &metadata)
+                .await
+                .err()
+                .expect("preflight refusal");
+            assert!(
+                error.to_string().contains("ambiguous non-URI path"),
+                "{kind}: {error}"
+            );
+            assert_eq!(metadata.to_json().expect("metadata"), metadata_before);
+            assert_eq!(
+                store
+                    .base
+                    .list(None)
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .expect("inventory"),
+                before
+            );
+        }
+    }
 }
 
 #[tokio::test]

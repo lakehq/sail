@@ -387,23 +387,6 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         Ok(outcome)
     }
 
-    async fn compare_and_swap_iceberg_metadata(
-        &self,
-        database: &Namespace,
-        table: &str,
-        request: crate::lakehouse::IcebergMetadataCasRequest,
-    ) -> CatalogResult<crate::lakehouse::IcebergMetadataCasOutcome> {
-        let result = self
-            .inner
-            .compare_and_swap_iceberg_metadata(database, table, request)
-            .await;
-        // Invalidate even on errors: a transport error may hide a successful publication.
-        if let Some(cache) = self.table_cache.as_ref() {
-            cache.invalidate(database).await;
-        }
-        result
-    }
-
     async fn get_delta_ratified_commits(
         &self,
         database: &Namespace,
@@ -452,43 +435,6 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         self.inner.validate_alter_table(options)
     }
 
-    async fn rename_table_metadata_requirement(
-        &self,
-        database: &Namespace,
-        table: &str,
-    ) -> CatalogResult<super::RenameTableMetadataRequirement> {
-        self.inner
-            .rename_table_metadata_requirement(database, table)
-            .await
-    }
-
-    async fn rename_table_with_precondition(
-        &self,
-        database: &Namespace,
-        table: &str,
-        destination_database: &Namespace,
-        destination_table: &str,
-        precondition: super::RenameTablePrecondition,
-    ) -> CatalogResult<()> {
-        let result = self
-            .inner
-            .rename_table_with_precondition(
-                database,
-                table,
-                destination_database,
-                destination_table,
-                precondition,
-            )
-            .await;
-        if (result.is_ok() || matches!(&result, Err(CatalogError::CommitStateUnknown(_))))
-            && let Some(cache) = &self.table_cache
-        {
-            cache.invalidate(database).await;
-            cache.invalidate(destination_database).await;
-        }
-        result
-    }
-
     async fn rename_table(
         &self,
         database: &Namespace,
@@ -496,17 +442,14 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         destination_database: &Namespace,
         destination_table: &str,
     ) -> CatalogResult<()> {
-        let result = self
-            .inner
+        self.inner
             .rename_table(database, table, destination_database, destination_table)
-            .await;
-        if (result.is_ok() || matches!(&result, Err(CatalogError::CommitStateUnknown(_))))
-            && let Some(cache) = &self.table_cache
-        {
+            .await?;
+        if let Some(cache) = &self.table_cache {
             cache.invalidate(database).await;
             cache.invalidate(destination_database).await;
         }
-        result
+        Ok(())
     }
 
     async fn alter_table(
@@ -620,51 +563,7 @@ mod tests {
     use crate::lakehouse::TableAccessPurpose;
     use crate::provider::{CreateDatabaseOptions, CreateTableOptions, Namespace};
 
-    struct RenameState {
-        tables: HashMap<Namespace, Vec<TableStatus>>,
-        destination: Namespace,
-        apply: bool,
-        result: Option<CatalogResult<()>>,
-        calls: usize,
-    }
-
-    impl RenameState {
-        fn rename(
-            &mut self,
-            database: &Namespace,
-            table: &str,
-            destination_database: &Namespace,
-            destination_table: &str,
-        ) -> CatalogResult<()> {
-            assert_eq!(database, &Namespace::try_from(vec!["db1"]).unwrap());
-            assert_eq!(table, "t1");
-            assert_eq!(destination_database, &self.destination);
-            assert_eq!(destination_table, "t2");
-            self.calls += 1;
-            if self.apply {
-                let source = self.tables.get_mut(database).unwrap();
-                assert_eq!(source.len(), 1);
-                let mut renamed = source.remove(0);
-                assert_eq!(renamed.name, table);
-                renamed.database = destination_database.clone().into();
-                renamed.name = destination_table.into();
-                self.tables
-                    .get_mut(destination_database)
-                    .unwrap()
-                    .push(renamed);
-            }
-            self.result.take().unwrap()
-        }
-    }
-
-    #[derive(Debug, thiserror::Error)]
-    #[error("rename acknowledgement lost")]
-    struct RenameErrorSource(Arc<()>);
-
     struct MockProvider {
-        name: &'static str,
-        reject_disabled_locks: bool,
-        policy_calls: AtomicUsize,
         db_calls: AtomicUsize,
         table_calls: AtomicUsize,
         view_calls: AtomicUsize,
@@ -673,17 +572,11 @@ mod tests {
         commit_calls: AtomicUsize,
         delta_commit_calls: AtomicUsize,
         last_commit_format: Mutex<Option<String>>,
-        rename_requirements: AtomicUsize,
-        guarded_renames: AtomicUsize,
-        rename_state: Mutex<Option<RenameState>>,
     }
 
     impl MockProvider {
         fn new() -> Self {
             Self {
-                name: "mock",
-                reject_disabled_locks: false,
-                policy_calls: AtomicUsize::new(0),
                 db_calls: AtomicUsize::new(0),
                 table_calls: AtomicUsize::new(0),
                 view_calls: AtomicUsize::new(0),
@@ -692,9 +585,6 @@ mod tests {
                 commit_calls: AtomicUsize::new(0),
                 delta_commit_calls: AtomicUsize::new(0),
                 last_commit_format: Mutex::new(None),
-                rename_requirements: AtomicUsize::new(0),
-                guarded_renames: AtomicUsize::new(0),
-                rename_state: Mutex::new(None),
             }
         }
     }
@@ -702,22 +592,7 @@ mod tests {
     #[async_trait::async_trait]
     impl CatalogProvider for MockProvider {
         fn get_name(&self) -> &str {
-            self.name
-        }
-
-        fn validate_alter_table(&self, options: &AlterTableOptions) -> CatalogResult<()> {
-            self.policy_calls.fetch_add(1, Ordering::SeqCst);
-            if self.reject_disabled_locks
-                && let AlterTableOptions::SetTableProperties { properties } = options
-                && properties
-                    .iter()
-                    .any(|(key, value)| key == "engine.hive.lock-enabled" && value != "true")
-            {
-                return Err(crate::error::CatalogError::CommitRejected(
-                    "disabled locks".into(),
-                ));
-            }
-            Ok(())
+            "mock"
         }
 
         fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
@@ -884,9 +759,6 @@ mod tests {
 
         async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
             self.table_calls.fetch_add(1, Ordering::SeqCst);
-            if let Some(state) = self.rename_state.lock().unwrap().as_ref() {
-                return Ok(state.tables.get(database).unwrap().clone());
-            }
             Ok(vec![TableStatus {
                 catalog: Some("cat".to_string()),
                 database: database.clone().into(),
@@ -922,68 +794,6 @@ mod tests {
             _options: AlterTableOptions,
         ) -> CatalogResult<()> {
             Ok(())
-        }
-
-        async fn rename_table_metadata_requirement(
-            &self,
-            database: &Namespace,
-            table: &str,
-        ) -> CatalogResult<crate::provider::RenameTableMetadataRequirement> {
-            assert_eq!(database, &Namespace::try_from(vec!["db1"]).unwrap());
-            assert_eq!(table, "t1");
-            self.rename_requirements.fetch_add(1, Ordering::SeqCst);
-            Ok(crate::provider::RenameTableMetadataRequirement::Iceberg {
-                table_location: "file:///table".into(),
-                metadata_location: "file:///table/metadata.json".into(),
-            })
-        }
-
-        async fn rename_table_with_precondition(
-            &self,
-            database: &Namespace,
-            table: &str,
-            destination_database: &Namespace,
-            destination_table: &str,
-            precondition: crate::provider::RenameTablePrecondition,
-        ) -> CatalogResult<()> {
-            if let Some(state) = self.rename_state.lock().unwrap().as_mut() {
-                assert_eq!(
-                    precondition,
-                    crate::provider::RenameTablePrecondition::Iceberg {
-                        metadata_location: "file:///table/metadata.json".into(),
-                    }
-                );
-                return state.rename(database, table, destination_database, destination_table);
-            }
-            assert_eq!(database, &Namespace::try_from(vec!["db1"]).unwrap());
-            assert_eq!(table, "t1");
-            assert_eq!(
-                destination_database,
-                &Namespace::try_from(vec!["db2"]).unwrap()
-            );
-            assert_eq!(destination_table, "t2");
-            self.guarded_renames.fetch_add(1, Ordering::SeqCst);
-            let crate::provider::RenameTablePrecondition::Iceberg { metadata_location } =
-                precondition;
-            if metadata_location != "file:///table/metadata.json" {
-                return Err(crate::error::CatalogError::Conflict("stale pointer".into()));
-            }
-            Ok(())
-        }
-
-        async fn rename_table(
-            &self,
-            database: &Namespace,
-            table: &str,
-            destination_database: &Namespace,
-            destination_table: &str,
-        ) -> CatalogResult<()> {
-            self.rename_state.lock().unwrap().as_mut().unwrap().rename(
-                database,
-                table,
-                destination_database,
-                destination_table,
-            )
         }
 
         async fn create_view(
@@ -1264,361 +1074,6 @@ mod tests {
         // Second call - should hit cache (meaning max_capacity(0) was NOT applied)
         provider.list_databases(None).await.unwrap();
         assert_eq!(mock.db_calls.load(Ordering::SeqCst), 1);
-    }
-
-    struct GatedRenameSource {
-        enabled: bool,
-        started: tokio::sync::Notify,
-        resume: tokio::sync::Semaphore,
-    }
-
-    #[async_trait::async_trait]
-    impl sail_common_datafusion::datasource::DataSource for GatedRenameSource {
-        fn name(&self) -> &str {
-            "iceberg"
-        }
-
-        fn as_lake_source(
-            self: Arc<Self>,
-        ) -> Option<Arc<dyn sail_common_datafusion::lakesource::LakeSource>> {
-            Some(self)
-        }
-
-        async fn create_source(
-            &self,
-            _ctx: &dyn datafusion::catalog::Session,
-            _info: sail_common_datafusion::datasource::SourceInfo,
-        ) -> datafusion_common::Result<Arc<dyn datafusion_expr::TableSource>> {
-            datafusion_common::not_impl_err!("unused in rename test")
-        }
-
-        async fn create_writer(
-            &self,
-            _ctx: &dyn datafusion::catalog::Session,
-            _info: sail_common_datafusion::datasource::SinkInfo,
-        ) -> datafusion_common::Result<datafusion_expr::LogicalPlan> {
-            datafusion_common::not_impl_err!("unused in rename test")
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl sail_common_datafusion::lakesource::LakeSource for GatedRenameSource {
-        async fn load_rename_table_properties(
-            &self,
-            _ctx: &datafusion::execution::TaskContext,
-            table_location: &str,
-            metadata_location: &str,
-        ) -> datafusion_common::Result<Vec<(String, String)>> {
-            assert_eq!(table_location, "file:///table");
-            assert_eq!(metadata_location, "file:///table/metadata.json");
-            self.started.notify_one();
-            self.resume.acquire().await.unwrap().forget();
-            Ok(vec![(
-                "engine.hive.lock-enabled".into(),
-                self.enabled.to_string(),
-            )])
-        }
-    }
-
-    #[tokio::test]
-    async fn rename_policy_and_publication_keep_original_provider_after_catalog_switch() {
-        use datafusion::prelude::{SessionConfig, SessionContext};
-        use sail_common_datafusion::datasource::DataSourceRegistry;
-
-        use crate::manager::{CatalogManager, CatalogManagerOptions};
-
-        for enabled in [false, true] {
-            let original = Arc::new(MockProvider {
-                name: "original",
-                reject_disabled_locks: true,
-                ..MockProvider::new()
-            });
-            let permissive = Arc::new(MockProvider {
-                name: "permissive",
-                ..MockProvider::new()
-            });
-            let manager = Arc::new(
-                CatalogManager::try_new(CatalogManagerOptions {
-                    catalogs: HashMap::from([
-                        (
-                            "original".into(),
-                            original.clone() as Arc<dyn CatalogProvider>,
-                        ),
-                        (
-                            "permissive".into(),
-                            permissive.clone() as Arc<dyn CatalogProvider>,
-                        ),
-                    ]),
-                    default_catalog: "original".into(),
-                    default_database: vec!["db1".into()],
-                    global_temporary_database: vec!["global_temp".into()],
-                })
-                .unwrap(),
-            );
-            let source = Arc::new(GatedRenameSource {
-                enabled,
-                started: tokio::sync::Notify::new(),
-                resume: tokio::sync::Semaphore::new(0),
-            });
-            let registry = Arc::new(DataSourceRegistry::new());
-            registry.register_data_source(source.clone()).unwrap();
-            let session = SessionContext::new_with_config(
-                SessionConfig::new()
-                    .with_extension(registry)
-                    .with_extension(manager.clone()),
-            );
-            let task = {
-                let manager = manager.clone();
-                let ctx = session.task_ctx();
-                tokio::spawn(async move {
-                    manager
-                        .rename_table(
-                            &ctx,
-                            &["db1".into(), "t1".into()],
-                            &["db2".into(), "t2".into()],
-                        )
-                        .await
-                })
-            };
-            tokio::time::timeout(Duration::from_secs(5), source.started.notified())
-                .await
-                .unwrap();
-            manager.set_default_catalog("permissive").unwrap();
-            source.resume.add_permits(1);
-            let result = task.await.unwrap();
-            if enabled {
-                result.unwrap();
-            } else {
-                assert!(matches!(
-                    result,
-                    Err(crate::error::CatalogError::CommitRejected(_))
-                ));
-            }
-            assert_eq!(original.rename_requirements.load(Ordering::SeqCst), 1);
-            assert_eq!(original.policy_calls.load(Ordering::SeqCst), 1);
-            assert_eq!(
-                original.guarded_renames.load(Ordering::SeqCst),
-                usize::from(enabled)
-            );
-            assert_eq!(permissive.rename_requirements.load(Ordering::SeqCst), 0);
-            assert_eq!(permissive.policy_calls.load(Ordering::SeqCst), 0);
-            assert_eq!(permissive.guarded_renames.load(Ordering::SeqCst), 0);
-        }
-    }
-
-    #[tokio::test]
-    #[expect(clippy::panic, reason = "unexpected test outcomes must fail the test")]
-    async fn rename_refreshes_listings_on_success_or_unknown_but_not_conflict() {
-        use sail_common_datafusion::error::CommitStateUnknownError;
-
-        use crate::provider::RenameTablePrecondition;
-
-        fn identities(tables: &[TableStatus]) -> Vec<(Vec<String>, String)> {
-            tables
-                .iter()
-                .map(|table| (table.database.clone(), table.name.clone()))
-                .collect()
-        }
-
-        for guarded in [false, true] {
-            for same_namespace in [false, true] {
-                // Unknown must invalidate whether or not publication actually happened.
-                for (unknown, apply) in [(false, true), (true, true), (true, false), (false, false)]
-                {
-                    let mock = mock_provider();
-                    let source = Namespace::try_from(vec!["db1"]).unwrap();
-                    let target =
-                        Namespace::try_from(vec![if same_namespace { "db1" } else { "db2" }])
-                            .unwrap();
-                    let unrelated = Namespace::try_from(vec!["unrelated"]).unwrap();
-                    let original = mock.get_table(&source, "t1").await.unwrap();
-                    let sentinel = Arc::new(());
-                    let result = if unknown {
-                        Err(CatalogError::CommitStateUnknown(
-                            CommitStateUnknownError::with_source(
-                                "rename outcome uncertain",
-                                RenameErrorSource(sentinel.clone()),
-                            ),
-                        ))
-                    } else if apply {
-                        Ok(())
-                    } else {
-                        Err(CatalogError::Conflict("rename precondition failed".into()))
-                    };
-                    let mut tables =
-                        HashMap::from([(target.clone(), vec![]), (unrelated.clone(), vec![])]);
-                    tables.insert(source.clone(), vec![original.clone()]);
-                    *mock.rename_state.lock().unwrap() = Some(RenameState {
-                        tables,
-                        destination: target.clone(),
-                        apply,
-                        result: Some(result),
-                        calls: 0,
-                    });
-                    let provider = CachingCatalogProvider::new(
-                        mock.clone(),
-                        CatalogCacheConfig {
-                            table_cache_type: sail_common::config::CacheType::Session,
-                            table_cache_size: Some(10),
-                            ..Default::default()
-                        },
-                        None,
-                    );
-                    for _ in 0..2 {
-                        for ns in [&source, &target, &unrelated] {
-                            let expected = if ns == &source {
-                                vec![original.clone()]
-                            } else {
-                                vec![]
-                            };
-                            assert_eq!(
-                                identities(&provider.list_tables(ns).await.unwrap()),
-                                identities(&expected)
-                            );
-                        }
-                    }
-                    let affected = if same_namespace { 1 } else { 2 };
-                    assert_eq!(mock.table_calls.load(Ordering::SeqCst), affected + 1);
-                    let result = if guarded {
-                        provider
-                            .rename_table_with_precondition(
-                                &source,
-                                "t1",
-                                &target,
-                                "t2",
-                                RenameTablePrecondition::Iceberg {
-                                    metadata_location: "file:///table/metadata.json".into(),
-                                },
-                            )
-                            .await
-                    } else {
-                        provider.rename_table(&source, "t1", &target, "t2").await
-                    };
-                    match result {
-                        Err(CatalogError::CommitStateUnknown(error)) if unknown => {
-                            assert_eq!(
-                                error.to_string(),
-                                "commit state unknown: rename outcome uncertain: rename acknowledgement lost"
-                            );
-                            let source = std::error::Error::source(&error)
-                                .unwrap()
-                                .downcast_ref::<RenameErrorSource>()
-                                .unwrap();
-                            assert!(Arc::ptr_eq(&source.0, &sentinel));
-                        }
-                        Err(CatalogError::Conflict(message)) if !unknown && !apply => {
-                            assert_eq!(message, "rename precondition failed");
-                        }
-                        Ok(()) if !unknown && apply => {}
-                        result => panic!("unexpected rename result: {result:?}"),
-                    }
-                    let mut renamed = original.clone();
-                    renamed.name = "t2".into();
-                    renamed.database = target.clone().into();
-                    for _ in 0..2 {
-                        for ns in [&source, &target, &unrelated] {
-                            let expected = if apply && ns == &target {
-                                vec![renamed.clone()]
-                            } else if !apply && ns == &source {
-                                vec![original.clone()]
-                            } else {
-                                vec![]
-                            };
-                            assert_eq!(
-                                identities(
-                                    &mock.rename_state.lock().unwrap().as_ref().unwrap().tables[ns]
-                                ),
-                                identities(&expected)
-                            );
-                            assert_eq!(
-                                identities(&provider.list_tables(ns).await.unwrap()),
-                                identities(&expected)
-                            );
-                        }
-                        assert_eq!(
-                            mock.table_calls.load(Ordering::SeqCst),
-                            affected + 1 + if unknown || apply { affected } else { 0 }
-                        );
-                    }
-                    assert_eq!(mock.rename_state.lock().unwrap().as_ref().unwrap().calls, 1);
-                }
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn guarded_rename_forwards_through_runtime_and_invalidates_both_namespaces() {
-        use crate::provider::{
-            RenameTableMetadataRequirement, RenameTablePrecondition, RuntimeAwareCatalogProvider,
-        };
-
-        let mock = mock_provider();
-        let config = CatalogCacheConfig {
-            table_cache_type: sail_common::config::CacheType::Session,
-            table_cache_size: Some(10),
-            table_cache_ttl_secs: Some(60),
-            ..Default::default()
-        };
-        let provider = RuntimeAwareCatalogProvider::try_new(
-            || Ok(CachingCatalogProvider::new(mock.clone(), config, None)),
-            tokio::runtime::Handle::current(),
-        )
-        .unwrap();
-        let source = Namespace::try_from(vec!["db1"]).unwrap();
-        let target = Namespace::try_from(vec!["db2"]).unwrap();
-        for _ in 0..2 {
-            assert_eq!(
-                provider
-                    .rename_table_metadata_requirement(&source, "t1")
-                    .await
-                    .unwrap(),
-                RenameTableMetadataRequirement::Iceberg {
-                    table_location: "file:///table".into(),
-                    metadata_location: "file:///table/metadata.json".into(),
-                }
-            );
-        }
-        assert_eq!(mock.rename_requirements.load(Ordering::SeqCst), 2);
-        for ns in [&source, &target] {
-            provider.list_tables(ns).await.unwrap();
-        }
-        assert_eq!(mock.table_calls.load(Ordering::SeqCst), 2);
-        let error = provider
-            .rename_table_with_precondition(
-                &source,
-                "t1",
-                &target,
-                "t2",
-                RenameTablePrecondition::Iceberg {
-                    metadata_location: "stale".into(),
-                },
-            )
-            .await;
-        assert!(matches!(
-            error,
-            Err(crate::error::CatalogError::Conflict(_))
-        ));
-        for ns in [&source, &target] {
-            provider.list_tables(ns).await.unwrap();
-        }
-        assert_eq!(mock.table_calls.load(Ordering::SeqCst), 2);
-        provider
-            .rename_table_with_precondition(
-                &source,
-                "t1",
-                &target,
-                "t2",
-                RenameTablePrecondition::Iceberg {
-                    metadata_location: "file:///table/metadata.json".into(),
-                },
-            )
-            .await
-            .unwrap();
-        for ns in [&source, &target] {
-            provider.list_tables(ns).await.unwrap();
-        }
-        assert_eq!(mock.table_calls.load(Ordering::SeqCst), 4);
-        assert_eq!(mock.guarded_renames.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

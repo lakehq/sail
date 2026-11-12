@@ -2,11 +2,23 @@
 # Semantic cases: Apache Iceberg 1.12 TestRemoveSnapshots and TestExpireSnapshotsProcedure.
 # NULL IDs and missing-file counts confirmed with Spark 4.1.4 + Iceberg 1.12.0.
 
+import copy
+from urllib.parse import urlparse
+
 import pytest
+from pyiceberg.io.pyarrow import PyArrowFileIO
+from pyiceberg.manifest import (
+    ManifestEntry,
+    ManifestEntryStatus,
+    write_manifest,
+    write_manifest_list,
+)
+from pyiceberg.table import StaticTable
 from pyspark.errors import PySparkException
 from pyspark.sql.types import LongType, StructField, StructType
 
 from pysail.testing._dev.spark.steps.iceberg import _find_latest_metadata
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 from pysail.tests._dev.spark.iceberg.test_iceberg_merge import _local_file_path
 from pysail.tests._dev.spark.iceberg.test_iceberg_procedures import _edit_latest_metadata
@@ -40,6 +52,114 @@ def table(spark, tmp_path):
         yield name, path
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def _install_escaped_data_aliases(metadata_location, file_io, spelling):
+    """Give two snapshots one reader-visible file, using URI and non-URI spellings."""
+    table = StaticTable.from_metadata(metadata_location, properties=file_io.properties)
+    snapshots = table.metadata.snapshots
+    assert len(snapshots) == 2  # noqa: PLR2004
+    current = table.current_snapshot()
+    entries = [entry for manifest in current.manifests(file_io) for entry in manifest.fetch_manifest_entry(file_io)]
+    assert len(entries) == 1
+    shared = f"{table.location().rstrip('/')}/data/shared%253A.parquet"
+    with file_io.new_input(entries[0].data_file.file_path).open() as source:
+        content = source.read()
+    with file_io.new_output(shared).create() as output:
+        output.write(content)
+    plain = urlparse(shared).path.replace("%253A", "%3A")
+    retained = plain if spelling == "absolute" else "data/shared%3A.parquet"
+    for snapshot in snapshots:
+        data_file = copy.deepcopy(entries[0].data_file)
+        data_file[1] = retained if snapshot.snapshot_id == current.snapshot_id else shared
+        manifest_path = f"{table.location().rstrip('/')}/metadata/alias-{snapshot.snapshot_id}.avro"
+        with write_manifest(
+            2, table.spec(), table.schema(), file_io.new_output(manifest_path), snapshot.snapshot_id, "null"
+        ) as writer:
+            writer.add_entry(
+                ManifestEntry.from_args(
+                    status=ManifestEntryStatus.ADDED,
+                    snapshot_id=snapshot.snapshot_id,
+                    sequence_number=snapshot.sequence_number,
+                    file_sequence_number=snapshot.sequence_number,
+                    data_file=data_file,
+                )
+            )
+        manifest = writer.to_manifest_file()
+        with write_manifest_list(
+            2,
+            file_io.new_output(snapshot.manifest_list),
+            snapshot.snapshot_id,
+            snapshot.parent_snapshot_id,
+            snapshot.sequence_number,
+            "null",
+        ) as writer:
+            writer.add_manifests([manifest])
+    return snapshots[0].snapshot_id, shared, content
+
+
+@pytest.mark.parametrize("spelling", ["absolute", "relative"])
+def test_expiration_rejects_escaped_data_alias_before_publication(spark, table, spelling):
+    from pysail.testing._dev.spark.steps.iceberg import _latest_metadata_path
+
+    name, path = table
+    for value in [1, 2]:
+        spark.sql(f"INSERT OVERWRITE {name} VALUES ({value}), ({value + 10})")
+    expired, shared, content = _install_escaped_data_aliases(
+        _latest_metadata_path(path).as_uri(), PyArrowFileIO(), spelling
+    )
+    # Read an expression over the actual data, not a metadata-only count or bound.
+    assert sorted(row.value for row in spark.table(name).selectExpr("id + 100 AS value").collect()) == [102, 112]
+    before = {p: p.read_bytes() for p in path.rglob("*") if p.is_file()}
+    metadata = _find_latest_metadata(path)
+    try:
+        with pytest.raises(PySparkException, match="ambiguous non-URI path"):
+            expire(spark, name, f", snapshot_ids => array(CAST({expired} AS BIGINT))")
+    finally:
+        # Run even when the refusal assertion fails, to expose destructive regressions.
+        with spark_connect_server() as server, spark_session_factory(server.remote) as sessions:
+            reopened = sessions.create().read.format("iceberg").load(str(path))
+            assert sorted(row.value for row in reopened.selectExpr("id + 100 AS value").collect()) == [102, 112]
+        with PyArrowFileIO().new_input(shared).open() as source:
+            assert source.read() == content
+    assert _find_latest_metadata(path) == metadata
+    assert {p: p.read_bytes() for p in path.rglob("*") if p.is_file()} == before
+    with PyArrowFileIO().new_input(shared).open() as source:
+        assert source.read() == content
+
+
+def test_expiration_preserves_encoded_partition_uris(spark, tmp_path):
+    name = "expire_encoded_partition"
+    path = tmp_path / name
+    spark.sql(
+        f"CREATE TABLE {name} (id BIGINT, part STRING) USING iceberg PARTITIONED BY (part) "
+        f"LOCATION '{escape_sql_string_literal(str(path))}'"
+    )
+    try:
+        for value in [1, 2]:
+            spark.sql(f"INSERT OVERWRITE {name} VALUES ({value}, 'a/b'), ({value + 10}, 'a/b')")
+        uris = [row.file_path for row in spark.table(f"{name}.files").collect()]
+        assert uris and all("%" in uri and uri.startswith("file:") for uri in uris)
+        assert expire(spark, name, f", older_than => {FUTURE}")[0] == 1
+        with spark_connect_server() as server, spark_session_factory(server.remote) as sessions:
+            rows = sessions.create().read.format("iceberg").load(str(path)).orderBy("id").collect()
+            assert [tuple(row) for row in rows] == [(2, "a/b"), (12, "a/b")]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def test_pointer_authoritative_memory_registration_rejects_expiration(spark, table):
+    name, path = table
+    spark.sql(f"INSERT INTO {name} VALUES (1)")
+    spark.sql(f"INSERT OVERWRITE {name} VALUES (2)")
+    spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('table_type'='ICEBERG')")
+    before = {p: p.read_bytes() for p in path.rglob("*") if p.is_file()}
+    properties = spark.sql(f"SHOW TBLPROPERTIES {name}").collect()
+    with pytest.raises(PySparkException, match="pointer-authoritative registrations"):
+        expire(spark, name, f", older_than => {FUTURE}")
+    assert {p: p.read_bytes() for p in path.rglob("*") if p.is_file()} == before
+    assert spark.sql(f"SHOW TBLPROPERTIES {name}").collect() == properties
+    assert [row.id for row in spark.table(name).collect()] == [2]
 
 
 @pytest.mark.parametrize("version", [1, 2, 3])

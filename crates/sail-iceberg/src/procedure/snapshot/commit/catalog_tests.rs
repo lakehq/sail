@@ -2,7 +2,7 @@
 #![expect(clippy::expect_used)]
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,7 +16,6 @@ use sail_common_datafusion::catalog::managed::{
     METADATA_LOCATION_UNDERSCORE_KEY, PREVIOUS_METADATA_LOCATION_KEY,
 };
 use sail_common_datafusion::catalog::*;
-use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use super::*;
 use crate::io::test_store::{PutFault, TestStore};
@@ -25,11 +24,9 @@ use crate::procedure::rewrite_manifests::tests::{operation, output_schema};
 #[derive(Clone, Copy)]
 enum CasFault {
     None,
-    NoPublication,
     Conflicts(usize),
     Reject,
     LostAck,
-    PostCommitMetaException,
     Pause,
 }
 
@@ -38,11 +35,7 @@ struct PointerCatalog {
     attempts: AtomicUsize,
     fault: CasFault,
     paused: tokio::sync::Notify,
-    typed_cas: AtomicBool,
-    rest_commit: AtomicBool,
-    classification: AtomicBool,
-    location: String,
-    replacement: Mutex<Option<(StoreContext, TableMetadata)>>,
+    marker: Mutex<Option<&'static str>>,
 }
 
 fn unsupported<T>() -> CatalogResult<T> {
@@ -65,7 +58,7 @@ impl CatalogProvider for PointerCatalog {
                 columns: vec![],
                 comment: None,
                 constraints: vec![],
-                location: Some(self.location.clone()),
+                location: None,
                 format: "iceberg".into(),
                 partition_by: vec![],
                 sort_by: vec![],
@@ -77,10 +70,8 @@ impl CatalogProvider for PointerCatalog {
                     } else {
                         let mut properties =
                             vec![(METADATA_LOCATION_UNDERSCORE_KEY.into(), pointer)];
-                        if self.classification.load(Ordering::SeqCst) {
-                            properties.push(("classification".into(), "iceberg".into()));
-                        } else if self.typed_cas.load(Ordering::SeqCst) {
-                            properties.push(("table_type".into(), "ICEBERG".into()));
+                        if let Some(marker) = *self.marker.lock().expect("marker") {
+                            properties.push((marker.into(), "ICEBERG".into()));
                         }
                         properties
                     }
@@ -88,63 +79,6 @@ impl CatalogProvider for PointerCatalog {
                 is_external: true,
             },
         })
-    }
-    fn lakehouse_capabilities(&self) -> Vec<sail_catalog::lakehouse::LakehouseCapability> {
-        if self.rest_commit.load(Ordering::SeqCst) {
-            vec![sail_catalog::lakehouse::LakehouseCapability::IcebergRestCommit]
-        } else if self.typed_cas.load(Ordering::SeqCst) {
-            vec![sail_catalog::lakehouse::LakehouseCapability::IcebergMetadataLocationCas]
-        } else {
-            vec![]
-        }
-    }
-    async fn compare_and_swap_iceberg_metadata(
-        &self,
-        _: &Namespace,
-        _: &str,
-        request: sail_catalog::lakehouse::IcebergMetadataCasRequest,
-    ) -> CatalogResult<sail_catalog::lakehouse::IcebergMetadataCasOutcome> {
-        use sail_catalog::lakehouse::IcebergMetadataCasOutcome as Outcome;
-        let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
-        let replacement = self.replacement.lock().expect("replacement").take();
-        if let Some((store, metadata)) = replacement {
-            let location = "metadata/recreated.metadata.json";
-            store
-                .prefixed
-                .put(
-                    &Path::from(location),
-                    metadata.to_json().expect("metadata").into(),
-                )
-                .await
-                .expect("replacement");
-            *self.pointer.lock().expect("pointer") = url::Url::parse(&self.location)
-                .expect("URL")
-                .join(location)
-                .expect("pointer")
-                .to_string();
-            return Ok(Outcome::Conflict {
-                message: "table replaced".into(),
-            });
-        }
-        if matches!(self.fault, CasFault::Conflicts(count) if attempt <= count) {
-            return Ok(Outcome::Conflict {
-                message: "injected conflict".into(),
-            });
-        }
-        let mut pointer = self.pointer.lock().expect("pointer");
-        assert_eq!(pointer.as_str(), request.expected());
-        *pointer = request.replacement().into();
-        if matches!(self.fault, CasFault::PostCommitMetaException) {
-            Ok(Outcome::Unknown {
-                message: "HMS conditional alter may have published: MetaException: onAlterTable listener failed".into(),
-            })
-        } else if matches!(self.fault, CasFault::LostAck) {
-            Ok(Outcome::Unknown {
-                message: "lost acknowledgement".into(),
-            })
-        } else {
-            Ok(Outcome::Committed)
-        }
     }
     async fn alter_table(
         &self,
@@ -157,9 +91,6 @@ impl CatalogProvider for PointerCatalog {
             return unsupported();
         };
         let properties = properties.into_iter().collect::<HashMap<_, _>>();
-        if matches!(self.fault, CasFault::NoPublication) {
-            return Ok(());
-        }
         if matches!(self.fault, CasFault::Conflicts(count) if attempt <= count) {
             return Err(CatalogError::Conflict("injected pointer conflict".into()));
         }
@@ -275,11 +206,7 @@ fn pointer_fixture(
         attempts: AtomicUsize::new(0),
         fault: cas_fault,
         paused: tokio::sync::Notify::new(),
-        typed_cas: AtomicBool::new(false),
-        rest_commit: AtomicBool::new(false),
-        classification: AtomicBool::new(false),
-        location: url.to_string(),
-        replacement: Mutex::new(None),
+        marker: Mutex::new(None),
     });
     let manager = CatalogManager::try_new(CatalogManagerOptions {
         catalogs: HashMap::from([("test".into(), catalog.clone() as Arc<dyn CatalogProvider>)]),
@@ -310,23 +237,23 @@ fn pointer_fixture(
 }
 
 #[tokio::test]
-async fn expiration_rejects_unconfirmed_catalog_authorities_without_touching_state() {
+async fn expiration_rejects_pointer_authority_without_mutating_catalog_or_files() {
     use sail_common_datafusion::lakeprocedure::{LakeProcedureInvocation, LakeProcedureValue};
 
     use crate::procedure::descriptor::IcebergProcedureType;
-    for authority in [
-        CommitAuthority::IcebergRestCommit,
-        CommitAuthority::VersionedCatalogCommit,
-        CommitAuthority::IcebergMetadataLocationCas,
-    ] {
-        let (store, catalog, ctx, url, mut context) = fixture(CasFault::NoPublication, None).await;
-        context.commit = authority;
+
+    // HMS/Glue and pointer-authoritative memory registrations use table_type;
+    // classification-only providers must not silently fall back to filesystem publication.
+    for marker in ["table_type", "classification"] {
+        let (store, catalog, ctx, url, context) = fixture(CasFault::None, None).await;
+        *catalog.marker.lock().expect("marker") = Some(marker);
         let before = store
             .inner
             .list(None)
             .try_collect::<Vec<_>>()
             .await
             .expect("inventory");
+        let pointer = catalog.pointer.lock().expect("pointer").clone();
         let procedure = IcebergProcedureType::ExpireSnapshots
             .descriptor()
             .expect("descriptor");
@@ -340,12 +267,17 @@ async fn expiration_rejects_unconfirmed_catalog_authorities_without_touching_sta
         .expect("operation");
         let error = commit_snapshot_operation(&ctx, &url, &[], Some(&context), operation, schema)
             .await
-            .expect_err("unsupported authority");
+            .expect_err("unsupported pointer authority");
         assert!(
             error
                 .to_string()
-                .contains("catalog binding or authority changed")
+                .contains("pointer-authoritative registrations"),
+            "{error}"
         );
+        assert_eq!(catalog.attempts.load(Ordering::SeqCst), 0);
+        assert_eq!(store.puts.load(Ordering::SeqCst), 0);
+        assert!(store.deletes.lock().expect("deletes").is_empty());
+        assert_eq!(*catalog.pointer.lock().expect("pointer"), pointer);
         assert_eq!(
             store
                 .inner
@@ -355,264 +287,6 @@ async fn expiration_rejects_unconfirmed_catalog_authorities_without_touching_sta
                 .expect("inventory"),
             before
         );
-        assert!(store.deletes.lock().expect("deletes").is_empty());
-        assert_eq!(catalog.attempts.load(Ordering::SeqCst), 0);
-    }
-}
-
-#[tokio::test]
-async fn expiration_rejects_confirmed_rest_before_staging_or_publication() {
-    let (store, catalog, ctx, url, mut context) = fixture(CasFault::NoPublication, None).await;
-    catalog.rest_commit.store(true, Ordering::SeqCst);
-    context.commit = CommitAuthority::IcebergRestCommit;
-    let before = store
-        .inner
-        .list(None)
-        .try_collect::<Vec<_>>()
-        .await
-        .expect("inventory");
-    let pointer = catalog.pointer.lock().expect("pointer").clone();
-    let (operation, schema) = expiration_operation();
-    let error = commit_snapshot_operation(&ctx, &url, &[], Some(&context), operation, schema)
-        .await
-        .expect_err("generic REST cannot atomically validate retention");
-    assert!(
-        error
-            .to_string()
-            .contains("atomic whole-metadata conditional publication or server-side retention"),
-        "{error}"
-    );
-    assert_eq!(catalog.attempts.load(Ordering::SeqCst), 0);
-    assert_eq!(store.puts.load(Ordering::SeqCst), 0);
-    assert!(store.deletes.lock().expect("deletes").is_empty());
-    assert_eq!(*catalog.pointer.lock().expect("pointer"), pointer);
-    assert_eq!(
-        store
-            .inner
-            .list(None)
-            .try_collect::<Vec<_>>()
-            .await
-            .expect("inventory"),
-        before
-    );
-}
-
-fn expiration_operation() -> (ExpireSnapshots, datafusion::arrow::datatypes::SchemaRef) {
-    use sail_common_datafusion::lakeprocedure::{LakeProcedureInvocation, LakeProcedureValue};
-
-    use crate::procedure::descriptor::IcebergProcedureType;
-    let procedure = IcebergProcedureType::ExpireSnapshots
-        .descriptor()
-        .expect("descriptor");
-    let schema = procedure.schema();
-    let mut arguments = vec![LakeProcedureValue::Null; procedure.parameters.len()];
-    arguments[0] = LakeProcedureValue::Utf8("items".into());
-    arguments[5] = LakeProcedureValue::Int64Array(vec![Some(10)]);
-    (
-        ExpireSnapshots::from_invocation(&LakeProcedureInvocation {
-            procedure,
-            arguments,
-        })
-        .expect("operation"),
-        schema,
-    )
-}
-
-#[tokio::test]
-async fn classification_marker_never_downgrades_a_nonpublishing_catalog_to_filesystem() {
-    let (store, catalog, ctx, url, context) = fixture(CasFault::NoPublication, None).await;
-    catalog.classification.store(true, Ordering::SeqCst);
-    // Use the real resolver, as with a classification-marked Unity table.
-    let manager = ctx.extension::<CatalogManager>().expect("manager");
-    let resolved = manager
-        .resolve_lakehouse_table(
-            &context.catalog_table,
-            sail_catalog::lakehouse::ResolveLakehouseTableRequest {
-                catalog_table: context.catalog_table.clone(),
-                operation: LakehouseOperation::Maintenance,
-                requested_format: Some(LakehouseFormat::Iceberg),
-                options: vec![],
-            },
-        )
-        .await
-        .expect("resolve");
-    let before = store
-        .inner
-        .list(None)
-        .try_collect::<Vec<_>>()
-        .await
-        .expect("inventory");
-    let (operation, schema) = expiration_operation();
-    let error = commit_snapshot_operation(
-        &ctx,
-        &url,
-        &[],
-        Some(&resolved.execution),
-        operation,
-        schema,
-    )
-    .await
-    .expect_err("unsupported CAS");
-    assert!(
-        error
-            .to_string()
-            .contains("confirmed filesystem or typed metadata CAS"),
-        "{error}"
-    );
-    assert_eq!(catalog.attempts.load(Ordering::SeqCst), 0);
-    assert!(store.deletes.lock().expect("deletes").is_empty());
-    assert_eq!(
-        before,
-        store
-            .inner
-            .list(None)
-            .try_collect::<Vec<_>>()
-            .await
-            .expect("inventory")
-    );
-}
-
-#[tokio::test]
-async fn expiration_typed_cas_retries_conflicts_but_not_unknown_or_replaced_uuid() {
-    for case in [
-        "success",
-        "conflict",
-        "unknown",
-        "postcommit-meta-exception",
-        "recreated",
-        "foreign-pointer",
-    ] {
-        let fault = match case {
-            "conflict" => CasFault::Conflicts(1),
-            "unknown" => CasFault::LostAck,
-            "postcommit-meta-exception" => CasFault::PostCommitMetaException,
-            _ => CasFault::None,
-        };
-        let (store, catalog, ctx, url, context) = fixture(fault, None).await;
-        catalog.typed_cas.store(true, Ordering::SeqCst);
-        let reader = StoreContext::new(store.inner.clone(), &url).expect("store");
-        let bytes = reader
-            .prefixed
-            .get(&Path::from("metadata/v1.metadata.json"))
-            .await
-            .expect("metadata")
-            .bytes()
-            .await
-            .expect("bytes");
-        let mut metadata = TableMetadata::from_json(&bytes).expect("metadata");
-        let mut head = metadata.snapshots[0].clone();
-        head.snapshot_id = 20;
-        head.parent_snapshot_id = Some(10);
-        metadata.snapshots.push(head);
-        metadata.current_snapshot_id = Some(20);
-        reader
-            .prefixed
-            .put(
-                &Path::from("metadata/v1.metadata.json"),
-                metadata.to_json().expect("json").into(),
-            )
-            .await
-            .expect("metadata");
-        if case == "recreated" {
-            metadata.table_uuid = Some(uuid::Uuid::new_v4());
-            *catalog.replacement.lock().expect("replacement") = Some((reader.clone(), metadata));
-        }
-        if case == "foreign-pointer" {
-            *catalog.pointer.lock().expect("pointer") =
-                "memory://foreign/table/metadata/v1.metadata.json".into();
-        }
-        let resolved = IcebergCatalogCommitCoordinator::load_expiration_table(
-            ctx.as_ref(),
-            &context.catalog_table,
-        )
-        .await
-        .expect("resolved");
-        let (operation, schema) = expiration_operation();
-        let result = commit_snapshot_operation(
-            &ctx,
-            &url,
-            &[],
-            Some(&resolved.execution),
-            operation,
-            schema,
-        )
-        .await;
-        match case {
-            "success" | "conflict" => {
-                result.expect("confirmed CAS");
-            }
-            "unknown" | "postcommit-meta-exception" => assert!(
-                result
-                    .expect_err("unknown")
-                    .to_string()
-                    .contains("commit state unknown")
-            ),
-            "recreated" => assert!(
-                result
-                    .expect_err("recreated")
-                    .to_string()
-                    .contains("UUID changed during expiration retry")
-            ),
-            _ => assert!(
-                result
-                    .expect_err("foreign pointer")
-                    .to_string()
-                    .contains("outside the table's object store")
-            ),
-        }
-        assert_eq!(
-            catalog.attempts.load(Ordering::SeqCst),
-            match case {
-                "conflict" => 2,
-                "foreign-pointer" => 0,
-                _ => 1,
-            }
-        );
-        if matches!(
-            case,
-            "unknown" | "postcommit-meta-exception" | "foreign-pointer"
-        ) {
-            assert!(store.deletes.lock().expect("deletes").is_empty());
-        }
-        if case == "postcommit-meta-exception" {
-            let pointer = catalog.pointer.lock().expect("pointer").clone();
-            assert!(!pointer.ends_with("v1.metadata.json"));
-            let key = pointer
-                .strip_prefix(url.as_str())
-                .expect("published candidate");
-            let bytes = reader
-                .prefixed
-                .get(&Path::from(key))
-                .await
-                .expect("candidate retained")
-                .bytes()
-                .await
-                .expect("candidate bytes");
-            assert_eq!(
-                TableMetadata::from_json(&bytes)
-                    .expect("valid candidate")
-                    .snapshots
-                    .len(),
-                1
-            );
-        }
-        if case == "recreated" {
-            let bytes = reader
-                .prefixed
-                .get(&Path::from("metadata/recreated.metadata.json"))
-                .await
-                .expect("replacement preserved")
-                .bytes()
-                .await
-                .expect("bytes");
-            assert_eq!(
-                TableMetadata::from_json(&bytes)
-                    .expect("metadata")
-                    .snapshots
-                    .len(),
-                2
-            );
-        }
     }
 }
 

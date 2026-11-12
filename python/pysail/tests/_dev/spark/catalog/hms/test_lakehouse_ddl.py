@@ -1,21 +1,15 @@
 # ruff: noqa: S608, PLR2004
 """DDL interoperability for Delta and Iceberg tables registered in HMS."""
 
-import gzip
 import json
 from decimal import Decimal
 from urllib.parse import urlparse
-from uuid import uuid4
 
 import boto3
 import pytest
 
 from pysail.tests._dev.spark.catalog.hms.conftest import _describe_extended_properties, _reference_catalog_table
-from pysail.tests._dev.spark.catalog.hms.test_iceberg_catalog_commit import (
-    _catalog_properties,
-    _metadata_location,
-    _set_catalog_properties,
-)
+from pysail.tests._dev.spark.catalog.hms.test_iceberg_catalog_commit import _metadata_location
 
 
 def test_hms_identifier_fields(spark, jvm_spark, hms_s3_database, hms_s3_env):
@@ -101,162 +95,7 @@ def _iceberg_metadata(jvm_spark, database, table, env):
     location = _metadata_location(jvm_spark, database, table)
     url = urlparse(location)
     client = _s3_client(env)
-    data = client.get_object(Bucket=url.netloc, Key=url.path.lstrip("/"))["Body"].read()
-    if data.startswith(b"\x1f\x8b"):
-        data = gzip.decompress(data)
-    return location, json.loads(data)
-
-
-@pytest.mark.parametrize(
-    ("operation", "codec"),
-    [
-        ("SET TBLPROPERTIES ('custom'='updated')", "none"),
-        ("ADD COLUMNS (extra INT)", "none"),
-        ("RENAME TO disabled_locks_target", "none"),
-        ("RENAME TO disabled_locks_target", "gzip"),
-    ],
-)
-def test_iceberg_ddl_rejects_metadata_only_disabled_locks(
-    spark, jvm_spark, hms_s3_database, hms_s3_env, operation, codec
-):
-    table = "metadata_only_disabled_locks"
-    name = f"{hms_s3_database}.{table}"
-    reference = f"iceberg.{name}"
-    jvm_spark.sql(
-        f"CREATE TABLE {reference} (id INT) USING iceberg TBLPROPERTIES ('write.metadata.compression-codec'='{codec}')"
-    )
-    jvm_spark.sql(f"INSERT INTO {reference} VALUES (1)")
-    jvm_spark.sql(f"ALTER TABLE {reference} SET TBLPROPERTIES ('engine.hive.lock-enabled'='false')")
-    properties = _catalog_properties(jvm_spark, hms_s3_database, table)
-    properties.pop("engine.hive.lock-enabled", None)
-    _set_catalog_properties(jvm_spark, hms_s3_database, table, properties)
-    assert "engine.hive.lock-enabled" not in _catalog_properties(jvm_spark, hms_s3_database, table)
-    pointer, metadata = _iceberg_metadata(jvm_spark, hms_s3_database, table, hms_s3_env)
-    assert metadata["properties"]["engine.hive.lock-enabled"] == "false"
-    assert pointer.endswith(".gz.metadata.json") == (codec == "gzip")
-    location = urlparse(metadata["location"])
-    client = _s3_client(hms_s3_env)
-
-    def inventory():
-        return {
-            item["Key"]: client.get_object(Bucket=location.netloc, Key=item["Key"])["Body"].read()
-            for page in client.get_paginator("list_objects_v2").paginate(
-                Bucket=location.netloc, Prefix=location.path.lstrip("/").rstrip("/") + "/"
-            )
-            for item in page.get("Contents", [])
-        }
-
-    if operation.startswith("RENAME"):
-        # Uncommitted metadata must not override the HMS pointer's disabled lock policy.
-        orphan = dict(metadata, properties={**metadata["properties"], "engine.hive.lock-enabled": "true"})
-        client.put_object(
-            Bucket=location.netloc,
-            Key=location.path.lstrip("/").rstrip("/") + "/metadata/99999-uncommitted.metadata.json",
-            Body=json.dumps(orphan).encode(),
-        )
-    before = inventory()
-    catalog_before = _reference_catalog_table(jvm_spark, hms_s3_database, table)
-    with pytest.raises(Exception, match=r"engine\.hive\.lock-enabled"):
-        spark.sql(f"ALTER TABLE {name} {operation}").collect()
-    assert _metadata_location(jvm_spark, hms_s3_database, table) == pointer
-    assert inventory() == before
-    assert _reference_catalog_table(jvm_spark, hms_s3_database, table).equals(catalog_before)
-    assert not spark.catalog.tableExists(f"{hms_s3_database}.disabled_locks_target")
-    assert not jvm_spark.catalog.tableExists(f"iceberg.{hms_s3_database}.disabled_locks_target")
-    assert [row.id for row in spark.table(name).collect()] == [1]
-    assert [row.id for row in jvm_spark.table(reference).collect()] == [1]
-
-
-@pytest.fixture
-def rename_metadata_bucket(hms_s3_env):
-    client = _s3_client(hms_s3_env)
-    bucket = f"sail-rename-metadata-{uuid4().hex}"
-    client.create_bucket(Bucket=bucket)
-    try:
-        yield bucket
-    finally:
-        for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket):
-            for item in page.get("Contents", []):
-                client.delete_object(Bucket=bucket, Key=item["Key"])
-        client.delete_bucket(Bucket=bucket)
-
-
-@pytest.mark.parametrize("enabled", [False, True], ids=["disabled", "enabled"])
-@pytest.mark.parametrize("codec", ["none", "gzip"])
-def test_iceberg_rename_uses_cross_bucket_metadata_policy(
-    spark, jvm_spark, hms_s3_database, hms_s3_env, rename_metadata_bucket, enabled, codec
-):
-    source = f"{hms_s3_database}.cross_bucket_source"
-    target = f"{hms_s3_database}.cross_bucket_target"
-    reference = f"iceberg.{source}"
-    client = _s3_client(hms_s3_env)
-    metadata_path = f"s3://{rename_metadata_bucket}/{hms_s3_database}/metadata"
-    shadow = None
-    try:
-        jvm_spark.sql(
-            f"CREATE TABLE {reference} (id INT) USING iceberg TBLPROPERTIES ("
-            f"'write.metadata.path'='{metadata_path}', 'write.metadata.compression-codec'='{codec}', "
-            "'engine.hive.lock-enabled'='true')"
-        )
-        jvm_spark.sql(f"INSERT INTO {reference} VALUES (1)")
-        if not enabled:
-            jvm_spark.sql(f"ALTER TABLE {reference} SET TBLPROPERTIES ('engine.hive.lock-enabled'='false')")
-        properties = _catalog_properties(jvm_spark, hms_s3_database, "cross_bucket_source")
-        properties.pop("engine.hive.lock-enabled", None)
-        _set_catalog_properties(jvm_spark, hms_s3_database, "cross_bucket_source", properties)
-        pointer, metadata = _iceberg_metadata(jvm_spark, hms_s3_database, "cross_bucket_source", hms_s3_env)
-        assert metadata["properties"]["engine.hive.lock-enabled"] == str(enabled).lower()
-        assert pointer.startswith(metadata_path + "/")
-        assert pointer.endswith(".gz.metadata.json") == (codec == "gzip")
-        data_location = urlparse(metadata["location"])
-        assert data_location.netloc != rename_metadata_bucket
-        metadata_key = urlparse(pointer).path.lstrip("/")
-        # The table bucket contains a valid metadata object with the opposite policy at the same key.
-        decoy = dict(
-            metadata, properties={**metadata["properties"], "engine.hive.lock-enabled": str(not enabled).lower()}
-        )
-        decoy_bytes = json.dumps(decoy).encode()
-        if codec == "gzip":
-            decoy_bytes = gzip.compress(decoy_bytes)
-        shadow = (data_location.netloc, metadata_key)
-        client.put_object(Bucket=shadow[0], Key=shadow[1], Body=decoy_bytes)
-
-        def inventory():
-            return {
-                (bucket, item["Key"]): client.get_object(Bucket=bucket, Key=item["Key"])["Body"].read()
-                for bucket, prefix in [
-                    (data_location.netloc, data_location.path.lstrip("/").rstrip("/") + "/"),
-                    (rename_metadata_bucket, ""),
-                    shadow,
-                ]
-                for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix)
-                for item in page.get("Contents", [])
-            }
-
-        before = inventory()
-        catalog_before = _reference_catalog_table(jvm_spark, hms_s3_database, "cross_bucket_source")
-        statement = f"ALTER TABLE {source} RENAME TO cross_bucket_target"
-        if enabled:
-            spark.sql(statement).collect()
-            assert not spark.catalog.tableExists(source)
-            assert _iceberg_metadata(jvm_spark, hms_s3_database, "cross_bucket_target", hms_s3_env) == (
-                pointer,
-                metadata,
-            )
-            assert [row.id for row in jvm_spark.table(f"iceberg.{target}").collect()] == [1]
-        else:
-            with pytest.raises(Exception, match=r"engine\.hive\.lock-enabled"):
-                spark.sql(statement).collect()
-            assert not spark.catalog.tableExists(target)
-            assert _reference_catalog_table(jvm_spark, hms_s3_database, "cross_bucket_source").equals(catalog_before)
-            assert _metadata_location(jvm_spark, hms_s3_database, "cross_bucket_source") == pointer
-            assert [row.id for row in jvm_spark.table(reference).collect()] == [1]
-        assert inventory() == before
-    finally:
-        for name in [source, target]:
-            jvm_spark.sql(f"DROP TABLE IF EXISTS iceberg.{name}")
-        if shadow is not None:
-            client.delete_object(Bucket=shadow[0], Key=shadow[1])
+    return location, json.loads(client.get_object(Bucket=url.netloc, Key=url.path.lstrip("/"))["Body"].read())
 
 
 @pytest.mark.parametrize("fmt", ["delta", "iceberg"])
@@ -493,24 +332,16 @@ def test_lakehouse_column_changes(spark, jvm_spark, hms_s3_database, fmt):
     assert jvm_spark.table(reference).schema["renamed"].metadata["comment"] == "renamed column"
 
 
-@pytest.mark.parametrize(("fmt", "codec"), [("delta", None), ("iceberg", "none"), ("iceberg", "gzip")])
-def test_lakehouse_table_rename(spark, jvm_spark, hms_s3_database, hms_s3_env, fmt, codec):
+@pytest.mark.parametrize("fmt", ["delta", "iceberg"])
+def test_lakehouse_table_rename(spark, jvm_spark, hms_s3_database, fmt):
     database = hms_s3_database
     table = f"{database}.rename_source"
     target = f"{database}.rename_target"
     reference = f"iceberg.{target}" if fmt == "iceberg" else target
-    properties = f"TBLPROPERTIES ('write.metadata.compression-codec'='{codec}')" if codec else ""
-    spark.sql(f"CREATE TABLE {table} (id INT) USING {fmt} {properties}")
+    spark.sql(f"CREATE TABLE {table} (id INT) USING {fmt}")
     spark.sql(f"INSERT INTO {table} VALUES (1)")
-    location = _describe_extended_properties(spark, table)["Location"]
-    before = _iceberg_metadata(jvm_spark, database, "rename_source", hms_s3_env) if fmt == "iceberg" else None
-    if before is not None:
-        assert before[0].endswith(".gz.metadata.json") == (codec == "gzip")
     spark.sql(f"ALTER TABLE {table} RENAME TO rename_target")
     assert not spark.catalog.tableExists(table)
-    assert _describe_extended_properties(spark, target)["Location"] == location
-    if fmt == "iceberg":
-        assert _iceberg_metadata(jvm_spark, database, "rename_target", hms_s3_env) == before
     assert jvm_spark.sql(f"SELECT id FROM {reference}").first().id == 1
     spark.sql(f"INSERT INTO {target} VALUES (2)")
     jvm_spark.sql(f"REFRESH TABLE {reference}")

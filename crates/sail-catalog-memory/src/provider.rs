@@ -21,8 +21,6 @@ use tokio::sync::RwLock;
 
 use crate::managed_table;
 
-#[cfg(test)]
-mod metadata_cas_tests;
 mod replacement;
 
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
@@ -169,7 +167,6 @@ impl MemoryCatalogProvider {
                     properties,
                     partition_by,
                     location,
-                    format,
                     ..
                 } => match options {
                     AlterTableOptions::AlterSnapshotReference { .. }
@@ -242,19 +239,9 @@ impl MemoryCatalogProvider {
                     AlterTableOptions::SetTableProperties {
                         properties: new_props,
                     } => {
-                        let pointer_update = if format.eq_ignore_ascii_case("iceberg") {
-                            managed_table::validate_iceberg_metadata_update(
-                                properties.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                                &new_props,
-                            )?
-                        } else {
-                            None
-                        };
-                        if pointer_update.is_none() {
-                            managed_table::validate_metadata_location_precondition(
-                                table, properties, &new_props,
-                            )?;
-                        }
+                        managed_table::validate_metadata_location_precondition(
+                            table, properties, &new_props,
+                        )?;
                         for (key, value) in new_props {
                             if key == "comment" {
                                 *comment = Some(value.clone());
@@ -264,13 +251,6 @@ impl MemoryCatalogProvider {
                             } else {
                                 properties.push((key, value));
                             }
-                        }
-                        if let Some((replacement, previous)) = pointer_update {
-                            managed_table::update_metadata_properties(
-                                properties,
-                                &replacement,
-                                previous.as_deref(),
-                            );
                         }
                         Ok(())
                     }
@@ -712,53 +692,6 @@ impl CatalogProvider for MemoryCatalogProvider {
     ) -> CatalogResult<()> {
         let _access = self.publication_gate.read().await;
         self.apply_table_alterations(database, table, vec![options], Some(schema.as_ref()))
-    }
-
-    fn lakehouse_capabilities(&self) -> Vec<sail_catalog::lakehouse::LakehouseCapability> {
-        vec![sail_catalog::lakehouse::LakehouseCapability::IcebergMetadataLocationCas]
-    }
-
-    async fn compare_and_swap_iceberg_metadata(
-        &self,
-        database: &Namespace,
-        table: &str,
-        request: sail_catalog::lakehouse::IcebergMetadataCasRequest,
-    ) -> CatalogResult<sail_catalog::lakehouse::IcebergMetadataCasOutcome> {
-        use sail_catalog::lakehouse::IcebergMetadataCasOutcome as Outcome;
-        let _access = self.publication_gate.read().await;
-        let mut db = self.databases.get_mut(database).ok_or_else(|| {
-            CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
-        })?;
-        db.check_known(table)?;
-        let status = db
-            .tables
-            .get_mut(table)
-            .ok_or_else(|| CatalogError::NotFound(CatalogObject::Table, table.into()))?;
-        let TableKind::Table {
-            format, properties, ..
-        } = &mut status.kind
-        else {
-            return Ok(Outcome::Rejected {
-                message: "Iceberg CAS requires a table".into(),
-            });
-        };
-        if !format.eq_ignore_ascii_case("iceberg") {
-            return Ok(Outcome::Rejected {
-                message: "Iceberg CAS requires Iceberg format".into(),
-            });
-        }
-        if let Err(outcome) =
-            request.validate_base(properties.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-        {
-            return Ok(outcome);
-        }
-        managed_table::update_metadata_properties(
-            properties,
-            request.replacement(),
-            Some(request.expected()),
-        );
-        db.changed(table);
-        Ok(Outcome::Committed)
     }
 
     async fn alter_table_atomically(

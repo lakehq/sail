@@ -211,27 +211,6 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             })?
     }
 
-    async fn compare_and_swap_iceberg_metadata(
-        &self,
-        database: &Namespace,
-        table: &str,
-        request: crate::lakehouse::IcebergMetadataCasRequest,
-    ) -> CatalogResult<crate::lakehouse::IcebergMetadataCasOutcome> {
-        let inner = self.inner.clone();
-        let database = database.clone();
-        let table = table.to_string();
-        self.handle
-            .spawn(async move {
-                inner
-                    .compare_and_swap_iceberg_metadata(&database, &table, request)
-                    .await
-            })
-            .await
-            .map_err(|error| {
-                CatalogError::CommitStateUnknown(format!("Iceberg CAS task failed: {error}").into())
-            })?
-    }
-
     async fn get_delta_ratified_commits(
         &self,
         database: &Namespace,
@@ -289,55 +268,6 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
 
     fn validate_alter_table(&self, options: &AlterTableOptions) -> CatalogResult<()> {
         self.inner.validate_alter_table(options)
-    }
-
-    async fn rename_table_metadata_requirement(
-        &self,
-        database: &Namespace,
-        table: &str,
-    ) -> CatalogResult<super::RenameTableMetadataRequirement> {
-        let inner = self.inner.clone();
-        let database = database.clone();
-        let table = table.to_string();
-        self.handle
-            .spawn(async move {
-                inner
-                    .rename_table_metadata_requirement(&database, &table)
-                    .await
-            })
-            .await
-            .map_err(|e| {
-                CatalogError::External(format!("Failed to inspect rename metadata: {e}"))
-            })?
-    }
-
-    async fn rename_table_with_precondition(
-        &self,
-        database: &Namespace,
-        table: &str,
-        destination_database: &Namespace,
-        destination_table: &str,
-        precondition: super::RenameTablePrecondition,
-    ) -> CatalogResult<()> {
-        let inner = self.inner.clone();
-        let database = database.clone();
-        let table = table.to_string();
-        let destination_database = destination_database.clone();
-        let destination_table = destination_table.to_string();
-        self.handle
-            .spawn(async move {
-                inner
-                    .rename_table_with_precondition(
-                        &database,
-                        &table,
-                        &destination_database,
-                        &destination_table,
-                        precondition,
-                    )
-                    .await
-            })
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to execute guarded rename: {e}")))?
     }
 
     async fn rename_table(

@@ -188,19 +188,6 @@ pub trait CatalogProvider: Send + Sync {
         ))
     }
 
-    /// Atomically replace an Iceberg metadata pointer. Unsupported providers never mutate.
-    async fn compare_and_swap_iceberg_metadata(
-        &self,
-        database: &Namespace,
-        table: &str,
-        request: crate::lakehouse::IcebergMetadataCasRequest,
-    ) -> CatalogResult<crate::lakehouse::IcebergMetadataCasOutcome> {
-        let _ = (database, table, request);
-        Ok(crate::lakehouse::IcebergMetadataCasOutcome::Rejected {
-            message: "atomic Iceberg metadata pointer CAS is unsupported".into(),
-        })
-    }
-
     async fn get_delta_ratified_commits(
         &self,
         database: &Namespace,
@@ -226,29 +213,6 @@ pub trait CatalogProvider: Send + Sync {
         table: &str,
         options: DropTableOptions,
     ) -> CatalogResult<()>;
-
-    /// Inspect authoritative catalog metadata without loading format metadata.
-    async fn rename_table_metadata_requirement(
-        &self,
-        _database: &Namespace,
-        _table: &str,
-    ) -> CatalogResult<RenameTableMetadataRequirement> {
-        Ok(RenameTableMetadataRequirement::None)
-    }
-
-    /// Rename only if the metadata validated by the lake source is still current.
-    async fn rename_table_with_precondition(
-        &self,
-        _database: &Namespace,
-        _table: &str,
-        _destination_database: &Namespace,
-        _destination_table: &str,
-        _precondition: RenameTablePrecondition,
-    ) -> CatalogResult<()> {
-        Err(CatalogError::UnsupportedCapability(
-            "guarded table rename".into(),
-        ))
-    }
 
     async fn rename_table(
         &self,

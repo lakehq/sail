@@ -211,40 +211,6 @@ impl LakeRelationProvider for IcebergLakeSource {
 
 #[async_trait]
 impl LakeSource for IcebergLakeSource {
-    async fn load_rename_table_properties(
-        &self,
-        ctx: &datafusion::execution::TaskContext,
-        table_location: &str,
-        metadata_location: &str,
-    ) -> Result<Vec<(String, String)>> {
-        // Metadata may live in a different bucket via write.metadata.path.
-        let store_url =
-            if let Some(url) = crate::utils::file_url_from_absolute_path(metadata_location) {
-                url
-            } else {
-                match Url::parse(metadata_location) {
-                    Ok(url) => url,
-                    Err(url::ParseError::RelativeUrlWithoutBase) => {
-                        Self::parse_table_url(vec![table_location.to_string()]).await?
-                    }
-                    Err(error) => return Err(DataFusionError::External(Box::new(error))),
-                }
-            };
-        let store = ctx
-            .runtime_env()
-            .object_store_registry
-            .get_store(&store_url)?;
-        let metadata_path = metadata_location_to_object_path_string(metadata_location)?;
-        let bytes = load_metadata_file_bytes(&store, &metadata_path).await?;
-        let metadata = TableMetadata::from_json(&bytes)
-            .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        Ok(metadata
-            .properties
-            .get("engine.hive.lock-enabled")
-            .map(|value| vec![("engine.hive.lock-enabled".into(), value.clone())])
-            .unwrap_or_default())
-    }
-
     fn relation_provider(self: Arc<Self>) -> Option<Arc<dyn LakeRelationProvider>> {
         Some(self)
     }
@@ -962,13 +928,6 @@ pub(crate) async fn plan_iceberg_write(
     } else {
         None
     };
-    if let (Some(context), Some(table)) = (lakehouse_table.as_ref(), table.as_ref()) {
-        crate::catalog_support::commit::IcebergCatalogCommitCoordinator::new(
-            &ctx,
-            context.catalog_table(),
-        )
-        .validate_base_metadata(table.metadata())?;
-    }
     let existing_partition_columns = table
         .as_ref()
         .map(IcebergLakeSource::partition_columns_from_metadata)
@@ -1665,79 +1624,6 @@ mod tests {
     };
 
     use super::*;
-
-    #[tokio::test]
-    async fn rename_properties_follow_metadata_authority_and_preserve_relative_keys()
-    -> std::result::Result<(), Box<dyn std::error::Error>> {
-        use datafusion::execution::TaskContext;
-        use object_store::ObjectStoreExt;
-        use object_store::memory::InMemory;
-        use object_store::path::Path;
-
-        use crate::table::metadata_loader::encode_metadata_file;
-
-        let ctx = TaskContext::default();
-        let data_store = Arc::new(InMemory::new());
-        let metadata_store = Arc::new(InMemory::new());
-        ctx.runtime_env()
-            .register_object_store(&Url::parse("s3://data-bucket")?, data_store.clone());
-        ctx.runtime_env()
-            .register_object_store(&Url::parse("s3://metadata-bucket")?, metadata_store.clone());
-        let table_location = "s3://data-bucket/table";
-        for extension in [".metadata.json", ".gz.metadata.json", ".metadata.json.gz"] {
-            let key = format!("custom/escaped%2Fkey+value/00001-metadata{extension}");
-            let pointer = format!("s3://metadata-bucket/{key}");
-            let path = Path::parse(&key)?;
-            for enabled in [false, true] {
-                for (store, policy) in [(&data_store, !enabled), (&metadata_store, enabled)] {
-                    let metadata = serde_json::json!({
-                        "format-version": 2,
-                        "table-uuid": "00000000-0000-0000-0000-000000000001",
-                        "location": table_location,
-                        "last-sequence-number": 0,
-                        "last-updated-ms": 0,
-                        "last-column-id": 0,
-                        "schemas": [{"type": "struct", "schema-id": 0, "fields": []}],
-                        "current-schema-id": 0,
-                        "partition-specs": [{"spec-id": 0, "fields": []}],
-                        "default-spec-id": 0,
-                        "last-partition-id": 999,
-                        "sort-orders": [{"order-id": 0, "fields": []}],
-                        "default-sort-order-id": 0,
-                        "properties": {"engine.hive.lock-enabled": policy.to_string(), "unrelated": "ignored"}
-                    });
-                    let bytes = encode_metadata_file(&key, &serde_json::to_vec(&metadata)?)?;
-                    assert_eq!(
-                        bytes.starts_with(&[0x1f, 0x8b]),
-                        extension != ".metadata.json"
-                    );
-                    store.put(&path, bytes.into()).await?;
-                }
-                // The same key in the table's store has the opposite lock policy.
-                assert_eq!(
-                    IcebergLakeSource
-                        .load_rename_table_properties(&ctx, table_location, &pointer)
-                        .await?,
-                    vec![("engine.hive.lock-enabled".into(), enabled.to_string())]
-                );
-                assert_eq!(
-                    IcebergLakeSource
-                        .load_rename_table_properties(&ctx, table_location, &key)
-                        .await?,
-                    vec![("engine.hive.lock-enabled".into(), (!enabled).to_string())]
-                );
-                // An absolute pointer does not require an object in the data store at all.
-                data_store.delete(&path).await?;
-                assert_eq!(
-                    IcebergLakeSource
-                        .load_rename_table_properties(&ctx, table_location, &pointer)
-                        .await?,
-                    vec![("engine.hive.lock-enabled".into(), enabled.to_string())]
-                );
-            }
-        }
-        Ok(())
-    }
 
     #[test]
     fn deferred_writes_advertise_action_schema() -> Result<()> {
