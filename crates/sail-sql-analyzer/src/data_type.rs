@@ -71,7 +71,7 @@ fn from_ast_day_time_interval_field(
     }
 }
 
-fn timestamp_precision_to_time_unit(
+fn from_ast_timestamp_precision(
     precision: Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
 ) -> SqlResult<spec::TimeUnit> {
     let precision = precision.as_ref().map(|(_, p, _)| p.value);
@@ -186,21 +186,21 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
                 }
                 None => spec::TimestampType::Configured,
             };
-            let time_unit = timestamp_precision_to_time_unit(precision)?;
+            let time_unit = from_ast_timestamp_precision(precision)?;
             Ok(spec::DataType::Timestamp {
                 time_unit,
                 timestamp_type,
             })
         }
         DataType::TimestampNtz(_, precision) => {
-            let time_unit = timestamp_precision_to_time_unit(precision)?;
+            let time_unit = from_ast_timestamp_precision(precision)?;
             Ok(spec::DataType::Timestamp {
                 time_unit,
                 timestamp_type: spec::TimestampType::WithoutTimeZone,
             })
         }
         DataType::TimestampLtz(_, precision) => {
-            let time_unit = timestamp_precision_to_time_unit(precision)?;
+            let time_unit = from_ast_timestamp_precision(precision)?;
             Ok(spec::DataType::Timestamp {
                 time_unit,
                 timestamp_type: spec::TimestampType::WithLocalTimeZone,

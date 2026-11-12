@@ -180,9 +180,7 @@ fn json_data_type_to_proto(data_type: JsonDataType) -> SparkResult<sc::DataType>
                 python_class: py_class,
                 serialized_python_class: serialized_class,
                 sql_type: sql_type
-                    .map(|sql_type| {
-                        Ok(Box::new(json_data_type_to_proto(*sql_type)?)) as SparkResult<_>
-                    })
+                    .map(|t| Ok(Box::new(json_data_type_to_proto(*t)?)) as SparkResult<_>)
                     .transpose()?,
             }))),
         },
@@ -709,7 +707,7 @@ mod tests {
             // test data type conversion
             let data_type = parse_spark_json_data_type(schema).unwrap();
             assert_eq!(data_type, expected);
-            // Both input formats use the same conversion to the plan specification.
+            // Both input formats produce equivalent plan specifications.
             let from_proto = sail_common::spec::DataType::try_from(data_type);
             let from_json = sail_common::spec::DataType::try_from(json_data_type);
             match from_proto {

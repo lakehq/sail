@@ -532,7 +532,7 @@ macro_rules! build_primitive_array {
 
 /// Build an Arrow array from Python row values.
 fn build_array_from_rows(
-    _py: Python<'_>,
+    py: Python<'_>,
     rows: &[Bound<'_, PyAny>],
     col_idx: usize,
     field: &Arc<Field>,
@@ -579,8 +579,34 @@ fn build_array_from_rows(
         DataType::Utf8 => build_string_array!(rows, col_idx, StringArray),
         DataType::LargeUtf8 => build_string_array!(rows, col_idx, LargeStringArray),
         DataType::Date32 => build_primitive_array!(rows, col_idx, i32, Date32Array),
-        DataType::Timestamp(TimeUnit::Microsecond, None) => {
-            build_primitive_array!(rows, col_idx, i64, TimestampMicrosecondArray)
+        DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
+            let type_name = if timezone.is_some() {
+                "TimestampType"
+            } else {
+                "TimestampNTZType"
+            };
+            let converter = py
+                .import("pyspark.sql.types")
+                .and_then(|types| types.getattr(type_name)?.call0()?.getattr("toInternal"))
+                .map_err(py_err)?;
+            let values = rows
+                .iter()
+                .map(|row| {
+                    let item = row.get_item(col_idx)?;
+                    if item.is_none() {
+                        Ok(None)
+                    } else if let Ok(value) = item.extract::<i64>() {
+                        // Preserve support for integer microseconds alongside Python datetimes.
+                        Ok(Some(value))
+                    } else {
+                        converter.call1((item,))?.extract::<Option<i64>>()
+                    }
+                })
+                .collect::<PyResult<Vec<_>>>()
+                .map_err(py_err)?;
+            Ok(Arc::new(
+                TimestampMicrosecondArray::from(values).with_timezone_opt(timezone.clone()),
+            ))
         }
         DataType::Binary => build_binary_array!(rows, col_idx, arrow::array::BinaryArray),
         DataType::LargeBinary => build_binary_array!(rows, col_idx, LargeBinaryArray),

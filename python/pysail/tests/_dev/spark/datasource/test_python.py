@@ -751,9 +751,48 @@ def test_python_ddl_schema_complex_types(spark, struct_schema):
     assert df.collect() == [Row(payload=Row(values=[1, None], labels={"a": "b", "c": None}))]
 
 
-def test_python_ddl_schema_timestamp_types(spark):
-    from pyspark.sql.datasource import DataSource
+@pytest.mark.parametrize(
+    "row_format",
+    [
+        "datetime",
+        pytest.param(
+            "microseconds",
+            marks=pytest.mark.spark(skip_if_jvm=True, reason="Sail accepts epoch microseconds in timestamp tuples"),
+        ),
+    ],
+)
+def test_python_ddl_schema_timestamp_types(spark, row_format):
+    from datetime import datetime, timedelta, timezone
+
+    from pyspark.sql import Row
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
     from pyspark.sql.types import StructField, StructType, TimestampNTZType, TimestampType
+
+    wall_time = datetime(2024, 1, 2, 3, 4, 5, 123456)  # noqa: DTZ001
+    before_epoch = datetime(1969, 12, 31, 23, 59, 59, 999999)  # noqa: DTZ001
+    expected = [
+        Row(default_time=None, local_time=None, wall_time=None),
+        Row(default_time=-1, local_time=-1, wall_time=before_epoch),
+        Row(default_time=1704144845123456, local_time=1704144845123456, wall_time=wall_time),
+    ]
+    if row_format == "microseconds":
+        epoch = datetime(1970, 1, 1)  # noqa: DTZ001
+        rows = [
+            (
+                row.default_time,
+                row.local_time,
+                (row.wall_time - epoch) // timedelta(microseconds=1) if row.wall_time else None,
+            )
+            for row in expected
+        ]
+    else:
+        offset_time = wall_time.replace(tzinfo=timezone(timedelta(hours=5, minutes=30)))
+        before_epoch_utc = before_epoch.replace(tzinfo=timezone.utc)
+        rows = [
+            (None, None, None),
+            (before_epoch_utc, before_epoch_utc, before_epoch),
+            (offset_time, offset_time, wall_time),
+        ]
 
     class TimestampDDLDataSource(DataSource):
         @classmethod
@@ -763,6 +802,16 @@ def test_python_ddl_schema_timestamp_types(spark):
         def schema(self):
             return "default_time TIMESTAMP, local_time TIMESTAMP_LTZ, wall_time TIMESTAMP_NTZ"
 
+        def reader(self, schema):  # noqa: ARG002
+            return TimestampDDLReader()
+
+    class TimestampDDLReader(DataSourceReader):
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            yield from rows
+
     spark.dataSource.register(TimestampDDLDataSource)
     df = spark.read.format("timestamp_ddl_test").load()
     assert df.schema == StructType(
@@ -771,6 +820,13 @@ def test_python_ddl_schema_timestamp_types(spark):
             StructField("local_time", TimestampType()),
             StructField("wall_time", TimestampNTZType()),
         ]
+    )
+    # Compare instants independently of the client machine timezone used by collect().
+    assert (
+        df.selectExpr("unix_micros(default_time) AS default_time", "unix_micros(local_time) AS local_time", "wall_time")
+        .orderBy("wall_time")
+        .collect()
+        == expected
     )
 
 
