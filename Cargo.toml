@@ -53,7 +53,6 @@ xee-xpath = "0.1.5"
 xot = "0.31.2"
 # TODO: `serde_yaml` is deprecated. No satisfactory alternative exists yet, we may need to build our own in the future.
 serde_yaml = "0.9.34"
-# serde_with = { version = "3.24.0", default-features = false, features = ["base64", "std", "macros"] }
 monostate = "1.0.2"
 regex = "1.12.3"
 fancy-regex = "0.20.0"
@@ -74,11 +73,9 @@ paste = "1.0.15"
 proc-macro2 = "1.0.106"
 prettyplease = "0.3.0"
 phf = { version = "0.14.0", features = ["macros"] }
-# ryu = "1.0.23"
 either = "1.16.0"
 num-bigint = "0.5.1"
 rand = "0.10.1"
-# rand_chacha = "0.10.0"
 rand_distr = "0.6.0"
 url = "2.5.8"
 lexical-core = { version = "1.0.6", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
@@ -117,7 +114,6 @@ twox-hash = "2.1.5"
 zstd = "0.14.0"
 roaring = "0.12.0"
 datasketches = { version = "0.6.0", features = ["hll", "theta"] }
-# sha1 = "0.11.0"
 half = { version = "2.7.1", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.65"
 chumsky = { version = "0.13.0", default-features = false, features = ["pratt"] }
@@ -157,7 +153,6 @@ rustfs-mimalloc-sys = { version = "=0.5.6", default-features = false }
 # The `tonic` version must match the one used in `arrow-flight` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-flight/Cargo.toml
 tonic = { version = "0.14.6", features = ["tls-ring", "tls-native-roots", "gzip", "zstd"] }
-# tonic-build = "0.14.6"
 tonic-prost-build = "0.14.6"
 tonic-prost = "0.14.6"
 tonic-reflection = "0.14.6"
@@ -204,9 +199,7 @@ datafusion-physical-expr-common = { version = "55.2.0" }
 pyo3 = { version = "0.29.0", features = ["serde"] }
 jiter = { version = "0.19.0", default-features = false }
 arrow = { version = "59.2.0", features = ["chrono-tz"] }
-# arrow-array = { version = "59.2.0", features = ["ffi"] }
 arrow-buffer = { version = "59.2.0" }
-# arrow-data = { version = "59.2.0" }
 arrow-schema = { version = "59.2.0", features = ["serde", "canonical_extension_types"] }
 arrow-flight = { version = "59.2.0", features = ["flight-sql-experimental"] }
 arrow-pyarrow = { version = "59.2.0" }
