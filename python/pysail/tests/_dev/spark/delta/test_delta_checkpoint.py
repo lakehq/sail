@@ -373,11 +373,13 @@ def test_time_travel_before_latest_checkpoint(spark, tmp_path: Path, metadata_as
     for value in range(21):
         spark.range(value, value + 1).write.format("delta").mode("append").save(str(tmp_path))
     hint = json.loads((tmp_path / "_delta_log" / "_last_checkpoint").read_text())
-    assert hint["version"] == 20
-    _checkpoint_file(tmp_path, 20)
+    checkpoint_version = 20
+    assert hint["version"] == checkpoint_version
+    _checkpoint_file(tmp_path, checkpoint_version)
 
     # Read an early version first, then every boundary including checkpoints and latest.
-    for version in [3, *[v for v in range(22) if v != 3]]:
+    early_version = 3
+    for version in [early_version, *[v for v in range(22) if v != early_version]]:
         rows = (
             spark.read.format("delta")
             .option("metadataAsDataRead", metadata_as_data)
@@ -417,7 +419,7 @@ def test_checkpoint_hint_is_only_a_listing_hint(spark, tmp_path: Path, metadata_
 @pytest.mark.parametrize("exact_checksum", [False, True], ids=["replay-header", "checksum-header"])
 @pytest.mark.parametrize("missing_version", [0, 2, 3], ids=["prefix", "interior", "tail"])
 def test_time_travel_rejects_uncovered_commits(
-    spark, tmp_path: Path, metadata_as_data: str, exact_checksum: bool, missing_version: int
+    spark, tmp_path: Path, metadata_as_data: str, missing_version: int, *, exact_checksum: bool
 ):
     _write_checkpoint_with_compacted_tail(tmp_path, "commit-only")
     log_path = tmp_path / "_delta_log"
