@@ -170,6 +170,26 @@ def test_empty_dynamic_partition_overwrite_is_noop(spark, tmp_path, entry):
         assert partition_rows(path, ["id", "msg"]) == Counter([("1", "hello"), ("2", "goodbye")])
 
 
+@pytest.mark.spark(skip_if_jvm=True, reason="Compatibility with Sail's legacy empty partition paths")
+@pytest.mark.parametrize("value", [None, ""], ids=["null", "empty"])
+def test_dynamic_overwrite_replaces_legacy_empty_partition(spark, tmp_path, value):
+    path = tmp_path / "data"
+    for key, msg in [("", "old"), ("keep", "untouched")]:
+        partition = path / f"p={key}"
+        partition.mkdir(parents=True)
+        pq.write_table(pa.table({"msg": [msg]}), partition / "existing.parquet")
+    schema = "msg STRING, p STRING"
+    before = spark.read.schema(schema).parquet(str(path)).filter("p IS NULL").select("msg").collect()
+    untouched = parquet_files(path / "p=keep")
+    spark.conf.set(OVERWRITE_MODE, "DYNAMIC")
+    spark.createDataFrame([("new", value)], schema).write.partitionBy("p").mode("overwrite").parquet(str(path))
+    assert partition_rows(path, ["msg", "p"]) == Counter([("new", None), ("untouched", "keep")])
+    assert before == [("old",)]
+    assert not parquet_files(path / "p=")
+    assert parquet_files(path / "p=keep") == untouched
+    assert spark.read.schema(schema).parquet(str(path)).filter("p IS NULL").select("msg").collect() == [("new",)]
+
+
 def test_dynamic_mode_unpartitioned_overwrite_still_replaces_all(spark, tmp_path):
     path = tmp_path / "data"
     spark.createDataFrame([(1,), (2,)], "id INT").write.parquet(str(path))

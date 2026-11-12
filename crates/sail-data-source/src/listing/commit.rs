@@ -224,7 +224,13 @@ pub(super) fn partition_key(path: &Path, root: &Path, columns: &[String]) -> Opt
             if percent_decode_str(name).decode_utf8().ok()? != column.as_str() {
                 return None;
             }
-            Some(percent_decode_str(value).decode_utf8().ok()?.into_owned())
+            let value = percent_decode_str(value).decode_utf8().ok()?;
+            // Legacy empty partition paths have the same identity as Hive null partitions.
+            Some(if value.is_empty() {
+                "__HIVE_DEFAULT_PARTITION__".into()
+            } else {
+                value.into_owned()
+            })
         })
         .collect()
 }
@@ -506,6 +512,15 @@ mod tests {
             "table2/p=a/q=one/file",
         ] {
             assert_eq!(partition_key(&Path::parse(path)?, &root, &columns), None);
+        }
+        for path in [
+            "table/p=/q=one/file",
+            "table/p=__HIVE_DEFAULT_PARTITION__/q=one/file",
+        ] {
+            assert_eq!(
+                partition_key(&Path::parse(path)?, &root, &columns),
+                Some(vec!["__HIVE_DEFAULT_PARTITION__".into(), "one".into()])
+            );
         }
         assert_eq!(escape_partition("a/b=c%?#'é"), "a%2Fb%3Dc%25%3F%23%27é");
         Ok(())
