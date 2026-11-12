@@ -23,6 +23,40 @@ Feature: Data source functions preserve data type metadata
       | MAP<STRING, GEOMETRY(4326)>    | ''                   |
       | MAP<GEOGRAPHY(4326), STRING>   | ''                   |
 
+  Scenario Outline: from_csv parses day-time interval literals: <case>
+    When query
+      """
+      SELECT from_csv(value, 'a INTERVAL <qualifier>').a <=> <expected> AS matches
+      FROM VALUES (<input>) AS t(value)
+      """
+    Then query result
+      | matches |
+      | true    |
+
+    Examples:
+      | case                        | input                                        | qualifier        | expected                                   |
+      | whole days                  | "INTERVAL '1' DAY"                           | DAY              | INTERVAL '1' DAY                           |
+      | negative days               | "INTERVAL '-1' DAY"                          | DAY              | INTERVAL '-1' DAY                          |
+      | days and hours              | "INTERVAL '1 12' DAY TO HOUR"                | DAY TO HOUR      | INTERVAL '1 12' DAY TO HOUR                |
+      | days through seconds        | "INTERVAL '1 02:00:03.000004' DAY TO SECOND" | DAY TO SECOND    | INTERVAL '1 02:00:03.000004' DAY TO SECOND |
+      | hours through seconds       | "INTERVAL '02:03:04.000005' HOUR TO SECOND"  | HOUR TO SECOND   | INTERVAL '02:03:04.000005' HOUR TO SECOND  |
+      | minutes through seconds     | "INTERVAL '02:03.000004' MINUTE TO SECOND"   | MINUTE TO SECOND | INTERVAL '02:03.000004' MINUTE TO SECOND   |
+      | microseconds                | "INTERVAL '0.000001' SECOND"                 | SECOND           | INTERVAL '0.000001' SECOND                 |
+      | negative fractional seconds | "INTERVAL '-1.000001' SECOND"                | SECOND           | INTERVAL '-1.000001' SECOND                |
+      | zero                        | "INTERVAL '0' SECOND"                        | SECOND           | INTERVAL '0' SECOND                        |
+      | empty field                 | ''                                           | DAY              | CAST(NULL AS INTERVAL DAY)                 |
+      | null input                  | CAST(NULL AS STRING)                         | DAY              | CAST(NULL AS INTERVAL DAY)                 |
+
+  Scenario: from_csv rejects overflowing interval literals in FAILFAST mode
+    When query
+      """
+      SELECT from_csv(
+        "INTERVAL '999999999999999999999999999' DAY",
+        'a INTERVAL DAY', map('mode', 'FAILFAST')
+      ) AS result
+      """
+    Then query error (?i)invalid argument|malformed records
+
   Scenario Outline: <function> preserves interval qualifiers
     When query
       """

@@ -96,6 +96,7 @@ use datafusion_spark::function::url::url_decode::UrlDecode;
 use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
+use sail_common::spec::SparkIntervalMetadata;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
 use sail_common_datafusion::catalog::{
     CatalogPartitionField, LakehouseExecutionContext, PartitionTransform,
@@ -3798,6 +3799,26 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkSequence::new(Arc::from(session_timezone), ansi_mode);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkInterval(r#gen::SparkIntervalUdf { qualifier, safe }) => {
+                let qualifier = qualifier
+                    .as_deref()
+                    .map(SparkIntervalMetadata::from_json)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
+                let udf = match name {
+                    "spark_year_month_interval" => {
+                        ScalarUDF::from(SparkYearMonthInterval::new(qualifier, safe))
+                    }
+                    "spark_day_time_interval" => {
+                        ScalarUDF::from(SparkDayTimeInterval::new(qualifier, safe))
+                    }
+                    "spark_calendar_interval" => {
+                        ScalarUDF::from(SparkCalendarInterval::new(qualifier, safe))
+                    }
+                    _ => return plan_err!("unknown interval conversion function: {name}"),
+                };
+                return Ok(Arc::new(udf));
+            }
             UdfKind::SparkToString(r#gen::SparkToStringUdf { timezone }) => {
                 let timezone = timezone.map(Arc::from);
                 let udf = match name {
@@ -4154,9 +4175,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_elt" | "elt" => Ok(Arc::new(ScalarUDF::from(SparkElt::new()))),
             "spark_decode" | "decode" => Ok(Arc::new(ScalarUDF::from(SparkDecode::new()))),
             "spark_year_month_interval" => {
-                Ok(Arc::new(ScalarUDF::from(SparkYearMonthInterval::new())))
+                Ok(Arc::new(ScalarUDF::from(SparkYearMonthInterval::default())))
             }
-            "spark_day_time_interval" => Ok(Arc::new(ScalarUDF::from(SparkDayTimeInterval::new()))),
+            "spark_day_time_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkDayTimeInterval::default())))
+            }
             "year_month_interval_months" => {
                 Ok(Arc::new(ScalarUDF::from(YearMonthIntervalMonths::new())))
             }
@@ -4164,7 +4187,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 SparkDayTimeIntervalToCalendarInterval::new(),
             ))),
             "spark_calendar_interval" => {
-                Ok(Arc::new(ScalarUDF::from(SparkCalendarInterval::new())))
+                Ok(Arc::new(ScalarUDF::from(SparkCalendarInterval::default())))
             }
             "spark_date_format" | "date_format" => {
                 // Use UTC as default timezone when creating from name only
@@ -4278,14 +4301,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkBitGet>()
             || node_inner.is::<SparkBitwiseNot>()
             || node_inner.is::<SparkBRound>()
-            || node_inner.is::<SparkCalendarInterval>()
             || node_inner.is::<SparkConcat>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
             || node_inner.is::<SparkDatePart>()
             || node_inner.is::<SparkIntegerDatePart>()
             || node_inner.is::<SparkDateTrunc>()
-            || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDayTimeIntervalToCalendarInterval>()
             || node_inner.is::<SparkDecode>()
             || node_inner.is::<SparkElt>()
@@ -4348,7 +4369,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkVersion>()
             || node_inner.is::<SparkWidthBucket>()
             || node_inner.is::<SparkXxhash64>()
-            || node_inner.is::<SparkYearMonthInterval>()
             || node_inner.is::<YearMonthIntervalMonths>()
             || node_inner.is::<SparkToJson>()
             || node_inner.is::<TryUrlDecode>()
@@ -4437,6 +4457,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkUnixTimestamp(r#gen::SparkUnixTimestampUdf {
                 session_timezone,
                 ansi_mode,
+            })
+        } else if let Some((qualifier, safe)) = node_inner
+            .downcast_ref::<SparkYearMonthInterval>()
+            .map(|func| (func.qualifier(), func.safe()))
+            .or_else(|| {
+                node_inner
+                    .downcast_ref::<SparkDayTimeInterval>()
+                    .map(|func| (func.qualifier(), func.safe()))
+            })
+            .or_else(|| {
+                node_inner
+                    .downcast_ref::<SparkCalendarInterval>()
+                    .map(|func| (func.qualifier(), func.safe()))
+            })
+        {
+            UdfKind::SparkInterval(r#gen::SparkIntervalUdf {
+                qualifier: qualifier
+                    .map(SparkIntervalMetadata::to_json)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("{e}"))?,
+                safe,
             })
         } else if let Some(timezone) = node_inner
             .downcast_ref::<SparkToUtf8>()
@@ -10041,6 +10082,80 @@ mod tests {
         let decoded = downcast_udf::<SparkToUtf8>(&decoded, "SparkToUtf8")?;
         assert_eq!(decoded.timezone(), None);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_qualified_interval_parsing() -> Result<()> {
+        use datafusion::arrow::array::StringArray;
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::col;
+        use datafusion::physical_expr::create_physical_expr;
+        use datafusion::physical_expr::execution_props::ExecutionProps;
+        use sail_common::spec::{
+            DayTimeIntervalField, SparkIntervalMetadata, YearMonthIntervalField,
+        };
+
+        let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+        let dfschema = DFSchema::try_from(schema.as_ref().clone())?;
+        for safe in [false, true] {
+            for (udf, valid) in [
+                (
+                    ScalarUDF::from(SparkDayTimeInterval::new(
+                        Some(SparkIntervalMetadata::DayTime {
+                            start_field: DayTimeIntervalField::Hour,
+                            end_field: DayTimeIntervalField::Hour,
+                        }),
+                        safe,
+                    )),
+                    "1",
+                ),
+                (
+                    ScalarUDF::from(SparkYearMonthInterval::new(
+                        Some(SparkIntervalMetadata::YearMonth {
+                            start_field: YearMonthIntervalField::Year,
+                            end_field: YearMonthIntervalField::Year,
+                        }),
+                        safe,
+                    )),
+                    "1",
+                ),
+                (
+                    ScalarUDF::from(SparkDayTimeInterval::new(None, safe)),
+                    "INTERVAL '1' HOUR",
+                ),
+                (
+                    ScalarUDF::from(SparkYearMonthInterval::new(None, safe)),
+                    "INTERVAL '1' YEAR",
+                ),
+                (
+                    ScalarUDF::from(SparkCalendarInterval::new(None, safe)),
+                    "1 month 2 days",
+                ),
+            ] {
+                let decoded_udf = round_trip_udf(udf.clone())?;
+                assert_eq!(&udf, decoded_udf.as_ref());
+                let expression = udf.call(vec![col("value")]);
+                let physical = create_physical_expr(
+                    &expression,
+                    &dfschema,
+                    &ExecutionProps::new(),
+                    &PhysicalPlanningContext::default(),
+                )?;
+                let decoded = round_trip_expr(&physical, &schema)?;
+                let values = if safe {
+                    vec![Some(valid), Some("invalid"), None]
+                } else {
+                    vec![Some(valid), Some(valid), None]
+                };
+                assert_same_result(
+                    &physical,
+                    &decoded,
+                    Arc::clone(&schema),
+                    vec![Arc::new(StringArray::from(values))],
+                )?;
+            }
+        }
         Ok(())
     }
 
