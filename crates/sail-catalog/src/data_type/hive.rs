@@ -256,7 +256,7 @@ impl HiveTypeDialect {
                 });
 
             let name = any()
-                .filter(|c: &char| !":,<>()".contains(*c))
+                .filter(|c: &char| !":,<>".contains(*c))
                 .repeated()
                 .at_least(1)
                 .to_slice()
@@ -323,6 +323,22 @@ mod tests {
             ]));
             assert_eq!(data_type, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn round_trips_struct_field_names_with_parentheses() -> CatalogResult<()> {
+        let schema = "struct<a(b):int,c(d):decimal(10,2)>";
+        let expected = DataType::Struct(Fields::from(vec![
+            Field::new("a(b)", DataType::Int32, true),
+            Field::new("c(d)", DataType::Decimal128(10, 2), true),
+        ]));
+
+        for dialect in [HiveTypeDialect::Hive, HiveTypeDialect::Glue] {
+            assert_eq!(dialect.format_arrow_type(&expected)?, schema);
+            assert_eq!(dialect.parse_arrow_type(schema)?, expected);
+        }
+
         Ok(())
     }
 }
