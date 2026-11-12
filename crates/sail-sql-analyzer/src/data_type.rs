@@ -84,7 +84,7 @@ fn from_ast_timestamp_precision(
     }
 }
 
-fn time_precision_to_time_unit(
+fn from_ast_time_precision(
     precision: Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
 ) -> SqlResult<spec::TimeUnit> {
     let precision = precision.as_ref().map(|(_, p, _)| p.value);
@@ -207,7 +207,7 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
             })
         }
         DataType::Time(_, precision) => {
-            let time_unit = time_precision_to_time_unit(precision)?;
+            let time_unit = from_ast_time_precision(precision)?;
             match time_unit {
                 spec::TimeUnit::Second | spec::TimeUnit::Millisecond => {
                     Ok(spec::DataType::Time32 { time_unit })

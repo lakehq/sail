@@ -126,11 +126,8 @@ impl FromStr for DayTimeIntervalField {
     type Err = serde::de::value::Error;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        crate::data_type::parser::parse(
-            input,
-            crate::data_type::parser::create_day_time_interval_field_parser(),
-        )
-        .map_err(serde::de::Error::custom)
+        crate::data_type::parser::parse(input, crate::data_type::parser::day_time_interval_field())
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -157,7 +154,7 @@ impl FromStr for YearMonthIntervalField {
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         crate::data_type::parser::parse(
             input,
-            crate::data_type::parser::create_year_month_interval_field_parser(),
+            crate::data_type::parser::year_month_interval_field(),
         )
         .map_err(serde::de::Error::custom)
     }
@@ -192,7 +189,7 @@ mod serde_time {
         D: Deserializer<'de>,
     {
         let input = String::deserialize(deserializer)?;
-        parser::parse(&input, parser::create_time_parser()).map_err(serde::de::Error::custom)
+        parser::parse(&input, parser::time()).map_err(serde::de::Error::custom)
     }
 }
 
@@ -213,8 +210,7 @@ mod serde_char {
         D: Deserializer<'de>,
     {
         let input = String::deserialize(deserializer)?;
-        parser::parse(&input, parser::create_character_parser("char"))
-            .map_err(serde::de::Error::custom)
+        parser::parse(&input, parser::character("char")).map_err(serde::de::Error::custom)
     }
 }
 
@@ -235,8 +231,7 @@ mod serde_varchar {
         D: Deserializer<'de>,
     {
         let input = String::deserialize(deserializer)?;
-        parser::parse(&input, parser::create_character_parser("varchar"))
-            .map_err(serde::de::Error::custom)
+        parser::parse(&input, parser::character("varchar")).map_err(serde::de::Error::custom)
     }
 }
 
@@ -257,7 +252,7 @@ mod serde_fixed_decimal {
         D: Deserializer<'de>,
     {
         let input = String::deserialize(deserializer)?;
-        parser::parse(&input, parser::create_decimal_parser()).map_err(serde::de::Error::custom)
+        parser::parse(&input, parser::decimal()).map_err(serde::de::Error::custom)
     }
 }
 
@@ -282,7 +277,7 @@ mod serde_geometry {
         D: Deserializer<'de>,
     {
         let input = String::deserialize(deserializer)?;
-        parser::parse(&input, parser::create_geometry_parser()).map_err(serde::de::Error::custom)
+        parser::parse(&input, parser::geometry()).map_err(serde::de::Error::custom)
     }
 }
 
@@ -307,7 +302,7 @@ mod serde_geography {
         D: Deserializer<'de>,
     {
         let input = String::deserialize(deserializer)?;
-        parser::parse(&input, parser::create_geography_parser()).map_err(serde::de::Error::custom)
+        parser::parse(&input, parser::geography()).map_err(serde::de::Error::custom)
     }
 }
 
@@ -347,11 +342,8 @@ mod serde_day_time_interval {
         D: Deserializer<'de>,
     {
         let input = String::deserialize(deserializer)?;
-        parser::parse(
-            &input,
-            parser::create_interval_parser(parser::create_day_time_interval_field_parser()),
-        )
-        .map_err(serde::de::Error::custom)
+        parser::parse(&input, parser::interval(parser::day_time_interval_field()))
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -393,7 +385,7 @@ mod serde_year_month_interval {
         let input = String::deserialize(deserializer)?;
         parser::parse(
             &input,
-            parser::create_interval_parser(parser::create_year_month_interval_field_parser()),
+            parser::interval(parser::year_month_interval_field()),
         )
         .map_err(serde::de::Error::custom)
     }

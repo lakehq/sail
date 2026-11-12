@@ -23,8 +23,7 @@ pub(crate) fn parse<'a, T>(
         })
 }
 
-fn create_nonnegative_integer_parser<'a>() -> impl Parser<'a, &'a str, i32, ParserExtra<'a>> + Clone
-{
+fn nonnegative_integer<'a>() -> impl Parser<'a, &'a str, i32, ParserExtra<'a>> + Clone {
     text::digits(10).to_slice().try_map(|input: &str, span| {
         input
             .parse()
@@ -32,7 +31,7 @@ fn create_nonnegative_integer_parser<'a>() -> impl Parser<'a, &'a str, i32, Pars
     })
 }
 
-fn create_signed_integer_parser<'a>() -> impl Parser<'a, &'a str, i32, ParserExtra<'a>> + Clone {
+fn signed_integer<'a>() -> impl Parser<'a, &'a str, i32, ParserExtra<'a>> + Clone {
     just('-')
         .or_not()
         .then(text::digits(10))
@@ -50,34 +49,33 @@ fn parenthesized<'a, T>(
     parser.padded().delimited_by(just('('), just(')'))
 }
 
-pub(crate) fn create_time_parser<'a>() -> impl Parser<'a, &'a str, Option<i32>, ParserExtra<'a>> {
-    just("time").ignore_then(parenthesized(create_nonnegative_integer_parser()).or_not())
+pub(crate) fn time<'a>() -> impl Parser<'a, &'a str, Option<i32>, ParserExtra<'a>> {
+    just("time").ignore_then(parenthesized(nonnegative_integer()).or_not())
 }
 
-pub(crate) fn create_character_parser<'a>(
+pub(crate) fn character<'a>(
     type_name: &'static str,
 ) -> impl Parser<'a, &'a str, i32, ParserExtra<'a>> {
-    just(type_name).ignore_then(parenthesized(create_nonnegative_integer_parser()))
+    just(type_name).ignore_then(parenthesized(nonnegative_integer()))
 }
 
-pub(crate) fn create_decimal_parser<'a>() -> impl Parser<'a, &'a str, (i32, i32), ParserExtra<'a>> {
+pub(crate) fn decimal<'a>() -> impl Parser<'a, &'a str, (i32, i32), ParserExtra<'a>> {
     just("decimal").ignore_then(parenthesized(
-        create_nonnegative_integer_parser()
+        nonnegative_integer()
             .then_ignore(just(',').padded())
-            .then(create_signed_integer_parser()),
+            .then(signed_integer()),
     ))
 }
 
-fn create_srid_parser<'a>() -> impl Parser<'a, &'a str, i32, ParserExtra<'a>> + Clone {
-    just("ANY").to(-1).or(create_nonnegative_integer_parser())
+fn srid<'a>() -> impl Parser<'a, &'a str, i32, ParserExtra<'a>> + Clone {
+    just("ANY").to(-1).or(nonnegative_integer())
 }
 
-pub(crate) fn create_geometry_parser<'a>() -> impl Parser<'a, &'a str, i32, ParserExtra<'a>> {
-    just("geometry").ignore_then(parenthesized(create_srid_parser()))
+pub(crate) fn geometry<'a>() -> impl Parser<'a, &'a str, i32, ParserExtra<'a>> {
+    just("geometry").ignore_then(parenthesized(srid()))
 }
 
-pub(crate) fn create_geography_parser<'a>()
--> impl Parser<'a, &'a str, (i32, String), ParserExtra<'a>> {
+pub(crate) fn geography<'a>() -> impl Parser<'a, &'a str, (i32, String), ParserExtra<'a>> {
     let algorithm = any()
         .filter(|character: &char| character.is_alphanumeric() || *character == '_')
         .repeated()
@@ -85,12 +83,12 @@ pub(crate) fn create_geography_parser<'a>()
         .collect::<String>();
     just("geography")
         .ignore_then(parenthesized(
-            create_srid_parser().then(just(',').padded().ignore_then(algorithm).or_not()),
+            srid().then(just(',').padded().ignore_then(algorithm).or_not()),
         ))
         .map(|(srid, algorithm)| (srid, algorithm.unwrap_or_else(|| "spherical".to_string())))
 }
 
-pub(crate) fn create_day_time_interval_field_parser<'a>()
+pub(crate) fn day_time_interval_field<'a>()
 -> impl Parser<'a, &'a str, DayTimeIntervalField, ParserExtra<'a>> + Clone {
     choice((
         just("day").to(DayTimeIntervalField::Day),
@@ -100,14 +98,14 @@ pub(crate) fn create_day_time_interval_field_parser<'a>()
     ))
 }
 
-pub(crate) fn create_year_month_interval_field_parser<'a>()
+pub(crate) fn year_month_interval_field<'a>()
 -> impl Parser<'a, &'a str, YearMonthIntervalField, ParserExtra<'a>> + Clone {
     just("year")
         .to(YearMonthIntervalField::Year)
         .or(just("month").to(YearMonthIntervalField::Month))
 }
 
-pub(crate) fn create_interval_parser<'a, T>(
+pub(crate) fn interval<'a, T>(
     field_parser: impl Parser<'a, &'a str, T, ParserExtra<'a>> + Clone,
 ) -> impl Parser<'a, &'a str, (Option<T>, Option<T>), ParserExtra<'a>> {
     let whitespace = text::whitespace().at_least(1);
