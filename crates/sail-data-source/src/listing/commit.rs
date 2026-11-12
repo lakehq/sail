@@ -456,9 +456,10 @@ pub(super) async fn cleanup_staging(store: &dyn ObjectStore, staging: &Path) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow::datatypes::{DataType, Field};
     use object_store::memory::InMemory;
+
+    use super::*;
 
     fn string_schema(columns: &[String]) -> Schema {
         Schema::new(

@@ -1,3 +1,4 @@
+# ruff: noqa: S608
 from collections import Counter
 from contextlib import contextmanager
 from urllib.parse import unquote
@@ -8,7 +9,6 @@ import pyarrow.parquet as pq
 import pytest
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
-
 
 OVERWRITE_MODE = "spark.sql.sources.partitionOverwriteMode"
 
@@ -69,7 +69,7 @@ def test_sql_partition_overwrite(spark, tmp_path, clause, mode):
         try:
             spark.sql(f"SET {OVERWRITE_MODE}={mode}")
             # Positional inserts use data columns followed by dynamic partition columns.
-            spark.sql(f"INSERT OVERWRITE TABLE {table} {clause} SELECT msg, id FROM {source}")  # noqa: S608
+            spark.sql(f"INSERT OVERWRITE TABLE {table} {clause} SELECT msg, id FROM {source}")
         finally:
             spark.catalog.dropTempView(source)
 
@@ -113,7 +113,7 @@ def test_invalid_partition_overwrite_mode_preserves_data(spark, tmp_path):
     path = tmp_path / "data"
     spark.createDataFrame([(1, "hello")], "id INT, msg STRING").write.partitionBy("id").parquet(str(path))
     before = parquet_files(path)
-    with pytest.raises(Exception, match="(?i)invalid|mode|partition|enumeration"):
+    with pytest.raises(Exception, match=r"(?i)invalid|mode|partition|enumeration"):
         (
             spark.createDataFrame([(1, "new")], "id INT, msg STRING")
             .write.partitionBy("id")
@@ -205,12 +205,14 @@ def test_dynamic_overwrite_matches_existing_numeric_partition(spark, tmp_path, p
     with partitioned_table(spark, path, schema=f"msg STRING, p {partition_type}", partitions="p") as table:
         spark.sql(f"INSERT INTO {table} SELECT 'appended', CAST(1 AS {partition_type})")
         assert parquet_files(path / "p=1")
-        assert spark.table(table).count() == 3
+        expected_initial_count = 3
+        assert spark.table(table).count() == expected_initial_count
         spark.conf.set(OVERWRITE_MODE, "DYNAMIC")
         spark.sql(f"INSERT OVERWRITE {table} PARTITION (p) SELECT 'new', CAST(1 AS {partition_type})")
-        assert spark.table(table).select("msg", "p").orderBy("p").collect() == [("new", 1.0), ("keep", 2.0)]
+        expected = [("new", 1.0), ("keep", 2.0)]
+        assert spark.table(table).select("msg", "p").orderBy("p").collect() == expected
         assert parquet_files(path / "p=2") == untouched
-        assert sum(pq.ParquetFile(file).metadata.num_rows for file in path.rglob("*.parquet")) == 2
+        assert sum(pq.ParquetFile(file).metadata.num_rows for file in path.rglob("*.parquet")) == len(expected)
 
 
 @pytest.mark.parametrize("partition_type", ["TIMESTAMP", "TIMESTAMP_NTZ"])
@@ -232,7 +234,7 @@ def test_failed_dynamic_overwrite_preserves_data(spark, tmp_path):
     before = parquet_files(path)
     spark.conf.set(OVERWRITE_MODE, "DYNAMIC")
     source = spark.createDataFrame([("30", 1), ("invalid", 2)], "value STRING, id INT").repartition(2)
-    with pytest.raises(Exception, match="(?i)cast|invalid|parse"):
+    with pytest.raises(Exception, match=r"(?i)cast|invalid|parse"):
         source.selectExpr("CAST(value AS INT) AS value", "id").write.partitionBy("id").mode("overwrite").parquet(
             str(path)
         )
@@ -271,7 +273,7 @@ def test_invalid_partition_clause_preserves_data(spark, tmp_path, clause):
         spark.sql(f"INSERT INTO {table} VALUES ('hello', 1), ('goodbye', 2)")
         before = parquet_files(path)
         spark.conf.set(OVERWRITE_MODE, "DYNAMIC")
-        with pytest.raises(Exception, match="(?i)partition|duplicate"):
+        with pytest.raises(Exception, match=r"(?i)partition|duplicate"):
             spark.sql(f"INSERT OVERWRITE TABLE {table} {clause} SELECT 'yo', 2").collect()
         assert parquet_files(path) == before
         assert partition_rows(path, ["id", "msg"]) == Counter([("1", "hello"), ("2", "goodbye")])
@@ -283,7 +285,7 @@ def test_incomplete_partition_clause_preserves_data(spark, tmp_path):
         spark.sql(f"INSERT INTO {table} VALUES ('hello', 1, 'one'), ('goodbye', 2, 'two')")
         before = parquet_files(path)
         spark.conf.set(OVERWRITE_MODE, "DYNAMIC")
-        with pytest.raises(Exception, match="(?i)partition"):
+        with pytest.raises(Exception, match=r"(?i)partition"):
             spark.sql(f"INSERT OVERWRITE TABLE {table} PARTITION (id) SELECT 'yo', 2, 'two'").collect()
         assert parquet_files(path) == before
 
@@ -297,7 +299,7 @@ def test_unsupported_partition_clause_preserves_data(spark, tmp_path, clause):
         before = parquet_files(path)
         spark.conf.set(OVERWRITE_MODE, "DYNAMIC")
         select = "SELECT 'yo', 'one'" if clause.endswith("bucket)") else "SELECT 'yo'"
-        with pytest.raises(Exception, match="(?i)partition|unsupported|not supported"):
+        with pytest.raises(Exception, match=r"(?i)partition|unsupported|not supported"):
             spark.sql(f"INSERT OVERWRITE TABLE {table} {clause} {select}").collect()
         assert parquet_files(path) == before
         assert partition_rows(path, ["id", "bucket", "msg"]) == Counter(

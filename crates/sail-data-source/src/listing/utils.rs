@@ -580,9 +580,10 @@ mod tests {
 
     #[tokio::test]
     async fn hive_listing_prunes_safe_equalities_and_lists_ambiguous_keys() -> Result<()> {
+        use std::sync::atomic::Ordering;
+
         use datafusion::logical_expr::{col, lit};
         use datafusion::prelude::SessionContext;
-        use std::sync::atomic::Ordering;
         let store = CountingListingStore::default();
         for path in [
             "ints/p=1/file",

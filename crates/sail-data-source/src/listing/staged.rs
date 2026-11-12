@@ -1,5 +1,6 @@
 use std::any::Any;
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use arrow::array::{Array, RecordBatch, StringArray, UInt64Array};
@@ -389,7 +390,6 @@ async fn demux_partitions(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow::array::Int32Array;
     use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
     use datafusion::execution::object_store::ObjectStoreUrl;
@@ -397,6 +397,8 @@ mod tests {
     use datafusion_common::config::TableParquetOptions;
     use datafusion_datasource::memory::MemorySourceConfig;
     use object_store::memory::InMemory;
+
+    use super::*;
 
     #[tokio::test]
     async fn repeated_execution_emits_only_fresh_attempt_files() -> Result<()> {
