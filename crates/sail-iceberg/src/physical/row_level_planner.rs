@@ -12,6 +12,7 @@ use sail_common_datafusion::datasource::{PhysicalSinkMode, RowLevelCommand, RowL
 use sail_data_source::options::ResolveOptions;
 use sail_logical_plan::row_level::RowLevelWriteNode;
 
+use crate::catalog_support::commit::IcebergCatalogCommitCoordinator;
 use crate::lake_source::{
     IcebergLakeSource, catalog_managed_iceberg_from_options, metadata_location_from_options,
     resolve_iceberg_metadata_location, split_iceberg_write_options_and_table_properties,
@@ -45,6 +46,7 @@ pub(crate) async fn plan_iceberg_row_level_write(
             metadata_location,
         )
         .await?;
+        validate_row_level_base_metadata(session, node, &table)?;
         return plan_metadata_delete(session, node, &table, &table_url)
             .await?
             .ok_or_else(|| {
@@ -86,6 +88,7 @@ async fn plan_iceberg_merge_on_read(
         metadata_location_for_load,
     )
     .await?;
+    validate_row_level_base_metadata(session, node, &table)?;
     ensure_current_row_level_mode(&table, node)?;
     if node.command() == RowLevelCommand::Delete
         && let Some(plan) = plan_metadata_delete(session, node, &table, &table_url).await?
@@ -147,6 +150,7 @@ async fn plan_iceberg_copy_on_write(
         metadata_location,
     )
     .await?;
+    validate_row_level_base_metadata(session, node, &table)?;
     ensure_current_row_level_mode(&table, node)?;
     let [input] = physical_inputs else {
         return plan_err!("Iceberg copy-on-write requires exactly one write-plan input");
@@ -301,6 +305,18 @@ async fn plan_metadata_delete(
         .with_output(node.output())
         .with_expected_snapshot_id(node.expected_snapshot_id()),
     )))
+}
+
+fn validate_row_level_base_metadata(
+    session: &dyn Session,
+    node: &RowLevelWriteNode,
+    table: &Table,
+) -> Result<()> {
+    if let Some(target) = node.target_lakehouse_table() {
+        IcebergCatalogCommitCoordinator::new(&session, target.catalog_table())
+            .validate_base_metadata(table.metadata())?;
+    }
+    Ok(())
 }
 
 fn ensure_current_row_level_mode(table: &Table, node: &RowLevelWriteNode) -> Result<()> {

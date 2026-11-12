@@ -470,7 +470,8 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         destination_table: &str,
         precondition: super::RenameTablePrecondition,
     ) -> CatalogResult<()> {
-        self.inner
+        let result = self
+            .inner
             .rename_table_with_precondition(
                 database,
                 table,
@@ -478,12 +479,14 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
                 destination_table,
                 precondition,
             )
-            .await?;
-        if let Some(cache) = &self.table_cache {
+            .await;
+        if (result.is_ok() || matches!(&result, Err(CatalogError::CommitStateUnknown(_))))
+            && let Some(cache) = &self.table_cache
+        {
             cache.invalidate(database).await;
             cache.invalidate(destination_database).await;
         }
-        Ok(())
+        result
     }
 
     async fn rename_table(
@@ -493,14 +496,17 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         destination_database: &Namespace,
         destination_table: &str,
     ) -> CatalogResult<()> {
-        self.inner
+        let result = self
+            .inner
             .rename_table(database, table, destination_database, destination_table)
-            .await?;
-        if let Some(cache) = &self.table_cache {
+            .await;
+        if (result.is_ok() || matches!(&result, Err(CatalogError::CommitStateUnknown(_))))
+            && let Some(cache) = &self.table_cache
+        {
             cache.invalidate(database).await;
             cache.invalidate(destination_database).await;
         }
-        Ok(())
+        result
     }
 
     async fn alter_table(
@@ -614,6 +620,47 @@ mod tests {
     use crate::lakehouse::TableAccessPurpose;
     use crate::provider::{CreateDatabaseOptions, CreateTableOptions, Namespace};
 
+    struct RenameState {
+        tables: HashMap<Namespace, Vec<TableStatus>>,
+        destination: Namespace,
+        apply: bool,
+        result: Option<CatalogResult<()>>,
+        calls: usize,
+    }
+
+    impl RenameState {
+        fn rename(
+            &mut self,
+            database: &Namespace,
+            table: &str,
+            destination_database: &Namespace,
+            destination_table: &str,
+        ) -> CatalogResult<()> {
+            assert_eq!(database, &Namespace::try_from(vec!["db1"]).unwrap());
+            assert_eq!(table, "t1");
+            assert_eq!(destination_database, &self.destination);
+            assert_eq!(destination_table, "t2");
+            self.calls += 1;
+            if self.apply {
+                let source = self.tables.get_mut(database).unwrap();
+                assert_eq!(source.len(), 1);
+                let mut renamed = source.remove(0);
+                assert_eq!(renamed.name, table);
+                renamed.database = destination_database.clone().into();
+                renamed.name = destination_table.into();
+                self.tables
+                    .get_mut(destination_database)
+                    .unwrap()
+                    .push(renamed);
+            }
+            self.result.take().unwrap()
+        }
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("rename acknowledgement lost")]
+    struct RenameErrorSource(Arc<()>);
+
     struct MockProvider {
         name: &'static str,
         reject_disabled_locks: bool,
@@ -628,6 +675,7 @@ mod tests {
         last_commit_format: Mutex<Option<String>>,
         rename_requirements: AtomicUsize,
         guarded_renames: AtomicUsize,
+        rename_state: Mutex<Option<RenameState>>,
     }
 
     impl MockProvider {
@@ -646,6 +694,7 @@ mod tests {
                 last_commit_format: Mutex::new(None),
                 rename_requirements: AtomicUsize::new(0),
                 guarded_renames: AtomicUsize::new(0),
+                rename_state: Mutex::new(None),
             }
         }
     }
@@ -835,6 +884,9 @@ mod tests {
 
         async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
             self.table_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(state) = self.rename_state.lock().unwrap().as_ref() {
+                return Ok(state.tables.get(database).unwrap().clone());
+            }
             Ok(vec![TableStatus {
                 catalog: Some("cat".to_string()),
                 database: database.clone().into(),
@@ -894,6 +946,15 @@ mod tests {
             destination_table: &str,
             precondition: crate::provider::RenameTablePrecondition,
         ) -> CatalogResult<()> {
+            if let Some(state) = self.rename_state.lock().unwrap().as_mut() {
+                assert_eq!(
+                    precondition,
+                    crate::provider::RenameTablePrecondition::Iceberg {
+                        metadata_location: "file:///table/metadata.json".into(),
+                    }
+                );
+                return state.rename(database, table, destination_database, destination_table);
+            }
             assert_eq!(database, &Namespace::try_from(vec!["db1"]).unwrap());
             assert_eq!(table, "t1");
             assert_eq!(
@@ -908,6 +969,21 @@ mod tests {
                 return Err(crate::error::CatalogError::Conflict("stale pointer".into()));
             }
             Ok(())
+        }
+
+        async fn rename_table(
+            &self,
+            database: &Namespace,
+            table: &str,
+            destination_database: &Namespace,
+            destination_table: &str,
+        ) -> CatalogResult<()> {
+            self.rename_state.lock().unwrap().as_mut().unwrap().rename(
+                database,
+                table,
+                destination_database,
+                destination_table,
+            )
         }
 
         async fn create_view(
@@ -1327,6 +1403,146 @@ mod tests {
             assert_eq!(permissive.rename_requirements.load(Ordering::SeqCst), 0);
             assert_eq!(permissive.policy_calls.load(Ordering::SeqCst), 0);
             assert_eq!(permissive.guarded_renames.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    #[expect(clippy::panic, reason = "unexpected test outcomes must fail the test")]
+    async fn rename_refreshes_listings_on_success_or_unknown_but_not_conflict() {
+        use sail_common_datafusion::error::CommitStateUnknownError;
+
+        use crate::provider::RenameTablePrecondition;
+
+        fn identities(tables: &[TableStatus]) -> Vec<(Vec<String>, String)> {
+            tables
+                .iter()
+                .map(|table| (table.database.clone(), table.name.clone()))
+                .collect()
+        }
+
+        for guarded in [false, true] {
+            for same_namespace in [false, true] {
+                // Unknown must invalidate whether or not publication actually happened.
+                for (unknown, apply) in [(false, true), (true, true), (true, false), (false, false)]
+                {
+                    let mock = mock_provider();
+                    let source = Namespace::try_from(vec!["db1"]).unwrap();
+                    let target =
+                        Namespace::try_from(vec![if same_namespace { "db1" } else { "db2" }])
+                            .unwrap();
+                    let unrelated = Namespace::try_from(vec!["unrelated"]).unwrap();
+                    let original = mock.get_table(&source, "t1").await.unwrap();
+                    let sentinel = Arc::new(());
+                    let result = if unknown {
+                        Err(CatalogError::CommitStateUnknown(
+                            CommitStateUnknownError::with_source(
+                                "rename outcome uncertain",
+                                RenameErrorSource(sentinel.clone()),
+                            ),
+                        ))
+                    } else if apply {
+                        Ok(())
+                    } else {
+                        Err(CatalogError::Conflict("rename precondition failed".into()))
+                    };
+                    let mut tables =
+                        HashMap::from([(target.clone(), vec![]), (unrelated.clone(), vec![])]);
+                    tables.insert(source.clone(), vec![original.clone()]);
+                    *mock.rename_state.lock().unwrap() = Some(RenameState {
+                        tables,
+                        destination: target.clone(),
+                        apply,
+                        result: Some(result),
+                        calls: 0,
+                    });
+                    let provider = CachingCatalogProvider::new(
+                        mock.clone(),
+                        CatalogCacheConfig {
+                            table_cache_type: sail_common::config::CacheType::Session,
+                            table_cache_size: Some(10),
+                            ..Default::default()
+                        },
+                        None,
+                    );
+                    for _ in 0..2 {
+                        for ns in [&source, &target, &unrelated] {
+                            let expected = if ns == &source {
+                                vec![original.clone()]
+                            } else {
+                                vec![]
+                            };
+                            assert_eq!(
+                                identities(&provider.list_tables(ns).await.unwrap()),
+                                identities(&expected)
+                            );
+                        }
+                    }
+                    let affected = if same_namespace { 1 } else { 2 };
+                    assert_eq!(mock.table_calls.load(Ordering::SeqCst), affected + 1);
+                    let result = if guarded {
+                        provider
+                            .rename_table_with_precondition(
+                                &source,
+                                "t1",
+                                &target,
+                                "t2",
+                                RenameTablePrecondition::Iceberg {
+                                    metadata_location: "file:///table/metadata.json".into(),
+                                },
+                            )
+                            .await
+                    } else {
+                        provider.rename_table(&source, "t1", &target, "t2").await
+                    };
+                    match result {
+                        Err(CatalogError::CommitStateUnknown(error)) if unknown => {
+                            assert_eq!(
+                                error.to_string(),
+                                "commit state unknown: rename outcome uncertain: rename acknowledgement lost"
+                            );
+                            let source = std::error::Error::source(&error)
+                                .unwrap()
+                                .downcast_ref::<RenameErrorSource>()
+                                .unwrap();
+                            assert!(Arc::ptr_eq(&source.0, &sentinel));
+                        }
+                        Err(CatalogError::Conflict(message)) if !unknown && !apply => {
+                            assert_eq!(message, "rename precondition failed");
+                        }
+                        Ok(()) if !unknown && apply => {}
+                        result => panic!("unexpected rename result: {result:?}"),
+                    }
+                    let mut renamed = original.clone();
+                    renamed.name = "t2".into();
+                    renamed.database = target.clone().into();
+                    for _ in 0..2 {
+                        for ns in [&source, &target, &unrelated] {
+                            let expected = if apply && ns == &target {
+                                vec![renamed.clone()]
+                            } else if !apply && ns == &source {
+                                vec![original.clone()]
+                            } else {
+                                vec![]
+                            };
+                            assert_eq!(
+                                identities(
+                                    &mock.rename_state.lock().unwrap().as_ref().unwrap().tables[ns]
+                                ),
+                                identities(&expected)
+                            );
+                            assert_eq!(
+                                identities(&provider.list_tables(ns).await.unwrap()),
+                                identities(&expected)
+                            );
+                        }
+                        assert_eq!(
+                            mock.table_calls.load(Ordering::SeqCst),
+                            affected + 1 + if unknown || apply { affected } else { 0 }
+                        );
+                    }
+                    assert_eq!(mock.rename_state.lock().unwrap().as_ref().unwrap().calls, 1);
+                }
+            }
         }
     }
 

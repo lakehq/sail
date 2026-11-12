@@ -1031,6 +1031,10 @@ impl ExecutionPlan for IcebergCommitExec {
                 let bytes = load_metadata_file_bytes(&object_store, &latest_meta).await?;
                 let mut table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                if let Some(catalog_table) = catalog_table.as_ref() {
+                    IcebergCatalogCommitCoordinator::new(context.as_ref(), catalog_table)
+                        .validate_base_metadata(&table_meta)?;
+                }
                 let base_codec = BaseMetadataCodec::capture(Some(&table_meta))?;
                 Self::validate_requirements(Some(&table_meta), &commit_info.requirements)?;
                 if dynamic_partition_overwrite {
@@ -1566,6 +1570,10 @@ fn commit_conflict_error() -> DataFusionError {
         "Iceberg commit failed after {MAX_COMMIT_RETRIES} retries due to concurrent metadata updates"
     ))
 }
+
+#[cfg(test)]
+#[path = "commit_exec/policy_tests.rs"]
+mod policy_tests;
 
 #[cfg(test)]
 #[expect(clippy::expect_used)]
