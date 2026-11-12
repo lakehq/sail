@@ -209,7 +209,7 @@ arrow = { version = "59.2.0", features = ["chrono-tz"] }
 arrow-array = { version = "59.2.0", features = ["ffi"] }
 arrow-buffer = { version = "59.2.0" }
 arrow-data = { version = "59.2.0" }
-arrow-schema = { version = "59.2.0", features = ["serde"] }
+arrow-schema = { version = "59.2.0", features = ["serde", "canonical_extension_types"] }
 arrow-flight = { version = "59.2.0", features = ["flight-sql-experimental"] }
 arrow-pyarrow = { version = "59.2.0" }
 arrow-select = { version = "59.2.0" }

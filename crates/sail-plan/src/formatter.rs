@@ -795,12 +795,8 @@ mod tests {
     #[test]
     fn uuid_target_type_names_include_nested_fields() -> PlanResult<()> {
         let formatter = SparkPlanFormatter;
-        let uuid = Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata(
-            std::collections::HashMap::from([(
-                sail_common_datafusion::uuid::UUID_METADATA_KEY.to_string(),
-                "uuid".to_string(),
-            )]),
-        );
+        let uuid = Field::new("u", DataType::FixedSizeBinary(16), true)
+            .with_extension_type(arrow_schema::extension::Uuid);
         assert_eq!(formatter.field_to_simple_string(&uuid)?, "uuid");
         assert_eq!(
             formatter.data_type_to_simple_string(uuid.data_type())?,

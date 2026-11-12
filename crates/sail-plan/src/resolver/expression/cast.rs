@@ -164,9 +164,7 @@ impl PlanResolver<'_> {
                 interval_unit,
                 start_field,
                 end_field,
-            } => spec::SparkIntervalMetadata::try_new(*interval_unit, *start_field, *end_field)?
-                .map(spec::SparkIntervalMetadata::to_json)
-                .transpose()?,
+            } => spec::SparkIntervalMetadata::try_new(*interval_unit, *start_field, *end_field)?,
             _ => None,
         };
         let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
@@ -304,17 +302,24 @@ impl PlanResolver<'_> {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Interval(IntervalUnit::YearMonth),
                 _,
-            ) => ScalarUDF::new_from_impl(SparkYearMonthInterval::new()).call(vec![expr]),
+            ) => ScalarUDF::new_from_impl(SparkYearMonthInterval::new(
+                spark_interval_metadata,
+                is_try,
+            ))
+            .call(vec![expr]),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Duration(TimeUnit::Microsecond),
                 _,
-            ) => ScalarUDF::new_from_impl(SparkDayTimeInterval::new()).call(vec![expr]),
+            ) => {
+                ScalarUDF::new_from_impl(SparkDayTimeInterval::new(spark_interval_metadata, is_try))
+                    .call(vec![expr])
+            }
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Interval(IntervalUnit::MonthDayNano),
                 _,
-            ) => ScalarUDF::new_from_impl(SparkCalendarInterval::new()).call(vec![expr]),
+            ) => ScalarUDF::new_from_impl(SparkCalendarInterval::default()).call(vec![expr]),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Date32,
@@ -377,6 +382,7 @@ impl PlanResolver<'_> {
         };
         Ok(match spark_interval_metadata {
             Some(metadata) => {
+                let metadata = metadata.to_json()?;
                 // Nested expressions consume the Expr without its NamedExpr metadata.
                 // Keep the target qualifier on the cast field as well as the projection.
                 let field = expr.to_field(schema)?.1;

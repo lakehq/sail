@@ -297,13 +297,14 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::uuid::{UUID_EXTENSION_NAME, UUID_METADATA_KEY};
 
     fn uuid_add(path: &[&str]) -> ColumnChange<DataType> {
         ColumnChange::Add {
             path: path.iter().map(|s| (*s).to_string()).collect(),
             data_type: DataType::FixedSizeBinary(16),
             metadata: BTreeMap::from([
-                ("iceberg.type".into(), "uuid".into()),
+                (UUID_METADATA_KEY.into(), UUID_EXTENSION_NAME.into()),
                 ("custom".into(), "retained".into()),
                 ("comment".into(), "old".into()),
             ]),
@@ -317,7 +318,7 @@ mod tests {
     fn expected_uuid() -> Field {
         Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata(
             [
-                ("iceberg.type".into(), "uuid".into()),
+                (UUID_METADATA_KEY.into(), UUID_EXTENSION_NAME.into()),
                 ("custom".into(), "retained".into()),
                 ("comment".into(), "UUID column".into()),
             ]

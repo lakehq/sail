@@ -296,6 +296,7 @@ message ExtendedScalarUdf {
     SparkSequenceUdf spark_sequence = 39;
     SparkToStringUdf spark_to_string = 40;
     UuidCastUdf uuid_cast = 41;
+    SparkIntervalUdf spark_interval = 42;
   }
 }
 
@@ -489,6 +490,12 @@ message SparkNegativeUdf {
 
 message SparkFromCsvUdf {
   string session_timezone = 1;
+}
+
+message SparkIntervalUdf {
+  // SparkIntervalMetadata JSON, decoded once when reconstructing the UDF.
+  optional string qualifier = 1;
+  bool safe = 2;
 }
 
 message UuidCastUdf {

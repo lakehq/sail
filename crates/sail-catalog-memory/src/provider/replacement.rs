@@ -219,7 +219,7 @@ mod tests {
     use std::time::Duration;
 
     use arrow::datatypes::DataType;
-    use sail_common_datafusion::uuid::{UUID_METADATA_KEY, is_uuid_field};
+    use sail_common_datafusion::uuid::{UUID_EXTENSION_NAME, UUID_METADATA_KEY, is_uuid_field};
     use tokio::sync::Barrier;
 
     use super::*;
@@ -276,7 +276,7 @@ mod tests {
             let (provider, namespace) = fixture(existing).await?;
             let mut request = options();
             let metadata = std::collections::BTreeMap::from([
-                (UUID_METADATA_KEY.into(), "uuid".into()),
+                (UUID_METADATA_KEY.into(), UUID_EXTENSION_NAME.into()),
                 ("custom".into(), "retained".into()),
             ]);
             request.columns[0].data_type = DataType::FixedSizeBinary(16);
