@@ -7,26 +7,48 @@ rank: 12
 
 Sail is designed to provide high performance for data processing workloads. However, several factors can affect the performance of your Sail applications. In this guide, we discuss common performance tuning techniques and best practices to help you optimize your Sail applications.
 
-## Configuration Options
+<!--@include: ./_common/options.md-->
 
-::: info
-Here, we refer to configuration options by their names, such as `execution.batch_size`, but you can typically set these options via environment variables, such as `SAIL_EXECUTION__BATCH_SIZE`.
-Refer to the [Configuration Guide](../configuration/) for more information on how Sail configuration works in general.
-:::
+## Where Settings Take Effect
 
-`execution.batch_size` controls the number of rows processed in each batch during execution.
-Increasing this value can improve performance by reducing the overhead of processing many small batches.
-However, setting it too high may lead to potential out-of-memory errors.
-Experiment with different batch sizes to find the optimal value for your workload.
+Sail reads its configuration from environment variables when the Sail server starts, or in Python, when you create a `SparkConnectServer` instance.
+Set the environment variables before that point.
+In Python, Sail reads the following settings only once per process, when you create the first server.
 
-`execution.default_parallelism` determines the default number of partitions for physical operators.
-The default value `0` indicates that parallelism is determined based on the available CPU cores, which is a good default for local mode.
-However, when running in cluster mode, this default parallelism is determined by the available CPU cores on the driver, which typically has only a small number of CPU cores.
-Since this configuration option is in effect during physical planning on the driver, the default parallelism does not take into account the actual size of the cluster.
-Therefore, in cluster mode, set this option explicitly so that the parallelism is appropriate for distributed task execution on the workers.
+- `runtime.stack_size`
+- the `telemetry.*` options
+- the `catalog.system.*` options
+- `RUST_LOG`
 
-`cluster.worker_task_slots` controls the number of tasks that can run concurrently on each worker.
-Note that within a task region, some tasks can share a slot if their stages belong to the same slot-sharing group.
-The task slots track only logical task assignments rather than physical resource isolation. All tasks running on a worker compete for the same pool of CPU and memory resources.
-We believe this simplification in resource management works well in cloud environments, where resource isolation can be achieved at the worker level using containers.
-Setting this option to a lower value can help reduce contention for CPU and memory resources but may result in underutilization. It may also increase scheduling overhead, as more workers may be needed to run the same workload. Setting this to a higher value can improve resource sharing, but it means each worker will need more CPU and memory resources.
+In local mode, a single process plans and runs each query.
+In cluster mode, the driver of each session plans the query inside the server process, and the workers run its tasks.
+Options that shape the plan, such as `execution.default_parallelism` and the `optimizer.*` options, take effect on the server.
+Options that limit resources, such as the memory pool and temporary files, apply to each process that runs tasks.
+Set them for the workers as well.
+On Kubernetes, refer to the [Cluster Configuration and Sizing](/guide/deployment/configuration) page for the options that the server passes to workers and how to set the others.
+To confirm which options the server process uses, query the `system.session.options` table.
+See [Observability](/guide/observability/#system-catalog).
+
+## Differences from Spark
+
+Some Spark tuning options and hints work differently in Sail.
+
+| Spark option or hint                                       | Behavior in Sail                                                                                                   |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `spark.sql.shuffle.partitions`                             | Sets only the default partition count of the `REPARTITION` hint. See [Parallelism and Batching](./parallelism.md). |
+| `spark.sql.autoBroadcastJoinThreshold`                     | Has no effect. See [Join Strategies](./joins.md).                                                                  |
+| `BROADCAST`, `MERGE`, `SHUFFLE_HASH`, and other join hints | Ignored. See [Join Strategies](./joins.md#join-hints).                                                             |
+| `spark.sql.adaptive.*`                                     | Has no effect. Sail does not change the plan of a query while it runs.                                             |
+| `spark.sql.parquet.compression.codec`                      | Has no effect. See [Data Layout and Caches](./data-layout.md#compression).                                         |
+
+## Topics
+
+<PageList :data="data" :prefix="['guide', 'performance']" />
+
+For Python UDFs, the [Performance](/guide/udf/performance) page of the UDF guide compares the UDF types.
+To build Sail with all features of your CPU enabled, refer to the [Installation](/introduction/installation/) guide.
+
+<script setup>
+import PageList from "@theme/components/PageList.vue";
+import { data } from "./index.data.ts";
+</script>

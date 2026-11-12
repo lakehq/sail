@@ -318,6 +318,8 @@
     The `flight` shuffle backend streams shuffle data directly among tasks via Arrow Flight.
     The `storage` shuffle backend materializes merged shuffle partitions in object storage
     before running dependent stages.
+    The `celeborn` shuffle backend materializes blocking shuffle data in an external
+    Apache Celeborn cluster.
   experimental: true
 
 - key: cluster.shuffle_backend.flight.compression
@@ -384,7 +386,8 @@
   default: "[]"
   description: |
     The endpoints of Celeborn masters. Each entry is a `host:port` string.
-    Multiple entries enable master high availability.
+    The client tries another configured endpoint after a connection, timeout, or protocol
+    failure. Multiple entries do not configure the Celeborn masters for high availability.
   experimental: true
 
 - key: cluster.shuffle_backend.celeborn.compression
@@ -416,8 +419,8 @@
   type: number
   default: "1073741824"
   description: |
-    The maximum number of bytes written to a Celeborn partition before the
-    worker requests a split.
+    The number of bytes written to a Celeborn partition epoch before the worker
+    requests a split.
   experimental: true
 
 - key: cluster.shuffle_backend.celeborn.partition_split_mode
@@ -502,8 +505,9 @@
     The object storage base path for DataFrame checkpoints managed by the server. The path must be
     readable and writable by the driver and every worker. Checkpoint operations are rejected when
     this value is empty. Sail does not fall back to driver memory or local worker storage. Sail
-    removes each session namespace on shutdown. An object storage lifecycle policy can clean up
-    data left by an ungraceful process exit.
+    removes a session namespace when the session is released or removed by the idle timeout, not on
+    server shutdown. An object storage lifecycle policy can clean up data left by an ungraceful
+    process exit.
   experimental: true
 
 - key: parquet.enable_page_index

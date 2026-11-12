@@ -1,6 +1,6 @@
 ---
 title: Kubernetes
-rank: 2
+rank: 3
 ---
 
 # Kubernetes
@@ -8,14 +8,19 @@ rank: 2
 <!--@include: ./_common/support.md-->
 
 Sail supports distributed data processing on Kubernetes clusters.
+The [local cluster walkthrough](#local-cluster-walkthrough) deploys Sail with the sample manifests in `k8s/`.
+The [production deployment](#production-deployment) uses the resources in `deployments/production/`.
+
+## Local Cluster Walkthrough
+
 This guide demonstrates how to deploy Sail on a Kubernetes cluster and connect to it via Spark Connect.
 
-## Building the Docker Image
+### Building the Docker Image
 
 We first need to build the Docker image for Sail. Please refer to
 the [Docker Images Guide](/guide/deployment/docker-images/) for more information.
 
-## Loading the Docker Image
+### Loading the Docker Image
 
 You will need to make the Docker image available to your Kubernetes cluster.
 The exact steps depend on your Kubernetes environment.
@@ -78,7 +83,7 @@ Then load the Docker image into the cluster.
 kind load docker-image sail:latest
 ```
 
-## Running the Sail Server
+### Running the Sail Server
 
 ::: info
 
@@ -108,12 +113,12 @@ The example sets the `SAIL_MODE` environment variable to `kubernetes-cluster` fo
 
 :::
 
-## Overriding the Default Pod Spec
+### Overriding the Default Pod Spec
 
 By default, the worker pod spec is created programmatically. If the `kubernetes.worker_pod_template` configuration option is provided, it is merged into
 the generated spec, allowing you to customize the worker pods.
 
-### Using a Custom Pod Template
+#### Using a Custom Pod Template
 
 You can use Kustomize to declaratively define the Kubernetes resources. This approach makes it easier to manage
 overrides and reuse manifests across environments. For example, you can specify custom volumes in your overlay
@@ -137,7 +142,7 @@ You can then apply the customized manifests using the following command.
 kubectl apply -k k8s/
 ```
 
-## Running Spark Jobs
+### Running Spark Jobs
 
 To connect to the Sail Spark Connect server, you can forward the service port to your local machine.
 
@@ -154,7 +159,7 @@ The worker pods are terminated after a certain period of inactivity.
 env SPARK_CONNECT_MODE_ENABLED=1 SPARK_REMOTE="sc://localhost:50051" pyspark
 ```
 
-## Running Python Tests
+### Running Python Tests
 
 When running tests with pytest, the worker pods may need a writable volume for temporary files. To handle this, define a
 custom pod template (such as the `k8s/test-volume-patch.yaml` file shown above) that mounts a temporary volume into the pod.
@@ -165,7 +170,7 @@ Once the pod template is in place, you can run pytest locally against the cluste
 env SPARK_REMOTE="sc://localhost:50051" PYTEST_DEBUG_TEMPROOT="/tmp/sail" pytest --pyargs pysail
 ```
 
-## Cleaning Up
+### Cleaning Up
 
 Run the following command to clean up the Kubernetes resources for the Sail server.
 All Sail worker pods will be terminated automatically as well.
@@ -185,3 +190,61 @@ You can delete the kind cluster using the following command.
 ```bash
 kind delete cluster
 ```
+
+## Production Deployment
+
+Use the resources in `deployments/production/base/` through an overlay for your environment.
+The included overlay `deployments/production/overlays/local-evaluation` is an example that `verify-static.sh` checks by default.
+
+### Setting Target Inputs
+
+Check out the Sail release or commit that you want to deploy.
+It must include `deployments/production/`.
+Build one image for the server and workers with the following command.
+The command builds `deployments/production/Dockerfile` from the current checkout with the release profile.
+The image runs as a non-root user and declares `SIGINT` as its stop signal.
+
+```bash
+RUST_PROFILE=release \
+  deployments/production/checks/build-image.sh \
+  "<registry>/<repository>:<tag>"
+```
+
+The script builds and tags the image locally.
+Push it to your registry, and reference the digest that the registry reports.
+See [Images and Credentials](./security-baseline.md#images-and-credentials) for the image requirements.
+
+The base copies the image from the `sail-production-settings` ConfigMap into the server Deployment before your overlay applies its patches.
+Your overlay must therefore set the same digest in the following fields.
+
+- `data.image` of the `sail-production-settings` ConfigMap
+- `image` of the `server` container
+- The `SAIL_KUBERNETES__IMAGE` value of the `server` container
+
+The image must contain every Python package that your UDFs import.
+See [Clients](./architecture.md#clients) for details.
+
+The base fills the pod IP, namespace, and pod name from the downward API.
+See [Cluster Configuration and Sizing](./configuration.md) for the Sail options and the worker pod template.
+
+Place the server on stable capacity.
+You can place workers on preemptible capacity through the worker pod template if your workload tests show that worker loss is acceptable.
+
+### Rendering and Verifying
+
+The following script renders the example overlay with `kubectl kustomize` and checks the result.
+
+```bash
+deployments/production/checks/verify-static.sh
+```
+
+To verify your own overlay, pass its path and set `REQUIRE_IMAGE_DIGEST=1`.
+
+```bash
+REQUIRE_IMAGE_DIGEST=1 \
+  deployments/production/checks/verify-static.sh \
+  <your-overlay>
+```
+
+With `REQUIRE_IMAGE_DIGEST=1`, the script also requires the overlay to include its Namespace with pinned Restricted Pod Security Admission labels.
+The overlay must also include a full source revision in the `sail-production-settings` ConfigMap.
