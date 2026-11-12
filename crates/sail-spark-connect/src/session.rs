@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -65,6 +65,20 @@ impl SessionConfigProvider for SparkSession {
         Ok(keys
             .iter()
             .map(|key| state.config.get_option(key).map(str::to_owned))
+            .collect())
+    }
+
+    fn get_options_with_prefix(&self, prefix: &str) -> Result<BTreeMap<String, String>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        Ok(state
+            .config
+            .get_all(Some(prefix))
+            .map_err(|e| internal_datafusion_err!("{e}"))?
+            .into_iter()
+            .filter_map(|ConfigKeyValue { key, value }| Some((key, value?)))
             .collect())
     }
 }
