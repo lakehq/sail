@@ -588,10 +588,17 @@ impl PlanResolver<'_> {
     /// Casts a name to the map key type, as Spark does for a string literal.
     // TODO: Support other key types that Spark casts a string to (timestamp, binary and boolean).
     fn map_key_from_name(&self, name: &str, key_type: &DataType) -> Option<expr::Expr> {
+        if matches!(
+            key_type,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        ) {
+            return Some(lit(name.to_string()));
+        }
+        // Trim whitespace and control characters before casting a string to a number or date.
+        let name = name.trim_matches(|c: char| c <= ' ' || c == '\u{7f}');
         let key = lit(name.to_string());
         let ansi_mode = self.config.ansi_mode;
         match key_type {
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Some(key),
             DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 if !ansi_mode => {
                 legacy_integer_key(name, key_type).map(lit)
             }

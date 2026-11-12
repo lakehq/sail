@@ -174,16 +174,37 @@ Feature: Attribute identity in column resolution
       | false | DATE '2024-01-01'      | x          | NULL  |
       | true  | DATE '2024-01-01'      | 2024-01-01 | a     |
 
-  Scenario: A padded dotted name is trimmed before it is cast to an integer map key
-    Given config spark.sql.ansi.enabled = false
+  Scenario Outline: A padded dotted name is trimmed before it is cast to the map key type
+    Given config spark.sql.ansi.enabled = <ansi>
     When query
       """
-      SELECT m.` 1` AS v, n.`1 ` AS w
-      FROM VALUES (map(1, 'a'), map(CAST(1 AS BIGINT), 'b')) AS t(m, n)
+      SELECT m.` <name> ` AS v FROM VALUES (map(<key>, 'a')) AS t(m)
       """
     Then query result
-      | v | w |
-      | a | b |
+      | v |
+      | a |
+
+    Examples:
+      | ansi  | key                   | name       |
+      | false | 1                     | 1          |
+      | true  | 1                     | 1          |
+      | false | CAST(1 AS BIGINT)     | 1          |
+      | true  | CAST(1 AS BIGINT)     | 1          |
+      | false | CAST(1 AS DECIMAL(3)) | 1          |
+      | true  | CAST(1 AS DECIMAL(3)) | 1          |
+      | false | 1.5D                  | 1.5        |
+      | true  | 1.5D                  | 1.5        |
+      | false | DATE '2024-01-01'     | 2024-01-01 |
+      | true  | DATE '2024-01-01'     | 2024-01-01 |
+
+  Scenario: A padded dotted name matches a string map key exactly
+    When query
+      """
+      SELECT m.` a` AS v, m.`a` AS w FROM VALUES (map(' a', 'b')) AS t(m)
+      """
+    Then query result
+      | v | w    |
+      | b | NULL |
 
   Scenario Outline: A dotted name that is not a valid map key fails in ANSI mode
     Given config spark.sql.ansi.enabled = true
