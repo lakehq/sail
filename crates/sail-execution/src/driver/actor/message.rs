@@ -64,6 +64,11 @@ pub enum DriverMessage {
         job_id: JobId,
         outcome: JobOutputOutcome,
     },
+    CompleteJobCleanup {
+        job_id: JobId,
+        context: Arc<TaskContext>,
+        result: ExecutionResult<()>,
+    },
     UpdateTask {
         key: TaskKey,
         status: TaskStatus,
@@ -101,6 +106,7 @@ pub enum TaskStatus {
     Succeeded,
     Failed,
     Canceled,
+    ReplayLost,
 }
 
 impl fmt::Display for TaskStatus {
@@ -110,6 +116,7 @@ impl fmt::Display for TaskStatus {
             TaskStatus::Succeeded => write!(f, "SUCCEEDED"),
             TaskStatus::Failed => write!(f, "FAILED"),
             TaskStatus::Canceled => write!(f, "CANCELED"),
+            TaskStatus::ReplayLost => write!(f, "REPLAY_LOST"),
         }
     }
 }
@@ -121,6 +128,7 @@ impl From<r#gen::TaskStatus> for TaskStatus {
             r#gen::TaskStatus::Succeeded => Self::Succeeded,
             r#gen::TaskStatus::Failed => Self::Failed,
             r#gen::TaskStatus::Canceled => Self::Canceled,
+            r#gen::TaskStatus::ReplayLost => Self::ReplayLost,
         }
     }
 }
@@ -132,6 +140,7 @@ impl From<TaskStatus> for r#gen::TaskStatus {
             TaskStatus::Succeeded => r#gen::TaskStatus::Succeeded,
             TaskStatus::Failed => r#gen::TaskStatus::Failed,
             TaskStatus::Canceled => r#gen::TaskStatus::Canceled,
+            TaskStatus::ReplayLost => r#gen::TaskStatus::ReplayLost,
         }
     }
 }
@@ -150,6 +159,7 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::ProbeLostWorker { .. } => "ProbeLostWorker",
             DriverMessage::ExecuteJob { .. } => "ExecuteJob",
             DriverMessage::CleanUpJob { .. } => "CleanUpJob",
+            DriverMessage::CompleteJobCleanup { .. } => "CompleteJobCleanup",
             DriverMessage::UpdateTask { .. } => "UpdateTask",
             DriverMessage::ProbePendingTask { .. } => "ProbePendingTask",
             DriverMessage::FetchDriverStream { .. } => "FetchDriverStream",
@@ -202,7 +212,8 @@ impl SpanAssociation for DriverMessage {
                 context: _,
                 result: _,
             } => {}
-            DriverMessage::CleanUpJob { job_id, .. } => {
+            DriverMessage::CleanUpJob { job_id, .. }
+            | DriverMessage::CompleteJobCleanup { job_id, .. } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }
             DriverMessage::UpdateTask {

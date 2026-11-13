@@ -19,6 +19,8 @@ impl Actor for TaskRunnerActor {
         Self {
             session_id,
             signals: Default::default(),
+            completions: Default::default(),
+            closing: Default::default(),
             tasks: Default::default(),
             extensions,
             placement,
@@ -61,6 +63,14 @@ impl Actor for TaskRunnerActor {
                 schema,
                 result,
             } => self.handle_create_local_stream(key, replicas, schema, result),
+            TaskRunnerMessage::CreateReplayStream {
+                key,
+                id,
+                storage,
+                schema,
+                context,
+                result,
+            } => self.handle_create_replay_stream(key, id, storage, schema, context, result),
             TaskRunnerMessage::CreateStorageStream {
                 key,
                 schema,
@@ -90,10 +100,11 @@ impl Actor for TaskRunnerActor {
             }
             TaskRunnerMessage::FetchStorageStream {
                 key,
+                replay,
                 schema,
                 context,
                 result,
-            } => self.handle_fetch_storage_stream(key, schema, context, result),
+            } => self.handle_fetch_storage_stream(key, replay, schema, context, result),
             TaskRunnerMessage::FetchCelebornStream {
                 job_id,
                 stage,
@@ -112,7 +123,14 @@ impl Actor for TaskRunnerActor {
             TaskRunnerMessage::CleanUpCelebornStreams { job_id, stage } => {
                 self.handle_clean_up_celeborn_streams(ctx, job_id, stage)
             }
-            TaskRunnerMessage::CloseJob { job_id } => self.handle_close_job(job_id),
+            TaskRunnerMessage::CloseJob { job_id, result } => {
+                self.handle_close_job(ctx, job_id, result)
+            }
+            TaskRunnerMessage::FinishCloseJob { job_id, done } => {
+                self.extensions.local_streams.remove_streams(job_id, None);
+                let _ = done.send(true);
+                ActorAction::Continue
+            }
             TaskRunnerMessage::Shutdown => self.handle_shutdown(),
         }
     }

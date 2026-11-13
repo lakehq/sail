@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod replay_integration_tests;
+
 pub mod driver;
 pub mod error;
 mod id;

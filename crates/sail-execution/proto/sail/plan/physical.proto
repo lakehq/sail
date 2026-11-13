@@ -81,7 +81,13 @@ message ExtendedPhysicalPlanNode {
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
     SeededRandomExecNode seeded_random = 67;
     IdentityGenerateExecNode identity_generate = 68;
+    EvaluateOnceExecNode evaluate_once = 69;
   }
+}
+
+message EvaluateOnceExecNode {
+  // Encodes expressions and metadata using the converter-aware projection codec.
+  bytes projection_plan = 1;
 }
 
 message IdentityGenerateExecNode {

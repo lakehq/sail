@@ -135,6 +135,28 @@ impl TaskStreamAccessor {
         .await
     }
 
+    async fn create_replay_stream(
+        &self,
+        key: TaskStreamKey,
+        id: sail_common_datafusion::replay::ReplayId,
+        storage: bool,
+        schema: SchemaRef,
+    ) -> Result<Box<dyn TaskStreamChannelSink>> {
+        let (result, rx) = oneshot::channel();
+        self.receive(
+            TaskRunnerMessage::CreateReplayStream {
+                key,
+                id,
+                storage,
+                schema,
+                context: self.context.clone(),
+                result,
+            },
+            rx,
+        )
+        .await
+    }
+
     async fn create_storage_stream(
         &self,
         key: TaskStreamKey,
@@ -213,12 +235,14 @@ impl TaskStreamAccessor {
     async fn fetch_storage_stream(
         &self,
         key: TaskStreamKey,
+        replay: Option<sail_common_datafusion::replay::ReplayId>,
         schema: SchemaRef,
     ) -> Result<TaskStreamSource> {
         let (result, rx) = oneshot::channel();
         self.receive(
             TaskRunnerMessage::FetchStorageStream {
                 key,
+                replay,
                 schema,
                 context: self.context.clone(),
                 result,
@@ -283,6 +307,24 @@ impl fmt::Debug for MultiChannelTaskStreamReader {
 #[tonic::async_trait]
 impl TaskStreamReader for MultiChannelTaskStreamReader {
     async fn open(&self, partition: usize) -> Result<TaskStreamSource> {
+        use futures::TryStreamExt;
+        let result = self.open_inner(partition).await;
+        if self.input.replay.is_none() {
+            return result;
+        }
+        let stream = result.map_err(|e| {
+            DataFusionError::External(Box::new(crate::error::ReplayReadError(e.to_string())))
+        })?;
+        Ok(Box::pin(stream.map_err(|e| {
+            crate::stream::error::TaskStreamError::External(Arc::new(
+                crate::error::ReplayReadError(e.to_string()),
+            ))
+        })))
+    }
+}
+
+impl MultiChannelTaskStreamReader {
+    async fn open_inner(&self, partition: usize) -> Result<TaskStreamSource> {
         let streams = match self.input.locator.as_ref() {
             TaskInputLocator::Driver { keys } => {
                 let keys = keys.get(partition).ok_or_else(|| {
@@ -316,6 +358,7 @@ impl TaskStreamReader for MultiChannelTaskStreamReader {
                 try_join_all(keys.iter().map(|key| {
                     self.streams.fetch_storage_stream(
                         key.task_stream_key(self.key.job_id, self.input.stage),
+                        self.input.replay,
                         self.schema.clone(),
                     )
                 }))
@@ -382,6 +425,19 @@ impl TaskStreamWriter for MultiChannelTaskStreamWriter {
         }
         let channels = self.output.channels();
         let sinks = match &self.output.locator {
+            TaskOutputLocator::ReplayLocal { id } | TaskOutputLocator::ReplayStorage { id } => {
+                let storage =
+                    matches!(self.output.locator, TaskOutputLocator::ReplayStorage { .. });
+                try_join_all((0..channels).map(|channel| {
+                    self.streams.create_replay_stream(
+                        self.key.task_stream_key(channel),
+                        *id,
+                        storage,
+                        self.schema.clone(),
+                    )
+                }))
+                .await?
+            }
             TaskOutputLocator::Pipelined { replicas } => {
                 try_join_all((0..channels).map(|channel| {
                     self.streams.create_local_stream(

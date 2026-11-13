@@ -7154,6 +7154,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tonic",
  "tonic-prost-build",
  "url",
@@ -7266,6 +7267,7 @@ dependencies = [
  "arrow-flight",
  "bytes",
  "chrono",
+ "crc32fast",
  "datafusion",
  "datafusion-proto",
  "datafusion-spark",
@@ -7281,7 +7283,9 @@ dependencies = [
  "kube",
  "log",
  "object_store",
+ "opentelemetry",
  "opentelemetry-proto",
+ "opentelemetry_sdk",
  "prost",
  "prost-build",
  "rand 0.10.3",
@@ -7497,6 +7501,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-function",
+ "uuid",
 ]
 
 [[package]]

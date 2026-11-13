@@ -49,6 +49,7 @@ use sail_logical_plan::remote_checkpoint::{
     RemoteCheckpointCommandNode, RemoteCheckpointRelationNode,
 };
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
+use sail_logical_plan::replay::ReplayNode;
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
 use sail_logical_plan::seeded_random::SeededRandomNode;
 use sail_logical_plan::show_string::ShowStringNode;
@@ -70,6 +71,7 @@ use sail_physical_plan::remote_checkpoint::{
     checkpoint_storage_schema,
 };
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
+use sail_physical_plan::replay::ReplayExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::seeded_random::{SeededRandomExec, SeededRandomExprColumn};
 use sail_physical_plan::show_string::ShowStringExec;
@@ -142,8 +144,46 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         planning_ctx: &PhysicalPlanningContext,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         let plan: Arc<dyn ExecutionPlan> = if let Some(node) =
-            node.as_any().downcast_ref::<RemoteCheckpointCommandNode>()
+            node.as_any().downcast_ref::<ReplayNode>()
         {
+            let [input] = physical_inputs else {
+                return internal_err!("Replay requires exactly one physical input");
+            };
+            Arc::new(ReplayExec::try_new(node.id(), input.clone())?)
+        } else if let Some(node) = node
+            .as_any()
+            .downcast_ref::<sail_logical_plan::merge_evaluate::EvaluateOnceNode>()
+        {
+            let [input] = physical_inputs else {
+                return internal_err!("EvaluateOnce requires one physical input");
+            };
+            let [logical_input] = logical_inputs else {
+                return internal_err!("EvaluateOnce requires one logical input");
+            };
+            let expressions = node
+                .expr()
+                .iter()
+                .zip(UserDefinedLogicalNode::schema(node).fields())
+                .map(|(expr, field)| {
+                    Ok(datafusion::physical_expr::projection::ProjectionExpr::new(
+                        planner.create_physical_expr(
+                            expr,
+                            logical_input.schema(),
+                            session,
+                            planning_ctx,
+                        )?,
+                        field.name().clone(),
+                    ))
+                })
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
+            Arc::new(
+                sail_physical_plan::merge_evaluate::EvaluateOnceExec::try_new(
+                    input.clone(),
+                    expressions,
+                    UserDefinedLogicalNode::schema(node).inner(),
+                )?,
+            )
+        } else if let Some(node) = node.as_any().downcast_ref::<RemoteCheckpointCommandNode>() {
             let [_logical_input] = logical_inputs else {
                 return internal_err!("RemoteCheckpointCommand requires exactly one logical input");
             };
@@ -738,6 +778,262 @@ mod tests {
 
     fn schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]))
+    }
+
+    #[tokio::test]
+    async fn replay_zero_argument_volatile_filter_stays_on_its_consumer()
+    -> datafusion_common::Result<()> {
+        use futures::TryStreamExt;
+        use sail_common_datafusion::replay::ReplayId;
+        use sail_common_datafusion::session::job::JobRunner;
+        use sail_execution::job_runner::LocalJobRunner;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        for keep in [false, true] {
+            for filtered_first in [false, true] {
+                let calls = Arc::new(AtomicUsize::new(0));
+                let predicate = create_udf(
+                    "volatile_predicate",
+                    vec![],
+                    DataType::Boolean,
+                    Volatility::Volatile,
+                    Arc::new({
+                        let calls = calls.clone();
+                        move |_| {
+                            calls.fetch_add(1, Ordering::SeqCst);
+                            Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(keep))))
+                        }
+                    }),
+                );
+                let source = LogicalPlanBuilder::scan("t", memory_source(vec![10, 20])?, None)?
+                    .project(vec![col("k"), col("v")])?
+                    .filter(col("k").gt(lit(0_i64)))?
+                    .build()?;
+                let named = LogicalPlan::Extension(datafusion_expr::Extension {
+                    node: Arc::new(ReplayNode::new(
+                        ReplayId {
+                            scope: uuid::Uuid::new_v4(),
+                            ordinal: 0,
+                        },
+                        Arc::new(source),
+                    )),
+                });
+                let filtered = LogicalPlanBuilder::from(named.clone())
+                    .filter(predicate.call(vec![]))?
+                    .filter(col("k").gt(lit(0_i64)))?
+                    .build()?;
+                let (left, right) = if filtered_first {
+                    (filtered, named)
+                } else {
+                    (named, filtered)
+                };
+                let logical = LogicalPlanBuilder::from(left).union(right)?.build()?;
+                let context = SessionContext::new_with_state(
+                    SessionStateBuilder::new()
+                        .with_default_features()
+                        .with_optimizer_rules(crate::optimizer::default_optimizer_rules())
+                        .with_query_planner(new_query_planner())
+                        .build(),
+                );
+                let state = context.state();
+                let optimized = state.optimize(&logical)?;
+                optimized.apply(|node| {
+                    if let LogicalPlan::Extension(extension) = node
+                        && let Some(replay) = extension.node.as_any().downcast_ref::<ReplayNode>() {
+                        assert!(!replay.input().exists(|node| {
+                            Ok(node.expressions().iter().any(|expr| matches!(expr,
+                                datafusion_expr::Expr::ScalarFunction(f) if f.name() == "volatile_predicate")))
+                        })?);
+                    }
+                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                })?;
+                let physical = state
+                    .query_planner()
+                    .create_physical_plan(&optimized, &state)
+                    .await?;
+                let batches = LocalJobRunner::default()
+                    .execute(&context, physical.clone())
+                    .await?
+                    .try_collect::<Vec<_>>()
+                    .await?;
+                let batch = concat_batches(&physical.schema(), &batches)?;
+                let mut actual = batch
+                    .column(1)
+                    .as_primitive::<Int64Type>()
+                    .values()
+                    .to_vec();
+                actual.sort_unstable();
+                assert_eq!(
+                    actual,
+                    if keep {
+                        vec![10, 10, 20, 20]
+                    } else {
+                        vec![10, 20]
+                    }
+                );
+                assert!(calls.load(Ordering::SeqCst) > 0);
+                assert_eq!(context.runtime_env().disk_manager.used_disk_space(), 0);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn evaluate_once_keeps_occurrences_and_short_circuits() -> datafusion_common::Result<()> {
+        use sail_logical_plan::merge_evaluate::evaluate_once;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let rows = Arc::new(AtomicUsize::new(0));
+        let audit = create_udf(
+            "evaluate_audit",
+            vec![DataType::Int64],
+            DataType::Int64,
+            Volatility::Volatile,
+            Arc::new({
+                let rows = rows.clone();
+                move |args: &[ColumnarValue]| {
+                    let value = &args[0];
+                    rows.fetch_add(
+                        match value {
+                            ColumnarValue::Array(a) => a.len(),
+                            _ => 1,
+                        },
+                        Ordering::SeqCst,
+                    );
+                    Ok(value.clone())
+                }
+            }),
+        );
+        let input = LogicalPlanBuilder::scan("t", memory_source(vec![10, 20])?, None)?.build()?;
+        let selected =
+            when(col("k").eq(lit(1_i64)), audit.call(vec![col("v")])).otherwise(lit(0_i64))?;
+        let boundary = evaluate_once(
+            input,
+            vec![selected.clone().alias("a"), selected.alias("b")],
+        )?;
+        let plan = LogicalPlanBuilder::from(boundary)
+            .project(vec![col("a"), col("a").alias("again"), col("b")])?
+            .build()?;
+        let context = SessionContext::new_with_state(
+            SessionStateBuilder::new()
+                .with_default_features()
+                .with_optimizer_rules(sail_logical_optimizer::default_optimizer_rules())
+                .with_query_planner(new_query_planner())
+                .build(),
+        );
+        let state = context.state();
+        let optimized = state.optimize(&plan)?;
+        let physical = state
+            .query_planner()
+            .create_physical_plan(&optimized, &state)
+            .await?;
+        let result = collect(physical.clone(), context.task_ctx()).await?;
+        let batch = concat_batches(&physical.schema(), &result)?;
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.column(0), batch.column(1));
+        assert_eq!(batch.column(0), batch.column(2));
+        assert_eq!(rows.load(Ordering::SeqCst), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_planner_preserves_boundary_and_executes_named_source_once()
+    -> datafusion_common::Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use futures::TryStreamExt;
+        use sail_common_datafusion::replay::ReplayId;
+        use sail_common_datafusion::session::job::JobRunner;
+        use sail_execution::job_runner::LocalJobRunner;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rows = Arc::new(AtomicUsize::new(0));
+        let audit = create_udf(
+            "replay_audit",
+            vec![DataType::Int64],
+            DataType::Int64,
+            Volatility::Volatile,
+            Arc::new({
+                let calls = calls.clone();
+                let rows = rows.clone();
+                move |args: &[ColumnarValue]| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    let [value] = args else {
+                        return internal_err!("expected one audit argument");
+                    };
+                    rows.fetch_add(
+                        match value {
+                            ColumnarValue::Array(a) => a.len(),
+                            ColumnarValue::Scalar(_) => 1,
+                        },
+                        Ordering::SeqCst,
+                    );
+                    Ok(value.clone())
+                }
+            }),
+        );
+        let source = LogicalPlanBuilder::scan("t", memory_source(vec![10, 20])?, None)?
+            .project(vec![col("k"), audit.call(vec![col("v")]).alias("v")])?
+            .build()?;
+        let id = ReplayId {
+            scope: uuid::Uuid::new_v4(),
+            ordinal: 0,
+        };
+        let named = LogicalPlan::Extension(datafusion_expr::Extension {
+            node: Arc::new(ReplayNode::new(id, Arc::new(source))),
+        });
+        let consumer = LogicalPlanBuilder::from(named)
+            .filter(col("k").eq(lit(2_i64)))?
+            .project(vec![col("v")])?
+            .limit(0, Some(1))?
+            .build()?;
+        let logical = LogicalPlanBuilder::from(consumer.clone())
+            .union(consumer)?
+            .build()?;
+        let context = SessionContext::new_with_state(
+            SessionStateBuilder::new()
+                .with_default_features()
+                .with_query_planner(new_query_planner())
+                .build(),
+        );
+        let state = context.state();
+        let optimized = state.optimize(&logical)?;
+        let physical = state
+            .query_planner()
+            .create_physical_plan(&optimized, &state)
+            .await?;
+        let mut replay_count = 0;
+        physical.apply(|node| {
+            if let Some(replay) = node.downcast_ref::<ReplayExec>() {
+                replay_count += 1;
+                assert_eq!(replay.id(), id);
+                assert_eq!(replay.schema().fields().len(), 2);
+            }
+            Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+        })?;
+        assert!(replay_count >= 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let runner = LocalJobRunner::default();
+        for epoch in 1..=2 {
+            let batches = runner
+                .execute(&context, physical.clone())
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+            let batch = concat_batches(&physical.schema(), &batches)?;
+            assert_eq!(
+                batch
+                    .column(0)
+                    .as_primitive::<Int64Type>()
+                    .values()
+                    .as_ref(),
+                &[20, 20]
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), epoch);
+            // Filter/projection/limit on either consumer must not specialize the source.
+            assert_eq!(rows.load(Ordering::SeqCst), epoch * 2);
+            assert_eq!(context.runtime_env().disk_manager.used_disk_space(), 0);
+        }
+        Ok(())
     }
 
     #[test]

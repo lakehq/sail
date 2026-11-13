@@ -996,8 +996,10 @@ impl PlanResolver<'_> {
             PlanError::invalid("MERGE target field name is missing during assignment validation")
         })?;
         self.validate_store_assignment_type(&write_type, target_field.data_type(), target_name)?;
-        *value = align_row_level_value(
-            value.clone(),
+        // Validate structural alignment here, but retain the raw occurrence. Expansion
+        // captures it into a slot before alignment can duplicate field access.
+        align_row_level_value(
+            Expr::Column(datafusion_common::Column::from_name("__merge_value")),
             &write_type,
             target_field.data_type(),
             self.config.case_sensitive,

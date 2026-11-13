@@ -78,8 +78,11 @@ pub fn ensure_scalar_subquery_nullability(
     plan: Arc<dyn ExecutionPlan>,
 ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
     plan.transform_up(|plan| {
-        let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
-            return Ok(Transformed::no(plan));
+        let evaluate = plan.downcast_ref::<sail_physical_plan::merge_evaluate::EvaluateOnceExec>();
+        let projection = match (plan.downcast_ref::<ProjectionExec>(), evaluate) {
+            (Some(projection), _) => projection,
+            (_, Some(evaluate)) => evaluate.projection(),
+            _ => return Ok(Transformed::no(plan)),
         };
 
         let mut changed = false;
@@ -110,7 +113,15 @@ pub fn ensure_scalar_subquery_nullability(
             })
             .collect::<datafusion_common::Result<Vec<_>>>()?;
 
-        if changed {
+        if changed && evaluate.is_some() {
+            Ok(Transformed::yes(Arc::new(
+                sail_physical_plan::merge_evaluate::EvaluateOnceExec::try_new(
+                    Arc::clone(projection.input()),
+                    expressions,
+                    &projection.schema(),
+                )?,
+            ) as Arc<dyn ExecutionPlan>))
+        } else if changed {
             Ok(Transformed::yes(Arc::new(ProjectionExec::try_new(
                 expressions,
                 Arc::clone(projection.input()),

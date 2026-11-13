@@ -180,6 +180,17 @@ impl JobScheduler {
         }
 
         let mut actions = vec![];
+        if let Some(cause) = job.replay_failure.clone() {
+            if let JobState::Running { output } = &job.state {
+                actions.push(JobAction::FailJobOutput {
+                    handle: output.handle(),
+                    cause,
+                });
+            }
+            job.state = JobState::Failed;
+            return actions;
+        }
+        Self::seal_replays(job);
 
         actions.extend(Self::cascade_cancel_task_attempts(
             job_id,
@@ -244,6 +255,62 @@ impl JobScheduler {
         ));
 
         actions
+    }
+
+    fn seal_replays(job: &mut JobDescriptor) {
+        for (plan, stage) in job.graph.stages().iter().zip(&mut job.stages) {
+            if plan.replay.is_none() || stage.sealed_attempts.is_some() {
+                continue;
+            }
+            stage.sealed_attempts = stage
+                .tasks
+                .iter()
+                .map(|task| {
+                    let (last, head) = task.attempts.split_last()?;
+                    matches!(last.state, TaskState::Succeeded).then_some(head.len())
+                })
+                .collect::<Option<Vec<_>>>();
+        }
+    }
+
+    /// A reader cannot repair lost sealed data by evaluating a new producer.
+    pub fn fail_replay(&mut self, job_id: JobId, cause: CommonErrorCause) {
+        if let Some(job) = self.jobs.get_mut(&job_id) {
+            job.replay_failure.get_or_insert(cause);
+        }
+    }
+
+    pub fn lose_replay_output(&mut self, key: &TaskKey) {
+        let Some(job) = self.jobs.get_mut(&key.job_id) else {
+            return;
+        };
+        let Some(plan) = job.graph.stages().get(key.stage) else {
+            return;
+        };
+        if plan.replay.is_none() {
+            return;
+        }
+        let stage = &mut job.stages[key.stage];
+        if stage
+            .sealed_attempts
+            .as_ref()
+            .and_then(|x| x.get(key.partition))
+            == Some(&key.attempt)
+        {
+            job.replay_failure = Some(CommonErrorCause::Execution(format!(
+                "sealed replay output lost: {}",
+                TaskKeyDisplay(key)
+            )));
+        } else if let Some(attempt) = stage
+            .tasks
+            .get_mut(key.partition)
+            .and_then(|x| x.attempts.get_mut(key.attempt))
+        {
+            // This output has not been published, so a fresh building attempt is safe.
+            if matches!(attempt.state, TaskState::Succeeded) {
+                attempt.state = TaskState::Failed;
+            }
+        }
     }
 
     fn update_task_regions(job: &mut JobDescriptor, task_max_attempts: usize) {
@@ -348,7 +415,9 @@ impl JobScheduler {
         let mut actions = vec![];
 
         for (s, stage) in job.topology.stages.iter().enumerate() {
-            if matches!(job.stages[s].state, StageState::Inactive) {
+            if job.graph.stages()[s].replay.is_some()
+                || matches!(job.stages[s].state, StageState::Inactive)
+            {
                 continue;
             }
             let all_consumers_succeeded = stage.consumers.iter().all(|&c| {
@@ -472,13 +541,22 @@ impl JobScheduler {
         for t in &region.tasks {
             if let Some(attempt) = Self::get_latest_task_attempt(job, t.stage, t.partition) {
                 let stage = &job.graph.stages()[t.stage];
-                let output = match stage.mode {
-                    OutputMode::Pipelined => TaskOutputKind::Local,
-                    OutputMode::Blocking => match job.graph.shuffle_backend() {
+                let output = if stage.replay.is_some() {
+                    match job.graph.shuffle_backend() {
                         ShuffleBackendKind::Storage { .. } => TaskOutputKind::Storage,
-                        ShuffleBackendKind::Celeborn { .. } => TaskOutputKind::External,
-                        ShuffleBackendKind::Flight { .. } => unreachable!(),
-                    },
+                        ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Celeborn { .. } => {
+                            TaskOutputKind::Local
+                        }
+                    }
+                } else {
+                    match stage.mode {
+                        OutputMode::Pipelined => TaskOutputKind::Local,
+                        OutputMode::Blocking => match job.graph.shuffle_backend() {
+                            ShuffleBackendKind::Storage { .. } => TaskOutputKind::Storage,
+                            ShuffleBackendKind::Celeborn { .. } => TaskOutputKind::External,
+                            ShuffleBackendKind::Flight { .. } => unreachable!(),
+                        },
+                    }
                 };
                 let key = StageGroupKey {
                     placement: stage.placement,
@@ -799,18 +877,28 @@ impl<'a> TaskInputBuilder<'a> {
     }
 
     fn build(&self) -> ExecutionResult<TaskInput> {
-        let locator = match self.producer.mode {
-            OutputMode::Pipelined => match self.producer.placement {
-                TaskPlacement::Driver => self.build_driver_locator()?,
-                TaskPlacement::Worker => self.build_worker_locator()?,
-            },
-            OutputMode::Blocking => match self.job.graph.shuffle_backend() {
+        let locator = if self.producer.replay.is_some() {
+            match self.job.graph.shuffle_backend() {
                 ShuffleBackendKind::Storage { .. } => self.build_storage_locator()?,
-                ShuffleBackendKind::Celeborn { .. } => self.build_shuffle_service_locator()?,
-                ShuffleBackendKind::Flight { .. } => self.build_storage_locator()?,
-            },
+                ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Celeborn { .. } => {
+                    self.build_worker_locator()?
+                }
+            }
+        } else {
+            match self.producer.mode {
+                OutputMode::Pipelined => match self.producer.placement {
+                    TaskPlacement::Driver => self.build_driver_locator()?,
+                    TaskPlacement::Worker => self.build_worker_locator()?,
+                },
+                OutputMode::Blocking => match self.job.graph.shuffle_backend() {
+                    ShuffleBackendKind::Storage { .. } => self.build_storage_locator()?,
+                    ShuffleBackendKind::Celeborn { .. } => self.build_shuffle_service_locator()?,
+                    ShuffleBackendKind::Flight { .. } => self.build_storage_locator()?,
+                },
+            }
         };
         Ok(TaskInput {
+            replay: self.producer.replay,
             stage: self.input.stage,
             locator: Arc::new(locator),
         })
@@ -997,6 +1085,14 @@ impl<'a> TaskInputBuilder<'a> {
     }
 
     fn latest_attempt(&self, partition: usize) -> ExecutionResult<usize> {
+        if self.producer.replay.is_some() {
+            return self.job.stages[self.input.stage]
+                .sealed_attempts
+                .as_ref()
+                .and_then(|x| x.get(partition))
+                .copied()
+                .ok_or_else(|| ExecutionError::InternalError("replay input is not sealed".into()));
+        }
         if let Some(attempt) =
             JobScheduler::get_latest_task_attempt(self.job, self.input.stage, partition)
         {
@@ -1069,11 +1165,20 @@ impl<'a> TaskOutputBuilder<'a> {
                 }
             }
         };
-        let locator = match self.stage.mode {
-            OutputMode::Pipelined => TaskOutputLocator::Pipelined {
-                replicas: self.job.graph.replicas(self.key.stage),
-            },
-            OutputMode::Blocking => TaskOutputLocator::Blocking,
+        let locator = if let Some(id) = self.stage.replay {
+            match self.job.graph.shuffle_backend() {
+                ShuffleBackendKind::Storage { .. } => TaskOutputLocator::ReplayStorage { id },
+                ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Celeborn { .. } => {
+                    TaskOutputLocator::ReplayLocal { id }
+                }
+            }
+        } else {
+            match self.stage.mode {
+                OutputMode::Pipelined => TaskOutputLocator::Pipelined {
+                    replicas: self.job.graph.replicas(self.key.stage),
+                },
+                OutputMode::Blocking => TaskOutputLocator::Blocking,
+            }
         };
         Ok(TaskOutput {
             distribution,
@@ -1123,6 +1228,10 @@ impl StageGroup {
 }
 
 #[cfg(test)]
+#[path = "replay_tests.rs"]
+mod replay_tests;
+
+#[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
@@ -1134,6 +1243,7 @@ mod tests {
     async fn late_unknown_commit_cancels_queued_retry() -> Result<(), Box<dyn std::error::Error>> {
         use std::sync::Arc;
 
+        use crate::replay_integration_tests::test_event_reporter;
         use datafusion::arrow::datatypes::Schema;
         use datafusion::datasource::memory::MemorySourceConfig;
         use datafusion::execution::TaskContext;
@@ -1144,8 +1254,6 @@ mod tests {
         use sail_common_datafusion::error::CommonErrorCause;
         use sail_iceberg::SnapshotUpdateKind;
         use sail_iceberg::physical_plan::IcebergCommitExec;
-        use sail_telemetry::telemetry::{global_system_event_reporter, init_telemetry};
-        use sail_telemetry::{ResourceKind, ResourceOptions};
         use url::Url;
 
         use super::{JobAction, JobScheduler, JobState, TaskState};
@@ -1163,14 +1271,7 @@ mod tests {
         config.telemetry.export_traces = false;
         config.telemetry.export_metrics = false;
         config.telemetry.export_logs = false;
-        init_telemetry(
-            &config.telemetry,
-            &config.catalog.system,
-            ResourceOptions {
-                kind: ResourceKind::Server,
-            },
-        )?;
-        let reporter = global_system_event_reporter().ok_or("missing event reporter")?;
+        let reporter = test_event_reporter();
         let handle = tokio::runtime::Handle::current();
         let runtime = RuntimeHandle::new(handle.clone(), handle);
         let options = DriverOptions::try_new(

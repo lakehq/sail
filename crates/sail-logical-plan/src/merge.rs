@@ -3,7 +3,15 @@ use std::fmt::Formatter;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::merge_evaluate::evaluate_once;
+use crate::replay::ReplayNode;
+use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions_aggregate::count::count_udaf;
+use sail_common_datafusion::replay::ReplayId;
+
+mod intent;
+#[cfg(test)]
+mod tests;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{
@@ -11,7 +19,6 @@ use datafusion_common::{
     TableReference, plan_err,
 };
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, Case, FieldMetadata};
-use datafusion_expr::expr_fn::not;
 use datafusion_expr::logical_plan::{
     Aggregate, Extension, Filter, LogicalPlanBuilder, Projection, SubqueryAlias,
 };
@@ -21,6 +28,7 @@ use datafusion_expr::{
     ScalarUDF, UserDefinedLogicalNodeCore, cast, col, lit, when,
 };
 use educe::Educe;
+use intent::{MergeClauseSelection, capture_merge_values};
 use log::trace;
 use sail_common_datafusion::column_features::ColumnFeaturesBuilder;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -37,9 +45,6 @@ use crate::row_level::{
 pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
 pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
-
-const COW_EXISTENCE_SOURCE_RELATION: &str = "__sail_merge_cow_existence_source";
-const COW_EXISTENCE_TARGET_RELATION: &str = "__sail_merge_cow_existence_target";
 
 type GeneratedAssignmentMarker = (String, String);
 type MergeProjection = (Vec<Expr>, Vec<GeneratedAssignmentMarker>);
@@ -570,7 +575,18 @@ pub fn expand_merge(
         )?;
     }
 
-    if should_check_cardinality || requirements.effects.change_data {
+    let scope = uuid::Uuid::new_v4();
+    let source_id =
+        collision_free_source_alias("row_id", &mut occupied_names, options.case_sensitive);
+    let source_plan = LogicalPlan::Extension(Extension {
+        node: Arc::new(MonotonicIdNode::try_new(
+            Arc::new(source_plan),
+            source_id.clone(),
+        )?),
+    });
+    let source_plan = replay_plan(source_plan, ReplayId { scope, ordinal: 0 });
+
+    {
         // Add stable per-target-row id before join; JOIN will duplicate this value for matches.
         // Use a dedicated logical node so we don't rely on later expression rewriters (MERGE builds plans directly).
         target_plan = LogicalPlan::Extension(Extension {
@@ -629,15 +645,24 @@ pub fn expand_merge(
             NullEquality::NullEqualsNothing,
             false,
         )?;
-        let insert_rows = LogicalPlan::Join(insert_rows);
+        let output_options = options.clone();
+        let (insert_rows, selection) =
+            MergeClauseSelection::apply(LogicalPlan::Join(insert_rows), &mut options, true)?;
+        let insert_rows = LogicalPlanBuilder::from(insert_rows)
+            .filter(selection.insert_predicate())?
+            .build()?;
+        let insert_rows = capture_merge_values(
+            insert_rows,
+            &mut options,
+            target_schema,
+            path_column,
+            row_index_column,
+            row_delete_metadata_columns,
+        )?;
         let insert_value_schema = insert_rows.schema().clone();
-        let insert_operation = when(
-            insert_only_insert_filter(&options),
-            lit(RowLevelOperationType::Insert.as_i32()),
-        )
-        .otherwise(lit(RowLevelOperationType::Noop.as_i32()))?;
+        let insert_operation = lit(RowLevelOperationType::Insert.as_i32());
 
-        let insert_projection_exprs = build_insert_only_projection(
+        let mut insert_projection_exprs = build_insert_only_projection(
             &options,
             target_schema,
             &insert_value_schema,
@@ -646,47 +671,39 @@ pub fn expand_merge(
             row_delete_metadata_columns,
             insert_operation,
         )?;
-        let insert_projected =
-            project_merge_with_identity(insert_rows, insert_projection_exprs, &options, lit(true))?;
+        let writer_columns = insert_projection_exprs
+            .iter()
+            .map(|expr| expr.schema_name().to_string())
+            .collect::<Vec<_>>();
+        insert_projection_exprs.extend([
+            col(&source_id),
+            col(&selection.ordinal),
+            lit(ScalarValue::Int64(None)).alias(TARGET_ROW_ID_COLUMN),
+        ]);
+        for name in std::iter::once(path_column)
+            .chain(row_index_column)
+            .chain(row_delete_metadata_columns.iter().copied())
+        {
+            let field = target_schema.field_with_unqualified_name(name)?;
+            insert_projection_exprs
+                .push(lit(ScalarValue::try_new_null(field.data_type())?).alias(name));
+        }
+        let insert_projected = project_merge_with_identity(
+            insert_rows,
+            insert_projection_exprs,
+            &options,
+            &selection,
+        )?;
         let insert_projected =
             apply_generation_projection(insert_projected, &options.generated_column_exprs, &[])?;
 
-        let projected = if requirements.source_metrics {
-            let noop_rows = Join::try_new(
-                Arc::new(source_plan.clone()),
-                Arc::new(target_plan.clone()),
-                join_on,
-                residual_filter,
-                JoinType::LeftSemi,
-                JoinConstraint::On,
-                NullEquality::NullEqualsNothing,
-                false,
-            )?;
-            let noop_rows = LogicalPlan::Join(noop_rows);
-            let noop_projection_exprs = build_insert_only_noop_projection(
-                target_schema,
-                path_column,
-                row_index_column,
-                row_delete_metadata_columns,
-            )?;
-            let noop_projected = LogicalPlanBuilder::from(noop_rows)
-                .project(noop_projection_exprs)?
-                .build()?;
-            let noop_projected =
-                apply_generation_projection(noop_projected, &options.generated_column_exprs, &[])?;
-
-            LogicalPlanBuilder::from(insert_projected)
-                .union(noop_projected)?
-                .build()?
-        } else {
-            insert_projected
-        };
         let projected = apply_delta_check_constraint_filter(
-            projected,
+            insert_projected,
             &options.check_constraint_exprs,
             Some(row_level_data_operation_expr()),
         )?;
 
+        let projected = replay_plan(projected, ReplayId { scope, ordinal: 1 });
         let change_data_plan = requirements
             .effects
             .change_data
@@ -700,6 +717,30 @@ pub fn expand_merge(
                 )
             })
             .transpose()?;
+        let projected = LogicalPlanBuilder::from(projected)
+            .project(
+                writer_columns
+                    .iter()
+                    .map(|name| Expr::Column(Column::from_name(name)))
+                    .collect::<Vec<_>>(),
+            )?
+            .build()?;
+        let projected = if requirements.source_metrics {
+            let mut expressions = projected
+                .schema()
+                .columns()
+                .into_iter()
+                .map(Expr::Column)
+                .collect::<Vec<_>>();
+            expressions.push(lit(ScalarValue::Int64(None)).alias(MERGE_SOURCE_METRIC_COLUMN));
+            let writer = LogicalPlanBuilder::from(projected)
+                .project(expressions)?
+                .build()?;
+            let metric = build_source_metric_plan(source_plan.clone(), writer.schema())?;
+            LogicalPlanBuilder::from(writer).union(metric)?.build()?
+        } else {
+            projected
+        };
         let command_schema = Arc::new(DFSchema::empty());
         return Ok(MergeExpansion {
             write_plan: projected,
@@ -708,7 +749,7 @@ pub fn expand_merge(
             change_data_plan,
             change_data_preimage: None,
             output_schema: command_schema,
-            options,
+            options: output_options,
         });
     }
 
@@ -721,12 +762,20 @@ pub fn expand_merge(
         row_index_column,
         row_delete_metadata_columns,
         requirements,
+        ReplayId { scope, ordinal: 1 },
+        &source_id,
     )
+}
+
+fn replay_plan(input: LogicalPlan, id: ReplayId) -> LogicalPlan {
+    LogicalPlan::Extension(Extension {
+        node: Arc::new(ReplayNode::new(id, Arc::new(input))),
+    })
 }
 
 /// Default MERGE expansion: clause-aware join + presence columns + touched files.
 fn build_default_merge_expansion(
-    options: MergeIntoOptions,
+    mut options: MergeIntoOptions,
     target_plan: LogicalPlan,
     source_plan: LogicalPlan,
     should_check_cardinality: bool,
@@ -734,6 +783,8 @@ fn build_default_merge_expansion(
     row_index_column: Option<&str>,
     row_delete_metadata_columns: &[&str],
     requirements: MergePlanRequirements,
+    intent_id: ReplayId,
+    source_id: &str,
 ) -> Result<MergeExpansion> {
     let target_schema = target_plan.schema();
     // Unconditional matched DELETE needs only source presence, not source values.
@@ -744,12 +795,8 @@ fn build_default_merge_expansion(
     );
     let single_stream_cdf =
         requirements.effects.change_data && !options.identity_columns.is_empty();
-    let should_preserve_cow_target_rows_by_existence_join =
-        (requirements.preserve_unmodified_target_rows || single_stream_cdf)
-            && (unconditional_matched_delete
-                || (options.matched_clauses.is_empty()
-                    && !options.not_matched_by_source_clauses.is_empty()));
-    let include_source_only_rows = !options.not_matched_by_target_clauses.is_empty();
+    let deduplicate_targets = unconditional_matched_delete || options.matched_clauses.is_empty();
+    let output_options = options.clone();
     let source_schema = source_plan.schema().clone();
 
     let augmented_target = LogicalPlanBuilder::from(target_plan.clone())
@@ -802,85 +849,78 @@ fn build_default_merge_expansion(
         join
     };
 
-    let write_join = if should_preserve_cow_target_rows_by_existence_join {
-        Arc::new(build_cow_target_preserving_write_join(
-            augmented_target,
-            augmented_source,
-            &join_on,
-            residual_filter,
-            include_source_only_rows,
-        )?)
+    let join = if deduplicate_targets {
+        let keys = vec![
+            col(TARGET_ROW_ID_COLUMN),
+            when(
+                col(TARGET_PRESENT_COLUMN).is_not_null(),
+                lit(ScalarValue::Int64(None)),
+            )
+            .otherwise(col(source_id))?,
+        ];
+        LogicalPlanBuilder::from(join.as_ref().clone())
+            .distinct_on(
+                keys,
+                join.schema()
+                    .columns()
+                    .into_iter()
+                    .map(Expr::Column)
+                    .collect(),
+                None,
+            )?
+            .build()?
     } else {
-        Arc::clone(&join)
+        join.as_ref().clone()
     };
+    let (join, selection) = MergeClauseSelection::apply(join, &mut options, false)?;
+    let write_join = Arc::new(join);
 
     let target_present = col(TARGET_PRESENT_COLUMN).is_not_null();
-    let source_present = col(SOURCE_PRESENT_COLUMN).is_not_null();
-
-    let matched_pred = target_present.clone().and(source_present.clone());
-    let not_matched_by_source_pred = target_present.clone().and(not(source_present.clone()));
-    let not_matched_by_target_pred = not(target_present.clone()).and(source_present.clone());
-
-    let mut row_delete_pred: Option<Expr> = None;
-    let mut insert_pred: Option<Expr> = None;
-
-    for clause in &options.matched_clauses {
-        let mut pred = matched_pred.clone();
-        if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.expr.clone());
-        }
-        match clause.action {
-            MergeMatchedAction::Delete
-            | MergeMatchedAction::UpdateAll
-            | MergeMatchedAction::UpdateSet(_) => {
-                row_delete_pred = or_pred(row_delete_pred, pred);
-            }
-        }
-    }
-
-    for clause in &options.not_matched_by_source_clauses {
-        let mut pred = not_matched_by_source_pred.clone();
-        if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.expr.clone());
-        }
-        match clause.action {
-            MergeNotMatchedBySourceAction::Delete | MergeNotMatchedBySourceAction::UpdateSet(_) => {
-                row_delete_pred = or_pred(row_delete_pred, pred);
-            }
-        }
-    }
-
-    for clause in &options.not_matched_by_target_clauses {
-        let mut pred = not_matched_by_target_pred.clone();
-        if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.expr.clone());
-        }
-        match clause.action {
-            MergeNotMatchedByTargetAction::InsertAll
-            | MergeNotMatchedByTargetAction::InsertColumns { .. } => {
-                insert_pred = or_pred(insert_pred, pred);
-            }
-        }
-    }
-
-    let insert_expr = insert_pred.unwrap_or_else(|| lit(false));
-    let active_expr = target_present.or(insert_expr);
+    let active_expr = target_present.or(selection.insert_predicate());
 
     let filtered = LogicalPlanBuilder::from(write_join.as_ref().clone())
         .filter(active_expr)?
         .build()?;
+    let filtered = capture_merge_values(
+        filtered,
+        &mut options,
+        target_schema,
+        path_column,
+        row_index_column,
+        row_delete_metadata_columns,
+    )?;
     let value_schema = filtered.schema().clone();
 
     let (mut projection_exprs, generated_assignment_markers) = build_merge_projection(
         &options,
+        &selection,
         target_schema,
         &value_schema,
         path_column,
         row_index_column,
         row_delete_metadata_columns,
     )?;
+    let writer_columns = projection_exprs
+        .iter()
+        .map(|expr| expr.schema_name().to_string())
+        .filter(|name| {
+            !generated_assignment_markers
+                .iter()
+                .any(|(_, marker)| marker == name)
+        })
+        .collect::<Vec<_>>();
+    projection_exprs.extend([
+        col(TARGET_ROW_ID_COLUMN),
+        col(source_id),
+        col(&selection.ordinal),
+    ]);
+    if row_delete_metadata_columns.is_empty()
+        && let Some(index) = row_index_column
+    {
+        projection_exprs.push(col(index));
+    }
     let change_data_preimage =
-        if single_stream_cdf {
+        if requirements.effects.change_data {
             let mut occupied = filtered
                 .schema()
                 .fields()
@@ -913,55 +953,25 @@ fn build_default_merge_expansion(
         } else {
             None
         };
-    let row_index_operation_expr = if requirements.effects.row_index_deletes {
-        Some(
-            projection_exprs
-                .iter()
-                .find(|expr| matches!(expr, Expr::Alias(alias) if alias.name == OPERATION_COLUMN))
-                .cloned()
-                .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "MERGE row-index projection is missing its row operation column"
-                            .to_string(),
-                    )
-                })?,
-        )
-    } else {
-        None
-    };
+
     trace!("projection exprs: {:?}", projection_exprs);
-    let change_data_input =
-        (requirements.effects.change_data && !single_stream_cdf).then(|| filtered.clone());
-    let projected = project_merge_with_identity(
-        filtered,
-        projection_exprs.clone(),
-        &options,
-        not_matched_by_target_pred,
-    )?;
+
+    let projected =
+        project_merge_with_identity(filtered, projection_exprs.clone(), &options, &selection)?;
     let projected = apply_generation_projection(
         projected,
         &options.generated_column_exprs,
         &generated_assignment_markers,
     )?;
-    let change_data_plan = if let Some(before_input) = change_data_input {
-        let operation = projection_exprs
-            .iter()
-            .find(|expr| matches!(expr, Expr::Alias(alias) if alias.name == OPERATION_COLUMN))
-            .cloned()
-            .ok_or_else(|| DataFusionError::Internal("Missing MERGE operation".into()))?;
-        let mut before_projection = change_data_columns(
-            target_schema,
-            path_column,
-            row_index_column,
-            row_delete_metadata_columns,
-        );
-        before_projection.push(operation);
-        // Preserve target identity when multiple source rows select an unconditional delete.
-        before_projection.push(col(TARGET_ROW_ID_COLUMN));
-        let before = LogicalPlanBuilder::from(before_input)
-            .project(before_projection)?
-            .distinct()?
-            .build()?;
+    let projected = apply_delta_check_constraint_filter(
+        projected,
+        &options.check_constraint_exprs,
+        Some(row_level_data_operation_expr()),
+    )?;
+    let intent = replay_plan(projected, intent_id);
+    let projected = intent.clone();
+    let change_data_plan = if !single_stream_cdf && let Some(preimage) = &change_data_preimage {
+        let before = intent.clone();
         let update = change_data_update_operation();
         let deleted = col(OPERATION_COLUMN)
             .eq(lit(RowLevelOperationType::MatchedDelete.as_i32()))
@@ -972,7 +982,13 @@ fn build_default_merge_expansion(
             path_column,
             row_index_column,
             row_delete_metadata_columns,
-        );
+        )
+        .into_iter()
+        .map(|expr| {
+            let name = expr.schema_name().to_string();
+            col(preimage).field(name.clone()).alias(name)
+        })
+        .collect::<Vec<_>>();
         fields.push(
             when(update.clone(), lit("update_preimage"))
                 .otherwise(lit("delete"))?
@@ -996,47 +1012,36 @@ fn build_default_merge_expansion(
 
     // Targeted rewrites may omit matched or source-only rows from the write branch,
     // so formats that report source-row metrics use a separate aggregate branch.
+    let change_data_preimage = change_data_preimage.filter(|_| single_stream_cdf);
+    let writer_expressions = writer_columns
+        .iter()
+        .chain(change_data_preimage.iter())
+        .map(|name| Expr::Column(Column::from_name(name)))
+        .collect::<Vec<_>>();
+    let projected = LogicalPlanBuilder::from(projected)
+        .project(writer_expressions)?
+        .build()?;
     let projected = if requirements.source_metrics {
-        let mut source_metric_projected = build_source_metric_plan(
-            source_plan.clone(),
-            target_schema,
-            path_column,
-            row_index_column,
-            row_delete_metadata_columns,
-        )?;
-        if let Some(name) = &change_data_preimage {
-            let field = projected.schema().field_with_unqualified_name(name)?;
-            let mut expressions = source_metric_projected
-                .schema()
-                .columns()
-                .into_iter()
-                .map(Expr::Column)
-                .collect::<Vec<_>>();
-            expressions.push(lit(ScalarValue::try_new_null(field.data_type())?).alias(name));
-            source_metric_projected = LogicalPlanBuilder::from(source_metric_projected)
-                .project(expressions)?
-                .build()?;
-        }
-        LogicalPlanBuilder::from(projected)
-            .union(source_metric_projected)?
-            .build()?
+        let metric = build_source_metric_plan(source_plan.clone(), projected.schema())?;
+        LogicalPlanBuilder::from(projected).union(metric)?.build()?
     } else {
         projected
     };
-    let projected = apply_delta_check_constraint_filter(
-        projected,
-        &options.check_constraint_exprs,
-        Some(row_level_data_operation_expr()),
-    )?;
 
-    let (rewrite_matched, rewrite_not_matched_by_source) =
-        build_rewrite_predicates(&options, &matched_pred, &not_matched_by_source_pred);
-    let rewrite_filter = combine_rewrite_preds(rewrite_matched, rewrite_not_matched_by_source);
+    let rewrite_filter = (!options.matched_clauses.is_empty()
+        || !options.not_matched_by_source_clauses.is_empty())
+    .then(|| {
+        change_data_update_operation()
+            .or(col(OPERATION_COLUMN).eq(lit(RowLevelOperationType::MatchedDelete.as_i32())))
+            .or(col(OPERATION_COLUMN)
+                .eq(lit(RowLevelOperationType::NotMatchedBySourceDelete.as_i32())))
+    });
 
     let touched_files_plan = if requirements.effects.touched_files {
         rewrite_filter
+            .clone()
             .map(|rewrite_filter| {
-                LogicalPlanBuilder::from(join.as_ref().clone())
+                LogicalPlanBuilder::from(intent.clone())
                     .filter(rewrite_filter)?
                     .aggregate(vec![col(path_column)], Vec::<Expr>::new())?
                     .project(vec![col(path_column).alias(path_column.to_string())])?
@@ -1049,7 +1054,7 @@ fn build_default_merge_expansion(
 
     let row_index_delete_plan = if requirements.effects.row_index_deletes
         && let Some(row_index_column) = row_index_column
-        && let Some(row_delete_pred) = row_delete_pred
+        && let Some(row_delete_pred) = rewrite_filter
     {
         let mut delete_projection = vec![
             col(path_column).alias(path_column.to_string()),
@@ -1060,9 +1065,9 @@ fn build_default_merge_expansion(
                 .iter()
                 .map(|column| col(*column).alias((*column).to_string())),
         );
-        delete_projection.extend(row_index_operation_expr.clone());
+        delete_projection.push(col(OPERATION_COLUMN));
         Some(
-            LogicalPlanBuilder::from(join.as_ref().clone())
+            LogicalPlanBuilder::from(intent)
                 .filter(row_delete_pred)?
                 .project(delete_projection)?
                 .build()?,
@@ -1074,120 +1079,14 @@ fn build_default_merge_expansion(
     let command_schema = Arc::new(DFSchema::empty());
 
     Ok(MergeExpansion {
-        write_plan: projected.clone(),
+        write_plan: projected,
         touched_files_plan,
         row_index_delete_plan,
         change_data_plan,
         change_data_preimage,
         output_schema: command_schema,
-        options,
+        options: output_options,
     })
-}
-
-fn build_cow_target_preserving_write_join(
-    target: LogicalPlan,
-    source: LogicalPlan,
-    join_on: &[(Expr, Expr)],
-    residual_filter: Option<Expr>,
-    include_source_only_rows: bool,
-) -> Result<LogicalPlan> {
-    let target_schema = target.schema().clone();
-    let source_schema = source.schema().clone();
-    let reversed_join_on = join_on
-        .iter()
-        .map(|(target_expr, source_expr)| (source_expr.clone(), target_expr.clone()))
-        .collect::<Vec<_>>();
-
-    // A right-mark join emits every target row exactly once while still recording whether any
-    // source row matched it. Keeping the target on the probe/output side also preserves its
-    // writer-friendly partitioning when the source can be collected.
-    let existence_source = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-        Arc::new(source.clone()),
-        COW_EXISTENCE_SOURCE_RELATION,
-    )?);
-    let existence_target = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-        Arc::new(target.clone()),
-        COW_EXISTENCE_TARGET_RELATION,
-    )?);
-    let target_columns = existence_target.schema().columns();
-    let target_existence_join = LogicalPlan::Join(Join::try_new(
-        Arc::new(existence_source),
-        Arc::new(existence_target),
-        reversed_join_on.clone(),
-        residual_filter.clone(),
-        JoinType::RightMark,
-        JoinConstraint::On,
-        NullEquality::NullEqualsNothing,
-        false,
-    )?);
-    let match_mark = target_existence_join
-        .schema()
-        .columns()
-        .last()
-        .cloned()
-        .ok_or_else(|| {
-            DataFusionError::Internal(
-                "MERGE target existence join is missing its mark column".to_string(),
-            )
-        })?;
-
-    let mut target_rows_projection = target_columns
-        .into_iter()
-        .zip(target_schema.fields())
-        .map(|(column, field)| Expr::Column(column).alias(field.name().clone()))
-        .collect::<Vec<_>>();
-    for field in source_schema.fields() {
-        let expression = if field.name() == SOURCE_PRESENT_COLUMN {
-            when(Expr::Column(match_mark.clone()), lit(true))
-                .otherwise(lit(ScalarValue::Boolean(None)))?
-        } else {
-            lit(ScalarValue::try_new_null(field.data_type())?)
-        };
-        target_rows_projection.push(expression.alias(field.name().clone()));
-    }
-    let target_rows = LogicalPlanBuilder::from(target_existence_join)
-        .project(target_rows_projection)?
-        .build()?;
-
-    if !include_source_only_rows {
-        return Ok(target_rows);
-    }
-
-    // The mark join intentionally carries no source values. Add only unmatched source rows for
-    // INSERT clauses; a left-anti join preserves duplicate source-only rows without multiplying
-    // matched target rows.
-    let source_only_rows = LogicalPlan::Join(Join::try_new(
-        Arc::new(source),
-        Arc::new(target),
-        reversed_join_on,
-        residual_filter,
-        JoinType::LeftAnti,
-        JoinConstraint::On,
-        NullEquality::NullEqualsNothing,
-        false,
-    )?);
-    let mut source_only_projection = target_schema
-        .fields()
-        .iter()
-        .map(|field| {
-            Ok(lit(ScalarValue::try_new_null(field.data_type())?).alias(field.name().clone()))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    source_only_projection.extend(
-        source_only_rows
-            .schema()
-            .columns()
-            .into_iter()
-            .zip(source_schema.fields())
-            .map(|(column, field)| Expr::Column(column).alias(field.name().clone())),
-    );
-    let source_only_rows = LogicalPlanBuilder::from(source_only_rows)
-        .project(source_only_projection)?
-        .build()?;
-
-    LogicalPlanBuilder::from(target_rows)
-        .union(source_only_rows)?
-        .build()
 }
 
 fn select_merge_join_type(
@@ -1305,20 +1204,6 @@ fn merge_has_star_action(options: &MergeIntoOptions) -> bool {
             .any(|clause| matches!(clause.action, MergeNotMatchedByTargetAction::InsertAll))
 }
 
-fn insert_only_insert_filter(options: &MergeIntoOptions) -> Expr {
-    let preds = options
-        .not_matched_by_target_clauses
-        .iter()
-        .map(|c| {
-            c.condition
-                .as_ref()
-                .map(|x| x.expr.clone())
-                .unwrap_or_else(|| lit(true))
-        })
-        .collect::<Vec<_>>();
-    combine_disjunction(&preds).unwrap_or_else(|| lit(false))
-}
-
 fn merge_insert_omits_identity(
     options: &MergeIntoOptions,
     action: &MergeNotMatchedByTargetAction,
@@ -1347,17 +1232,9 @@ fn project_merge_with_identity(
     input: LogicalPlan,
     mut projections: Vec<Expr>,
     options: &MergeIntoOptions,
-    insert_base: Expr,
+    selection: &MergeClauseSelection,
 ) -> Result<LogicalPlan> {
-    // IS TRUE in the clause predicates makes every materialized generation mask
-    // non-null, even when physical expression schemas conservatively say nullable.
-    let predicates = first_matching_clause_predicates(
-        insert_base,
-        options
-            .not_matched_by_target_clauses
-            .iter()
-            .map(|clause| clause.condition.as_ref()),
-    );
+    let predicates = selection.predicates(&selection.inserts);
     let mut occupied =
         input
             .schema()
@@ -1401,9 +1278,7 @@ fn project_merge_with_identity(
         };
         allocations.push((name, identity, domain));
     }
-    let mut plan = LogicalPlanBuilder::from(input)
-        .project(projections)?
-        .build()?;
+    let mut plan = evaluate_once(input, projections)?;
     if allocations.is_empty() {
         return Ok(plan);
     }
@@ -1462,7 +1337,7 @@ fn project_merge_with_identity(
             Ok(value.alias_with_metadata(field.name(), Some(FieldMetadata::from(metadata))))
         })
         .collect::<Result<Vec<_>>>()?;
-    LogicalPlanBuilder::from(plan).project(output)?.build()
+    evaluate_once(plan, output)
 }
 
 fn apply_generation_projection(
@@ -1473,6 +1348,36 @@ fn apply_generation_projection(
     if generated_column_exprs.is_empty() {
         return Ok(plan);
     }
+    let mut occupied = plan
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| merge_name_key(field.name(), false))
+        .collect();
+    let mut expected_projection = plan
+        .schema()
+        .columns()
+        .into_iter()
+        .map(Expr::Column)
+        .collect::<Vec<_>>();
+    let mut expected_columns = Vec::new();
+    let mut expected_names = Vec::new();
+    for (name, expr) in generated_column_exprs {
+        let slot = collision_free_source_alias("generated_expected", &mut occupied, false);
+        let data_type = expr.get_type(plan.schema())?;
+        let selected = col(OPERATION_COLUMN)
+            .eq(lit(RowLevelOperationType::Insert.as_i32()))
+            .or(change_data_update_operation());
+        expected_projection.push(
+            when(selected, expr.clone())
+                .otherwise(lit(ScalarValue::try_new_null(&data_type)?))?
+                .alias(&slot),
+        );
+        expected_columns.push((name.clone(), col(&slot)));
+        expected_names.push(slot);
+    }
+    let plan = evaluate_once(plan, expected_projection)?;
+    let generated_column_exprs = &expected_columns;
     let gen_map: HashMap<&str, &Expr> = generated_column_exprs
         .iter()
         .map(|(name, expr)| (name.as_str(), expr))
@@ -1491,9 +1396,10 @@ fn apply_generation_projection(
         .fields()
         .iter()
         .filter(|field| {
-            !generated_assignment_markers
-                .iter()
-                .any(|(_, marker)| marker == field.name())
+            !expected_names.contains(field.name())
+                && !generated_assignment_markers
+                    .iter()
+                    .any(|(_, marker)| marker == field.name())
         })
         .map(|f| {
             let name = f.name();
@@ -1555,7 +1461,7 @@ fn apply_generation_projection(
             }
         })
         .collect::<Result<Vec<Expr>>>()?;
-    LogicalPlanBuilder::from(plan).project(post_exprs)?.build()
+    evaluate_once(plan, post_exprs)
 }
 
 fn row_level_data_operation_expr() -> Expr {
@@ -1709,7 +1615,9 @@ fn build_insert_only_projection(
             when_then_expr,
             else_expr: Some(Box::new(lit(ScalarValue::Null))),
         });
-        projections.push(expr.alias(name));
+        projections.push(
+            expr.alias_with_metadata(name, Some(FieldMetadata::from(field.metadata().clone()))),
+        );
     }
 
     projections.push(operation_expr.alias(OPERATION_COLUMN));
@@ -1717,35 +1625,9 @@ fn build_insert_only_projection(
     Ok(projections)
 }
 
-fn build_insert_only_noop_projection(
-    target_schema: &DFSchemaRef,
-    path_column: &str,
-    row_index_column: Option<&str>,
-    row_delete_metadata_columns: &[&str],
-) -> Result<Vec<Expr>> {
-    let mut projections = Vec::new();
-    for field in target_schema.fields().iter() {
-        if is_merge_metadata_column(
-            field.name(),
-            path_column,
-            row_index_column,
-            row_delete_metadata_columns,
-        ) {
-            continue;
-        }
-        let null_value = ScalarValue::try_new_null(field.data_type())?;
-        projections.push(lit(null_value).alias(field.name().clone()));
-    }
-    projections.push(lit(RowLevelOperationType::Noop.as_i32()).alias(OPERATION_COLUMN));
-    Ok(projections)
-}
-
 fn build_source_metric_plan(
     source_plan: LogicalPlan,
-    target_schema: &DFSchemaRef,
-    path_column: &str,
-    row_index_column: Option<&str>,
-    row_delete_metadata_columns: &[&str],
+    writer_schema: &DFSchemaRef,
 ) -> Result<LogicalPlan> {
     let source_count = Expr::AggregateFunction(AggregateFunction {
         func: count_udaf(),
@@ -1762,51 +1644,21 @@ fn build_source_metric_plan(
         .aggregate(Vec::<Expr>::new(), vec![source_count])?
         .build()?;
 
-    let mut projections = Vec::new();
-    let mut path_expr = None;
-
-    for field in target_schema.fields().iter() {
-        if field.name() == path_column {
-            let null_value = ScalarValue::try_new_null(field.data_type())?;
-            path_expr = Some(lit(null_value).alias(path_column.to_string()));
-            continue;
-        }
-        if is_merge_metadata_column(
-            field.name(),
-            path_column,
-            row_index_column,
-            row_delete_metadata_columns,
-        ) {
-            continue;
-        }
-        let null_value = ScalarValue::try_new_null(field.data_type())?;
-        projections.push(lit(null_value).alias(field.name().clone()));
-    }
-
-    let Some(path_expr) = path_expr else {
-        return plan_err!("MERGE source metric projection is missing required path column");
-    };
-    projections.push(path_expr);
-    if !row_delete_metadata_columns.is_empty() {
-        for metadata_column in row_index_column
-            .into_iter()
-            .chain(row_delete_metadata_columns.iter().copied())
-        {
-            let field = target_schema
-                .fields()
-                .iter()
-                .find(|field| field.name() == metadata_column)
-                .ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "MERGE source metric projection is missing metadata column '{metadata_column}'"
-                    ))
-                })?;
-            let null_value = ScalarValue::try_new_null(field.data_type())?;
-            projections.push(lit(null_value).alias(metadata_column.to_string()));
-        }
-    }
-    projections.push(lit(RowLevelOperationType::SourceMetric.as_i32()).alias(OPERATION_COLUMN));
-    projections.push(col(MERGE_SOURCE_METRIC_COLUMN).alias(MERGE_SOURCE_METRIC_COLUMN));
+    let projections = writer_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let value = match field.name().as_str() {
+                OPERATION_COLUMN => lit(RowLevelOperationType::SourceMetric.as_i32()),
+                MERGE_SOURCE_METRIC_COLUMN => col(MERGE_SOURCE_METRIC_COLUMN),
+                _ => lit(ScalarValue::try_new_null(field.data_type())?),
+            };
+            Ok(value.alias_with_metadata(
+                field.name(),
+                Some(FieldMetadata::from(field.metadata().clone())),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     LogicalPlanBuilder::from(count_plan)
         .project(projections)?
@@ -2011,80 +1863,18 @@ fn combine_disjunction(exprs: &[Expr]) -> Option<Expr> {
     Some(iter.fold(first, |acc, expr| acc.or(expr)))
 }
 
-fn or_pred(existing: Option<Expr>, expr: Expr) -> Option<Expr> {
-    Some(match existing {
-        Some(prev) => prev.or(expr),
-        None => expr,
-    })
-}
-
-fn first_matching_clause_predicates<'a>(
-    base_predicate: Expr,
-    conditions: impl IntoIterator<Item = Option<&'a ExprWithSource>>,
-) -> Vec<Expr> {
-    let mut prior_match: Option<Expr> = None;
-    conditions
-        .into_iter()
-        .map(|condition| {
-            let clause_match = base_predicate
-                .clone()
-                .and(
-                    condition
-                        .map(|condition| condition.expr.clone())
-                        .unwrap_or_else(|| lit(true)),
-                )
-                .is_true();
-            let selected = match &prior_match {
-                Some(prior_match) => clause_match.clone().and(not(prior_match.clone())),
-                None => clause_match.clone(),
-            };
-            prior_match = Some(match prior_match.take() {
-                Some(prior_match) => prior_match.or(clause_match),
-                None => clause_match,
-            });
-            selected
-        })
-        .collect()
-}
-
 fn build_merge_projection(
     options: &MergeIntoOptions,
+    selection: &MergeClauseSelection,
     target_schema: &DFSchemaRef,
     value_schema: &DFSchemaRef,
     path_column: &str,
     row_index_column: Option<&str>,
     row_delete_metadata_columns: &[&str],
 ) -> Result<MergeProjection> {
-    let matched_base = col(TARGET_PRESENT_COLUMN)
-        .is_not_null()
-        .and(col(SOURCE_PRESENT_COLUMN).is_not_null());
-    let matched_clause_predicates = first_matching_clause_predicates(
-        matched_base,
-        options
-            .matched_clauses
-            .iter()
-            .map(|clause| clause.condition.as_ref()),
-    );
-    let not_matched_by_source_base = col(TARGET_PRESENT_COLUMN)
-        .is_not_null()
-        .and(col(SOURCE_PRESENT_COLUMN).is_null());
-    let not_matched_by_source_clause_predicates = first_matching_clause_predicates(
-        not_matched_by_source_base,
-        options
-            .not_matched_by_source_clauses
-            .iter()
-            .map(|clause| clause.condition.as_ref()),
-    );
-    let not_matched_by_target_base = col(TARGET_PRESENT_COLUMN)
-        .is_null()
-        .and(col(SOURCE_PRESENT_COLUMN).is_not_null());
-    let not_matched_by_target_clause_predicates = first_matching_clause_predicates(
-        not_matched_by_target_base,
-        options
-            .not_matched_by_target_clauses
-            .iter()
-            .map(|clause| clause.condition.as_ref()),
-    );
+    let matched_clause_predicates = selection.predicates(&selection.matched);
+    let not_matched_by_source_clause_predicates = selection.predicates(&selection.by_source);
+    let not_matched_by_target_clause_predicates = selection.predicates(&selection.inserts);
 
     let mut cases: HashMap<String, Vec<(Expr, Expr)>> = target_schema
         .fields()
@@ -2251,7 +2041,10 @@ fn build_merge_projection(
             })
         };
 
-        projections.push(expr.alias(name.clone()));
+        projections.push(expr.alias_with_metadata(
+            name.clone(),
+            Some(FieldMetadata::from(field.metadata().clone())),
+        ));
     }
 
     // Preserve the file path column so downstream physical planning can implement
@@ -2393,40 +2186,6 @@ fn build_merge_projection(
     }
 
     Ok((projections, generated_assignment_markers))
-}
-
-fn build_rewrite_predicates(
-    options: &MergeIntoOptions,
-    matched_pred: &Expr,
-    not_matched_by_source_pred: &Expr,
-) -> (Vec<Expr>, Vec<Expr>) {
-    let mut matched = Vec::new();
-    let mut not_matched_by_source = Vec::new();
-
-    for clause in &options.matched_clauses {
-        let mut pred = matched_pred.clone().and(options.on_condition.expr.clone());
-        if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.expr.clone());
-        }
-        matched.push(pred);
-    }
-
-    for clause in &options.not_matched_by_source_clauses {
-        let mut pred = not_matched_by_source_pred.clone();
-        if let Some(cond) = &clause.condition {
-            pred = pred.and(cond.expr.clone());
-        }
-        not_matched_by_source.push(pred);
-    }
-
-    (matched, not_matched_by_source)
-}
-
-fn combine_rewrite_preds(matched: Vec<Expr>, not_matched_by_source: Vec<Expr>) -> Option<Expr> {
-    let mut preds = Vec::new();
-    preds.extend(matched);
-    preds.extend(not_matched_by_source);
-    combine_disjunction(&preds)
 }
 
 fn merge_target_field<'a>(

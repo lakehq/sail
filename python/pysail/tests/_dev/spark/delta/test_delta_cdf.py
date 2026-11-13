@@ -572,7 +572,7 @@ def test_cdf_in_commit_timestamps(spark, tmp_path):
 
 
 @pytest.mark.parametrize("operation", ["update", "merge", "replace"])
-def test_cdf_rejects_volatile_rewrites_before_commit(spark, tmp_path, operation):
+def test_cdf_volatile_rewrites_require_replay(spark, tmp_path, operation):
     path = tmp_path / "cdf_volatile"
     spark.createDataFrame([(1, "old")], "id LONG, value STRING").write.format("delta").option(
         "delta.enableChangeDataFeed", "true"
@@ -590,6 +590,17 @@ def test_cdf_rejects_volatile_rewrites_before_commit(spark, tmp_path, operation)
                 "replaceWhere", "id = 1"
             ).save(str(path))
 
+    if operation == "merge":
+        rewrite()
+        rows = spark.read.format("delta").load(str(path)).collect()
+        assert len(rows) == 1
+        assert rows[0].id == 1
+        assert rows[0].value != "old"
+        assert _changes(spark, path, 1, 1) == sorted([
+            (1, "old", "update_preimage"),
+            (1, rows[0].value, "update_postimage"),
+        ])
+        return
     with pytest.raises(Exception, match="non-deterministic expressions"):
         rewrite()
     assert not (path / "_delta_log" / "00000000000000000001.json").exists()

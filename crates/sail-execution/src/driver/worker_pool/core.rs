@@ -441,6 +441,19 @@ impl WorkerPool {
         Ok(Box::pin(stream))
     }
 
+    pub fn close_job_confirmed(
+        &mut self,
+        worker_id: WorkerId,
+        job_id: JobId,
+    ) -> futures::future::BoxFuture<'static, ExecutionResult<()>> {
+        let client = self
+            .workers
+            .get_mut(&worker_id)
+            .ok_or_else(|| ExecutionError::InvalidArgument(format!("worker {worker_id} not found")))
+            .and_then(|worker| Self::get_client_set(worker_id, worker, &self.options));
+        Box::pin(async move { client?.core.clean_up_job(job_id, None).await })
+    }
+
     pub fn clean_up_job(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,

@@ -148,9 +148,14 @@ impl TaskMonitor {
                 break Self::status(key, TaskStatus::Succeeded, None, None);
             };
             if let Err(error) = batch {
+                let status = if crate::error::is_replay_read_error(&error) {
+                    TaskStatus::ReplayLost
+                } else {
+                    TaskStatus::Failed
+                };
                 break Self::status(
                     key,
-                    TaskStatus::Failed,
+                    status,
                     Some(format!("task error: {error}")),
                     Some(CommonErrorCause::new::<PyErrExtractor>(&error)),
                 );

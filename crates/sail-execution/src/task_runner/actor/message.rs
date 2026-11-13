@@ -43,6 +43,14 @@ pub enum TaskRunnerMessage {
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     },
+    CreateReplayStream {
+        key: TaskStreamKey,
+        id: sail_common_datafusion::replay::ReplayId,
+        storage: bool,
+        schema: SchemaRef,
+        context: Arc<TaskContext>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
+    },
     CreateStorageStream {
         key: TaskStreamKey,
         schema: SchemaRef,
@@ -73,6 +81,7 @@ pub enum TaskRunnerMessage {
     },
     FetchStorageStream {
         key: TaskStreamKey,
+        replay: Option<sail_common_datafusion::replay::ReplayId>,
         schema: SchemaRef,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
@@ -99,6 +108,11 @@ pub enum TaskRunnerMessage {
     },
     CloseJob {
         job_id: JobId,
+        result: oneshot::Sender<ExecutionResult<()>>,
+    },
+    FinishCloseJob {
+        job_id: JobId,
+        done: tokio::sync::watch::Sender<bool>,
     },
     Shutdown,
 }
@@ -108,11 +122,13 @@ impl SpanAssociation for TaskRunnerMessage {
         match self {
             Self::RunTaskBatch { .. } => "RunTaskBatch",
             Self::CloseJob { .. } => "CloseJob",
+            Self::FinishCloseJob { .. } => "FinishCloseJob",
             Self::StopTask { .. } => "StopTask",
             Self::ReportTaskStatus { .. } => "ReportTaskStatus",
             Self::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
             Self::CreateLocalStream { .. } => "CreateLocalStream",
             Self::CreateStorageStream { .. } => "CreateStorageStream",
+            Self::CreateReplayStream { .. } => "CreateReplayStream",
             Self::CreateCelebornStream { .. } => "CreateCelebornStream",
             Self::FetchDriverStream { .. } => "FetchDriverStream",
             Self::FetchWorkerStream { .. } => "FetchWorkerStream",
@@ -134,7 +150,7 @@ impl SpanAssociation for TaskRunnerMessage {
                 properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
             }
-            Self::CloseJob { job_id } => {
+            Self::CloseJob { job_id, .. } | Self::FinishCloseJob { job_id, .. } => {
                 properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }
             Self::StopTask {
@@ -180,7 +196,8 @@ impl SpanAssociation for TaskRunnerMessage {
             }
             Self::ProbePendingLocalStream { key }
             | Self::CreateLocalStream { key, .. }
-            | Self::CreateStorageStream { key, .. } => {
+            | Self::CreateStorageStream { key, .. }
+            | Self::CreateReplayStream { key, .. } => {
                 let TaskStreamKey {
                     job_id,
                     stage,

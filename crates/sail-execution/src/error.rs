@@ -9,6 +9,21 @@ use tokio::task::JoinError;
 
 pub type ExecutionResult<T> = Result<T, ExecutionError>;
 
+/// A fixed replay attempt cannot be repaired by rerunning its producer.
+#[derive(Debug, Error)]
+#[error("sealed replay unavailable: {0}")]
+pub(crate) struct ReplayReadError(pub String);
+
+pub(crate) fn is_replay_read_error(error: &(dyn std::error::Error + 'static)) -> bool {
+    if error.is::<ReplayReadError>() {
+        return true;
+    }
+    if let Some(DataFusionError::Collection(errors)) = error.downcast_ref::<DataFusionError>() {
+        return errors.iter().any(|error| is_replay_read_error(error));
+    }
+    error.source().is_some_and(is_replay_read_error)
+}
+
 #[derive(Debug, Error)]
 pub enum ExecutionError {
     #[error("error in DataFusion: {0}")]
