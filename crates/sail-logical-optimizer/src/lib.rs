@@ -11,8 +11,10 @@ mod deduplicate;
 mod eliminate_sorts;
 mod input_file_metadata;
 mod lateral_join;
+mod merge_evaluate;
 mod partition_sensitive_subquery;
 mod prune_seeded_random;
+mod replay;
 mod resolve_lambda_variables;
 mod rewrite_binary_grouping;
 mod scalar_iterator_udf;
@@ -71,6 +73,10 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
         vec![Arc::new(DecorrelateLateralProjection::new())];
     for rule in rules {
+        if rule.name() == datafusion::optimizer::push_down_filter::PushDownFilter::new().name() {
+            custom.push(Arc::new(replay::ReplayAwarePushDownFilter));
+            continue;
+        }
         if rule.name() == simplify_expressions::SimplifyExpressions::default().name() {
             custom.push(Arc::new(
                 simplify_expressions::SimplifyExpressions::default(),
@@ -102,7 +108,7 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
                 scalar_subquery_domain::NormalizeScalarSubqueryDomain,
             ));
             custom.push(Arc::new(NormalizeScalarSubqueryKeys));
-            custom.push(rule);
+            custom.push(Arc::new(merge_evaluate::EvaluateOnceScalarSubquery));
             continue;
         }
         if rule.name() == OptimizeProjections::new().name() {

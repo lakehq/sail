@@ -1,9 +1,13 @@
+#[cfg(test)]
+mod tests;
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::Partitioning;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use sail_common_datafusion::replay::ReplayId;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskStreamKey, WorkerId};
@@ -20,6 +24,7 @@ pub struct TaskDefinition {
 
 #[derive(Debug, Clone)]
 pub struct TaskInput {
+    pub replay: Option<ReplayId>,
     pub stage: usize,
     pub locator: Arc<TaskInputLocator>,
 }
@@ -87,6 +92,25 @@ pub enum TaskOutputDistribution {
 pub enum TaskOutputLocator {
     Pipelined { replicas: usize },
     Blocking,
+    ReplayLocal { id: ReplayId },
+    ReplayStorage { id: ReplayId },
+}
+
+fn encode_replay_id(id: ReplayId) -> r#gen::ReplayId {
+    r#gen::ReplayId {
+        scope: id.scope.to_string(),
+        ordinal: id.ordinal,
+    }
+}
+
+fn decode_replay_id(id: r#gen::ReplayId) -> ExecutionResult<ReplayId> {
+    Ok(ReplayId {
+        scope: id
+            .scope
+            .parse()
+            .map_err(|e| ExecutionError::InvalidArgument(format!("invalid replay scope: {e}")))?,
+        ordinal: id.ordinal,
+    })
 }
 
 impl From<TaskDefinition> for r#gen::TaskDefinition {
@@ -131,8 +155,13 @@ impl TryFrom<r#gen::TaskDefinition> for TaskDefinition {
 
 impl From<TaskInput> for r#gen::TaskInput {
     fn from(value: TaskInput) -> Self {
-        let TaskInput { stage, locator } = value;
+        let TaskInput {
+            replay,
+            stage,
+            locator,
+        } = value;
         r#gen::TaskInput {
+            replay: replay.map(encode_replay_id),
             stage: stage as u64,
             locator: Some(locator.as_ref().clone().into()),
         }
@@ -152,6 +181,7 @@ impl TryFrom<r#gen::TaskInput> for TaskInput {
             }
         };
         Ok(TaskInput {
+            replay: value.replay.map(decode_replay_id).transpose()?,
             stage: value.stage as usize,
             locator: Arc::new(locator),
         })
@@ -511,6 +541,12 @@ impl From<TaskOutputLocator> for r#gen::TaskOutputLocator {
             TaskOutputLocator::Blocking => {
                 r#gen::task_output_locator::Kind::Blocking(r#gen::TaskOutputBlockingLocator {})
             }
+            TaskOutputLocator::ReplayLocal { id } => {
+                r#gen::task_output_locator::Kind::ReplayLocal(encode_replay_id(id))
+            }
+            TaskOutputLocator::ReplayStorage { id } => {
+                r#gen::task_output_locator::Kind::ReplayStorage(encode_replay_id(id))
+            }
         };
         r#gen::TaskOutputLocator { kind: Some(kind) }
     }
@@ -527,6 +563,16 @@ impl TryFrom<r#gen::TaskOutputLocator> for TaskOutputLocator {
                 replicas: replicas as usize,
             }),
             Some(r#gen::task_output_locator::Kind::Blocking(_)) => Ok(TaskOutputLocator::Blocking),
+            Some(r#gen::task_output_locator::Kind::ReplayLocal(id)) => {
+                Ok(TaskOutputLocator::ReplayLocal {
+                    id: decode_replay_id(id)?,
+                })
+            }
+            Some(r#gen::task_output_locator::Kind::ReplayStorage(id)) => {
+                Ok(TaskOutputLocator::ReplayStorage {
+                    id: decode_replay_id(id)?,
+                })
+            }
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task output locator".to_string(),
             )),

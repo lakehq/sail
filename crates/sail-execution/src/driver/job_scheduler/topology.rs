@@ -181,7 +181,8 @@ impl JobTopology {
                         .plan
                         .output_partitioning()
                         .partition_count();
-                    if matches!(input.mode, InputMode::Forward)
+                    if graph.stages()[input.stage].replay.is_none()
+                        && matches!(input.mode, InputMode::Forward)
                         && input_partitions == consumer_partitions
                     {
                         if let Some(&d) = task_to_region.get(&TaskTopology {
@@ -242,6 +243,62 @@ mod tests {
             )
             .unwrap(),
         )
+    }
+
+    #[test]
+    fn replay_forward_consumer_waits_for_all_producer_partitions() {
+        use sail_common_datafusion::replay::ReplayId;
+        use sail_physical_plan::replay::ReplayExec;
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let empty = Arc::new(EmptyExec::new(schema));
+        let source = UnionExec::try_new(vec![empty; 4]).unwrap();
+        let plan = Arc::new(
+            ReplayExec::try_new(
+                ReplayId {
+                    scope: Default::default(),
+                    ordinal: 0,
+                },
+                source,
+            )
+            .unwrap(),
+        );
+        let graph = JobGraph::try_new(
+            plan,
+            JobGraphOptions {
+                shuffle_backend: ShuffleBackendKind::Flight {
+                    compression: ShuffleCompression::None,
+                    connection_count: std::num::NonZeroUsize::MIN,
+                    initial_stream_window_size: None,
+                    initial_connection_window_size: None,
+                },
+            },
+        )
+        .unwrap();
+        let topology = JobTopology::try_new(&graph).unwrap();
+        let producer = graph
+            .stages()
+            .iter()
+            .position(|stage| stage.replay.is_some())
+            .unwrap();
+        let final_stage = graph.stages().len() - 1;
+        for partition in 0..4 {
+            let consumer = topology.task_regions[&super::TaskTopology {
+                stage: final_stage,
+                partition,
+            }];
+            assert_eq!(topology.regions[consumer].dependencies.len(), 4);
+            for partition in 0..4 {
+                let dependency = topology.task_regions[&super::TaskTopology {
+                    stage: producer,
+                    partition,
+                }];
+                assert!(
+                    topology.regions[consumer]
+                        .dependencies
+                        .contains(&dependency)
+                );
+            }
+        }
     }
 
     #[test]

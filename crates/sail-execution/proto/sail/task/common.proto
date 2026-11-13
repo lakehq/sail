@@ -11,6 +11,12 @@ message TaskDefinition {
 message TaskInput {
   uint64 stage = 1;
   TaskInputLocator locator = 2;
+  ReplayId replay = 3;
+}
+
+message ReplayId {
+  string scope = 1;
+  uint32 ordinal = 2;
 }
 
 message TaskInputLocator {
@@ -109,6 +115,8 @@ message TaskOutputLocator {
   oneof Kind {
     TaskOutputPipelinedLocator pipelined = 1;
     TaskOutputBlockingLocator blocking = 2;
+    ReplayId replay_local = 3;
+    ReplayId replay_storage = 4;
   }
 }
 

@@ -42,7 +42,7 @@ impl LocalStreamManager {
         match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => {
                 let senders = match entry.get_mut() {
-                    LocalStreamState::Created { .. } => {
+                    LocalStreamState::Created { .. } | LocalStreamState::Replay { .. } => {
                         return Err(ExecutionError::InternalError(format!(
                             "local stream {} is already created",
                             TaskStreamKeyDisplay(&key)
@@ -84,6 +84,29 @@ impl LocalStreamManager {
         }
     }
 
+    pub fn create_replay_stream(
+        &mut self,
+        key: TaskStreamKey,
+        id: sail_common_datafusion::replay::ReplayId,
+        schema: SchemaRef,
+        context: &datafusion::execution::TaskContext,
+    ) -> ExecutionResult<Box<dyn TaskStreamChannelSink>> {
+        if self.streams.contains_key(&key) {
+            return Err(ExecutionError::InternalError(
+                "replay stream already exists or was read before sealing".into(),
+            ));
+        }
+        let (stream, sink) = super::replay::ReplayStream::create(
+            id,
+            schema,
+            context.runtime_env().clone(),
+            key.partition,
+        )?;
+        self.streams
+            .insert(key, LocalStreamState::Replay { stream });
+        Ok(sink)
+    }
+
     pub fn fetch_stream(
         &mut self,
         ctx: &mut ActorContext<TaskRunnerActor>,
@@ -92,6 +115,7 @@ impl LocalStreamManager {
         match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => match entry.get_mut() {
                 LocalStreamState::Created { stream } => stream.subscribe(),
+                LocalStreamState::Replay { stream } => stream.subscribe(),
                 LocalStreamState::Pending { senders } => {
                     let (tx, rx) = mpsc::channel(self.options.task_stream_buffer);
                     senders.push(tx);
@@ -112,6 +136,16 @@ impl LocalStreamManager {
                     self.options.task_stream_creation_timeout,
                 );
                 Ok(Box::pin(ReceiverStream::new(rx)))
+            }
+        }
+    }
+
+    pub fn retire_replays(&mut self, job_id: JobId) {
+        for (key, state) in &self.streams {
+            if key.job_id == job_id
+                && let LocalStreamState::Replay { stream } = state
+            {
+                stream.retire();
             }
         }
     }

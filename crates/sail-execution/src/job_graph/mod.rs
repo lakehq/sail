@@ -1,12 +1,14 @@
 mod planner;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::physical_expr::{PhysicalExpr, RangePartitioning};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, PlanProperties};
+use sail_common_datafusion::replay::ReplayId;
 
 use crate::shuffle::ShuffleBackendKind;
 
@@ -29,6 +31,13 @@ pub struct JobGraph {
     /// The output schema of the job.
     schema: SchemaRef,
     options: JobGraphOptions,
+    replays: HashMap<ReplayId, ReplayStage>,
+}
+
+#[derive(Debug)]
+struct ReplayStage {
+    properties: Arc<PlanProperties>,
+    stage: Option<usize>,
 }
 
 impl JobGraph {
@@ -85,6 +94,9 @@ impl fmt::Display for JobGraph {
                 writeln!(f, "group={}", stage.group)?;
             }
             writeln!(f, "mode={}", stage.mode)?;
+            if let Some(id) = stage.replay {
+                writeln!(f, "replay={id}")?;
+            }
             writeln!(
                 f,
                 "partitions={}",
@@ -100,6 +112,7 @@ impl fmt::Display for JobGraph {
 
 #[derive(Debug)]
 pub struct Stage {
+    pub replay: Option<ReplayId>,
     pub inputs: Vec<StageInput>,
     pub plan: Arc<dyn ExecutionPlan>,
     /// The name of the "slot sharing group" for the stage.

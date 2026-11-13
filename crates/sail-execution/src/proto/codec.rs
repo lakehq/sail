@@ -1494,6 +1494,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col,
                 source_present_col,
             )?)),
+            NodeKind::EvaluateOnce(r#gen::EvaluateOnceExecNode { projection_plan }) => {
+                let plan = try_decode_physical_plan_with_converter(
+                    ctx,
+                    self,
+                    proto_converter,
+                    &projection_plan,
+                )?;
+                let projection = plan.downcast_ref::<ProjectionExec>().ok_or_else(|| {
+                    plan_datafusion_err!("EvaluateOnce payload must be a projection")
+                })?;
+                Ok(Arc::new(
+                    sail_physical_plan::merge_evaluate::EvaluateOnceExec::try_new(
+                        projection.input().clone(),
+                        projection.expr().to_vec(),
+                        &projection.schema(),
+                    )?,
+                ))
+            }
             NodeKind::IdentityGenerate(r#gen::IdentityGenerateExecNode {
                 input,
                 columns,
@@ -3094,6 +3112,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 stream_source_adapter.input().clone(),
             )?;
             NodeKind::StreamSourceAdapter(r#gen::StreamSourceAdapterExecNode { input })
+        } else if let Some(evaluate) =
+            node.downcast_ref::<sail_physical_plan::merge_evaluate::EvaluateOnceExec>()
+        {
+            NodeKind::EvaluateOnce(r#gen::EvaluateOnceExecNode {
+                projection_plan: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    Arc::new(evaluate.projection().clone()),
+                )?,
+            })
         } else if let Some(cardinality_check) = node.downcast_ref::<MergeCardinalityCheckExec>() {
             let input = try_encode_physical_plan_with_converter(
                 self,
@@ -6613,6 +6641,33 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udaf(&udaf, &mut buf)?;
         codec.try_decode_udaf(&name, &buf)
+    }
+
+    #[test]
+    fn test_evaluate_once_round_trip_preserves_metadata() -> Result<()> {
+        use datafusion::physical_expr::projection::ProjectionExpr;
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_physical_plan::merge_evaluate::EvaluateOnceExec;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int64, false).with_metadata(
+                std::collections::HashMap::from([("test".into(), "metadata".into())]),
+            ),
+        ]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema.clone()));
+        let expressions = vec![ProjectionExpr::new(
+            Arc::new(datafusion::physical_expr::expressions::Column::new(
+                "value", 0,
+            )),
+            "value",
+        )];
+        let plan = Arc::new(EvaluateOnceExec::try_new(input, expressions, &schema)?);
+        let expected = plan.schema();
+        let bytes = try_encode_physical_plan(&RemoteExecutionCodec, plan)?;
+        let decoded =
+            try_decode_physical_plan(&TaskContext::default(), &RemoteExecutionCodec, &bytes)?;
+        assert!(decoded.downcast_ref::<EvaluateOnceExec>().is_some());
+        assert_eq!(decoded.schema(), expected);
+        Ok(())
     }
 
     #[test]

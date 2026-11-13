@@ -26,6 +26,22 @@ def normalize_plan_text(plan_text: str) -> str:
 
     text = re.sub(r", metrics=\[([^\]]*)\]", _normalize_metrics_block, text)
 
+    # Replay scope is generated per statement; retain distinct scopes and ordinals
+    # across logical, physical, and distributed representations of that statement.
+    replay_scopes: dict[str, int] = {}
+
+    def normalize_replay_scope(match: re.Match[str]) -> str:
+        scope = match.group(2).lower()
+        index = replay_scopes.setdefault(scope, len(replay_scopes))
+        return f"{match.group(1)}<replay_scope_{index}>{match.group(3)}"
+
+    text = re.sub(
+        r"(Replay(?:Exec)?: |replay=)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(:\d+)",
+        normalize_replay_scope,
+        text,
+        flags=re.IGNORECASE,
+    )
+
     # Normalize temp paths / file URIs that appear in plans.
     pytest_tmp_prefix = re.compile(
         r"(^|[\s\[\(=,:{\"]|[A-Za-z][A-Za-z0-9+.\-]+://)"

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -265,7 +266,6 @@ _KNOWN_QUERY_FAILURES = {
         "a higher-order function over an array of structs in a filter cannot resolve the column",
         False,
     ),
-    "intersect": ("INTERSECT on array of struct columns fails to compare list values", False),
 }
 
 
@@ -355,6 +355,13 @@ def test_column_mapped_schema_matches_reference(spark: SparkSession, column_mapp
 def test_column_mapped_query_matches_reference(
     request, spark: SparkSession, column_mapped_views: dict, access: str, name: str, query: str
 ) -> None:
+    if name == "intersect" and os.environ.get("SAIL_MODE", "local") == "local":
+        request.applymarker(
+            pytest.mark.xfail(
+                reason="local join dynamic filtering cannot compare arrays of structs; disabled in cluster mode",
+                strict=True,
+            )
+        )
     if name in _KNOWN_QUERY_FAILURES:
         reason, partitioned_only = _KNOWN_QUERY_FAILURES[name]
         if column_mapped_views["partitioned"] or not partitioned_only:

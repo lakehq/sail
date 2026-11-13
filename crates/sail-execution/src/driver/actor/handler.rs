@@ -185,7 +185,13 @@ impl DriverActor {
             );
 
             let message = "task failed for lost worker".to_string();
-            let keys = self.task_assigner.find_worker_tasks(worker_id);
+            let mut keys = self.task_assigner.find_worker_tasks(worker_id);
+            for key in self.task_assigner.find_worker_output_tasks(worker_id) {
+                self.job_scheduler.lose_replay_output(&key);
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
             self.task_assigner.deactivate_worker(worker_id);
             for key in keys.iter() {
                 self.job_scheduler.update_task(
@@ -270,7 +276,15 @@ impl DriverActor {
                 self.run_tasks(ctx);
                 self.reconcile_worker_demands(ctx);
             }
-            TaskStatus::Failed => {
+            TaskStatus::Failed | TaskStatus::ReplayLost => {
+                if matches!(status, TaskStatus::ReplayLost) {
+                    self.job_scheduler.fail_replay(
+                        key.job_id,
+                        cause.clone().unwrap_or_else(|| {
+                            CommonErrorCause::Execution("sealed replay data unavailable".into())
+                        }),
+                    );
+                }
                 // Some canceled tasks may report failed status due to closed streams,
                 // but it is fine to handle them as failed tasks again.
                 self.job_scheduler
@@ -520,19 +534,39 @@ impl DriverActor {
                 stage,
                 context,
             } => {
-                // Job closure is a lifecycle operation, independent of shuffle ownership.
-                // Keep a closed-job record even on workers whose streams were cleaned earlier.
                 if stage.is_none() {
+                    let mut stops = self
+                        .task_assigner
+                        .job_worker_ids(job_id)
+                        .into_iter()
+                        .map(|worker_id| self.worker_pool.close_job_confirmed(worker_id, job_id))
+                        .collect::<Vec<_>>();
                     if let Some(task_runner) = self.task_runner.clone() {
-                        ctx.spawn(async move {
-                            let _ = task_runner
-                                .send(TaskRunnerMessage::CloseJob { job_id })
-                                .await;
-                        });
+                        stops.push(Box::pin(async move {
+                            let (result, stopped) = oneshot::channel();
+                            task_runner
+                                .send(TaskRunnerMessage::CloseJob { job_id, result })
+                                .await?;
+                            stopped.await?
+                        }));
                     }
-                    for worker_id in self.task_assigner.active_worker_ids() {
-                        self.worker_pool.clean_up_job(ctx, worker_id, job_id, None);
-                    }
+                    let driver = ctx.handle().clone();
+                    ctx.spawn(async move {
+                        // Join all confirmations, even if one worker is unavailable.
+                        let result = futures::future::join_all(stops)
+                            .await
+                            .into_iter()
+                            .collect::<ExecutionResult<Vec<_>>>()
+                            .map(|_| ());
+                        let _ = driver
+                            .send(DriverMessage::CompleteJobCleanup {
+                                job_id,
+                                context,
+                                result,
+                            })
+                            .await;
+                    });
+                    return;
                 }
                 if self.task_assigner.untrack_storage_streams(job_id, stage)
                     && let Some(task_runner) = self.task_runner.clone()
@@ -584,6 +618,52 @@ impl DriverActor {
                 }
             }
         }
+    }
+
+    pub(super) fn handle_complete_job_cleanup(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+        context: Arc<TaskContext>,
+        result: ExecutionResult<()>,
+    ) -> ActorAction {
+        if let Err(error) = result {
+            // Never delete a prefix while an unconfirmed writer may still use it.
+            warn!("job {job_id} cleanup awaits stop confirmation: {error}");
+            return ActorAction::Continue;
+        }
+        let storage = self.task_assigner.untrack_storage_streams(job_id, None);
+        let external = self.task_assigner.untrack_external_streams(job_id, None);
+        let owners = self.task_assigner.untrack_local_streams(job_id, None);
+        for owner in owners {
+            if let TaskStreamAssignment::Worker { worker_id } = owner
+                && self.task_assigner.is_worker_idle(worker_id)
+            {
+                self.worker_pool.mark_worker_idle(ctx, worker_id);
+            }
+        }
+        if let Some(task_runner) = self.task_runner.clone() {
+            ctx.spawn(async move {
+                if storage {
+                    let _ = task_runner
+                        .send(TaskRunnerMessage::CleanUpStorageStreams {
+                            job_id,
+                            stage: None,
+                            context,
+                        })
+                        .await;
+                }
+                if external {
+                    let _ = task_runner
+                        .send(TaskRunnerMessage::CleanUpCelebornStreams {
+                            job_id,
+                            stage: None,
+                        })
+                        .await;
+                }
+            });
+        }
+        ActorAction::Continue
     }
 
     fn unassign_task(

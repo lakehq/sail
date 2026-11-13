@@ -230,6 +230,21 @@ impl TaskAssigner {
         self.driver.untrack_external_streams(job_id, stage)
     }
 
+    pub fn job_worker_ids(&self, job_id: JobId) -> HashSet<WorkerId> {
+        self.task_assignments
+            .iter()
+            .filter_map(|(key, assignment)| {
+                if key.job_id == job_id
+                    && let TaskAssignment::Worker { worker_id, .. } = assignment
+                {
+                    Some(*worker_id)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     pub fn active_worker_ids(&self) -> Vec<WorkerId> {
         self.workers
             .iter()
@@ -266,6 +281,16 @@ impl TaskAssigner {
                 .flat_map(|x| x.list_tasks().cloned().collect::<Vec<_>>())
                 .collect(),
             WorkerResource::Inactive => vec![],
+        }
+    }
+
+    /// Includes successful tasks whose replay files still live on this worker.
+    pub fn find_worker_output_tasks(&self, worker_id: WorkerId) -> Vec<TaskKey> {
+        match self.workers.get(&worker_id) {
+            Some(WorkerResource::Active { local_streams, .. }) => {
+                local_streams.iter().cloned().collect()
+            }
+            _ => vec![],
         }
     }
 

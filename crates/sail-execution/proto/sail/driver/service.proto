@@ -48,6 +48,7 @@ enum TaskStatus {
   TASK_STATUS_SUCCEEDED = 1;
   TASK_STATUS_FAILED = 2;
   TASK_STATUS_CANCELED = 3;
+  TASK_STATUS_REPLAY_LOST = 4;
 }
 
 message ReportTaskStatusResponse {

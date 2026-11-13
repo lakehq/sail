@@ -62,6 +62,7 @@ readonly = { workspace = true }
 indexmap = { workspace = true }
 chrono = { workspace = true }
 bytes = { workspace = true }
+crc32fast = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
@@ -69,3 +70,5 @@ tonic-prost-build = { workspace = true }
 
 [dev-dependencies]
 h2 = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }

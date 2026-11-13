@@ -29,6 +29,7 @@ pub(crate) struct StorageStreamManager {
     session_id: String,
     max_file_size: usize,
     compression: ShuffleCompression,
+    replays: Arc<super::replay::ReplayJobs>,
 }
 
 impl StorageStreamManager {
@@ -43,7 +44,56 @@ impl StorageStreamManager {
             session_id,
             max_file_size,
             compression,
+            replays: Default::default(),
         }
+    }
+
+    pub(crate) fn create_replay_stream(
+        &self,
+        key: TaskStreamKey,
+        id: sail_common_datafusion::replay::ReplayId,
+        schema: SchemaRef,
+        context: &TaskContext,
+    ) -> ExecutionResult<Box<dyn TaskStreamChannelSink>> {
+        let (store, prefix) = self.store_and_prefix(&key, context)?;
+        Ok(Box::new(super::replay::ReplayStorageSink::new(
+            store,
+            prefix.join("replay"),
+            id,
+            schema,
+            context.runtime_env().clone(),
+            key.partition,
+            self.replays.get(key.job_id),
+        )?))
+    }
+
+    pub(crate) fn fetch_replay_stream(
+        &self,
+        key: TaskStreamKey,
+        id: sail_common_datafusion::replay::ReplayId,
+        schema: SchemaRef,
+        context: &TaskContext,
+    ) -> ExecutionResult<TaskStreamSource> {
+        let (store, prefix) = self.store_and_prefix(&key, context)?;
+        Ok(super::replay::fetch(
+            store,
+            prefix.join("replay"),
+            id,
+            schema,
+            context.runtime_env().clone(),
+            self.replays.get(key.job_id),
+        ))
+    }
+
+    /// Close admission synchronously; the returned future waits for all remote
+    /// store operations, including uploads whose task futures were dropped.
+    pub(crate) fn close_replays(
+        &self,
+        job_id: JobId,
+    ) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let job = self.replays.get(job_id);
+        job.close();
+        async move { job.wait().await }
     }
 
     pub(crate) fn create_stream(

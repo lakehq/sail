@@ -32,6 +32,7 @@ use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
+use sail_physical_plan::replay::ReplayExec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
@@ -55,10 +56,12 @@ impl JobGraph {
             stages: vec![],
             schema: plan.schema(),
             options,
+            replays: Default::default(),
         };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?.plan;
         let (last, inputs) = rewrite_inputs(last)?;
         graph.stages.push(Stage {
+            replay: None,
             inputs,
             plan: last,
             group: String::new(),
@@ -400,6 +403,10 @@ fn plan_job_graph_stages(
     driver_stage_handling: DriverStageHandling,
     scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<PlannedSubtree> {
+    if let Some(replay) = plan.downcast_ref::<ReplayExec>() {
+        return build_replay_job_graph(replay, graph, scalar_context);
+    }
+
     if let Some(scalar) = plan.downcast_ref::<ScalarSubqueryExec>() {
         return build_scalar_subquery_job_graph(scalar, usage, graph, driver_stage_handling);
     }
@@ -634,6 +641,68 @@ fn plan_job_graph_stages(
         subtree.into_planned_subtree()
     };
     Ok(plan)
+}
+
+fn build_replay_job_graph(
+    replay: &ReplayExec,
+    graph: &mut JobGraph,
+    scalar_context: Option<ScalarSubqueryContext<'_>>,
+) -> ExecutionResult<PlannedSubtree> {
+    let id = replay.id();
+    let properties = replay.properties().clone();
+    // Resolve the name before visiting the producer: repeated references must
+    // not duplicate exchanges, driver effects, or nested replay stages.
+    if let Some(existing) = graph.replays.get(&id) {
+        let same_partitioning = match (&existing.properties.partitioning, &properties.partitioning)
+        {
+            (Partitioning::UnknownPartitioning(a), Partitioning::UnknownPartitioning(b)) => a == b,
+            (a, b) => a == b,
+        };
+        if existing.properties.eq_properties.schema() != &replay.schema() || !same_partitioning {
+            return Err(ExecutionError::InternalError(format!(
+                "conflicting schema or partitioning for replay {id}"
+            )));
+        }
+        let stage = existing
+            .stage
+            .ok_or_else(|| ExecutionError::InternalError(format!("cyclic replay producer {id}")))?;
+        return Ok(PlannedSubtree::without_pending_scalar_subquery_expr(
+            stage_input_exec(stage, InputMode::Forward, properties),
+        ));
+    }
+    graph.replays.insert(
+        id,
+        super::ReplayStage {
+            properties: properties.clone(),
+            stage: None,
+        },
+    );
+    let child = plan_job_graph_stages(
+        replay.input().clone(),
+        PartitionUsage::Once,
+        graph,
+        DriverStageHandling::CreateStage,
+        scalar_context,
+    )?;
+    let child = wrap_pending_scalar_subqueries(child, scalar_context);
+    let stage = push_stage(
+        child,
+        graph,
+        OutputDistribution::RoundRobinBatch { channels: 1 },
+        TaskPlacement::Worker,
+        OutputMode::Blocking,
+    )?;
+    graph.stages[stage].replay = Some(id);
+    graph.replays.insert(
+        id,
+        super::ReplayStage {
+            properties: properties.clone(),
+            stage: Some(stage),
+        },
+    );
+    Ok(PlannedSubtree::without_pending_scalar_subquery_expr(
+        stage_input_exec(stage, InputMode::Forward, properties),
+    ))
 }
 
 fn rebuild_subtree(
@@ -1015,6 +1084,7 @@ fn push_stage(
 ) -> ExecutionResult<usize> {
     let (plan, inputs) = rewrite_inputs(plan)?;
     let stage = Stage {
+        replay: None,
         inputs,
         plan,
         group: String::new(),
@@ -1109,6 +1179,74 @@ mod tests {
     use crate::job_graph::{InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement};
     use crate::plan::StageInputExec;
     use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+
+    #[test]
+    fn replay_names_deduplicate_before_splitting_producers() {
+        use sail_common_datafusion::replay::ReplayId;
+        use sail_physical_plan::replay::ReplayExec;
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let id = ReplayId {
+                scope: Default::default(),
+                ordinal: 7,
+            };
+            let source = Arc::new(
+                RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(3)).unwrap(),
+            );
+            let a: Arc<dyn ExecutionPlan> =
+                Arc::new(ReplayExec::try_new(id, source.clone()).unwrap());
+            // A different Arc with the same name is the same producer.
+            let b: Arc<dyn ExecutionPlan> = Arc::new(ReplayExec::try_new(id, source).unwrap());
+            let single = JobGraph::try_new(a.clone(), options.clone()).unwrap();
+            let graph =
+                JobGraph::try_new(UnionExec::try_new(vec![a, b]).unwrap(), options).unwrap();
+            assert_eq!(graph.stages.len(), single.stages.len());
+            let producers = graph
+                .stages
+                .iter()
+                .enumerate()
+                .filter(|(_, stage)| stage.replay == Some(id))
+                .collect::<Vec<_>>();
+            assert_eq!(producers.len(), 1);
+            let (producer, stage) = producers[0];
+            assert!(matches!(stage.mode, OutputMode::Blocking));
+            assert_eq!(stage.distribution.channels(), 1);
+            assert_eq!(stage.plan.output_partitioning().partition_count(), 3);
+            assert!(
+                graph.stages.last().unwrap().inputs.iter().all(
+                    |input| input.stage == producer && matches!(input.mode, InputMode::Forward)
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn replay_conflicting_schema_or_partitioning_is_rejected() {
+        use sail_common_datafusion::replay::ReplayId;
+        use sail_physical_plan::replay::ReplayExec;
+        let id = ReplayId {
+            scope: Default::default(),
+            ordinal: 0,
+        };
+        let a: Arc<dyn ExecutionPlan> = Arc::new(ReplayExec::try_new(id, empty_plan()).unwrap());
+        let different_layout = UnionExec::try_new(vec![empty_plan(), empty_plan()]).unwrap();
+        let b: Arc<dyn ExecutionPlan> =
+            Arc::new(ReplayExec::try_new(id, different_layout).unwrap());
+        assert!(
+            JobGraph::try_new(
+                UnionExec::try_new(vec![a.clone(), b]).unwrap(),
+                flight_shuffle_options()
+            )
+            .is_err()
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let b = Arc::new(ReplayExec::try_new(id, Arc::new(EmptyExec::new(schema))).unwrap());
+        let join = Arc::new(datafusion::physical_plan::joins::CrossJoinExec::new(a, b));
+        assert!(JobGraph::try_new(join, flight_shuffle_options()).is_err());
+    }
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]))
@@ -1518,6 +1656,7 @@ mod tests {
                 stages: vec![],
                 schema: schema(),
                 options,
+                replays: Default::default(),
             };
             let input = create_scalar_subquery_input(&empty_plan(), &mut graph).unwrap();
 

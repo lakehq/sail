@@ -17,6 +17,7 @@ pub struct JobDescriptor {
     pub stages: Vec<StageDescriptor>,
     pub regions: Vec<TaskRegionDescriptor>,
     pub state: JobState,
+    pub replay_failure: Option<CommonErrorCause>,
 }
 
 pub enum JobState {
@@ -63,6 +64,7 @@ impl JobDescriptor {
             let mut descriptor = StageDescriptor {
                 tasks: vec![],
                 state: StageState::Active,
+                sealed_attempts: None,
             };
             for _ in 0..stage.plan.output_partitioning().partition_count() {
                 descriptor.tasks.push(TaskDescriptor { attempts: vec![] });
@@ -82,12 +84,15 @@ impl JobDescriptor {
             stages,
             regions,
             state,
+            replay_failure: None,
         })
     }
 }
 
 #[derive(Debug)]
 pub struct StageDescriptor {
+    /// Set once after every partition of a named replay producer succeeds.
+    pub sealed_attempts: Option<Vec<usize>>,
     /// A list of tasks for each partition of the stage.
     pub tasks: Vec<TaskDescriptor>,
     pub state: StageState,

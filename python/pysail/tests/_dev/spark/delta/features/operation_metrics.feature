@@ -282,7 +282,20 @@ Feature: Delta Lake operationMetrics in commitInfo
         | operationMetrics |
       Then delta log latest commit info contains
         | path                                 | value |
-        | operationMetrics.numTargetFilesAdded | 1     |
+        | operationMetrics.numTargetFilesAdded   | 3     |
+        | operationMetrics.numTargetFilesRemoved | 1     |
+        | operationMetrics.numSourceRows         | 0     |
+        | operationMetrics.numOutputRows         | 4     |
+      When query
+        """
+        SELECT id, value, flag FROM delta_op_metrics_merge ORDER BY id
+        """
+      Then query result ordered
+        | id | value     | flag           |
+        | 1  | old       | keep           |
+        | 2  | old       | matched_update |
+        | 3  | old       | matched_delete |
+        | 5  | old_stale | source_update  |
 
   Rule: MERGE operationMetrics (Merge-on-Read with deletion vectors)
 

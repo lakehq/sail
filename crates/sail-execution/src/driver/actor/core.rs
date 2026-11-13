@@ -170,6 +170,11 @@ impl Actor for DriverActor {
             DriverMessage::CleanUpJob { job_id, outcome } => {
                 self.handle_clean_up_job(ctx, job_id, outcome)
             }
+            DriverMessage::CompleteJobCleanup {
+                job_id,
+                context,
+                result,
+            } => self.handle_complete_job_cleanup(ctx, job_id, context, result),
             DriverMessage::UpdateTask {
                 key,
                 status,
