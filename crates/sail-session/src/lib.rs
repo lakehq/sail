@@ -31,8 +31,8 @@ mod tests {
     use sail_plan::config::PlanConfig;
     use sail_plan::formatter::SparkPlanFormatter;
     use sail_plan::resolver::PlanResolver;
-    use sail_sql_analyzer::data_type::from_ast_data_type;
-    use sail_sql_analyzer::parser::{parse_data_type, parse_one_statement};
+    use sail_sql_analyzer::data_type::parse_data_type;
+    use sail_sql_analyzer::parser::parse_one_statement;
     use sail_sql_analyzer::statement::from_ast_statement;
     use sail_system_store::catalog::SystemCatalog;
 
@@ -91,7 +91,7 @@ mod tests {
                     // In the table definition YAML file, we have a SQL string for the data type
                     // of each column (for documentation purposes). Here we ensure that the SQL
                     // data type matches the Arrow data type used for table row struct serde.
-                    let data_type = parse_data_type(col.sql_type).and_then(from_ast_data_type)?;
+                    let data_type = parse_data_type(col.sql_type)?;
                     let data_type = resolver.resolve_data_type_for_plan(&data_type)?;
                     assert_eq!(data_type, col.arrow_type);
                 }

@@ -22,7 +22,7 @@ def suite_tests(pytester, monkeypatch):
         monkeypatch.delenv(name, raising=False)
     pytester.makeini("[pytest]\nmarkers =\n    function(group)")
     pytester.makeconftest('pytest_plugins = ["pysail.testing.suites", "pysail.testing.spark.markers"]')
-    monkeypatch.setattr(suites, "relative_test_path", lambda path: path.relative_to(pytester.path))
+    monkeypatch.setattr(suites, "relative_test_path", lambda path, **_: path.relative_to(pytester.path))
     pytester.makepyfile(
         test_cases="""
         import pytest
@@ -236,7 +236,7 @@ def test_inventory_includes_disabled_suites(suite_tests, monkeypatch):
     ]
 
 
-def test_matrix_assignment_respects_groups_and_spark_requirements(suite_tests, monkeypatch):
+def test_matrix_assignment_respects_module_affinity_and_spark_requirements(suite_tests, monkeypatch):
     versions = ["3.5.9", "4.0.5", "4.1.4", "4.2.1"]
     suite_tests.makeconftest("""
         import json
@@ -246,15 +246,15 @@ def test_matrix_assignment_respects_groups_and_spark_requirements(suite_tests, m
             Path("selected.json").write_text(json.dumps([item.name for item in session.items]))
     """)
     suite_tests.makepyfile(
-        test_groups="""
+        test_assignment="""
         import pytest
-        @pytest.mark.suite(name="grouped")
+        @pytest.mark.suite(name="first-suite")
         @pytest.mark.spark(version=">=4", reason="First feature")
         def test_first(): pass
         @pytest.mark.spark(reason="Different reason", version=">=4")
-        @pytest.mark.suite(name="grouped")
+        @pytest.mark.suite(name="second-suite")
         def test_second(): pass
-        @pytest.mark.suite(name="grouped")
+        @pytest.mark.suite(name="custom")
         @pytest.mark.spark(version=">=4.1", cross_version=True)
         def test_cross_version(): pass
         @pytest.mark.spark(version="<4.2")
@@ -271,7 +271,7 @@ def test_matrix_assignment_respects_groups_and_spark_requirements(suite_tests, m
     assignments = {}
     for version in versions:
         monkeypatch.setattr(suites, "pyspark_version", lambda v=version: tuple(map(int, v.split("."))))
-        result = suite_tests.runpytest("--collect-only", "-q", "test_groups.py")
+        result = suite_tests.runpytest("--collect-only", "-q", "test_assignment.py")
         assert result.ret in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED)
         assignments[version] = json.loads((suite_tests.path / "selected.json").read_text())
     assert [v for v, names in assignments.items() if "test_first" in names] == [
@@ -285,15 +285,16 @@ def test_matrix_assignment_respects_groups_and_spark_requirements(suite_tests, m
     assert all("test_unsupported" not in names for names in assignments.values())
 
 
-def test_assignment_is_independent_of_filters_collection_order_and_marker_order(suite_tests):
+def test_assignment_is_independent_of_version_and_marker_order(suite_tests):
     first, second = suite_tests.getitems("def test_first(): pass\ndef test_second(): pass")
     for item, requirements in [(first, [">=4", "<4.2"]), (second, ["<4.2", ">=4"])]:
         for requirement in requirements:
             item.add_marker(pytest.mark.spark(version=requirement))
     versions = ["3.5.9", "4.0.5", "4.1.4", "4.2.1"]
-    selected = suites.assigned_versions(first, "sql", "seed", versions)
-    assert selected == suites.assigned_versions(second, "sql", "seed", versions[::-1])
-    assert {tuple(suites.assigned_versions(first, "sql", str(seed), versions)) for seed in range(20)} == {
+    affinity = ("module", "test.py")
+    selected = suites.assigned_versions(first, affinity, "seed", versions)
+    assert selected == suites.assigned_versions(second, affinity, "seed", versions[::-1])
+    assert {tuple(suites.assigned_versions(first, affinity, str(seed), versions)) for seed in range(20)} == {
         ("4.0.5",),
         ("4.1.4",),
     }

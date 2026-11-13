@@ -658,6 +658,67 @@ Feature: from_json function parses JSON strings into structured types
         | Whitespace-only schema string produces error | '   '        |
 
   Rule: Spark JSON schema format
+    Scenario Outline: Reject type wrappers in JSON schemas: <case>
+      When query
+        """
+        SELECT from_json('null', '<schema>') AS result
+        """
+      Then query error .*
+
+      Examples:
+        | case          | schema                                                                                            |
+        | struct field  | {"type":"struct","fields":[{"name":"v","type":{"type":"integer"},"nullable":true,"metadata":{}}]} |
+        | array element | {"type":"array","elementType":{"type":"integer"},"containsNull":true}                             |
+        | map key       | {"type":"map","keyType":{"type":"string"},"valueType":"integer","valueContainsNull":true}         |
+        | map value     | {"type":"map","keyType":"string","valueType":{"type":"integer"},"valueContainsNull":true}         |
+        | wrapped array | {"type":{"type":"array","elementType":"integer","containsNull":true}}                             |
+
+    @sail-only
+    Scenario: Unknown type in JSON schema reports a parsing error
+      When query
+        """
+        SELECT from_json('{"v":1}', '{"type":"struct","fields":[{"name":"v","type":"unsupported_type","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query error Failed to parse JSON schema
+
+    Scenario Outline: Reject SQL-only type expressions in JSON schemas: <type>
+      When query
+        """
+        SELECT from_json('{"v":null}', '{"type":"struct","fields":[{"name":"v","type":"<type>","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query error .*
+
+      Examples:
+        | type             |
+        | timestamp(3)     |
+        | timestamp_ntz(9) |
+        | timestamp_ltz(9) |
+        | decimal(10)      |
+
+    Scenario Outline: Parse canonical parameterized JSON schema types: <type>
+      When query
+        """
+        SELECT from_json('{"v":<value>}', '{"type":"struct","fields":[{"name":"v","type":"<type>","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | type          | value                 | result                |
+        | timestamp     | "2024-06-15 10:30:00" | {2024-06-15 10:30:00} |
+        | timestamp_ntz | "2024-06-15 10:30:00" | {2024-06-15 10:30:00} |
+        | decimal(10,0) | 12                    | {12}                  |
+
+    Scenario: Parse precision-only decimal in a DDL schema
+      When query
+        """
+        SELECT from_json('{"v":12}', 'v DECIMAL(10)') AS result
+        """
+      Then query result
+        | result |
+        | {12}   |
+
     Scenario: Parse struct using Spark JSON schema
       When query
         """
@@ -711,6 +772,15 @@ Feature: from_json function parses JSON strings into structured types
       Then query result
         | result |
         | {{42}} |
+
+    Scenario: Parse nested decimal schema with typed metadata
+      When query
+        """
+        SELECT from_json('{"Items":[{"Amount":12.50}]}', '{"type":"struct","fields":[{"name":"Items","type":{"type":"array","elementType":{"type":"struct","fields":[{"name":"Amount","type":"decimal(10,2)","nullable":false,"metadata":{"count":3,"enabled":true,"labels":["a","b"]}}]},"containsNull":false},"nullable":false,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result      |
+        | {[{12.50}]} |
 
     Scenario: Invalid JSON schema string returns error
       When query

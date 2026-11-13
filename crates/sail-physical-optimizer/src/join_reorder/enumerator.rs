@@ -346,11 +346,7 @@ impl PlanEnumerator {
         let forbidden = JoinSet::from_iter(0..idx)? | nodes;
 
         // Enlarge recursively
-        if !self.enumerate_csg_rec(nodes, forbidden)? {
-            return Ok(false);
-        }
-
-        Ok(true)
+        self.enumerate_csg_rec(nodes, forbidden)
     }
 
     /// DPhyp join enumeration over connected subgraphs.
@@ -412,11 +408,8 @@ impl PlanEnumerator {
         // Generate all non-empty neighbor subsets and union with current nodes
         if !Self::for_each_neighbor_subset_union(&neighbors, |subset_join_set| {
             let new_set = nodes | subset_join_set;
-            if self.dp_table.contains_key(&new_set)
-                && new_set.cardinality() > nodes.cardinality()
-                && !self.emit_csg(new_set)?
-            {
-                return Ok(false);
+            if self.dp_table.contains_key(&new_set) && new_set.cardinality() > nodes.cardinality() {
+                return self.emit_csg(new_set);
             }
             Ok(true)
         })? {
@@ -428,17 +421,10 @@ impl PlanEnumerator {
         let new_forbidden = forbidden | neighbors_set;
 
         // Recurse on each union set under updated forbidden set
-        if !Self::for_each_neighbor_subset_union(&neighbors, |subset_join_set| {
+        Self::for_each_neighbor_subset_union(&neighbors, |subset_join_set| {
             let set = nodes | subset_join_set;
-            if !self.enumerate_csg_rec(set, new_forbidden)? {
-                return Ok(false);
-            }
-            Ok(true)
-        })? {
-            return Ok(false);
-        }
-
-        Ok(true)
+            self.enumerate_csg_rec(set, new_forbidden)
+        })
     }
 
     /// Enumerate CMP recursively: extend `right` until valid CSG-CMP pairs are reached.
@@ -475,17 +461,10 @@ impl PlanEnumerator {
         let new_forbidden = forbidden | neighbors_set;
 
         // Recurse on each combined set under updated forbidden set
-        if !Self::for_each_neighbor_subset_union(&neighbors, |subset_join_set| {
+        Self::for_each_neighbor_subset_union(&neighbors, |subset_join_set| {
             let set = right | subset_join_set;
-            if !self.enumerate_cmp_rec(left, set, new_forbidden)? {
-                return Ok(false);
-            }
-            Ok(true)
-        })? {
-            return Ok(false);
-        }
-
-        Ok(true)
+            self.enumerate_cmp_rec(left, set, new_forbidden)
+        })
     }
 
     /// Attempt to emit a CSG-CMP pair, respecting the emit threshold.
