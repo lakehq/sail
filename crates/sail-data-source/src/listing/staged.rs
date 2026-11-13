@@ -229,8 +229,9 @@ fn parquet_sorting_columns(exec: &DataSinkExec) -> Option<Vec<SortingColumn>> {
         let column = sort.expr.downcast_ref::<Column>()?;
         let field = input_schema.fields().get(column.index())?;
         if writer_schema.column_with_name(field.name()).is_none() {
-            // Removed partition keys are constant within each file.
-            continue;
+            // Canonical Hive paths can merge distinct raw partition values.
+            // Only the in-file prefix before a removed key remains ordered.
+            break;
         }
         // An unsupported in-file key invalidates the ordering: later keys need
         // not be independently sorted when an earlier key is omitted.
@@ -498,16 +499,33 @@ mod tests {
     }
 
     #[test]
-    fn sorting_columns_skip_removed_partition_keys() -> Result<()> {
-        assert_eq!(
-            sorting_columns(true, &[2, 1], SortOptions::default())?,
-            Some(vec![SortingColumn {
-                column_idx: 2,
-                descending: false,
-                nulls_first: true,
-            }])
-        );
-        assert_eq!(sorting_columns(true, &[2], SortOptions::default())?, None);
+    fn sorting_columns_stop_at_removed_partition_keys() -> Result<()> {
+        for descending in [false, true] {
+            for nulls_first in [false, true] {
+                let options = SortOptions {
+                    descending,
+                    nulls_first,
+                };
+                assert_eq!(sorting_columns(true, &[2, 1], options)?, None);
+                assert_eq!(sorting_columns(true, &[2], options)?, None);
+                assert_eq!(
+                    sorting_columns(false, &[1, 2, 0], options)?,
+                    Some(vec![SortingColumn {
+                        column_idx: 1,
+                        descending,
+                        nulls_first,
+                    }])
+                );
+                assert_eq!(
+                    sorting_columns(true, &[1, 2], options)?,
+                    Some(vec![SortingColumn {
+                        column_idx: 2,
+                        descending,
+                        nulls_first,
+                    }])
+                );
+            }
+        }
         Ok(())
     }
 
@@ -515,6 +533,10 @@ mod tests {
     fn sorting_columns_reject_unsupported_nested_leading_key() -> Result<()> {
         assert_eq!(
             sorting_columns(true, &[0, 1], SortOptions::default())?,
+            None
+        );
+        assert_eq!(
+            sorting_columns(true, &[1, 0], SortOptions::default())?,
             None
         );
         Ok(())
