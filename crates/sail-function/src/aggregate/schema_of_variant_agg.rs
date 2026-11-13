@@ -90,10 +90,13 @@ impl Accumulator for SchemaOfVariantAggAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        // Use Postcard to avoid the default serde_json deserialization recursion limit.
+        // The enum representation adds nesting, so valid variant schemas can exceed
+        // that limit when partial aggregate states are merged.
         let state = self
             .merged_schema
             .as_ref()
-            .map(serde_json::to_vec)
+            .map(postcard::to_stdvec)
             .transpose()
             .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
         Ok(vec![ScalarValue::Binary(state)])
@@ -102,7 +105,7 @@ impl Accumulator for SchemaOfVariantAggAccumulator {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let schemas: &BinaryArray = as_binary_array(&states[0])?;
         for state in schemas.iter().flatten() {
-            let other_schema = serde_json::from_slice(state)
+            let other_schema = postcard::from_bytes(state)
                 .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
             self.merged_schema = Some(match self.merged_schema.take() {
                 Some(existing) => merge_variant_types(existing, other_schema),

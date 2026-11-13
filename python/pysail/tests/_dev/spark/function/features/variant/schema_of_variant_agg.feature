@@ -168,6 +168,25 @@ Feature: schema_of_variant_agg
 
   Rule: Aggregate state preserves field names
 
+    Scenario Outline: schema_of_variant_agg preserves deeply nested schemas: <depth> <type> with <partitions> partitions
+      When query
+        """
+        SELECT schema_of_variant_agg(parse_json(concat(
+          repeat('<opening>', <depth>), CAST(id AS STRING), repeat('<closing>', <depth>)
+        ))) = concat(repeat(<type>, <depth>), 'BIGINT', repeat('>', <depth>)) AS result
+        FROM range(0, 8, 1, <partitions>)
+        """
+      Then query result
+        | result |
+        | true   |
+
+      Examples:
+        | depth | type         | opening | closing | partitions |
+        | 43    | 'OBJECT<x: ' | {"x":   | }       | 1          |
+        | 43    | 'OBJECT<x: ' | {"x":   | }       | 4          |
+        | 100   | 'OBJECT<x: ' | {"x":   | }       | 4          |
+        | 100   | 'ARRAY<'     | [       | ]       | 4          |
+
     Scenario: schema_of_variant_agg merges nested schemas with punctuation in field names
       When query
         """

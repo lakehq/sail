@@ -27,6 +27,10 @@ Feature: schema_of_xml infers a DDL schema from a literal XML document
       | mixed text               | '<p><a>hello<b>1</b>world</a></p>'                                           | STRUCT<a: STRUCT<_VALUE: ARRAY<STRING>, b: BIGINT>>   |
       | XML entities             | '<p><a>&amp;</a></p>'                                                        | STRUCT<a: STRING>                                     |
       | CDATA                    | '<p><a><![CDATA[42]]></a></p>'                                               | STRUCT<a: BIGINT>                                     |
+      | adjacent CDATA and text  | '<p><a>1<![CDATA[2]]>3</a></p>'                                               | STRUCT<a: BIGINT>                                     |
+      | character references     | '<p><a>&#49;&#x32;3</a></p>'                                                 | STRUCT<a: BIGINT>                                     |
+      | attribute references     | '<p id="&#49;&#x32;3"/>'                                                     | STRUCT<_id: BIGINT>                                   |
+      | unknown entity           | '<p><a>&unknown;</a></p>'                                                    | STRUCT<_corrupt_record: STRING>                       |
       | quoted field name        | '<p><a-b>1</a-b></p>'                                                        | STRUCT<`a-b`: BIGINT>                                 |
       | namespace                | '<p xmlns:n="urn:test"><n:a>1</n:a></p>'                                     | STRUCT<`_xmlns:n`: STRING, `n:a`: BIGINT>             |
       | ignore namespace         | '<p xmlns:n="urn:test"><n:a>1</n:a></p>', map('ignoreNamespace', 'true')     | STRUCT<_n: STRING, a: BIGINT>                         |
@@ -44,6 +48,41 @@ Feature: schema_of_xml infers a DDL schema from a literal XML document
       | custom corrupt field     | '<p>', map('columnNameOfCorruptRecord', 'bad-record')                        | STRUCT<`bad-record`: STRING>                          |
       | null option value        | '<p><a id="2">1</a></p>', map('valueTag', CAST(NULL AS STRING))              | STRUCT<a: STRUCT<_id: BIGINT, null: BIGINT>>          |
       | foldable input           | concat('<p><a>', '1</a></p>')                                                | STRUCT<a: BIGINT>                                     |
+
+  Scenario Outline: schema_of_xml preserves lexical namespace names: <case>
+    When query
+      """
+      SELECT schema_of_xml(<args>) AS result
+      """
+    Then query result
+      | result   |
+      | <result> |
+
+    Examples:
+      | case                    | args                                                                                                            | result                                                                                      |
+      | aliased elements        | '<p xmlns:a="urn:x" xmlns:b="urn:x"><a:x>1</a:x><b:x>2</b:x></p>'                                                | STRUCT<`_xmlns:a`: STRING, `_xmlns:b`: STRING, `a:x`: BIGINT, `b:x`: BIGINT>                   |
+      | aliased attributes      | '<p xmlns:a="urn:x" xmlns:b="urn:x" a:x="1" b:x="true"/>'                                                      | STRUCT<`_a:x`: BIGINT, `_b:x`: BOOLEAN, `_xmlns:a`: STRING, `_xmlns:b`: STRING>                |
+      | ignored aliases         | '<p xmlns:a="urn:x" xmlns:b="urn:x"><a:x>1</a:x><b:x>2</b:x></p>', map('ignoreNamespace', 'true')               | STRUCT<_a: STRING, _b: STRING, x: ARRAY<BIGINT>>                                             |
+      | undeclared element      | '<p><n:a>1</n:a></p>'                                                                                            | STRUCT<`n:a`: BIGINT>                                                                        |
+      | ignored undeclared name | '<p><n:a>1</n:a></p>', map('ignoreNamespace', 'true')                                                             | STRUCT<a: BIGINT>                                                                            |
+      | undeclared attribute    | '<n:p n:id="2"><n:a>1</n:a></n:p>'                                                                              | STRUCT<`_n:id`: BIGINT, `n:a`: BIGINT>                                                       |
+
+  Scenario Outline: schema_of_xml uses a strict default date format: <value>
+    When query
+      """
+      SELECT schema_of_xml('<p><a><value></a></p>') AS result
+      """
+    Then query result
+      | result   |
+      | <result> |
+
+    Examples:
+      | value      | result               |
+      | 2024-1-2   | STRUCT<a: TIMESTAMP> |
+      | 2024-01-2  | STRUCT<a: TIMESTAMP> |
+      | 2024-1-02  | STRUCT<a: TIMESTAMP> |
+      | 2024-01-02 | STRUCT<a: DATE>      |
+      | 2024-02-30 | STRUCT<a: STRING>    |
 
   Scenario: schema_of_xml retains repeated text values as a struct
     When query

@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, MapArray, StringArray};
 use arrow_schema::{DataType, Field, FieldRef};
-use chrono::NaiveDate;
 use datafusion_common::{DataFusionError, Result, exec_err, plan_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
@@ -12,6 +11,9 @@ use datafusion_expr::{
 };
 use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
+use quick_xml::Reader;
+use quick_xml::escape::resolve_predefined_entity;
+use quick_xml::events::{BytesStart, Event};
 
 use crate::scalar::datetime::format::DateTimeFormat;
 use crate::scalar::datetime::timestamp_parser::parse_timestamp_string;
@@ -82,13 +84,8 @@ fn schema_of_xml(args: &[ArrayRef], case_sensitive: bool, timestamp_ntz: bool) -
         return plan_err!("For function `schema_of_xml`, the xml must not be null");
     }
     let options = XmlInferenceOptions::new(args.get(1), case_sensitive, timestamp_ntz)?;
-    let mut xot = xot::Xot::new();
-    let inferred = match xot
-        .parse(rows.value(0))
-        .map_err(|e| e.to_string())
-        .and_then(|doc| xot.document_element(doc).map_err(|e| e.to_string()))
-    {
-        Ok(root) => options.infer_element(&xot, root, true)?,
+    let inferred = match options.infer_xml(rows.value(0)) {
+        Ok(inferred) => inferred,
         Err(error) if options.fail_fast => {
             return exec_err!("Malformed XML in schema_of_xml: {error}");
         }
@@ -113,10 +110,12 @@ struct XmlInferenceOptions {
     value_tag: String,
     corrupt_record: String,
     fail_fast: bool,
-    date_format: Option<DateTimeFormat>,
+    date_format: DateTimeFormat,
     timestamp_format: Option<DateTimeFormat>,
     timestamp_ntz_format: Option<DateTimeFormat>,
 }
+
+type XmlResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 impl XmlInferenceOptions {
     fn new(arg: Option<&ArrayRef>, case_sensitive: bool, timestamp_ntz: bool) -> Result<Self> {
@@ -198,7 +197,11 @@ impl XmlInferenceOptions {
                 .cloned()
                 .unwrap_or_else(|| "_corrupt_record".into()),
             fail_fast: mode == "FAILFAST",
-            date_format: format("dateformat")?,
+            date_format: DateTimeFormat::for_parsing(
+                options
+                    .get("dateformat")
+                    .map_or("yyyy-MM-dd", String::as_str),
+            )?,
             timestamp_format: format("timestampformat")?,
             timestamp_ntz_format: format("timestampntzformat")?,
         })
@@ -234,11 +237,7 @@ impl XmlInferenceOptions {
         if value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false") {
             return Boolean;
         }
-        let is_date = self.date_format.as_ref().map_or_else(
-            || NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok(),
-            |f| f.parse_datetime_value(value).is_ok(),
-        );
-        if is_date {
+        if self.date_format.parse_datetime_value(value).is_ok() {
             return Date;
         }
         if self.timestamp_ntz {
@@ -266,12 +265,11 @@ impl XmlInferenceOptions {
         String
     }
 
-    fn name(&self, xot: &xot::Xot, node: xot::Node, name: xot::NameId) -> Result<String> {
+    fn name<'a>(&self, name: &'a str) -> &'a str {
         if self.ignore_namespace {
-            Ok(xot.local_name_str(name).to_string())
+            name.rsplit_once(':').map_or(name, |(_, local)| local)
         } else {
-            xot.full_name(node, name)
-                .map_err(|e| DataFusionError::Execution(e.to_string()))
+            name
         }
     }
 
@@ -291,26 +289,87 @@ impl XmlInferenceOptions {
         }
     }
 
-    fn infer_element(&self, xot: &xot::Xot, node: xot::Node, root: bool) -> Result<InferredType> {
+    fn infer_xml(&self, xml: &str) -> XmlResult<InferredType> {
+        // Use lexical names rather than resolving namespaces. Spark accepts undeclared
+        // prefixes and treats different prefixes for the same URI as distinct names.
+        let mut reader = Reader::from_str(xml);
+        reader.config_mut().expand_empty_elements = true;
+        reader.config_mut().check_comments = true;
+        let mut inferred = None;
+        loop {
+            match reader.read_event()? {
+                Event::Start(element) if inferred.is_none() => {
+                    inferred = Some(self.infer_element(&mut reader, element, true)?);
+                }
+                Event::Text(text)
+                    if text
+                        .xml_content()?
+                        .trim_matches([' ', '\t', '\n', '\r'])
+                        .is_empty() => {}
+                Event::Decl(_) | Event::DocType(_) | Event::Comment(_) | Event::PI(_) => {}
+                Event::Eof => return inferred.ok_or_else(|| "Missing XML root element".into()),
+                _ => return Err("Unexpected content outside XML root element".into()),
+            }
+        }
+    }
+
+    fn add_text(&self, fields: &mut Vec<(String, InferredType)>, text: &mut String) {
+        if !text.trim_matches([' ', '\t', '\n', '\r']).is_empty() {
+            self.add_field(fields, self.value_tag.clone(), self.infer_value(text));
+        }
+        text.clear();
+    }
+
+    fn infer_element(
+        &self,
+        reader: &mut Reader<&[u8]>,
+        element: BytesStart<'_>,
+        root: bool,
+    ) -> XmlResult<InferredType> {
+        let mut attributes = Vec::new();
+        for attribute in element.attributes() {
+            let attribute = attribute?;
+            let name = reader.decoder().decode(attribute.key.as_ref())?;
+            let value = attribute.decode_and_unescape_value(reader.decoder())?;
+            if !self.exclude_attribute {
+                attributes.push((
+                    format!("{}{}", self.attribute_prefix, self.name(&name)),
+                    self.infer_value(&value),
+                ));
+            }
+        }
         let mut fields = Vec::new();
         let mut has_elements = false;
-        for child in xot.children(node) {
-            match xot.value(child) {
-                xot::Value::Element(element) => {
+        let mut text = String::new();
+        loop {
+            match reader.read_event()? {
+                Event::Text(value) => text.push_str(&value.xml_content()?),
+                Event::CData(value) => text.push_str(&value.xml_content()?),
+                Event::GeneralRef(reference) => {
+                    if let Some(character) = reference.resolve_char_ref()? {
+                        text.push(character);
+                    } else {
+                        let name = reference.decode()?;
+                        text.push_str(
+                            resolve_predefined_entity(&name).ok_or("Unknown XML entity")?,
+                        );
+                    }
+                }
+                Event::Start(element) => {
+                    self.add_text(&mut fields, &mut text);
                     has_elements = true;
-                    let name = self.name(xot, child, element.name())?;
-                    self.add_field(&mut fields, name, self.infer_element(xot, child, false)?);
+                    let name = element.name();
+                    let name = reader.decoder().decode(name.as_ref())?;
+                    let name = self.name(&name).to_string();
+                    let inferred = self.infer_element(reader, element, false)?;
+                    self.add_field(&mut fields, name, inferred);
                 }
-                xot::Value::Text(text)
-                    if !text.get().trim_matches([' ', '\t', '\n', '\r']).is_empty() =>
-                {
-                    self.add_field(
-                        &mut fields,
-                        self.value_tag.clone(),
-                        self.infer_value(text.get()),
-                    );
+                Event::End(_) => {
+                    self.add_text(&mut fields, &mut text);
+                    break;
                 }
-                _ => {}
+                Event::Comment(_) | Event::PI(_) => self.add_text(&mut fields, &mut text),
+                _ => return Err("Unexpected XML event inside element".into()),
             }
         }
         let primitive_text = fields
@@ -321,33 +380,15 @@ impl XmlInferenceOptions {
         } else {
             InferredType::Struct(fields)
         };
-        if !self.exclude_attribute
-            && (!xot.attributes(node).is_empty() || !xot.namespaces(node).is_empty())
-        {
+        if !attributes.is_empty() {
             let mut fields = match inferred {
                 InferredType::Struct(fields) => fields,
                 InferredType::Null => vec![],
                 ty => vec![(self.value_tag.clone(), ty)],
             };
-            for (name, value) in xot.attributes(node).iter() {
-                let name = format!("{}{}", self.attribute_prefix, self.name(xot, node, name)?);
-                self.add_field(&mut fields, name, self.infer_value(value));
-            }
-            // Spark treats namespace declarations as attributes during inference.
-            for (prefix, namespace) in xot.namespaces(node).iter() {
-                let prefix = xot.prefix_str(prefix);
-                let name = if prefix.is_empty() {
-                    "xmlns".to_string()
-                } else if self.ignore_namespace {
-                    prefix.to_string()
-                } else {
-                    format!("xmlns:{prefix}")
-                };
-                self.add_field(
-                    &mut fields,
-                    format!("{}{name}", self.attribute_prefix),
-                    self.infer_value(xot.namespace_str(*namespace)),
-                );
+            // Namespace declarations are ordinary attributes in the lexical reader.
+            for (name, ty) in attributes {
+                self.add_field(&mut fields, name, ty);
             }
             inferred = InferredType::Struct(fields);
         }
