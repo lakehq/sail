@@ -536,7 +536,7 @@ impl PlanResolver<'_> {
         Ok(None)
     }
 
-    fn resolve_potentially_nested_field<T: AsRef<str>>(
+    pub(super) fn resolve_potentially_nested_field<T: AsRef<str>>(
         &self,
         expr: expr::Expr,
         data_type: &DataType,
