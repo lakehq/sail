@@ -194,6 +194,99 @@ async fn preparation_reads_each_physical_manifest_once_and_preserves_retained_sp
 }
 
 #[tokio::test]
+async fn refreshed_gc_property_controls_cleanup_before_any_inventory_reads() {
+    use crate::io::test_store::TestStore;
+
+    for (value, enabled) in [
+        (None, true),
+        (Some("true"), true),
+        (Some("TrUe"), true),
+        (Some("false"), false),
+        (Some("FALSE"), false),
+        (Some(""), false),
+        (Some("yes"), false),
+        (Some(" true "), false),
+    ] {
+        let (store, url, mut metadata) = fixture().await;
+        metadata
+            .properties
+            .insert("gc.enabled".into(), "true".into());
+        let counted = Arc::new(TestStore::new(store.base));
+        let store = StoreContext::new(counted.clone(), &url).expect("counted store");
+        let mut prepared = operation()
+            .prepare(&store, &url, &metadata)
+            .await
+            .expect("prepare with GC enabled");
+        // Exercise every cleanup counter, including delete and statistics files.
+        let mut paths = vec![];
+        for kind in 0..6 {
+            let path = Path::from(format!("table/candidate-{kind}"));
+            store
+                .base
+                .put(&path, "candidate".into())
+                .await
+                .expect("put");
+            prepared.expiration.candidates.paths.insert(
+                path.clone(),
+                InventoryEntry {
+                    kind,
+                    selected: true,
+                },
+            );
+            paths.push(path);
+        }
+        metadata.snapshots.retain(|s| s.snapshot_id == 20);
+        match value {
+            Some(value) => {
+                metadata
+                    .properties
+                    .insert("gc.enabled".into(), value.into());
+            }
+            None => {
+                metadata.properties.remove("gc.enabled");
+            }
+        }
+        counted.gets.lock().expect("gets").clear();
+        if !enabled {
+            assert!(operation().prepare(&store, &url, &metadata).await.is_err());
+            assert!(counted.gets.lock().expect("gets").is_empty());
+        }
+        let batch = prepared
+            .expiration
+            .finish(
+                &store,
+                &url,
+                Ok(metadata),
+                IcebergProcedureType::ExpireSnapshots
+                    .descriptor()
+                    .expect("descriptor")
+                    .schema(),
+            )
+            .await
+            .expect("committed expiration returns counts");
+        assert_eq!(counted.gets.lock().expect("gets").is_empty(), !enabled);
+        assert_eq!(
+            counted.deletes.lock().expect("deletes").is_empty(),
+            !enabled
+        );
+        let expected = if enabled { [1, 1, 1, 1, 2, 1] } else { [0; 6] };
+        for (column, expected) in batch.columns().iter().zip(expected) {
+            assert_eq!(
+                column
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .expect("count")
+                    .value(0),
+                expected,
+            );
+        }
+        for path in paths {
+            assert_eq!(counted.inner.get(&path).await.is_ok(), !enabled);
+        }
+    }
+}
+
+#[tokio::test]
 async fn selected_inventory_preserves_file_kinds_and_shared_statistics() {
     let mut position = entry(2, FormatVersion::V3);
     position.data_file.content = DataContentType::PositionDeletes;

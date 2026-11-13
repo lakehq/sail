@@ -1401,6 +1401,78 @@ def test_rest_expiration_standard_updates_at_publication_gate(
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
 
 
+def test_rest_expiration_preserves_files_when_gc_disabled_at_publication_gate(
+    spark, gated_remote, commit_gate_proxy, iceberg_rest_endpoint, seaweedfs_host_endpoint
+):
+    table_name = "expiration_gc_disabled"
+    table_fqn = f"{NAMESPACE}.{table_name}"
+    spark.sql(f"CREATE TABLE {table_fqn} (id INT) USING iceberg TBLPROPERTIES ('gc.enabled'='true')")
+    try:
+        spark.sql(f"INSERT INTO {table_fqn} VALUES (1), (11)")  # noqa: S608
+        expired = _load_table(iceberg_rest_endpoint, table_name)["metadata"]["current-snapshot-id"]
+        spark.sql(f"INSERT OVERWRITE {table_fqn} VALUES (2), (12)")  # noqa: S608
+        before = _load_table(iceberg_rest_endpoint, table_name)
+        location = before["metadata"]["location"]
+        file_io = PyArrowFileIO(
+            {
+                "s3.endpoint": seaweedfs_host_endpoint,
+                "s3.access-key-id": "admin",
+                "s3.secret-access-key": "password",
+                "s3.region": "us-east-1",
+            }
+        )
+        bucket = urllib.parse.urlparse(location).netloc
+        original_bytes = {}
+        for key in _s3_object_keys(seaweedfs_host_endpoint, location):
+            with file_io.new_input(f"s3://{bucket}/{key}").open() as source:
+                original_bytes[key] = source.read()
+        _, gate = commit_gate_proxy
+        gate.arm(NAMESPACE, table_name)
+        statement = f"CALL system.expire_snapshots('{table_fqn}', snapshot_ids => array(CAST({expired} AS BIGINT)))"
+        with spark_session_factory(gated_remote) as sessions, ThreadPoolExecutor(max_workers=1) as executor:
+            client = sessions.create()
+            future = executor.submit(lambda: client.sql(statement).collect())
+            try:
+                if not gate.arrived.wait(timeout=60):
+                    outcome = future.exception(timeout=1) if future.done() else "still running"
+                    pytest.fail(f"Expiration did not reach POST gate: {outcome}")
+                _rest_update(
+                    iceberg_rest_endpoint,
+                    table_name,
+                    [{"action": "set-properties", "updates": {"gc.enabled": "false"}}],
+                )
+                concurrent = _load_table(iceberg_rest_endpoint, table_name)
+                assert concurrent["metadata"]["refs"] == before["metadata"]["refs"]
+            finally:
+                gate.release.set()
+            result = future.result(timeout=60)
+        after = _load_table(iceberg_rest_endpoint, table_name)
+        assert gate.response_status == HTTPStatus.OK
+        assert gate.request_count == 1
+        assert gate.table_posts == 1
+        assert after["metadata-location"] != concurrent["metadata-location"]
+        assert expired not in {s["snapshot-id"] for s in after["metadata"]["snapshots"]}
+        assert after["metadata"]["properties"]["gc.enabled"] == "false"
+        assert original_bytes.keys() <= _s3_object_keys(seaweedfs_host_endpoint, location)
+        for key, expected in original_bytes.items():
+            with file_io.new_input(f"s3://{bucket}/{key}").open() as source:
+                assert source.read() == expected
+        assert len(result) == 1
+        assert tuple(result[0]) == (0, 0, 0, 0, 0, 0)
+        with spark_session_factory(gated_remote) as sessions:
+            client = sessions.create()
+            assert sorted(row.value for row in client.table(table_fqn).selectExpr("id + 100 AS value").collect()) == [
+                102,
+                112,
+            ]
+            with pytest.raises(PySparkException, match="GC is disabled"):
+                client.sql(statement).collect()
+        assert gate.table_posts == 1
+        assert _load_table(iceberg_rest_endpoint, table_name)["metadata-location"] == after["metadata-location"]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+
+
 @pytest.mark.parametrize("apply_commit", [False, True], ids=["not_applied", "applied"])
 @pytest.mark.parametrize(
     "fault", [503, "disconnect", "malformed", "stale_payload", "wrong_uuid", "unapplied_removals", "refresh_denied"]

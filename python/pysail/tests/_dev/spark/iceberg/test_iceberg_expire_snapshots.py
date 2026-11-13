@@ -139,7 +139,8 @@ def test_expiration_preserves_encoded_partition_uris(spark, tmp_path):
         for value in [1, 2]:
             spark.sql(f"INSERT OVERWRITE {name} VALUES ({value}, 'a/b'), ({value + 10}, 'a/b')")
         uris = [row.file_path for row in spark.table(f"{name}.files").collect()]
-        assert uris and all("%" in uri and uri.startswith("file:") for uri in uris)
+        assert uris
+        assert all("%" in uri and uri.startswith("file:") for uri in uris)
         assert expire(spark, name, f", older_than => {FUTURE}")[0] == 1
         with spark_connect_server() as server, spark_session_factory(server.remote) as sessions:
             rows = sessions.create().read.format("iceberg").load(str(path)).orderBy("id").collect()

@@ -62,6 +62,13 @@ pub(crate) struct PreparedExpiration {
     pub(crate) expiration: Expiration,
 }
 
+fn gc_enabled(metadata: &TableMetadata) -> bool {
+    metadata
+        .properties
+        .get("gc.enabled")
+        .is_none_or(|value| value.eq_ignore_ascii_case("true"))
+}
+
 impl ExpireSnapshots {
     pub(crate) fn from_invocation(invocation: &LakeProcedureInvocation) -> Result<Self> {
         let older_than_ms = match invocation.argument("older_than") {
@@ -100,11 +107,7 @@ impl ExpireSnapshots {
 
     // [CREDIT]: https://github.com/apache/iceberg/blob/apache-iceberg-1.12.0/core/src/main/java/org/apache/iceberg/RemoveSnapshots.java#L213-L365
     fn select(&self, metadata: &TableMetadata) -> Result<(HashSet<i64>, Vec<String>)> {
-        if metadata
-            .properties
-            .get("gc.enabled")
-            .is_some_and(|value| !value.eq_ignore_ascii_case("true"))
-        {
+        if !gc_enabled(metadata) {
             return plan_err!(
                 "Cannot expire snapshots: GC is disabled (deleting files may corrupt other tables)"
             );
@@ -566,6 +569,12 @@ impl Expiration {
             Ok(metadata)
                 if metadata.table_uuid == self.table_uuid && metadata.location == self.location =>
             {
+                if !gc_enabled(&metadata) {
+                    log::warn!(
+                        "Snapshot expiration committed, but GC is disabled; preserving all candidate files"
+                    );
+                    return output(schema, [0; 6]);
+                }
                 inventory(store, url, &metadata, None).await
             }
             Ok(_) => plan_err!("Iceberg table UUID or location changed after expiration"),
