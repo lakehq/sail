@@ -10,10 +10,6 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    env:
-      # Coverage environment variables
-      RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
-      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-profiles/rust-unit/sail-%p-%m.profraw
     steps:
       - uses: actions/checkout@v7
 
@@ -29,20 +25,10 @@ jobs:
         with:
           cache-key: rust-tests
 
-      - name: Prepare coverage directories
-        run: mkdir -p target/llvm-profiles/rust-unit
-
       - name: Run Cargo Test
-        run: cargo nextest run --no-fail-fast
-
-      # Generate coverage report after unit tests (runs in PRs and pushes)
-      - name: Generate Rust unit coverage report
         run: |
-          LLVM_PATH=$(.github/scripts/find-llvm-profdata.sh)
-          grcov target/llvm-profiles/rust-unit --binary-path target/debug/ -s . \
-            --llvm-path "$LLVM_PATH" \
-            -t lcov --branch --ignore-not-existing \
-            -o coverage-rust-unit.info
+          cargo llvm-cov nextest --no-fail-fast --include-build-script \
+            --lcov --output-path coverage-rust-unit.info
 
       - name: Upload Rust unit coverage to Codecov
         # Dependabot does not operate from a fork of the repository, so a token

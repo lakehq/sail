@@ -5,7 +5,7 @@ inputs:
     description: Cache key prefix (e.g., 'rust-tests', 'rust-lint', or 'rust-build')
     required: true
   install-testing-tools:
-    description: Whether to install testing tools (grcov, nextest, llvm-tools-preview)
+    description: Whether to install testing tools (cargo-llvm-cov, nextest, llvm-tools-preview)
     default: "true"
   install-nightly-toolchain:
     description: Whether to install the Rust nightly toolchain
@@ -37,9 +37,9 @@ runs:
         rustup toolchain install nightly --profile default
       shell: bash
 
-    - name: Install grcov
+    - name: Install cargo-llvm-cov
       if: ${{ inputs.install-testing-tools == 'true' }}
-      uses: taiki-e/install-action@grcov
+      uses: taiki-e/install-action@cargo-llvm-cov
 
     - name: Install cargo-nextest
       if: ${{ inputs.install-testing-tools == 'true' }}
