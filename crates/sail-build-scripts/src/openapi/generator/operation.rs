@@ -119,7 +119,10 @@ impl OpenApiGenerator<'_> {
                 RustType::Option(Box::new(schema_type))
             };
             let kind = match location {
-                ParameterLocation::Path => ParameterKind::Path { required },
+                ParameterLocation::Path => ParameterKind::Path {
+                    required,
+                    raw: self.config.raw_path_parameters.contains(&parameter.name),
+                },
                 ParameterLocation::Query => ParameterKind::Query {
                     required,
                     array: is_array,
@@ -482,6 +485,13 @@ fn generate_path_expression(
             })?;
         let ident = &parameter.identifier;
         let required = parameter.kind.required();
+        let encode = |value: TokenStream| {
+            if matches!(parameter.kind, ParameterKind::Path { raw: true, .. }) {
+                value
+            } else {
+                quote! { eager_percent_encode(#value) }
+            }
+        };
         let optional_segment =
             !required && expression.ends_with('/') && after_start[end + 1..].starts_with('/');
         if optional_segment {
@@ -495,10 +505,11 @@ fn generate_path_expression(
             } else {
                 quote! { value.to_string() }
             };
+            let encoded = encode(value);
             quote! {
                 #ident
                     .as_ref()
-                    .map(|value| format!(#format, eager_percent_encode(#value)))
+                    .map(|value| format!(#format, #encoded))
                     .unwrap_or_default()
             }
         } else {
@@ -507,7 +518,7 @@ fn generate_path_expression(
             } else {
                 quote! { #ident.to_string() }
             };
-            quote! { eager_percent_encode(#value) }
+            encode(value)
         };
         arguments.push(argument);
         rest = &after_start[end + 1..];
@@ -671,7 +682,7 @@ struct OperationParameter {
 
 #[derive(Clone, Copy)]
 enum ParameterKind {
-    Path { required: bool },
+    Path { required: bool, raw: bool },
     Query { required: bool, array: bool },
     Header { required: bool, array: bool },
 }
@@ -679,7 +690,7 @@ enum ParameterKind {
 impl ParameterKind {
     fn required(&self) -> bool {
         match self {
-            Self::Path { required }
+            Self::Path { required, .. }
             | Self::Query { required, .. }
             | Self::Header { required, .. } => *required,
         }

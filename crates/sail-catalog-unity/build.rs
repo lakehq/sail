@@ -21,6 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         OpenApiConfig {
             excluded_operations: [].into_iter().collect(),
             excluded_schemas: ["ColumnTypeName".to_owned()].into_iter().collect(),
+            raw_path_parameters: Default::default(),
         },
     )?;
 
