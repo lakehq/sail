@@ -75,7 +75,7 @@ def celeborn_envs(
             ]
         )
     )
-    envs = {
+    return {
         "SAIL_MODE": "local-cluster",
         "SAIL_CLUSTER__SHUFFLE_BACKEND__TYPE": "celeborn",
         "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__MASTER_ENDPOINTS": (
@@ -83,7 +83,6 @@ def celeborn_envs(
         ),
         "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES": endpoint_overrides,
     }
-    return envs
 
 
 def fail_once(marker):
