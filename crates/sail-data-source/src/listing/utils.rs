@@ -2,9 +2,7 @@ use std::sync::Arc;
 
 use arrow_schema::FieldRef;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use datafusion::datasource::listing::helpers::{
-    evaluate_partition_prefix, filter_partitioned_file,
-};
+use datafusion::datasource::listing::helpers::filter_partitioned_file;
 use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::cache::cache_manager::CachedFileList;
 use datafusion::logical_expr::{Expr, Volatility};
@@ -291,49 +289,9 @@ pub fn infer_partitions(
     Ok(inferred.unwrap_or_default())
 }
 
-/// Choose only an unambiguous leading prefix. NULLs, escaped spellings, and
-/// floating-point directory aliases must be decoded before predicate evaluation.
-fn hive_partition_prefix(columns: &[(String, DataType)], filters: &[Expr]) -> Option<Path> {
-    if filters.iter().any(|filter| {
-        filter
-            .exists(|expr| Ok(matches!(expr, Expr::Literal(value, _) if value.is_null())))
-            .unwrap_or(true)
-    }) {
-        return None;
-    }
-    let columns = columns
-        .iter()
-        .take_while(|(name, dt)| {
-            name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                && !matches!(
-                    dt,
-                    DataType::Float16
-                        | DataType::Float32
-                        | DataType::Float64
-                        | DataType::Timestamp(_, _)
-                )
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let prefix = evaluate_partition_prefix(&columns, filters)?;
-    let parts = prefix
-        .parts()
-        .take_while(|part| {
-            let Some((_, value)) = part.as_ref().split_once('=') else {
-                return false;
-            };
-            !value.is_empty()
-                && value != "__HIVE_DEFAULT_PARTITION__"
-                && value
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
-        })
-        .collect::<Vec<_>>();
-    (!parts.is_empty()).then(|| Path::from_iter(parts))
-}
-
-/// Decode Hive nulls before type conversion and predicate evaluation, retaining
-/// prefix pruning for ordinary unambiguous partition equalities.
+/// Decode Hive names, values, and nulls before type conversion and predicate evaluation.
+/// A decoded equality cannot determine the raw prefix: percent-encoded aliases
+/// may name the same logical partition.
 pub async fn hive_partitioned_files<'a>(
     ctx: &'a dyn Session,
     store: &'a dyn ObjectStore,
@@ -352,12 +310,11 @@ pub async fn hive_partitioned_files<'a>(
             .collect(),
         Default::default(),
     )?;
-    let prefix = hive_partition_prefix(columns, filters);
     let filters = datafusion_expr::utils::conjunction(filters.iter().cloned())
         .map(|filter| vec![Expr::IsTrue(Box::new(filter))])
         .unwrap_or_default();
     let files = table_path
-        .list_prefixed_files(ctx, store, prefix, "")
+        .list_prefixed_files(ctx, store, None, "")
         .await?
         .try_filter(|meta| futures::future::ready(meta.size > 0))
         .map_ok(|meta| {
@@ -585,7 +542,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hive_listing_prunes_safe_equalities_and_lists_ambiguous_keys() -> Result<()> {
+    async fn hive_listing_filters_decoded_keys_after_listing() -> Result<()> {
         use std::sync::atomic::Ordering;
 
         use datafusion::logical_expr::{col, lit};
@@ -594,6 +551,8 @@ mod tests {
         for path in [
             "ints/p=1/file",
             "ints/p=2/file",
+            "ints/%70=1/file",
+            "ints/p=%31/file",
             "ints/p=__HIVE_DEFAULT_PARTITION__/file",
             "strings/p=a%3Db/file",
             "strings/p=other/file",
@@ -613,11 +572,11 @@ mod tests {
                 "ints",
                 DataType::Int32,
                 col("p").eq(lit(1_i32)),
-                1,
-                1,
-                "ints/p=1",
+                3,
+                5,
+                "ints",
             ),
-            ("ints", DataType::Int32, col("p").is_null(), 1, 3, "ints"),
+            ("ints", DataType::Int32, col("p").is_null(), 1, 5, "ints"),
             (
                 "strings",
                 DataType::Utf8,
