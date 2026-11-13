@@ -39,8 +39,8 @@ use regex::Regex;
 //
 // TODO: `sail-plan/src/function/scalar/conversion.rs` — `int()`, `bigint()`, `smallint()` and `tinyint()` trim nothing.
 //
-// TODO: `sail-function/src/scalar/datetime/spark_date.rs`, `spark_timestamp.rs` and `spark_date_format.rs` —
-//  the temporal parsers trim nothing, so `CAST(' 2024-01-01 ' AS DATE)` diverges from Spark.
+// TODO: `sail-function/src/scalar/datetime/spark_date_format.rs` — trims nothing before
+//  parsing a string as a timestamp.
 //
 // TODO: `sail-function/src/scalar/variant/spark_variant_get.rs` — trims nothing.
 //
