@@ -53,6 +53,20 @@ def test_shuffle_finishes_when_join_leaves_probe_partitions_unread(spark, partit
     assert rows == ([Row(id=0)] if join_type == "left_semi" else [])
 
 
+@pytest.mark.timeout(30)
+def test_shuffle_finishes_when_union_leaves_merge_replicas_unread(spark):
+    # The sorted branch is a single partition read through a merge input, which
+    # keeps a replica for every union partition although only one of them reads it.
+    # Multiple range batches overflow the one-batch shuffle buffers.
+    rows, limit = 10_000, 5_000
+    top = spark.range(rows, numPartitions=4).orderBy("id").limit(limit)
+    even = spark.range(rows, numPartitions=4).filter("id % 2 = 0")
+
+    total = top.union(even).groupBy().sum("id").collect()[0][0]
+
+    assert total == sum(range(limit)) + sum(range(0, rows, 2))
+
+
 @pytest.mark.timeout(15)
 def test_hash_join_preserves_global_build_limit(spark):
     build = spark.range(16, numPartitions=4).limit(3)
