@@ -907,6 +907,16 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         password: Option<SecretString>,
+        /// Signs every request with AWS Signature Version 4, for example for the
+        /// Amazon S3 Tables or RustFS Iceberg REST endpoints.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sigv4_enabled: Option<bool>,
+        /// The SigV4 signing region. Defaults to the AWS region provider chain.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signing_region: Option<String>,
+        /// The SigV4 signing name, such as `s3tables` or `s3`. Defaults to `execute-api`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signing_name: Option<String>,
         #[serde(flatten)]
         cache: CatalogCacheConfig,
     },
