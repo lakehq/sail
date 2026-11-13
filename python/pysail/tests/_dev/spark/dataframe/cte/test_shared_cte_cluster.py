@@ -5,7 +5,7 @@ from pyspark.errors import PySparkException
 
 from pysail.testing.spark.session import spark_connect_server
 from pysail.testing.spark.utils.common import is_jvm_spark, shares_deterministic_ctes
-from pysail.tests._dev.spark.dataframe.test_shared_cte_volatile import ROWS, VOLATILE, cte, query
+from pysail.tests._dev.spark.dataframe.cte.test_shared_cte_volatile import ROWS, VOLATILE, cte, query
 
 
 @pytest.fixture(scope="module")
