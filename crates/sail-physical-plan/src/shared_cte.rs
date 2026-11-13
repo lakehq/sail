@@ -1,248 +1,68 @@
+use std::collections::{HashMap, HashSet};
 use std::fmt::Formatter;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, UInt32Array};
-use datafusion::arrow::compute::take;
-use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion::common::runtime::SpawnedTask;
-use datafusion::common::tree_node::TreeNodeRecursion;
-use datafusion::execution::memory_pool::{MemoryConsumer, MemoryLimit, MemoryReservation};
-use datafusion::execution::{SendableRecordBatchStream, SpillFile, TaskContext};
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
+use datafusion::execution::memory_pool::MemoryLimit;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::coop::cooperative;
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType, SchedulingType};
+use datafusion::physical_plan::joins::NestedLoopJoinExec;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet, SpillMetrics};
+use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::spill::SpillManager;
 use datafusion::physical_plan::statistics::StatisticsArgs;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{
-    DataFusionError, Result, Statistics, internal_datafusion_err, internal_err,
-};
-use futures::future::{BoxFuture, Shared};
-use futures::{FutureExt, StreamExt, TryStreamExt, stream};
+use datafusion_common::{Result, Statistics, internal_datafusion_err, internal_err};
+use futures::StreamExt;
 
-/// The size of the batches of a shared CTE that are kept in memory when the memory pool
-/// is bounded. The other batches are written to disk, as the operators that can spill
-/// do under a bounded pool, since the memory of the batches cannot be given back to the
-/// operators of the query that cannot spill.
-pub const SHARED_CTE_MEMORY_LIMIT: usize = 1024 * 1024;
+use crate::shared_cte::tee::{Tee, TeeReader};
 
-/// Returns the size of the batches of a shared CTE that are kept in memory, in total
-/// across its partitions. In cluster mode, where each partition of a shared CTE is
-/// produced by its own task, the size applies to each partition.
-///
-/// A shared CTE is kept in memory in full when the memory pool is unbounded, where no
-/// operator writes to disk, so that disk is never required for a shared CTE that the
-/// query would not require otherwise.
-pub fn shared_cte_memory_limit(context: &TaskContext) -> usize {
-    match context.memory_pool().memory_limit() {
-        MemoryLimit::Infinite => usize::MAX,
-        MemoryLimit::Finite(_) | MemoryLimit::Unknown => SHARED_CTE_MEMORY_LIMIT,
-    }
-}
-
-/// The batches of a stream, which are read any number of times after the stream ends.
-///
-/// The first batches are kept in memory, up to a size and within the memory pool, and
-/// the other batches are written to disk, so that the buffer does not hold the memory
-/// of other operators. The size is unlimited under an unbounded memory pool (see
-/// [`shared_cte_memory_limit`]). All batches stay in memory if they cannot be written
-/// to disk.
-pub struct ReplayBuffer {
-    spill: SpillManager,
-    chunks: Vec<ReplayChunk>,
-    /// The size of the batches that are read from disk.
-    batch_size: usize,
-    /// The memory of the batches that are not spilled.
-    _reservation: MemoryReservation,
-}
-
-#[derive(Clone)]
-enum ReplayChunk {
-    Memory(Arc<Vec<RecordBatch>>),
-    Spilled(Arc<dyn SpillFile>),
-}
-
-impl ReplayBuffer {
-    /// Reads the stream to its end. The batches are kept in memory while their size fits
-    /// in `memory`, the number of bytes that the buffers of a shared CTE can still keep
-    /// in memory.
-    pub async fn try_new(
-        mut stream: SendableRecordBatchStream,
-        context: &TaskContext,
-        name: String,
-        metrics: SpillMetrics,
-        memory: Arc<AtomicUsize>,
-    ) -> Result<Self> {
-        let spill = SpillManager::new(context.runtime_env(), metrics, stream.schema())
-            .with_compression_type(context.session_config().spill_compression());
-        let reservation = MemoryConsumer::new(name)
-            .with_can_spill(true)
-            .register(context.memory_pool());
-        let batch_size = context.session_config().batch_size().max(1);
-        let mut chunks = vec![];
-        let mut batches = vec![];
-        let mut file = None;
-        // Whether the batches can be written to disk.
-        let mut spillable = true;
-        while let Some(batch) = stream.next().await {
-            let batch = batch?;
-            if batch.num_rows() == 0 {
-                continue;
-            }
-            // The size of the rows of the batch, which can be a slice of larger arrays.
-            let size = batch
-                .columns()
-                .iter()
-                .map(|column| column.to_data().get_slice_memory_size())
-                .sum::<std::result::Result<usize, _>>()?;
-            if file.is_none() && spillable {
-                let fits = memory
-                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |memory| {
-                        memory.checked_sub(size)
-                    })
-                    .is_ok();
-                if fits && reservation.try_grow(size).is_ok() {
-                    batches.push(batch);
-                    continue;
-                }
-                if fits {
-                    memory.fetch_add(size, Ordering::Relaxed);
-                }
-                match spill.create_in_progress_file("SharedCteExec") {
-                    Ok(created) => {
-                        if !batches.is_empty() {
-                            chunks
-                                .push(ReplayChunk::Memory(Arc::new(std::mem::take(&mut batches))));
-                        }
-                        file = Some(created);
-                    }
-                    Err(_) => spillable = false,
-                }
-            }
-            match &mut file {
-                Some(file) => {
-                    file.append_batch(&batch)?;
-                }
-                None => {
-                    reservation.grow(size);
-                    batches.push(batch);
-                }
-            }
-        }
-        if !batches.is_empty() {
-            chunks.push(ReplayChunk::Memory(Arc::new(batches)));
-        }
-        if let Some(written) = file
-            .as_mut()
-            .map(|file| file.finish())
-            .transpose()?
-            .flatten()
-        {
-            chunks.push(ReplayChunk::Spilled(written));
-        }
-        Ok(Self {
-            spill,
-            chunks,
-            batch_size,
-            _reservation: reservation,
-        })
-    }
-
-    /// Returns the batches in the order of the stream.
-    pub fn stream(self: &Arc<Self>) -> stream::BoxStream<'static, Result<RecordBatch>> {
-        let buffer = Arc::clone(self);
-        stream::iter(self.chunks.clone())
-            .flat_map(move |chunk| match chunk {
-                ReplayChunk::Memory(batches) => {
-                    stream::iter((0..batches.len()).map(move |i| Ok(batches[i].clone()))).boxed()
-                }
-                ReplayChunk::Spilled(file) => match buffer.spill.read_spill_as_stream(file, None) {
-                    Ok(stream) => {
-                        let batch_size = buffer.batch_size;
-                        stream
-                            .flat_map(move |batch| stream::iter(compact(batch, batch_size)))
-                            .boxed()
-                    }
-                    Err(error) => stream::once(async move { Err(error) }).boxed(),
-                },
-            })
-            .boxed()
-    }
-}
-
-/// Copies a batch that is read from disk into new batches of at most the given size.
-/// The arrays of a batch that is read from disk share the memory of the whole batch,
-/// and an operator that receives a batch larger than the size can keep slices of it,
-/// so that the operators would account for more memory than they keep.
-fn compact(batch: Result<RecordBatch>, batch_size: usize) -> Vec<Result<RecordBatch>> {
-    let batch = match batch {
-        Ok(batch) => batch,
-        Err(error) => return vec![Err(error)],
-    };
-    let rows = batch.num_rows();
-    (0..rows)
-        .step_by(batch_size)
-        .map(|offset| {
-            let length = batch_size.min(rows - offset);
-            let indices = UInt32Array::from_iter_values(offset as u32..(offset + length) as u32);
-            let columns = batch
-                .columns()
-                .iter()
-                .map(|column| {
-                    // An array of a type that cannot be copied keeps the memory of the batch.
-                    let column = take(column, &indices, None)
-                        .unwrap_or_else(|_| column.slice(offset, length));
-                    match column.data_type() {
-                        DataType::Utf8View => Arc::new(column.as_string_view().gc()) as ArrayRef,
-                        DataType::BinaryView => Arc::new(column.as_binary_view().gc()),
-                        _ => column,
-                    }
-                })
-                .collect();
-            let options = RecordBatchOptions::new().with_row_count(Some(length));
-            Ok(RecordBatch::try_new_with_options(
-                batch.schema(),
-                columns,
-                &options,
-            )?)
-        })
-        .collect()
-}
+pub mod blocking;
+pub mod tee;
 
 /// The output of a shared CTE, which is produced once and read by every reference.
 ///
-/// The output is produced in full before it is read, since references that are inputs
-/// of the same operator (e.g. a self join) are not read at the same pace. It is
-/// produced when a reference is first read, and released when the plan that contains
+/// Each partition of the output is a [`Tee`]: it is produced when a reference asks for
+/// rows that no reference has read yet, and the rows are kept until every reference has
+/// read them, since references that are inputs of the same operator (e.g. a self join)
+/// are not read at the same pace. The output is released when the plan that contains
 /// the references has returned its output.
 pub struct SharedCte {
     id: usize,
     name: String,
     /// The partitioning of the output, which the references report as their own.
     partitioning: Partitioning,
+    /// Whether the references must read one evaluation of the CTE.
+    volatile: bool,
     state: Mutex<SharedCteState>,
 }
 
 #[derive(Default)]
 struct SharedCteState {
     producer: Option<SharedCteProducer>,
-    output: Option<Shared<BoxFuture<'static, SharedCteResult>>>,
+    /// The partitions of the output.
+    output: Option<Arc<Vec<Arc<Tee>>>>,
 }
-
-type SharedCteResult = std::result::Result<Arc<Vec<Arc<ReplayBuffer>>>, Arc<DataFusionError>>;
 
 #[derive(Clone)]
 struct SharedCteProducer {
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
     metrics: SpillMetrics,
+    /// The number of references, each of which reads every partition of the output.
+    references: usize,
+    /// Whether a reference is in the build side of a nested loop join, which the join can
+    /// execute again.
+    rereadable: bool,
 }
 
 impl std::fmt::Debug for SharedCte {
@@ -262,8 +82,20 @@ impl SharedCte {
             id,
             name,
             partitioning,
+            volatile: false,
             state: Mutex::new(SharedCteState::default()),
         }
+    }
+
+    /// Returns the shared CTE whose references must read one evaluation, if it is
+    /// volatile.
+    pub fn with_volatile(mut self, volatile: bool) -> Self {
+        self.volatile = volatile;
+        self
+    }
+
+    pub fn volatile(&self) -> bool {
+        self.volatile
     }
 
     pub fn partitioning(&self) -> &Partitioning {
@@ -284,14 +116,16 @@ impl SharedCte {
             .map_err(|_| internal_datafusion_err!("shared CTE state is poisoned"))
     }
 
-    /// Sets the plan that produces the output. The plan is repartitioned if it does not
-    /// have the partitioning of the shared CTE anymore, since each partition of a
-    /// reference is a partition of the output.
+    /// Sets the plan that produces the output for the given number of references. The
+    /// plan is repartitioned if it does not have the partitioning of the shared CTE
+    /// anymore, since each partition of a reference is a partition of the output.
     fn produce(
         &self,
         plan: &Arc<dyn ExecutionPlan>,
         context: &Arc<TaskContext>,
         metrics: &ExecutionPlanMetricsSet,
+        references: usize,
+        rereadable: bool,
     ) -> Result<()> {
         let mut state = self.state()?;
         if state.producer.is_none() {
@@ -314,40 +148,85 @@ impl SharedCte {
                 plan,
                 context: Arc::clone(context),
                 metrics: SpillMetrics::new(metrics, self.id),
+                references,
+                rereadable,
             });
         }
         Ok(())
     }
 
-    /// Returns the output, which is produced when it is first requested.
-    fn output(&self) -> Result<Shared<BoxFuture<'static, SharedCteResult>>> {
+    /// Returns the partitions of the output, which are produced when they are read.
+    fn output(&self) -> Result<Arc<Vec<Arc<Tee>>>> {
         let mut state = self.state()?;
         if let Some(output) = &state.output {
-            return Ok(output.clone());
+            return Ok(Arc::clone(output));
         }
         let Some(producer) = state.producer.clone() else {
             return internal_err!("shared CTE {}#{} has no producer", self.name, self.id);
         };
-        let output = async move {
-            // The task outlives the reference that requests the output first.
-            match SpawnedTask::spawn(producer.run()).join().await {
-                Ok(output) => output.map(Arc::new).map_err(Arc::new),
-                Err(error) => Err(Arc::new(DataFusionError::ExecutionJoin(Box::new(error)))),
-            }
-        }
-        .boxed()
-        .shared();
-        state.output = Some(output.clone());
+        let SharedCteProducer {
+            plan,
+            context,
+            metrics,
+            references,
+            rereadable,
+        } = producer;
+        // A nested loop join executes its build side again only to spill it after the
+        // memory pool refuses to keep it in memory.
+        let runtime = context.runtime_env();
+        let keep_all = rereadable
+            && matches!(runtime.memory_pool.memory_limit(), MemoryLimit::Finite(_))
+            && runtime.disk_manager.tmp_files_enabled();
+        let output = (0..plan.output_partitioning().partition_count())
+            .map(|partition| {
+                let source = {
+                    let plan = Arc::clone(&plan);
+                    let context = Arc::clone(&context);
+                    Box::new(move || plan.execute(partition, context)) as _
+                };
+                Arc::new(Tee::new(
+                    format!("SharedCteExec[{}#{}][{partition}]", self.name, self.id),
+                    plan.schema(),
+                    source,
+                    references,
+                    keep_all,
+                    &context,
+                    metrics.clone(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let output = Arc::new(output);
+        state.output = Some(Arc::clone(&output));
         Ok(output)
     }
 
     /// Releases the output and stops producing it. The output is produced again if it
-    /// is requested after that.
+    /// is read after that.
     fn release(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.output = None;
         }
     }
+}
+
+/// Returns the identifiers of the shared CTEs that the plan may read again from the
+/// beginning: a nested loop join executes its build side again to spill it, after the
+/// memory pool refuses to keep it in memory.
+pub fn ctes_read_again(plan: &Arc<dyn ExecutionPlan>) -> HashSet<usize> {
+    let mut ids = HashSet::new();
+    // The closures never fail.
+    let _ = plan.apply(|plan| {
+        if let Some(join) = plan.downcast_ref::<NestedLoopJoinExec>() {
+            let _ = join.left().apply(|plan| {
+                if let Some(scan) = plan.downcast_ref::<SharedCteScanExec>() {
+                    ids.insert(scan.cte.id());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            });
+        }
+        Ok(TreeNodeRecursion::Continue)
+    });
+    ids
 }
 
 /// Releases the outputs of the shared CTEs of a plan when every partition of the plan
@@ -370,46 +249,6 @@ impl Drop for SharedCteOutputGuard {
     }
 }
 
-impl SharedCteProducer {
-    async fn run(self) -> Result<Vec<Arc<ReplayBuffer>>> {
-        let Self {
-            plan,
-            context,
-            metrics,
-        } = self;
-        let partitions = plan.output_partitioning().partition_count();
-        // The partitions share the memory of the CTE.
-        let memory = Arc::new(AtomicUsize::new(shared_cte_memory_limit(&context)));
-        let tasks = (0..partitions)
-            .map(|partition| {
-                let stream = plan.execute(partition, Arc::clone(&context))?;
-                let context = Arc::clone(&context);
-                let metrics = metrics.clone();
-                let memory = Arc::clone(&memory);
-                Ok(SpawnedTask::spawn(async move {
-                    ReplayBuffer::try_new(
-                        stream,
-                        &context,
-                        format!("SharedCteExec[{partition}]"),
-                        metrics,
-                        memory,
-                    )
-                    .await
-                }))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let mut buffers = Vec::with_capacity(tasks.len());
-        for task in tasks {
-            let buffer = task
-                .join()
-                .await
-                .map_err(|error| DataFusionError::ExecutionJoin(Box::new(error)))??;
-            buffers.push(Arc::new(buffer));
-        }
-        Ok(buffers)
-    }
-}
-
 /// Produces the output of shared CTEs for the references in its input and in the
 /// CTEs themselves, and returns the output of its input.
 ///
@@ -420,6 +259,11 @@ impl SharedCteProducer {
 pub struct SharedCteExec {
     input: Arc<dyn ExecutionPlan>,
     ctes: Vec<(Arc<SharedCte>, Arc<dyn ExecutionPlan>)>,
+    /// The number of references of each CTE in the input and in the CTEs, which are
+    /// numbered by [`SharedCteScanExec::with_reference`].
+    references: Vec<usize>,
+    /// Whether each CTE is read in the build side of a nested loop join.
+    rereadable: Vec<bool>,
     /// The number of partitions of the output that are read or dropped.
     finished: Arc<AtomicUsize>,
     metrics: ExecutionPlanMetricsSet,
@@ -432,9 +276,37 @@ impl SharedCteExec {
         ctes: Vec<(Arc<SharedCte>, Arc<dyn ExecutionPlan>)>,
     ) -> Self {
         let properties = Arc::new(input.properties().as_ref().clone());
+        let references = ctes
+            .iter()
+            .map(|(cte, _)| {
+                let mut count = 0;
+                for plan in std::iter::once(&input).chain(ctes.iter().map(|(_, plan)| plan)) {
+                    // The closure never fails.
+                    let _ = plan.apply(|plan| {
+                        if let Some(scan) = plan.downcast_ref::<SharedCteScanExec>()
+                            && Arc::ptr_eq(&scan.cte, cte)
+                        {
+                            count = count.max(scan.reference + 1);
+                        }
+                        Ok(TreeNodeRecursion::Continue)
+                    });
+                }
+                count
+            })
+            .collect();
+        let read_again = std::iter::once(&input)
+            .chain(ctes.iter().map(|(_, plan)| plan))
+            .flat_map(ctes_read_again)
+            .collect::<HashSet<_>>();
+        let rereadable = ctes
+            .iter()
+            .map(|(cte, _)| read_again.contains(&cte.id()))
+            .collect();
         Self {
             input,
             ctes,
+            references,
+            rereadable,
             finished: Arc::new(AtomicUsize::new(0)),
             metrics: ExecutionPlanMetricsSet::new(),
             properties,
@@ -447,6 +319,42 @@ impl SharedCteExec {
 
     pub fn ctes(&self) -> &[(Arc<SharedCte>, Arc<dyn ExecutionPlan>)] {
         &self.ctes
+    }
+
+    /// Returns the plan in which the given references, as pairs of the identifier of the
+    /// shared CTE and the number of the reference, evaluate their CTE themselves.
+    pub fn inline_references(
+        &self,
+        references: &HashSet<(usize, usize)>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let bodies = self
+            .ctes
+            .iter()
+            .map(|(cte, body)| (cte.id(), Arc::clone(body)))
+            .collect::<HashMap<_, _>>();
+        let inline = |plan: &Arc<dyn ExecutionPlan>| {
+            Arc::clone(plan)
+                .transform_up(|plan| match plan.downcast_ref::<SharedCteScanExec>() {
+                    Some(scan) if references.contains(&(scan.cte.id(), scan.reference)) => {
+                        match bodies.get(&scan.cte.id()) {
+                            Some(body) => Ok(Transformed::yes(project(
+                                Arc::clone(body),
+                                scan.projection(),
+                            )?)),
+                            None => internal_err!("shared CTE {} has no plan", scan.cte.id()),
+                        }
+                    }
+                    _ => Ok(Transformed::no(plan)),
+                })
+                .data()
+        };
+        let input = inline(&self.input)?;
+        let ctes = self
+            .ctes
+            .iter()
+            .map(|(cte, body)| Ok((Arc::clone(cte), inline(body)?)))
+            .collect::<Result<Vec<_>>>()?;
+        share_ctes(input, ctes)
     }
 }
 
@@ -529,8 +437,10 @@ impl ExecutionPlan for SharedCteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        for (cte, plan) in &self.ctes {
-            cte.produce(plan, &context, &self.metrics)?;
+        for (((cte, plan), references), rereadable) in
+            self.ctes.iter().zip(&self.references).zip(&self.rereadable)
+        {
+            cte.produce(plan, &context, &self.metrics, *references, *rereadable)?;
         }
         let guard = SharedCteOutputGuard {
             ctes: self.ctes.iter().map(|(cte, _)| Arc::clone(cte)).collect(),
@@ -564,9 +474,11 @@ impl ExecutionPlan for SharedCteExec {
 }
 
 /// Reads the output of a shared CTE for one reference.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SharedCteScanExec {
     cte: Arc<SharedCte>,
+    /// The number of the reference among the references of the shared CTE.
+    reference: usize,
     /// The columns of the shared CTE that the reference reads, or `None` for all columns.
     projection: Option<Vec<usize>>,
     /// The statistics of the output of all partitions.
@@ -605,17 +517,21 @@ impl SharedCteScanExec {
             _ => None,
         }
         .unwrap_or(Partitioning::UnknownPartitioning(partitions));
-        // The column statistics of the CTE are not those of the declared columns.
-        let mut output = Statistics::new_unknown(&schema);
-        output.num_rows = statistics.num_rows;
-        let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(schema),
-            partitioning,
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        ));
+        let output = project_statistics(statistics, projection.as_deref(), &schema);
+        // A reader of kept batches is always ready, so the scan consumes the scheduling
+        // budget of its task, as the other leaves do.
+        let properties = Arc::new(
+            PlanProperties::new(
+                EquivalenceProperties::new(schema),
+                partitioning,
+                EmissionType::Incremental,
+                Boundedness::Bounded,
+            )
+            .with_scheduling_type(SchedulingType::Cooperative),
+        );
         Self {
             cte,
+            reference: 0,
             statistics: Arc::new(output),
             projection,
             properties,
@@ -626,8 +542,22 @@ impl SharedCteScanExec {
         &self.cte
     }
 
+    /// Returns the reference with the given number among the references of the shared
+    /// CTE, which are numbered from zero in the plan that produces the shared CTE.
+    pub fn with_reference(&self, reference: usize) -> Self {
+        Self {
+            reference,
+            ..self.clone()
+        }
+    }
+
     pub fn projection(&self) -> Option<&[usize]> {
         self.projection.as_deref()
+    }
+
+    /// Returns the number of the reference among the references of the shared CTE.
+    pub fn reference(&self) -> usize {
+        self.reference
     }
 }
 
@@ -710,37 +640,149 @@ impl ExecutionPlan for SharedCteScanExec {
             );
         }
         let output = self.cte.output()?;
+        let Some(tee) = output.get(partition) else {
+            return internal_err!(
+                "{}: partition {partition} of the shared CTE is not produced",
+                self.name()
+            );
+        };
+        let reader: TeeReader = tee.reader(self.reference)?;
         let projection = self.projection.clone();
         let schema = self.schema();
-        let stream = stream::once(async move {
-            let output = output.await.map_err(DataFusionError::Shared)?;
-            // Each partition of the reference is a partition of the output.
-            let buffer = output.get(partition).cloned();
-            Ok::<_, DataFusionError>(stream::iter(buffer).flat_map(|buffer| buffer.stream()).map(
-                move |batch| {
-                    let batch = batch?;
-                    let columns = match &projection {
-                        Some(projection) => projection
-                            .iter()
-                            .map(|&index| Arc::clone(batch.column(index)))
-                            .collect(),
-                        None => batch.columns().to_vec(),
-                    };
-                    // The reference declares the schema of the CTE definition.
-                    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
-                    Ok(RecordBatch::try_new_with_options(
-                        Arc::clone(&schema),
-                        columns,
-                        &options,
-                    )?)
-                },
-            ))
-        })
-        .try_flatten();
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
+        let stream = reader.map(move |batch| {
+            let batch = batch?;
+            let columns = match &projection {
+                Some(projection) => projection
+                    .iter()
+                    .map(|&index| Arc::clone(batch.column(index)))
+                    .collect(),
+                None => batch.columns().to_vec(),
+            };
+            // The reference declares the schema of the CTE definition.
+            let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+            Ok(RecordBatch::try_new_with_options(
+                Arc::clone(&schema),
+                columns,
+                &options,
+            )?)
+        });
+        Ok(Box::pin(cooperative(RecordBatchStreamAdapter::new(
             self.schema(),
             stream,
-        )))
+        ))))
+    }
+}
+
+/// Returns the plan that produces the given shared CTEs for their references in the plan
+/// and in the CTEs, where a CTE can refer to the CTEs before it. A CTE that is left with
+/// fewer than two references is evaluated in place of its reference. The references of
+/// each CTE are numbered (see [`SharedCteScanExec::with_reference`]).
+pub fn share_ctes(
+    plan: Arc<dyn ExecutionPlan>,
+    ctes: Vec<(Arc<SharedCte>, Arc<dyn ExecutionPlan>)>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let mut plan = plan;
+    let mut ctes = ctes;
+    loop {
+        let mut references: HashMap<usize, usize> = HashMap::new();
+        for plan in std::iter::once(&plan).chain(ctes.iter().map(|(_, plan)| plan)) {
+            plan.apply(|plan| {
+                if let Some(scan) = plan.downcast_ref::<SharedCteScanExec>() {
+                    *references.entry(scan.cte().id()).or_default() += 1;
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+        let count = |cte: &SharedCte| references.get(&cte.id()).copied().unwrap_or(0);
+        let Some(position) = ctes.iter().position(|(cte, _)| count(cte) < 2) else {
+            break;
+        };
+        let (single, body) = ctes.remove(position);
+        if count(&single) == 0 {
+            continue;
+        }
+        let inline = |plan: Arc<dyn ExecutionPlan>| {
+            plan.transform_up(|plan| match plan.downcast_ref::<SharedCteScanExec>() {
+                Some(scan) if scan.cte().id() == single.id() => Ok(Transformed::yes(project(
+                    Arc::clone(&body),
+                    scan.projection(),
+                )?)),
+                _ => Ok(Transformed::no(plan)),
+            })
+            .data()
+        };
+        plan = inline(plan)?;
+        for (_, cte) in &mut ctes {
+            *cte = inline(Arc::clone(cte))?;
+        }
+    }
+    if ctes.is_empty() {
+        return Ok(plan);
+    }
+    // Each reference reads the output of its shared CTE as one of its numbered readers.
+    let mut references: HashMap<usize, usize> = HashMap::new();
+    let mut number = |plan: Arc<dyn ExecutionPlan>| {
+        plan.transform_up(|plan| match plan.downcast_ref::<SharedCteScanExec>() {
+            Some(scan) => {
+                let count = references.entry(scan.cte().id()).or_default();
+                let scan = scan.with_reference(*count);
+                *count += 1;
+                Ok(Transformed::yes(Arc::new(scan) as Arc<dyn ExecutionPlan>))
+            }
+            None => Ok(Transformed::no(plan)),
+        })
+        .data()
+    };
+    let plan = number(plan)?;
+    let ctes = ctes
+        .into_iter()
+        .map(|(cte, body)| Ok((cte, number(body)?)))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(SharedCteExec::new(plan, ctes)))
+}
+
+/// Returns the plan of a shared CTE for a reference that reads the given columns.
+fn project(
+    plan: Arc<dyn ExecutionPlan>,
+    projection: Option<&[usize]>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let Some(projection) = projection else {
+        return Ok(plan);
+    };
+    let schema = plan.schema();
+    let expressions = projection
+        .iter()
+        .map(|&index| {
+            let name = schema.field(index).name();
+            ProjectionExpr::new(Arc::new(Column::new(name, index)), name.clone())
+        })
+        .collect::<Vec<_>>();
+    Ok(Arc::new(ProjectionExec::try_new(expressions, plan)?))
+}
+
+/// Returns the statistics of a reference that reads the given columns of a shared CTE
+/// with the given statistics, as those of a projection of the plan of the CTE.
+fn project_statistics(
+    statistics: &Statistics,
+    projection: Option<&[usize]>,
+    schema: &SchemaRef,
+) -> Statistics {
+    let columns = statistics.column_statistics.len();
+    let projected = match projection {
+        None => statistics.clone(),
+        Some(projection) if projection.iter().all(|&index| index < columns) => {
+            let mut projected = statistics.clone().project(Some(&projection));
+            projected.calculate_total_byte_size(schema);
+            projected
+        }
+        Some(_) => Statistics::new_unknown(schema),
+    };
+    if projected.column_statistics.len() == schema.fields().len() {
+        projected
+    } else {
+        let mut output = Statistics::new_unknown(schema);
+        output.num_rows = statistics.num_rows;
+        output
     }
 }
 
@@ -789,15 +831,18 @@ mod tests {
             Partitioning::UnknownPartitioning(3),
         ));
         let statistics = Statistics::new_unknown(&schema);
-        let scan = |column: usize| -> Result<Arc<dyn ExecutionPlan>> {
-            Ok(Arc::new(SharedCteScanExec::new(
-                Arc::clone(&cte),
-                Arc::new(schema.project(&[column])?),
-                &statistics,
-                Some(vec![column]),
-            )))
+        let scan = |column: usize, reference: usize| -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(Arc::new(
+                SharedCteScanExec::new(
+                    Arc::clone(&cte),
+                    Arc::new(schema.project(&[column])?),
+                    &statistics,
+                    Some(vec![column]),
+                )
+                .with_reference(reference),
+            ))
         };
-        let input = UnionExec::try_new(vec![scan(1)?, scan(0)?])?;
+        let input = UnionExec::try_new(vec![scan(1, 0)?, scan(0, 1)?])?;
         let shared = Arc::new(SharedCteExec::new(
             input,
             vec![(Arc::clone(&cte), producer)],
@@ -812,9 +857,19 @@ mod tests {
             );
         }
         let context = Arc::new(TaskContext::default().with_runtime(runtime.build_arc()?));
-        let batches = collect(Arc::clone(&shared) as Arc<dyn ExecutionPlan>, context).await?;
+        let batches = collect(
+            Arc::clone(&shared) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&context),
+        )
+        .await?;
         // The output is released once every partition of every reference is read.
         assert!(cte.state()?.output.is_none());
+        // The plan is executed again, and produces the shared CTE again.
+        let again = collect(Arc::clone(&shared) as Arc<dyn ExecutionPlan>, context).await?;
+        assert_eq!(
+            again.iter().map(|x| x.num_rows()).sum::<usize>(),
+            batches.iter().map(|x| x.num_rows()).sum::<usize>()
+        );
         let mut values = batches
             .iter()
             .flat_map(|batch| {
@@ -844,14 +899,138 @@ mod tests {
         let (values, spilled) = read(None, true).await?;
         assert_eq!(values, expected);
         assert_eq!(spilled, 0);
-        // The output does not fit in memory and is spilled to disk.
-        let (values, spilled) = read(Some(64 * 1024), true).await?;
+        let (values, _) = read(Some(64 * 1024), true).await?;
         assert_eq!(values, expected);
-        assert!(spilled > 0);
         // The output stays in memory when temporary files are disabled.
         let (values, spilled) = read(Some(64 * 1024), false).await?;
         assert_eq!(values, expected);
         assert_eq!(spilled, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_shared_cte_in_the_build_side_of_a_nested_loop_join_is_read_again() -> Result<()> {
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_plan::common::collect as common_collect;
+
+        let (schema, producer) = plan(1)?;
+        let statistics = Statistics::new_unknown(&schema);
+        let (_, right) = plan(1)?;
+        for nested_loop_join in [true, false] {
+            let cte = Arc::new(SharedCte::new(
+                0,
+                "c".to_string(),
+                Partitioning::UnknownPartitioning(1),
+            ));
+            let scan = |reference: usize| -> Arc<dyn ExecutionPlan> {
+                Arc::new(
+                    SharedCteScanExec::new(
+                        Arc::clone(&cte),
+                        Arc::clone(&schema),
+                        &statistics,
+                        None,
+                    )
+                    .with_reference(reference),
+                )
+            };
+            let build = scan(0);
+            let input: Arc<dyn ExecutionPlan> = if nested_loop_join {
+                let join = NestedLoopJoinExec::try_new(
+                    Arc::clone(&build),
+                    Arc::clone(&right),
+                    None,
+                    &JoinType::LeftSemi,
+                    None,
+                )?;
+                UnionExec::try_new(vec![Arc::new(join), scan(1)])?
+            } else {
+                UnionExec::try_new(vec![Arc::clone(&build), scan(1)])?
+            };
+            let shared = Arc::new(SharedCteExec::new(
+                Arc::clone(&input),
+                vec![(Arc::clone(&cte), Arc::clone(&producer))],
+            ));
+            let runtime = RuntimeEnvBuilder::new().with_memory_limit(64 * 1024 * 1024, 1.0);
+            let context = Arc::new(TaskContext::default().with_runtime(runtime.build_arc()?));
+            // The other reference reads every row before the build side is read.
+            let other = input.output_partitioning().partition_count() - 1;
+            let rows = common_collect(shared.execute(other, Arc::clone(&context))?).await?;
+            assert_eq!(rows.iter().map(|x| x.num_rows()).sum::<usize>(), 4096);
+            // The build side is read, and read again from the beginning, as the join does
+            // after the memory pool refuses to keep it in memory.
+            let first = common_collect(build.execute(0, Arc::clone(&context))?).await?;
+            assert_eq!(first.iter().map(|x| x.num_rows()).sum::<usize>(), 4096);
+            let again = build.execute(0, Arc::clone(&context));
+            if nested_loop_join {
+                let again = common_collect(again?).await?;
+                assert_eq!(again.iter().map(|x| x.num_rows()).sum::<usize>(), 4096);
+            } else {
+                let failed = match again {
+                    Ok(again) => common_collect(again).await.is_err(),
+                    Err(_) => true,
+                };
+                assert!(failed);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_shared_cte_reference_yields_when_its_budget_is_spent() -> Result<()> {
+        use std::task::Poll;
+
+        use datafusion_common::DataFusionError;
+
+        use datafusion::physical_plan::common::collect as common_collect;
+
+        const BATCHES: usize = 512;
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from_iter_values(0..8))],
+        )?;
+        let producer =
+            MemorySourceConfig::try_new_exec(&[vec![batch; BATCHES]], Arc::clone(&schema), None)?;
+        let cte = Arc::new(SharedCte::new(
+            0,
+            "c".to_string(),
+            Partitioning::UnknownPartitioning(1),
+        ));
+        let statistics = Statistics::new_unknown(&schema);
+        let scan = |reference: usize| -> Arc<dyn ExecutionPlan> {
+            Arc::new(
+                SharedCteScanExec::new(Arc::clone(&cte), Arc::clone(&schema), &statistics, None)
+                    .with_reference(reference),
+            )
+        };
+        let input = UnionExec::try_new(vec![scan(0), scan(1)])?;
+        let shared = Arc::new(SharedCteExec::new(
+            input,
+            vec![(Arc::clone(&cte), producer)],
+        ));
+        let context = Arc::new(TaskContext::default());
+        // The second reference reads every batch, which is kept for the first one.
+        let rows = common_collect(shared.execute(1, Arc::clone(&context))?).await?;
+        assert_eq!(rows.len(), BATCHES);
+        // The first reference reads kept batches, which are always ready, and yields to
+        // other tasks when the scheduling budget of its task is spent.
+        let mut stream = shared.execute(0, Arc::clone(&context))?;
+        let mut read = 0;
+        let ready = std::future::poll_fn(|cx| {
+            loop {
+                match stream.poll_next_unpin(cx) {
+                    Poll::Ready(Some(batch)) => {
+                        batch?;
+                        read += 1;
+                    }
+                    Poll::Ready(None) => return Poll::Ready(Ok::<_, DataFusionError>(false)),
+                    Poll::Pending => return Poll::Ready(Ok(true)),
+                }
+            }
+        })
+        .await?;
+        assert!(ready, "read {read} batches without yielding");
+        assert!(read < BATCHES);
         Ok(())
     }
 
@@ -884,15 +1063,13 @@ mod tests {
             Partitioning::UnknownPartitioning(1),
         ));
         let statistics = Statistics::new_unknown(&schema);
-        let scan = || -> Arc<dyn ExecutionPlan> {
-            Arc::new(SharedCteScanExec::new(
-                Arc::clone(&cte),
-                Arc::clone(&schema),
-                &statistics,
-                None,
-            ))
+        let scan = |reference: usize| -> Arc<dyn ExecutionPlan> {
+            Arc::new(
+                SharedCteScanExec::new(Arc::clone(&cte), Arc::clone(&schema), &statistics, None)
+                    .with_reference(reference),
+            )
         };
-        let input = UnionExec::try_new(vec![scan(), scan()])?;
+        let input = UnionExec::try_new(vec![scan(0), scan(1)])?;
         let shared = Arc::new(SharedCteExec::new(input, vec![(cte, producer)]));
         let context = Arc::new(TaskContext::default());
         for partition in 0..2 {
@@ -941,15 +1118,13 @@ mod tests {
             Partitioning::UnknownPartitioning(3),
         ));
         let statistics = Statistics::new_unknown(&schema);
-        let scan = || -> Arc<dyn ExecutionPlan> {
-            Arc::new(SharedCteScanExec::new(
-                Arc::clone(&cte),
-                Arc::clone(&schema),
-                &statistics,
-                None,
-            ))
+        let scan = |reference: usize| -> Arc<dyn ExecutionPlan> {
+            Arc::new(
+                SharedCteScanExec::new(Arc::clone(&cte), Arc::clone(&schema), &statistics, None)
+                    .with_reference(reference),
+            )
         };
-        let input = UnionExec::try_new(vec![scan(), scan()])?;
+        let input = UnionExec::try_new(vec![scan(0), scan(1)])?;
         let shared = Arc::new(SharedCteExec::new(
             input,
             vec![(Arc::clone(&cte), producer)],
@@ -978,54 +1153,118 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_shared_cte_memory_is_bounded_in_total_under_a_bounded_pool() -> Result<()> {
-        let limit = SHARED_CTE_MEMORY_LIMIT / (1024 * 1024);
-        // Only a prefix of the CTE stays in memory, whatever the sizes of its partitions,
-        // although the pool has room for more.
-        let runtime = RuntimeEnvBuilder::new().with_memory_limit(1024 * 1024 * 1024, 1.0);
-        let (rows, spilled) = read_large([16, 8, 8], runtime).await?;
-        assert_eq!((rows, spilled), (64, 32 - limit));
+    async fn test_shared_cte_copies_batches_larger_than_the_batch_size() -> Result<()> {
+        use datafusion::arrow::array::StringArray;
+        use datafusion::physical_plan::streaming::{PartitionStream, StreamingTableExec};
+        use datafusion::prelude::SessionConfig;
+
+        const BATCH_SIZE: usize = 1024;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
+        let rows = 4 * BATCH_SIZE + 1;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from_iter_values(0..rows as i64)),
+                Arc::new(StringArray::from_iter_values(
+                    (0..rows).map(|x| format!("value {x}")),
+                )),
+            ],
+        )?;
+        // A source that returns the batch as it is, as a window does with a whole partition.
+        #[derive(Debug)]
+        struct OneBatch(RecordBatch);
+        impl PartitionStream for OneBatch {
+            fn schema(&self) -> &SchemaRef {
+                self.0.schema_ref()
+            }
+
+            fn execute(&self, _: Arc<TaskContext>) -> SendableRecordBatchStream {
+                let stream = futures::stream::iter(vec![Ok(self.0.clone())]);
+                Box::pin(RecordBatchStreamAdapter::new(self.0.schema(), stream))
+            }
+        }
+        let producer: Arc<dyn ExecutionPlan> = Arc::new(StreamingTableExec::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(OneBatch(batch.clone()))],
+            None,
+            vec![],
+            false,
+            None,
+        )?);
+        let cte = Arc::new(SharedCte::new(
+            0,
+            "c".to_string(),
+            Partitioning::UnknownPartitioning(1),
+        ));
+        let statistics = Statistics::new_unknown(&schema);
+        let scan = |reference: usize| -> Arc<dyn ExecutionPlan> {
+            Arc::new(
+                SharedCteScanExec::new(Arc::clone(&cte), Arc::clone(&schema), &statistics, None)
+                    .with_reference(reference),
+            )
+        };
+        let input = UnionExec::try_new(vec![scan(0), scan(1)])?;
+        let shared = Arc::new(SharedCteExec::new(
+            input,
+            vec![(Arc::clone(&cte), producer)],
+        ));
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(BATCH_SIZE)),
+        );
+        for partition in 0..2 {
+            let mut stream = shared.execute(partition, Arc::clone(&context))?;
+            let mut batches = vec![];
+            while let Some(batch) = stream.next().await {
+                batches.push(batch?);
+            }
+            // Each batch that a reference reads is a copy of a part of the batch, which
+            // does not keep the memory of the whole batch.
+            assert!(batches.iter().all(|x| x.num_rows() <= BATCH_SIZE));
+            let size = batches
+                .iter()
+                .map(|x| x.get_array_memory_size())
+                .sum::<usize>();
+            assert!(
+                size * 2 <= batch.get_array_memory_size() * 3,
+                "{size} {}",
+                batch.get_array_memory_size()
+            );
+            let read = datafusion::arrow::compute::concat_batches(&schema, &batches)?;
+            assert_eq!(read, batch);
+        }
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_shared_cte_reads_new_batches_from_disk() -> Result<()> {
-        use datafusion::arrow::array::{StringArray, StringViewArray};
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Utf8, false),
-            Field::new("c", DataType::Utf8View, false),
-        ]));
-        let strings = (0..20000).map(|x| format!("{x:064}")).collect::<Vec<_>>();
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(Int64Array::from_iter_values(0..20000)),
-                Arc::new(StringArray::from_iter_values(&strings)),
-                Arc::new(StringViewArray::from_iter_values(&strings)),
-            ],
-        )?;
-        let input = MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None)?;
-        let context = TaskContext::default();
-        let stream = input.execute(0, Arc::new(TaskContext::default()))?;
-        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
-        // The batch is written to disk, since no memory is left for the CTE.
-        let memory = Arc::new(AtomicUsize::new(0));
-        let buffer = ReplayBuffer::try_new(stream, &context, "c".to_string(), metrics, memory);
-        let batches = Arc::new(buffer.await?)
-            .stream()
-            .try_collect::<Vec<_>>()
-            .await?;
-        let rows = batches.iter().map(|x| x.num_rows()).collect::<Vec<_>>();
-        assert_eq!(rows, vec![8192, 8192, 3616]);
-        // Each array holds the memory of its own values, and not that of the batch.
-        for batch in &batches {
-            let rows = batch.num_rows();
-            assert!(batch.column(0).get_array_memory_size() < rows * 8 + 1024);
-            assert!(batch.column(1).get_array_memory_size() < rows * 72 + 1024);
-            assert!(batch.column(2).get_array_memory_size() < rows * 80 + 1024);
+    async fn test_shared_cte_spills_under_a_bounded_pool() -> Result<()> {
+        // The second reference reads after the first one, so the CTE is kept for it. Under
+        // a memory limit, the kept batches are written to disk, even if the pool has room
+        // for them, so that they take no memory that other operators may need.
+        for limit in [1024 * 1024 * 1024, 16 * 1024 * 1024] {
+            let runtime = RuntimeEnvBuilder::new().with_memory_limit(limit, 1.0);
+            let (rows, spilled) = read_large([16, 8, 8], runtime).await?;
+            assert_eq!(rows, 64);
+            assert!(spilled >= 16, "spilled {spilled}");
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_shared_cte_stays_in_memory_without_temporary_files() -> Result<()> {
+        use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+
+        // The CTE is kept outside the pool when it cannot be spilled, which is not an error.
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(4 * 1024 * 1024, 1.0)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+            );
+        let (rows, spilled) = read_large([16, 8, 8], runtime).await?;
+        assert_eq!((rows, spilled), (64, 0));
         Ok(())
     }
 
@@ -1033,12 +1272,52 @@ mod tests {
     async fn test_shared_cte_spill_failure_is_an_error() -> Result<()> {
         // The temporary files of the CTE exceed the size that they are allowed to have.
         let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(1024 * 1024 * 1024, 1.0)
+            .with_memory_limit(4 * 1024 * 1024, 1.0)
             .with_disk_manager_builder(
                 DiskManagerBuilder::default().with_max_temp_directory_size(1024 * 1024),
             );
         let result = read_large([16, 0, 0], runtime).await;
         assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_shared_cte_reference_statistics() -> Result<()> {
+        use datafusion::common::stats::Precision;
+        use datafusion::common::{ColumnStatistics, ScalarValue};
+
+        let (schema, _) = plan(1)?;
+        let cte = Arc::new(SharedCte::new(
+            0,
+            "c".to_string(),
+            Partitioning::UnknownPartitioning(1),
+        ));
+        let column = |min: i64, max: i64| ColumnStatistics {
+            min_value: Precision::Exact(ScalarValue::Int64(Some(min))),
+            max_value: Precision::Exact(ScalarValue::Int64(Some(max))),
+            null_count: Precision::Exact(0),
+            distinct_count: Precision::Inexact(10),
+            ..ColumnStatistics::new_unknown()
+        };
+        let statistics = Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Exact(160),
+            column_statistics: vec![column(0, 9), column(-9, 0)],
+        };
+        let scan = |projection: Option<Vec<usize>>| -> Result<Arc<Statistics>> {
+            let schema = match &projection {
+                Some(projection) => Arc::new(schema.project(projection)?),
+                None => Arc::clone(&schema),
+            };
+            let scan = SharedCteScanExec::new(Arc::clone(&cte), schema, &statistics, projection);
+            scan.statistics_from_inputs(&[], &StatisticsArgs::new())
+        };
+        // A reference has the statistics of the CTE, projected to the columns it reads.
+        assert_eq!(*scan(None)?, statistics);
+        let projected = scan(Some(vec![1]))?;
+        assert_eq!(projected.num_rows, Precision::Exact(10));
+        assert_eq!(projected.total_byte_size, Precision::Exact(80));
+        assert_eq!(projected.column_statistics, vec![column(-9, 0)]);
         Ok(())
     }
 

@@ -12,6 +12,7 @@ from pyspark.errors import PySparkException
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+from pysail.tests._dev.spark.execution.test_shuffle_storage import check_retried_cte_query_fails
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -157,7 +158,7 @@ _SHARED_CTE = "c AS (SELECT id % 7 AS k, count(*) AS n FROM range(1000) GROUP BY
         ),
         # The output of the shared CTE is empty in every partition.
         (
-            "WITH a AS (SELECT count(*) AS q FROM range(0, 12, 1, 3) HAVING count(*) < 0) "
+            "WITH a AS (SELECT sum(id) AS q FROM range(0, 12, 1, 3) HAVING sum(id) < 0) "
             "SELECT count(*) FROM a x JOIN a y ON x.q = y.q",
             [(0,)],
         ),
@@ -181,9 +182,13 @@ def test_shared_cte_error_with_celeborn_shuffle(spark):
         spark.sql(query).collect()
 
 
+def test_retried_region_reads_the_output_of_a_blocking_stage(spark):
+    check_retried_cte_query_fails(spark)
+
+
 def test_celeborn_shuffle_is_usable_after_a_shared_cte_without_output(spark):
     query = (
-        "WITH a AS (SELECT count(*) AS q FROM range(0, 12, 1, 3) HAVING count(*) < 0) "
+        "WITH a AS (SELECT sum(id) AS q FROM range(0, 12, 1, 3) HAVING sum(id) < 0) "
         "SELECT count(*) FROM a x JOIN a y ON x.q = y.q"
     )
     for _ in range(2):

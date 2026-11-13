@@ -271,7 +271,14 @@ async fn shuffle_write(
 ) -> Result<()> {
     let mut sink = writer.open(partition).await?;
     let result = async {
-        while let Some(batch) = stream.next().await {
+        loop {
+            // A batch is produced only when the sink asks for it.
+            if sink.ready().await? == TaskStreamWriteState::Closed {
+                return Ok::<_, datafusion::error::DataFusionError>(false);
+            }
+            let Some(batch) = stream.next().await else {
+                break;
+            };
             let batch = batch?;
             if batch.num_rows() == 0 {
                 continue;

@@ -2,7 +2,7 @@ import pytest
 from pyspark.errors import PySparkException
 
 from pysail.testing.spark.session import spark_connect_server
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, shares_deterministic_ctes
 
 
 @pytest.fixture(scope="module")
@@ -26,7 +26,8 @@ CTE = f"c AS (SELECT id, max(id % 1000) AS g FROM range({ROWS}) GROUP BY id)"
 def test_self_join_reads_shared_cte_at_different_paces(spark):
     query = f"WITH {CTE} SELECT count(*), sum(a.g + b.g) FROM c a JOIN c b ON a.id = b.id"
     assert spark.sql(query).collect() == [(ROWS, 2 * 999 * ROWS // 2)]
-    assert "SharedCteExec" in spark.sql(f"EXPLAIN {query}").collect()[0][0]
+    plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
+    assert ("SharedCteExec" in plan) == shares_deterministic_ctes(), plan
 
 
 def test_union_all_reads_shared_cte_twice(spark):

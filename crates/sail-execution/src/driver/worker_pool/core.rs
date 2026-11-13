@@ -447,6 +447,7 @@ impl WorkerPool {
         worker_id: WorkerId,
         job_id: JobId,
         stage: Option<usize>,
+        attempts: Vec<usize>,
     ) {
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             warn!("worker {worker_id} not found");
@@ -460,7 +461,15 @@ impl WorkerPool {
         // postpone existing idle probes. Schedule another probe in case an earlier one
         // ran while the worker still owned streams that this cleanup releases.
         Self::schedule_idle_worker_probe(ctx, worker_id, worker, &self.options);
-        Self::clean_up_job_for_worker(ctx, job_id, stage, worker_id, worker, &self.options);
+        Self::clean_up_job_for_worker(
+            ctx,
+            job_id,
+            stage,
+            attempts,
+            worker_id,
+            worker,
+            &self.options,
+        );
     }
 
     fn get_client_set(
@@ -499,6 +508,7 @@ impl WorkerPool {
         ctx: &mut ActorContext<DriverActor>,
         job_id: JobId,
         stage: Option<usize>,
+        attempts: Vec<usize>,
         worker_id: WorkerId,
         worker: &mut WorkerDescriptor,
         options: &WorkerPoolOptions,
@@ -511,7 +521,7 @@ impl WorkerPool {
             }
         };
         ctx.spawn(async move {
-            if let Err(e) = client.clean_up_job(job_id, stage).await {
+            if let Err(e) = client.clean_up_job(job_id, stage, attempts).await {
                 Self::log_worker_control_error("clean up job", worker_id, &e);
             }
         });

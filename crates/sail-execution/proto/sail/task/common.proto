@@ -57,13 +57,6 @@ message TaskInputStorageLocator {
 
 message TaskInputShuffleServiceLocator {
   repeated TaskInputChannelList channels = 1;
-  // The range of producer partitions that each partition reads, if not all.
-  repeated TaskInputMapRange maps = 2;
-}
-
-message TaskInputMapRange {
-  uint64 start = 1;
-  uint64 end = 2;
 }
 
 message TaskInputChannelList {
@@ -116,7 +109,7 @@ message TaskOutputLocator {
   oneof Kind {
     TaskOutputPipelinedLocator pipelined = 1;
     TaskOutputBlockingLocator blocking = 2;
-    TaskOutputReplayedLocator replayed = 3;
+    TaskOutputSharedLocator shared = 3;
   }
 }
 
@@ -124,10 +117,11 @@ message TaskOutputPipelinedLocator {
   uint64 replicas = 1;
 }
 
-// The output is buffered in full and then read by each replica at its own pace.
-message TaskOutputReplayedLocator {
-  uint64 replicas = 1;
+message TaskOutputBlockingLocator {
 }
 
-message TaskOutputBlockingLocator {
+// The output is read by each replica at its own pace, and produced when a replica asks
+// for rows that no replica has read yet.
+message TaskOutputSharedLocator {
+  uint64 replicas = 1;
 }

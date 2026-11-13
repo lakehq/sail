@@ -5,7 +5,7 @@ use std::time::Duration;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::error::{CelebornError, CelebornResult};
 use crate::protocol::StatusCode;
@@ -230,7 +230,8 @@ impl TransportFrame<'_> {
 ///
 /// Netty permits multiple outstanding RPCs, but a small client only needs one transaction at a
 /// time. The mutex gives clones a single reusable connection while retaining exact request/reply
-/// ordering. I/O, timeout, and framing errors invalidate the connection before it is reused.
+/// ordering. A transaction that does not complete (an I/O, timeout, or framing error, or a
+/// caller that stops waiting for the reply) invalidates the connection before it is reused.
 #[derive(Debug, Clone)]
 pub(crate) struct TransportConnection {
     host: String,
@@ -301,11 +302,14 @@ impl TransportConnection {
         write_bytes(&mut header, partition_unique_id)?;
         let prefix = batch_header(map_id, attempt_id, batch_id, data_length);
 
+        let frame = TransportFrame {
+            frame_type: TransportFrameType::PushData,
+            header,
+            body: TransportBody::PrefixAndData { prefix, data },
+        };
         let response = self
-            .request(TransportFrame {
-                frame_type: TransportFrameType::PushData,
-                header,
-                body: TransportBody::PrefixAndData { prefix, data },
+            .request_until(frame, |response| {
+                response.rpc_id().is_none_or(|id| id == request_id)
             })
             .await?
             .into_rpc_response(request_id)?;
@@ -399,8 +403,12 @@ impl TransportConnection {
     ) -> CelebornResult<TransportFrame<'static>> {
         // Keep the lock outside the I/O timeout. A caller queued behind another transaction must
         // not time out and clear the connection that the active transaction is using.
-        let mut stream = self.stream.lock().await;
+        let mut transaction = Transaction {
+            stream: self.stream.lock().await,
+            completed: false,
+        };
         let result = tokio::time::timeout(self.timeout, async {
+            let stream = &mut *transaction.stream;
             if stream.is_none() {
                 *stream = Some(TcpStream::connect((&*self.host, self.port)).await?);
             }
@@ -417,19 +425,30 @@ impl TransportConnection {
         })
         .await;
         match result {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(error)) => {
-                // A failed transaction can leave unread bytes in the socket. Starting fresh is
-                // safer than allowing the next request to interpret those bytes as its reply.
-                *stream = None;
-                Err(error)
+            Ok(Ok(response)) => {
+                transaction.completed = true;
+                Ok(response)
             }
-            Err(_) => {
-                // `timeout` cancels its future before it can run error cleanup. Discard the
-                // socket here, otherwise a late response can be mistaken for the next request.
-                *stream = None;
-                Err(CelebornError::Timeout)
-            }
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(CelebornError::Timeout),
+        }
+    }
+}
+
+/// A transaction on a connection, which discards the connection unless it completes.
+///
+/// A transaction that fails, times out, or is dropped by its caller after its request is
+/// written can leave unread bytes in the socket. Starting fresh is safer than allowing the
+/// next request to interpret those bytes as its reply.
+struct Transaction<'a> {
+    stream: MutexGuard<'a, Option<TcpStream>>,
+    completed: bool,
+}
+
+impl Drop for Transaction<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            *self.stream = None;
         }
     }
 }
@@ -768,6 +787,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_late_reply_to_an_earlier_request_is_skipped_by_a_push() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            TransportFrame::read(&mut socket).await.unwrap();
+            for frame in [
+                response(0, TransportFrameType::RpcFailure, b"failed"),
+                response(0, TransportFrameType::RpcFailure, b"failed again"),
+            ] {
+                frame.write(&mut socket).await.unwrap();
+            }
+            TransportFrame::read(&mut socket).await.unwrap();
+            response(1, TransportFrameType::RpcResponse, b"")
+                .write(&mut socket)
+                .await
+                .unwrap();
+        });
+        let connection = TransportConnection::new("127.0.0.1", port, Duration::from_secs(5));
+        assert!(connection.send_rpc(vec![1]).await.is_err());
+        connection
+            .push_data("shuffle", "location", 0, 0, 0, b"data")
+            .await
+            .unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn a_late_reply_to_a_later_request_is_skipped() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -799,5 +846,59 @@ mod tests {
             b"zero"
         );
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_request_that_is_dropped_after_it_is_sent_does_not_leave_its_reply() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (sent_tx, sent_rx) = tokio::sync::oneshot::channel::<()>();
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let mut signals = Some((sent_tx, dropped_rx));
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let signals = signals.take();
+                tokio::spawn(async move {
+                    let mut signals = signals;
+                    while let Ok(request) = TransportFrame::read(&mut socket).await {
+                        let reply = match request.frame_type {
+                            TransportFrameType::ChunkFetchRequest => {
+                                // The chunk is sent after the client stops waiting for it.
+                                if let Some((sent, dropped)) = signals.take() {
+                                    sent.send(()).unwrap();
+                                    dropped.await.unwrap();
+                                }
+                                // The reply has the stream ID, chunk index, offset and
+                                // length of the request.
+                                TransportFrame::new(
+                                    TransportFrameType::ChunkFetchSuccess,
+                                    request.header.to_vec(),
+                                    b"chunk".to_vec(),
+                                )
+                            }
+                            _ => {
+                                let id =
+                                    i64::from_be_bytes(request.header[..8].try_into().unwrap());
+                                response(id, TransportFrameType::RpcResponse, b"ok")
+                            }
+                        };
+                        if reply.write(&mut socket).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        let connection = TransportConnection::new("127.0.0.1", port, Duration::from_secs(5));
+        let mut fetch = Box::pin(connection.fetch_chunk(1, 0, 0, 5));
+        tokio::select! {
+            _ = &mut fetch => panic!("the chunk is sent after the fetch is dropped"),
+            _ = sent_rx => {}
+        }
+        drop(fetch);
+        dropped_tx.send(()).unwrap();
+        assert_eq!(connection.send_rpc(vec![1]).await.unwrap(), b"ok");
+        server.abort();
     }
 }

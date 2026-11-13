@@ -120,7 +120,7 @@ impl TaskStreamAccessor {
         &self,
         key: TaskStreamKey,
         replicas: usize,
-        replay: bool,
+        shared: bool,
         schema: SchemaRef,
     ) -> Result<Box<dyn TaskStreamChannelSink>> {
         let (result, rx) = oneshot::channel();
@@ -128,7 +128,7 @@ impl TaskStreamAccessor {
             TaskRunnerMessage::CreateLocalStream {
                 key,
                 replicas,
-                replay: replay.then(|| Arc::clone(&self.context)),
+                shared: shared.then(|| Arc::clone(&self.context)),
                 schema,
                 result,
             },
@@ -235,7 +235,6 @@ impl TaskStreamAccessor {
         job_id: JobId,
         stage: usize,
         channels: Vec<usize>,
-        maps: Option<(usize, usize)>,
         schema: SchemaRef,
     ) -> Result<TaskStreamSource> {
         let (result, rx) = oneshot::channel();
@@ -244,7 +243,6 @@ impl TaskStreamAccessor {
                 job_id,
                 stage,
                 channels,
-                maps,
                 schema,
                 result,
             },
@@ -325,23 +323,16 @@ impl TaskStreamReader for MultiChannelTaskStreamReader {
                 }))
                 .await?
             }
-            TaskInputLocator::ShuffleService { channels, maps } => {
+            TaskInputLocator::ShuffleService { channels } => {
                 let channels = channels.get(partition).ok_or_else(|| {
                     DataFusionError::Execution(format!("input partition {partition} not found"))
                 })?;
-                let maps = match maps {
-                    Some(maps) => Some(*maps.get(partition).ok_or_else(|| {
-                        DataFusionError::Execution(format!("input partition {partition} not found"))
-                    })?),
-                    None => None,
-                };
                 vec![
                     self.streams
                         .fetch_celeborn_stream(
                             self.key.job_id,
                             self.input.stage,
                             channels.clone(),
-                            maps,
                             self.schema.clone(),
                         )
                         .await?,
@@ -393,14 +384,16 @@ impl TaskStreamWriter for MultiChannelTaskStreamWriter {
         }
         let channels = self.output.channels();
         let sinks = match &self.output.locator {
-            TaskOutputLocator::Pipelined { replicas }
-            | TaskOutputLocator::Replayed { replicas } => {
-                let replay = matches!(self.output.locator, TaskOutputLocator::Replayed { .. });
+            TaskOutputLocator::Pipelined { replicas } | TaskOutputLocator::Shared { replicas } => {
+                let shared = matches!(self.output.locator, TaskOutputLocator::Shared { .. });
+                // A shared output has one channel, since a batch that is written to a channel
+                // whose replicas do not ask for it would wait for them.
+                debug_assert!(!shared || channels == 1);
                 try_join_all((0..channels).map(|channel| {
                     self.streams.create_local_stream(
                         self.key.task_stream_key(channel),
                         *replicas,
-                        replay,
+                        shared,
                         self.schema.clone(),
                     )
                 }))

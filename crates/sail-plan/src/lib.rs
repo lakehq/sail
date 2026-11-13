@@ -13,7 +13,7 @@ use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::plan::NamedPlan;
-use crate::shared_cte::{optimize_shared_ctes, session_state_for_restart};
+use crate::shared_cte::{optimize_and_plan_shared_ctes, session_state_for_restart};
 use crate::streaming::rewriter::{is_streaming_plan, rewrite_streaming_plan};
 
 pub mod catalog;
@@ -47,23 +47,30 @@ pub async fn resolve_and_execute_plan(
     let df = execute_logical_plan(ctx, plan).await?;
     let (session_state, plan) = df.into_parts();
     let mut restart = false;
-    let plan = optimize_shared_ctes(plan, &mut |plan, query| {
-        if query && std::mem::replace(&mut restart, true) {
-            session_state_for_restart(&session_state).optimize(&plan)
-        } else {
-            session_state.optimize(&plan)
-        }
-    })?;
-    let plan = if is_streaming_plan(&plan)? {
-        rewrite_streaming_plan(plan)?
-    } else {
-        plan
-    };
-    info.push(plan.to_stringified(PlanType::FinalLogicalPlan));
-    let plan = session_state
-        .query_planner()
-        .create_physical_plan(&plan, &session_state)
-        .await?;
+    let (logical, plan) = optimize_and_plan_shared_ctes(
+        plan,
+        &mut |plan, query| {
+            if query && std::mem::replace(&mut restart, true) {
+                session_state_for_restart(&session_state).optimize(&plan)
+            } else {
+                session_state.optimize(&plan)
+            }
+        },
+        |plan| async {
+            let plan = if is_streaming_plan(&plan)? {
+                rewrite_streaming_plan(plan)?
+            } else {
+                plan
+            };
+            let physical = session_state
+                .query_planner()
+                .create_physical_plan(&plan, &session_state)
+                .await?;
+            Ok((plan, physical))
+        },
+    )
+    .await?;
+    info.push(logical.to_stringified(PlanType::FinalLogicalPlan));
     let plan = if let Some(fields) = fields {
         rename_physical_plan(plan, &fields)?
     } else {

@@ -58,10 +58,10 @@ impl Actor for TaskRunnerActor {
             TaskRunnerMessage::CreateLocalStream {
                 key,
                 replicas,
-                replay,
+                shared,
                 schema,
                 result,
-            } => self.handle_create_local_stream(key, replicas, replay, schema, result),
+            } => self.handle_create_local_stream(key, replicas, shared, schema, result),
             TaskRunnerMessage::CreateStorageStream {
                 key,
                 schema,
@@ -99,14 +99,14 @@ impl Actor for TaskRunnerActor {
                 job_id,
                 stage,
                 channels,
-                maps,
                 schema,
                 result,
-            } => self
-                .handle_fetch_celeborn_stream(ctx, job_id, stage, channels, maps, schema, result),
-            TaskRunnerMessage::CleanUpLocalStreams { job_id, stage } => {
-                self.handle_clean_up_local_streams(job_id, stage)
-            }
+            } => self.handle_fetch_celeborn_stream(ctx, job_id, stage, channels, schema, result),
+            TaskRunnerMessage::CleanUpLocalStreams {
+                job_id,
+                stage,
+                attempts,
+            } => self.handle_clean_up_local_streams(job_id, stage, &attempts),
             TaskRunnerMessage::CleanUpStorageStreams {
                 job_id,
                 stage,

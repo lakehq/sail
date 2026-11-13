@@ -18,6 +18,11 @@ pub trait TaskStreamWriter: fmt::Debug + Send + Sync {
 /// A sink for one shuffle task partition and all of its output channels.
 #[tonic::async_trait]
 pub trait TaskStreamSink: Send {
+    /// Waits until the sink asks for the next batch, and returns whether the sink still
+    /// writes batches.
+    async fn ready(&mut self) -> Result<TaskStreamWriteState> {
+        Ok(TaskStreamWriteState::Active)
+    }
     /// Write at most one batch per output channel concurrently. Calls are ordered
     /// so that each channel preserves its input batch order.
     async fn write(&mut self, batches: Vec<Option<RecordBatch>>) -> Result<TaskStreamWriteState>;
@@ -35,6 +40,11 @@ pub trait TaskStreamSink: Send {
 /// A physical sink for exactly one channel of the task stream.
 #[tonic::async_trait]
 pub trait TaskStreamChannelSink: Send {
+    /// Waits until the sink asks for the next batch, and returns whether the sink still
+    /// writes batches.
+    async fn ready(&mut self) -> Result<TaskStreamWriteState> {
+        Ok(TaskStreamWriteState::Active)
+    }
     async fn write(&mut self, batch: RecordBatch) -> Result<TaskStreamWriteState>;
     async fn commit(self: Box<Self>) -> Result<()>;
     async fn abort(self: Box<Self>) -> Result<()>;
@@ -52,6 +62,22 @@ pub(crate) struct MultiChannelTaskStreamSink {
 
 #[tonic::async_trait]
 impl TaskStreamSink for MultiChannelTaskStreamSink {
+    async fn ready(&mut self) -> Result<TaskStreamWriteState> {
+        // The next batch is produced when every channel that still writes asks for it.
+        for sink in &mut self.sinks {
+            if let Some(writer) = sink.as_mut()
+                && writer.ready().await? == TaskStreamWriteState::Closed
+            {
+                *sink = None;
+            }
+        }
+        Ok(if self.sinks.iter().any(Option::is_some) {
+            TaskStreamWriteState::Active
+        } else {
+            TaskStreamWriteState::Closed
+        })
+    }
+
     async fn write(&mut self, batches: Vec<Option<RecordBatch>>) -> Result<TaskStreamWriteState> {
         if batches.len() != self.sinks.len() {
             return Err(DataFusionError::Internal(format!(

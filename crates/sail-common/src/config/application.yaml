@@ -978,7 +978,14 @@
   description: |
     Whether the references to a CTE can share one evaluation of the CTE.
     If the value is `true`, a CTE that is referenced more than once is planned and
-    evaluated once for the references that read the same rows of it.
+    evaluated once for the references that read the same rows of it, when the CTE is
+    non-deterministic (so that every reference sees the same values), when it refers to
+    another CTE that is referenced more than once (so that nested CTEs are not evaluated
+    repeatedly), or when it holds its output before returning it (for example, an
+    aggregation or a sort), so that the rows kept for a reference that reads it later are
+    no more than what evaluating it holds anyway. Any other CTE is evaluated for each
+    reference. With a memory limit and temporary files disabled, only the first two kinds
+    are shared.
     If the value is `false`, the CTE is planned and evaluated for each reference.
   experimental: true
 

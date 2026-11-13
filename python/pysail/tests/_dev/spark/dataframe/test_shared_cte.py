@@ -8,7 +8,7 @@ These tests check the results on every engine, and on Sail they also check the p
 import pytest
 from pyspark.errors import PySparkException
 
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, shares_deterministic_ctes
 
 CTE = "c AS (SELECT id % 7 AS k, count(*) AS n, max(id) AS m FROM range(1000) GROUP BY 1)"
 
@@ -17,12 +17,17 @@ def plan(spark, query):
     return spark.sql(f"EXPLAIN {query}").collect()[0][0]
 
 
-def check(spark, query, expected, *, shared, scans):
+def check(spark, query, expected, *, shared, scans, must_share=False):
     """Checks the result, and on Sail whether a CTE is shared and how often the
     range is scanned."""
     assert sorted(tuple(row) for row in spark.sql(query).collect()) == sorted(expected)
     if not is_jvm_spark():
         text = plan(spark, query)
+        if shared and not must_share and not shares_deterministic_ctes():
+            # Each reference evaluates the CTE, as on the merge base. Only volatile CTEs
+            # and the CTEs that refer to other shared CTEs are shared.
+            assert "SharedCteExec" not in text, text
+            return
         assert ("SharedCteExec" in text) == shared, text
         assert text.count("RangeExec") == scans, text
 
@@ -45,8 +50,9 @@ def test_nested_cte_plan_is_linear_in_depth(spark, depth):
     else:
         text = plan(spark, query)
         assert len(text.splitlines()) < 10 * depth + 20  # noqa: PLR2004
-        # The first CTE only projects the range, so it is inlined into the second one.
-        assert text.count("RangeExec") == 2  # noqa: PLR2004
+        # The first CTE only projects the range, so it is inlined into the second one,
+        # whose join is evaluated by each of its two references in the third one.
+        assert text.count("RangeExec") == 4  # noqa: PLR2004
     assert spark.sql(query).collect() == [(10,)]
 
 
@@ -118,7 +124,8 @@ def test_parameters_in_shared_cte(spark):
     positional = query.format(n="?", lo="?")
     assert spark.sql(positional, args=[100, 3]).collect() == [(1278,)]
     if not is_jvm_spark():
-        assert "SharedCteExec" in spark.sql(positional, args=[100, 3])._explain_string()  # noqa: SLF001
+        text = spark.sql(positional, args=[100, 3])._explain_string()  # noqa: SLF001
+        assert ("SharedCteExec" in text) == shares_deterministic_ctes(), text
 
 
 def test_input_files_of_shared_cte(spark, tmp_path):
@@ -129,7 +136,9 @@ def test_input_files_of_shared_cte(spark, tmp_path):
         df = spark.sql(
             "WITH c AS (SELECT id FROM shared_cte_input_files) SELECT a.id FROM c a JOIN c b ON a.id = b.id"
         )
-        assert len(df.inputFiles()) == 3  # noqa: PLR2004
+        files = spark.read.parquet(path).inputFiles()
+        assert files
+        assert sorted(df.inputFiles()) == sorted(files)
         assert df.count() == 30  # noqa: PLR2004
     finally:
         spark.catalog.dropTempView("shared_cte_input_files")
@@ -147,7 +156,9 @@ def test_filtered_rows_are_not_evaluated(spark):
     )
     assert sorted(tuple(row) for row in spark.sql(query).collect()) == [(5.0, 5.0), (10.0, 10.0)]
     query = f"WITH {cte} SELECT a.r FROM c a JOIN c b ON a.id = b.id"
-    with pytest.raises(PySparkException, match="(?i)divi"):
+    # In cluster mode the error can be reported as a conflict between task attempts, since
+    # the failed stage is retried after the query has received partial output.
+    with pytest.raises(PySparkException, match="(?i)divi|different attempt"):
         spark.sql(query).collect()
 
 
@@ -156,7 +167,7 @@ def test_volatile_cte_is_shared(spark):
         "WITH c AS (SELECT id, rand() AS r FROM range(10)) "
         "SELECT count(*) FROM c a JOIN c b ON a.id = b.id AND a.r = b.r"
     )
-    check(spark, query, [(10,)], shared=True, scans=1)
+    check(spark, query, [(10,)], shared=True, scans=1, must_share=True)
 
 
 def test_volatile_cte_in_projected_exists_is_shared(spark):
@@ -164,12 +175,12 @@ def test_volatile_cte_in_projected_exists_is_shared(spark):
         "WITH c AS (SELECT id, rand() AS r FROM range(10)) "
         "SELECT count_if(e), count(*) FROM (SELECT EXISTS (SELECT a.r FROM c b) AS e FROM c a)"
     )
-    check(spark, query, [(10, 10)], shared=True, scans=1)
+    check(spark, query, [(10, 10)], shared=True, scans=1, must_share=True)
     query = (
         "WITH c AS (SELECT id, rand() AS r FROM range(10)) "
         "SELECT count_if(e), count(*) FROM (SELECT EXISTS (SELECT 1 FROM c b WHERE b.r = a.r) AS e FROM c a)"
     )
-    check(spark, query, [(10, 10)], shared=True, scans=1)
+    check(spark, query, [(10, 10)], shared=True, scans=1, must_share=True)
 
 
 def test_deterministic_cte_in_view_is_inlined(spark):
@@ -270,7 +281,10 @@ def test_nested_cte_references_share_one_evaluation(spark):
         d AS (SELECT a.k, a.n + b.n AS t FROM c a JOIN c b ON a.k = b.k)
         SELECT sum(x.t), sum(y.t) FROM d x JOIN d y ON x.k = y.k
     """
-    check(spark, query, [(2000, 2000)], shared=True, scans=1)
+    # The second CTE refers to the first one, so it is shared in any configuration; the
+    # first one is evaluated by each reference in it when deterministic CTEs are not shared.
+    scans = 1 if shares_deterministic_ctes() else 2
+    check(spark, query, [(2000, 2000)], shared=True, scans=scans, must_share=True)
 
 
 def test_cte_that_projects_one_source_is_inlined(spark):

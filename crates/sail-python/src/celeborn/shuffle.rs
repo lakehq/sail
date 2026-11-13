@@ -54,11 +54,7 @@ impl PyShufflePartitionStream {
             runtime.primary().block_on(async move {
                 let mut stream = match stream {
                     Some(stream) => stream,
-                    None => {
-                        client
-                            .read_partition_stream(shuffle_id, partition_id, None)
-                            .await
-                    }
+                    None => client.read_partition_stream(shuffle_id, partition_id).await,
                 };
                 let result = stream
                     .next()

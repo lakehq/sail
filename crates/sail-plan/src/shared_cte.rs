@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
@@ -7,7 +8,7 @@ use datafusion::optimizer::eliminate_join::EliminateJoin;
 use datafusion::optimizer::{OptimizerContext, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion_expr::utils::{conjunction, disjunction};
 use datafusion_expr::{
     Distinct, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, SubqueryAlias,
@@ -19,6 +20,8 @@ use sail_common_datafusion::rename::logical_plan::rename_logical_plan_reusing_pr
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::seeded_random::SeededRandomNode;
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
+
+use crate::scalar_subquery_key::is_volatile_call;
 
 /// A CTE definition whose references can share one evaluation of its body.
 #[derive(Debug)]
@@ -39,6 +42,13 @@ pub struct CteDefinition {
     /// The schema of the definition with the nullability of the optimized definition,
     /// once it is known.
     optimized_schema: OnceLock<SchemaRef>,
+    /// Whether each reference evaluates the definition itself, since the query planner
+    /// finds that a shared body of the definition does not hold its output before it
+    /// returns it (see [`SharedCteBody::inline`]).
+    inlined: AtomicBool,
+    /// The definition as it was resolved, and the expressions of its top projection that
+    /// each reference computes itself over this definition (see [`project_in_references`]).
+    projected: Option<(Arc<LogicalPlan>, Vec<Expr>)>,
 }
 
 impl CteDefinition {
@@ -51,6 +61,8 @@ impl CteDefinition {
             plan: OnceLock::new(),
             volatile,
             optimized_schema: OnceLock::new(),
+            inlined: AtomicBool::new(false),
+            projected: None,
         }
     }
 
@@ -65,6 +77,8 @@ impl CteDefinition {
             plan: OnceLock::new(),
             volatile: self.volatile,
             optimized_schema: OnceLock::new(),
+            inlined: AtomicBool::new(false),
+            projected: None,
         }
     }
 
@@ -219,10 +233,12 @@ impl TableSource for CteReference {
 /// The optimized body of a CTE definition that is shared by several references.
 #[derive(Debug)]
 pub struct SharedCteBody {
-    name: TableReference,
+    definition: Arc<CteDefinition>,
     plan: LogicalPlan,
     /// The columns of the definition that the body computes, or `None` for all columns.
     columns: Option<Vec<usize>>,
+    /// Whether the definition refers to other shareable definitions.
+    nested: bool,
 }
 
 impl SharedCteBody {
@@ -232,7 +248,28 @@ impl SharedCteBody {
 
     /// Returns the name of the CTE.
     pub fn name(&self) -> &TableReference {
-        &self.name
+        &self.definition.name
+    }
+
+    /// Returns whether the definition is volatile, so that its references must read one
+    /// evaluation.
+    pub fn volatile(&self) -> bool {
+        self.definition.volatile
+    }
+
+    /// Returns whether the references share the body whatever it computes: when the
+    /// definition is volatile, so that they read one evaluation, or when it refers to
+    /// other definitions, so that each level of nested definitions is evaluated once
+    /// rather than once for each path to it.
+    pub fn must_share(&self) -> bool {
+        self.definition.volatile || self.nested
+    }
+
+    /// Lets each reference to the definition evaluate the definition itself, as the
+    /// resolver does for a definition that is not shareable, once the query is optimized
+    /// again (see [`optimize_and_plan_shared_ctes`]).
+    pub fn inline(&self) {
+        self.definition.inlined.store(true, Ordering::Relaxed);
     }
 
     /// Returns the positions in the body output of the columns of the definition.
@@ -293,13 +330,11 @@ pub fn analyze_shared_ctes(
 
 /// Returns the plan of a stored view in which the references refer to copies of their
 /// definitions, so that each query that reads the view evaluates the CTEs of the view
-/// with its own CTEs. The references to definitions that are not volatile are replaced by
-/// the definitions unless `deterministic` is set. `next_index` returns the next position
+/// with its own CTEs. `next_index` returns the next position
 /// among the CTE definitions of the query, and `register` receives each copy, after the
 /// copies that it refers to.
 pub fn renew_cte_definitions(
     plan: LogicalPlan,
-    deterministic: bool,
     next_index: &mut dyn FnMut() -> usize,
     register: &mut dyn FnMut(Arc<CteDefinition>),
 ) -> Result<LogicalPlan> {
@@ -347,17 +382,180 @@ pub fn renew_cte_definitions(
     collect(&plan, &mut definitions)?;
     let mut renewed = HashMap::new();
     // A definition refers only to the definitions at earlier positions.
-    let inline = |plan| match deterministic {
-        true => Ok(plan),
-        false => inline_deterministic_references(plan),
-    };
     for (index, definition) in definitions {
-        let resolved = inline(bind(definition.resolved.as_ref().clone(), &renewed)?)?;
+        let resolved = bind(definition.resolved.as_ref().clone(), &renewed)?;
         let copy = Arc::new(definition.renew(next_index(), resolved));
         register(Arc::clone(&copy));
         renewed.insert(index, copy);
     }
-    inline(bind(plan, &renewed)?)
+    bind(plan, &renewed)
+}
+
+/// Returns the plan in which each reference to a definition whose top projection computes
+/// deterministic expressions computes them itself, over a definition that passes on the
+/// columns that they read. A reference then computes them only for the rows that it reads,
+/// after the filters that the optimizer places above it, as the definition does in the
+/// place of the reference, while a shared body computes the rest once. The volatile
+/// expressions remain in the definition, so that the references read one evaluation.
+pub fn project_in_references(plan: LogicalPlan) -> Result<LogicalPlan> {
+    fn collect(
+        plan: &LogicalPlan,
+        definitions: &mut BTreeMap<usize, Arc<CteDefinition>>,
+    ) -> Result<()> {
+        plan.apply_with_subqueries(|plan| {
+            if let LogicalPlan::TableScan(scan) = plan
+                && let Some(reference) = CteReference::try_from_scan(scan)
+                && !definitions.contains_key(&reference.definition.index)
+            {
+                definitions.insert(
+                    reference.definition.index,
+                    Arc::clone(&reference.definition),
+                );
+                collect(reference.definition.plan(), definitions)?;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(())
+    }
+    type Projected = HashMap<usize, (Arc<CteDefinition>, Option<Vec<Expr>>)>;
+    fn bind(plan: LogicalPlan, projected: &Projected) -> Result<Transformed<LogicalPlan>> {
+        plan.transform_up_with_subqueries(|plan| {
+            let LogicalPlan::TableScan(scan) = &plan else {
+                return Ok(Transformed::no(plan));
+            };
+            let Some((definition, exprs)) = CteReference::try_from_scan(scan)
+                .and_then(|reference| projected.get(&reference.definition.index))
+            else {
+                return Ok(Transformed::no(plan));
+            };
+            let scan = definition.scan()?;
+            Ok(Transformed::yes(match exprs {
+                Some(exprs) => LogicalPlanBuilder::from(scan)
+                    .project(exprs.clone())?
+                    .build()?,
+                None => scan,
+            }))
+        })
+    }
+    let mut definitions = BTreeMap::new();
+    collect(&plan, &mut definitions)?;
+    let mut projected = Projected::new();
+    // A definition refers only to the definitions at earlier positions.
+    for (index, definition) in definitions {
+        let bound = bind(definition.plan().as_ref().clone(), &projected)?;
+        let (plan, exprs) = match split_projection(&bound.data)? {
+            Some((plan, exprs)) => (plan, Some(exprs)),
+            None if bound.transformed => (bound.data.clone(), None),
+            None => continue,
+        };
+        let mut copy = CteDefinition::new(
+            index,
+            definition.name.clone(),
+            Arc::new(plan),
+            definition.volatile,
+        );
+        copy.projected = exprs.clone().map(|exprs| (Arc::new(bound.data), exprs));
+        projected.insert(index, (Arc::new(copy), exprs));
+    }
+    Ok(bind(plan, &projected)?.data)
+}
+
+/// Splits a definition whose top projection computes deterministic expressions into a
+/// definition that computes the other expressions and passes on the columns that the
+/// deterministic expressions read, and the expressions that compute the output of the
+/// definition from the output of the new definition.
+fn split_projection(plan: &LogicalPlan) -> Result<Option<(LogicalPlan, Vec<Expr>)>> {
+    let LogicalPlan::SubqueryAlias(alias) = plan else {
+        return Ok(None);
+    };
+    // The definition is named by the aliases above its projection.
+    let mut aliases = vec![alias];
+    let projection = loop {
+        match aliases[aliases.len() - 1].input.as_ref() {
+            LogicalPlan::SubqueryAlias(alias) => aliases.push(alias),
+            LogicalPlan::Projection(projection) => break projection,
+            _ => return Ok(None),
+        }
+    };
+    // Whether the reference can compute the expression from the columns of the input.
+    let movable = |expr: &Expr| -> Result<bool> {
+        let mut expr = expr;
+        while let Expr::Alias(alias) = expr {
+            if alias.metadata.is_some() {
+                return Ok(false);
+            }
+            expr = alias.expr.as_ref();
+        }
+        if matches!(expr, Expr::Column(_)) {
+            return Ok(false);
+        }
+        Ok(!expr.exists(|expr| {
+            Ok(is_volatile_call(expr)
+                || matches!(
+                    expr,
+                    Expr::ScalarSubquery(_)
+                        | Expr::Exists(_)
+                        | Expr::InSubquery(_)
+                        | Expr::SetComparison(_)
+                        | Expr::OuterReferenceColumn(_, _)
+                        | Expr::Placeholder(_)
+                ))
+        })?)
+    };
+    let moved = projection
+        .expr
+        .iter()
+        .map(movable)
+        .collect::<Result<Vec<_>>>()?;
+    if !moved.iter().any(|x| *x) {
+        return Ok(None);
+    }
+    let mut inner = vec![];
+    for (expr, moved) in projection.expr.iter().zip(&moved) {
+        if *moved {
+            for column in expr.column_refs() {
+                let column = Expr::Column(column.clone());
+                if !inner.contains(&column) {
+                    inner.push(column);
+                }
+            }
+        } else if !inner.contains(expr) {
+            inner.push(expr.clone());
+        }
+    }
+    // The definition keeps its top projection if the columns would have the same names.
+    let input = aliases.iter().rev().fold(
+        LogicalPlanBuilder::from(Arc::clone(&projection.input)).project(inner),
+        |builder, alias| builder.and_then(|builder| builder.alias(alias.alias.clone())),
+    );
+    let Ok(input) = input.and_then(|builder| builder.build()) else {
+        return Ok(None);
+    };
+    let qualifier = Some(alias.alias.clone());
+    let exprs = projection
+        .expr
+        .iter()
+        .zip(&moved)
+        .zip(plan.schema().fields())
+        .map(|((expr, moved), field)| {
+            if !moved {
+                return Ok(Expr::Column(Column::new(qualifier.clone(), field.name())));
+            }
+            let expr = expr
+                .clone()
+                .unalias()
+                .transform(|expr| match expr {
+                    Expr::Column(column) => Ok(Transformed::yes(Expr::Column(Column::new(
+                        qualifier.clone(),
+                        column.name,
+                    )))),
+                    expr => Ok(Transformed::no(expr)),
+                })
+                .data()?;
+            Ok(expr.alias_qualified(qualifier.clone(), field.name()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Some((input, exprs)))
 }
 
 /// Replaces the references to definitions that are not volatile by their definitions,
@@ -534,12 +732,17 @@ pub fn optimize_shared_ctes(
     }
     // The references to volatile definitions still share one evaluation, which a
     // reference reads as it reads a source.
-    let mut inlined = HashSet::new();
+    let mut inlined = references(&plan, &|definition| {
+        definition.inlined.load(Ordering::Relaxed)
+    })?
+    .into_iter()
+    .collect::<HashSet<_>>();
     if reads_input_layout(&plan)? {
         inlined.extend(deterministic_references(&plan)?);
     }
     loop {
-        let root = with_optimized_schemas(inline_unshared_references(&plan, &mut inlined)?)?;
+        let (root, current) = inline_unshared_references(&plan, &mut inlined)?;
+        let root = with_optimized_schemas(root)?;
         let has_references = contains_reference(&root)?;
         let root = match optimize(root, true) {
             Ok(root) => root,
@@ -552,7 +755,7 @@ pub fn optimize_shared_ctes(
             }
             Err(error) => return Err(error),
         };
-        match share_references(root, &inlined, optimize)? {
+        match share_references(root, &current, optimize)? {
             Sharing::Shared(plan) => return Ok(plan),
             Sharing::Inline(sites) => inlined.extend(sites),
             // The optimizer fails on a shared body, as it can on the query above.
@@ -567,8 +770,15 @@ pub fn optimize_shared_ctes(
 /// Returns the references to definitions that are not volatile, in the plan and in the
 /// definitions that it refers to.
 fn deterministic_references(plan: &LogicalPlan) -> Result<Vec<Site>> {
+    references(plan, &|definition| !definition.volatile)
+}
+
+/// Returns the references to the selected definitions, in the plan and in the definitions
+/// that it refers to.
+fn references(plan: &LogicalPlan, selected: &dyn Fn(&CteDefinition) -> bool) -> Result<Vec<Site>> {
     fn collect(
         plan: &LogicalPlan,
+        selected: &dyn Fn(&CteDefinition) -> bool,
         visited: &mut HashSet<usize>,
         sites: &mut Vec<Site>,
     ) -> Result<()> {
@@ -576,11 +786,11 @@ fn deterministic_references(plan: &LogicalPlan) -> Result<Vec<Site>> {
             if let LogicalPlan::TableScan(scan) = plan
                 && let Some(reference) = CteReference::try_from_scan(scan)
             {
-                if !reference.definition.volatile {
+                if selected(&reference.definition) {
                     sites.push(site(scan));
                 }
                 if visited.insert(reference.definition.index) {
-                    collect(reference.definition.plan(), visited, sites)?;
+                    collect(reference.definition.plan(), selected, visited, sites)?;
                 }
             }
             Ok(TreeNodeRecursion::Continue)
@@ -588,8 +798,54 @@ fn deterministic_references(plan: &LogicalPlan) -> Result<Vec<Site>> {
         Ok(())
     }
     let mut sites = vec![];
-    collect(plan, &mut HashSet::new(), &mut sites)?;
+    collect(plan, selected, &mut HashSet::new(), &mut sites)?;
     Ok(sites)
+}
+
+/// Returns whether a body that the plan shares belongs to a definition whose references
+/// evaluate it themselves.
+fn shares_inlined_definition(plan: &LogicalPlan) -> Result<bool> {
+    fn find(plan: &LogicalPlan, visited: &mut HashSet<usize>) -> Result<bool> {
+        let mut found = false;
+        plan.apply_with_subqueries(|plan| {
+            if let LogicalPlan::TableScan(scan) = plan
+                && let Some(reference) = CteReference::try_from_scan(scan)
+                && let Some(body) = &reference.body
+                && visited.insert(Arc::as_ptr(body) as usize)
+            {
+                found = reference.definition.inlined.load(Ordering::Relaxed)
+                    || find(body.plan(), visited)?;
+            }
+            Ok(if found {
+                TreeNodeRecursion::Stop
+            } else {
+                TreeNodeRecursion::Continue
+            })
+        })?;
+        Ok(found)
+    }
+    find(plan, &mut HashSet::new())
+}
+
+/// Optimizes a resolved plan with [`optimize_shared_ctes`], and plans the optimized plan
+/// with the given function. When the query planner finds a shared body that does not hold
+/// its output before it returns it (see [`SharedCteBody::inline`]), each reference to its
+/// definition evaluates the definition itself, and the plan is optimized and planned again.
+pub async fn optimize_and_plan_shared_ctes<T, F>(
+    plan: LogicalPlan,
+    optimize: &mut (dyn FnMut(LogicalPlan, bool) -> Result<LogicalPlan> + Send),
+    mut physical: impl FnMut(LogicalPlan) -> F,
+) -> Result<T>
+where
+    F: Future<Output = Result<T>>,
+{
+    loop {
+        let optimized = optimize_shared_ctes(plan.clone(), optimize)?;
+        let planned = physical(optimized.clone()).await;
+        if !shares_inlined_definition(&optimized)? {
+            return planned;
+        }
+    }
 }
 
 /// Returns the plan in which the references read the optimized schemas of their
@@ -670,11 +926,8 @@ fn renamed_reference(alias: &SubqueryAlias) -> Option<(&TableScan, Vec<String>)>
     let LogicalPlan::Projection(projection) = alias.input.as_ref() else {
         return None;
     };
-    let LogicalPlan::TableScan(scan) = projection.input.as_ref() else {
-        return None;
-    };
-    CteReference::try_from_scan(scan)?;
-    let schema = &scan.projected_schema;
+    let scan = reference(projection.input.as_ref())?;
+    let schema = projection.input.schema();
     if alias.alias != scan.table_name || projection.expr.len() != schema.fields().len() {
         return None;
     }
@@ -707,21 +960,15 @@ pub fn inline_references(
     plan.transform_down_with_subqueries(|plan| {
         let inlined = match &plan {
             LogicalPlan::SubqueryAlias(alias) => match renamed_reference(alias) {
-                Some((scan, names)) if selected(site(scan)) => {
-                    let definition = definition(scan);
-                    Some(rename_logical_plan_reusing_projection(
-                        definition.plan().as_ref().clone(),
-                        &names,
-                    )?)
-                }
+                Some((scan, names)) if selected(site(scan)) => Some(
+                    rename_logical_plan_reusing_projection(in_place(scan), &names)?,
+                ),
                 _ => None,
             },
-            LogicalPlan::TableScan(scan)
-                if CteReference::try_from_scan(scan).is_some() && selected(site(scan)) =>
-            {
-                Some(definition(scan).plan().as_ref().clone())
-            }
-            _ => None,
+            plan => match reference(plan) {
+                Some(scan) if selected(site(scan)) => Some(in_place(scan)),
+                _ => None,
+            },
         };
         Ok(match inlined {
             Some(plan) => Transformed::yes(plan),
@@ -729,6 +976,35 @@ pub fn inline_references(
         })
     })
     .data()
+}
+
+/// Returns the scan of a reference, which is the plan itself, or the input of the
+/// projection that computes the expressions that a definition leaves to its references.
+fn reference(plan: &LogicalPlan) -> Option<&TableScan> {
+    match plan {
+        LogicalPlan::TableScan(scan) => {
+            let reference = CteReference::try_from_scan(scan)?;
+            reference.definition.projected.is_none().then_some(scan)
+        }
+        LogicalPlan::Projection(projection) => {
+            let LogicalPlan::TableScan(scan) = projection.input.as_ref() else {
+                return None;
+            };
+            let reference = CteReference::try_from_scan(scan)?;
+            let (_, exprs) = reference.definition.projected.as_ref()?;
+            (exprs == &projection.expr).then_some(scan)
+        }
+        _ => None,
+    }
+}
+
+/// Returns the definition in the place of a reference.
+fn in_place(scan: &TableScan) -> LogicalPlan {
+    let definition = definition(scan);
+    match &definition.projected {
+        Some((plan, _)) => plan.as_ref().clone(),
+        None => definition.plan().as_ref().clone(),
+    }
 }
 
 fn definition(scan: &TableScan) -> Arc<CteDefinition> {
@@ -739,33 +1015,42 @@ fn definition(scan: &TableScan) -> Arc<CteDefinition> {
 }
 
 /// Replaces the references that do not share a body by their definitions, including
-/// the only reference to a definition.
+/// the only reference to a definition, and returns the plan and the inlined references.
 fn inline_unshared_references(
     plan: &LogicalPlan,
     inlined: &mut HashSet<Site>,
-) -> Result<LogicalPlan> {
+) -> Result<(LogicalPlan, HashSet<Site>)> {
+    // The only reference to a volatile definition is inlined only in this plan: a
+    // definition whose body holds it can be inlined later, and its references would
+    // then evaluate the volatile definition again.
+    let mut current = inlined.clone();
     loop {
-        let root = inline_references(plan.clone(), &|site| inlined.contains(&site))?;
-        let mut sites: HashMap<usize, Vec<Site>> = HashMap::new();
-        count_references(&root, inlined, &mut sites)?;
+        let root = inline_references(plan.clone(), &|site| current.contains(&site))?;
+        let mut sites = HashMap::new();
+        count_references(&root, &current, &mut sites)?;
         let single = sites
             .into_values()
-            .filter(|sites| sites.len() == 1)
-            .flatten()
+            .filter(|(_, sites)| sites.len() == 1)
             .collect::<Vec<_>>();
         if single.is_empty() {
-            return Ok(root);
+            return Ok((root, current));
         }
-        inlined.extend(single);
+        for (volatile, sites) in single {
+            if !volatile {
+                inlined.extend(sites.iter().copied());
+            }
+            current.extend(sites);
+        }
     }
 }
 
 /// Counts the references to each definition in the plan and in the definitions that it
-/// refers to, where a definition is counted once for all the references that share it.
+/// refers to, where a definition is counted once for all the references that share it,
+/// with whether the definition is volatile.
 fn count_references(
     plan: &LogicalPlan,
     inlined: &HashSet<Site>,
-    sites: &mut HashMap<usize, Vec<Site>>,
+    sites: &mut HashMap<usize, (bool, Vec<Site>)>,
 ) -> Result<()> {
     plan.apply_with_subqueries(|plan| {
         if let LogicalPlan::TableScan(scan) = plan
@@ -776,7 +1061,11 @@ fn count_references(
                 count_references(definition.plan(), inlined, sites)?;
             } else {
                 let first = !sites.contains_key(&definition.index);
-                sites.entry(definition.index).or_default().push(site(scan));
+                sites
+                    .entry(definition.index)
+                    .or_insert_with(|| (definition.volatile, vec![]))
+                    .1
+                    .push(site(scan));
                 if first {
                     count_references(definition.plan(), inlined, sites)?;
                 }
@@ -790,8 +1079,10 @@ fn count_references(
 /// How a plan is read by its consumer.
 #[derive(Clone, Copy, Default)]
 struct Context {
-    /// Whether the plan is read through a limit, which can stop reading it early, or
-    /// through a filter that is left above a reference, which the scan does not record.
+    /// Whether the plan is read through a limit, which can stop reading it early, through
+    /// a sort with a limit right above a reference, which the optimizer can push into an
+    /// aggregate of the definition in its place, or through a filter that is left above a
+    /// reference, which the scan does not record.
     partial: bool,
     /// Whether the consumer ignores duplicate rows of the plan, as the filter side of
     /// a semi or anti join, or the input of a duplicate elimination.
@@ -856,6 +1147,18 @@ fn collect_members(plan: &LogicalPlan, context: Context, members: &mut Members) 
     let partial = filtered
         || match plan {
             LogicalPlan::Limit(_) => true,
+            LogicalPlan::Sort(sort) if sort.fetch.is_some() => {
+                let mut input = sort.input.as_ref();
+                loop {
+                    match input {
+                        LogicalPlan::Projection(projection) => input = &projection.input,
+                        LogicalPlan::Filter(filter) => input = &filter.input,
+                        LogicalPlan::SubqueryAlias(alias) => input = &alias.input,
+                        _ => break,
+                    }
+                }
+                matches!(input, LogicalPlan::TableScan(scan) if CteReference::try_from_scan(scan).is_some())
+            }
             LogicalPlan::Projection(_)
             | LogicalPlan::Filter(_)
             | LogicalPlan::SubqueryAlias(_)
@@ -1087,7 +1390,8 @@ fn share_references(
         let source = Arc::new(CteReference {
             definition: Arc::clone(&definition),
             body: Some(Arc::new(SharedCteBody {
-                name: definition.name.clone(),
+                nested: contains_reference(definition.plan())?,
+                definition: Arc::clone(&definition),
                 plan,
                 columns,
             })),
@@ -1133,7 +1437,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_renewed_deterministic_definitions_are_inlined_unless_shared() -> Result<()> {
+    fn test_renewed_definitions_keep_their_references() -> Result<()> {
         let values = LogicalPlanBuilder::values(vec![vec![lit(1)]])?.build()?;
         let alias = |plan: LogicalPlan, name: &str| -> Result<Arc<LogicalPlan>> {
             Ok(Arc::new(LogicalPlan::SubqueryAlias(
@@ -1152,33 +1456,30 @@ mod tests {
             alias(d.scan()?, "v")?,
             true,
         ));
-        for (deterministic, expected) in [(true, 1), (false, 0)] {
-            let mut index = 10;
-            let mut copies = vec![];
-            renew_cte_definitions(
-                v.scan()?,
-                deterministic,
-                &mut || {
-                    index += 1;
-                    index
-                },
-                &mut |copy| copies.push(copy),
-            )?;
-            let mut references = 0;
-            let resolved = copies.iter().filter(|x| x.volatile).map(|x| x.resolved());
-            assert_eq!(resolved.clone().count(), 1);
-            for plan in resolved {
-                plan.apply_with_subqueries(|plan| {
-                    if let LogicalPlan::TableScan(scan) = plan
-                        && CteReference::try_from_scan(scan).is_some()
-                    {
-                        references += 1;
-                    }
-                    Ok(TreeNodeRecursion::Continue)
-                })?;
-            }
-            assert_eq!(references, expected);
+        let mut index = 10;
+        let mut copies = vec![];
+        renew_cte_definitions(
+            v.scan()?,
+            &mut || {
+                index += 1;
+                index
+            },
+            &mut |copy| copies.push(copy),
+        )?;
+        let mut references = 0;
+        let resolved = copies.iter().filter(|x| x.volatile).map(|x| x.resolved());
+        assert_eq!(resolved.clone().count(), 1);
+        for plan in resolved {
+            plan.apply_with_subqueries(|plan| {
+                if let LogicalPlan::TableScan(scan) = plan
+                    && CteReference::try_from_scan(scan).is_some()
+                {
+                    references += 1;
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
         }
+        assert_eq!(references, 1);
         Ok(())
     }
 }

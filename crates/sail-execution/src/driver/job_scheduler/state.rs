@@ -93,6 +93,17 @@ pub struct StageDescriptor {
     pub state: StageState,
 }
 
+impl StageDescriptor {
+    /// Returns the latest attempt of the task of each partition of the stage. The tasks
+    /// of a stage can be in different task regions, which are retried independently.
+    pub fn latest_attempts(&self) -> Vec<usize> {
+        self.tasks
+            .iter()
+            .map(|t| t.attempts.len().saturating_sub(1))
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum StageState {
     /// The tasks in the stage are not yet completed,

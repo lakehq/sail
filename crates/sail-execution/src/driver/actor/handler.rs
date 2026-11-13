@@ -518,6 +518,7 @@ impl DriverActor {
             JobAction::CleanUpJob {
                 job_id,
                 stage,
+                attempts,
                 context,
             } => {
                 // Job closure is a lifecycle operation, independent of shuffle ownership.
@@ -531,7 +532,8 @@ impl DriverActor {
                         });
                     }
                     for worker_id in self.task_assigner.active_worker_ids() {
-                        self.worker_pool.clean_up_job(ctx, worker_id, job_id, None);
+                        self.worker_pool
+                            .clean_up_job(ctx, worker_id, job_id, None, vec![]);
                     }
                 }
                 if self.task_assigner.untrack_storage_streams(job_id, stage)
@@ -557,7 +559,13 @@ impl DriverActor {
                     }
                     if stage.is_some() {
                         for worker_id in self.task_assigner.active_worker_ids() {
-                            self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage);
+                            self.worker_pool.clean_up_job(
+                                ctx,
+                                worker_id,
+                                job_id,
+                                stage,
+                                attempts.clone(),
+                            );
                         }
                     }
                 }
@@ -565,11 +573,13 @@ impl DriverActor {
                     match x {
                         TaskStreamAssignment::Driver => {
                             if let Some(task_runner) = self.task_runner.clone() {
+                                let attempts = attempts.clone();
                                 ctx.spawn(async move {
                                     let _ = task_runner
                                         .send(TaskRunnerMessage::CleanUpLocalStreams {
                                             job_id,
                                             stage,
+                                            attempts,
                                         })
                                         .await;
                                 });
@@ -577,7 +587,13 @@ impl DriverActor {
                         }
                         TaskStreamAssignment::Worker { worker_id } => {
                             if stage.is_some() {
-                                self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage);
+                                self.worker_pool.clean_up_job(
+                                    ctx,
+                                    worker_id,
+                                    job_id,
+                                    stage,
+                                    attempts.clone(),
+                                );
                             }
                         }
                     }

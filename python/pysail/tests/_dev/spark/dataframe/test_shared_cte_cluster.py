@@ -4,7 +4,7 @@ import pytest
 from pyspark.errors import PySparkException
 
 from pysail.testing.spark.session import spark_connect_server
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, shares_deterministic_ctes
 from pysail.tests._dev.spark.dataframe.test_shared_cte_volatile import ROWS, VOLATILE, cte, query
 
 
@@ -23,7 +23,8 @@ def test_shared_cte_is_read_by_several_stages(spark):
         SELECT sum(a.n), sum(b.n), (SELECT max(n) FROM c) FROM c a JOIN c b ON a.k = b.k
     """
     assert spark.sql(query).collect() == [(100000, 100000, 14286)]
-    assert "SharedCteExec" in spark.sql(f"EXPLAIN {query}").collect()[0][0]
+    plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
+    assert ("SharedCteExec" in plan) == shares_deterministic_ctes(), plan
 
 
 def test_shared_cte_is_read_by_union_branches(spark):
@@ -88,15 +89,13 @@ def test_shared_cte_error_fails_only_the_stages_that_read_it(spark):
         "CREATE OR REPLACE TEMP VIEW shared_cte_t AS "
         "SELECT CAST(id % 3 AS INT) AS k, CAST(id % 4 AS BIGINT) AS v FROM range(0, 10, 1, 2)"
     )
-    cte = (
-        "c AS (SELECT a.k, 100 DIV b.v AS q "
-        "FROM shared_cte_t a JOIN shared_cte_t b ON a.k <=> b.k AND a.v <=> b.v)"
-    )
+    cte = "c AS (SELECT k, v, 100 DIV v AS q FROM shared_cte_t GROUP BY k, v)"
     join = "JOIN c a ON e.k = a.k JOIN c b ON a.k = b.k AND a.q = b.q"
     try:
         query = f"WITH {cte} SELECT count(*) FROM shared_cte_e e {join}"
         assert spark.sql(query).collect() == [(0,)]
-        assert "SharedCteExec" in spark.sql(f"EXPLAIN {query}").collect()[0][0]
+        plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
+        assert ("SharedCteExec" in plan) == shares_deterministic_ctes(), plan
         query = f"WITH {cte} SELECT count(*) FROM shared_cte_t e {join}"
         # The error can be reported as a conflict between task attempts, since the
         # failed stage is retried after the query has received partial output.

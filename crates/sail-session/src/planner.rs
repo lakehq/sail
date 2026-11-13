@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -7,6 +8,7 @@ use datafusion::common::config::TableParquetOptions;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::execution::context::QueryPlanner;
+use datafusion::execution::memory_pool::MemoryLimit;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{
@@ -72,6 +74,8 @@ use sail_physical_plan::remote_checkpoint::{
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::seeded_random::{SeededRandomExec, SeededRandomExprColumn};
+use sail_physical_plan::shared_cte::blocking::holds_output;
+use sail_physical_plan::shared_cte::ctes_read_again;
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
@@ -104,11 +108,42 @@ impl QueryPlanner for ExtensionQueryPlanner {
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         // A shared CTE body is planned before the plans that refer to it.
         let mut shared_ctes = SharedCtePlanner::default();
+        // Without temporary files, a shared CTE keeps its rows in memory outside the memory
+        // pool, so with a memory limit only the CTEs that must be evaluated once are shared.
+        let runtime = session.runtime_env();
+        let retains_within_limit =
+            !matches!(runtime.memory_pool.memory_limit(), MemoryLimit::Finite(_))
+                || runtime.disk_manager.tmp_files_enabled();
+        let mut bodies = vec![];
         for body in shared_cte_bodies(logical_plan)? {
             let plan = self.plan(body.plan(), session, &shared_ctes).await?;
-            shared_ctes.add(&body, body.name().to_string(), plan)?;
+            // A body that returns rows before its input ends would keep up to all its rows
+            // for a reference that reads it late, while each reference that evaluates the
+            // body itself keeps little.
+            if !body.must_share() && !(retains_within_limit && holds_output(&plan)) {
+                body.inline();
+            }
+            shared_ctes.add(&body, body.name().to_string(), Arc::clone(&plan))?;
+            bodies.push((body, plan));
         }
         let plan = self.plan(logical_plan, session, &shared_ctes).await?;
+        // With a memory limit and temporary files, a nested loop join executes its build
+        // side again to spill it, and a shared CTE that it reads keeps all its rows and
+        // its evaluation for that. Each reference evaluates such a CTE itself, unless the
+        // CTE must be evaluated once.
+        if matches!(runtime.memory_pool.memory_limit(), MemoryLimit::Finite(_))
+            && runtime.disk_manager.tmp_files_enabled()
+        {
+            let read_again = std::iter::once(&plan)
+                .chain(bodies.iter().map(|(_, plan)| plan))
+                .flat_map(ctes_read_again)
+                .collect::<HashSet<_>>();
+            for (id, (body, _)) in bodies.iter().enumerate() {
+                if read_again.contains(&id) && !body.must_share() {
+                    body.inline();
+                }
+            }
+        }
         shared_ctes.finish(plan)
     }
 }

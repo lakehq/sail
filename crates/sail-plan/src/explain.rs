@@ -20,7 +20,7 @@ use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::plan::NamedPlan;
-use crate::shared_cte::{optimize_shared_ctes, session_state_for_restart};
+use crate::shared_cte::{optimize_and_plan_shared_ctes, session_state_for_restart};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplainKind {
@@ -290,48 +290,6 @@ async fn collect_plan_with(
 
     let mut analyzed_logical = None;
     let mut restart = false;
-    let optimized_logical = optimize_shared_ctes(plan, &mut |plan, query| {
-        if !query {
-            return session_state.optimize(&plan);
-        }
-        // The query is optimized again after a CTE reference is replaced by its definition.
-        let restarted;
-        let session_state = if std::mem::replace(&mut restart, true) {
-            restarted = session_state_for_restart(&session_state);
-            &restarted
-        } else {
-            &session_state
-        };
-        initial_logical = plan.clone();
-        stringified = vec![initial_logical.to_stringified(PlanType::InitialLogicalPlan)];
-        let analyzed = session_state.analyzer().execute_and_check(
-            plan,
-            config_options.as_ref(),
-            |analyzed_plan, analyzer| {
-                let plan_type = PlanType::AnalyzedLogicalPlan {
-                    analyzer_name: analyzer.name().to_string(),
-                };
-                stringified.push(analyzed_plan.to_stringified(plan_type));
-            },
-        )?;
-        stringified.push(analyzed.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
-        let optimized = session_state.optimizer().optimize(
-            analyzed.clone(),
-            session_state,
-            |optimized_plan, optimizer| {
-                let plan_type = PlanType::OptimizedLogicalPlan {
-                    optimizer_name: optimizer.name().to_string(),
-                };
-                stringified.push(optimized_plan.to_stringified(plan_type));
-            },
-        )?;
-        analyzed_logical = Some(analyzed);
-        Ok(optimized)
-    })?;
-    let analyzed_logical = analyzed_logical
-        .ok_or_else(|| DataFusionError::Internal("the query plan is not analyzed".into()))?;
-    stringified.push(optimized_logical.to_stringified(PlanType::FinalLogicalPlan));
-
     let records = Arc::new(Mutex::new(PhysicalPlanRecords::default()));
     let optimizers = std::iter::once(None)
         .chain(
@@ -354,13 +312,71 @@ async fn collect_plan_with(
         .with_physical_optimizer_rules(optimizers)
         .build();
 
-    let result = explain_state
-        .query_planner()
-        .create_physical_plan(&optimized_logical, &explain_state)
-        .await;
-    let records = std::mem::take(&mut *records.lock().map_err(|_| {
-        DataFusionError::Internal("EXPLAIN physical plan recorder is poisoned".into())
-    })?);
+    let (optimized_logical, result, records) = optimize_and_plan_shared_ctes(
+        plan,
+        &mut |plan, query| {
+            if !query {
+                return session_state.optimize(&plan);
+            }
+            // The query is optimized again after a CTE reference is replaced by its definition.
+            let restarted;
+            let session_state = if std::mem::replace(&mut restart, true) {
+                restarted = session_state_for_restart(&session_state);
+                &restarted
+            } else {
+                &session_state
+            };
+            initial_logical = plan.clone();
+            stringified = vec![initial_logical.to_stringified(PlanType::InitialLogicalPlan)];
+            let analyzed = session_state.analyzer().execute_and_check(
+                plan,
+                config_options.as_ref(),
+                |analyzed_plan, analyzer| {
+                    let plan_type = PlanType::AnalyzedLogicalPlan {
+                        analyzer_name: analyzer.name().to_string(),
+                    };
+                    stringified.push(analyzed_plan.to_stringified(plan_type));
+                },
+            )?;
+            stringified.push(analyzed.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
+            let optimized = session_state.optimizer().optimize(
+                analyzed.clone(),
+                session_state,
+                |optimized_plan, optimizer| {
+                    let plan_type = PlanType::OptimizedLogicalPlan {
+                        optimizer_name: optimizer.name().to_string(),
+                    };
+                    stringified.push(optimized_plan.to_stringified(plan_type));
+                },
+            )?;
+            analyzed_logical = Some(analyzed);
+            Ok(optimized)
+        },
+        |optimized| {
+            let records = Arc::clone(&records);
+            let explain_state = &explain_state;
+            async move {
+                let lock = || {
+                    records.lock().map_err(|_| {
+                        DataFusionError::Internal(
+                            "EXPLAIN physical plan recorder is poisoned".into(),
+                        )
+                    })
+                };
+                *lock()? = PhysicalPlanRecords::default();
+                let result = explain_state
+                    .query_planner()
+                    .create_physical_plan(&optimized, explain_state)
+                    .await;
+                let records = std::mem::take(&mut *lock()?);
+                Ok((optimized, result, records))
+            }
+        },
+    )
+    .await?;
+    let analyzed_logical = analyzed_logical
+        .ok_or_else(|| DataFusionError::Internal("the query plan is not analyzed".into()))?;
+    stringified.push(optimized_logical.to_stringified(PlanType::FinalLogicalPlan));
     stringified.extend(records.plans);
     let mut physical_error = None;
     let mut physical_plan = match result {

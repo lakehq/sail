@@ -1,7 +1,7 @@
 mod core;
 mod options;
 mod state;
-mod topology;
+pub(crate) mod topology;
 
 use std::sync::Arc;
 
@@ -60,6 +60,9 @@ pub enum JobAction {
     CleanUpJob {
         job_id: JobId,
         stage: Option<usize>,
+        /// The latest attempt of each partition of the stage, whose streams and the
+        /// streams of the earlier attempts are cleaned up.
+        attempts: Vec<usize>,
         context: Arc<TaskContext>,
     },
 }

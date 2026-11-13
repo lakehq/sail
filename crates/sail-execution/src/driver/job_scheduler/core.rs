@@ -19,7 +19,7 @@ use crate::driver::DriverActor;
 use crate::driver::job_scheduler::state::{
     JobDescriptor, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
-use crate::driver::job_scheduler::topology::TaskRegionTopology;
+use crate::driver::job_scheduler::topology::{TaskRegionTopology, TaskTopology};
 use crate::driver::job_scheduler::{JobAction, JobScheduler, JobState};
 use crate::driver::output::{JobOutputOutcome, build_job_output};
 use crate::error::{ExecutionError, ExecutionResult};
@@ -60,6 +60,7 @@ impl JobScheduler {
             plan,
             crate::job_graph::JobGraphOptions {
                 shuffle_backend: self.options.shuffle_backend.clone(),
+                worker_slots: self.options.worker_slots,
             },
         )?;
         debug!("job {job_id} job graph \n{graph}");
@@ -162,7 +163,9 @@ impl JobScheduler {
     ///   2. If any task in the final stages is running or has succeeded, all its channels are
     ///      added as job output streams if not already.
     ///   3. For each stage, if all the stages that consume it have succeeded, remove
-    ///      the output streams of the stage if not already.
+    ///      the output streams of the stage if not already. The output of a blocking stage
+    ///      is removed only when the task regions of its consumers have succeeded, since a
+    ///      retry of such a region reads the output again.
     ///   4. If any task fails without allowing a retry or exceeds the maximum allowed
     ///      attempts, the task region and the job are marked as failed.
     ///   5. If all the tasks in the final stages have succeeded, the job is marked as succeeded.
@@ -347,24 +350,11 @@ impl JobScheduler {
     ) -> Vec<JobAction> {
         let mut actions = vec![];
 
-        for (s, stage) in job.topology.stages.iter().enumerate() {
+        for s in 0..job.topology.stages.len() {
             if matches!(job.stages[s].state, StageState::Inactive) {
                 continue;
             }
-            let all_consumers_succeeded = stage.consumers.iter().all(|&c| {
-                let partitions = job.graph.stages()[c]
-                    .plan
-                    .output_partitioning()
-                    .partition_count();
-                (0..partitions).all(|p| {
-                    job.stages[c].tasks[p]
-                        .attempts
-                        .last()
-                        .is_some_and(|a| matches!(a.state, TaskState::Succeeded))
-                })
-            });
-
-            if all_consumers_succeeded && !stage.consumers.is_empty() {
+            if Self::stage_output_is_consumed(job, s) {
                 job.stages[s].state = StageState::Inactive;
                 event_reporter.report(SystemEvent::StageUpdated {
                     session_id: session_id.to_string(),
@@ -373,15 +363,58 @@ impl JobScheduler {
                     status: job.stages[s].state.status().to_string(),
                     updated_at: Utc::now(),
                 });
+                // A later retry of the region runs a new attempt of the stage, whose
+                // streams are read again.
                 actions.push(JobAction::CleanUpJob {
                     job_id,
                     stage: Some(s),
+                    attempts: job.stages[s].latest_attempts(),
                     context: job.context.clone(),
                 });
             }
         }
 
         actions
+    }
+
+    /// Returns whether no task reads the output of the stage anymore.
+    fn stage_output_is_consumed(job: &JobDescriptor, s: usize) -> bool {
+        let succeeded = |stage: usize, partition: usize| {
+            job.stages[stage].tasks[partition]
+                .attempts
+                .last()
+                .is_some_and(|a| matches!(a.state, TaskState::Succeeded))
+        };
+        // A retry of a task region runs the consumer tasks of a blocking stage again, but
+        // not the stage itself, which is in another region. The tasks of a pipelined or
+        // shared stage are retried with their consumers, and read with a new attempt.
+        let blocking = matches!(job.graph.stages()[s].mode, OutputMode::Blocking);
+        let consumed = |c: usize, p: usize| {
+            if !blocking {
+                return succeeded(c, p);
+            }
+            job.topology
+                .task_regions
+                .get(&TaskTopology {
+                    stage: c,
+                    partition: p,
+                })
+                .is_some_and(|&r| {
+                    job.topology.regions[r]
+                        .tasks
+                        .iter()
+                        .all(|t| succeeded(t.stage, t.partition))
+                })
+        };
+        let consumers = &job.topology.stages[s].consumers;
+        !consumers.is_empty()
+            && consumers.iter().all(|&c| {
+                let partitions = job.graph.stages()[c]
+                    .plan
+                    .output_partitioning()
+                    .partition_count();
+                (0..partitions).all(|p| consumed(c, p))
+            })
     }
 
     fn schedule_task_regions(
@@ -473,7 +506,7 @@ impl JobScheduler {
             if let Some(attempt) = Self::get_latest_task_attempt(job, t.stage, t.partition) {
                 let stage = &job.graph.stages()[t.stage];
                 let output = match stage.mode {
-                    OutputMode::Pipelined | OutputMode::Replayed => TaskOutputKind::Local,
+                    OutputMode::Pipelined | OutputMode::Shared => TaskOutputKind::Local,
                     OutputMode::Blocking => match job.graph.shuffle_backend() {
                         ShuffleBackendKind::Storage { .. } => TaskOutputKind::Storage,
                         ShuffleBackendKind::Celeborn { .. } => TaskOutputKind::External,
@@ -637,6 +670,7 @@ impl JobScheduler {
         actions.push(JobAction::CleanUpJob {
             job_id,
             stage: None,
+            attempts: vec![],
             context: job.context.clone(),
         });
         job.state.finish_output(outcome);
@@ -800,7 +834,7 @@ impl<'a> TaskInputBuilder<'a> {
 
     fn build(&self) -> ExecutionResult<TaskInput> {
         let locator = match self.producer.mode {
-            OutputMode::Pipelined | OutputMode::Replayed => match self.producer.placement {
+            OutputMode::Pipelined | OutputMode::Shared => match self.producer.placement {
                 TaskPlacement::Driver => self.build_driver_locator()?,
                 TaskPlacement::Worker => self.build_worker_locator()?,
             },
@@ -873,24 +907,13 @@ impl<'a> TaskInputBuilder<'a> {
                 let channels = (0..input_channels).collect::<Vec<_>>();
                 vec![channels; output_partitions]
             }
-            InputMode::Rescale { partitions } => {
-                let input_partitions = self.producer.plan.output_partitioning().partition_count();
-                let channels = (0..input_channels).collect::<Vec<_>>();
-                return Ok(TaskInputLocator::ShuffleService {
-                    channels: vec![channels; partitions],
-                    maps: Some(rescale_ranges(input_partitions, partitions)),
-                });
-            }
             mode => {
                 return Err(ExecutionError::InvalidArgument(format!(
                     "Celeborn shuffle service does not support {mode} input"
                 )));
             }
         };
-        Ok(TaskInputLocator::ShuffleService {
-            channels,
-            maps: None,
-        })
+        Ok(TaskInputLocator::ShuffleService { channels })
     }
 
     fn assignment(&self, key: &TaskInputKey) -> Option<&TaskAssignment> {
@@ -985,7 +1008,9 @@ impl<'a> TaskInputBuilder<'a> {
                 // grouping. A parent such as UnionExec can change the containing stage's
                 // partition count, so use the target count recorded on this input edge.
                 let mut groups = Vec::with_capacity(output_partitions);
-                for (start, end) in rescale_ranges(input_partitions, output_partitions) {
+                for output_partition in 0..output_partitions {
+                    let start = output_partition * input_partitions / output_partitions;
+                    let end = (output_partition + 1) * input_partitions / output_partitions;
                     let mut group =
                         Vec::with_capacity((end.saturating_sub(start)) * input_channels);
                     for partition in start..end {
@@ -1082,10 +1107,10 @@ impl<'a> TaskOutputBuilder<'a> {
             OutputMode::Pipelined => TaskOutputLocator::Pipelined {
                 replicas: self.job.graph.replicas(self.key.stage),
             },
-            OutputMode::Replayed => TaskOutputLocator::Replayed {
+            OutputMode::Blocking => TaskOutputLocator::Blocking,
+            OutputMode::Shared => TaskOutputLocator::Shared {
                 replicas: self.job.graph.replicas(self.key.stage),
             },
-            OutputMode::Blocking => TaskOutputLocator::Blocking,
         };
         Ok(TaskOutput {
             distribution,
@@ -1134,35 +1159,13 @@ impl StageGroup {
     }
 }
 
-/// Returns the contiguous range of input partitions that each output partition of a
-/// rescaled input reads, aligned with the partition grouping of `CoalesceExec`.
-fn rescale_ranges(input_partitions: usize, output_partitions: usize) -> Vec<(usize, usize)> {
-    (0..output_partitions)
-        .map(|partition| {
-            (
-                partition * input_partitions / output_partitions,
-                (partition + 1) * input_partitions / output_partitions,
-            )
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
-    use super::{StageGroup, rescale_ranges};
+    use super::StageGroup;
     use crate::id::{JobId, TaskKey};
     use crate::task::scheduling::{TaskOutputKind, TaskSetEntry};
-
-    #[test]
-    fn rescale_ranges_cover_the_input_partitions_in_order() {
-        assert_eq!(rescale_ranges(4, 2), vec![(0, 2), (2, 4)]);
-        assert_eq!(rescale_ranges(5, 2), vec![(0, 2), (2, 5)]);
-        assert_eq!(rescale_ranges(3, 3), vec![(0, 1), (1, 2), (2, 3)]);
-        // An output partition can read no input partition.
-        assert_eq!(rescale_ranges(2, 4), vec![(0, 0), (0, 1), (1, 1), (1, 2)]);
-    }
 
     #[tokio::test]
     async fn late_unknown_commit_cancels_queued_retry() -> Result<(), Box<dyn std::error::Error>> {
@@ -1312,6 +1315,372 @@ mod tests {
     }
 
     #[test]
+    fn shared_stage_runs_in_the_region_of_its_readers_within_their_slots()
+    -> crate::error::ExecutionResult<()> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::Statistics;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_plan::union::UnionExec;
+        use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+        use sail_celeborn::common::{CompressionCodec, PartitionSplitMode};
+        use sail_physical_plan::shared_cte::{SharedCte, SharedCteExec, SharedCteScanExec};
+
+        use super::{JobDescriptor, JobScheduler, JobState, TaskAttemptDescriptor, TaskState};
+        use crate::job_graph::{JobGraph, JobGraphOptions, OutputMode, TaskPlacement};
+        use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let producer: Arc<dyn ExecutionPlan> =
+            MemorySourceConfig::try_new_exec(&[vec![], vec![]], schema.clone(), None)?;
+        let cte = Arc::new(SharedCte::new(
+            0,
+            "c".to_string(),
+            producer.output_partitioning().clone(),
+        ));
+        let statistics = Statistics::new_unknown(&schema);
+        let scan = |reference: usize| -> Arc<dyn ExecutionPlan> {
+            Arc::new(
+                SharedCteScanExec::new(cte.clone(), schema.clone(), &statistics, None)
+                    .with_reference(reference),
+            )
+        };
+        // The readers have four partitions, as the plan would have without the shared CTE.
+        let input = UnionExec::try_new(vec![scan(0), scan(1)])?;
+        let plan = Arc::new(SharedCteExec::new(input, vec![(cte.clone(), producer)]));
+        for shuffle_backend in [
+            ShuffleBackendKind::Storage {
+                path: None,
+                max_file_size: 1024,
+                compression: ShuffleCompression::None,
+            },
+            ShuffleBackendKind::Celeborn {
+                master_endpoints: vec![],
+                compression: CompressionCodec::None,
+                heartbeat_interval_secs: 30,
+                endpoint_overrides: vec![],
+                partition_split_threshold: 1024,
+                partition_split_mode: PartitionSplitMode::Soft,
+            },
+        ] {
+            let graph = JobGraph::try_new(
+                plan.clone(),
+                JobGraphOptions {
+                    shuffle_backend,
+                    worker_slots: None,
+                },
+            )?;
+            let shared = graph
+                .stages()
+                .iter()
+                .position(|x| matches!(x.mode, OutputMode::Shared))
+                .ok_or_else(|| {
+                    crate::error::ExecutionError::InternalError("no shared stage".into())
+                })?;
+            let mut job = JobDescriptor::try_new(
+                graph,
+                JobState::Draining,
+                Arc::new(TaskContext::default()),
+            )?;
+            for stage in &mut job.stages {
+                for task in &mut stage.tasks {
+                    task.attempts.push(TaskAttemptDescriptor {
+                        state: TaskState::Created,
+                        messages: vec![],
+                        cause: None,
+                        job_output_fetched: false,
+                    });
+                }
+            }
+            let region = job
+                .topology
+                .regions
+                .iter()
+                .find(|x| x.tasks.iter().any(|t| t.stage == shared))
+                .ok_or_else(|| crate::error::ExecutionError::InternalError("no region".into()))?;
+            // The shared stage runs with the stages that read it.
+            assert!(region.tasks.iter().any(|t| t.stage != shared));
+            let region = JobScheduler::build_task_region(JobId::from(1), &job, region);
+            let slots = region
+                .tasks
+                .iter()
+                .filter(|(placement, _)| matches!(placement, TaskPlacement::Worker))
+                .count();
+            // The region needs no more task slots than its readers do.
+            assert_eq!(slots, 4);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn worker_slots_of_a_region_are_the_task_sets_of_the_region()
+    -> crate::error::ExecutionResult<()> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::Statistics;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::union::UnionExec;
+        use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+        use sail_celeborn::common::{CompressionCodec, PartitionSplitMode};
+        use sail_physical_plan::shared_cte::{SharedCte, SharedCteExec, SharedCteScanExec};
+
+        use super::{JobDescriptor, JobScheduler, JobState, TaskAttemptDescriptor, TaskState};
+        use crate::job_graph::{JobGraph, JobGraphOptions, OutputMode, TaskPlacement};
+        use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let empty: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema.clone()));
+        let producer: Arc<dyn ExecutionPlan> = UnionExec::try_new(vec![empty; 10])?;
+        let cte = Arc::new(SharedCte::new(
+            0,
+            "c".to_string(),
+            producer.output_partitioning().clone(),
+        ));
+        let statistics = Statistics::new_unknown(&schema);
+        let scan = |reference: usize| -> Arc<dyn ExecutionPlan> {
+            Arc::new(
+                SharedCteScanExec::new(cte.clone(), schema.clone(), &statistics, None)
+                    .with_reference(reference),
+            )
+        };
+        // A union of twenty partitions reads the shared CTE of ten partitions.
+        let input = UnionExec::try_new(vec![scan(0), scan(1)])?;
+        let plan = Arc::new(SharedCteExec::new(input, vec![(cte.clone(), producer)]));
+        for shuffle_backend in [
+            ShuffleBackendKind::Flight {
+                compression: ShuffleCompression::None,
+                connection_count: std::num::NonZeroUsize::MIN,
+                initial_stream_window_size: None,
+                initial_connection_window_size: None,
+            },
+            ShuffleBackendKind::Storage {
+                path: None,
+                max_file_size: 1024,
+                compression: ShuffleCompression::None,
+            },
+            ShuffleBackendKind::Celeborn {
+                master_endpoints: vec![],
+                compression: CompressionCodec::None,
+                heartbeat_interval_secs: 30,
+                endpoint_overrides: vec![],
+                partition_split_threshold: 1024,
+                partition_split_mode: PartitionSplitMode::Soft,
+            },
+        ] {
+            let graph = JobGraph::try_new(
+                plan.clone(),
+                JobGraphOptions {
+                    shuffle_backend,
+                    worker_slots: None,
+                },
+            )?;
+            let mut job = JobDescriptor::try_new(
+                graph,
+                JobState::Draining,
+                Arc::new(TaskContext::default()),
+            )?;
+            for stage in &mut job.stages {
+                for task in &mut stage.tasks {
+                    task.attempts.push(TaskAttemptDescriptor {
+                        state: TaskState::Created,
+                        messages: vec![],
+                        cause: None,
+                        job_output_fetched: false,
+                    });
+                }
+            }
+            let mut shared = None;
+            for (r, region) in job.topology.regions.iter().enumerate() {
+                let task_region = JobScheduler::build_task_region(JobId::from(1), &job, region);
+                let slots = task_region
+                    .tasks
+                    .iter()
+                    .filter(|(placement, _)| matches!(placement, TaskPlacement::Worker))
+                    .count();
+                assert_eq!(job.topology.worker_slots(&job.graph, r), slots);
+                if region
+                    .tasks
+                    .iter()
+                    .any(|t| matches!(job.graph.stages()[t.stage].mode, OutputMode::Shared))
+                {
+                    shared = Some(slots);
+                }
+            }
+            assert_eq!(shared, Some(20));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn stage_latest_attempts_count_the_retries_of_each_partition()
+    -> crate::error::ExecutionResult<()> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+
+        use super::{JobDescriptor, JobState, TaskAttemptDescriptor, TaskState};
+        use crate::job_graph::{JobGraph, JobGraphOptions};
+        use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+
+        let graph = JobGraph::try_new(
+            MemorySourceConfig::try_new_exec(&[vec![], vec![]], Arc::new(Schema::empty()), None)?,
+            JobGraphOptions {
+                shuffle_backend: ShuffleBackendKind::Flight {
+                    compression: ShuffleCompression::None,
+                    connection_count: std::num::NonZeroUsize::MIN,
+                    initial_stream_window_size: None,
+                    initial_connection_window_size: None,
+                },
+                worker_slots: None,
+            },
+        )?;
+        let mut job =
+            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))?;
+        let attempt = |state| TaskAttemptDescriptor {
+            state,
+            messages: vec![],
+            cause: None,
+            job_output_fetched: false,
+        };
+        assert_eq!(job.stages[0].latest_attempts(), vec![0, 0]);
+        for task in &mut job.stages[0].tasks {
+            task.attempts.push(attempt(TaskState::Succeeded));
+        }
+        assert_eq!(job.stages[0].latest_attempts(), vec![0, 0]);
+        // The region of partition 0 is retried on its own, so the partitions of the stage
+        // have different latest attempts.
+        job.stages[0].tasks[0]
+            .attempts
+            .push(attempt(TaskState::Scheduled));
+        assert_eq!(job.stages[0].latest_attempts(), vec![1, 0]);
+        Ok(())
+    }
+
+    #[test]
+    fn blocking_stage_output_is_kept_until_the_regions_of_its_consumers_succeed()
+    -> crate::error::ExecutionResult<()> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::Statistics;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_expr::expressions::Column;
+        use datafusion::physical_plan::Partitioning;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+        use datafusion::physical_plan::union::UnionExec;
+        use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+        use sail_physical_plan::shared_cte::{SharedCte, SharedCteExec, SharedCteScanExec};
+
+        use super::{JobDescriptor, JobScheduler, JobState, TaskAttemptDescriptor, TaskState};
+        use crate::driver::job_scheduler::topology::TaskTopology;
+        use crate::job_graph::{JobGraph, JobGraphOptions, OutputMode};
+        use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        // The CTE body reads the output of a blocking stage.
+        let source = MemorySourceConfig::try_new_exec(&[vec![], vec![]], schema.clone(), None)?;
+        let producer: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            source,
+            Partitioning::Hash(vec![Arc::new(Column::new("a", 0))], 2),
+        )?);
+        let cte = Arc::new(SharedCte::new(
+            0,
+            "c".to_string(),
+            producer.output_partitioning().clone(),
+        ));
+        let statistics = Statistics::new_unknown(&schema);
+        let scan = |reference: usize| -> Arc<dyn ExecutionPlan> {
+            Arc::new(
+                SharedCteScanExec::new(cte.clone(), schema.clone(), &statistics, None)
+                    .with_reference(reference),
+            )
+        };
+        let input = UnionExec::try_new(vec![scan(0), scan(1)])?;
+        let plan = Arc::new(SharedCteExec::new(input, vec![(cte.clone(), producer)]));
+        let graph = JobGraph::try_new(
+            plan,
+            JobGraphOptions {
+                shuffle_backend: ShuffleBackendKind::Storage {
+                    path: None,
+                    max_file_size: 1024,
+                    compression: ShuffleCompression::None,
+                },
+                worker_slots: None,
+            },
+        )?;
+        let mut job =
+            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))?;
+        let attempt = |state| TaskAttemptDescriptor {
+            state,
+            messages: vec![],
+            cause: None,
+            job_output_fetched: false,
+        };
+        for stage in &mut job.stages {
+            for task in &mut stage.tasks {
+                task.attempts.push(attempt(TaskState::Succeeded));
+            }
+        }
+        let modes = job
+            .graph
+            .stages()
+            .iter()
+            .map(|x| format!("{:?}", x.mode))
+            .collect::<Vec<_>>();
+        // A blocking stage whose consumers share their region with another stage.
+        let (blocking, other) = (0..job.stages.len())
+            .filter(|&s| matches!(job.graph.stages()[s].mode, OutputMode::Blocking))
+            .find_map(|s| {
+                let c = *job.topology.stages[s].consumers.first()?;
+                let r = job.topology.task_regions.get(&TaskTopology {
+                    stage: c,
+                    partition: 0,
+                })?;
+                let other = job.topology.regions[*r]
+                    .tasks
+                    .iter()
+                    .find(|t| !job.topology.stages[s].consumers.contains(&t.stage))?
+                    .clone();
+                Some((s, other))
+            })
+            .ok_or_else(|| {
+                crate::error::ExecutionError::InternalError(format!("no such stage: {modes:?}"))
+            })?;
+        assert!(JobScheduler::stage_output_is_consumed(&job, blocking));
+        // Another task of the region fails, so the region is retried and reads the output
+        // of the blocking stage again.
+        job.stages[other.stage].tasks[other.partition]
+            .attempts
+            .push(attempt(TaskState::Failed));
+        assert!(!JobScheduler::stage_output_is_consumed(&job, blocking));
+        // The output of a stage in the region is read again by a new attempt of the stage,
+        // so it is removed as soon as its consumers succeed.
+        let pipelined = (0..job.stages.len())
+            .find(|&s| {
+                !matches!(job.graph.stages()[s].mode, OutputMode::Blocking)
+                    && !job.topology.stages[s].consumers.is_empty()
+                    && !job.topology.stages[s].consumers.contains(&other.stage)
+                    && s != other.stage
+            })
+            .ok_or_else(|| {
+                crate::error::ExecutionError::InternalError(format!("no such stage: {modes:?}"))
+            })?;
+        assert!(JobScheduler::stage_output_is_consumed(&job, pipelined));
+        job.stages[other.stage].tasks[other.partition]
+            .attempts
+            .push(attempt(TaskState::Succeeded));
+        assert!(JobScheduler::stage_output_is_consumed(&job, blocking));
+        Ok(())
+    }
+
+    #[test]
     fn unknown_commit_stops_retries_and_takes_precedence_over_other_failures()
     -> crate::error::ExecutionResult<()> {
         use std::sync::Arc;
@@ -1337,6 +1706,7 @@ mod tests {
                     initial_stream_window_size: None,
                     initial_connection_window_size: None,
                 },
+                worker_slots: None,
             },
         )?;
         let mut job =
@@ -1422,6 +1792,7 @@ mod tests {
                     initial_stream_window_size: None,
                     initial_connection_window_size: None,
                 },
+                worker_slots: None,
             },
         )?;
         let mut job =

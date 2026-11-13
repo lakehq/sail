@@ -4,16 +4,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
-use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, Statistics, internal_err};
 use datafusion_expr::{LogicalPlan, TableScan, UserDefinedLogicalNode};
-use datafusion_physical_expr::projection::ProjectionExpr;
-use sail_physical_plan::shared_cte::{SharedCte, SharedCteExec, SharedCteScanExec};
+use sail_physical_plan::shared_cte::{SharedCte, SharedCteScanExec, share_ctes};
 use sail_plan::shared_cte::{CteReference, SharedCteBody};
 
 /// Returns the shared CTE bodies that the plan refers to, each after the bodies that
@@ -72,11 +69,10 @@ impl SharedCtePlanner {
     ) -> Result<()> {
         let statistics = StatisticsContext::new().compute(plan.as_ref(), &StatisticsArgs::new())?;
         let planned = PlannedCte {
-            cte: Arc::new(SharedCte::new(
-                self.ctes.len(),
-                name,
-                plan.output_partitioning().clone(),
-            )),
+            cte: Arc::new(
+                SharedCte::new(self.ctes.len(), name, plan.output_partitioning().clone())
+                    .with_volatile(body.volatile()),
+            ),
             plan,
             statistics,
         };
@@ -86,66 +82,10 @@ impl SharedCtePlanner {
     }
 
     /// Returns the plan that produces the shared CTEs for their references in the plan.
-    /// A CTE that is left with one reference is evaluated in place of the reference.
     pub(crate) fn finish(self, plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut plan = plan;
-        let mut ctes = self.ctes;
-        loop {
-            let mut references: HashMap<usize, usize> = HashMap::new();
-            for plan in std::iter::once(&plan).chain(ctes.iter().map(|x| &x.plan)) {
-                plan.apply(|plan| {
-                    if let Some(scan) = plan.downcast_ref::<SharedCteScanExec>() {
-                        *references.entry(scan.cte().id()).or_default() += 1;
-                    }
-                    Ok(TreeNodeRecursion::Continue)
-                })?;
-            }
-            let count = |x: &PlannedCte| references.get(&x.cte.id()).copied().unwrap_or(0);
-            let Some(position) = ctes.iter().position(|x| count(x) < 2) else {
-                break;
-            };
-            let single = ctes.remove(position);
-            if count(&single) == 0 {
-                continue;
-            }
-            let inline = |plan: Arc<dyn ExecutionPlan>| {
-                plan.transform_up(|plan| match plan.downcast_ref::<SharedCteScanExec>() {
-                    Some(scan) if scan.cte().id() == single.cte.id() => Ok(Transformed::yes(
-                        project(Arc::clone(&single.plan), scan.projection())?,
-                    )),
-                    _ => Ok(Transformed::no(plan)),
-                })
-                .data()
-            };
-            plan = inline(plan)?;
-            for cte in &mut ctes {
-                cte.plan = inline(Arc::clone(&cte.plan))?;
-            }
-        }
-        if ctes.is_empty() {
-            return Ok(plan);
-        }
-        let ctes = ctes.into_iter().map(|x| (x.cte, x.plan)).collect();
-        Ok(Arc::new(SharedCteExec::new(plan, ctes)))
+        let ctes = self.ctes.into_iter().map(|x| (x.cte, x.plan)).collect();
+        share_ctes(plan, ctes)
     }
-}
-
-fn project(
-    plan: Arc<dyn ExecutionPlan>,
-    projection: Option<&[usize]>,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let Some(projection) = projection else {
-        return Ok(plan);
-    };
-    let schema = plan.schema();
-    let expressions = projection
-        .iter()
-        .map(|&index| {
-            let name = schema.field(index).name();
-            ProjectionExpr::new(Arc::new(Column::new(name, index)), name.clone())
-        })
-        .collect::<Vec<_>>();
-    Ok(Arc::new(ProjectionExec::try_new(expressions, plan)?))
 }
 
 #[async_trait]

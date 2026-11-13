@@ -106,7 +106,6 @@ impl ShuffleClient {
         &self,
         shuffle_id: i32,
         partition_id: i32,
-        maps: Option<(i32, i32)>,
     ) -> BoxStream<'static, CelebornResult<Bytes>> {
         let (result, receiver) = oneshot::channel();
         if self
@@ -114,7 +113,6 @@ impl ShuffleClient {
             .send(ShuffleClientMessage::ReadPartitionStream {
                 shuffle_id,
                 partition_id,
-                maps,
                 result,
             })
             .await

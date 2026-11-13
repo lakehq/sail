@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use datafusion::physical_plan::ExecutionPlanProperties;
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::job_graph::{InputMode, JobGraph, OutputMode};
+use crate::job_graph::{InputMode, JobGraph, OutputMode, TaskPlacement};
 
 #[derive(Debug)]
 #[readonly::make]
@@ -50,7 +50,7 @@ impl JobTopology {
                 stages[input.stage].consumers.push(s);
                 if matches!(
                     &graph.stages()[input.stage].mode,
-                    OutputMode::Pipelined | OutputMode::Replayed
+                    OutputMode::Pipelined | OutputMode::Shared
                 ) {
                     pipelined_adjacency[s].push(input.stage);
                     pipelined_adjacency[input.stage].push(s);
@@ -221,6 +221,53 @@ impl JobTopology {
     }
 }
 
+impl JobTopology {
+    /// Returns the number of worker task slots that the region needs, as the job scheduler
+    /// counts its task sets: the stages of a slot-sharing group share task sets, which are
+    /// filled with the partitions of each stage in turn, so that no two partitions of a
+    /// stage share a task set.
+    pub fn worker_slots(&self, graph: &JobGraph, region: usize) -> usize {
+        let Some(region) = self.regions.get(region) else {
+            return 0;
+        };
+        let mut groups: IndexMap<&str, IndexMap<usize, usize>> = IndexMap::new();
+        for task in &region.tasks {
+            let stage = &graph.stages()[task.stage];
+            if matches!(stage.placement, TaskPlacement::Worker) {
+                let partitions = stage.plan.output_partitioning().partition_count();
+                groups
+                    .entry(stage.group.as_str())
+                    .or_default()
+                    .insert(task.stage, partitions);
+            }
+        }
+        groups
+            .values()
+            .map(|partitions| {
+                let count = partitions.values().copied().max().unwrap_or(0);
+                let mut offsets = HashMap::new();
+                let mut offset = 0;
+                for (&stage, &n) in partitions {
+                    if n > 0 {
+                        offsets.insert(stage, offset);
+                        offset = (offset + n) % count;
+                    }
+                }
+                region
+                    .tasks
+                    .iter()
+                    .filter_map(|task| {
+                        offsets
+                            .get(&task.stage)
+                            .map(|o| (o + task.partition) % count)
+                    })
+                    .collect::<HashSet<_>>()
+                    .len()
+            })
+            .sum()
+    }
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
@@ -257,6 +304,7 @@ mod tests {
                     max_file_size: 1,
                     compression: ShuffleCompression::None,
                 },
+                worker_slots: None,
             },
         )
         .unwrap();

@@ -21,7 +21,9 @@ use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 use crate::scalar_subquery_key::is_volatile_call;
-use crate::shared_cte::{CteDefinition, CteReference, inline_references, renew_cte_definitions};
+use crate::shared_cte::{
+    CteDefinition, CteReference, inline_references, project_in_references, renew_cte_definitions,
+};
 
 /// Whether a named relation is a CTE definition or a parameter view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,8 +56,6 @@ struct CteSharing {
     name: datafusion_common::TableReference,
     /// Whether the definition is inside a subquery, where it can refer to outer columns.
     nested: bool,
-    /// Whether a definition that is not volatile can be shared.
-    deterministic: bool,
     /// Whether the references can share one evaluation of the definition, as
     /// `Some(volatile)`, decided when the CTE is first referenced.
     shareable: OnceLock<Option<bool>>,
@@ -92,14 +92,12 @@ impl CteInfo {
     fn with_sharing(
         mut self,
         name: datafusion_common::TableReference,
-        deterministic: bool,
         state: &mut PlanResolverState,
     ) -> Self {
         self.sharing = Some(CteSharing {
             index: state.next_cte_definition_index(),
             name,
             nested: state.get_outer_query_schema().is_some(),
-            deterministic,
             shareable: OnceLock::new(),
             definition: OnceLock::new(),
         });
@@ -123,8 +121,7 @@ impl CteInfo {
         let shareable = match sharing.shareable.get() {
             Some(shareable) => *shareable,
             None => {
-                let shareable = shareable_definition(&self.plan, sharing.nested)?
-                    .filter(|volatile| *volatile || sharing.deterministic);
+                let shareable = shareable_definition(&self.plan, sharing.nested)?;
                 *sharing.shareable.get_or_init(|| shareable)
             }
         };
@@ -227,7 +224,7 @@ impl PlanResolver<'_> {
             };
             let cte = CteInfo::try_new(plan, CteKind::Definition, state)?;
             let cte = if share {
-                cte.with_sharing(reference.clone(), self.share_deterministic_ctes, state)
+                cte.with_sharing(reference.clone(), state)
             } else {
                 cte
             };
@@ -327,7 +324,8 @@ impl PlanResolver<'_> {
                 plan
             });
         }
-        Self::scan_shared_cte_references(plan, state)
+        let plan = Self::scan_shared_cte_references(plan, state)?;
+        Ok(project_in_references(plan)?)
     }
 
     /// Returns the plan of a stored view in which the references to shared CTE definitions
@@ -340,7 +338,6 @@ impl PlanResolver<'_> {
         let mut definitions = vec![];
         let plan = renew_cte_definitions(
             plan,
-            self.share_deterministic_ctes,
             &mut || state.next_cte_definition_index(),
             &mut |definition| definitions.push(definition),
         )?;

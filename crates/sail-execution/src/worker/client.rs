@@ -89,10 +89,16 @@ impl WorkerClient {
         Ok(())
     }
 
-    pub async fn clean_up_job(&self, job_id: JobId, stage: Option<usize>) -> ExecutionResult<()> {
+    pub async fn clean_up_job(
+        &self,
+        job_id: JobId,
+        stage: Option<usize>,
+        attempts: Vec<usize>,
+    ) -> ExecutionResult<()> {
         let request = CleanUpJobRequest {
             job_id: job_id.into(),
             stage: stage.map(|x| x as u64),
+            attempts: attempts.into_iter().map(|x| x as u64).collect(),
         };
         let response = self.inner.get().await?.clean_up_job(request).await?;
         let CleanUpJobResponse {} = response.into_inner();

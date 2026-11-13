@@ -93,7 +93,9 @@ impl TaskRunnerActor {
 
     pub(super) fn handle_close_job(&mut self, job_id: JobId) -> ActorAction {
         self.tasks.close_job(job_id);
-        self.extensions.local_streams.remove_streams(job_id, None);
+        self.extensions
+            .local_streams
+            .remove_streams(job_id, None, &[]);
         self.signals.retain(|key, _| key.job_id != job_id);
         ActorAction::Continue
     }
@@ -175,7 +177,7 @@ impl TaskRunnerActor {
         &mut self,
         key: TaskStreamKey,
         replicas: usize,
-        replay: Option<Arc<TaskContext>>,
+        shared: Option<Arc<TaskContext>>,
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     ) -> ActorAction {
@@ -190,7 +192,7 @@ impl TaskRunnerActor {
         let _ = result.send(
             self.extensions
                 .local_streams
-                .create_stream(key, replicas, replay, schema),
+                .create_stream(key, replicas, shared, schema),
         );
         ActorAction::Continue
     }
@@ -368,7 +370,6 @@ impl TaskRunnerActor {
         job_id: JobId,
         stage: usize,
         channels: Vec<usize>,
-        maps: Option<(usize, usize)>,
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
@@ -381,11 +382,7 @@ impl TaskRunnerActor {
         let streams = self.extensions.celeborn_streams.clone();
         ctx.spawn(async move {
             let output = match streams {
-                Some(streams) => {
-                    streams
-                        .fetch_stream(job_id, stage, channels, maps, schema)
-                        .await
-                }
+                Some(streams) => streams.fetch_stream(job_id, stage, channels, schema).await,
                 None => Err(DataFusionError::Internal(
                     "Celeborn stream requested without a Celeborn shuffle backend".to_string(),
                 )),
@@ -399,8 +396,11 @@ impl TaskRunnerActor {
         &mut self,
         job_id: JobId,
         stage: Option<usize>,
+        attempts: &[usize],
     ) -> ActorAction {
-        self.extensions.local_streams.remove_streams(job_id, stage);
+        self.extensions
+            .local_streams
+            .remove_streams(job_id, stage, attempts);
         ActorAction::Continue
     }
 

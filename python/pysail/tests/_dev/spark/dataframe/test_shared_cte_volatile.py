@@ -389,10 +389,20 @@ def test_volatile_cte_is_shared(spark):
     assert text.count("RangeExec") == 1, text
 
 
-# Proposed additions elsewhere (same invariants, other configurations):
-# - test_shared_cte_disabled.py (SAIL_OPTIMIZER__SHARE_CTE_DEFINITIONS=false keeps per-reference
-#   evaluation): the rand() join above returns 0 and the plan has 2 RangeExec, no SharedCteExec.
-# - test_shared_cte_cluster.py (local-cluster): the "join", "union-all", "different-filters",
-#   "sorted-limit" and "nested" shapes for rand()/uuid()/nondeterministic_udf(), plus the
-#   scalar-subquery test for rand()/uuid() (not current_timestamp(): pre-existing cluster error,
-#   see report), so that Replayed/Blocking consumers all read the same rows.
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("SELECT (SELECT max(s) FROM c WHERE k < 5) = (SELECT max(s) FROM c WHERE k >= 5)", True),
+        ("SELECT (SELECT count(*) FROM c WHERE s = (SELECT max(s) FROM c))", 10),
+    ],
+    ids=["scalar-subqueries", "nested-scalar-subqueries"],
+)
+@pytest.mark.parametrize("function", ["rand()", "uuid()"])
+def test_cte_reading_a_volatile_cte_through_a_scalar_subquery_is_evaluated_once(spark, function, query, expected):
+    """Spark inlines the volatile CTE, which has one reference, into the other CTE, which is then
+    non-deterministic and evaluated once for its references (InlineCTE)."""
+    ctes = (
+        f"WITH c0 AS (SELECT {function} AS r FROM range(1)), "
+        "c AS (SELECT id AS k, (SELECT max(r) FROM c0) AS s FROM range(10)) "
+    )
+    assert spark.sql(ctes + query).collect()[0][0] == expected
