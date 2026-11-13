@@ -481,3 +481,29 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | Extract field after array index path                     | '{"a":[{"b":42}]}'        | '$.a[0].b'  |
         | Quoted field containing dot is treated as one field      | '{"a.b":42,"a":{"b":99}}' | '$["a.b"]'  |
         | Quoted field containing brackets is treated as one field | '{"a[0]":42,"a":[99]}'    | '$["a[0]"]' |
+
+  # [CREDIT]: https://github.com/apache/spark/blob/32f7299601108917fb01920a54e084595b7b3bf8/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/expressions/variant/VariantExpressionSuite.scala#L693-L728
+  Rule: Variant string casts differ from JSON serialization
+
+    Scenario Outline: Variant string cast: <input>
+      When query
+        """
+        SELECT CAST(parse_json(<input>) AS STRING) AS cast_value,
+               TRY_CAST(parse_json(<input>) AS STRING) AS try_value,
+               variant_get(parse_json(<input>), '$', 'string') AS get_value,
+               to_json(parse_json(<input>)) AS json_value
+        """
+      Then query result
+        | cast_value | try_value | get_value | json_value |
+        | <text>     | <text>    | <text>    | <json>     |
+
+      Examples:
+        | input                 | text      | json      |
+        | 'null'                | NULL      | null      |
+        | '"hello"'             | hello     | "hello"   |
+        | '42'                  | 42        | 42        |
+        | 'true'                | true      | true      |
+        | '{"x":2}'             | {"x":2}   | {"x":2}   |
+        | '[1,null]'            | [1,null]  | [1,null]  |
+        | CAST(NULL AS STRING)  | NULL      | NULL      |
+        | '"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghij"' | abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghij | "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghij" |

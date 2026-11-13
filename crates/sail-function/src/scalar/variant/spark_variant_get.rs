@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/main/src/variant_get.rs>
+use arrow::array::{ArrayRef, StringBuilder};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef};
 use chumsky::prelude::*;
 use datafusion::arrow::datatypes::TimeUnit;
@@ -8,8 +9,9 @@ use datafusion_common::{Result, ScalarValue, arrow_datafusion_err, exec_datafusi
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use parquet_variant::{VariantPath, VariantPathElement};
-use parquet_variant_compute::{GetOptions, VariantType, variant_get};
+use parquet_variant::{Variant, VariantPath, VariantPathElement};
+use parquet_variant_compute::{GetOptions, VariantArray, VariantType, variant_get};
+use parquet_variant_json::VariantToJson;
 use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_data_type_exec_err};
@@ -155,8 +157,41 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
     };
 
     // Execute
-    let result = variant_get(&variant_arr, options)
-        .map_err(|e| datafusion_common::DataFusionError::Execution(format!("{name}: {e}")))?;
+    let result = if final_type == Some(DataType::Utf8) {
+        // Spark string casts unquote strings and map Variant null to SQL NULL.
+        // Objects and arrays retain their JSON representation.
+        // Explicit Variant output also unshreds typed values and preserves missing paths.
+        let variant_output = Field::new(
+            name,
+            DataType::Struct(
+                vec![
+                    Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, true),
+                    variant_metadata_field(DataType::Binary, false),
+                ]
+                .into(),
+            ),
+            true,
+        )
+        .with_extension_type(VariantType);
+        let values = variant_get(
+            &variant_arr,
+            build_get_options(variant_path.clone(), &Some(Arc::new(variant_output))),
+        )?;
+        let values = VariantArray::try_new(values.as_ref())?;
+        let mut strings = StringBuilder::new();
+        for value in values.iter() {
+            match value {
+                None | Some(Variant::Null) => strings.append_null(),
+                Some(Variant::String(value)) => strings.append_value(value),
+                Some(Variant::ShortString(value)) => strings.append_value(value.as_str()),
+                Some(value) => strings.append_value(value.to_json_string()?),
+            }
+        }
+        Arc::new(strings.finish()) as ArrayRef
+    } else {
+        variant_get(&variant_arr, options)
+            .map_err(|e| datafusion_common::DataFusionError::Execution(format!("{name}: {e}")))?
+    };
 
     // Fallback: if extracting as numeric type returned all NULLs,
     // try extracting as Boolean and cast (Spark casts true→1, false→0)

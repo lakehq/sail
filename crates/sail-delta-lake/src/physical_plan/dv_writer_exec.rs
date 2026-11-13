@@ -32,6 +32,7 @@ use crate::physical_plan::{
     delta_action_schema, encode_actions, meta_adds,
 };
 use crate::schema::PhysicalPartitionColumn;
+use crate::spec::utils::decode_path;
 use crate::spec::{Action, Add, DeltaOperation, RemoveOptions};
 use crate::transaction::OperationMetrics;
 
@@ -647,7 +648,22 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                     )?
                 };
                 for add in adds {
-                    add_by_path.insert(add.path.clone(), add);
+                    let path = decode_path(&add.path)
+                        .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                    if let Some(previous) = add_by_path.insert(path.clone(), add.clone())
+                        && crate::spec::actions::logical_file_key(
+                            &previous.path,
+                            previous.deletion_vector.as_ref(),
+                        ) != crate::spec::actions::logical_file_key(
+                            &add.path,
+                            add.deletion_vector.as_ref(),
+                        )
+                    {
+                        return Err(DataFusionError::Execution(format!(
+                            "ambiguous Delta file identities for decoded path {path:?}: {:?} and {:?}",
+                            previous.path, add.path
+                        )));
+                    }
                 }
             }
 
@@ -903,6 +919,7 @@ mod tests {
         use crate::physical_plan::decode_actions_and_meta_from_batch;
 
         let first_path = "a+b%20c.parquet";
+        let first_uri = "a+b%2520c.parquet";
         let batches = [
             (vec![first_path, "b.parquet", first_path], vec![1, 2, 3]),
             (vec!["b.parquet", first_path], vec![4, 1]),
@@ -919,7 +936,7 @@ mod tests {
         let input = MemorySourceConfig::try_new_exec(&[batches], row_schema, None)?;
         let metadata = RecordBatch::try_from_iter(vec![(
             PATH_COLUMN,
-            Arc::new(StringArray::from(vec!["a+b%2520c.parquet", "b.parquet"])) as ArrayRef,
+            Arc::new(StringArray::from(vec![first_uri, "b.parquet"])) as ArrayRef,
         )])?;
         let adds_input =
             MemorySourceConfig::try_new_exec(&[vec![metadata.clone()]], metadata.schema(), None)?;
@@ -944,7 +961,7 @@ mod tests {
         assert!(writer.required_input_ordering().iter().all(Option::is_none));
         let batches = collect(Arc::new(writer), context.task_ctx()).await?;
         let mut adds = HashMap::new();
-        let mut removes = 0;
+        let mut removes = Vec::new();
         let mut deleted_rows = 0;
         for batch in batches {
             let (actions, metadata) = decode_actions_and_meta_from_batch(&batch)?;
@@ -953,7 +970,7 @@ mod tests {
                     Action::Add(add) => {
                         assert!(adds.insert(add.path.clone(), add).is_none());
                     }
-                    Action::Remove(_) => removes += 1,
+                    Action::Remove(remove) => removes.push(remove.path),
                     _ => return internal_err!("unexpected action from DV writer"),
                 }
             }
@@ -961,10 +978,15 @@ mod tests {
                 deleted_rows += metadata.row_count;
             }
         }
-        assert_eq!(removes, 2);
+        removes.sort();
+        assert_eq!(removes, [first_uri, "b.parquet"]);
         assert_eq!(adds.len(), 2);
         assert_eq!(deleted_rows, 4);
-        for (path, expected) in [(first_path, vec![1, 3]), ("b.parquet", vec![2, 4])] {
+        assert_eq!(
+            decode_path(first_uri).map_err(|error| DataFusionError::External(Box::new(error)))?,
+            first_path,
+        );
+        for (path, expected) in [(first_uri, vec![1, 3]), ("b.parquet", vec![2, 4])] {
             let descriptor = adds
                 .get(path)
                 .and_then(|add| add.deletion_vector.as_ref())

@@ -478,6 +478,18 @@ impl CatalogCommand {
                     Err(e) => return Err(e),
                 };
 
+                if matches!(
+                    options,
+                    AlterTableOptions::SetTableProperties { .. }
+                        | AlterTableOptions::UnsetTableProperties { .. }
+                ) && !matches!(table_status.kind, TableKind::Table { .. })
+                {
+                    return Err(CatalogError::InvalidArgument(format!(
+                        "ALTER TABLE SET/UNSET TBLPROPERTIES requires a table, but '{}' is a view",
+                        table.join(".")
+                    )));
+                }
+
                 manager.validate_alter_table(&table, &options)?;
                 let (location, format) = match &table_status.kind {
                     sail_common_datafusion::catalog::TableKind::Table {

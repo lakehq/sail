@@ -3094,6 +3094,336 @@ mod tests {
         .unwrap()
     }
 
+    async fn optimize_conflict_add(
+        store: &dyn ObjectStore,
+        path: &str,
+        partition: &str,
+        ids: Vec<i64>,
+    ) -> Add {
+        use datafusion::arrow::array::Int64Array;
+        use datafusion::arrow::datatypes::{DataType as ArrowType, Field, Schema};
+        use datafusion::arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", ArrowType::Int64, false)]));
+        let count = ids.len();
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(ids))]).unwrap();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        let bytes = writer.into_inner().unwrap();
+        let size = bytes.len() as i64;
+        store.put(&Path::from(path), bytes.into()).await.unwrap();
+        Add {
+            path: path.to_string(),
+            partition_values: HashMap::from([("part".to_string(), Some(partition.to_string()))]),
+            size,
+            data_change: true,
+            stats: Some(serde_json::json!({"numRecords": count}).to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn optimize_conflict_remove(add: &Add, data_change: bool) -> CommitAction {
+        CommitAction::Remove(Remove {
+            path: add.path.clone(),
+            deletion_timestamp: Some(Utc::now().timestamp_millis()),
+            data_change,
+            extended_file_metadata: Some(true),
+            partition_values: Some(add.partition_values.clone()),
+            size: Some(add.size),
+            deletion_vector: add.deletion_vector.clone(),
+            ..Default::default()
+        })
+    }
+
+    async fn optimize_conflict_objects(
+        store: &dyn ObjectStore,
+    ) -> std::collections::BTreeMap<String, Bytes> {
+        let mut objects = std::collections::BTreeMap::new();
+        for entry in store.list(None).try_collect::<Vec<_>>().await.unwrap() {
+            let bytes = store
+                .get(&entry.location)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            objects.insert(entry.location.to_string(), bytes);
+        }
+        objects
+    }
+
+    async fn optimize_conflict_rows(
+        store: &dyn ObjectStore,
+        snapshot: &DeltaSnapshot,
+    ) -> Vec<(i64, String)> {
+        use datafusion::arrow::array::Int64Array;
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let mut rows = vec![];
+        for add in snapshot.adds() {
+            assert!(add.deletion_vector.is_none());
+            let bytes = store
+                .get(&Path::from(add.path.as_str()))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+                .unwrap()
+                .build()
+                .unwrap();
+            for batch in reader {
+                let batch = batch.unwrap();
+                let ids = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                let partition = add.partition_values["part"].as_ref().unwrap();
+                rows.extend(ids.values().iter().map(|id| (*id, partition.clone())));
+            }
+        }
+        rows.sort();
+        rows
+    }
+
+    // [CREDIT]: https://github.com/delta-io/delta/blob/v4.4.1/spark/src/test/scala/org/apache/spark/sql/delta/optimize/OptimizeConflictSuite.scala#L43-L97
+    #[tokio::test]
+    async fn optimize_prepared_commit_checks_intervening_business_writes() {
+        for case in [
+            "delete",
+            "overwrite",
+            "append-same",
+            "append-disjoint",
+            "delete-disjoint",
+        ] {
+            let store = Arc::new(InMemory::new());
+            let log_store = test_log_store(store.clone());
+            let first =
+                optimize_conflict_add(store.as_ref(), "part=a/first.parquet", "a", vec![1]).await;
+            let second =
+                optimize_conflict_add(store.as_ref(), "part=a/second.parquet", "a", vec![2]).await;
+            let other =
+                optimize_conflict_add(store.as_ref(), "part=b/other.parquet", "b", vec![10]).await;
+            let mut compacted =
+                optimize_conflict_add(store.as_ref(), "part=a/compacted.parquet", "a", vec![1, 2])
+                    .await;
+            compacted.data_change = false;
+            let (partition, id) = if case == "append-disjoint" {
+                ("b", 11)
+            } else {
+                ("a", 99)
+            };
+            let business = optimize_conflict_add(
+                store.as_ref(),
+                &format!("part={partition}/business.parquet"),
+                partition,
+                vec![id],
+            )
+            .await;
+            let metadata = Metadata::try_new(
+                None,
+                None,
+                StructType::try_new([
+                    StructField::not_null("id", DataType::LONG),
+                    StructField::not_null("part", DataType::STRING),
+                ])
+                .unwrap(),
+                vec!["part".to_string()],
+                0,
+                HashMap::new(),
+            )
+            .unwrap();
+            let protocol = Protocol::new(1, 2, None, None);
+            let initial = CommitBuilder::default()
+                .with_actions(vec![
+                    CommitAction::Protocol(protocol.clone()),
+                    CommitAction::Metadata(metadata.clone()),
+                    CommitAction::Add(first.clone()),
+                    CommitAction::Add(second.clone()),
+                    CommitAction::Add(other.clone()),
+                ])
+                .build(
+                    None,
+                    log_store.clone(),
+                    DeltaOperation::Create {
+                        mode: SaveMode::ErrorIfExists,
+                        location: "memory:///".to_string(),
+                        protocol: Box::new(protocol),
+                        metadata: Box::new(metadata),
+                    },
+                )
+                .await
+                .unwrap()
+                .snapshot
+                .unwrap();
+            let optimize_actions = vec![
+                optimize_conflict_remove(&first, false),
+                optimize_conflict_remove(&second, false),
+                CommitAction::Add(compacted.clone()),
+            ];
+            let before_prepare = optimize_conflict_objects(store.as_ref()).await;
+            let prepared = CommitBuilder::default()
+                .with_actions(optimize_actions.clone())
+                .build(
+                    Some(initial.clone()),
+                    log_store.clone(),
+                    DeltaOperation::Optimize {
+                        predicate: Some("part = 'a'".to_string()),
+                    },
+                )
+                .into_prepared_commit_future()
+                .await
+                .unwrap();
+            assert_eq!(
+                optimize_conflict_objects(store.as_ref()).await,
+                before_prepare,
+                "{case}"
+            );
+            assert_eq!(log_store.get_latest_version(0).await.unwrap(), 0);
+
+            let (business_actions, operation) = match case {
+                "delete" | "delete-disjoint" => (
+                    vec![optimize_conflict_remove(
+                        if case == "delete" { &first } else { &other },
+                        true,
+                    )],
+                    DeltaOperation::Delete {
+                        predicate: Some(format!("id = {}", if case == "delete" { 1 } else { 10 })),
+                    },
+                ),
+                "overwrite" => (
+                    vec![
+                        optimize_conflict_remove(&first, true),
+                        CommitAction::Add(business.clone()),
+                    ],
+                    DeltaOperation::Write {
+                        mode: SaveMode::Overwrite,
+                        partition_by: None,
+                        predicate: Some("id = 1".to_string()),
+                    },
+                ),
+                _ => (
+                    vec![CommitAction::Add(business.clone())],
+                    DeltaOperation::Write {
+                        mode: SaveMode::Append,
+                        partition_by: None,
+                        predicate: None,
+                    },
+                ),
+            };
+            let winner = CommitBuilder::default()
+                .with_actions(business_actions.clone())
+                .build(Some(initial.clone()), log_store.clone(), operation)
+                .await
+                .unwrap();
+            assert_eq!(winner.snapshot.as_ref().unwrap().version(), 1);
+            let winner_objects = optimize_conflict_objects(store.as_ref()).await;
+            let winner_actions = read_commit_actions(&log_store, 1).await;
+            let file_actions = |actions: Vec<Action>| {
+                actions
+                    .into_iter()
+                    .filter(|action| matches!(action, Action::Add(_) | Action::Remove(_)))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                file_actions(winner_actions.clone()),
+                business_actions
+                    .into_iter()
+                    .map(Action::from)
+                    .collect::<Vec<_>>()
+            );
+            let compatible = case.starts_with("append-");
+            let result = prepared.await;
+            if compatible {
+                let finalized = result.unwrap().await.unwrap();
+                assert_eq!(finalized.snapshot.unwrap().version(), 2);
+                assert_eq!(
+                    file_actions(read_commit_actions(&log_store, 2).await),
+                    optimize_actions
+                        .into_iter()
+                        .map(Action::from)
+                        .collect::<Vec<_>>()
+                );
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(DeltaError::Transaction(TransactionError::CommitConflict(
+                            CommitConflictError::ConcurrentDeleteRead
+                        )))
+                    ),
+                    "{case}"
+                );
+                assert_eq!(
+                    optimize_conflict_objects(store.as_ref()).await,
+                    winner_objects,
+                    "{case}"
+                );
+            }
+            assert_eq!(read_commit_actions(&log_store, 1).await, winner_actions);
+            let version = if compatible { 2 } else { 1 };
+            assert_eq!(log_store.get_latest_version(0).await.unwrap(), version);
+            let reopened =
+                DeltaSnapshot::try_new(log_store.as_ref(), Default::default(), Some(version), None)
+                    .await
+                    .unwrap();
+            let mut expected_adds = match case {
+                "delete" => vec![second.clone(), other.clone()],
+                "overwrite" => vec![second.clone(), other.clone(), business.clone()],
+                "delete-disjoint" => vec![first.clone(), second.clone()],
+                _ => vec![compacted.clone(), other.clone(), business.clone()],
+            };
+            expected_adds.sort_by(|a, b| a.path.cmp(&b.path));
+            let mut actual_adds = reopened.adds().to_vec();
+            actual_adds.sort_by(|a, b| a.path.cmp(&b.path));
+            assert_eq!(actual_adds, expected_adds, "{case}");
+            let expected_rows = match case {
+                "delete" => vec![(2, "a"), (10, "b")],
+                "overwrite" => vec![(2, "a"), (10, "b"), (99, "a")],
+                "append-same" => vec![(1, "a"), (2, "a"), (10, "b"), (99, "a")],
+                "append-disjoint" => vec![(1, "a"), (2, "a"), (10, "b"), (11, "b")],
+                "delete-disjoint" => vec![(1, "a"), (2, "a")],
+                _ => unreachable!(),
+            }
+            .into_iter()
+            .map(|(id, part)| (id, part.to_string()))
+            .collect::<Vec<_>>();
+            assert_eq!(
+                optimize_conflict_rows(store.as_ref(), &reopened).await,
+                expected_rows,
+                "{case}"
+            );
+            assert_eq!(
+                optimize_conflict_rows(store.as_ref(), &initial).await,
+                vec![
+                    (1, "a".to_string()),
+                    (2, "a".to_string()),
+                    (10, "b".to_string())
+                ]
+            );
+            let final_objects = optimize_conflict_objects(store.as_ref()).await;
+            for (path, bytes) in before_prepare {
+                assert_eq!(final_objects.get(&path), Some(&bytes), "{case}: {path}");
+            }
+            let mut versions = store
+                .list(None)
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap()
+                .iter()
+                .filter_map(|entry| {
+                    crate::delta_log::parse_commit_version_from_location(&entry.location)
+                })
+                .collect::<Vec<_>>();
+            versions.sort_unstable();
+            assert_eq!(versions, (0..=version).collect::<Vec<_>>());
+        }
+    }
+
     fn deletion_vector_add(stats: Option<&str>, cardinality: i64) -> Add {
         Add {
             path: "part-00000.parquet".to_string(),

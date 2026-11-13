@@ -252,6 +252,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         for key in [
             SparkConfigKey::SPARK_DATABRICKS_DELTA_RETENTION_DURATION_CHECK_ENABLED,
             SparkConfigKey::SPARK_DATABRICKS_DELTA_VACUUM_RETENTION_WINDOW_IGNORE_ENABLED,
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_VACUUM_LOGGING_ENABLED,
             SparkConfigKey::SPARK_DATABRICKS_DELTA_OPTIMIZE_MIN_FILE_SIZE,
             SparkConfigKey::SPARK_DATABRICKS_DELTA_OPTIMIZE_MAX_FILE_SIZE,
             SparkConfigKey::SPARK_DATABRICKS_DELTA_OPTIMIZE_MAX_DELETED_ROWS_RATIO,
@@ -550,5 +551,42 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
         }
 
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vacuum_logging_forwards_live_settings_without_changing_default() -> SparkResult<()> {
+        let key = SparkConfigKey::SPARK_DATABRICKS_DELTA_VACUUM_LOGGING_ENABLED;
+        for entries in [
+            &SPARK_CONFIG_V3_5,
+            &SPARK_CONFIG_V4_0,
+            &SPARK_CONFIG_V4_1,
+            &SPARK_CONFIG_V4_2,
+            &SPARK_CONFIG_V4_3,
+        ] {
+            let mut config = SparkRuntimeConfig {
+                entries,
+                config: HashMap::new(),
+            };
+            for value in [None, Some("false"), Some("true"), Some("false"), None] {
+                match value {
+                    Some(value) => config.set(key.to_string(), value.to_string())?,
+                    None => config.unset(key)?,
+                }
+                let plan = PlanConfig::try_from(&config)?;
+                let forwarded: Vec<_> = plan
+                    .lakehouse_options
+                    .iter()
+                    .filter(|(k, _)| k == key)
+                    .map(|(_, v)| v.as_str())
+                    .collect();
+                assert_eq!(forwarded, value.into_iter().collect::<Vec<_>>());
+            }
+        }
+        Ok(())
     }
 }

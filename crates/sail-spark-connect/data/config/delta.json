@@ -29,6 +29,15 @@
     "defaultValue": "true"
   },
   {
+    "key": "spark.databricks.delta.vacuum.enforceDeletedFileAndLogRetentionDurationCompatibility",
+    "doc": "Rejects table properties whose log retention duration is shorter than the deleted-file retention duration.",
+    "defaultValue": "true"
+  },
+  {
+    "key": "spark.databricks.delta.vacuum.logging.enabled",
+    "doc": "Whether to record VACUUM operations in the Delta transaction log. When unset, the storage implementation determines the default."
+  },
+  {
     "key": "spark.databricks.delta.vacuum.retentionWindowIgnore.enabled",
     "doc": "Uses the table's deleted-file retention duration instead of a nonzero VACUUM RETAIN value.",
     "defaultValue": "true"

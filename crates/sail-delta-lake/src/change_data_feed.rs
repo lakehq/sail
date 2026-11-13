@@ -306,7 +306,7 @@ impl ChangeDataFeedSource {
             for action in actions {
                 match action {
                     Action::Add(add) if add.data_change => {
-                        adds.insert(add.path.clone(), add);
+                        adds.insert(crate::spec::utils::path_comparison_key(&add.path), add);
                     }
                     Action::Remove(remove) if remove.data_change => {
                         removes.push(remove);
@@ -317,7 +317,8 @@ impl ChangeDataFeedSource {
             let mut deleted = Vec::new();
             for remove in removes {
                 let old = removed_file(&mut table, version, remove).await?;
-                if let Some(new) = adds.remove(&old.path) {
+                if let Some(new) = adds.remove(&crate::spec::utils::path_comparison_key(&old.path))
+                {
                     // A DV replacement changes visibility within one physical file.
                     if old.deletion_vector != new.deletion_vector {
                         changes.push(ChangeFiles {
@@ -661,7 +662,10 @@ async fn removed_file(table: &mut DeltaTable, version: i64, remove: Remove) -> R
         .snapshot()?
         .adds()
         .iter()
-        .find(|add| add.path == remove.path && add.deletion_vector == remove.deletion_vector)
+        .find(|add| {
+            crate::spec::logical_file_key(&add.path, add.deletion_vector.as_ref())
+                == crate::spec::logical_file_key(&remove.path, remove.deletion_vector.as_ref())
+        })
         .cloned()
         .ok_or_else(|| {
             datafusion::common::DataFusionError::Execution(format!(

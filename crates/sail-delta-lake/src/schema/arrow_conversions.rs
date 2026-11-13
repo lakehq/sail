@@ -11,7 +11,9 @@ use datafusion::arrow::datatypes::{
 use datafusion::arrow::error::ArrowError;
 use itertools::Itertools;
 use parquet_variant_compute::VariantType;
-use sail_common_datafusion::variant::is_marked_variant_storage_type;
+use sail_common_datafusion::variant::{
+    is_marked_variant_storage_type, variant_metadata_field,
+};
 
 use crate::spec::schema::{
     ArrayType, DataType, MapType, MetadataValue, PrimitiveType, StructField, StructType,
@@ -117,13 +119,15 @@ impl TryFrom<&DataType> for ArrowDataType {
                 Arc::new(ArrowField::try_from(m.as_ref())?),
                 false,
             )),
-            DataType::Variant(s) => {
+            DataType::Variant(_) => {
                 if *t == DataType::unshredded_variant() {
                     Ok(Self::Struct(
-                        s.fields()
-                            .map(ArrowField::try_from)
-                            .collect::<Result<Vec<ArrowField>, ArrowError>>()?
-                            .into(),
+                        vec![
+                            // Keep Variant identity when scalar folding drops parent metadata.
+                            variant_metadata_field(ArrowDataType::Binary, false),
+                            ArrowField::new("value", ArrowDataType::Binary, false),
+                        ]
+                        .into(),
                     ))
                 } else {
                     Err(ArrowError::SchemaError(
@@ -270,14 +274,14 @@ impl TryFrom<&ArrowDataType> for DataType {
             | ArrowDataType::LargeList(field)
             | ArrowDataType::LargeListView(field)
             | ArrowDataType::FixedSizeList(field, _) => Ok(ArrayType::new(
-                DataType::try_from(field.data_type())?,
+                StructField::try_from(field.as_ref())?.data_type,
                 field.is_nullable(),
             )
             .into()),
             ArrowDataType::Map(field, _) => {
                 if let ArrowDataType::Struct(struct_fields) = field.data_type() {
-                    let key_type = DataType::try_from(struct_fields[0].data_type())?;
-                    let value_type = DataType::try_from(struct_fields[1].data_type())?;
+                    let key_type = StructField::try_from(struct_fields[0].as_ref())?.data_type;
+                    let value_type = StructField::try_from(struct_fields[1].as_ref())?.data_type;
                     Ok(MapType::new(key_type, value_type, struct_fields[1].is_nullable()).into())
                 } else {
                     Err(ArrowError::SchemaError(
@@ -306,7 +310,150 @@ impl TryFrom<ArrowSchemaRef> for DataType {
 
 #[cfg(test)]
 mod tests {
+    use datafusion_common::ScalarValue;
+    use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::expressions::Literal;
+    use sail_common_datafusion::variant::is_variant_storage_field;
+
     use super::*;
+
+    fn assert_variant_null_identity(field: &ArrowField) -> datafusion_common::Result<()> {
+        assert_eq!(field.extension_type_name(), Some(VariantType::NAME));
+        assert!(is_marked_variant_storage_type(field.data_type()));
+        let scalar = ScalarValue::try_new_null(field.data_type())?;
+        assert!(scalar.is_null());
+        let literal_field = Literal::new(scalar).return_field(&ArrowSchema::empty())?;
+        assert!(literal_field.metadata().is_empty());
+        assert_eq!(literal_field.data_type(), field.data_type());
+        assert!(is_variant_storage_field(&literal_field));
+        assert_eq!(
+            StructField::try_from(literal_field.as_ref())?.data_type,
+            DataType::unshredded_variant()
+        );
+        VariantType.supports_data_type(literal_field.data_type())?;
+        Ok(())
+    }
+
+    #[test]
+    fn external_variant_schema_preserves_null_identity_and_roundtrips()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for nullable in [false, true] {
+            let json = serde_json::json!({
+                "type": "struct",
+                "fields": [{
+                    "name": "v", "type": "variant", "nullable": nullable,
+                    "metadata": {"comment": "external variant"}
+                }]
+            });
+            let source: StructType = serde_json::from_value(json.clone())?;
+            let arrow = ArrowSchema::try_from(&source)?;
+            let field = arrow.field(0);
+            assert_eq!(field.is_nullable(), nullable);
+            assert_variant_null_identity(field)?;
+            let ArrowDataType::Struct(children) = field.data_type() else {
+                return Err("expected Variant struct storage".into());
+            };
+            assert_eq!(children.len(), 2);
+            assert_eq!(children[0].name(), "metadata");
+            assert_eq!(children[1].name(), "value");
+            for child in children {
+                assert_eq!(child.data_type(), &ArrowDataType::Binary);
+                assert!(!child.is_nullable());
+            }
+            assert_eq!(
+                children[0].metadata(),
+                &HashMap::from([("variant".to_string(), "true".to_string())])
+            );
+            assert!(children[1].metadata().is_empty());
+            assert_eq!(serde_json::to_value(StructType::try_from(&arrow)?)?, json);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nested_variant_schema_preserves_identity_and_roundtrips()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for nullable in [false, true] {
+            let variant = DataType::unshredded_variant();
+            let source = StructType::new_unchecked([
+                StructField::new(
+                    "nested",
+                    DataType::struct_type_unchecked([StructField::new(
+                        "v",
+                        variant.clone(),
+                        nullable,
+                    )]),
+                    nullable,
+                ),
+                StructField::new(
+                    "items",
+                    ArrayType::new(variant.clone(), nullable),
+                    nullable,
+                ),
+                StructField::new(
+                    "mapping",
+                    MapType::new(DataType::STRING, variant, nullable),
+                    nullable,
+                ),
+            ]);
+            let arrow = ArrowSchema::try_from(&source)?;
+            let ArrowDataType::Struct(nested) = arrow.field(0).data_type() else {
+                return Err("expected nested struct".into());
+            };
+            let ArrowDataType::List(element) = arrow.field(1).data_type() else {
+                return Err("expected list".into());
+            };
+            let ArrowDataType::Map(entries, _) = arrow.field(2).data_type() else {
+                return Err("expected map".into());
+            };
+            let ArrowDataType::Struct(entries) = entries.data_type() else {
+                return Err("expected map entries".into());
+            };
+            for field in [&nested[0], element, &entries[1]] {
+                assert_eq!(field.is_nullable(), nullable);
+                assert_variant_null_identity(field)?;
+            }
+            assert_eq!(StructType::try_from(&arrow)?, source);
+            assert_eq!(
+                serde_json::to_value(StructType::try_from(&arrow)?)?,
+                serde_json::to_value(&source)?
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_binary_struct_is_not_marked_as_variant() -> datafusion_common::Result<()> {
+        let source = StructField::new(
+            "ordinary",
+            DataType::struct_type_unchecked([
+                StructField::not_null("metadata", DataType::BINARY),
+                StructField::not_null("value", DataType::BINARY),
+            ]),
+            true,
+        );
+        let field = ArrowField::try_from(&source)?;
+        assert_eq!(field.extension_type_name(), None);
+        assert!(!is_marked_variant_storage_type(field.data_type()));
+        let scalar = ScalarValue::try_new_null(field.data_type())?;
+        let literal_field = Literal::new(scalar).return_field(&ArrowSchema::empty())?;
+        assert!(!is_variant_storage_field(&literal_field));
+        assert_eq!(StructField::try_from(&field)?, source);
+        let nested = StructType::new_unchecked([
+            StructField::new(
+                "items",
+                ArrayType::new(source.data_type.clone(), true),
+                true,
+            ),
+            StructField::new(
+                "mapping",
+                MapType::new(DataType::STRING, source.data_type, true),
+                true,
+            ),
+        ]);
+        assert_eq!(StructType::try_from(&ArrowSchema::try_from(&nested)?)?, nested);
+        Ok(())
+    }
 
     #[test]
     fn array_variant_element_preserves_extension_metadata() -> Result<(), ArrowError> {

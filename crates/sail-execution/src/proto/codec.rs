@@ -131,8 +131,8 @@ use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
     DeltaCommitContext, DeltaCommitExec, DeltaDecodePath, DeltaDiscoveryExec, DeltaLogReplayExec,
-    DeltaLogReplayMode, DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
-    DeltaSnapshotContext, DeltaWriteContext, DeltaWriterExec,
+    DeltaLogReplayMode, DeltaMetadataStatsExec, DeltaPathKey, DeltaRemoveActionsExec,
+    DeltaScanByAddsExec, DeltaSnapshotContext, DeltaWriteContext, DeltaWriterExec,
 };
 use sail_delta_lake::schema::PhysicalPartitionColumn;
 use sail_delta_lake::spec::{
@@ -4224,6 +4224,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
             "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
             "delta_decode_path" => Ok(Arc::new(ScalarUDF::from(DeltaDecodePath::default()))),
+            "delta_path_key" => Ok(Arc::new(ScalarUDF::from(DeltaPathKey::default()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -4237,6 +4238,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<CollectionElement>()
             || node_inner.is::<MapExplodeEntry>()
             || node_inner.is::<DeltaDecodePath>()
+            || node_inner.is::<DeltaPathKey>()
             || node_inner.is::<MapExtract>()
             || node_inner.is::<ArrayItemWithPosition>()
             || node_inner.is::<ArrayStructField>()
@@ -8453,6 +8455,33 @@ mod tests {
         let decoded = round_trip_udf(ScalarUDF::from(MapExplodeEntry::default()))?;
         downcast_udf::<MapExplodeEntry>(&decoded, "MapExplodeEntry")?;
         assert_eq!(decoded.name(), "map_explode_entry");
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_delta_path_key_udf() -> Result<()> {
+        use datafusion::common::config::ConfigOptions;
+        use datafusion::physical_expr::ScalarFunctionExpr;
+        use datafusion::physical_expr::expressions::Literal;
+
+        let decoded = round_trip_udf(ScalarUDF::from(DeltaPathKey::default()))?;
+        downcast_udf::<DeltaPathKey>(&decoded, "DeltaPathKey")?;
+        let schema = Arc::new(Schema::empty());
+        let expression = ScalarFunctionExpr::try_new(
+            decoded,
+            vec![Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                "café/%c3%a9/%252f".to_string(),
+            ))))],
+            schema.as_ref(),
+            Arc::new(ConfigOptions::default()),
+        )?;
+        let result = expression
+            .evaluate(&RecordBatch::new_empty(schema))?
+            .into_array(1)?;
+        assert_eq!(
+            ScalarValue::try_from_array(result.as_ref(), 0)?,
+            ScalarValue::Utf8(Some("café/%C3%A9/%252f".to_string())),
+        );
         Ok(())
     }
 

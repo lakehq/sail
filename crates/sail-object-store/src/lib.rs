@@ -7,4 +7,4 @@ mod s3;
 pub use path::{
     ResolvedObjectStorePath, delete_object_store_prefix_objects, resolve_object_store_path,
 };
-pub use registry::DynamicObjectStoreRegistry;
+pub use registry::{DynamicObjectStoreRegistry, builtin_local_filesystem_path};

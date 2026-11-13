@@ -25,7 +25,6 @@ use sail_function::scalar::datetime::timestamp_cast::{
 use sail_function::scalar::r#struct::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
-use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -230,17 +229,6 @@ impl PlanResolver<'_> {
                 ),
                 DataType::Date32,
             ),
-            (_, DataType::Utf8, _) if expr_is_variant => cast(
-                ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
-                DataType::Utf8,
-            ),
-            (_, DataType::LargeUtf8, _) if expr_is_variant => cast(
-                ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
-                DataType::LargeUtf8,
-            ),
-            (_, DataType::Utf8View, _) if expr_is_variant => {
-                ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr])
-            }
             (_, to, is_try) if expr_is_variant => {
                 let service = self.ctx.extension::<PlanService>()?;
                 let data_type_string = service.plan_formatter().data_type_to_simple_string(&to)?;

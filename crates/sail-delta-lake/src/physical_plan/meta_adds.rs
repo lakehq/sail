@@ -8,7 +8,6 @@ use datafusion::arrow::array::{
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
-use percent_encoding::percent_decode_str;
 
 use crate::datasource::{COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN};
 use crate::schema::PhysicalPartitionColumn;
@@ -139,11 +138,8 @@ pub fn decode_adds_from_meta_batch_with_partition_value_columns(
             )));
         }
 
-        let raw_path = path_arr.value(row);
-        let path = percent_decode_str(raw_path)
-            .decode_utf8()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .to_string();
+        // Metadata carries the original log URI, not the decoded scan-routing key.
+        let path = path_arr.value(row).to_string();
 
         let size = size_arr
             .map(|a| if a.is_null(row) { 0 } else { a.value(row) })
@@ -340,6 +336,26 @@ mod tests {
     use datafusion::arrow::datatypes::Field;
 
     use super::*;
+
+    #[test]
+    fn metadata_adds_preserve_stored_uri_spelling() -> Result<()> {
+        let paths = vec![
+            "p=日本語/part.parquet",
+            "p=café/part.parquet",
+            "p=caf%c3%a9/part.parquet",
+            "p=a%252Fb%2525/part.parquet",
+        ];
+        let batch = RecordBatch::try_from_iter(vec![(
+            PATH_COLUMN,
+            Arc::new(StringArray::from(paths.clone())) as ArrayRef,
+        )])?;
+        let adds = decode_adds_from_meta_batch_with_partition_value_columns(&batch, None)?;
+        assert_eq!(
+            adds.iter().map(|add| add.path.as_str()).collect::<Vec<_>>(),
+            paths
+        );
+        Ok(())
+    }
 
     #[test]
     fn decode_adds_maps_partition_keys_and_extracts_commit_metadata() -> Result<()> {

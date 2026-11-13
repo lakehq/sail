@@ -1,7 +1,14 @@
+from __future__ import annotations
+
 import json
+import os
+from contextlib import contextmanager
+from urllib.parse import quote
+from urllib.request import url2pathname
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from pyspark.sql import Row
 
 
 def write_delta_with_row_groups(path, column_mapping, include_stats, *, value_padding=0):
@@ -87,3 +94,73 @@ def write_delta_with_row_groups(path, column_mapping, include_stats, *, value_pa
     log = path / "_delta_log"
     log.mkdir()
     (log / "00000000000000000000.json").write_text("".join(json.dumps(action) + "\n" for action in actions))
+
+
+def _commits(path):
+    return {
+        int(file.stem): [json.loads(line) for line in file.read_text().splitlines()]
+        for file in (path / "_delta_log").glob("*.json")
+        if file.stem.isdigit()
+    }
+
+
+def _active_files(path):
+    # These bounded fixtures retain every JSON commit, so file state can be checked directly.
+    def identity(action):
+        dv = action.get("deletionVector")
+        return action["path"], None if dv is None else (dv["storageType"], dv["pathOrInlineDv"], dv.get("offset"))
+
+    files = {}
+    for _, actions in sorted(_commits(path).items()):
+        for action in actions:
+            if "remove" in action:
+                files.pop(identity(action["remove"]), None)
+        for action in actions:
+            if "add" in action:
+                files[identity(action["add"])] = action["add"]
+    return [Row(**{"deletionVector": None, **add}) for add in files.values()]
+
+
+def _paths(rows):
+    # Hadoop Path strings are physical paths; preserve literal percent escapes during OS conversion.
+    return {os.path.normpath(url2pathname(quote(row.path.removeprefix("file:"), safe="/:"))) for row in rows}
+
+
+_TABLE_NOT_VIEW = (
+    r"(?i)(EXPECT_TABLE_NOT_VIEW|expects a table|requires a table|"
+    r"not supported for (?:temporary )?views?\b|\bis (?:a )?(?:temporary )?view\b|found (?:a )?view\b)"
+)
+
+
+def _tree(path):
+    return {str(file.relative_to(path)): file.read_bytes() for file in path.rglob("*") if file.is_file()}
+
+
+@contextmanager
+def _settings(spark, **settings):
+    previous = {key: spark.conf.get(key, None) for key in settings}
+    try:
+        for key, value in settings.items():
+            spark.conf.set(key, value)
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                spark.conf.unset(key)
+            else:
+                spark.conf.set(key, value)
+
+
+def _effective(path, key):
+    return next(
+        action[key]
+        for _, actions in sorted(_commits(path).items(), reverse=True)
+        for action in reversed(actions)
+        if key in action
+    )
+
+
+def _assert_unchanged(spark, name, path, before, rows, schema):
+    assert _tree(path) == before
+    assert spark.table(name).schema == schema
+    assert spark.table(name).orderBy("id").collect() == rows

@@ -54,6 +54,29 @@ pub(crate) fn decode_path(path: &str) -> Result<String, Utf8Error> {
     Ok(percent_decode_str(path).decode_utf8()?.to_string())
 }
 
+/// Comparison key for stored data-file URIs, without decoding their contents.
+///
+/// Java URI equality ignores percent-escape hex case, but distinguishes literal
+/// Unicode (and unreserved ASCII) from escaped octets. This does not qualify
+/// absolute paths, normalize path segments, or change scheme/authority handling.
+pub(crate) fn path_comparison_key(path: &str) -> String {
+    let mut key = String::with_capacity(path.len());
+    let mut remaining = path;
+    while let Some(offset) = remaining.find('%') {
+        key.push_str(&remaining[..=offset]);
+        remaining = &remaining[offset + 1..];
+        if let Some(escape) = remaining.as_bytes().get(..2)
+            && escape.iter().all(u8::is_ascii_hexdigit)
+        {
+            key.push(char::from(escape[0].to_ascii_uppercase()));
+            key.push(char::from(escape[1].to_ascii_uppercase()));
+            remaining = &remaining[2..];
+        }
+    }
+    key.push_str(remaining);
+    key
+}
+
 pub(crate) mod serde_path {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -186,6 +209,30 @@ mod tests {
 
     use super::*;
     use crate::spec::{MapType, StructType};
+
+    #[test]
+    fn path_keys_fold_only_percent_escape_hex_case() {
+        for (left, right) in [
+            ("caf%c3%a9.parquet", "caf%C3%A9.parquet"),
+            ("日本語/%2f%3a.parquet", "日本語/%2F%3A.parquet"),
+            ("p=a%252fb", "p=a%252fb"),
+        ] {
+            assert_eq!(path_comparison_key(left), path_comparison_key(right));
+        }
+        for (left, right) in [
+            ("café.parquet", "caf%C3%A9.parquet"),
+            ("a.parquet", "%61.parquet"),
+            ("p=a%252fb", "p=a%252Fb"),
+            ("a/b", "a%2Fb"),
+            ("A.parquet", "a.parquet"),
+            ("/table/a", "file:/table/a"),
+        ] {
+            assert_ne!(path_comparison_key(left), path_comparison_key(right));
+        }
+        for path in ["日本語", "%", "%a", "%aZ", "%%2g", "%é"] {
+            assert_eq!(path_comparison_key(path), path);
+        }
+    }
 
     fn arrow_timestamp_ntz() -> ArrowDataType {
         ArrowDataType::Timestamp(TimeUnit::Microsecond, None)

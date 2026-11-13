@@ -5,7 +5,6 @@ import os
 import shutil
 import time
 from urllib.parse import quote, unquote, urlparse
-from urllib.request import url2pathname
 from uuid import uuid4
 
 import pyarrow as pa
@@ -18,36 +17,7 @@ from pysail.testing.spark.session import spark_connect_server, spark_session_fac
 from pysail.testing.spark.utils.common import pyspark_version
 from pysail.testing.spark.utils.plan import normalize_plan_text
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
-
-
-def _commits(path):
-    return {
-        int(file.stem): [json.loads(line) for line in file.read_text().splitlines()]
-        for file in (path / "_delta_log").glob("*.json")
-        if file.stem.isdigit()
-    }
-
-
-def _active_files(path):
-    # These bounded fixtures retain every JSON commit, so file state can be checked directly.
-    def identity(action):
-        dv = action.get("deletionVector")
-        return action["path"], None if dv is None else (dv["storageType"], dv["pathOrInlineDv"], dv.get("offset"))
-
-    files = {}
-    for _, actions in sorted(_commits(path).items()):
-        for action in actions:
-            if "remove" in action:
-                files.pop(identity(action["remove"]), None)
-        for action in actions:
-            if "add" in action:
-                files[identity(action["add"])] = action["add"]
-    return [Row(**{"deletionVector": None, **add}) for add in files.values()]
-
-
-def _paths(rows):
-    # Hadoop Path strings may contain a literal '#'.
-    return {os.path.normpath(url2pathname(row.path.removeprefix("file:"))) for row in rows}
+from pysail.tests._dev.spark.delta.utils import _active_files, _commits, _paths
 
 
 @pytest.fixture
@@ -72,6 +42,8 @@ def maintenance_table(spark, tmp_path):
         ("optimize.maxFileSize", "1073741824", "2048"),
         ("optimize.maxDeletedRowsRatio", "0.05", "0.25"),
         ("retentionDurationCheck.enabled", "true", "false"),
+        ("vacuum.logging.enabled", None, "false"),
+        ("vacuum.enforceDeletedFileAndLogRetentionDurationCompatibility", "true", "false"),
         ("vacuum.retentionWindowIgnore.enabled", "true", "false"),
     ],
 )
@@ -80,7 +52,9 @@ def test_maintenance_config_registry(spark, delta_jvm_spark, tmp_path, suffix, d
     key = f"spark.databricks.delta.{suffix}"
     sessions = [spark]
     # The Delta releases used with Spark 3.5/4.0 do not register this vacuum setting.
-    if suffix != "vacuum.retentionWindowIgnore.enabled" or pyspark_version() >= (4, 1):
+    if (suffix != "vacuum.retentionWindowIgnore.enabled" or pyspark_version() >= (4, 1)) and (
+        suffix != "vacuum.enforceDeletedFileAndLogRetentionDurationCompatibility" or pyspark_version() >= (4, 2)
+    ):
         sessions.append(delta_jvm_spark)
     previous = [session.conf.get(key, None) for session in sessions]
     try:
@@ -559,13 +533,16 @@ def test_vacuum_retention_dry_run_and_audit(spark, delta_jvm_spark, maintenance_
     ignore_window = "spark.databricks.delta.vacuum.retentionWindowIgnore.enabled"
     spark.conf.set(ignore_window, "false")
     try:
-        assert spark.sql(f"VACUUM {name} RETAIN 24 HOURS DRY RUN").collect() == []
+        assert _paths(spark.sql(f"VACUUM {name} RETAIN 24 HOURS DRY RUN").collect()) == {str(cdf.parent)}
     finally:
         spark.conf.unset(ignore_window)
     parallelism = "spark.sql.sources.parallelPartitionDiscovery.parallelism"
     previous = delta_jvm_spark.conf.get(parallelism)
     delta_jvm_spark.conf.set(parallelism, "2")
     try:
+        assert _paths(delta_jvm_spark.sql(f"VACUUM delta.`{path}` FULL DRY RUN RETAIN 24 HOURS").collect()) == {
+            str(cdf.parent)
+        }
         reference = delta_jvm_spark.sql(f"VACUUM delta.`{path}` FULL DRY RUN RETAIN 1 HOURS")
         assert dry.schema == reference.schema
         assert _paths(dry.collect()) == _paths(reference.collect()) == {str(orphan), str(cdf)}
