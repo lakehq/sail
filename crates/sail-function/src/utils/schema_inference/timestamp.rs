@@ -1,40 +1,7 @@
 use chrono::{NaiveDate, NaiveTime};
-use chrono_tz::Tz;
+use sail_common_datafusion::utils::datetime::SparkZone;
 
 use crate::scalar::datetime::timestamp_parser::parse_timestamp_string;
-
-/// Validates a timezone string the way Spark's `getZoneId` does for the cases
-/// that appear in JSON: `Z`, numeric offsets (`+02:00`, `-0800`), and IANA
-/// region IDs (`America/Los_Angeles`).
-fn is_valid_timezone(tz: &str) -> bool {
-    let tz = tz.trim();
-    if tz.is_empty() {
-        return false;
-    }
-    if tz == "Z" || tz.eq_ignore_ascii_case("UTC") || tz.eq_ignore_ascii_case("GMT") {
-        return true;
-    }
-    if let Some(offset) = tz.strip_prefix(['+', '-']) {
-        let digits: String = offset.chars().filter(|c| *c != ':').collect();
-        if digits.len() != offset.len() - offset.matches(':').count()
-            || !digits.bytes().all(|b| b.is_ascii_digit())
-        {
-            return false;
-        }
-        let parse2 = |s: &str| s.parse::<u32>().ok();
-        let (hours, minutes) = match digits.len() {
-            2 => (parse2(&digits), Some(0)),
-            4 => (parse2(&digits[0..2]), parse2(&digits[2..4])),
-            6 => (parse2(&digits[0..2]), parse2(&digits[2..4])),
-            _ => (None, None),
-        };
-        return match (hours, minutes) {
-            (Some(h), Some(m)) => h <= 18 && m < 60,
-            _ => false,
-        };
-    }
-    tz.parse::<Tz>().is_ok()
-}
 
 /// Returns true if the string matches a timestamp/date that Spark's
 /// `inferTimestamp` option would promote to `TIMESTAMP`. This is a faithful
@@ -69,7 +36,7 @@ pub(crate) fn is_timestamp_string(s: &str) -> bool {
         }
     }
     match &parsed.timezone {
-        Some(tz) => is_valid_timezone(tz),
+        Some(tz) => SparkZone::parse(tz).is_ok(),
         None => true,
     }
 }
