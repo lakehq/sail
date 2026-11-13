@@ -49,6 +49,24 @@ Feature: schema_of_xml infers a DDL schema from a literal XML document
       | null option value        | '<p><a id="2">1</a></p>', map('valueTag', CAST(NULL AS STRING))              | STRUCT<a: STRUCT<_id: BIGINT, null: BIGINT>>          |
       | foldable input           | concat('<p><a>', '1</a></p>')                                                | STRUCT<a: BIGINT>                                     |
 
+  Scenario Outline: schema_of_xml respects null markers: <case>
+    When query
+      """
+      SELECT schema_of_xml('<xml>', map('nullValue', 'N/A')) AS result
+      """
+    Then query result
+      | result   |
+      | <result> |
+
+    Examples:
+      | case              | xml                                | result                                 |
+      | repeated elements | <p><a>N/A</a><a>1</a></p>          | STRUCT<a: ARRAY<BIGINT>>               |
+      | numeric attribute | <p><a id="N/A"/><a id="1"/></p>    | STRUCT<a: ARRAY<STRUCT<_id: BIGINT>>>  |
+      | boolean attribute | <p><a id="N/A"/><a id="true"/></p> | STRUCT<a: ARRAY<STRUCT<_id: BOOLEAN>>> |
+      | root attribute    | <p id="N/A"/>                      | STRUCT<_id: STRING>                    |
+      | trimmed marker    | <p><a> N/A </a><a>1</a></p>        | STRUCT<a: ARRAY<BIGINT>>               |
+      | trimmed attribute | <p><a id=" N/A "/><a id="1"/></p>  | STRUCT<a: ARRAY<STRUCT<_id: BIGINT>>>  |
+
   Scenario Outline: schema_of_xml preserves lexical namespace names: <case>
     When query
       """
@@ -135,6 +153,31 @@ Feature: schema_of_xml infers a DDL schema from a literal XML document
     Then query result
       | result |
       | 42     |
+
+  Scenario Outline: schema_of_xml timestamps round trip through from_xml: <timestamp_type> <value>
+    Given config spark.sql.timestampType = <timestamp_type>
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    When query
+      """
+      SELECT CAST(from_xml(
+        '<p><t><value></t></p>',
+        schema_of_xml('<p><t><value></t></p>')
+      ).t AS STRING) AS result
+      """
+    Then query result
+      | result   |
+      | <result> |
+
+    Examples:
+      | timestamp_type | value                      | result                     |
+      | TIMESTAMP_LTZ  | 2024-01-02T03:04:05        | 2024-01-02 03:04:05        |
+      | TIMESTAMP_NTZ  | 2024-01-02T03:04:05        | 2024-01-02 03:04:05        |
+      | TIMESTAMP_LTZ  | 2024-01-02 03:04:05.123456 | 2024-01-02 03:04:05.123456 |
+      | TIMESTAMP_NTZ  | 2024-01-02 03:04:05.123456 | 2024-01-02 03:04:05.123456 |
+      | TIMESTAMP_LTZ  | 2024-01-02T03:04:05Z       | 2024-01-01 19:04:05        |
+      | TIMESTAMP_LTZ  | 2024-01-02T03:04:05+02:00  | 2024-01-01 17:04:05        |
+      | TIMESTAMP_LTZ  | 2024-1-2                   | 2024-01-02 00:00:00        |
+      | TIMESTAMP_NTZ  | 2024-1-2                   | 2024-01-02 00:00:00        |
 
   Scenario Outline: schema_of_xml rejects invalid arguments: <case>
     When query

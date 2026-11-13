@@ -106,6 +106,7 @@ struct XmlInferenceOptions {
     ignore_spaces: bool,
     infer_schema: bool,
     prefers_decimal: bool,
+    null_value: Option<String>,
     attribute_prefix: String,
     value_tag: String,
     corrupt_record: String,
@@ -190,6 +191,7 @@ impl XmlInferenceOptions {
             ignore_spaces: boolean("ignoresurroundingspaces", true)?,
             infer_schema: boolean("inferschema", true)?,
             prefers_decimal: boolean("prefersdecimal", false)?,
+            null_value: options.get("nullvalue").cloned(),
             attribute_prefix,
             value_tag,
             corrupt_record: options
@@ -217,7 +219,7 @@ impl XmlInferenceOptions {
         } else {
             value
         };
-        if value.is_empty() {
+        if value.is_empty() || self.null_value.as_deref() == Some(value) {
             return Null;
         }
         if value.parse::<i64>().is_ok() {

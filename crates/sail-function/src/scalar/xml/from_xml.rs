@@ -15,6 +15,8 @@ use xee_xpath::Documents;
 
 use crate::functions_utils::make_scalar_function;
 use crate::scalar::datetime::format::{DateTimeFormat, ParsedDateTime};
+use crate::scalar::datetime::spark_timestamp::TimestampParser;
+use crate::scalar::datetime::timestamp_parser::parse_timestamp_string;
 
 #[cfg(test)]
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
@@ -54,8 +56,8 @@ struct SparkFromXmlOptions {
     null_value: Option<String>,
     attribute_prefix: String,
     value_tag: String,
-    timestamp_ltz_format: DateTimeFormat,
-    timestamp_ntz_format: DateTimeFormat,
+    timestamp_ltz_format: Option<DateTimeFormat>,
+    timestamp_ntz_format: Option<DateTimeFormat>,
     date_format: DateTimeFormat,
     mode: ParseMode,
 }
@@ -70,8 +72,6 @@ impl SparkFromXmlOptions {
     const TIMESTAMP_NTZ_FORMAT_OPTION: &'static str = "timestampNTZFormat";
     const DATE_FORMAT_OPTION: &'static str = "dateFormat";
     const MODE_OPTION: &'static str = "mode";
-    const TIMESTAMP_LTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
-    const TIMESTAMP_NTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
     const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     fn from_map(map: &MapArray) -> Result<Self> {
@@ -89,21 +89,11 @@ impl SparkFromXmlOptions {
         let timestamp_ltz_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
             .map(DateTimeFormat::for_parsing)
-            .transpose()?
-            .unwrap_or_else(|| {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_LTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp LTZ format should be valid")
-            });
+            .transpose()?;
         let timestamp_ntz_format = find_key_value(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
             .as_deref()
             .map(DateTimeFormat::for_parsing)
-            .transpose()?
-            .unwrap_or_else(|| {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp NTZ format should be valid")
-            });
+            .transpose()?;
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
             .map(DateTimeFormat::for_parsing)
@@ -134,6 +124,34 @@ impl SparkFromXmlOptions {
             mode,
         })
     }
+
+    fn parse_timestamp(
+        &self,
+        value: &str,
+        has_timezone: bool,
+        session_timezone: &str,
+    ) -> Result<i64> {
+        let format = if has_timezone {
+            &self.timestamp_ltz_format
+        } else {
+            &self.timestamp_ntz_format
+        };
+        if let Some(format) = format {
+            let parsed = format.parse_datetime_value(value)?;
+            return parsed_timestamp_to_micros(parsed, has_timezone, session_timezone);
+        }
+        let parser = if has_timezone {
+            TimestampParser::Ltz {
+                default_timezone: session_timezone.to_string(),
+            }
+        } else {
+            if parse_timestamp_string(value).is_some_and(|p| p.timezone.is_some()) {
+                return exec_err!("TIMESTAMP_NTZ XML values must not contain a time zone");
+            }
+            TimestampParser::Ntz
+        };
+        parser.parse_unformatted(value)
+    }
 }
 
 impl Default for SparkFromXmlOptions {
@@ -142,16 +160,8 @@ impl Default for SparkFromXmlOptions {
             null_value: None,
             attribute_prefix: Self::ATTRIBUTE_PREFIX_DEFAULT.to_string(),
             value_tag: Self::VALUE_TAG_DEFAULT.to_string(),
-            timestamp_ltz_format: {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_LTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp LTZ format should be valid")
-            },
-            timestamp_ntz_format: {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp NTZ format should be valid")
-            },
+            timestamp_ltz_format: None,
+            timestamp_ntz_format: None,
             date_format: {
                 #[expect(clippy::expect_used)]
                 DateTimeFormat::for_parsing(Self::DATE_FORMAT_DEFAULT)
@@ -714,30 +724,14 @@ fn append_text(
             Err(_) => b.append_null(),
         },
         XmlFieldBuilder::TimestampMicrosecond { builder: b, has_tz } => {
-            let fmt = if *has_tz {
-                &options.timestamp_ltz_format
-            } else {
-                &options.timestamp_ntz_format
-            };
-            match fmt.parse_datetime_value(raw) {
-                Ok(parsed) => {
-                    let micros = parsed_timestamp_to_micros(parsed, *has_tz, session_timezone)?;
-                    b.append_value(micros);
-                }
+            match options.parse_timestamp(raw, *has_tz, session_timezone) {
+                Ok(micros) => b.append_value(micros),
                 Err(_) => b.append_null(),
             }
         }
         XmlFieldBuilder::TimestampNanosecond { builder: b, has_tz } => {
-            let fmt = if *has_tz {
-                &options.timestamp_ltz_format
-            } else {
-                &options.timestamp_ntz_format
-            };
-            match fmt.parse_datetime_value(raw) {
-                Ok(parsed) => {
-                    let micros = parsed_timestamp_to_micros(parsed, *has_tz, session_timezone)?;
-                    b.append_value(micros * 1_000);
-                }
+            match options.parse_timestamp(raw, *has_tz, session_timezone) {
+                Ok(micros) => b.append_value(micros * 1_000),
                 Err(_) => b.append_null(),
             }
         }
