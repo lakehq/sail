@@ -129,7 +129,9 @@
 ### Write-Only Options ###
 
 - key: snapshot_properties
-  description: Per-write snapshot summary annotations from snapshot-property.<key> options.
+  description: |
+    Per-write snapshot summary annotations from snapshot-property.<key> options.
+    Each overrides the session setting spark.sql.iceberg.snapshot-property.<key>.
   supported: true
   rust_type: "std::collections::BTreeMap<String, String>"
   scopes: [write]
