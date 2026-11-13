@@ -19,8 +19,9 @@ use datafusion_expr::{
 };
 use projection::project_with_keys;
 use sail_common_datafusion::OPTIMIZER_CORRELATION_KEY_PREFIX;
-use sail_function::scalar::conversion::spark_float_to_decimal::SparkFloatToDecimal;
 use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
+
+use crate::scalar_subquery_domain::cast_column;
 
 mod projection;
 
@@ -100,29 +101,6 @@ fn native_equality(expression: &Expr) -> Option<(&Expr, &Expr)> {
         Some((right, &binary.left))
     } else {
         None
-    }
-}
-
-/// The column that a key casts. Sail plans a strict FLOAT or DOUBLE to DECIMAL cast
-/// as a function that rounds like Spark, so key it like the cast it replaces; its
-/// null-on-overflow form, like TRY_CAST, is not a key.
-fn cast_column(expression: &Expr) -> Option<&Column> {
-    let input = match expression {
-        Expr::Cast(cast) => cast.expr.as_ref(),
-        Expr::ScalarFunction(function)
-            if function
-                .func
-                .inner()
-                .downcast_ref::<SparkFloatToDecimal>()
-                .is_some_and(|function| !function.null_on_overflow()) =>
-        {
-            function.args.first()?
-        }
-        _ => return None,
-    };
-    match input {
-        Expr::Column(column) => Some(column),
-        _ => None,
     }
 }
 

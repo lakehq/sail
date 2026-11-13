@@ -219,6 +219,9 @@ def dataframe_for(case, spark):
         "to_timestamp_ntz value with null format": lambda: spark.range(1).select(
             F.to_timestamp_ntz(F.lit("2024-01-02"), F.lit(None)).alias("result")
         ),
+        "cast of a double to decimal to string": lambda: (
+            spark.range(1).select(F.lit(0.145).alias("d")).select(F.col("d").cast("decimal(10,2)").cast("string"))
+        ),
     }
     try:
         return cases[case]()

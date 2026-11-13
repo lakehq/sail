@@ -630,6 +630,11 @@ fn need_rename_cast(expr: &expr::Expr) -> bool {
         expr::Expr::Cast(cast) => need_rename_cast(cast.expr.as_ref()),
         expr::Expr::TryCast(try_cast) => need_rename_cast(try_cast.expr.as_ref()),
         expr::Expr::ScalarFunction(function)
+            if function.func.inner().is::<SparkFloatToDecimal>() =>
+        {
+            function.args.first().is_none_or(need_rename_cast)
+        }
+        expr::Expr::ScalarFunction(function)
             if function
                 .func
                 .inner()

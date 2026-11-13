@@ -209,6 +209,14 @@ Feature: Numeric casts to Decimal handle precision overflow
         | 10.00  |
         | NULL   |
 
+    Scenario: A cast over a DOUBLE to DECIMAL cast keeps the column name
+      When dataframe for cast of a double to decimal to string
+      Then dataframe schema
+        """
+        root
+         |-- d: string (nullable = true)
+        """
+
     Scenario Outline: Rounding up past the precision of <target> with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
