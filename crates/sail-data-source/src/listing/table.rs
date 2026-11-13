@@ -24,6 +24,7 @@ pub struct ListingTableSourceConfig {
     pub target_partitions: usize,
     pub read_format: Arc<dyn ReadFormat>,
     pub path_glob_filter: Option<PathGlobFilter>,
+    pub validate_partition_columns: bool,
     pub compression: CompressionTypeVariant,
 }
 

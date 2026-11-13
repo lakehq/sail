@@ -225,7 +225,7 @@ pub(super) fn partition_key(path: &Path, root: &Path, columns: &[String]) -> Opt
         .collect()
 }
 
-fn decode_partition_component(part: &str, column: &str) -> Option<String> {
+pub(super) fn decode_partition_component(part: &str, column: &str) -> Option<String> {
     let (name, value) = part.split_once('=')?;
     if percent_decode_str(name).decode_utf8().ok()? != column {
         return None;
@@ -338,7 +338,7 @@ fn typed_partition_key(values: &[String], schema: &Schema) -> Result<Vec<ScalarV
         .collect()
 }
 
-fn typed_partition_value(
+pub(super) fn typed_partition_value(
     value: &str,
     data_type: &arrow::datatypes::DataType,
 ) -> Result<ScalarValue> {

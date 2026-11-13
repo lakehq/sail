@@ -44,6 +44,7 @@ impl DataSource for RateDataSource {
             sort_order,
             options,
             read_case_sensitive: _,
+            validate_partition_columns: _,
         } = info;
         if !constraints.deref().is_empty() {
             return plan_err!("the rate data source does not support constraints");

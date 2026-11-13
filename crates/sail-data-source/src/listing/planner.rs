@@ -435,8 +435,16 @@ async fn list_files_for_scan<'a>(
                 let files = if source.config().read_format.hive_partition_paths()
                     && !partition_cols_ref.is_empty()
                 {
-                    hive_partitioned_files(ctx, store_ref, table_path, filters, partition_cols_ref)
-                        .await?
+                    hive_partitioned_files(
+                        ctx,
+                        listing,
+                        table_path,
+                        filters,
+                        partition_cols_ref,
+                        source.config().validate_partition_columns,
+                        path_glob_filter,
+                    )
+                    .await?
                 } else {
                     pruned_partition_list(
                         ctx,

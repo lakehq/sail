@@ -856,6 +856,7 @@ impl PlanResolver<'_> {
                             items: properties.to_vec(),
                         }],
                         read_case_sensitive: self.config.case_sensitive,
+                        validate_partition_columns: self.config.validate_partition_columns,
                     };
                     if let Some(lake_source) = registry
                         .get_lake_source_if_supported(&format)
@@ -929,6 +930,7 @@ impl PlanResolver<'_> {
                             items: properties.to_vec(),
                         }],
                         read_case_sensitive: self.config.case_sensitive,
+                        validate_partition_columns: self.config.validate_partition_columns,
                     };
                     match lake_source.infer_metadata(&self.ctx.state(), info).await {
                         Ok(metadata) => {

@@ -177,6 +177,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             sort_order,
             options,
             read_case_sensitive,
+            validate_partition_columns,
         } = info;
 
         let read_format = T::read(ctx, options)?;
@@ -264,6 +265,14 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             }
         };
 
+        let partition_fields = if hive_partition_paths {
+            partition_fields
+                .into_iter()
+                .map(|field| Arc::new(field.as_ref().clone().with_nullable(true)))
+                .collect()
+        } else {
+            partition_fields
+        };
         validate_partitions(&sampled_files, &partition_fields, hive_partition_paths)?;
 
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
@@ -277,6 +286,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             target_partitions: ctx.config().target_partitions(),
             read_format: Arc::new(read_format),
             path_glob_filter,
+            validate_partition_columns,
             compression,
         })?;
         Ok(Arc::new(source))

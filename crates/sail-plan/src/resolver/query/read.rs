@@ -296,6 +296,7 @@ impl PlanResolver<'_> {
                                 },
                             ],
                             read_case_sensitive: self.config.case_sensitive,
+                            validate_partition_columns: self.config.validate_partition_columns,
                         };
                         let table_source = match lake_relation {
                             Some((relation_provider, relation)) => {
@@ -725,6 +726,7 @@ impl PlanResolver<'_> {
                 items: options.into_iter().collect(),
             }],
             read_case_sensitive: self.config.case_sensitive,
+            validate_partition_columns: self.config.validate_partition_columns,
         };
         let registry = self.ctx.extension::<DataSourceRegistry>()?;
         let table_source = registry

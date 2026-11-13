@@ -66,6 +66,8 @@ pub struct PlanConfig {
     pub order_by_ordinal: bool,
     /// Default for partition overwrite writes; operation options take precedence.
     pub dynamic_partition_overwrite: bool,
+    /// Reject malformed typed Hive partition values; otherwise read them as null.
+    pub validate_partition_columns: bool,
     /// Patterns used to redact sensitive table property keys and values.
     pub redaction_options_regex: String,
     pub redaction_regex: String,
@@ -126,6 +128,7 @@ impl Default for PlanConfig {
             group_by_ordinal: true,
             order_by_ordinal: true,
             dynamic_partition_overwrite: false,
+            validate_partition_columns: true,
             redaction_options_regex: "(?i)url".to_string(),
             redaction_regex: "(?i)secret|password|token|access[.]?key".to_string(),
             pivot_max_values: 10000,

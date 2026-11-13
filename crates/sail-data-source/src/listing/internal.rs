@@ -431,6 +431,8 @@ pub(super) mod tests {
                                 &url,
                                 &[],
                                 &[("p".into(), arrow::datatypes::DataType::Int32)],
+                                true,
+                                None,
                             )
                             .await?
                             .try_collect::<Vec<_>>()
