@@ -7401,6 +7401,8 @@ dependencies = [
  "parquet-variant-compute",
  "parquet-variant-json",
  "percent-encoding",
+ "postcard",
+ "quick-xml",
  "rand 0.10.3",
  "rand_distr",
  "regex",
