@@ -1,7 +1,10 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, MutableArrayData, make_array};
+use datafusion::arrow::array::{
+    Array, ArrayRef, AsArray, MutableArrayData, OffsetSizeTrait, make_array,
+};
+use datafusion::arrow::buffer::Buffer;
 use datafusion::arrow::compute::BatchCoalescer;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
@@ -268,6 +271,10 @@ impl ExecutionPlan for ShuffleWriteExec {
                             .with_biggest_coalesce_batch_size(Some(pass_through_rows))
                     })
                     .collect(),
+                slices: matches!(
+                    self.partitioning,
+                    ShufflePartitioning::Hash(..) | ShufflePartitioning::Range(_)
+                ),
                 batch_rows: batch_size,
                 pass_through_rows,
             }
@@ -336,102 +343,108 @@ async fn shuffle_write(
 /// One batch coalescer per output channel.
 struct Coalescers {
     channels: Vec<BatchCoalescer>,
+    /// Whether partitioned batches are slices of one batch holding every channel's rows,
+    /// rather than whole input batches or batches taken for one channel.
+    slices: bool,
     batch_rows: usize,
     pass_through_rows: usize,
 }
 
 impl Coalescers {
     /// Adds the partitioned batches of one input batch to their channels.
-    ///
-    /// Partitioned batches are slices of one batch holding every channel's rows, so
-    /// the columns the coalescer would not copy are copied here before they are queued.
     fn push(&mut self, partitions: Vec<Option<RecordBatch>>) -> Result<()> {
         for (coalescer, batch) in self.channels.iter_mut().zip(partitions) {
             if let Some(batch) = batch {
-                push_batch(coalescer, batch, self.batch_rows, self.pass_through_rows)?;
+                push_batch(
+                    coalescer,
+                    batch,
+                    self.slices,
+                    self.batch_rows,
+                    self.pass_through_rows,
+                )?;
             }
         }
         Ok(())
     }
 }
 
-/// Adds a batch to the coalescer, copying the columns it would keep sharing the input's buffers.
+/// Adds a batch to the coalescer, copying the columns it would otherwise keep sharing
+/// buffers with rows that are not in its output.
 fn push_batch(
     coalescer: &mut BatchCoalescer,
     batch: RecordBatch,
+    slices: bool,
     batch_rows: usize,
     pass_through_rows: usize,
 ) -> Result<()> {
     let rows = batch.num_rows();
     let buffered = coalescer.get_buffered_rows();
-    if rows > pass_through_rows
-        && buffered > 0
-        && buffered <= pass_through_rows
-        && rows > batch_rows - buffered
-    {
+    let large = rows > pass_through_rows;
+    if large && (buffered == 0 || buffered > pass_through_rows) {
+        // The coalescer passes the batch on as it is.
+        let batch = if slices {
+            copy_columns(batch, |_| true)?
+        } else {
+            batch
+        };
+        return Ok(coalescer.push_batch(batch)?);
+    }
+    if large && rows > batch_rows - buffered {
         // The coalescer merges a large batch into a small buffered one rather than passing
-        // it through, and the full batches after the first would then share one copy.
+        // it through, and the full batches after the first would then share its buffers.
         // So the rows of each output batch are copied on their own, with passing through
         // turned off to keep the same batch boundaries.
         coalescer.set_biggest_coalesce_batch_size(None);
         let mut offset = 0;
         while offset < rows {
             let len = (batch_rows - coalescer.get_buffered_rows()).min(rows - offset);
-            push_copy(coalescer, batch.slice(offset, len), pass_through_rows)?;
+            let part = batch.slice(offset, len);
+            coalescer.push_batch(copy_columns(part, |t| !copied_by_coalescer(t))?)?;
             offset += len;
         }
         coalescer.set_biggest_coalesce_batch_size(Some(pass_through_rows));
         return Ok(());
     }
-    push_copy(coalescer, batch, pass_through_rows)
-}
-
-fn push_copy(
-    coalescer: &mut BatchCoalescer,
-    batch: RecordBatch,
-    pass_through_rows: usize,
-) -> Result<()> {
-    // A large batch can be passed through without copying any of its columns.
-    let batch = if batch.num_rows() > pass_through_rows {
-        copy_columns(&batch, |_| true)?
+    let batch = if slices {
+        copy_columns(batch, |t| !copied_by_coalescer(t))?
     } else {
-        copy_columns(&batch, |data_type| !copied_by_coalescer(data_type))?
+        batch
     };
     Ok(coalescer.push_batch(batch)?)
 }
 
 // The coalescer keeps columns of other types as slices of their input until it
 // finishes a batch, and passes on a batch made of one slice without copying it.
+// It copies view strings only when their buffers are mostly unused, and completed
+// batches are compacted for the rest.
 /// Returns whether the coalescer copies rows of this type as they arrive.
 fn copied_by_coalescer(data_type: &DataType) -> bool {
     data_type.is_primitive() || matches!(data_type, DataType::Utf8View | DataType::BinaryView)
 }
 
 /// Copies the columns whose type matches, so they no longer share the input's buffers.
-fn copy_columns(batch: &RecordBatch, copy: impl Fn(&DataType) -> bool) -> Result<RecordBatch> {
+fn copy_columns(batch: RecordBatch, copy: impl Fn(&DataType) -> bool) -> Result<RecordBatch> {
     if !batch
         .columns()
         .iter()
         .any(|column| copy(column.data_type()))
     {
-        return Ok(batch.clone());
+        return Ok(batch);
     }
-    let columns = batch
-        .columns()
-        .iter()
+    let (schema, columns, rows) = batch.into_parts();
+    let columns = columns
+        .into_iter()
         .map(|column| {
             if copy(column.data_type()) {
-                copy_array(column)
+                copy_array(&column)
             } else {
-                Ok(Arc::clone(column))
+                Ok(column)
             }
         })
         .collect::<Result<_>>()?;
-    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+    let options = RecordBatchOptions::new().with_row_count(Some(rows));
     Ok(RecordBatch::try_new_with_options(
-        batch.schema(),
-        columns,
-        &options,
+        schema, columns, &options,
     )?)
 }
 
@@ -439,8 +452,7 @@ fn copy_array(array: &ArrayRef) -> Result<ArrayRef> {
     let data = array.to_data();
     let mut copy = MutableArrayData::new(vec![&data], false, data.len());
     copy.try_extend(0, 0, data.len())?;
-    // The copy still shares view payloads and dictionary values with the input.
-    compact_payload(make_array(copy.freeze()))
+    compact_unreferenced(make_array(copy.freeze()), false)
 }
 
 /// Writes the batch still buffered in each channel, returning `false` if every channel is closed.
@@ -454,10 +466,11 @@ async fn write_buffered(
             coalescer.finish_buffered_batch()?;
             // The buffered batch can be a slice of the last batch pushed, which shrinking
             // cannot release.
-            coalescer
-                .next_completed_batch()
-                .map(|batch| copy_columns(&batch, |_| true))
-                .transpose()
+            let Some(batch) = coalescer.next_completed_batch() else {
+                return Ok(None);
+            };
+            let batch = copy_columns(batch, |t| !copied_by_coalescer(t))?;
+            compact_completed(batch).map(Some)
         })
         .collect::<Result<Vec<_>>>()?;
     if batches.iter().all(Option::is_none) {
@@ -477,7 +490,7 @@ async fn write_completed(
             .map(|coalescer| {
                 coalescer
                     .next_completed_batch()
-                    .map(shrink_to_fit)
+                    .map(compact_completed)
                     .transpose()
             })
             .collect::<Result<_>>()?;
@@ -490,22 +503,94 @@ async fn write_completed(
     }
 }
 
-/// Releases the unused capacity of a completed batch.
-///
-/// The coalescer reserves a full batch for each column, and copies view strings
-/// into blocks that grow from batch to batch.
-fn shrink_to_fit(batch: RecordBatch) -> Result<RecordBatch> {
-    let (schema, mut columns, rows) = batch.into_parts();
-    for column in columns.iter_mut() {
-        // A column shared with another batch cannot be reallocated.
-        if let Some(column) = Arc::get_mut(column) {
-            column.shrink_to_fit();
-        }
-    }
+/// Releases the memory a completed batch holds but does not use.
+fn compact_completed(batch: RecordBatch) -> Result<RecordBatch> {
+    let (schema, columns, rows) = batch.into_parts();
+    let columns = columns
+        .into_iter()
+        .map(|mut column| {
+            // The coalescer reserves a full batch for each column, and copies view strings
+            // into blocks that grow from batch to batch. A column shared with another
+            // batch cannot be reallocated.
+            if let Some(column) = Arc::get_mut(&mut column) {
+                column.shrink_to_fit();
+            }
+            compact_unreferenced(column, true)
+        })
+        .collect::<Result<_>>()?;
     let options = RecordBatchOptions::new().with_row_count(Some(rows));
     Ok(RecordBatch::try_new_with_options(
         schema, columns, &options,
     )?)
+}
+
+/// Drops the buffers that a column holds but mostly does not use.
+///
+/// List views are only checked once `completed`, since a copy holds only its own values
+/// but a completed batch can end inside a partitioned batch and still hold the values
+/// of rows in the next one.
+fn compact_unreferenced(array: ArrayRef, completed: bool) -> Result<ArrayRef> {
+    let array = match array.data_type() {
+        DataType::Utf8View => {
+            let views = array.as_string_view();
+            if sparse(views.data_buffers(), views.total_buffer_bytes_used()) {
+                return Ok(Arc::new(views.gc()));
+            }
+            return Ok(array);
+        }
+        DataType::BinaryView => {
+            let views = array.as_binary_view();
+            if sparse(views.data_buffers(), views.total_buffer_bytes_used()) {
+                return Ok(Arc::new(views.gc()));
+            }
+            return Ok(array);
+        }
+        // Dictionaries are rare in shuffle output, so they are compacted without checking first.
+        // This also keeps the values of a completed batch to at most its row count, since
+        // concatenating dictionaries can only merge some value types.
+        DataType::Dictionary(_, _) => return compact_payload(array),
+        // Concatenating list views keeps all the values of each one, used or not.
+        DataType::ListView(_) if completed && unreferenced_list_values::<i32>(&array) => {
+            copy_array(&array)?
+        }
+        DataType::LargeListView(_) if completed && unreferenced_list_values::<i64>(&array) => {
+            copy_array(&array)?
+        }
+        data_type if data_type.is_nested() || matches!(data_type, DataType::RunEndEncoded(..)) => {
+            array
+        }
+        _ => return Ok(array),
+    };
+    let data = array.to_data();
+    let mut changed = false;
+    let children = data
+        .child_data()
+        .iter()
+        .map(|child| {
+            let child = make_array(child.clone());
+            let compacted = compact_unreferenced(Arc::clone(&child), completed)?;
+            changed |= !Arc::ptr_eq(&child, &compacted);
+            Ok(compacted.to_data())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if !changed {
+        return Ok(array);
+    }
+    Ok(make_array(
+        data.into_builder().child_data(children).build()?,
+    ))
+}
+
+/// Returns whether a list view holds values its lists do not use.
+fn unreferenced_list_values<O: OffsetSizeTrait>(array: &ArrayRef) -> bool {
+    let lists = array.as_list_view::<O>();
+    let used: usize = lists.sizes().iter().map(|size| size.as_usize()).sum();
+    lists.values().len() > used
+}
+
+/// Returns whether view data buffers hold more than twice the bytes their views use.
+fn sparse(buffers: &[Buffer], used: usize) -> bool {
+    buffers.iter().map(Buffer::capacity).sum::<usize>() > 2 * used
 }
 
 #[cfg(test)]
@@ -513,11 +598,12 @@ mod tests {
     use std::ops::Range;
 
     use datafusion::arrow::array::{
-        ArrayData, BooleanArray, Int64Array, ListArray, ListBuilder, StringArray, StringViewArray,
-        StringViewBuilder, UInt32Array,
+        ArrayData, BooleanArray, DictionaryArray, Int16Array, Int32Array, Int64Array, ListArray,
+        ListBuilder, ListViewArray, RunArray, StringArray, StringViewArray, StringViewBuilder,
+        UInt32Array,
     };
-    use datafusion::arrow::compute::{concat_batches, take_record_batch};
-    use datafusion::arrow::datatypes::{Field, Int64Type, SchemaRef};
+    use datafusion::arrow::compute::{cast, concat, concat_batches, take_record_batch};
+    use datafusion::arrow::datatypes::{Field, Int16Type, Int32Type, Int64Type, SchemaRef};
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::physical_expr::expressions::col;
     use datafusion::physical_plan::common::collect;
@@ -620,7 +706,7 @@ mod tests {
             .collect()
     }
 
-    /// Batches with string, boolean, and list columns, including views with strings too long to inline.
+    /// Batches with string, boolean, and list columns, and view strings too long to inline.
     fn nested_input(batches: usize, rows: i64) -> Result<Vec<RecordBatch>> {
         let item = Arc::new(Field::new_list_field(DataType::Int64, true));
         let view_item = Arc::new(Field::new_list_field(DataType::Utf8View, true));
@@ -658,6 +744,101 @@ mod tests {
                         Arc::new(v),
                         Arc::new(lv.finish()),
                     ],
+                )?)
+            })
+            .collect()
+    }
+
+    /// Batches whose rows all hash to one channel, with `long` rows of 16 KiB strings at the end.
+    fn skewed_input(batches: &[(usize, usize)]) -> Result<Vec<RecordBatch>> {
+        let item = Arc::new(Field::new_list_field(DataType::Utf8View, true));
+        let dictionary = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let string_item = Arc::new(Field::new_list_field(DataType::Utf8, true));
+        let run_end_encoded = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Utf8View, true)),
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, false),
+            Field::new("v", DataType::Utf8View, false),
+            Field::new("lv", DataType::List(item), false),
+            Field::new("d", dictionary, false),
+            Field::new("lw", DataType::ListView(string_item.clone()), false),
+            Field::new("r", run_end_encoded, false),
+        ]));
+        batches
+            .iter()
+            .map(|&(rows, long)| {
+                let values: Vec<String> = (0..rows)
+                    .map(|row| {
+                        if row < rows - long {
+                            format!("{row}")
+                        } else {
+                            format!("{row:0>16384}")
+                        }
+                    })
+                    .collect();
+                let k = Int64Array::from_iter_values(std::iter::repeat_n(0, rows));
+                let v = StringViewArray::from_iter_values(&values);
+                let mut lv = ListBuilder::new(StringViewBuilder::new());
+                for value in &values {
+                    lv.values().append_value(value);
+                    lv.append(true);
+                }
+                // Few distinct values, so concatenating keeps every dictionary's values.
+                let d = (0..rows)
+                    .map(|row| {
+                        if row < rows - long {
+                            format!("{}", row % 4)
+                        } else {
+                            format!("{:0>16384}", row % 4)
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let d: DictionaryArray<Int32Type> = d.iter().map(String::as_str).collect();
+                // One item per list, so only the lengths of the items are skewed.
+                let lw = ListViewArray::try_new(
+                    string_item.clone(),
+                    (0..rows as i32).collect::<Vec<_>>().into(),
+                    vec![1; rows].into(),
+                    Arc::new(StringArray::from_iter_values(&values)),
+                    None,
+                )?;
+                let run_ends = Int32Array::from_iter_values(1..=rows as i32);
+                let r = RunArray::<Int32Type>::try_new(&run_ends, &v)?;
+                Ok(RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(k),
+                        Arc::new(v),
+                        Arc::new(lv.finish()),
+                        Arc::new(d),
+                        Arc::new(lw),
+                        Arc::new(r),
+                    ],
+                )?)
+            })
+            .collect()
+    }
+
+    /// Batches that each have their own dictionary of view strings with narrow keys.
+    fn dictionary_input(batches: usize) -> Result<Vec<RecordBatch>> {
+        let dictionary =
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8View));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("d", dictionary, false),
+        ]));
+        (0..batches as i64)
+            .map(|i| {
+                let a = Int64Array::from_iter_values(i * ROWS..(i + 1) * ROWS);
+                let keys = Int16Array::from_iter_values((0..ROWS).map(|row| (row % 2000) as i16));
+                let values =
+                    StringViewArray::from_iter_values((0..2000).map(|v| format!("{i}-{v:020}")));
+                let d = DictionaryArray::<Int16Type>::try_new(keys, Arc::new(values))?;
+                Ok(RecordBatch::try_new(
+                    schema.clone(),
+                    vec![Arc::new(a), Arc::new(d)],
                 )?)
             })
             .collect()
@@ -724,26 +905,12 @@ mod tests {
         Ok(expected)
     }
 
-    /// Checks that a channel's batches share no memory with the input and that each column
-    /// keeps at most twice the memory of a compacted copy of its rows.
+    /// Checks that each column of a channel's batches keeps at most twice the memory of a
+    /// compacted copy of its rows.
     ///
     /// A consumer that falls behind holds on to the batches of one channel
     /// while the others are released, so this must hold for each channel.
-    fn assert_compact(input: &[RecordBatch], channel: usize, output: &[RecordBatch]) -> Result<()> {
-        let input_ranges = batch_ranges(input);
-        let shared = batch_ranges(output)
-            .into_iter()
-            .filter(|out| {
-                input_ranges
-                    .iter()
-                    .any(|r| out.start < r.end && r.start < out.end)
-            })
-            .count();
-        assert_eq!(
-            shared, 0,
-            "channel {channel} shares {shared} buffers with the input"
-        );
-
+    fn assert_compact(channel: usize, output: &[RecordBatch]) -> Result<()> {
         for (i, batch) in output.iter().enumerate() {
             let indices = UInt32Array::from_iter_values(0..batch.num_rows() as u32);
             let copy = take_record_batch(batch, &indices)?;
@@ -753,6 +920,7 @@ mod tests {
                 .iter()
                 .zip(batch.columns().iter().zip(copy.columns()))
             {
+                assert_uses_values(field.name(), &column.to_data());
                 let retained = column.get_array_memory_size();
                 // `take` still shares view payloads, so they are compacted separately.
                 let compact = compact_payload(Arc::clone(copy))?.get_array_memory_size();
@@ -766,12 +934,65 @@ mod tests {
         Ok(())
     }
 
+    /// Checks that the view strings and list view values nested in a column are used.
+    ///
+    /// A `take` keeps all of them, so the compacted copy cannot be relied on for these.
+    fn assert_uses_values(name: &str, data: &ArrayData) {
+        let array = make_array(data.clone());
+        match data.data_type() {
+            DataType::Utf8View => {
+                let views = array.as_string_view();
+                let held: usize = views.data_buffers().iter().map(Buffer::capacity).sum();
+                let used = views.total_buffer_bytes_used();
+                assert!(
+                    held <= 2 * used,
+                    "column {name} holds {held} bytes for {used} used"
+                );
+            }
+            // Unused values can be arbitrarily large, so none are allowed.
+            DataType::ListView(_) => {
+                let lists = array.as_list_view::<i32>();
+                let used: usize = lists.sizes().iter().map(|size| *size as usize).sum();
+                let held = lists.values().len();
+                assert!(
+                    held <= used,
+                    "column {name} holds {held} values for {used} used"
+                );
+            }
+            _ => {}
+        }
+        for child in data.child_data() {
+            assert_uses_values(name, child);
+        }
+    }
+
+    /// Checks that a channel's batches share no memory with the input.
+    ///
+    /// This only holds when every channel receives a small part of each input batch,
+    /// since the coalescer otherwise keeps sharing view payloads it mostly uses.
+    fn assert_not_shared(input: &[RecordBatch], channel: usize, output: &[RecordBatch]) {
+        let input_ranges = batch_ranges(input);
+        let shared = batch_ranges(output)
+            .into_iter()
+            .filter(|out| {
+                input_ranges
+                    .iter()
+                    .any(|r| out.start < r.end && r.start < out.end)
+            })
+            .count();
+        assert_eq!(
+            shared, 0,
+            "channel {channel} shares {shared} buffers with the input"
+        );
+    }
+
     /// Shuffles the input by `column` and checks the output of every channel.
     async fn assert_shuffle_compact(
         plan: Arc<dyn ExecutionPlan>,
         input: &[RecordBatch],
         column: &str,
         channels: usize,
+        skewed: bool,
     ) -> Result<Capture> {
         let schema = input[0].schema();
         let partitioning = hash(&schema, column, channels)?;
@@ -782,7 +1003,10 @@ mod tests {
                 concat_batches(&schema, output)?,
                 concat_batches(&schema, &expected)?
             );
-            assert_compact(input, channel, output)?;
+            assert_compact(channel, output)?;
+            if !skewed {
+                assert_not_shared(input, channel, output);
+            }
         }
         Ok(capture)
     }
@@ -821,7 +1045,8 @@ mod tests {
         let input = input(64)?;
         let capture = shuffle(memory(&input)?, TaskStreamWriteState::Active).await?;
         for (channel, output) in capture.channels.iter().enumerate() {
-            assert_compact(&input, channel, output)?;
+            assert_compact(channel, output)?;
+            assert_not_shared(&input, channel, output);
         }
         Ok(())
     }
@@ -830,7 +1055,8 @@ mod tests {
     #[tokio::test]
     async fn hash_shuffle_output_of_one_input_batch_does_not_retain_it() -> Result<()> {
         for (input, column) in [(input(1)?, "a"), (nested_input(1, ROWS)?, "s")] {
-            let capture = assert_shuffle_compact(memory(&input)?, &input, column, CHANNELS).await?;
+            let capture =
+                assert_shuffle_compact(memory(&input)?, &input, column, CHANNELS, false).await?;
             assert!(capture.channels.iter().all(|output| output.len() == 1));
         }
         Ok(())
@@ -843,7 +1069,7 @@ mod tests {
             (input_with_rows(4, 8 * ROWS)?, "a"),
             (nested_input(4, 8 * ROWS)?, "s"),
         ] {
-            assert_shuffle_compact(stream(&input, false)?, &input, column, 4).await?;
+            assert_shuffle_compact(stream(&input, false)?, &input, column, 4, false).await?;
         }
         Ok(())
     }
@@ -861,7 +1087,7 @@ mod tests {
             (nested_input(1, 256)?, nested_input(1, 16 * ROWS)?, "s"),
         ] {
             let input = [small, large].concat();
-            assert_shuffle_compact(stream(&input, false)?, &input, column, 4).await?;
+            assert_shuffle_compact(stream(&input, false)?, &input, column, 4, false).await?;
         }
         Ok(())
     }
@@ -870,7 +1096,113 @@ mod tests {
     #[tokio::test]
     async fn hash_shuffle_output_of_many_string_batches_is_compact() -> Result<()> {
         let input = nested_input(32, ROWS)?;
-        assert_shuffle_compact(memory(&input)?, &input, "s", 4).await?;
+        assert_shuffle_compact(memory(&input)?, &input, "s", 4, false).await?;
+        Ok(())
+    }
+
+    /// The first output batch ends inside an input batch whose long strings all come later.
+    #[tokio::test]
+    async fn hash_shuffle_output_ending_inside_a_partitioned_batch_does_not_retain_the_rest()
+    -> Result<()> {
+        let input = skewed_input(&[(4000, 0), (200, 0), (4096, 32)])?;
+        let capture = assert_shuffle_compact(stream(&input, false)?, &input, "k", 2, true).await?;
+        assert!(capture.channels.iter().any(|output| output.len() == 2));
+        Ok(())
+    }
+
+    /// Concatenating the dictionaries of many input batches would overflow their keys.
+    #[tokio::test]
+    async fn hash_shuffle_output_of_batches_with_their_own_dictionaries_is_compact() -> Result<()> {
+        // Each output batch takes rows from 32 input batches, each with 2000 values.
+        let input = dictionary_input(40)?;
+        let schema = input[0].schema();
+        let partitioning = hash(&schema, "a", CHANNELS)?;
+        let capture =
+            shuffle_with(memory(&input)?, partitioning, TaskStreamWriteState::Active).await?;
+        let expected = expected(&input, vec![col("a", &schema)?], CHANNELS)?;
+        // Concatenating the expected batches would overflow too, so the values are decoded.
+        let decode = |batches: &[RecordBatch]| -> Result<Vec<ArrayRef>> {
+            let columns = batches
+                .iter()
+                .map(|batch| {
+                    let d = cast(batch.column(1), &DataType::Utf8View)?;
+                    Ok(vec![Arc::clone(batch.column(0)), d])
+                })
+                .collect::<Result<Vec<_>>>()?;
+            (0..2)
+                .map(|i| {
+                    let parts: Vec<&dyn Array> = columns.iter().map(|c| c[i].as_ref()).collect();
+                    Ok(concat(&parts)?)
+                })
+                .collect()
+        };
+        for (channel, (output, expected)) in capture.channels.iter().zip(expected).enumerate() {
+            assert_eq!(decode(output)?, decode(&expected)?);
+            assert_compact(channel, output)?;
+            assert_not_shared(&input, channel, output);
+        }
+        Ok(())
+    }
+
+    /// The coalescer merges a large whole input batch into a small buffered one.
+    #[tokio::test]
+    async fn round_robin_shuffle_output_of_large_input_batch_after_small_one_does_not_retain_it()
+    -> Result<()> {
+        let input = [nested_input(1, 100)?, nested_input(1, 4 * ROWS)?].concat();
+        let schema = input[0].schema();
+        let partitioning = ShufflePartitioning::RoundRobinBatch(1);
+        let capture = shuffle_with(
+            stream(&input, false)?,
+            partitioning,
+            TaskStreamWriteState::Active,
+        )
+        .await?;
+        let output = &capture.channels[0];
+        assert_eq!(
+            concat_batches(&schema, output)?,
+            concat_batches(&schema, &input)?
+        );
+        assert_compact(0, output)?;
+        Ok(())
+    }
+
+    /// Row round-robin partitioning takes each channel's rows into new batches, which
+    /// still share the input's view strings.
+    #[tokio::test]
+    async fn row_round_robin_shuffle_output_does_not_retain_input_batches() -> Result<()> {
+        let input = nested_input(8, ROWS)?;
+        let partitioning = ShufflePartitioning::RoundRobinRow(4);
+        let capture =
+            shuffle_with(memory(&input)?, partitioning, TaskStreamWriteState::Active).await?;
+        let rows: usize = capture
+            .channels
+            .iter()
+            .flatten()
+            .map(|b| b.num_rows())
+            .sum();
+        assert_eq!(rows, 8 * ROWS as usize);
+        for (channel, output) in capture.channels.iter().enumerate() {
+            assert_compact(channel, output)?;
+        }
+        Ok(())
+    }
+
+    /// Round-robin partitioning passes on whole input batches, which need no copy.
+    #[tokio::test]
+    async fn round_robin_shuffle_passes_large_input_batches_through() -> Result<()> {
+        let input = input(8)?;
+        let partitioning = ShufflePartitioning::RoundRobinBatch(4);
+        let capture =
+            shuffle_with(memory(&input)?, partitioning, TaskStreamWriteState::Active).await?;
+        let input_ranges = batch_ranges(&input);
+        for output in &capture.channels {
+            assert_eq!(output.len(), 2);
+            assert!(
+                batch_ranges(output)
+                    .iter()
+                    .all(|range| input_ranges.contains(range))
+            );
+        }
         Ok(())
     }
 
