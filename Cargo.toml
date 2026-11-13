@@ -74,6 +74,7 @@ paste = "1.0.15"
 proc-macro2 = "1.0.106"
 prettyplease = "0.3.0"
 phf = { version = "0.14.0", features = ["macros"] }
+ryu = "1.0.23"
 either = "1.16.0"
 num-bigint = "0.5.1"
 rand = "0.10.1"

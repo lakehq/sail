@@ -1,4 +1,5 @@
 import re
+from decimal import Decimal
 
 import pyarrow as pa
 import pytest
@@ -69,6 +70,54 @@ def test_cast_correlation_keeps_aliased_window_partition_keys(spark, cast_below_
         (1, 10, 1 if cast_below_window else 3),
         (2, 10, None),
     ]
+
+
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
+def test_double_to_decimal_correlation_groups_by_the_rounded_key(spark):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        outer = spark.sql("SELECT CAST(k AS DECIMAL(10,2)) AS k FROM VALUES (0.14), (0.15), (0.16) AS o(k)").alias("o")
+        inner = spark.sql("SELECT * FROM VALUES (0.141D), (0.144D), (0.145D), (0.149D) AS i(d)").alias("i")
+        matching = inner.where(F.col("i.d").cast("decimal(10,2)") == F.col("o.k").outer())
+        result = outer.select("k", matching.select(F.count("*")).scalar().alias("n")).orderBy("k")
+        assert [tuple(row) for row in result.collect()] == [
+            (Decimal("0.14"), 2),
+            (Decimal("0.15"), 2),
+            (Decimal("0.16"), 0),
+        ]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")
+@pytest.mark.parametrize("cast_below_window", [True, False])
+def test_double_to_decimal_correlation_keeps_aliased_window_partition_keys(spark, cast_below_window):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        outer = spark.sql(
+            "SELECT CAST(k AS DECIMAL(10,2)) AS k, g FROM VALUES (0.14, 10), (0.14, 20), (0.15, 10), (0.16, 10) AS o(k, g)"
+        ).alias("o")
+        inner = spark.sql(
+            "SELECT * FROM VALUES (0.141D, 10, 1), (0.144D, 10, 2), (0.141D, 20, 3), (0.144D, 20, 4), (0.145D, 10, 5)"
+            " AS i(d, g, v)"
+        ).alias("i")
+        matching = inner.where(F.col("i.g") == F.col("o.g").outer())
+        if cast_below_window:
+            matching = matching.where(F.col("i.d").cast("decimal(10,2)") == F.col("o.k").outer())
+        matching = matching.alias("a").withColumn("w", F.row_number().over(Window.orderBy("v")))
+        if not cast_below_window:
+            matching = matching.where(F.col("a.d").cast("decimal(10,2)") == F.col("o.k").outer())
+        result = outer.select("k", "g", matching.select(F.max("w")).scalar().alias("n")).orderBy("k", "g")
+        assert [tuple(row) for row in result.collect()] == [
+            (Decimal("0.14"), 10, 2),
+            (Decimal("0.14"), 20, 2),
+            (Decimal("0.15"), 10, 1 if cast_below_window else 3),
+            (Decimal("0.16"), 10, None),
+        ]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
 
 
 @pytest.mark.spark(version=">=4", reason="Uses DataFrame.scalar")

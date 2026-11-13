@@ -11,6 +11,7 @@ use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::conversion::spark_cast_string_to_int32::SparkCastStringToInt32;
+use sail_function::scalar::conversion::spark_float_to_decimal::SparkFloatToDecimal;
 use sail_function::scalar::conversion::spark_to_string::{
     SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View,
 };
@@ -354,6 +355,14 @@ impl PlanResolver<'_> {
             {
                 cast_struct_positionally(expr, &from, &to, is_try)
             }
+            (DataType::Float32 | DataType::Float64, DataType::Decimal128(precision, scale), _) => {
+                ScalarUDF::new_from_impl(SparkFloatToDecimal::new(
+                    precision,
+                    scale,
+                    is_try || !self.config.ansi_mode,
+                ))
+                .call(vec![expr])
+            }
             (
                 from,
                 DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale),
@@ -620,6 +629,11 @@ fn need_rename_cast(expr: &expr::Expr) -> bool {
         }
         expr::Expr::Cast(cast) => need_rename_cast(cast.expr.as_ref()),
         expr::Expr::TryCast(try_cast) => need_rename_cast(try_cast.expr.as_ref()),
+        expr::Expr::ScalarFunction(function)
+            if function.func.inner().is::<SparkFloatToDecimal>() =>
+        {
+            function.args.first().is_none_or(need_rename_cast)
+        }
         expr::Expr::ScalarFunction(function)
             if function
                 .func

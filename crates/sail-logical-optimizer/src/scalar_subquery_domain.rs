@@ -6,6 +6,7 @@ use datafusion_common::{Column, Result};
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator};
+use sail_function::scalar::conversion::spark_float_to_decimal::SparkFloatToDecimal;
 use sail_logical_plan::seeded_random::{SeededRandomNode, is_reproducible_seeded_random_call};
 
 /// Evaluate non-equality scalar aggregates over the distinct outer values.
@@ -319,10 +320,7 @@ pub(crate) fn correlated_equality_key(expr: &Expr, cast: bool) -> Option<&Column
     fn key(expr: &Expr, cast: bool) -> Option<&Column> {
         match expr {
             Expr::Column(column) => Some(column),
-            Expr::Cast(c) if cast => match c.expr.as_ref() {
-                Expr::Column(column) => Some(column),
-                _ => None,
-            },
+            _ if cast => cast_column(expr),
             _ => None,
         }
     }
@@ -330,6 +328,29 @@ pub(crate) fn correlated_equality_key(expr: &Expr, cast: bool) -> Option<&Column
     match (key(&binary.left, cast), key(&binary.right, cast)) {
         (Some(column), _) if outer(&binary.right) => Some(column),
         (_, Some(column)) if outer(&binary.left) => Some(column),
+        _ => None,
+    }
+}
+
+/// The column that a key casts. Sail plans a strict FLOAT or DOUBLE to DECIMAL cast
+/// as a function that rounds like Spark, so key it like the cast it replaces; its
+/// null-on-overflow form, like TRY_CAST, is not a key.
+pub(crate) fn cast_column(expression: &Expr) -> Option<&Column> {
+    let input = match expression {
+        Expr::Cast(cast) => cast.expr.as_ref(),
+        Expr::ScalarFunction(function)
+            if function
+                .func
+                .inner()
+                .downcast_ref::<SparkFloatToDecimal>()
+                .is_some_and(|function| !function.null_on_overflow()) =>
+        {
+            function.args.first()?
+        }
+        _ => return None,
+    };
+    match input {
+        Expr::Column(column) => Some(column),
         _ => None,
     }
 }
@@ -352,4 +373,28 @@ fn has_unreproducible_volatile_expression(plan: &LogicalPlan) -> Result<bool> {
         }
         Ok(false)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::DataType;
+    use datafusion_expr::{ScalarUDF, binary_expr, col, out_ref_col};
+
+    use super::*;
+
+    #[test]
+    fn strict_float_to_decimal_cast_is_a_correlation_key() {
+        let equality = |null_on_overflow| {
+            binary_expr(
+                ScalarUDF::from(SparkFloatToDecimal::new(10, 2, null_on_overflow))
+                    .call(vec![col("d")]),
+                Operator::Eq,
+                out_ref_col(DataType::Decimal128(10, 2), "k"),
+            )
+        };
+        let d = Column::from_name("d");
+        assert_eq!(correlated_equality_key(&equality(false), true), Some(&d));
+        assert_eq!(correlated_equality_key(&equality(true), true), None);
+        assert_eq!(correlated_equality_key(&equality(false), false), None);
+    }
 }
