@@ -35,6 +35,22 @@ jobs:
       - name: Run Cargo Test
         run: cargo nextest run --no-fail-fast
 
+      # `nextest list` to get the binaries just built, then iterate and remove them.
+      # Without, cached binaries sit alongside newly built ones of the same name,
+      # which grcov reads and reports unexecuted.
+      - name: Remove stale test binaries
+        run: |
+          cargo nextest list --list-type binaries-only --message-format json \
+            | jq -r '."rust-binaries"[] | "\(."binary-name")\t\(."binary-path")"' \
+            | while IFS=$'\t' read -r name path; do
+                for f in "$(dirname "$path")/$name"-*; do
+                  if [[ -x "$f" && "$(basename "$f")" != *.* && "$f" != "$path" ]]; then
+                    echo "Removing $f"
+                    rm -f "$f"
+                  fi
+                done
+              done
+
       # Generate coverage report after unit tests (runs in PRs and pushes)
       - name: Generate Rust unit coverage report
         run: |
