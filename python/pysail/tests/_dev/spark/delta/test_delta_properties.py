@@ -49,7 +49,7 @@ def test_property_canonicalization_and_unset_restores_checkpoint_default(spark, 
             "delta.checkpointInterval": str(checkpoint_interval),
             "key": "value1",
         }
-        if weeks == 2:
+        if key == "kEy":
             expected["kEy"] = "value2"
         assert _effective(path, "metaData")["configuration"] == expected
     spark.sql(f"ALTER TABLE {name} UNSET TBLPROPERTIES ('{interval}', 'kEy')").collect()
@@ -61,7 +61,8 @@ def test_property_canonicalization_and_unset_restores_checkpoint_default(spark, 
     # The first post-unset checkpoint must use the default interval 10, not the previous 20.
     for value in range(1, 8):
         spark.sql(f"INSERT INTO {name} VALUES ({value})").collect()  # noqa: S608
-    assert max(_commits(path)) == 10
+    expected_checkpoint_version = 10
+    assert max(_commits(path)) == expected_checkpoint_version
     assert [file.name for file in (path / "_delta_log").glob("*.checkpoint.parquet")] == [
         "00000000000000000010.checkpoint.parquet"
     ]
@@ -81,11 +82,13 @@ def test_property_validation_is_atomic(spark, lifecycle_table, key, value, error
     name, path = lifecycle_table
     spark.sql(f"INSERT INTO {name} VALUES (1)").collect()  # noqa: S608
     rows, schema, before = spark.table(name).collect(), spark.table(name).schema, _tree(path)
-    with _settings(spark, **{"spark.databricks.delta.allowArbitraryProperties.enabled": "false"}):
-        with pytest.raises(Exception, match=error):
-            spark.sql(
-                f"ALTER TABLE {name} SET TBLPROPERTIES ('custom.valid' = 'must-not-persist', '{key}' = '{value}')"
-            ).collect()
+    with (
+        _settings(spark, **{"spark.databricks.delta.allowArbitraryProperties.enabled": "false"}),
+        pytest.raises(Exception, match=error),
+    ):
+        spark.sql(
+            f"ALTER TABLE {name} SET TBLPROPERTIES ('custom.valid' = 'must-not-persist', '{key}' = '{value}')"
+        ).collect()
     _assert_unchanged(spark, name, path, before, rows, schema)
 
 
@@ -94,7 +97,7 @@ def test_property_update_rejects_temporary_view_without_mutation(spark, lifecycl
     name, path = lifecycle_table
     view = "maintenance_lifecycle_view"
     if sql_view:
-        spark.sql(f"CREATE TEMP VIEW {view} AS SELECT * FROM {name}").collect()
+        spark.sql(f"CREATE TEMP VIEW {view} AS SELECT * FROM {name}").collect()  # noqa: S608
     else:
         spark.table(name).createOrReplaceTempView(view)
     try:
@@ -134,8 +137,9 @@ def test_feature_support_upgrades_reader_writer_dependencies(spark, lifecycle_ta
     assert _effective(path, "protocol") == {"minReaderVersion": 1, "minWriterVersion": 2}
     spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('delta.feature.deletionVectors' = 'supported')").collect()
     protocol = _effective(path, "protocol")
-    assert protocol["minReaderVersion"] == 3
-    assert protocol["minWriterVersion"] == 7
+    expected_reader_version, expected_writer_version = 3, 7
+    assert protocol["minReaderVersion"] == expected_reader_version
+    assert protocol["minWriterVersion"] == expected_writer_version
     assert set(protocol["readerFeatures"]) == {"deletionVectors"}
     assert set(protocol["writerFeatures"]) == {"appendOnly", "invariants", "deletionVectors"}
     assert set(protocol) == {"minReaderVersion", "minWriterVersion", "readerFeatures", "writerFeatures"}
@@ -235,11 +239,13 @@ def test_retention_calendar_interval_forms(spark, property_table, interval):
 def test_invalid_properties_remain_atomic_with_arbitrary_properties_enabled(spark, property_table, key, value, error):
     name, path = property_table
     before = _tree(path)
-    with _settings(spark, **{"spark.databricks.delta.allowArbitraryProperties.enabled": "true"}):
-        with pytest.raises(Exception, match=error):
-            spark.sql(
-                f"ALTER TABLE {name} SET TBLPROPERTIES ('custom.valid'='must-not-persist', '{key}'='{value}')"
-            ).collect()
+    with (
+        _settings(spark, **{"spark.databricks.delta.allowArbitraryProperties.enabled": "true"}),
+        pytest.raises(Exception, match=error),
+    ):
+        spark.sql(
+            f"ALTER TABLE {name} SET TBLPROPERTIES ('custom.valid'='must-not-persist', '{key}'='{value}')"
+        ).collect()
     assert _tree(path) == before
     spark.sql(f"INSERT INTO {name} VALUES (2)").collect()  # noqa: S608
     assert spark.table(name).orderBy("id").collect() == [Row(id=1), Row(id=2)]
@@ -250,9 +256,11 @@ def test_random_prefix_length_does_not_enable_unsupported_layout(spark, property
     spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('delta.randomPrefixLength'='5')").collect()
     assert _effective(path, "metaData")["configuration"]["delta.randomPrefixLength"] == "5"
     before = _tree(path)
-    with _settings(spark, **{"spark.databricks.delta.allowArbitraryProperties.enabled": "true"}):
-        with pytest.raises(Exception, match="randomizeFilePrefixes.*not supported"):
-            spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('delta.randomizeFilePrefixes'='true')").collect()
+    with (
+        _settings(spark, **{"spark.databricks.delta.allowArbitraryProperties.enabled": "true"}),
+        pytest.raises(Exception, match=r"randomizeFilePrefixes.*not supported"),
+    ):
+        spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('delta.randomizeFilePrefixes'='true')").collect()
     assert _tree(path) == before
     spark.sql(f"INSERT INTO {name} VALUES (2)").collect()  # noqa: S608
     assert spark.table(name).orderBy("id").collect() == [Row(id=1), Row(id=2)]
@@ -271,10 +279,12 @@ def test_alter_protocol_metadata_and_alternating_writes(spark, delta_jvm_spark, 
     spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('delta.feature.deletionVectors'='supported')").collect()
     protocol = _effective(path, "protocol")
     writers = {"appendOnly", "invariants", "deletionVectors"}
-    if writer_version == 3:
+    check_constraints_writer_version = 3
+    if writer_version == check_constraints_writer_version:
         writers.add("checkConstraints")
-    assert protocol["minReaderVersion"] == 3
-    assert protocol["minWriterVersion"] == 7
+    expected_reader_version, expected_writer_version = 3, 7
+    assert protocol["minReaderVersion"] == expected_reader_version
+    assert protocol["minWriterVersion"] == expected_writer_version
     assert set(protocol["readerFeatures"]) == {"deletionVectors"}
     assert set(protocol["writerFeatures"]) == writers
     assert _effective(path, "metaData")["configuration"] == {}
@@ -284,13 +294,13 @@ def test_alter_protocol_metadata_and_alternating_writes(spark, delta_jvm_spark, 
     assert _effective(path, "protocol") == protocol
     assert _effective(path, "metaData")["configuration"] == {}
     with classic_spark_mode():
-        assert delta_jvm_spark.sql(f"SELECT id FROM delta.`{path}`").collect() == [Row(id=1)]
+        assert delta_jvm_spark.sql(f"SELECT id FROM delta.`{path}`").collect() == [Row(id=1)]  # noqa: S608
         delta_jvm_spark.sql(f"INSERT INTO delta.`{path}` VALUES (2)").collect()  # noqa: S608
     spark.sql(f"INSERT INTO {name} VALUES (3)").collect()  # noqa: S608
     expected = [Row(id=1), Row(id=2), Row(id=3)]
     assert spark.table(name).orderBy("id").collect() == expected
     with classic_spark_mode():
-        assert delta_jvm_spark.sql(f"SELECT id FROM delta.`{path}` ORDER BY id").collect() == expected
+        assert delta_jvm_spark.sql(f"SELECT id FROM delta.`{path}` ORDER BY id").collect() == expected  # noqa: S608
 
 
 @pytest.mark.parametrize("key", ["checkpoint_interval", "append_only"])
@@ -335,7 +345,7 @@ def test_create_property_aliases_preserve_storage_behavior(spark, tmp_path, ctas
         assert not {"append_only", "checkpoint_interval", "column_mapping_mode"} & configuration.keys()
         assert _effective(path, "metaData")["configuration"]["delta.columnMapping.maxColumnId"] == "1"
         before = _tree(path)
-        with pytest.raises(Exception, match="(?i)append.only"):
+        with pytest.raises(Exception, match=r"(?i)append.only"):
             spark.sql(f"DELETE FROM {name} WHERE id = 1").collect()  # noqa: S608
         assert _tree(path) == before
         for value in (2, 3):
@@ -473,7 +483,7 @@ def test_row_tracking_preserves_row_ids_across_append_and_update(spark, tmp_path
         assert _effective(path, "metaData")["configuration"]["delta.enableRowTracking"] == "true"
         initial = spark.sql(f"SELECT _metadata.row_id AS row_id FROM {name}").first().row_id  # noqa: S608
         spark.sql(f"INSERT INTO {name} VALUES (2)").collect()  # noqa: S608
-        spark.sql(f"UPDATE {name} SET id = 10 WHERE id = 1").collect()
+        spark.sql(f"UPDATE {name} SET id = 10 WHERE id = 1").collect()  # noqa: S608
         rows = spark.sql(f"SELECT id, _metadata.row_id AS row_id FROM {name} ORDER BY id").collect()  # noqa: S608
         assert [row.id for row in rows] == [2, 10]
         assert rows[1].row_id == initial

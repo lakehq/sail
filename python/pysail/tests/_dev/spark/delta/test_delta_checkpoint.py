@@ -890,7 +890,8 @@ def test_checkpoint_retention_filters_expired_actions(spark, delta_jvm_spark, tm
     ).save(str(path))
     spark.range(1, 2).coalesce(1).write.format("delta").mode("append").save(str(path))
     files = _active_files(path)
-    assert len(files) == 2
+    expected_file_count = 2
+    assert len(files) == expected_file_count
     now = int(time.time() * 1000)
     if action_kind == "remove":
         actions = [

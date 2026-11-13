@@ -66,11 +66,13 @@ def test_vacuum_invalid_target_preserves_files(spark, semantic_table, tmp_path, 
         assert target.is_dir()
     before = _tree(tmp_path)
     exists = target.exists()
-    with _settings(spark, **{"spark.databricks.delta.retentionDurationCheck.enabled": "false"}):
-        with pytest.raises(Exception, match=r"(?i)(not.*delta|delta.*not|no.*log|not found|does not exist)"):
-            spark.sql(
-                f"VACUUM '{escape_sql_string_literal(str(target))}' RETAIN 0 HOURS {'DRY RUN' if dry_run else ''}"
-            ).collect()
+    with (
+        _settings(spark, **{"spark.databricks.delta.retentionDurationCheck.enabled": "false"}),
+        pytest.raises(Exception, match=r"(?i)(not.*delta|delta.*not|no.*log|not found|does not exist)"),
+    ):
+        spark.sql(
+            f"VACUUM '{escape_sql_string_literal(str(target))}' RETAIN 0 HOURS {'DRY RUN' if dry_run else ''}"
+        ).collect()
     assert _tree(tmp_path) == before
     assert target.exists() == exists
     assert spark.table(name).collect() == [Row(id=1, part="a")]
@@ -95,13 +97,16 @@ def test_vacuum_invalid_clauses_preserve_table(spark, semantic_table, clause, er
     spark.sql(f"INSERT INTO {name} VALUES (1, 'a')").collect()  # noqa: S608
     (path / "orphan.txt").write_bytes(b"must not delete")
     before = _tree(path)
-    with _settings(
-        spark,
-        **{
-            "spark.databricks.delta.retentionDurationCheck.enabled": "true",
-            "spark.databricks.delta.vacuum.retentionWindowIgnore.enabled": "false",
-        },
-    ), pytest.raises(Exception, match=error):
+    with (
+        _settings(
+            spark,
+            **{
+                "spark.databricks.delta.retentionDurationCheck.enabled": "true",
+                "spark.databricks.delta.vacuum.retentionWindowIgnore.enabled": "false",
+            },
+        ),
+        pytest.raises(Exception, match=error),
+    ):
         spark.sql(f"VACUUM {name} {clause}").collect()
     assert _tree(path) == before
     assert spark.table(name).collect() == [Row(id=1, part="a")]
@@ -114,7 +119,7 @@ def test_maintenance_rejects_views(spark, semantic_table, command, temporary):
     name, path = semantic_table
     spark.sql(f"INSERT INTO {name} VALUES (1, 'a')").collect()  # noqa: S608
     view = "maintenance_view"
-    spark.sql(f"CREATE {'TEMPORARY ' if temporary else ''}VIEW {view} AS SELECT * FROM {name}").collect()
+    spark.sql(f"CREATE {'TEMPORARY ' if temporary else ''}VIEW {view} AS SELECT * FROM {name}").collect()  # noqa: S608
     try:
         before = _tree(path)
         with pytest.raises(Exception, match=_TABLE_NOT_VIEW):

@@ -463,7 +463,7 @@ def test_inspection_refreshes_external_snapshot(spark, delta_jvm_spark, semantic
     name, path = semantic_table
     initial = spark.sql(f"DESCRIBE DETAIL {name}").first()
     initial_history = spark.sql(f"DESCRIBE HISTORY {name}").collect()
-    delta_jvm_spark.sql(f"INSERT INTO delta.`{path}` VALUES (7, 'external')").collect()
+    delta_jvm_spark.sql(f"INSERT INTO delta.`{path}` VALUES (7, 'external')").collect()  # noqa: S608
     delta_jvm_spark.sql(f"ALTER TABLE delta.`{path}` SET TBLPROPERTIES ('comment' = 'external update')").collect()
     detail = spark.sql(f"DESCRIBE DETAIL {name}").first()
     reference = delta_jvm_spark.sql(f"DESCRIBE DETAIL delta.`{path}`").first()

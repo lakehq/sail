@@ -48,8 +48,8 @@ def test_optimize_partition_groups(spark, tmp_path, request, mapping, multiple):
         ).collect()
     before_rows = spark.read.format("delta").load(str(path)).orderBy("id").collect()
     assert before_rows == [
-        Row(id=i, part=p, day=date(2017, 10, 11 if i == 5 else 10))
-        for i, p in [(1, "a"), (2, "b"), (3, None), (4, None), (5, "a")]
+        Row(id=i, part=p, day=date(2017, 10, day))
+        for i, p, day in [(1, "a", 10), (2, "b", 10), (3, None, 10), (4, None, 10), (5, "a", 11)]
         for _ in range(3)
     ]
     files = _active_files(path)
