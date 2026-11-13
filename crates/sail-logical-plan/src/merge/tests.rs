@@ -1,9 +1,9 @@
-use super::*;
-use datafusion_common::ToDFSchema;
 use datafusion_common::arrow::datatypes::{DataType, Field, Schema};
+use datafusion_common::{ToDFSchema, internal_datafusion_err};
 use datafusion_expr::EmptyRelation;
 use sail_common_datafusion::datasource::RowLevelTarget;
 
+use super::*;
 use crate::merge_evaluate::EvaluateOnceNode;
 
 fn expansion(fast_append: bool) -> Result<MergeExpansion> {
@@ -161,8 +161,14 @@ fn merge_consumers_share_source_and_intent_boundaries() -> Result<()> {
             collect_replays(plan, &mut producers);
         }
         assert_eq!(producers.len(), 2);
-        let source = *producers.keys().find(|id| id.ordinal == 0).unwrap();
-        let intent = *producers.keys().find(|id| id.ordinal == 1).unwrap();
+        let source = *producers
+            .keys()
+            .find(|id| id.ordinal == 0)
+            .ok_or_else(|| internal_datafusion_err!("missing source replay"))?;
+        let intent = *producers
+            .keys()
+            .find(|id| id.ordinal == 1)
+            .ok_or_else(|| internal_datafusion_err!("missing intent replay"))?;
         assert_eq!(source.scope, intent.scope);
         let mut ids = vec![];
         consumer_ids(&result.write_plan, &mut ids);

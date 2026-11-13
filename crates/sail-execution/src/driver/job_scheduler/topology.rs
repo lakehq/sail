@@ -250,7 +250,8 @@ mod tests {
         use sail_common_datafusion::replay::ReplayId;
         use sail_physical_plan::replay::ReplayExec;
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
-        let source = UnionExec::try_new(vec![Arc::new(EmptyExec::new(schema)); 4]).unwrap();
+        let empty = Arc::new(EmptyExec::new(schema));
+        let source = UnionExec::try_new(vec![empty; 4]).unwrap();
         let plan = Arc::new(
             ReplayExec::try_new(
                 ReplayId {

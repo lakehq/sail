@@ -71,7 +71,7 @@ def _merge(spark, name, source):
         MERGE INTO {name} t USING ({source}) s ON t.id=s.id
         WHEN MATCHED THEN UPDATE SET msg=s.msg
         WHEN NOT MATCHED THEN INSERT (id,msg) VALUES(s.id,s.msg)
-    """).collect()  # noqa: S608
+    """).collect()
 
 
 def _assert_update(spark, name, path, before, key):
@@ -129,7 +129,7 @@ def test_merge_source_is_evaluated_once(spark, merge_target, tmp_path, source_ki
         source = spark.range(1).select(audited_key.asNondeterministic()("id").alias("id"), sf.lit("new").alias("msg"))
     source.createOrReplaceTempView(source_name)
     try:
-        _merge(spark, name, f"SELECT * FROM {source_name}")
+        _merge(spark, name, f"SELECT * FROM {source_name}")  # noqa: S608
         if source_kind == "audited":
             events = [json.loads(file.read_text()) for file in audit.glob("*.json")]
             assert len(events) == 1, events
@@ -184,7 +184,7 @@ def test_merge_selected_rhs_and_struct_alignment_are_evaluated_once(spark, tmp_p
           'delta.enableChangeDataFeed'='true',
           'delta.enableDeletionVectors'='{str(deletion_vectors).lower()}')
     """).collect()
-    spark.sql(f"INSERT INTO {target} VALUES (1, named_struct('a','old','b','old'), 'old'), (2, NULL, 'old')").collect()
+    spark.sql(f"INSERT INTO {target} VALUES (1, named_struct('a','old','b','old'), 'old'), (2, NULL, 'old')").collect()  # noqa: S608
     spark.sql(f"""
         MERGE INTO {target} t USING (SELECT * FROM VALUES (1), (2), (3) AS source(id)) s ON t.id=s.id
         WHEN MATCHED AND CAST(NULL AS BOOLEAN) THEN UPDATE SET token=raise_error('null clause selected')
@@ -192,13 +192,14 @@ def test_merge_selected_rhs_and_struct_alignment_are_evaluated_once(spark, tmp_p
         WHEN MATCHED THEN UPDATE SET token='second'
         WHEN NOT MATCHED AND s.id=99 THEN INSERT (id,token) VALUES(s.id,raise_error('unselected insert'))
         WHEN NOT MATCHED THEN INSERT (id,payload,token) VALUES(s.id,{function}(s.id),uuid())
-    """).collect()
+    """).collect()  # noqa: S608
     events = [json.loads(file.read_text()) for file in audit.glob("*.json")]
     assert sorted(event["id"] for event in events) == [1, 3], events
     expected = {event["id"]: event["token"] for event in events}
     rows = spark.read.format("delta").load(str(path)).orderBy("id").collect()
     assert [row.id for row in rows] == [1, 2, 3]
-    assert rows[1].payload is None and rows[1].token == "second"
+    assert rows[1].payload is None
+    assert rows[1].token == "second"  # noqa: S105 - clause marker, not a password
     for row in (rows[0], rows[2]):
         assert tuple(row.payload) == (expected[row.id], expected[row.id])
         assert row.token != expected[row.id]
@@ -217,7 +218,7 @@ def test_merge_selected_rhs_and_struct_alignment_are_evaluated_once(spark, tmp_p
 
 
 @pytest.mark.parametrize(
-    "source,condition,count",
+    ("source", "condition", "count"),
     [
         ("SELECT 1 id WHERE false", "true", 0),
         ("SELECT 1 id UNION ALL SELECT 2 id", "true", 2),
@@ -320,7 +321,8 @@ def test_target_only_merge_preserves_untouched_files_and_artifact_metrics(spark,
         assert pq.ParquetFile(path / add["path"]).schema_arrow.names == ["id", "msg"]
     if deletion_vectors:
         assert all((path / name).read_bytes() == contents[name] for name in touched)
-        assert sum(active[name]["deletionVector"]["cardinality"] for name in touched) == 2
+        expected_deleted_rows = 2
+        assert sum(active[name]["deletionVector"]["cardinality"] for name in touched) == expected_deleted_rows
         assert int(metrics["numTargetDeletionVectorsAdded"]) == 1
     else:
         assert set(touched).isdisjoint(active)

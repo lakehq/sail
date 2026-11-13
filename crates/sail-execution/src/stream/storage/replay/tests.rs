@@ -140,7 +140,7 @@ async fn replay_storage_missing_and_corrupt_publication_is_an_error() -> Result<
             2,
         )
         .await?;
-        let path = prefix.child(if kind == 0 {
+        let path = prefix.clone().join(if kind == 0 {
             "manifest.json"
         } else {
             "chunk-00000000000000000001"

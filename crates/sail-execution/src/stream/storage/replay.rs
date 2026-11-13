@@ -198,7 +198,7 @@ async fn put_chunk(store: &dyn ObjectStore, prefix: &Path, index: u64, bytes: &[
     payload.extend_from_slice(bytes);
     store
         .put(
-            &prefix.child(format!("chunk-{index:020}")),
+            &prefix.clone().join(format!("chunk-{index:020}")),
             PutPayload::from(payload),
         )
         .await?;
@@ -251,7 +251,10 @@ async fn upload(
         return exec_err!("replay manifest exceeds limit");
     }
     store
-        .put(&prefix.child("manifest.json"), PutPayload::from(manifest))
+        .put(
+            &prefix.clone().join("manifest.json"),
+            PutPayload::from(manifest),
+        )
         .await?;
     // If closure raced with the final store operation, retract its publication
     // before releasing the tracked upload. Terminal cleanup waits for this.
@@ -295,7 +298,7 @@ pub(super) fn fetch(
         job.check()?;
         let reservation = MemoryConsumer::new("ReplayStorageRead").register(&runtime.memory_pool);
         reservation.try_grow(MANIFEST_LIMIT)?;
-        let path = prefix.child("manifest.json");
+        let path = prefix.clone().join("manifest.json");
         let meta = store.head(&path).await?;
         if meta.size == 0 || meta.size > MANIFEST_LIMIT as u64 {
             return exec_err!("invalid replay manifest length");
@@ -354,7 +357,10 @@ pub(super) fn fetch(
                     }
                     return Ok(None);
                 }
-                let path = state.prefix.child(format!("chunk-{:020}", state.next));
+                let path = state
+                    .prefix
+                    .clone()
+                    .join(format!("chunk-{:020}", state.next));
                 let length = (state.manifest.length - state.next * CHUNK_BYTES as u64)
                     .min(CHUNK_BYTES as u64);
                 if state.store.head(&path).await?.size != length + 4 {

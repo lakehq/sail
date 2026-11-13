@@ -783,11 +783,12 @@ mod tests {
     #[tokio::test]
     async fn replay_zero_argument_volatile_filter_stays_on_its_consumer()
     -> datafusion_common::Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
         use futures::TryStreamExt;
         use sail_common_datafusion::replay::ReplayId;
         use sail_common_datafusion::session::job::JobRunner;
         use sail_execution::job_runner::LocalJobRunner;
-        use std::sync::atomic::{AtomicUsize, Ordering};
 
         for keep in [false, true] {
             for filtered_first in [false, true] {
@@ -880,8 +881,9 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_once_keeps_occurrences_and_short_circuits() -> datafusion_common::Result<()> {
-        use sail_logical_plan::merge_evaluate::evaluate_once;
         use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use sail_logical_plan::merge_evaluate::evaluate_once;
         let rows = Arc::new(AtomicUsize::new(0));
         let audit = create_udf(
             "evaluate_audit",

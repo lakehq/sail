@@ -3,11 +3,12 @@ use std::fmt::Formatter;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::merge_evaluate::evaluate_once;
-use crate::replay::ReplayNode;
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions_aggregate::count::count_udaf;
 use sail_common_datafusion::replay::ReplayId;
+
+use crate::merge_evaluate::evaluate_once;
+use crate::replay::ReplayNode;
 
 mod intent;
 #[cfg(test)]
@@ -774,6 +775,7 @@ fn replay_plan(input: LogicalPlan, id: ReplayId) -> LogicalPlan {
 }
 
 /// Default MERGE expansion: clause-aware join + presence columns + touched files.
+#[expect(clippy::too_many_arguments, reason = "explicit MERGE planning inputs")]
 fn build_default_merge_expansion(
     mut options: MergeIntoOptions,
     target_plan: LogicalPlan,

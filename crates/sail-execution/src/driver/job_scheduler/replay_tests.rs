@@ -1,4 +1,3 @@
-use super::*;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::prelude::SessionContext;
@@ -8,6 +7,7 @@ use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::replay::ReplayId;
 use sail_physical_plan::replay::ReplayExec;
 
+use super::*;
 use crate::driver::job_scheduler::JobSchedulerOptions;
 use crate::driver::{DriverComponents, DriverOptions};
 use crate::id::{DriverId, WorkerId};

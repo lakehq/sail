@@ -84,10 +84,11 @@ impl UserDefinedLogicalNodeCore for ReplayNode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ToDFSchema;
     use datafusion_expr::EmptyRelation;
+
+    use super::*;
 
     #[test]
     fn logical_replay_allows_inferred_nullability_not_payload_changes() -> Result<()> {

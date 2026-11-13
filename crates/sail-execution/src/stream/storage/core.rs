@@ -58,7 +58,7 @@ impl StorageStreamManager {
         let (store, prefix) = self.store_and_prefix(&key, context)?;
         Ok(Box::new(super::replay::ReplayStorageSink::new(
             store,
-            prefix.child("replay"),
+            prefix.join("replay"),
             id,
             schema,
             context.runtime_env().clone(),
@@ -77,7 +77,7 @@ impl StorageStreamManager {
         let (store, prefix) = self.store_and_prefix(&key, context)?;
         Ok(super::replay::fetch(
             store,
-            prefix.child("replay"),
+            prefix.join("replay"),
             id,
             schema,
             context.runtime_env().clone(),

@@ -47,12 +47,14 @@ impl OptimizerRule for ReplayAwarePushDownFilter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
+
     use datafusion::optimizer::OptimizerContext;
     use datafusion_common::tree_node::TreeNode;
     use datafusion_expr::{Extension, LogicalPlanBuilder, col, lit};
     use sail_common_datafusion::replay::ReplayId;
-    use std::sync::Arc;
+
+    use super::*;
 
     #[test]
     fn replay_filter_barrier_keeps_source_optimization_visible() -> Result<()> {
@@ -79,13 +81,13 @@ mod tests {
             })?
             .data;
         let LogicalPlan::Filter(outer) = optimized else {
-            panic!("expected outer filter");
+            return datafusion_common::internal_err!("expected outer filter");
         };
         let LogicalPlan::Filter(inner) = outer.input.as_ref() else {
-            panic!("expected inner filter");
+            return datafusion_common::internal_err!("expected inner filter");
         };
         let LogicalPlan::Extension(extension) = inner.input.as_ref() else {
-            panic!("expected replay boundary");
+            return datafusion_common::internal_err!("expected replay boundary");
         };
         let replay = extension
             .node
@@ -95,7 +97,7 @@ mod tests {
         // The source's filter moved through its projection even though consumer
         // filters remained above the replay boundary.
         let LogicalPlan::Projection(projection) = replay.input().as_ref() else {
-            panic!("source projection must be retained");
+            return datafusion_common::internal_err!("source projection must be retained");
         };
         assert!(matches!(projection.input.as_ref(), LogicalPlan::Filter(_)));
         Ok(())

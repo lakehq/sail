@@ -1,5 +1,6 @@
-use super::*;
 use prost::Message;
+
+use super::*;
 
 #[test]
 fn replay_task_protocol_keeps_named_fixed_attempts() -> ExecutionResult<()> {

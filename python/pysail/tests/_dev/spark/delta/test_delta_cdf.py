@@ -596,10 +596,12 @@ def test_cdf_volatile_rewrites_require_replay(spark, tmp_path, operation):
         assert len(rows) == 1
         assert rows[0].id == 1
         assert rows[0].value != "old"
-        assert _changes(spark, path, 1, 1) == sorted([
-            (1, "old", "update_preimage"),
-            (1, rows[0].value, "update_postimage"),
-        ])
+        assert _changes(spark, path, 1, 1) == sorted(
+            [
+                (1, "old", "update_preimage"),
+                (1, rows[0].value, "update_postimage"),
+            ]
+        )
         return
     with pytest.raises(Exception, match="non-deterministic expressions"):
         rewrite()

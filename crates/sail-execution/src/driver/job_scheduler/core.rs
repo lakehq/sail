@@ -1243,7 +1243,6 @@ mod tests {
     async fn late_unknown_commit_cancels_queued_retry() -> Result<(), Box<dyn std::error::Error>> {
         use std::sync::Arc;
 
-        use crate::replay_integration_tests::test_event_reporter;
         use datafusion::arrow::datatypes::Schema;
         use datafusion::datasource::memory::MemorySourceConfig;
         use datafusion::execution::TaskContext;
@@ -1261,6 +1260,7 @@ mod tests {
         use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
         use crate::driver::{DriverActor, DriverComponents, DriverOptions};
         use crate::id::{DriverId, WorkerId};
+        use crate::replay_integration_tests::test_event_reporter;
         use crate::worker_manager::LocalWorkerManager;
 
         let mut config = AppConfig::load()?;
