@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 import boto3
 import pytest
 
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
+
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
@@ -76,6 +78,27 @@ def _current_schema_field_names(metadata: dict) -> list[str]:
     current_schema_id = metadata["current-schema-id"]
     current_schema = next(schema for schema in metadata["schemas"] if schema["schema-id"] == current_schema_id)
     return [field["name"] for field in current_schema["fields"]]
+
+
+def test_expiration_rejects_glue_without_mutation(spark, moto_endpoint, tmp_path):
+    database = "glue_expiration_db"
+    name = f"{database}.items"
+    spark.sql(f"CREATE DATABASE {database}")
+    try:
+        spark.sql(f"CREATE TABLE {name} (id INT) USING iceberg LOCATION '{escape_sql_string_literal(str(tmp_path))}'")
+        spark.sql(f"INSERT INTO {name} VALUES (1)")
+        spark.sql(f"INSERT OVERWRITE {name} VALUES (2)")
+        client = _glue_client(moto_endpoint)
+        before = client.get_table(DatabaseName=database, Name="items")["Table"]
+        files = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+        with pytest.raises(Exception, match="pointer-authoritative registrations"):
+            spark.sql(f"CALL system.expire_snapshots('{name}', older_than => TIMESTAMP '2099-01-01')").collect()
+        assert client.get_table(DatabaseName=database, Name="items")["Table"] == before
+        assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == files
+        assert [row.id for row in spark.table(name).collect()] == [2]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
 
 
 def test_ctas_records_glue_iceberg_metadata_location(

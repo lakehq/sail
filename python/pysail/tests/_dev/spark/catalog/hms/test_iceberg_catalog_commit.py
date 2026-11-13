@@ -68,6 +68,38 @@ def _assert_uuid_metadata_location(location: str, expected_version: int | None =
         assert filename.startswith(f"{expected_version:05}-"), filename
 
 
+def test_expiration_rejects_hms_without_mutation(spark, jvm_spark, hms_s3_database, hms_s3_env):
+    from pysail.tests._dev.spark.catalog.hms.test_lakehouse_ddl import _iceberg_metadata, _s3_client
+
+    table = "unsupported_expiration"
+    name = f"{hms_s3_database}.{table}"
+    spark.sql(f"CREATE TABLE {name} (id INT) USING iceberg")
+    spark.sql(f"INSERT INTO {name} VALUES (1)")
+    spark.sql(f"INSERT OVERWRITE {name} VALUES (2)")
+    pointer, metadata = _iceberg_metadata(jvm_spark, hms_s3_database, table, hms_s3_env)
+    before = _reference_catalog_table(jvm_spark, hms_s3_database, table)
+    location = urllib.parse.urlparse(metadata["location"])
+    client = _s3_client(hms_s3_env)
+
+    def inventory():
+        return {
+            item["Key"]: client.get_object(Bucket=location.netloc, Key=item["Key"])["Body"].read()
+            for page in client.get_paginator("list_objects_v2").paginate(
+                Bucket=location.netloc, Prefix=location.path.lstrip("/").rstrip("/") + "/"
+            )
+            for item in page.get("Contents", [])
+        }
+
+    files = inventory()
+    with pytest.raises(Exception, match="pointer-authoritative registrations"):
+        spark.sql(f"CALL system.expire_snapshots('{name}', older_than => TIMESTAMP '2099-01-01')").collect()
+    assert _reference_catalog_table(jvm_spark, hms_s3_database, table).equals(before)
+    assert _metadata_location(jvm_spark, hms_s3_database, table) == pointer
+    assert inventory() == files
+    assert [row.id for row in spark.table(name).collect()] == [2]
+    assert [row.id for row in jvm_spark.table(f"iceberg.{name}").collect()] == [2]
+
+
 def test_sail_insert_advances_hms_iceberg_metadata_location(
     spark: SparkSession,
     jvm_spark: SparkSession,

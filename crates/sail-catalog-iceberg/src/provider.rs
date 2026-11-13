@@ -1016,6 +1016,29 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         ]
     }
 
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: sail_catalog::lakehouse::ResolveLakehouseTableRequest,
+    ) -> CatalogResult<sail_catalog::lakehouse::LakehouseResolvedTable> {
+        let config = self.resolved_catalog_config().await?;
+        let result = self
+            .load_table_result(database, table, config.access_delegation())
+            .await?;
+        let session = Self::rest_table_session_ref(&self.name, database, table, config, &result)?;
+        let status = Self::load_table_result_to_status(&self.name, database, table, result)?;
+        let mut resolved = sail_catalog::lakehouse::resolve_lakehouse_table_status(
+            &self.name,
+            request.catalog_table,
+            &status,
+            request.operation,
+            &self.lakehouse_capabilities(),
+        );
+        resolved.execution.rest_session = Some(session);
+        Ok(resolved)
+    }
+
     fn create_table_metadata_requirement(
         &self,
         options: &CreateTableOptions,
@@ -4289,6 +4312,77 @@ mod tests {
         assert!(!serialized.contains("session-token-secret"));
         assert!(!serialized.contains("AKIA-SECRET"));
         assert!(!serialized.contains("storage-secret"));
+    }
+
+    #[tokio::test]
+    async fn maintenance_reloads_access_hints_without_rejecting_configured_access() {
+        use sail_catalog::lakehouse::ResolveLakehouseTableRequest;
+        for hint in ["endpoint", "credentials", "signing"] {
+            let ctx = TestContext::new(Some("test")).await;
+            let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+            let mut initial = create_table_response_with_access_session_hints();
+            initial
+                .as_object_mut()
+                .unwrap()
+                .remove("storage-credentials");
+            initial.as_object_mut().unwrap().remove("config");
+            let mut refreshed = create_table_response_with_access_session_hints();
+            if hint != "credentials" {
+                refreshed
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("storage-credentials");
+            }
+            refreshed.as_object_mut().unwrap().remove("config");
+            if hint == "endpoint" {
+                refreshed["config"] = serde_json::json!({"s3.endpoint": "http://configured-store"});
+            } else if hint == "signing" {
+                refreshed["config"] = serde_json::json!({"s3.remote-signing-enabled": "true"});
+            }
+            Mock::given(method("GET"))
+                .and(path(ctx.path("/namespaces/db1/tables/table1")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(initial))
+                .up_to_n_times(1)
+                .with_priority(1)
+                .expect(1)
+                .mount(&ctx.server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(ctx.path("/namespaces/db1/tables/table1")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(refreshed))
+                .with_priority(2)
+                .expect(1)
+                .mount(&ctx.server)
+                .await;
+            let request = ResolveLakehouseTableRequest {
+                catalog_table: vec!["test".into(), "db1".into(), "table1".into()],
+                operation: sail_common_datafusion::catalog::LakehouseOperation::Maintenance,
+                requested_format: Some(sail_common_datafusion::catalog::LakehouseFormat::Iceberg),
+                options: vec![],
+            };
+            ctx.catalog
+                .resolve_lakehouse_table(&namespace, "table1", request.clone())
+                .await
+                .unwrap();
+            let resolved = ctx
+                .catalog
+                .resolve_lakehouse_table(&namespace, "table1", request)
+                .await
+                .unwrap();
+            assert_eq!(
+                resolved.execution.commit,
+                CommitAuthority::IcebergRestCommit
+            );
+            let session = resolved.execution.rest_session.as_ref().unwrap();
+            assert_eq!(session.remote_signing_enabled, hint == "signing");
+            assert_eq!(
+                session.storage_credential_count,
+                usize::from(hint == "credentials")
+            );
+            let serialized = serde_json::to_string(&resolved.execution).unwrap();
+            assert!(!serialized.contains("storage-secret"));
+            assert!(!serialized.contains("http://configured-store"));
+        }
     }
 
     fn view_result() -> crate::r#gen::LoadViewResult {

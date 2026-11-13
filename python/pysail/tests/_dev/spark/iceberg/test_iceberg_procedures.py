@@ -339,11 +339,11 @@ def test_iceberg_snapshot_procedures(spark, tmp_path):
         assert current_from_ref.current_snapshot_id == snapshot_ids[2]
         assert [row.id for row in spark.table(table_name).orderBy("id").collect()] == [1, 2, 3]
 
-        with pytest.raises(
-            Exception,
-            match="Iceberg system procedure 'expire_snapshots' is recognized but not implemented",
-        ):
-            spark.sql(f"CALL system.expire_snapshots('{table_name}')").collect()
+        # The fixed 2024 timestamps are outside the default retention window. All refs
+        # now point to the tip; older manifest lists expire, but append data stays live.
+        assert tuple(spark.sql(f"CALL system.expire_snapshots('{table_name}')").first()) == (0, 0, 0, 0, 2, 0)
+        assert [row.snapshot_id for row in spark.table(f"{table_name}.snapshots").collect()] == snapshot_ids[-1:]
+        assert [row.id for row in spark.table(table_name).orderBy("id").collect()] == [1, 2, 3]
 
         with pytest.raises(Exception, match="Exactly one of snapshot_id or ref"):
             spark.sql(

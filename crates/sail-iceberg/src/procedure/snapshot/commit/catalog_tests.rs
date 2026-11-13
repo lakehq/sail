@@ -35,6 +35,7 @@ struct PointerCatalog {
     attempts: AtomicUsize,
     fault: CasFault,
     paused: tokio::sync::Notify,
+    marker: Mutex<Option<&'static str>>,
 }
 
 fn unsupported<T>() -> CatalogResult<T> {
@@ -67,7 +68,12 @@ impl CatalogProvider for PointerCatalog {
                     if pointer.is_empty() {
                         vec![]
                     } else {
-                        vec![(METADATA_LOCATION_UNDERSCORE_KEY.into(), pointer)]
+                        let mut properties =
+                            vec![(METADATA_LOCATION_UNDERSCORE_KEY.into(), pointer)];
+                        if let Some(marker) = *self.marker.lock().expect("marker") {
+                            properties.push((marker.into(), "ICEBERG".into()));
+                        }
+                        properties
                     }
                 },
                 is_external: true,
@@ -200,6 +206,7 @@ fn pointer_fixture(
         attempts: AtomicUsize::new(0),
         fault: cas_fault,
         paused: tokio::sync::Notify::new(),
+        marker: Mutex::new(None),
     });
     let manager = CatalogManager::try_new(CatalogManagerOptions {
         catalogs: HashMap::from([("test".into(), catalog.clone() as Arc<dyn CatalogProvider>)]),
@@ -227,6 +234,60 @@ fn pointer_fixture(
     );
     context.commit = CommitAuthority::IcebergMetadataLocationCas;
     (store, catalog, session.task_ctx(), url, context)
+}
+
+#[tokio::test]
+async fn expiration_rejects_pointer_authority_without_mutating_catalog_or_files() {
+    use sail_common_datafusion::lakeprocedure::{LakeProcedureInvocation, LakeProcedureValue};
+
+    use crate::procedure::descriptor::IcebergProcedureType;
+
+    // HMS/Glue and pointer-authoritative memory registrations use table_type;
+    // classification-only providers must not silently fall back to filesystem publication.
+    for marker in ["table_type", "classification"] {
+        let (store, catalog, ctx, url, context) = fixture(CasFault::None, None).await;
+        *catalog.marker.lock().expect("marker") = Some(marker);
+        let before = store
+            .inner
+            .list(None)
+            .try_collect::<Vec<_>>()
+            .await
+            .expect("inventory");
+        let pointer = catalog.pointer.lock().expect("pointer").clone();
+        let procedure = IcebergProcedureType::ExpireSnapshots
+            .descriptor()
+            .expect("descriptor");
+        let schema = procedure.schema();
+        let mut arguments = vec![LakeProcedureValue::Null; procedure.parameters.len()];
+        arguments[0] = LakeProcedureValue::Utf8("items".into());
+        let operation = ExpireSnapshots::from_invocation(&LakeProcedureInvocation {
+            procedure,
+            arguments,
+        })
+        .expect("operation");
+        let error = commit_snapshot_operation(&ctx, &url, &[], Some(&context), operation, schema)
+            .await
+            .expect_err("unsupported pointer authority");
+        assert!(
+            error
+                .to_string()
+                .contains("pointer-authoritative registrations"),
+            "{error}"
+        );
+        assert_eq!(catalog.attempts.load(Ordering::SeqCst), 0);
+        assert_eq!(store.puts.load(Ordering::SeqCst), 0);
+        assert!(store.deletes.lock().expect("deletes").is_empty());
+        assert_eq!(*catalog.pointer.lock().expect("pointer"), pointer);
+        assert_eq!(
+            store
+                .inner
+                .list(None)
+                .try_collect::<Vec<_>>()
+                .await
+                .expect("inventory"),
+            before
+        );
+    }
 }
 
 async fn assert_pointer_is_readable(store: &TestStore, catalog: &PointerCatalog, url: &url::Url) {
