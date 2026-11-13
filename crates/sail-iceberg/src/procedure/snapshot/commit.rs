@@ -98,6 +98,18 @@ pub(crate) async fn commit_snapshot_operation(
             .as_ref()
             .map(|table| &table.execution)
             .or(lakehouse_table);
+        if let ProcedureCommitOperation::ExpireSnapshots(operation) = &operation
+            && operation.clean_expired_metadata()
+            && active_context.is_some_and(|context| {
+                matches!(
+                    context.commit,
+                    sail_common_datafusion::catalog::CommitAuthority::IcebergRestCommit
+                )
+            })
+        {
+            // REST schema/spec removal cannot protect concurrently staged snapshots.
+            return plan_err!("clean_expired_metadata=true is not supported for REST tables");
+        }
         let catalog_info = match strict_catalog.as_ref() {
             Some(table) => CatalogTableInfo {
                 metadata_location: metadata_location_from_properties(

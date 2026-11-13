@@ -70,6 +70,10 @@ fn gc_enabled(metadata: &TableMetadata) -> bool {
 }
 
 impl ExpireSnapshots {
+    pub(crate) fn clean_expired_metadata(&self) -> bool {
+        self.clean_metadata
+    }
+
     pub(crate) fn from_invocation(invocation: &LakeProcedureInvocation) -> Result<Self> {
         let older_than_ms = match invocation.argument("older_than") {
             Some(LakeProcedureValue::TimestampMicros(value)) => Some(value.div_euclid(1000)),
