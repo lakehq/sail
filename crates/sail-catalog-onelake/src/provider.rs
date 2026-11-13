@@ -15,8 +15,8 @@ use sail_catalog::provider::{
     Namespace,
 };
 use sail_catalog_iceberg::{
-    IcebergRestCatalogOptions, IcebergRestCatalogProvider, REST_CATALOG_PROP_PREFIX,
-    REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE,
+    IcebergRestCatalogOptions, IcebergRestCatalogProvider, REST_CATALOG_PROP_URI,
+    REST_CATALOG_PROP_WAREHOUSE,
 };
 use sail_catalog_unity::{UnityCatalogOptions, UnityCatalogProvider};
 use sail_common_datafusion::catalog::{DatabaseStatus, TableKind, TableStatus};
@@ -95,8 +95,7 @@ impl OneLakeCatalogProvider {
                 let uri = ONE_LAKE_ICEBERG_ENDPOINT.to_string();
                 let mut properties = HashMap::new();
                 properties.insert(REST_CATALOG_PROP_URI.to_string(), uri);
-                properties.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), item_path.clone());
-                properties.insert(REST_CATALOG_PROP_PREFIX.to_string(), item_path);
+                properties.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), item_path);
                 Arc::new(IcebergRestCatalogProvider::new(
                     name.clone(),
                     IcebergRestCatalogOptions {
