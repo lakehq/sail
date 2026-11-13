@@ -233,7 +233,7 @@ def test_unrelated_alter_preserves_variant_feature_choice(spark, tmp_path, varia
             spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('custom.marker'='{marker}')").collect()
             assert _effective(path, "protocol") == initial
             assert not any(key.startswith("delta.feature.") for key in _effective(path, "metaData")["configuration"])
-        spark.sql(f"INSERT INTO {name} SELECT 2, parse_json('{{\"x\":2}}')").collect()  # noqa: S608
+        spark.sql(f"INSERT INTO {name} SELECT 2, parse_json('{{\"x\":2}}')").collect()
         assert _effective(path, "protocol") == initial
         assert spark.sql(f"SELECT id, CAST(v AS STRING) AS payload FROM {name} ORDER BY id").collect() == [  # noqa: S608
             Row(id=1, payload=None),
@@ -266,7 +266,7 @@ def test_external_preview_variant_survives_alter_and_cross_engine_writes(spark, 
         ).collect()
         delta_jvm_spark.sql(f"INSERT INTO {target} VALUES (1, NULL)").collect()  # noqa: S608
         # Separate writes retain an all-null file alongside a non-null Variant file.
-        delta_jvm_spark.sql(f"INSERT INTO {target} SELECT 0, parse_json('{{\"x\":0}}')").collect()  # noqa: S608
+        delta_jvm_spark.sql(f"INSERT INTO {target} SELECT 0, parse_json('{{\"x\":0}}')").collect()
     initial = _effective(path, "protocol")
     assert set(initial["readerFeatures"]) == {"variantType-preview"}
     assert not any(key.startswith("delta.feature.") for key in _effective(path, "metaData")["configuration"])
@@ -293,7 +293,7 @@ def test_external_preview_variant_survives_alter_and_cross_engine_writes(spark, 
             assert spark.sql(sail_query).collect() == initial_rows
             with classic_spark_mode():
                 assert delta_jvm_spark.sql(jvm_query).collect() == initial_rows
-        spark.sql(f"INSERT INTO {name} SELECT 2, parse_json('{{\"x\":2}}')").collect()  # noqa: S608
+        spark.sql(f"INSERT INTO {name} SELECT 2, parse_json('{{\"x\":2}}')").collect()
         with classic_spark_mode():
             delta_jvm_spark.sql(f"INSERT INTO {target} VALUES (3, NULL)").collect()  # noqa: S608
             expected = [
@@ -358,7 +358,7 @@ def test_nested_variant_append_and_reopen(spark, delta_jvm_spark, tmp_path, shap
     with classic_spark_mode():
         delta_jvm_spark.sql(f"CREATE TABLE {target} (id BIGINT, v {data_type}) USING delta{properties}").collect()
         for index, expression in enumerate(expressions):
-            delta_jvm_spark.sql(f"INSERT INTO {target} SELECT CAST({index} AS BIGINT), {expression}").collect()  # noqa: S608
+            delta_jvm_spark.sql(f"INSERT INTO {target} SELECT CAST({index} AS BIGINT), {expression}").collect()
         reference_schema = delta_jvm_spark.read.format("delta").load(str(path)).schema
         expected = delta_jvm_spark.sql(f"SELECT id, {projection} FROM {target} ORDER BY id").collect()  # noqa: S608
     if shape != "binary":
@@ -370,7 +370,7 @@ def test_nested_variant_append_and_reopen(spark, delta_jvm_spark, tmp_path, shap
     assert spark.read.format("delta").load(str(path)).schema == reference_schema
     assert spark.sql(f"SELECT id, {projection} FROM {target} ORDER BY id").collect() == expected  # noqa: S608
     for index, expression in enumerate(expressions, start=len(expressions)):
-        spark.sql(f"SELECT CAST({index} AS BIGINT) AS id, {expression} AS v").write.format("delta").mode("append").save(  # noqa: S608
+        spark.sql(f"SELECT CAST({index} AS BIGINT) AS id, {expression} AS v").write.format("delta").mode("append").save(
             str(path)
         )
     expected += [Row(**{**row.asDict(), "id": row.id + len(expressions)}) for row in expected]

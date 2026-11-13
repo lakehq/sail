@@ -501,7 +501,8 @@ def test_random_file_prefixes_follow_property_changes(spark, tmp_path, partition
         ).collect()
         spark.sql(f"INSERT INTO {name} VALUES (2, 'y')").collect()  # noqa: S608
         randomized = {file.path for file in _active_files(path)} - initial
-        assert randomized and all(re.fullmatch(r"[A-Za-z0-9]{5}/.*\.parquet", file) for file in randomized)
+        assert randomized
+        assert all(re.fullmatch(r"[A-Za-z0-9]{5}/.*\.parquet", file) for file in randomized)
         configuration = _effective(path, "metaData")["configuration"]
         assert configuration["delta.randomizeFilePrefixes"] == "true"
         assert configuration["delta.randomPrefixLength"] == "5"

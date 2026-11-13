@@ -101,9 +101,8 @@ def test_vacuum_invalid_clauses_preserve_table(spark, semantic_table, clause, er
             "spark.databricks.delta.retentionDurationCheck.enabled": "true",
             "spark.databricks.delta.vacuum.retentionWindowIgnore.enabled": "false",
         },
-    ):
-        with pytest.raises(Exception, match=error):
-            spark.sql(f"VACUUM {name} {clause}").collect()
+    ), pytest.raises(Exception, match=error):
+        spark.sql(f"VACUUM {name} {clause}").collect()
     assert _tree(path) == before
     assert spark.table(name).collect() == [Row(id=1, part="a")]
 
@@ -265,7 +264,7 @@ def test_unsupported_clone_protects_both_tables(spark, semantic_table, tmp_path,
     ],
 )
 def test_unsupported_native_missing_target_does_not_create_state(spark, semantic_table, tmp_path, command):
-    name, path = semantic_table
+    name, _path = semantic_table
     spark.sql(f"INSERT INTO {name} VALUES (1, 'a')").collect()  # noqa: S608
     missing = tmp_path / "missing"
     dest = tmp_path / "destination"
