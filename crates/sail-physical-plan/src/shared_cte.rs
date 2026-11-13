@@ -979,9 +979,8 @@ mod tests {
     async fn test_shared_cte_reference_yields_when_its_budget_is_spent() -> Result<()> {
         use std::task::Poll;
 
-        use datafusion_common::DataFusionError;
-
         use datafusion::physical_plan::common::collect as common_collect;
+        use datafusion_common::DataFusionError;
 
         const BATCHES: usize = 512;
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));

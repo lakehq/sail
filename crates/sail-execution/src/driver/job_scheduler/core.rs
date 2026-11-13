@@ -1572,10 +1572,9 @@ mod tests {
         use datafusion::datasource::memory::MemorySourceConfig;
         use datafusion::execution::TaskContext;
         use datafusion::physical_expr::expressions::Column;
-        use datafusion::physical_plan::Partitioning;
         use datafusion::physical_plan::repartition::RepartitionExec;
         use datafusion::physical_plan::union::UnionExec;
-        use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+        use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, Partitioning};
         use sail_physical_plan::shared_cte::{SharedCte, SharedCteExec, SharedCteScanExec};
 
         use super::{JobDescriptor, JobScheduler, JobState, TaskAttemptDescriptor, TaskState};
