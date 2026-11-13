@@ -190,6 +190,24 @@ Feature: from_xml parses an XML string into a struct value
         | Parse TIMESTAMP with default format     | '<p><ts>2026-06-17T18:00:00.000</ts></p>' | 'ts TIMESTAMP'     | ts    | 2026-06-17 18:00:00 |
         | Parse TIMESTAMP_NTZ with default format | '<p><ts>2026-06-17T18:00:00.000</ts></p>' | 'ts TIMESTAMP_NTZ' | ts    | 2026-06-17 18:00:00 |
 
+    Scenario Outline: Timestamp parsing with options: <case>
+      When query
+        """
+        SELECT CAST(from_xml('<p><ts><value></ts></p>', 'ts <type>', <options>).ts AS STRING) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                     | value                | type          | options                                          | result              |
+        | default LTZ with options | 2024-01-02T03:04:05  | TIMESTAMP_LTZ | map('mode', 'PERMISSIVE')                        | 2024-01-02 03:04:05 |
+        | default NTZ with options | 2024-01-02T03:04:05  | TIMESTAMP_NTZ | map('mode', 'PERMISSIVE')                        | 2024-01-02 03:04:05 |
+        | invalid default input    | invalid              | TIMESTAMP_LTZ | map('mode', 'PERMISSIVE')                        | NULL                |
+        | NTZ rejects a time zone  | 2024-01-02T03:04:05Z | TIMESTAMP_NTZ | map('mode', 'PERMISSIVE')                        | NULL                |
+        | custom LTZ stays strict  | 2024-01-02T03:04:05  | TIMESTAMP_LTZ | map('timestampFormat', 'dd/MM/yyyy HH:mm:ss')    | NULL                |
+        | custom NTZ stays strict  | 2024-01-02T03:04:05  | TIMESTAMP_NTZ | map('timestampNTZFormat', 'dd/MM/yyyy HH:mm:ss') | NULL                |
+
     Scenario: Custom timestampFormat option
       When query
         """

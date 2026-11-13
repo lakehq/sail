@@ -147,7 +147,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: schema_of_xml"
+        "success": "ok"
       }
     },
     {
@@ -169,7 +169,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: schema_of_xml"
+        "success": "ok"
       }
     },
     {
