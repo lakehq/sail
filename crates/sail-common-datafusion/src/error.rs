@@ -53,6 +53,11 @@ impl fmt::Display for CommitStateUnknownError {
     }
 }
 
+/// A definite rejection invalidated prepared output; retry requires a new plan.
+#[derive(Debug, Error)]
+#[error("commit requires replanning: {0}")]
+pub struct CommitRequiresReplanningError(pub String);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PythonErrorCause {
     pub summary: String,
@@ -101,6 +106,7 @@ pub enum CommonErrorCause {
     Execution(String),
     DeltaTable(String),
     CommitStateUnknown(String),
+    CommitRequiresReplanning(String),
 }
 
 impl fmt::Display for CommonErrorCause {
@@ -131,7 +137,8 @@ impl fmt::Display for CommonErrorCause {
             | CommonErrorCause::Configuration(x)
             | CommonErrorCause::Execution(x)
             | CommonErrorCause::DeltaTable(x)
-            | CommonErrorCause::CommitStateUnknown(x) => write!(f, "{x}"),
+            | CommonErrorCause::CommitStateUnknown(x)
+            | CommonErrorCause::CommitRequiresReplanning(x) => write!(f, "{x}"),
             CommonErrorCause::Python(PythonErrorCause { summary, .. }) => {
                 write!(f, "{summary}")
             }
@@ -141,7 +148,10 @@ impl fmt::Display for CommonErrorCause {
 
 impl CommonErrorCause {
     pub fn is_retryable(&self) -> bool {
-        !matches!(self, Self::CommitStateUnknown(_))
+        !matches!(
+            self,
+            Self::CommitStateUnknown(_) | Self::CommitRequiresReplanning(_)
+        )
     }
 
     fn build<Py: PythonErrorCauseExtractor>(
@@ -209,7 +219,8 @@ impl CommonErrorCause {
                         .collect::<Vec<_>>();
                     causes
                         .iter()
-                        .find(|cause| !cause.is_retryable())
+                        .find(|cause| matches!(cause, Self::CommitStateUnknown(_)))
+                        .or_else(|| causes.iter().find(|cause| !cause.is_retryable()))
                         .or_else(|| causes.first())
                         .cloned()
                         .unwrap_or_else(|| Self::Unknown("empty error collection".to_string()))
@@ -229,6 +240,10 @@ impl CommonErrorCause {
 
         if let Some(e) = error.downcast_ref::<CommitStateUnknownError>() {
             return Self::CommitStateUnknown(e.to_string());
+        }
+
+        if let Some(e) = error.downcast_ref::<CommitRequiresReplanningError>() {
+            return Self::CommitRequiresReplanning(e.to_string());
         }
 
         if let Some(e) = error.source() {
@@ -259,6 +274,66 @@ mod tests {
         fn extract(_: &(dyn Error + 'static)) -> Option<PythonErrorCause> {
             None
         }
+    }
+
+    #[test]
+    fn replanning_cause_survives_wrappers_and_serialization() {
+        fn rejection() -> DataFusionError {
+            DataFusionError::External(Box::new(CommitRequiresReplanningError(
+                "prepared output is stale".into(),
+            )))
+        }
+        for error in [
+            rejection(),
+            DataFusionError::Context("commit failed".into(), Box::new(rejection())),
+            DataFusionError::Shared(std::sync::Arc::new(rejection())),
+            DataFusionError::ArrowError(
+                Box::new(ArrowError::ExternalError(Box::new(rejection()))),
+                None,
+            ),
+            DataFusionError::Collection(vec![
+                DataFusionError::Execution("worker disconnected".into()),
+                rejection(),
+            ]),
+        ] {
+            let cause = CommonErrorCause::new::<NoPythonError>(&error);
+            assert!(!cause.is_retryable());
+            let json = serde_json::to_value(&cause).unwrap();
+            assert_eq!(
+                json,
+                serde_json::json!({
+                    "commitRequiresReplanning": "commit requires replanning: prepared output is stale"
+                })
+            );
+            let remote = DataFusionError::External(Box::new(RemoteError {
+                cause: serde_json::from_value(json).unwrap(),
+            }));
+            assert!(matches!(CommonErrorCause::new::<NoPythonError>(&remote),
+                CommonErrorCause::CommitRequiresReplanning(message)
+                    if message == "commit requires replanning: prepared output is stale"));
+        }
+        assert!(
+            CommonErrorCause::new::<NoPythonError>(&DataFusionError::Execution(
+                "worker disconnected".into()
+            ))
+            .is_retryable()
+        );
+    }
+
+    #[test]
+    fn unknown_commit_takes_precedence_over_definite_rejection() {
+        let error = DataFusionError::Collection(vec![
+            DataFusionError::External(Box::new(CommitRequiresReplanningError(
+                "stale output".into(),
+            ))),
+            DataFusionError::External(Box::new(CommitStateUnknownError::from(
+                "response lost".to_string(),
+            ))),
+        ]);
+        assert!(matches!(
+            CommonErrorCause::new::<NoPythonError>(&error),
+            CommonErrorCause::CommitStateUnknown(_)
+        ));
     }
 
     #[test]
