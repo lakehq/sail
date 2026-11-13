@@ -11,9 +11,7 @@ use datafusion::arrow::datatypes::{
 use datafusion::arrow::error::ArrowError;
 use itertools::Itertools;
 use parquet_variant_compute::VariantType;
-use sail_common_datafusion::variant::{
-    is_marked_variant_storage_type, variant_metadata_field,
-};
+use sail_common_datafusion::variant::{is_marked_variant_storage_type, variant_metadata_field};
 
 use crate::spec::schema::{
     ArrayType, DataType, MapType, MetadataValue, PrimitiveType, StructField, StructType,
@@ -385,11 +383,7 @@ mod tests {
                     )]),
                     nullable,
                 ),
-                StructField::new(
-                    "items",
-                    ArrayType::new(variant.clone(), nullable),
-                    nullable,
-                ),
+                StructField::new("items", ArrayType::new(variant.clone(), nullable), nullable),
                 StructField::new(
                     "mapping",
                     MapType::new(DataType::STRING, variant, nullable),
@@ -451,7 +445,10 @@ mod tests {
                 true,
             ),
         ]);
-        assert_eq!(StructType::try_from(&ArrowSchema::try_from(&nested)?)?, nested);
+        assert_eq!(
+            StructType::try_from(&ArrowSchema::try_from(&nested)?)?,
+            nested
+        );
         Ok(())
     }
 
