@@ -955,8 +955,7 @@ fn build_shared_cte_job_graph(
             .data()
     };
     // A reference reads the partitions of the stage at its own pace, with any shuffle
-    // backend. The stage runs with the stages that read it, produces its output when a
-    // reference asks for rows that no reference has read yet, and returns its error only
+    // backend. The stage runs with the stages that read it, and returns its error only
     // to the references that read up to it.
     // A volatile CTE with references that cannot run with its stage is materialized by
     // the shuffle backend, as one channel per partition for the shuffle service, which

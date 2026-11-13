@@ -386,8 +386,7 @@ impl TaskStreamWriter for MultiChannelTaskStreamWriter {
         let sinks = match &self.output.locator {
             TaskOutputLocator::Pipelined { replicas } | TaskOutputLocator::Shared { replicas } => {
                 let shared = matches!(self.output.locator, TaskOutputLocator::Shared { .. });
-                // A shared output has one channel, since a batch that is written to a channel
-                // whose replicas do not ask for it would wait for them.
+                // A shared output has one channel.
                 debug_assert!(!shared || channels == 1);
                 try_join_all((0..channels).map(|channel| {
                     self.streams.create_local_stream(

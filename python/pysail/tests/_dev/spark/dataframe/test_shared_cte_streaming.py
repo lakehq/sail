@@ -5,8 +5,9 @@ Spark evaluates a non-deterministic CTE once for all of its references, and inli
 deterministic CTE into each reference (InlineCTE). Sail may evaluate any CTE once for
 several references, but the results must be those of an engine that evaluates a
 deterministic CTE per reference: every reference reads all rows of one evaluation, a
-volatile CTE is evaluated once, a query fails only if it reads a row that fails, and a
-reference that is never read does not evaluate the CTE.
+volatile CTE is evaluated once, and a query fails only if it reads a row that fails. In
+local mode, a reference that is never read does not evaluate the CTE. In cluster mode,
+the stage of a shared CTE starts when it is scheduled, as every other stage does.
 
 Spark materializes a non-deterministic CTE in full in a shuffle before any reference
 reads it, so it fails on a row that no reference reads (for example under a LIMIT, or
@@ -20,13 +21,8 @@ import pytest
 
 from pysail.testing.spark.utils.common import is_jvm_spark
 
-# The query fails in Sail cluster mode as it should, but a retried task attempt can replace the
-# error with a conflict between attempts.
-# TODO: report the error of the failed task in cluster mode.
 LOCAL_CLUSTER = os.environ.get("SAIL_MODE") == "local-cluster"
-# The shuffle backends that store the output of a stage outside the workers.
-STORED_SHUFFLE = LOCAL_CLUSTER and os.environ.get("SAIL_CLUSTER__SHUFFLE_BACKEND__TYPE") in ("storage", "celeborn")
-DIVISION_BY_ZERO = "(?i)division by zero|different attempt" if LOCAL_CLUSTER else "(?i)division by zero"
+DIVISION_BY_ZERO = "(?i)division by zero"
 
 # Wide rows, so that one evaluation of a CTE is about 50 MB of Arrow data.
 ROWS = 400_000
@@ -232,9 +228,10 @@ def test_limits_over_volatile_cte_read_one_evaluation(spark, counted):
         "FROM (SELECT * FROM c LIMIT 10) x JOIN (SELECT * FROM c LIMIT 10) y ON x.id = y.id"
     )
     assert rows(spark, query) == [(0, True, True)]
-    if not is_jvm_spark():
-        # Spark evaluates the whole CTE before the references read it. Sail stops evaluating
-        # it once every reference has stopped reading.
+    if not is_jvm_spark() and not LOCAL_CLUSTER:
+        # Spark evaluates the whole CTE before the references read it. Sail local mode stops
+        # evaluating it once every reference has stopped reading. In cluster mode, the stage
+        # of the CTE runs ahead of its references, as every other stage does.
         assert counted() < ROWS // 4
 
 
@@ -269,19 +266,11 @@ def test_cte_is_not_evaluated_when_the_other_join_side_is_empty(spark, counted, 
         "JOIN c x ON e.k = x.k JOIN c y ON x.k = y.k"
     )
     assert rows(spark, query) == [(0, None)]
-    if not is_jvm_spark():
+    if not is_jvm_spark() and not LOCAL_CLUSTER:
         # Spark may evaluate a CTE in a stage of its own before it finds the other side empty.
-        # Sail cluster mode starts the stage below the shuffle of an aggregate body before it
-        # finds the other side empty, as it does without sharing, but evaluates the body once,
-        # or once for each reference when the shuffle output is stored, as without sharing.
-        # With a stored shuffle output, a volatile body is evaluated once in a stage of its
-        # own before the other side is found empty, as Spark does.
-        if cte == "aggregate-body" and LOCAL_CLUSTER:
-            assert counted() <= (2000 if STORED_SHUFFLE else 1000)
-        elif cte == "volatile-body" and STORED_SHUFFLE:
-            assert counted() <= 1000  # noqa: PLR2004
-        else:
-            assert counted() == 0
+        # In cluster mode, the stage of the CTE starts when it is scheduled, as every other
+        # stage does, before the other side is found empty.
+        assert counted() == 0
 
 
 # Errors: a query fails if and only if a reference reads a row that fails.

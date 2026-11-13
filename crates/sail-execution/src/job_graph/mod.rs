@@ -197,7 +197,7 @@ impl fmt::Display for InputMode {
 pub enum OutputMode {
     Pipelined,
     /// The output is read by each consumer at its own pace, in the region of its
-    /// consumers, and produced when a consumer asks for rows that no consumer has read.
+    /// consumers.
     Shared,
     Blocking,
 }

@@ -155,9 +155,7 @@ def test_filtered_rows_are_not_evaluated(spark):
     )
     assert sorted(tuple(row) for row in spark.sql(query).collect()) == [(5.0, 5.0), (10.0, 10.0)]
     query = f"WITH {cte} SELECT a.r FROM c a JOIN c b ON a.id = b.id"  # noqa: S608
-    # In cluster mode the error can be reported as a conflict between task attempts, since
-    # the failed stage is retried after the query has received partial output.
-    with pytest.raises(PySparkException, match=r"(?i)divi|different attempt"):
+    with pytest.raises(PySparkException, match=r"(?i)divi"):
         spark.sql(query).collect()
 
 

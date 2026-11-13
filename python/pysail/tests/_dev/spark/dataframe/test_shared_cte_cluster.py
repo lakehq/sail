@@ -98,9 +98,7 @@ def test_shared_cte_error_fails_only_the_stages_that_read_it(spark):
         plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
         assert ("SharedCteExec" in plan) == shares_deterministic_ctes(), plan
         query = f"WITH {cte} SELECT count(*) FROM shared_cte_t e {join}"  # noqa: S608
-        # The error can be reported as a conflict between task attempts, since the
-        # failed stage is retried after the query has received partial output.
-        with pytest.raises(PySparkException):
+        with pytest.raises(PySparkException, match=r"(?i)divi"):
             spark.sql(query).collect()
     finally:
         spark.sql("DROP VIEW IF EXISTS shared_cte_e")

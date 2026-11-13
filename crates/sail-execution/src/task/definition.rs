@@ -89,8 +89,7 @@ pub enum TaskOutputLocator {
         replicas: usize,
     },
     Blocking,
-    /// The output is read by each replica at its own pace, and produced when a replica
-    /// asks for rows that no replica has read yet.
+    /// The output of a shared stage, which is read by each replica at its own pace.
     Shared {
         replicas: usize,
     },

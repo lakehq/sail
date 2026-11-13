@@ -292,6 +292,16 @@ impl DriverActor {
         ActorAction::Continue
     }
 
+    pub(super) fn handle_job_output_emitted(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        key: TaskKey,
+    ) -> ActorAction {
+        self.job_scheduler.mark_job_output_emitted(&key);
+        self.refresh_job(ctx, key.job_id);
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_probe_pending_task(
         &mut self,
         ctx: &mut ActorContext<Self>,

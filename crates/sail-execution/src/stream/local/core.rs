@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::common::Result;
 use datafusion::execution::TaskContext;
 use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
@@ -16,10 +17,9 @@ use crate::id::{JobId, TaskStreamKey, TaskStreamKeyDisplay};
 use crate::stream::error::{TaskStreamError, TaskStreamResult};
 use crate::stream::local::memory::MemoryStream;
 use crate::stream::local::options::LocalStreamManagerOptions;
-use crate::stream::local::shared::{ClosedSink, SharedStream};
 use crate::stream::local::{LocalStreamManager, LocalStreamState};
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::TaskStreamChannelSink;
+use crate::stream::writer::{TaskStreamChannelSink, TaskStreamWriteState};
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
 impl LocalStreamManager {
@@ -48,24 +48,24 @@ impl LocalStreamManager {
             return Ok(Box::new(ClosedSink));
         }
         let create = |senders: Vec<_>| -> ExecutionResult<_> {
-            match &shared {
-                Some(context) => {
-                    let (stream, sink) = SharedStream::try_new(replicas, senders, context, schema)?;
-                    Ok((LocalStreamState::Shared { stream }, sink))
-                }
-                None => {
-                    let mut stream =
-                        Self::create_stream_with_senders(replicas, senders, &self.options);
-                    let sink = stream.publish()?;
-                    Ok((LocalStreamState::Created { stream }, sink))
-                }
-            }
+            let mut stream = match &shared {
+                Some(context) => MemoryStream::new_shared(
+                    self.options.task_stream_buffer,
+                    replicas,
+                    senders,
+                    context,
+                    schema,
+                ),
+                None => Self::create_stream_with_senders(replicas, senders, &self.options),
+            };
+            let sink = stream.publish()?;
+            Ok((stream, sink))
         };
 
         match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => {
                 let senders = match entry.get_mut() {
-                    LocalStreamState::Created { .. } | LocalStreamState::Shared { .. } => {
+                    LocalStreamState::Created { .. } => {
                         return Err(ExecutionError::InternalError(format!(
                             "local stream {} is already created",
                             TaskStreamKeyDisplay(&key)
@@ -81,8 +81,8 @@ impl LocalStreamManager {
                     }
                 };
                 match create(senders.clone()) {
-                    Ok((state, sink)) => {
-                        *entry.into_mut() = state;
+                    Ok((stream, sink)) => {
+                        *entry.into_mut() = LocalStreamState::Created { stream };
                         Ok(sink)
                     }
                     Err(e) => {
@@ -94,8 +94,8 @@ impl LocalStreamManager {
                 }
             }
             Entry::Vacant(entry) => match create(vec![]) {
-                Ok((state, sink)) => {
-                    entry.insert(state);
+                Ok((stream, sink)) => {
+                    entry.insert(LocalStreamState::Created { stream });
                     Ok(sink)
                 }
                 Err(e) => {
@@ -115,7 +115,6 @@ impl LocalStreamManager {
         match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => match entry.get_mut() {
                 LocalStreamState::Created { stream } => stream.subscribe(),
-                LocalStreamState::Shared { stream } => stream.subscribe(),
                 LocalStreamState::Pending { senders } => {
                     let (tx, rx) = mpsc::channel(self.options.task_stream_buffer);
                     senders.push(tx);
@@ -195,6 +194,24 @@ impl LocalStreamManager {
     }
 }
 
+/// The sink of a stream whose readers have all finished, which writes nothing.
+struct ClosedSink;
+
+#[tonic::async_trait]
+impl TaskStreamChannelSink for ClosedSink {
+    async fn write(&mut self, _batch: RecordBatch) -> Result<TaskStreamWriteState> {
+        Ok(TaskStreamWriteState::Closed)
+    }
+
+    async fn commit(self: Box<Self>) -> Result<()> {
+        Ok(())
+    }
+
+    async fn abort(self: Box<Self>) -> Result<()> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
@@ -203,7 +220,10 @@ mod tests {
     use datafusion::arrow::datatypes::Schema;
 
     use super::*;
-    use crate::stream::writer::TaskStreamWriteState;
+
+    fn batch() -> RecordBatch {
+        RecordBatch::new_empty(Arc::new(Schema::empty()))
+    }
 
     fn key(stage: usize) -> TaskStreamKey {
         attempt(stage, 0, 0)
@@ -231,22 +251,34 @@ mod tests {
             let mut sink = streams
                 .create_stream(key(0), 1, shared, Arc::clone(&schema))
                 .unwrap();
-            assert_eq!(sink.ready().await.unwrap(), TaskStreamWriteState::Closed);
+            assert_eq!(
+                sink.write(batch()).await.unwrap(),
+                TaskStreamWriteState::Closed
+            );
         }
         let mut sink = streams
             .create_stream(attempt(0, 0, 1), 1, None, Arc::clone(&schema))
             .unwrap();
-        assert_eq!(sink.ready().await.unwrap(), TaskStreamWriteState::Closed);
+        assert_eq!(
+            sink.write(batch()).await.unwrap(),
+            TaskStreamWriteState::Closed
+        );
         // The streams of other stages are created as usual.
         let mut sink = streams
             .create_stream(key(1), 1, None, Arc::clone(&schema))
             .unwrap();
-        assert_eq!(sink.ready().await.unwrap(), TaskStreamWriteState::Active);
+        assert_eq!(
+            sink.write(batch()).await.unwrap(),
+            TaskStreamWriteState::Active
+        );
         // A later attempt of a partition, which a retry of its region runs, is read.
         let mut sink = streams
             .create_stream(attempt(0, 1, 1), 1, None, Arc::clone(&schema))
             .unwrap();
-        assert_eq!(sink.ready().await.unwrap(), TaskStreamWriteState::Active);
+        assert_eq!(
+            sink.write(batch()).await.unwrap(),
+            TaskStreamWriteState::Active
+        );
         // A late clean-up of the earlier attempt keeps the stream of the later attempt.
         streams.remove_streams(JobId::from(1), Some(0), &[1, 0]);
         assert!(streams.streams.contains_key(&attempt(0, 1, 1)));

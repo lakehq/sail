@@ -1,7 +1,6 @@
 mod core;
 mod memory;
 mod options;
-mod shared;
 
 use std::collections::HashMap;
 
@@ -29,9 +28,6 @@ pub enum LocalStreamState {
     },
     Created {
         stream: memory::MemoryStream,
-    },
-    Shared {
-        stream: shared::SharedStream,
     },
     Failed {
         cause: CommonErrorCause,
