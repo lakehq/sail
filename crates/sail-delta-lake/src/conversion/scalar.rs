@@ -187,11 +187,13 @@ impl ScalarConverter {
                         scalar.to_array_of_size(1)
                     })
                     .collect::<DataFusionResult<Vec<_>>>()?;
-                Ok(Some(ScalarValue::Struct(Arc::new(StructArray::new(
+                // Missing statistics may violate a physical child's non-null constraint.
+                // Return an error so scan planning can discard this unusable bound.
+                Ok(Some(ScalarValue::Struct(Arc::new(StructArray::try_new(
                     fields.clone(),
                     arrays,
                     None,
-                )))))
+                )?))))
             }
             _ => Ok(None),
         }
@@ -586,6 +588,23 @@ mod tests {
     use super::{
         NULL_PARTITION_VALUE_DATA_PATH, parse_optional_partition_value, parse_partition_value,
     };
+
+    #[test]
+    fn incomplete_required_struct_statistics_return_error() {
+        let data_type = ArrowDataType::Struct(
+            vec![datafusion::arrow::datatypes::Field::new(
+                "metadata",
+                ArrowDataType::Binary,
+                false,
+            )]
+            .into(),
+        );
+        let stats = crate::spec::ColumnValueStat::Column(Default::default());
+        assert!(
+            super::ScalarConverter::column_value_stat_to_arrow_scalar_value(&stats, &data_type)
+                .is_err()
+        );
+    }
 
     #[test]
     fn test_parse_partition_value_preserves_hive_default_partition_string() {

@@ -100,32 +100,32 @@ impl TableFeature {
     }
 
     pub fn parse_str_name(value: &str) -> DeltaResult<Self> {
-        match value {
-            "appendOnly" => Ok(Self::AppendOnly),
+        match value.to_ascii_lowercase().as_str() {
+            "appendonly" => Ok(Self::AppendOnly),
             "invariants" => Ok(Self::Invariants),
-            "checkConstraints" => Ok(Self::CheckConstraints),
-            "changeDataFeed" => Ok(Self::ChangeDataFeed),
-            "allowColumnDefaults" => Ok(Self::AllowColumnDefaults),
-            "generatedColumns" => Ok(Self::GeneratedColumns),
-            "identityColumns" => Ok(Self::IdentityColumns),
-            "columnMapping" => Ok(Self::ColumnMapping),
-            "deletionVectors" => Ok(Self::DeletionVectors),
-            "rowTracking" => Ok(Self::RowTracking),
-            "domainMetadata" => Ok(Self::DomainMetadata),
-            "v2Checkpoint" => Ok(Self::V2Checkpoint),
-            "inCommitTimestamp" => Ok(Self::InCommitTimestamp),
-            "timestampNtz" => Ok(Self::TimestampWithoutTimezone),
-            "icebergCompatV1" => Ok(Self::IcebergCompatV1),
-            "icebergCompatV2" => Ok(Self::IcebergCompatV2),
+            "checkconstraints" => Ok(Self::CheckConstraints),
+            "changedatafeed" => Ok(Self::ChangeDataFeed),
+            "allowcolumndefaults" => Ok(Self::AllowColumnDefaults),
+            "generatedcolumns" => Ok(Self::GeneratedColumns),
+            "identitycolumns" => Ok(Self::IdentityColumns),
+            "columnmapping" => Ok(Self::ColumnMapping),
+            "deletionvectors" => Ok(Self::DeletionVectors),
+            "rowtracking" => Ok(Self::RowTracking),
+            "domainmetadata" => Ok(Self::DomainMetadata),
+            "v2checkpoint" => Ok(Self::V2Checkpoint),
+            "incommittimestamp" => Ok(Self::InCommitTimestamp),
+            "timestampntz" => Ok(Self::TimestampWithoutTimezone),
+            "icebergcompatv1" => Ok(Self::IcebergCompatV1),
+            "icebergcompatv2" => Ok(Self::IcebergCompatV2),
             "clustering" => Ok(Self::Clustering),
-            "vacuumProtocolCheck" => Ok(Self::VacuumProtocolCheck),
-            "variantType" => Ok(Self::VariantType),
-            "variantType-preview" => Ok(Self::VariantTypePreview),
-            "variantShredding" => Ok(Self::VariantShredding),
-            "variantShredding-preview" => Ok(Self::VariantShreddingPreview),
-            "typeWidening-preview" => Ok(Self::TypeWideningPreview),
-            "typeWidening" => Ok(Self::TypeWidening),
-            "catalogManaged" => Ok(Self::CatalogManaged),
+            "vacuumprotocolcheck" => Ok(Self::VacuumProtocolCheck),
+            "varianttype" => Ok(Self::VariantType),
+            "varianttype-preview" => Ok(Self::VariantTypePreview),
+            "variantshredding" => Ok(Self::VariantShredding),
+            "variantshredding-preview" => Ok(Self::VariantShreddingPreview),
+            "typewidening-preview" => Ok(Self::TypeWideningPreview),
+            "typewidening" => Ok(Self::TypeWidening),
+            "catalogmanaged" => Ok(Self::CatalogManaged),
             _ => Err(DeltaTableError::generic(format!(
                 "Unknown table feature: {value}"
             ))),
@@ -430,6 +430,36 @@ impl Protocol {
             push_writer_feature(TableFeature::IdentityColumns);
         }
         (reader_features, writer_features)
+    }
+
+    /// Use a legacy protocol only when it represents exactly the same supported features.
+    pub(crate) fn normalize_for_alter(&self) -> Self {
+        let (readers, writers) = self.table_features_for_upgrade();
+        let same_features = |left: &[TableFeature], right: &[TableFeature]| {
+            left.len() == right.len() && left.iter().all(|feature| right.contains(feature))
+        };
+        for writer in 1..=6 {
+            for reader in 1..=2 {
+                let candidate = Self::new(reader, writer, None, None);
+                let (candidate_readers, candidate_writers) = candidate.table_features_for_upgrade();
+                if same_features(&readers, &candidate_readers)
+                    && same_features(&writers, &candidate_writers)
+                {
+                    return candidate;
+                }
+            }
+        }
+        let reader = if readers.is_empty() {
+            1
+        } else if readers
+            .iter()
+            .all(|feature| *feature == TableFeature::ColumnMapping)
+        {
+            2
+        } else {
+            3
+        };
+        Self::new(reader, 7, (reader == 3).then_some(readers), Some(writers))
     }
 
     /// Merge protocol requirements without dropping versions or features already active on the

@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, LazyLock};
 
 use dashmap::DashMap;
 use datafusion::execution::object_store::ObjectStoreRegistry;
@@ -11,6 +12,7 @@ use object_store::gcp::{GoogleCloudStorage, GoogleCloudStorageBuilder};
 use object_store::http::{HttpBuilder, HttpStore};
 use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
+use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreScheme};
 use sail_common::runtime::RuntimeHandle;
 use url::Url;
@@ -20,6 +22,35 @@ use crate::layers::lazy::LazyObjectStore;
 use crate::layers::logging::LoggingObjectStore;
 use crate::layers::runtime::RuntimeAwareObjectStore;
 use crate::s3::get_s3_object_store;
+
+struct BuiltinLocalStore {
+    filesystem: Arc<LocalFileSystem>,
+    store: Arc<dyn ObjectStore>,
+}
+
+static BUILTIN_LOCAL_STORE: LazyLock<BuiltinLocalStore> = LazyLock::new(|| {
+    let filesystem = Arc::new(LocalFileSystem::new());
+    let store = Arc::new(LoggingObjectStore::new(filesystem.clone()));
+    BuiltinLocalStore { filesystem, store }
+});
+
+/// Resolve a physical directory prefix only for the exact built-in, unprefixed local store.
+/// Custom stores and wrappers do not grant permission to bypass their operations.
+pub fn builtin_local_filesystem_path(
+    store: &Arc<dyn ObjectStore>,
+    location: &Path,
+) -> object_store::Result<Option<PathBuf>> {
+    if !Arc::ptr_eq(store, &BUILTIN_LOCAL_STORE.store) {
+        return Ok(None);
+    }
+    // The file API reserves final names ending in #<digits>, but directories may use them.
+    // Map a valid child without accessing it, then remove that component lexically.
+    let mut path = BUILTIN_LOCAL_STORE
+        .filesystem
+        .path_to_filesystem(&location.clone().join("_sail_directory_prefix"))?;
+    path.pop();
+    Ok(Some(path))
+}
 
 #[derive(Debug, Eq, PartialEq, Hash)]
 struct ObjectStoreKey {
@@ -55,7 +86,7 @@ impl DynamicObjectStoreRegistry {
                 authority: "".to_string(),
                 session_fingerprint: None,
             },
-            Arc::new(LoggingObjectStore::new(Arc::new(LocalFileSystem::new()))),
+            BUILTIN_LOCAL_STORE.store.clone(),
         );
         Self { stores, runtime }
     }
@@ -296,6 +327,96 @@ mod tests {
             .unwrap();
         let default_store = registry.get_store(&url).unwrap();
         assert!(Arc::ptr_eq(&fallback, &default_store));
+    }
+
+    #[tokio::test]
+    async fn local_filesystem_capability_requires_the_builtin_outer_store_identity() {
+        use object_store::local::LocalFileSystem;
+        use object_store::path::Path;
+        use object_store::prefix::PrefixStore;
+
+        use super::{LoggingObjectStore, builtin_local_filesystem_path};
+
+        let handle = Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let registry = DynamicObjectStoreRegistry::new(runtime.clone());
+        let second_registry = DynamicObjectStoreRegistry::new(runtime);
+        let url = Url::parse("file:///").unwrap();
+        let builtin = registry.get_store(&url).unwrap();
+        assert!(Arc::ptr_eq(
+            &builtin,
+            &second_registry.get_store(&url).unwrap()
+        ));
+        let physical = std::env::temp_dir().canonicalize().unwrap();
+        // File URLs use ordinary Windows paths rather than canonical verbatim prefixes.
+        #[cfg(windows)]
+        let physical = Url::from_directory_path(&physical)
+            .unwrap()
+            .to_file_path()
+            .unwrap();
+        let location = Path::from_absolute_path(&physical).unwrap();
+        assert_eq!(
+            builtin_local_filesystem_path(&builtin, &location).unwrap(),
+            Some(physical.clone())
+        );
+        for name in [
+            "table#1",
+            "table#123",
+            "table?x",
+            "table%23",
+            "table%2F",
+            "table é",
+        ] {
+            let expected = physical.join(name);
+            let prefix = Path::from_absolute_path(&expected).unwrap();
+            assert_eq!(
+                builtin_local_filesystem_path(&builtin, &prefix).unwrap(),
+                Some(expected)
+            );
+        }
+        #[cfg(unix)]
+        assert_eq!(
+            builtin_local_filesystem_path(&builtin, &Path::ROOT).unwrap(),
+            Some(std::path::PathBuf::from("/"))
+        );
+        let replacements: [Arc<dyn ObjectStore>; 4] = [
+            Arc::new(InMemory::new()),
+            Arc::new(LocalFileSystem::new()),
+            Arc::new(LoggingObjectStore::new(builtin.clone())),
+            Arc::new(PrefixStore::new(builtin.clone(), Path::from("remapped"))),
+        ];
+        for replacement in replacements {
+            assert!(
+                builtin_local_filesystem_path(&replacement, &location)
+                    .unwrap()
+                    .is_none()
+            );
+            registry.register_session_store(&url, "session", replacement.clone());
+            let session = registry
+                .get_store_with_session(&url, Some("session"))
+                .unwrap();
+            assert!(Arc::ptr_eq(&session, &replacement));
+            assert!(
+                builtin_local_filesystem_path(&session, &location)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(Arc::ptr_eq(&registry.get_store(&url).unwrap(), &builtin));
+        }
+        let replacement: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        registry.register_store(&url, replacement.clone());
+        let resolved = registry.get_store(&url).unwrap();
+        assert!(Arc::ptr_eq(&resolved, &replacement));
+        assert!(
+            builtin_local_filesystem_path(&resolved, &location)
+                .unwrap()
+                .is_none()
+        );
+        // Replacing one registry does not replace another registry's default binding.
+        assert!(Arc::ptr_eq(
+            &second_registry.get_store(&url).unwrap(),
+            &builtin
+        ));
     }
 
     #[test]

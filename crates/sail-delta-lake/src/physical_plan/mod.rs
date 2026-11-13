@@ -34,6 +34,7 @@ mod merge_change_data;
 mod meta_adds;
 mod metadata_stats_exec;
 mod path_decode;
+mod path_key;
 mod remove_actions_exec;
 mod scan_by_adds_exec;
 mod write_context;
@@ -52,6 +53,7 @@ pub use dv_writer_exec::{
 pub use log_replay_exec::{DeltaLogReplayExec, DeltaLogReplayMode};
 pub use metadata_stats_exec::DeltaMetadataStatsExec;
 pub use path_decode::DeltaDecodePath;
+pub use path_key::DeltaPathKey;
 
 pub use crate::procedure::{
     DeltaMaintenanceExec, DeltaMaintenancePredicate, DeltaOptimizePlan, DeltaOptimizeRewriteExec,

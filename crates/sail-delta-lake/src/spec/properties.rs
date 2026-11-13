@@ -236,6 +236,52 @@ where
     Ok(canonicalized)
 }
 
+pub(crate) fn canonicalize_and_validate_alter_table_properties(
+    properties: &[(&str, &str)],
+    allow_arbitrary_properties: bool,
+) -> DeltaResult<HashMap<String, String>> {
+    let mut canonicalized = HashMap::new();
+    for &(key, value) in properties {
+        let lower = key.to_ascii_lowercase();
+        if lower.starts_with("delta.")
+            && canonicalize_table_property_key(key).is_none()
+            && !lower.starts_with("delta.feature.")
+            && !allow_arbitrary_properties
+        {
+            return Err(DeltaTableError::generic(format!(
+                "[DELTA_UNKNOWN_CONFIGURATION] Unknown configuration was specified: {key}"
+            )));
+        }
+        let key = canonicalize_alter_table_property_key(key);
+        if lower.starts_with("delta.") {
+            validate_table_property(&key, value)?;
+        }
+        canonicalized.insert(key, value.to_string());
+    }
+    if canonicalized
+        .get("delta.randomizeFilePrefixes")
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+    {
+        return Err(DeltaTableError::generic(
+            "delta.randomizeFilePrefixes=true is not supported by the Delta writer",
+        ));
+    }
+    Ok(canonicalized)
+}
+
+pub(crate) fn canonicalize_alter_table_property_key(key: &str) -> String {
+    let lower = key.to_ascii_lowercase();
+    if lower.starts_with("delta.feature.") {
+        lower
+    } else if lower.starts_with("delta.") {
+        canonicalize_table_property_key(key)
+            .unwrap_or(key)
+            .to_string()
+    } else {
+        key.to_string()
+    }
+}
+
 /// Map supported property aliases to their canonical Delta table property key.
 ///
 /// Returns `Some(canonical_key)` for recognized modeled properties and aliases, and `None`
@@ -243,6 +289,12 @@ where
 fn canonicalize_table_property_key(key: &str) -> Option<&'static str> {
     match key.to_ascii_lowercase().as_str() {
         "delta.appendonly" | "append_only" | "appendonly" => Some("delta.appendOnly"),
+        "delta.minreaderversion" => Some("delta.minReaderVersion"),
+        "delta.minwriterversion" => Some("delta.minWriterVersion"),
+        "delta.randomprefixlength" => Some("delta.randomPrefixLength"),
+        "delta.randomizefileprefixes" => Some("delta.randomizeFilePrefixes"),
+        "delta.enabledeletionvectors" => Some("delta.enableDeletionVectors"),
+        "delta.enablechangedatafeed" => Some("delta.enableChangeDataFeed"),
         "delta.checkpointinterval" | "checkpoint_interval" | "checkpointinterval" => {
             Some("delta.checkpointInterval")
         }
@@ -338,7 +390,10 @@ fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
         | "delta.enableInCommitTimestamps"
         | "delta.enableTypeWidening"
         | "delta.enableVariantShredding"
-        | "delta.enableExpiredLogCleanup" => parse_bool(value).map(|_| ()).ok_or_else(|| {
+        | "delta.enableExpiredLogCleanup"
+        | "delta.enableDeletionVectors"
+        | "delta.enableChangeDataFeed"
+        | "delta.randomizeFilePrefixes" => parse_bool(value).map(|_| ()).ok_or_else(|| {
             DeltaTableError::generic(format!("invalid boolean value for {key}: {value}"))
         }),
         "delta.checkpointInterval" | "delta.logCompactionInterval" => {
@@ -348,6 +403,31 @@ fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
                 ))
             })
         }
+        "delta.minReaderVersion" | "delta.minWriterVersion" => {
+            let maximum = if key == "delta.minReaderVersion" {
+                3
+            } else {
+                7
+            };
+            value
+                .parse::<i32>()
+                .ok()
+                .filter(|version| (1..=maximum).contains(version))
+                .map(|_| ())
+                .ok_or_else(|| {
+                    DeltaTableError::generic(format!(
+                        "invalid value for {key}: expected integer from 1 to {maximum}"
+                    ))
+                })
+        }
+        "delta.randomPrefixLength" => value
+            .parse::<i32>()
+            .ok()
+            .filter(|length| *length > 0)
+            .map(|_| ())
+            .ok_or_else(|| {
+                DeltaTableError::generic("delta.randomPrefixLength needs to be greater than 0")
+            }),
         "delta.checkpointPolicy" => CheckpointPolicy::from_str(value).map(|_| ()),
         "delta.inCommitTimestampEnablementVersion" => {
             parse_non_negative_i64(value).map(|_| ()).ok_or_else(|| {
@@ -444,7 +524,7 @@ fn parse_positive_int(s: &str) -> Option<NonZeroU64> {
 
 fn parse_bool(s: &str) -> Option<bool> {
     // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L124-L132>
-    match s {
+    match s.to_ascii_lowercase().as_str() {
         "true" => Some(true),
         "false" => Some(false),
         _ => None,
@@ -461,35 +541,48 @@ fn parse_non_negative_i64(s: &str) -> Option<i64> {
 }
 
 fn parse_interval(s: &str) -> Option<Duration> {
-    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L142-L146>
-    const SECONDS_PER_HOUR: u64 = 60 * 60;
-    const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
-    const SECONDS_PER_WEEK: u64 = 7 * SECONDS_PER_DAY;
-
-    let mut it = s.split_whitespace();
-    if it.next() != Some("interval") {
-        return None;
+    let lower = s.trim().to_ascii_lowercase();
+    let mut parts = lower.split_whitespace().peekable();
+    if parts.peek() == Some(&"interval") {
+        parts.next();
     }
-    let number = it.next()?.parse::<i64>().ok()?;
-    if number < 0 {
-        return None;
+    parts.peek()?;
+    let mut micros = 0i128;
+    while let Some(number) = parts.next() {
+        let unit = parts.next()?;
+        let scale = match unit {
+            "microsecond" | "microseconds" => 1,
+            "millisecond" | "milliseconds" => 1_000,
+            "second" | "seconds" => 1_000_000,
+            "minute" | "minutes" => 60_000_000,
+            "hour" | "hours" => 3_600_000_000,
+            "day" | "days" => 86_400_000_000,
+            "week" | "weeks" => 604_800_000_000,
+            _ => return None,
+        };
+        let value = if matches!(unit, "second" | "seconds") && number.contains('.') {
+            let (whole, fraction) = number.split_once('.')?;
+            if !number.bytes().any(|c| c.is_ascii_digit())
+                || fraction.len() > 9
+                || !fraction.bytes().all(|c| c.is_ascii_digit())
+            {
+                return None;
+            }
+            let negative = number.starts_with('-');
+            let whole = match whole {
+                "" | "+" | "-" => 0,
+                _ => whole.parse::<i64>().ok()?,
+            };
+            let fraction = format!("{fraction:0<6}");
+            let fraction = fraction.get(..6)?.parse::<i128>().ok()?;
+            i128::from(whole) * scale + if negative { -fraction } else { fraction }
+        } else {
+            i128::from(number.parse::<i64>().ok()?) * scale
+        };
+        micros = micros.checked_add(value)?;
     }
-    let number = number as u64;
-    match it.next()? {
-        "nanosecond" | "nanoseconds" => Some(Duration::from_nanos(number)),
-        "microsecond" | "microseconds" => Some(Duration::from_micros(number)),
-        "millisecond" | "milliseconds" => Some(Duration::from_millis(number)),
-        "second" | "seconds" => Some(Duration::from_secs(number)),
-        "minute" | "minutes" => (number <= u64::MAX / 60).then(|| Duration::from_mins(number)),
-        "hour" | "hours" => {
-            (number <= u64::MAX / SECONDS_PER_HOUR).then(|| Duration::from_hours(number))
-        }
-        "day" | "days" => number.checked_mul(SECONDS_PER_DAY).map(Duration::from_secs),
-        "week" | "weeks" => number
-            .checked_mul(SECONDS_PER_WEEK)
-            .map(Duration::from_secs),
-        _ => None,
-    }
+    let micros = i64::try_from(micros).ok()?;
+    u64::try_from(micros).ok().map(Duration::from_micros)
 }
 
 /// Resolve the effective `DataSkippingNumIndexedCols` for a given table configuration.

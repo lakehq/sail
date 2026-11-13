@@ -9,6 +9,7 @@ by default, which also covers reading nested fields next to INT96 columns in ID 
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import pytest
@@ -94,7 +95,13 @@ def test_delta_spark_table_query_matches(
     if name in _KNOWN_QUERY_FAILURES:
         reason, partitioned_only = _KNOWN_QUERY_FAILURES[name]
         if delta_spark_table["partitioned"] or not partitioned_only:
-            request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
+            request.applymarker(
+                pytest.mark.xfail(
+                    name != "intersect" or os.environ.get("SAIL_MODE", "local") == "local",
+                    reason=reason,
+                    strict=True,
+                )
+            )
     view = f"delta_spark_{delta_spark_table['mode']}_{int(delta_spark_table['partitioned'])}"
     spark.read.format("delta").load(delta_spark_table["path"]).createOrReplaceTempView(view)
     delta_jvm_spark.read.format("delta").load(delta_spark_table["path"]).createOrReplaceTempView(view)

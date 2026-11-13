@@ -53,6 +53,7 @@ use crate::datasource::pruning::{arrow_type_contains_timestamp, widen_timestamp_
 use crate::datasource::{DeltaScanConfig, create_object_store_url, partitioned_file_from_action};
 use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
+use crate::spec::utils::decode_path;
 use crate::spec::{Add, ColumnMappingMode};
 use crate::table::DeltaSnapshot;
 
@@ -291,12 +292,14 @@ pub async fn build_file_scan_config(
 
         // Add file column if configured
         if config.file_column_name.is_some() {
+            let path = decode_path(&action.path)
+                .map_err(|error| DataFusionError::External(Box::new(error)))?;
             let partition_value = if config.wrap_partition_values {
                 wrap_partition_value_in_dict(datafusion::common::scalar::ScalarValue::Utf8(Some(
-                    action.path.clone(),
+                    path,
                 )))
             } else {
-                datafusion::common::scalar::ScalarValue::Utf8(Some(action.path.clone()))
+                datafusion::common::scalar::ScalarValue::Utf8(Some(path))
             };
             part.partition_values.push(partition_value);
         }

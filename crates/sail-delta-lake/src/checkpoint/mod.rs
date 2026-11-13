@@ -2988,6 +2988,67 @@ mod tests {
     }
 
     #[test]
+    fn reconciled_state_uses_uri_keys_without_changing_checkpoint_payloads() -> DeltaResult<()> {
+        let vector = DeletionVectorDescriptor {
+            storage_type: StorageType::Inline,
+            path_or_inline_dv: "dv-identity".to_string(),
+            cardinality: 1,
+            size_in_bytes: 1,
+            offset: None,
+        };
+        for deletion_vector in [None, Some(vector)] {
+            let mut state = ReconciledCheckpointState::default();
+            let encoded = Add {
+                path: "caf%C3%A9.parquet".to_string(),
+                deletion_vector: deletion_vector.clone(),
+                ..Default::default()
+            };
+            let literal = Add {
+                path: "café.parquet".to_string(),
+                ..encoded.clone()
+            };
+            for add in [encoded.clone(), literal.clone()] {
+                state.apply_action(Action::Add(add));
+            }
+            let mut remove = encoded.into_remove(1);
+            remove.path = "caf%c3%a9.parquet".to_string();
+            state.apply_action(Action::Remove(remove.clone()));
+            assert_eq!(state.adds.len(), 1);
+            assert_eq!(state.adds.values().next(), Some(&literal));
+            assert_eq!(state.removes.values().next(), Some(&remove));
+            let rows = vec![
+                CheckpointActionRow {
+                    add: Some(literal.clone()),
+                    ..Default::default()
+                },
+                CheckpointActionRow {
+                    remove: Some(remove.clone()),
+                    ..Default::default()
+                },
+            ];
+            let decoded = decode_checkpoint_rows(&encode_rows_for_test(&rows)?)?;
+            assert_eq!(decoded[0].add.as_ref(), Some(&literal));
+            assert_eq!(decoded[1].remove.as_ref(), Some(&remove));
+            // A re-add with yet another hex spelling replaces the same tombstone.
+            let readded = Add {
+                path: "caf%c3%A9.parquet".to_string(),
+                ..literal.clone()
+            };
+            state.apply_action(Action::Add(readded.clone()));
+            assert!(state.removes.is_empty());
+            assert_eq!(state.adds.len(), 2);
+            assert_eq!(
+                state.adds.get(&crate::spec::logical_file_key(
+                    &readded.path,
+                    deletion_vector.as_ref()
+                )),
+                Some(&readded)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn reconciled_state_remove_masks_old_add() {
         let mut state = ReconciledCheckpointState::default();
         state.apply_action(Action::Add(Add {

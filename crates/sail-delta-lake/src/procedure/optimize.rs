@@ -106,6 +106,7 @@ pub(crate) async fn plan(
     }
     let candidates = select_files(&snapshot, filter.as_ref())?;
     let considered = candidates.len();
+    let partition_columns = snapshot.physical_partition_columns();
     let mut partitions: BTreeMap<BTreeMap<String, Option<String>>, Vec<Add>> = BTreeMap::new();
     for add in candidates {
         let dv_rewrite = add.deletion_vector.as_ref().is_some_and(|dv| {
@@ -119,15 +120,29 @@ pub(crate) async fn plan(
             })
         });
         if add.size < min_size || dv_rewrite {
-            partitions
-                .entry(
-                    add.partition_values
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
-                )
-                .or_default()
-                .push(add);
+            let mut key = add
+                .partition_values
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect::<BTreeMap<_, _>>();
+            // Normalize null encodings without changing nonempty partition spellings or Add actions.
+            for column in &partition_columns {
+                let Some(value) = key.get_mut(&column.physical_name) else {
+                    continue;
+                };
+                if value.as_deref() == Some("") {
+                    let field = snapshot.schema().field_with_name(&column.logical_name)?;
+                    if crate::conversion::parse_optional_partition_value(
+                        value.as_deref(),
+                        field.data_type(),
+                    )?
+                    .is_null()
+                    {
+                        *value = None;
+                    }
+                }
+            }
+            partitions.entry(key).or_default().push(add);
         }
     }
     let mut bins = vec![];
@@ -292,8 +307,25 @@ pub(super) async fn finish(
             remove.data_change = false;
             CommitAction::Remove(remove)
         }));
+        let mut added_sizes = added.iter().map(|file| file.size).collect::<Vec<_>>();
+        added_sizes.sort_unstable();
+        let count = added_sizes.len();
         let mut metrics = HashMap::new();
         for (key, value) in [
+            ("minFileSize", added_sizes.first().copied().unwrap_or(0)),
+            ("maxFileSize", added_sizes.last().copied().unwrap_or(0)),
+            (
+                "p25FileSize",
+                added_sizes.get(count / 4).copied().unwrap_or(0),
+            ),
+            (
+                "p50FileSize",
+                added_sizes.get(count / 2).copied().unwrap_or(0),
+            ),
+            (
+                "p75FileSize",
+                added_sizes.get(count * 3 / 4).copied().unwrap_or(0),
+            ),
             ("numAddedFiles", added.len() as i64),
             ("numRemovedFiles", removed.len() as i64),
             ("numAddedBytes", total_size(&added)?),

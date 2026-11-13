@@ -17,7 +17,7 @@ use crate::deletion_vector::resolve_dv_absolute_path;
 use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
 use crate::snapshot::DeltaSnapshot;
-use crate::spec::utils::encode_path;
+use crate::spec::utils::{decode_path, encode_path};
 use crate::spec::{DeletionVectorDescriptor, DeltaError, DeltaOperation, TableFeature};
 use crate::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 
@@ -40,6 +40,12 @@ pub(super) async fn execute(
         .unwrap_or(true);
     let safety = options
         .get("spark.databricks.delta.retentionDurationCheck.enabled")
+        .map(|value| value.to_ascii_lowercase().parse::<bool>())
+        .transpose()
+        .map_err(|e| DeltaError::generic(e.to_string()))?
+        .unwrap_or(true);
+    let logging = options
+        .get("spark.databricks.delta.vacuum.logging.enabled")
         .map(|value| value.to_ascii_lowercase().parse::<bool>())
         .transpose()
         .map_err(|e| DeltaError::generic(e.to_string()))?
@@ -89,21 +95,40 @@ pub(super) async fn execute(
         })
         .collect::<Result<Vec<_>>>()?;
     let store = log_store.object_store(None);
-    let candidates = store
+    let files = store
         .list(None)
-        .try_filter(|meta| {
-            let candidate = meta.last_modified.timestamp_millis() < cutoff
-                && !protected.contains(&meta.location)
-                && !hidden(&meta.location, &partition_names);
-            futures::future::ready(candidate)
-        })
+        .try_filter(|meta| futures::future::ready(!hidden(&meta.location, &partition_names)))
         .try_collect::<Vec<_>>()
         .await?;
     let root = snapshot.table_url();
+    let directories = Directories::discover(
+        &log_store.root_object_store(None),
+        root,
+        &partition_names,
+        &files,
+    )
+    .await?;
+    let mut occupied = directory_ancestors(
+        files
+            .iter()
+            .filter(|file| file.last_modified.timestamp_millis() < cutoff)
+            .map(|file| &file.location),
+    );
+    occupied.extend(directory_ancestors(protected.iter()));
+    occupied.extend(protected.iter().cloned());
+    let directory_candidates = directories.candidates(&occupied);
+    let candidates = files
+        .into_iter()
+        .filter(|meta| {
+            meta.last_modified.timestamp_millis() < cutoff && !protected.contains(&meta.location)
+        })
+        .collect::<Vec<_>>();
     if dry_run {
         let mut paths = candidates
             .iter()
-            .map(|file| absolute_path(root, &file.location))
+            .map(|file| &file.location)
+            .chain(directory_candidates.iter())
+            .map(|path| absolute_path(root, path))
             .collect::<Result<Vec<_>>>()?;
         paths.sort();
         return result(invocation, paths);
@@ -114,20 +139,25 @@ pub(super) async fn execute(
             .ok_or_else(|| DeltaError::generic("VACUUM byte count overflow"))
     })?;
     let start_metrics = HashMap::from([
-        ("numFilesToDelete".to_string(), json!(candidates.len())),
+        (
+            "numFilesToDelete".to_string(),
+            json!(candidates.len() + directory_candidates.len()),
+        ),
         ("sizeOfDataToDelete".to_string(), json!(bytes)),
     ]);
-    CommitBuilder::from(CommitProperties::default().with_operation_metrics(start_metrics))
-        .build(
-            Some(snapshot.clone()),
-            log_store.clone(),
-            DeltaOperation::VacuumStart {
-                retention_check_enabled: safety,
-                specified_retention_millis: specified,
-                default_retention_millis: default_retention,
-            },
-        )
-        .await?;
+    if logging {
+        CommitBuilder::from(CommitProperties::default().with_operation_metrics(start_metrics))
+            .build(
+                Some(snapshot.clone()),
+                log_store.clone(),
+                DeltaOperation::VacuumStart {
+                    retention_check_enabled: safety,
+                    specified_retention_millis: specified,
+                    default_retention_millis: default_retention,
+                },
+            )
+            .await?;
+    }
     // Protect references committed while discovery was running, and recheck object identity.
     let latest = Arc::new(
         DeltaSnapshot::try_new(
@@ -160,18 +190,239 @@ pub(super) async fn execute(
         session.config().target_partitions(),
     )
     .await?;
-    // TODO: Discover and remove eligible empty directories, including their result paths and metrics.
-    let end_metrics = HashMap::from([
-        ("numDeletedFiles".to_string(), json!(deleted)),
-        ("numVacuumedDirectories".to_string(), json!(0)),
-    ]);
-    CommitBuilder::from(CommitProperties::default().with_operation_metrics(end_metrics))
-        .build(Some(latest), log_store, DeltaOperation::VacuumEnd {})
+    let mut protected_directories = directory_ancestors(protected.iter());
+    protected_directories.extend(protected);
+    let deleted_directories = directories
+        .delete(directory_candidates, protected_directories)
         .await?;
+    let end_metrics = HashMap::from([
+        (
+            "numDeletedFiles".to_string(),
+            json!(deleted + deleted_directories),
+        ),
+        (
+            "numVacuumedDirectories".to_string(),
+            json!(directories.count()),
+        ),
+    ]);
+    if logging {
+        CommitBuilder::from(CommitProperties::default().with_operation_metrics(end_metrics))
+            .build(Some(latest), log_store, DeltaOperation::VacuumEnd {})
+            .await?;
+    }
     result(
         invocation,
-        vec![root.as_str().trim_end_matches('/').to_string()],
+        vec![display_path(root)?.trim_end_matches('/').to_string()],
     )
+}
+
+fn directory_ancestors<'a>(paths: impl Iterator<Item = &'a Path>) -> HashSet<Path> {
+    let mut directories = HashSet::new();
+    for path in paths {
+        let mut parent = path.parent();
+        while let Some(path) = parent {
+            if path == Path::ROOT {
+                break;
+            }
+            parent = path.parent();
+            directories.insert(path);
+        }
+    }
+    directories
+}
+
+struct Directories {
+    paths: HashSet<Path>,
+    #[cfg(unix)]
+    local: Option<Arc<local_directories::LocalDirectories>>,
+}
+
+impl Directories {
+    async fn discover(
+        store: &Arc<dyn ObjectStore>,
+        root: &Url,
+        partition_names: &[String],
+        files: &[ObjectMeta],
+    ) -> Result<Self> {
+        #[cfg(unix)]
+        if let Some(root) = sail_object_store::builtin_local_filesystem_path(
+            store,
+            &Path::from_url_path(root.path())?,
+        )? {
+            let partition_names = partition_names.to_vec();
+            let local = tokio::task::spawn_blocking(move || {
+                local_directories::LocalDirectories::discover(&root, &partition_names)
+            })
+            .await
+            .map_err(DeltaError::generic_err)??;
+            return Ok(Self {
+                paths: local.paths().cloned().collect(),
+                local: Some(Arc::new(local)),
+            });
+        }
+        #[cfg(not(unix))]
+        let _ = (store, root, partition_names);
+        Ok(Self {
+            paths: directory_ancestors(files.iter().map(|file| &file.location)),
+            #[cfg(unix)]
+            local: None,
+        })
+    }
+
+    fn count(&self) -> usize {
+        self.paths.len() + 1
+    }
+
+    fn candidates(&self, occupied: &HashSet<Path>) -> Vec<Path> {
+        #[cfg(unix)]
+        if self.local.is_some() {
+            return self.paths.difference(occupied).cloned().collect();
+        }
+        let _ = occupied;
+        Vec::new()
+    }
+
+    async fn delete(&self, candidates: Vec<Path>, protected: HashSet<Path>) -> Result<u64> {
+        #[cfg(unix)]
+        if let Some(local) = &self.local {
+            let local = local.clone();
+            return tokio::task::spawn_blocking(move || local.delete(&candidates, &protected))
+                .await
+                .map_err(DeltaError::generic_err)?;
+        }
+        let _ = (candidates, protected);
+        Ok(0)
+    }
+}
+
+#[cfg(unix)]
+mod local_directories {
+    use std::path::Path as FsPath;
+
+    use rustix::fd::{AsFd, OwnedFd};
+    use rustix::fs::{
+        AtFlags, Dir, FileType, Mode, OFlags, Stat, fstat, open, openat, statat, unlinkat,
+    };
+    use rustix::io::Errno;
+
+    use super::*;
+
+    const DIRECTORY_FLAGS: OFlags = OFlags::RDONLY
+        .union(OFlags::DIRECTORY)
+        .union(OFlags::NOFOLLOW)
+        .union(OFlags::CLOEXEC);
+
+    pub(super) struct LocalDirectories {
+        root: OwnedFd,
+        identities: HashMap<Path, Stat>,
+    }
+
+    fn io_error(error: Errno) -> DeltaError {
+        DeltaError::generic_err(std::io::Error::from(error))
+    }
+
+    fn changed(error: Errno) -> bool {
+        matches!(error, Errno::NOENT | Errno::NOTDIR | Errno::LOOP)
+    }
+
+    impl LocalDirectories {
+        pub(super) fn discover(root: &FsPath, partition_names: &[String]) -> Result<Self> {
+            let root = root.canonicalize().map_err(DeltaError::generic_err)?;
+            let root = open(root, DIRECTORY_FLAGS, Mode::empty()).map_err(io_error)?;
+            let mut identities = HashMap::new();
+            let mut pending = vec![Path::ROOT];
+            while let Some(path) = pending.pop() {
+                let directory = match Self::open_directory(&root, &path) {
+                    Ok(directory) => directory,
+                    Err(error) if changed(error) => continue,
+                    Err(error) => return Err(io_error(error).into()),
+                };
+                let entries = Dir::read_from(&directory).map_err(io_error)?;
+                for entry in entries {
+                    let entry = entry.map_err(io_error)?;
+                    let name = entry.file_name();
+                    if matches!(name.to_bytes(), b"." | b"..") {
+                        continue;
+                    }
+                    let name = name.to_str().map_err(DeltaError::generic_err)?;
+                    let child = if path == Path::ROOT {
+                        Path::parse(name)?
+                    } else {
+                        Path::parse(format!("{path}/{name}"))?
+                    };
+                    if hidden(&child, partition_names) {
+                        continue;
+                    }
+                    let stat = match statat(&directory, name, AtFlags::SYMLINK_NOFOLLOW) {
+                        Ok(stat) => stat,
+                        Err(error) if changed(error) => continue,
+                        Err(error) => return Err(io_error(error).into()),
+                    };
+                    if FileType::from_raw_mode(stat.st_mode) == FileType::Directory {
+                        identities.insert(child.clone(), stat);
+                        pending.push(child);
+                    }
+                }
+            }
+            Ok(Self { root, identities })
+        }
+
+        pub(super) fn paths(&self) -> impl Iterator<Item = &Path> {
+            self.identities.keys()
+        }
+
+        fn open_directory(root: &OwnedFd, path: &Path) -> rustix::io::Result<OwnedFd> {
+            let mut directory = openat(root, ".", DIRECTORY_FLAGS, Mode::empty())?;
+            for part in path.parts() {
+                directory = openat(
+                    directory.as_fd(),
+                    part.as_ref(),
+                    DIRECTORY_FLAGS,
+                    Mode::empty(),
+                )?;
+            }
+            Ok(directory)
+        }
+
+        pub(super) fn delete(&self, candidates: &[Path], protected: &HashSet<Path>) -> Result<u64> {
+            let mut deleted = 0;
+            for path in candidates {
+                if protected.contains(path) {
+                    continue;
+                }
+                let Some(parent) = path.parent() else {
+                    continue;
+                };
+                let Some(name) = path.filename() else {
+                    continue;
+                };
+                let parent = match Self::open_directory(&self.root, &parent) {
+                    Ok(parent) => parent,
+                    Err(error) if changed(error) => continue,
+                    Err(error) => return Err(io_error(error).into()),
+                };
+                let directory = match openat(&parent, name, DIRECTORY_FLAGS, Mode::empty()) {
+                    Ok(directory) => directory,
+                    Err(error) if changed(error) => continue,
+                    Err(error) => return Err(io_error(error).into()),
+                };
+                let stat = fstat(&directory).map_err(io_error)?;
+                if !self.identities.get(path).is_some_and(|original| {
+                    original.st_dev == stat.st_dev && original.st_ino == stat.st_ino
+                }) {
+                    continue;
+                }
+                // Never recurse: a concurrent writer or a hidden child makes rmdir fail safely.
+                // The parent descriptor and single-component name cannot traverse a symlink.
+                match unlinkat(&parent, name, AtFlags::REMOVEDIR) {
+                    Ok(()) => deleted += 1,
+                    Err(error) if changed(error) || error == Errno::NOTEMPTY => {}
+                    Err(error) => return Err(io_error(error).into()),
+                }
+            }
+            Ok(deleted)
+        }
+    }
 }
 
 async fn delete_candidates(
@@ -258,6 +509,9 @@ fn protect(
     path: &str,
     dv: Option<&DeletionVectorDescriptor>,
 ) -> Result<()> {
+    // Protection compares physical objects, not log-action identities.
+    let decoded = decode_path(path).map_err(DeltaError::generic_err)?;
+    let path = decoded.as_str();
     // Hadoop absolute paths have an absolute path component, not merely a scheme.
     let absolute_uri = path.split_once(':').filter(|(scheme, rest)| {
         scheme
@@ -328,10 +582,16 @@ fn relative_path(root: &Url, url: &Url) -> Result<Option<Path>> {
 }
 
 fn absolute_path(root: &Url, path: &Path) -> Result<String> {
-    Ok(root
+    let url = root
         .join(&format!("./{}", encode_path(path.as_ref())))
-        .map_err(DeltaError::generic_err)?
-        .to_string())
+        .map_err(DeltaError::generic_err)?;
+    display_path(&url)
+}
+
+fn display_path(url: &Url) -> Result<String> {
+    // Hadoop Path strings expose the physical path, including literal percent signs.
+    let path = decode_path(url.path()).map_err(DeltaError::generic_err)?;
+    Ok(format!("{}{path}", &url[..url::Position::BeforePath]))
 }
 
 fn hidden(path: &Path, partition_names: &[String]) -> bool {
@@ -377,12 +637,12 @@ mod tests {
                 ("space #/%3A?*.parquet", "space%20%23/%253A%3F%2A.parquet"),
             ] {
                 let mut files = HashSet::new();
-                protect(&mut files, &root, path, None).unwrap();
+                protect(&mut files, &root, encoded, None).unwrap();
                 let object = Path::parse(path).unwrap();
                 assert_eq!(files, HashSet::from([object.clone()]), "{root} {path}");
                 assert_eq!(
                     absolute_path(&root, &object).unwrap(),
-                    format!("{root}{encoded}")
+                    format!("{}{path}", display_path(&root).unwrap())
                 );
             }
         }
@@ -446,7 +706,7 @@ mod tests {
             ] {
                 let path = format!("{}:{suffix}", root.scheme());
                 let mut files = HashSet::new();
-                protect(&mut files, &root, &path, None).unwrap();
+                protect(&mut files, &root, &encode_path(&path), None).unwrap();
                 let object = Path::parse(&path).unwrap();
                 let mut expected = HashSet::from([object.clone()]);
                 if let Some(relative) = relative {
@@ -455,7 +715,7 @@ mod tests {
                 assert_eq!(files, expected, "{root} {path}");
                 assert_eq!(
                     absolute_path(&root, &object).unwrap(),
-                    format!("{root}{}", encode_path(&path))
+                    format!("{}{path}", display_path(&root).unwrap())
                 );
             }
             let mut files = HashSet::new();
@@ -582,6 +842,434 @@ mod tests {
         ) -> object_store::Result<()> {
             self.inner.copy_opts(from, to, options).await
         }
+    }
+
+    #[cfg(unix)]
+    fn test_registry() -> sail_object_store::DynamicObjectStoreRegistry {
+        let handle = tokio::runtime::Handle::current();
+        sail_object_store::DynamicObjectStoreRegistry::new(
+            sail_common::runtime::RuntimeHandle::new(handle.clone(), handle),
+        )
+    }
+
+    #[cfg(unix)]
+    async fn create_empty_table(store: Arc<dyn ObjectStore>, url: Url) -> LogStoreRef {
+        use crate::delta_log::StorageConfig;
+        use crate::spec::{
+            CommitAction, DataType, Metadata, Protocol, SaveMode, StructField, StructType,
+        };
+
+        let log_store =
+            crate::table::create_logstore_with_object_store(store, url.clone(), StorageConfig)
+                .unwrap();
+        let protocol = Protocol::new(1, 2, None, None);
+        let metadata = Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([StructField::not_null("id", DataType::LONG)]).unwrap(),
+            vec![],
+            0,
+            HashMap::new(),
+        )
+        .unwrap();
+        CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: url.to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await
+            .unwrap();
+        log_store
+    }
+
+    #[cfg(unix)]
+    async fn execute_test_vacuum(log_store: &LogStoreRef, dry_run: bool) -> RecordBatch {
+        use datafusion::prelude::SessionContext;
+        use sail_common_datafusion::lakeprocedure::LakeProcedureValue;
+
+        use crate::snapshot::DeltaSnapshotConfig;
+        use crate::spec::inspection::DeltaCommandType;
+
+        let snapshot = Arc::new(
+            DeltaSnapshot::try_new(
+                log_store.as_ref(),
+                DeltaSnapshotConfig::default(),
+                None,
+                None,
+            )
+            .await
+            .unwrap(),
+        );
+        let procedure = super::super::descriptor(DeltaCommandType::Vacuum);
+        let arguments = procedure
+            .parameters
+            .iter()
+            .map(|parameter| match parameter.name.as_str() {
+                "table" => LakeProcedureValue::Utf8(log_store.config().location.to_string()),
+                "dry_run" => LakeProcedureValue::Boolean(dry_run),
+                _ => LakeProcedureValue::Null,
+            })
+            .collect();
+        execute(
+            &SessionContext::new().state(),
+            snapshot,
+            log_store.clone(),
+            &LakeProcedureInvocation {
+                procedure,
+                arguments,
+            },
+            &BTreeMap::new(),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[cfg(unix)]
+    struct DirectoryTestRoot(std::path::PathBuf);
+
+    #[cfg(unix)]
+    impl DirectoryTestRoot {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("sail-vacuum-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+
+        fn url(&self) -> Url {
+            Url::from_directory_path(&self.0).unwrap()
+        }
+
+        async fn directories(&self, partition_names: &[String]) -> Directories {
+            use datafusion::execution::object_store::ObjectStoreRegistry;
+            let store = test_registry().get_store(&self.url()).unwrap();
+            Directories::discover(&store, &self.url(), partition_names, &[])
+                .await
+                .unwrap()
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for DirectoryTestRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn vacuum_respects_registered_memory_store_with_shadow_or_absent_host_path() {
+        use datafusion::execution::object_store::ObjectStoreRegistry;
+
+        for session_specific in [false, true] {
+            for shadow_exists in [false, true] {
+                let host = DirectoryTestRoot::new();
+                let table_path = host.0.join("table");
+                let url = Url::from_directory_path(&table_path).unwrap();
+                if shadow_exists {
+                    std::fs::create_dir_all(table_path.join("keep")).unwrap();
+                }
+                let registry = test_registry();
+                let builtin = registry.get_store(&url).unwrap();
+                let replacement: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+                let resolved = if session_specific {
+                    registry.register_session_store(&url, "custom-session", replacement.clone());
+                    assert!(Arc::ptr_eq(&registry.get_store(&url).unwrap(), &builtin));
+                    registry
+                        .get_store_with_session(&url, Some("custom-session"))
+                        .unwrap()
+                } else {
+                    registry.register_store(&url, replacement.clone());
+                    registry.get_store(&url).unwrap()
+                };
+                assert!(Arc::ptr_eq(&resolved, &replacement));
+                let log_store = create_empty_table(resolved, url).await;
+                let recent = Path::from("recent-file");
+                log_store
+                    .object_store(None)
+                    .put(&recent, "keep bytes".into())
+                    .await
+                    .unwrap();
+                assert_eq!(execute_test_vacuum(&log_store, true).await.num_rows(), 0);
+                assert_eq!(log_store.get_latest_version(0).await.unwrap(), 0);
+                assert_eq!(execute_test_vacuum(&log_store, false).await.num_rows(), 1);
+                assert_eq!(log_store.get_latest_version(0).await.unwrap(), 2);
+                assert_eq!(
+                    log_store
+                        .object_store(None)
+                        .get(&recent)
+                        .await
+                        .unwrap()
+                        .bytes()
+                        .await
+                        .unwrap(),
+                    "keep bytes"
+                );
+                assert_eq!(table_path.exists(), shadow_exists);
+                if shadow_exists {
+                    assert!(table_path.join("keep").is_dir());
+                    assert!(!table_path.join("_delta_log").exists());
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn vacuum_does_not_bypass_remapped_or_wrapped_local_stores() {
+        use datafusion::execution::object_store::ObjectStoreRegistry;
+        use object_store::local::LocalFileSystem;
+        use object_store::prefix::PrefixStore;
+
+        for prefix_wrapper in [false, true] {
+            let host = DirectoryTestRoot::new();
+            let backing = DirectoryTestRoot::new();
+            let url = host.url();
+            std::fs::create_dir(host.0.join("keep")).unwrap();
+            let registry = test_registry();
+            let mapped = LocalFileSystem::new_with_prefix(&backing.0).unwrap();
+            let physical_table = mapped
+                .path_to_filesystem(&Path::from_url_path(url.path()).unwrap())
+                .unwrap();
+            let replacement: Arc<dyn ObjectStore> = if prefix_wrapper {
+                Arc::new(PrefixStore::new(
+                    registry.get_store(&url).unwrap(),
+                    Path::from_url_path(backing.url().path()).unwrap(),
+                ))
+            } else {
+                Arc::new(mapped)
+            };
+            registry.register_store(&url, replacement.clone());
+            let resolved = registry.get_store(&url).unwrap();
+            assert!(Arc::ptr_eq(&resolved, &replacement));
+            let log_store = create_empty_table(resolved, url).await;
+            std::fs::create_dir(physical_table.join("mapped-empty")).unwrap();
+            assert_eq!(execute_test_vacuum(&log_store, true).await.num_rows(), 0);
+            assert_eq!(log_store.get_latest_version(0).await.unwrap(), 0);
+            execute_test_vacuum(&log_store, false).await;
+            assert_eq!(log_store.get_latest_version(0).await.unwrap(), 2);
+            assert!(physical_table.join("mapped-empty").is_dir());
+            assert!(physical_table.join("_delta_log").is_dir());
+            assert!(host.0.join("keep").is_dir());
+            assert!(!host.0.join("_delta_log").exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn vacuum_uses_registered_builtin_local_store_for_directory_cleanup() {
+        use datafusion::arrow::array::StringArray;
+        use datafusion::execution::object_store::ObjectStoreRegistry;
+
+        let root = DirectoryTestRoot::new();
+        let registry = test_registry();
+        for name in [
+            "table",
+            "table#1",
+            "table#123",
+            "table?x",
+            "table%23",
+            "table%2F",
+            "table é",
+        ] {
+            let physical = root.0.join(name);
+            let url = Url::from_directory_path(&physical).unwrap();
+            let log_store =
+                create_empty_table(registry.get_store(&url).unwrap(), url.clone()).await;
+            std::fs::create_dir(physical.join("empty")).unwrap();
+            let dry_run = execute_test_vacuum(&log_store, true).await;
+            assert_eq!(dry_run.num_rows(), 1);
+            assert_eq!(
+                dry_run
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap()
+                    .value(0),
+                format!("file://{}", physical.join("empty").display())
+            );
+            assert_eq!(log_store.get_latest_version(0).await.unwrap(), 0);
+            assert!(physical.join("empty").is_dir());
+            execute_test_vacuum(&log_store, false).await;
+            assert_eq!(log_store.get_latest_version(0).await.unwrap(), 2);
+            assert!(!physical.join("empty").exists());
+            assert!(physical.join("_delta_log").is_dir());
+            assert!(physical.is_dir());
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn vacuum_directory_candidate_preserves_recent_untracked_contents() {
+        use datafusion::arrow::array::StringArray;
+        use datafusion::execution::object_store::ObjectStoreRegistry;
+
+        let root = DirectoryTestRoot::new();
+        let registry = test_registry();
+        let log_store =
+            create_empty_table(registry.get_store(&root.url()).unwrap(), root.url()).await;
+        let directory = root.0.join("_change_data");
+        std::fs::create_dir(&directory).unwrap();
+        let recent = directory.join("recent.parquet");
+        std::fs::write(&recent, b"retained").unwrap();
+        let dry_run = execute_test_vacuum(&log_store, true).await;
+        assert_eq!(dry_run.num_rows(), 1);
+        assert_eq!(
+            dry_run
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .value(0),
+            Url::from_file_path(&directory).unwrap().as_str()
+        );
+        assert_eq!(log_store.get_latest_version(0).await.unwrap(), 0);
+        execute_test_vacuum(&log_store, false).await;
+        assert_eq!(std::fs::read(recent).unwrap(), b"retained");
+        assert!(directory.is_dir());
+        assert_eq!(log_store.get_latest_version(0).await.unwrap(), 2);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn vacuum_discovers_directories_without_following_symlinks() {
+        let root = DirectoryTestRoot::new();
+        let outside = DirectoryTestRoot::new();
+        for name in [
+            "_delta_log",
+            ".hidden",
+            "_hidden",
+            "metadata",
+            "kept",
+            "dv",
+            "old/child",
+            "empty space% #",
+            "_part=x",
+        ] {
+            std::fs::create_dir_all(root.0.join(name)).unwrap();
+        }
+        std::fs::create_dir(outside.0.join("empty")).unwrap();
+        std::os::unix::fs::symlink(&outside.0, root.0.join("link")).unwrap();
+        let directories = root.directories(&["_part".to_string()]).await;
+        assert_eq!(directories.count(), 7);
+        // Missing active files and DVs still protect their directories.
+        let references = [
+            Path::from("kept/missing.parquet"),
+            Path::from("dv/missing.bin"),
+            Path::from("old/child/orphan"),
+        ];
+        let protected = directory_ancestors(references.iter());
+        let candidates = directories.candidates(&protected);
+        assert_eq!(
+            candidates.iter().cloned().collect::<HashSet<_>>(),
+            HashSet::from([
+                Path::parse("empty space% #").unwrap(),
+                Path::from("_part=x")
+            ])
+        );
+        assert_eq!(directories.delete(candidates, protected).await.unwrap(), 2);
+        assert!(root.0.is_dir());
+        assert!(root.0.join("_delta_log").is_dir());
+        assert!(root.0.join("kept").is_dir());
+        assert!(root.0.join("dv").is_dir());
+        assert!(outside.0.join("empty").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn vacuum_preserves_populated_replaced_and_newly_protected_directories() {
+        let root = DirectoryTestRoot::new();
+        let outside = DirectoryTestRoot::new();
+        for name in ["populated", "replaced", "ancestor/child", "protected"] {
+            std::fs::create_dir_all(root.0.join(name)).unwrap();
+        }
+        std::fs::create_dir(outside.0.join("child")).unwrap();
+        let directories = root.directories(&[]).await;
+        let candidates = directories.candidates(&HashSet::new());
+        std::fs::write(root.0.join("populated/new-file"), b"new data").unwrap();
+        std::fs::rename(root.0.join("replaced"), root.0.join("original")).unwrap();
+        std::fs::create_dir(root.0.join("replaced")).unwrap();
+        std::fs::rename(root.0.join("ancestor"), root.0.join("moved")).unwrap();
+        std::os::unix::fs::symlink(&outside.0, root.0.join("ancestor")).unwrap();
+        let protected = directory_ancestors([Path::from("protected/live.parquet")].iter());
+        assert_eq!(directories.delete(candidates, protected).await.unwrap(), 0);
+        assert_eq!(
+            std::fs::read(root.0.join("populated/new-file")).unwrap(),
+            b"new data"
+        );
+        assert!(root.0.join("replaced").is_dir());
+        assert!(root.0.join("original").is_dir());
+        assert!(root.0.join("protected").is_dir());
+        assert!(root.0.join("moved/child").is_dir());
+        assert!(outside.0.join("child").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn vacuum_removes_empty_ancestry_over_successive_passes() {
+        let root = DirectoryTestRoot::new();
+        std::fs::create_dir_all(root.0.join("old/child")).unwrap();
+        std::fs::create_dir(root.0.join("_delta_log")).unwrap();
+        std::fs::write(root.0.join("old/child/orphan"), b"old").unwrap();
+        let directories = root.directories(&[]).await;
+        let occupied = directory_ancestors([Path::from("old/child/orphan")].iter());
+        assert!(directories.candidates(&occupied).is_empty());
+        std::fs::remove_file(root.0.join("old/child/orphan")).unwrap();
+        for _ in 0..2 {
+            let directories = root.directories(&[]).await;
+            directories
+                .delete(directories.candidates(&HashSet::new()), HashSet::new())
+                .await
+                .unwrap();
+        }
+        assert!(!root.0.join("old").exists());
+        assert!(root.0.join("_delta_log").is_dir());
+        assert!(root.0.is_dir());
+    }
+
+    #[tokio::test]
+    async fn vacuum_counts_object_prefixes_without_deleting_directories() {
+        let store = InMemory::new();
+        for path in ["part=a/one", "part=a/two", "part=b/nested/three"] {
+            store.put(&Path::from(path), "data".into()).await.unwrap();
+        }
+        let files = store.list(None).try_collect::<Vec<_>>().await.unwrap();
+        let store: Arc<dyn ObjectStore> = Arc::new(store);
+        let directories = Directories::discover(
+            &store,
+            &Url::parse("s3://bucket/table/").unwrap(),
+            &[],
+            &files,
+        )
+        .await
+        .unwrap();
+        assert_eq!(directories.count(), 4);
+        assert!(directories.candidates(&HashSet::new()).is_empty());
+        assert_eq!(
+            directories
+                .delete(Vec::new(), HashSet::new())
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            store
+                .list(None)
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     #[tokio::test]
