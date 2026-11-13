@@ -992,3 +992,53 @@ Feature: Correlated query results
       | count(*)             | count(*) > 0  | NULL  | 1   | 2   |
       | sum(v)               | count(*) >= 0 | NULL  | 1   | 3   |
       | coalesce(sum(v), 99) | count(*) >= 0 | 99    | 1   | 3   |
+
+  Scenario: An IN aggregate groups by a cast correlation key
+    When query
+      """
+      SELECT o.id, o.v FROM VALUES (0L, 3), (0L, 2), (1L, 4), (2L, 1) o(id, v)
+      WHERE o.v IN (SELECT max(i.v) FROM VALUES ('0', 2), ('00', 3), ('1', 4) i(k, v)
+                    WHERE CAST(i.k AS BIGINT) = o.id)
+      ORDER BY o.id, o.v
+      """
+    Then query result ordered
+      | id | v |
+      | 0  | 3 |
+      | 1  | 4 |
+
+  Scenario Outline: An <predicate> aggregate groups by a cast correlation key
+    When query
+      """
+      SELECT o.id FROM VALUES (0L), (0L), (1L), (2L) o(id)
+      WHERE <predicate> (SELECT max(i.v) FROM VALUES ('0', 2), ('00', 3), ('1', 4) i(k, v)
+                         WHERE CAST(i.k AS BIGINT) = o.id HAVING sum(i.v) = 5)
+      ORDER BY o.id
+      """
+    Then query result ordered
+      | id      |
+      | <first> |
+      | <last>  |
+
+    Examples:
+      | predicate  | first | last |
+      | EXISTS     | 0     | 0    |
+      | NOT EXISTS | 1     | 2    |
+
+  Scenario Outline: An IN aggregate over a window partitions it by the <key> correlation key
+    When query
+      """
+      SELECT o.id, o.v FROM VALUES (0L, 3), (0L, 2), (1L, 4), (2L, 1) o(id, v)
+      WHERE o.v IN (SELECT max(w) + 1 FROM (
+                      SELECT row_number() OVER (ORDER BY i.v) AS w
+                      FROM VALUES ('0', 0L, 2), ('00', 0L, 3), ('1', 1L, 4) i(k, n, v)
+                      WHERE <correlation>))
+      ORDER BY o.id, o.v
+      """
+    Then query result ordered
+      | id | v |
+      | 0  | 3 |
+
+    Examples:
+      | key    | correlation                |
+      | column | i.n = o.id                 |
+      | cast   | CAST(i.k AS BIGINT) = o.id |
