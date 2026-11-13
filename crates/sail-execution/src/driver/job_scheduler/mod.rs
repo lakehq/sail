@@ -52,6 +52,7 @@ pub enum JobAction {
         handle: JobOutputHandle,
         key: TaskStreamKey,
         schema: SchemaRef,
+        retry_cause: Option<CommonErrorCause>,
     },
     FailJobOutput {
         handle: JobOutputHandle,

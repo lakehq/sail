@@ -19,7 +19,7 @@ use crate::driver::DriverActor;
 use crate::driver::job_scheduler::state::{
     JobDescriptor, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
-use crate::driver::job_scheduler::topology::TaskRegionTopology;
+use crate::driver::job_scheduler::topology::{TaskRegionTopology, TaskTopology};
 use crate::driver::job_scheduler::{JobAction, JobScheduler, JobState};
 use crate::driver::output::{JobOutputOutcome, build_job_output};
 use crate::error::{ExecutionError, ExecutionResult};
@@ -417,6 +417,16 @@ impl JobScheduler {
                 continue;
             }
 
+            // Snapshot the cause before replacing any attempts. A successful sibling may
+            // already have delivered output and must report this failure if replay is rejected.
+            job.regions[r].retry_cause = region.tasks.iter().find_map(|t| {
+                let attempt = job.stages[t.stage].tasks[t.partition].attempts.last()?;
+                if matches!(attempt.state, TaskState::Failed) {
+                    attempt.cause.clone()
+                } else {
+                    None
+                }
+            });
             for t in &region.tasks {
                 let attempts = &mut job.stages[t.stage].tasks[t.partition].attempts;
                 attempts.push(TaskAttemptDescriptor {
@@ -536,6 +546,14 @@ impl JobScheduler {
                     continue;
                 }
                 attempt.job_output_fetched = true;
+                let retry_cause = job
+                    .topology
+                    .task_regions
+                    .get(&TaskTopology {
+                        stage: s,
+                        partition: p,
+                    })
+                    .and_then(|r| job.regions[*r].retry_cause.clone());
                 for c in 0..channels {
                     let key = TaskStreamKey {
                         job_id,
@@ -548,6 +566,7 @@ impl JobScheduler {
                         handle: output.handle(),
                         key,
                         schema: schema.clone(),
+                        retry_cause: retry_cause.clone(),
                     });
                 }
             }
@@ -1130,29 +1149,28 @@ mod tests {
     use crate::id::{JobId, TaskKey};
     use crate::task::scheduling::{TaskOutputKind, TaskSetEntry};
 
-    #[tokio::test]
-    async fn late_unknown_commit_cancels_queued_retry() -> Result<(), Box<dyn std::error::Error>> {
-        use std::sync::Arc;
+    struct TestScheduler {
+        scheduler: super::JobScheduler,
+        assigner: crate::driver::task_assigner::TaskAssigner,
+        ctx: sail_common::actor::ActorContext<crate::driver::DriverActor>,
+        _system: sail_common::actor::ActorSystem,
+    }
 
-        use datafusion::arrow::datatypes::Schema;
-        use datafusion::datasource::memory::MemorySourceConfig;
-        use datafusion::execution::TaskContext;
+    fn test_scheduler(session_id: &str) -> Result<TestScheduler, Box<dyn std::error::Error>> {
+        use std::sync::OnceLock;
+
         use datafusion::prelude::SessionContext;
         use sail_common::actor::{ActorContext, ActorSystem};
         use sail_common::config::{AppConfig, SystemCatalogStore};
         use sail_common::runtime::RuntimeHandle;
-        use sail_common_datafusion::error::CommonErrorCause;
-        use sail_iceberg::SnapshotUpdateKind;
-        use sail_iceberg::physical_plan::IcebergCommitExec;
         use sail_telemetry::telemetry::{global_system_event_reporter, init_telemetry};
         use sail_telemetry::{ResourceKind, ResourceOptions};
-        use url::Url;
 
-        use super::{JobAction, JobScheduler, JobState, TaskState};
+        use super::JobScheduler;
         use crate::driver::job_scheduler::JobSchedulerOptions;
         use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
         use crate::driver::{DriverActor, DriverComponents, DriverOptions};
-        use crate::id::{DriverId, WorkerId};
+        use crate::id::DriverId;
         use crate::worker_manager::LocalWorkerManager;
 
         let mut config = AppConfig::load()?;
@@ -1163,26 +1181,32 @@ mod tests {
         config.telemetry.export_traces = false;
         config.telemetry.export_metrics = false;
         config.telemetry.export_logs = false;
-        init_telemetry(
-            &config.telemetry,
-            &config.catalog.system,
-            ResourceOptions {
-                kind: ResourceKind::Server,
-            },
-        )?;
+        static TELEMETRY_INIT: OnceLock<Result<(), String>> = OnceLock::new();
+        TELEMETRY_INIT
+            .get_or_init(|| {
+                init_telemetry(
+                    &config.telemetry,
+                    &config.catalog.system,
+                    ResourceOptions {
+                        kind: ResourceKind::Server,
+                    },
+                )
+                .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(Clone::clone)?;
         let reporter = global_system_event_reporter().ok_or("missing event reporter")?;
         let handle = tokio::runtime::Handle::current();
         let runtime = RuntimeHandle::new(handle.clone(), handle);
         let options = DriverOptions::try_new(
             &config,
             runtime.clone(),
-            "late-unknown-commit".into(),
+            session_id.into(),
             DriverId::from(1),
             0,
         )?;
-        let mut scheduler =
-            JobScheduler::new(JobSchedulerOptions::from(&options), reporter.clone());
-        let mut assigner = TaskAssigner::new(TaskAssignerOptions::from(&options));
+        let scheduler = JobScheduler::new(JobSchedulerOptions::from(&options), reporter.clone());
+        let assigner = TaskAssigner::new(TaskAssignerOptions::from(&options));
         let mut system = ActorSystem::new();
         let driver = system.spawn::<DriverActor>((
             options,
@@ -1191,7 +1215,124 @@ mod tests {
                 event_reporter: reporter,
             },
         ));
-        let mut ctx = ActorContext::new(&driver);
+        Ok(TestScheduler {
+            scheduler,
+            assigner,
+            ctx: ActorContext::new(&driver),
+            _system: system,
+        })
+    }
+
+    #[tokio::test]
+    async fn retry_output_carries_current_region_failure_to_successful_siblings()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_expr::Partitioning;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        use super::{JobAction, TaskState};
+
+        let TestScheduler {
+            mut scheduler,
+            mut ctx,
+            _system,
+            ..
+        } = test_scheduler("retry-output-cause")?;
+        let input = MemorySourceConfig::try_new_exec(&[vec![]], Arc::new(Schema::empty()), None)?;
+        let plan = Arc::new(RepartitionExec::try_new(
+            input,
+            Partitioning::RoundRobinBatch(2),
+        )?);
+        let (job_id, _output) =
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        scheduler.refresh_job(job_id);
+        let key = |stage, partition, attempt| TaskKey {
+            job_id,
+            stage,
+            partition,
+            attempt,
+        };
+        assert_eq!(
+            scheduler.task_region(&key(1, 0, 0)),
+            scheduler.task_region(&key(1, 1, 0))
+        );
+
+        for (attempt, cause) in [
+            Some(CommonErrorCause::ArrowCast("invalid integer".into())),
+            None,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            scheduler.update_task(&key(0, 0, attempt), TaskState::Succeeded, None, None);
+            scheduler.update_task(&key(1, 0, attempt), TaskState::Failed, None, cause.clone());
+            scheduler.update_task(&key(1, 1, attempt), TaskState::Succeeded, None, None);
+            let actions = scheduler.refresh_job(job_id);
+            assert!(
+                actions
+                    .iter()
+                    .any(|action| matches!(action, JobAction::ScheduleTaskRegion { .. }))
+            );
+            assert!(
+                !actions
+                    .iter()
+                    .any(|action| matches!(action, JobAction::FailJobOutput { .. }))
+            );
+
+            // The successful sibling has no task error of its own, but its retry must
+            // carry the failed partition's cause. A later cause-less retry must not
+            // reuse the failure from an older region attempt.
+            scheduler.update_task(&key(1, 1, attempt + 1), TaskState::Running, None, None);
+            let actions = scheduler.refresh_job(job_id);
+            let retry_causes = actions
+                .iter()
+                .filter_map(|action| match action {
+                    JobAction::ExtendJobOutput {
+                        key, retry_cause, ..
+                    } if key.stage == 1 && key.partition == 1 && key.attempt == attempt + 1 => {
+                        Some(retry_cause)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(retry_causes.len(), 1);
+            if cause.is_some() {
+                assert!(
+                    matches!(retry_causes[0], Some(CommonErrorCause::ArrowCast(message)) if message == "invalid integer")
+                );
+            } else {
+                assert!(retry_causes[0].is_none());
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn late_unknown_commit_cancels_queued_retry() -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use sail_common_datafusion::error::CommonErrorCause;
+        use sail_iceberg::SnapshotUpdateKind;
+        use sail_iceberg::physical_plan::IcebergCommitExec;
+        use url::Url;
+
+        use super::{JobAction, JobState, TaskState};
+        use crate::id::WorkerId;
+
+        let TestScheduler {
+            mut scheduler,
+            mut assigner,
+            mut ctx,
+            _system,
+        } = test_scheduler("late-unknown-commit")?;
         let input = MemorySourceConfig::try_new_exec(&[vec![]], Arc::new(Schema::empty()), None)?;
         let plan = Arc::new(IcebergCommitExec::new(
             input,
