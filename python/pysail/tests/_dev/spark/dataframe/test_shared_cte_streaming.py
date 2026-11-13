@@ -142,7 +142,7 @@ def test_deterministic_cte_over_volatile_cte(spark):
     """`d` is deterministic but reads the volatile `c`: both references of `d` and the direct
     references of `c` read one evaluation of `c`."""
     query = (
-        f"WITH {volatile()}, d AS (SELECT id % 1000 AS g, sum(r) AS s, max(pad) AS pad FROM c GROUP BY 1) "
+        f"WITH {volatile()}, d AS (SELECT id % 1000 AS g, sum(r) AS s, max(pad) AS pad FROM c GROUP BY 1) "  # noqa: S608
         "SELECT count(*), count_if(abs(a.s - b.s) < 1e-9), sum(length(a.pad) + length(b.pad)), "
         "abs((SELECT sum(r) FROM c) - (SELECT sum(s) FROM d)) < 1e-6 FROM d a JOIN d b ON a.g = b.g"
     )
@@ -179,7 +179,7 @@ def test_partition_wise_join_of_deterministic_cte(spark):
 def test_nested_chain_of_deterministic_ctes(spark):
     ctes = ["c0 AS (SELECT id % 5000 AS k, id AS v FROM range(0, 20000, 1, 4))"]
     ctes.extend(
-        f"c{i} AS (SELECT a.k, a.v FROM c{i - 1} a JOIN (SELECT DISTINCT k FROM c{i - 1}) b ON a.k = b.k)"
+        f"c{i} AS (SELECT a.k, a.v FROM c{i - 1} a JOIN (SELECT DISTINCT k FROM c{i - 1}) b ON a.k = b.k)"  # noqa: S608
         for i in range(1, 6)
     )
     query = f"WITH {', '.join(ctes)} SELECT count(*), sum(v) FROM c5"  # noqa: S608
@@ -193,7 +193,7 @@ def test_each_reference_reads_all_rows_of_one_evaluation(spark):
     body = f"SELECT k, max({WIDE}) AS pad FROM (SELECT id % 300000 AS k FROM {SOURCE}) GROUP BY k"  # noqa: S608
     for cte, n in [
         (f"c AS ({body} LIMIT 250000)", 250000),
-        (f"c AS (SELECT /*+ REPARTITION(7) */ * FROM ({body}))", 300000),
+        (f"c AS (SELECT /*+ REPARTITION(7) */ * FROM ({body}))", 300000),  # noqa: S608
     ]:
         query = (
             f"WITH {cte} SELECT count(a.k), count(DISTINCT a.k), count(b.k), count(DISTINCT b.k), "  # noqa: S608
@@ -238,7 +238,7 @@ def test_limits_over_volatile_cte_read_one_evaluation(spark, counted):
         assert counted() < ROWS // 4
 
 
-def test_limit_and_exists_over_volatile_cte(spark, counted):
+def test_limit_and_exists_over_volatile_cte(spark, counted):  # noqa: ARG001
     query = (
         f"WITH c AS (SELECT id, counted(id) AS v, rand() AS r FROM {SOURCE}) "  # noqa: S608
         "SELECT count(*), count(x.v) FROM (SELECT * FROM c LIMIT 10) x "
@@ -279,7 +279,7 @@ def test_cte_is_not_evaluated_when_the_other_join_side_is_empty(spark, counted, 
         if cte == "aggregate-body" and LOCAL_CLUSTER:
             assert counted() <= (2000 if STORED_SHUFFLE else 1000)
         elif cte == "volatile-body" and STORED_SHUFFLE:
-            assert counted() <= 1000
+            assert counted() <= 1000  # noqa: PLR2004
         else:
             assert counted() == 0
 
@@ -287,12 +287,12 @@ def test_cte_is_not_evaluated_when_the_other_join_side_is_empty(spark, counted, 
 # Errors: a query fails if and only if a reference reads a row that fails.
 
 FAILS_AT_3 = "100 DIV (id - 3)"
-VOLATILE_FALLIBLE = f"c AS (SELECT id AS k, id AS v, rand() AS u, {FAILS_AT_3} AS f FROM range(0, 2000, 1, 3))"
+VOLATILE_FALLIBLE = f"c AS (SELECT id AS k, id AS v, rand() AS u, {FAILS_AT_3} AS f FROM range(0, 2000, 1, 3))"  # noqa: S608
 DETERMINISTIC_FALLIBLE = (
     "c AS (SELECT k, max(v) AS v, 100 DIV (k - 3) AS f FROM (SELECT id AS k, id AS v FROM range(0, 2000, 1, 3)) "
     "GROUP BY k)"
 )
-EXPECTED_SUM_F = sum(100 // (k - 3) if (k - 3) > 0 else -(100 // (3 - k)) for k in range(2000) if k != 3)
+EXPECTED_SUM_F = sum(100 // (k - 3) if (k - 3) > 0 else -(100 // (3 - k)) for k in range(2000) if k != 3)  # noqa: PLR2004
 
 
 @pytest.mark.parametrize("cte", [VOLATILE_FALLIBLE, DETERMINISTIC_FALLIBLE], ids=["volatile", "deterministic"])
@@ -327,7 +327,7 @@ def test_failing_column_that_no_reference_reads(spark, ansi, cte):  # noqa: ARG0
 def test_failing_row_filtered_out_by_every_reference(spark, ansi, volatile):  # noqa: ARG001
     if volatile:
         cte = "c AS (SELECT id AS k, rand() AS r, 10 DIV (id - 5) AS q FROM range(0, 1000, 1, 4))"
-        on, expected = "a.k = b.k AND a.r = b.r", [(999, sum(2 * int(10 / (k - 5)) for k in range(1000) if k != 5))]
+        on, expected = "a.k = b.k AND a.r = b.r", [(999, sum(2 * int(10 / (k - 5)) for k in range(1000) if k != 5))]  # noqa: PLR2004
     else:
         cte = "c AS (SELECT k, 10 DIV (k - 5) AS q FROM (SELECT id % 10 AS k FROM range(0, 1000, 1, 4)) GROUP BY k)"
         on, expected = "a.k = b.k", [(9, -4)]
@@ -388,8 +388,8 @@ def test_failing_volatile_cte_whose_references_are_not_read(spark, ansi):  # noq
 def test_failing_deterministic_cte_whose_references_are_not_read(spark, ansi):  # noqa: ARG001
     """Every reference is the probe side of a join whose build side is empty at runtime."""
     query = (
-        "WITH c AS (SELECT k, sum(id) AS s, 10 DIV (k - 5) AS q FROM (SELECT id % 10 AS k, id FROM range(0, 1000, 1, 4)) "
-        f"GROUP BY k) SELECT count(*) FROM {EMPTY} e JOIN c a ON e.k = a.k JOIN c b ON a.k = b.k AND a.q = b.q"  # noqa: S608
+        "WITH c AS (SELECT k, sum(id) AS s, 10 DIV (k - 5) AS q FROM (SELECT id % 10 AS k, id FROM range(0, 1000, 1, 4)) "  # noqa: S608
+        f"GROUP BY k) SELECT count(*) FROM {EMPTY} e JOIN c a ON e.k = a.k JOIN c b ON a.k = b.k AND a.q = b.q"
     )
     assert rows(spark, query) == [(0,)]
 
@@ -397,11 +397,11 @@ def test_failing_deterministic_cte_whose_references_are_not_read(spark, ansi):  
 @pytest.mark.parametrize(
     "query",
     [
-        f"WITH {VOLATILE_FALLIBLE} SELECT count(*), sum(a.f + b.f) FROM c a JOIN c b ON a.k = b.k",
-        f"WITH {DETERMINISTIC_FALLIBLE} SELECT count(*), sum(a.f) FROM c a JOIN c b ON a.k = b.k",
-        f"WITH {DETERMINISTIC_FALLIBLE} SELECT count(*), sum(CASE WHEN a.k <> 3 THEN a.f END) FROM c a JOIN c b ON a.k = b.k",
-        f"WITH {DETERMINISTIC_FALLIBLE} SELECT (SELECT sum(CASE WHEN k <> 3 THEN f END) FROM c), (SELECT count(*) FROM c)",
-        f"WITH {VOLATILE_FALLIBLE} SELECT (SELECT sum(CASE WHEN k <> 3 THEN f END) FROM c), (SELECT count(*) FROM c)",
+        f"WITH {VOLATILE_FALLIBLE} SELECT count(*), sum(a.f + b.f) FROM c a JOIN c b ON a.k = b.k",  # noqa: S608
+        f"WITH {DETERMINISTIC_FALLIBLE} SELECT count(*), sum(a.f) FROM c a JOIN c b ON a.k = b.k",  # noqa: S608
+        f"WITH {DETERMINISTIC_FALLIBLE} SELECT count(*), sum(CASE WHEN a.k <> 3 THEN a.f END) FROM c a JOIN c b ON a.k = b.k",  # noqa: S608
+        f"WITH {DETERMINISTIC_FALLIBLE} SELECT (SELECT sum(CASE WHEN k <> 3 THEN f END) FROM c), (SELECT count(*) FROM c)",  # noqa: S608
+        f"WITH {VOLATILE_FALLIBLE} SELECT (SELECT sum(CASE WHEN k <> 3 THEN f END) FROM c), (SELECT count(*) FROM c)",  # noqa: S608
     ],
     ids=["volatile", "deterministic", "guarded-join", "guarded-aggregate", "guarded-volatile"],
 )

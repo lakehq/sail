@@ -141,14 +141,14 @@ _SHARED_CTE = "c AS (SELECT id % 7 AS k, count(*) AS n FROM range(1000) GROUP BY
 @pytest.mark.parametrize(
     ("query", "expected"),
     [
-        (f"WITH {_SHARED_CTE} SELECT count(*), sum(a.n + b.n) FROM c a JOIN c b ON a.k = b.k", [(7, 2000)]),
-        (f"WITH {_SHARED_CTE} SELECT count(*), sum(n) FROM (SELECT * FROM c UNION ALL SELECT * FROM c)", [(14, 2000)]),
+        (f"WITH {_SHARED_CTE} SELECT count(*), sum(a.n + b.n) FROM c a JOIN c b ON a.k = b.k", [(7, 2000)]),  # noqa: S608
+        (f"WITH {_SHARED_CTE} SELECT count(*), sum(n) FROM (SELECT * FROM c UNION ALL SELECT * FROM c)", [(14, 2000)]),  # noqa: S608
         (
-            f"WITH {_SHARED_CTE} SELECT count(*) FROM (SELECT id FROM range(10) WHERE id < 0) e "
+            f"WITH {_SHARED_CTE} SELECT count(*) FROM (SELECT id FROM range(10) WHERE id < 0) e "  # noqa: S608
             "JOIN c a ON e.id = a.k JOIN c b ON a.k = b.k",
             [(0,)],
         ),
-        (f"WITH {_SHARED_CTE} SELECT a.k FROM c a JOIN c b ON a.k = b.k ORDER BY 1 LIMIT 3", [(0,), (1,), (2,)]),
+        (f"WITH {_SHARED_CTE} SELECT a.k FROM c a JOIN c b ON a.k = b.k ORDER BY 1 LIMIT 3", [(0,), (1,), (2,)]),  # noqa: S608
         # The output of the shared CTE is empty in most partitions, which are read as ranges
         # without batches of a file with batches.
         (
@@ -177,8 +177,8 @@ def test_shared_cte_with_celeborn_shuffle(spark, query, expected):
 
 def test_shared_cte_error_with_celeborn_shuffle(spark):
     cte = "c AS (SELECT id % 7 AS k, max(100 DIV (id - 3)) AS q FROM range(1000) GROUP BY 1)"
-    query = f"WITH {cte} SELECT sum(a.q + b.q) FROM c a JOIN c b ON a.k = b.k"
-    with pytest.raises(PySparkException, match="(?i)divi"):
+    query = f"WITH {cte} SELECT sum(a.q + b.q) FROM c a JOIN c b ON a.k = b.k"  # noqa: S608
+    with pytest.raises(PySparkException, match=r"(?i)divi"):
         spark.sql(query).collect()
 
 
@@ -193,5 +193,5 @@ def test_celeborn_shuffle_is_usable_after_a_shared_cte_without_output(spark):
     )
     for _ in range(2):
         assert [tuple(row) for row in spark.sql(query).collect()] == [(0,)]
-        query_with_output = f"WITH {_SHARED_CTE} SELECT count(*), sum(a.n + b.n) FROM c a JOIN c b ON a.k = b.k"
+        query_with_output = f"WITH {_SHARED_CTE} SELECT count(*), sum(a.n + b.n) FROM c a JOIN c b ON a.k = b.k"  # noqa: S608
         assert [tuple(row) for row in spark.sql(query_with_output).collect()] == [(7, 2000)]

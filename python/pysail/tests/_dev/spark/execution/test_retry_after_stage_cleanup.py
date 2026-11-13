@@ -26,11 +26,11 @@ GROUPS = (
 @pytest.mark.timeout(60)
 def test_failing_task_after_stage_clean_up_fails_the_query(spark):
     query = (
-        "SELECT count(*) AS n, sum(v) AS s FROM "
+        "SELECT count(*) AS n, sum(v) AS s FROM "  # noqa: S608
         f"(SELECT k, 1000000 DIV (k - 3) AS v FROM {GROUPS} a) c "
         f"WHERE v >= (SELECT avg(1000000 DIV (k - 3)) FROM {GROUPS} b)"
     )
     # A retried task attempt can replace the error with a conflict between attempts.
     # TODO: report the error of the failed task in cluster mode.
-    with pytest.raises(PySparkException, match="(?i)division by zero|different attempt"):
+    with pytest.raises(PySparkException, match=r"(?i)division by zero|different attempt"):
         spark.sql(query).collect()

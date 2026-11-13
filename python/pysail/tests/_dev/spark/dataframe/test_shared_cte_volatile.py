@@ -402,7 +402,7 @@ def test_cte_reading_a_volatile_cte_through_a_scalar_subquery_is_evaluated_once(
     """Spark inlines the volatile CTE, which has one reference, into the other CTE, which is then
     non-deterministic and evaluated once for its references (InlineCTE)."""
     ctes = (
-        f"WITH c0 AS (SELECT {function} AS r FROM range(1)), "
+        f"WITH c0 AS (SELECT {function} AS r FROM range(1)), "  # noqa: S608
         "c AS (SELECT id AS k, (SELECT max(r) FROM c0) AS s FROM range(10)) "
     )
     assert spark.sql(ctes + query).collect()[0][0] == expected

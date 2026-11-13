@@ -103,7 +103,7 @@ def check_retried_cte_query_fails(spark):
     spark.conf.set("spark.sql.ansi.enabled", "true")
     try:
         for _ in range(24):
-            with pytest.raises(PySparkException, match="(?i)division by zero"):
+            with pytest.raises(PySparkException, match=r"(?i)division by zero"):
                 spark.sql(RETRIED_CTE_QUERY).collect()
     finally:
         spark.conf.unset("spark.sql.ansi.enabled")

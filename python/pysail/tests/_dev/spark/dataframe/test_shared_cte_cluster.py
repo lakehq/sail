@@ -39,9 +39,10 @@ def test_shared_cte_is_read_by_union_branches(spark):
 def test_nested_shared_ctes(spark, depth):
     ctes = ["c0 AS (SELECT id FROM range(10))"]
     ctes.extend(
-        f"c{i} AS (SELECT a.id FROM c{i - 1} a JOIN c{i - 1} b ON a.id = b.id)" for i in range(1, depth + 1)
+        f"c{i} AS (SELECT a.id FROM c{i - 1} a JOIN c{i - 1} b ON a.id = b.id)"  # noqa: S608
+        for i in range(1, depth + 1)
     )
-    query = f"WITH {', '.join(ctes)} SELECT count(*) FROM c{depth}"
+    query = f"WITH {', '.join(ctes)} SELECT count(*) FROM c{depth}"  # noqa: S608
     assert spark.sql(query).collect() == [(10,)]
 
 
@@ -57,14 +58,14 @@ def test_insert_and_merge_from_shared_cte(spark, tmp_path):
     spark.sql(f"CREATE TABLE shared_cte_target (k BIGINT, n BIGINT) USING delta LOCATION '{tmp_path / 't'}'")
     cte = "c AS (SELECT id % 7 AS k, count(*) AS n FROM range(1000) GROUP BY 1)"
     try:
-        spark.sql(f"INSERT INTO shared_cte_target WITH {cte} SELECT a.k, a.n + b.n FROM c a JOIN c b ON a.k = b.k")
+        spark.sql(f"INSERT INTO shared_cte_target WITH {cte} SELECT a.k, a.n + b.n FROM c a JOIN c b ON a.k = b.k")  # noqa: S608
         assert spark.sql("SELECT count(*), sum(n) FROM shared_cte_target").collect() == [(7, 2000)]
         spark.sql(f"""
             MERGE INTO shared_cte_target t
             USING (WITH {cte} SELECT a.k, a.n + b.n AS n FROM c a JOIN c b ON a.k = b.k) s
             ON t.k = s.k
             WHEN MATCHED THEN UPDATE SET n = t.n + s.n
-        """)
+        """)  # noqa: S608
         assert spark.sql("SELECT count(*), sum(n) FROM shared_cte_target").collect() == [(7, 4000)]
     finally:
         spark.sql("DROP TABLE IF EXISTS shared_cte_target")
@@ -92,11 +93,11 @@ def test_shared_cte_error_fails_only_the_stages_that_read_it(spark):
     cte = "c AS (SELECT k, v, 100 DIV v AS q FROM shared_cte_t GROUP BY k, v)"
     join = "JOIN c a ON e.k = a.k JOIN c b ON a.k = b.k AND a.q = b.q"
     try:
-        query = f"WITH {cte} SELECT count(*) FROM shared_cte_e e {join}"
+        query = f"WITH {cte} SELECT count(*) FROM shared_cte_e e {join}"  # noqa: S608
         assert spark.sql(query).collect() == [(0,)]
         plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
         assert ("SharedCteExec" in plan) == shares_deterministic_ctes(), plan
-        query = f"WITH {cte} SELECT count(*) FROM shared_cte_t e {join}"
+        query = f"WITH {cte} SELECT count(*) FROM shared_cte_t e {join}"  # noqa: S608
         # The error can be reported as a conflict between task attempts, since the
         # failed stage is retried after the query has received partial output.
         with pytest.raises(PySparkException):

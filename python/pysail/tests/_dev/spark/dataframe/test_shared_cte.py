@@ -35,9 +35,10 @@ def check(spark, query, expected, *, shared, scans, must_share=False):
 def nested(depth):
     ctes = ["c0 AS (SELECT id FROM range(10))"]
     ctes.extend(
-        f"c{i} AS (SELECT a.id FROM c{i - 1} a JOIN c{i - 1} b ON a.id = b.id)" for i in range(1, depth + 1)
+        f"c{i} AS (SELECT a.id FROM c{i - 1} a JOIN c{i - 1} b ON a.id = b.id)"  # noqa: S608
+        for i in range(1, depth + 1)
     )
-    return f"WITH {', '.join(ctes)} SELECT count(*) FROM c{depth}"
+    return f"WITH {', '.join(ctes)} SELECT count(*) FROM c{depth}"  # noqa: S608
 
 
 @pytest.mark.parametrize("depth", [12, 16, 24])
@@ -49,7 +50,7 @@ def test_nested_cte_plan_is_linear_in_depth(spark, depth):
             pytest.skip("the plan is exponential in the depth")
     else:
         text = plan(spark, query)
-        assert len(text.splitlines()) < 10 * depth + 20  # noqa: PLR2004
+        assert len(text.splitlines()) < 10 * depth + 20
         # The first CTE only projects the range, so it is inlined into the second one,
         # whose join is evaluated by each of its two references in the third one.
         assert text.count("RangeExec") == 4  # noqa: PLR2004
@@ -60,31 +61,31 @@ def test_nested_cte_plan_is_linear_in_depth(spark, depth):
 def test_join_references_share_one_evaluation(spark, references):
     joins = " ".join(f"JOIN c t{i} ON t0.k = t{i}.k" for i in range(1, references))
     total = " + ".join(f"t{i}.n" for i in range(references))
-    query = f"WITH {CTE} SELECT sum({total}) FROM c t0 {joins}"
+    query = f"WITH {CTE} SELECT sum({total}) FROM c t0 {joins}"  # noqa: S608
     check(spark, query, [(1000 * references,)], shared=True, scans=1)
 
 
 @pytest.mark.parametrize("references", [2, 3])
 def test_union_references_share_one_evaluation(spark, references):
     branches = " UNION ALL ".join("SELECT n FROM c" for _ in range(references))
-    query = f"WITH {CTE} SELECT sum(n) FROM ({branches})"
+    query = f"WITH {CTE} SELECT sum(n) FROM ({branches})"  # noqa: S608
     check(spark, query, [(1000 * references,)], shared=True, scans=1)
 
 
 def test_references_with_different_columns_share_one_evaluation(spark):
-    query = f"WITH {CTE} SELECT a.k, a.n, b.m FROM c a JOIN c b ON a.k = b.k WHERE a.k = 0"
+    query = f"WITH {CTE} SELECT a.k, a.n, b.m FROM c a JOIN c b ON a.k = b.k WHERE a.k = 0"  # noqa: S608
     check(spark, query, [(0, 143, 994)], shared=True, scans=1)
-    query = f"WITH {CTE} SELECT sum(a.n), max(b.m) FROM c a JOIN c b ON a.k = b.k"
+    query = f"WITH {CTE} SELECT sum(a.n), max(b.m) FROM c a JOIN c b ON a.k = b.k"  # noqa: S608
     check(spark, query, [(1000, 999)], shared=True, scans=1)
 
 
 def test_references_with_the_same_filter_share_one_evaluation(spark):
-    query = f"WITH {CTE} SELECT k, n FROM c WHERE k < 2 UNION ALL SELECT k, m FROM c WHERE k < 2"
+    query = f"WITH {CTE} SELECT k, n FROM c WHERE k < 2 UNION ALL SELECT k, m FROM c WHERE k < 2"  # noqa: S608
     check(spark, query, [(0, 143), (1, 143), (0, 994), (1, 995)], shared=True, scans=1)
 
 
 def test_references_with_different_filters_are_inlined(spark):
-    query = f"WITH {CTE} SELECT k, n FROM c WHERE k < 2 UNION ALL SELECT k, n FROM c WHERE k > 5"
+    query = f"WITH {CTE} SELECT k, n FROM c WHERE k < 2 UNION ALL SELECT k, n FROM c WHERE k > 5"  # noqa: S608
     check(spark, query, [(0, 143), (1, 143), (6, 142)], shared=False, scans=2)
 
 
@@ -104,7 +105,7 @@ def test_references_with_the_same_limit_are_inlined(spark):
     assert len(spark.sql(query).collect()) == 2  # noqa: PLR2004
     if not is_jvm_spark():
         assert "SharedCteExec" not in plan(spark, query)
-    query = f"WITH {CTE} (SELECT max(n) FROM c) UNION ALL (SELECT max(m) FROM c) LIMIT 2"
+    query = f"WITH {CTE} (SELECT max(n) FROM c) UNION ALL (SELECT max(m) FROM c) LIMIT 2"  # noqa: S608
     check(spark, query, [(143,), (999,)], shared=True, scans=1)
 
 
@@ -118,7 +119,7 @@ def test_filter_columns_are_evaluated_by_the_filter_only(spark):
 
 def test_parameters_in_shared_cte(spark):
     cte = "c AS (SELECT id, max(id) + {n} AS v FROM range(10) WHERE id > {lo} GROUP BY id)"
-    query = f"WITH {cte} SELECT sum(a.v + b.v) FROM c a JOIN c b ON a.id = b.id"
+    query = f"WITH {cte} SELECT sum(a.v + b.v) FROM c a JOIN c b ON a.id = b.id"  # noqa: S608
     named = query.format(n=":n", lo=":lo")
     assert spark.sql(named, args={"lo": 3, "n": 100}).collect() == [(1278,)]
     positional = query.format(n="?", lo="?")
@@ -133,9 +134,7 @@ def test_input_files_of_shared_cte(spark, tmp_path):
     spark.range(30).repartition(3).write.parquet(path)
     spark.read.parquet(path).createOrReplaceTempView("shared_cte_input_files")
     try:
-        df = spark.sql(
-            "WITH c AS (SELECT id FROM shared_cte_input_files) SELECT a.id FROM c a JOIN c b ON a.id = b.id"
-        )
+        df = spark.sql("WITH c AS (SELECT id FROM shared_cte_input_files) SELECT a.id FROM c a JOIN c b ON a.id = b.id")
         files = spark.read.parquet(path).inputFiles()
         assert files
         assert sorted(df.inputFiles()) == sorted(files)
@@ -147,18 +146,18 @@ def test_input_files_of_shared_cte(spark, tmp_path):
 def test_filtered_rows_are_not_evaluated(spark):
     """The division fails for `id = 2`, which every reference filters out."""
     cte = "c AS (SELECT id, 10 / (id - 2) AS r FROM range(5) GROUP BY id)"
-    query = f"WITH {cte} SELECT a.r, b.r FROM c a JOIN c b ON a.id = b.id WHERE a.id > 2 AND b.id > 2"
+    query = f"WITH {cte} SELECT a.r, b.r FROM c a JOIN c b ON a.id = b.id WHERE a.id > 2 AND b.id > 2"  # noqa: S608
     check(spark, query, [(10.0, 10.0), (5.0, 5.0)], shared=True, scans=1)
     # A scalar subquery in the filter is not part of what the references read.
     query = (
-        f"WITH {cte} SELECT a.r, b.r FROM c a JOIN c b ON a.id = b.id "
+        f"WITH {cte} SELECT a.r, b.r FROM c a JOIN c b ON a.id = b.id "  # noqa: S608
         "WHERE a.id > (SELECT 2) AND b.id > (SELECT 2)"
     )
     assert sorted(tuple(row) for row in spark.sql(query).collect()) == [(5.0, 5.0), (10.0, 10.0)]
-    query = f"WITH {cte} SELECT a.r FROM c a JOIN c b ON a.id = b.id"
+    query = f"WITH {cte} SELECT a.r FROM c a JOIN c b ON a.id = b.id"  # noqa: S608
     # In cluster mode the error can be reported as a conflict between task attempts, since
     # the failed stage is retried after the query has received partial output.
-    with pytest.raises(PySparkException, match="(?i)divi|different attempt"):
+    with pytest.raises(PySparkException, match=r"(?i)divi|different attempt"):
         spark.sql(query).collect()
 
 
@@ -269,9 +268,9 @@ def test_sorted_cte_is_inlined(spark):
 
 
 def test_from_and_scalar_subquery_references_share_one_evaluation(spark):
-    query = f"WITH {CTE} SELECT k, n FROM c WHERE n = (SELECT max(n) FROM c) AND k > 4"
+    query = f"WITH {CTE} SELECT k, n FROM c WHERE n = (SELECT max(n) FROM c) AND k > 4"  # noqa: S608
     check(spark, query, [(5, 143)], shared=False, scans=2)
-    query = f"WITH {CTE} SELECT sum(n), (SELECT max(m) FROM c) FROM c"
+    query = f"WITH {CTE} SELECT sum(n), (SELECT max(m) FROM c) FROM c"  # noqa: S608
     check(spark, query, [(1000, 999)], shared=True, scans=1)
 
 
@@ -280,7 +279,7 @@ def test_nested_cte_references_share_one_evaluation(spark):
         WITH {CTE},
         d AS (SELECT a.k, a.n + b.n AS t FROM c a JOIN c b ON a.k = b.k)
         SELECT sum(x.t), sum(y.t) FROM d x JOIN d y ON x.k = y.k
-    """
+    """  # noqa: S608
     # The second CTE refers to the first one, so it is shared in any configuration; the
     # first one is evaluated by each reference in it when deterministic CTEs are not shared.
     scans = 1 if shares_deterministic_ctes() else 2
@@ -294,7 +293,7 @@ def test_cte_that_projects_one_source_is_inlined(spark):
 
 def test_distinct_references_turn_a_join_into_a_semi_join(spark):
     cte = "j AS (SELECT a.id, b.v FROM range(10) a JOIN (SELECT id % 3 AS id, id AS v FROM range(9)) b ON a.id = b.id)"
-    query = f"WITH {cte} SELECT count(*) FROM (SELECT DISTINCT id FROM j UNION ALL SELECT DISTINCT id FROM j)"
+    query = f"WITH {cte} SELECT count(*) FROM (SELECT DISTINCT id FROM j UNION ALL SELECT DISTINCT id FROM j)"  # noqa: S608
     assert spark.sql(query).collect() == [(6,)]
     if not is_jvm_spark():
         text = plan(spark, query)
@@ -340,7 +339,7 @@ def test_independent_ctes_with_different_filters_are_inlined(spark):
         WITH {CTE}, d AS (SELECT id % 5 AS k, sum(id) AS s FROM range(100) GROUP BY 1)
         SELECT (SELECT sum(n) FROM c WHERE k < 2) + (SELECT sum(n) FROM c WHERE k > 4),
                (SELECT sum(s) FROM d WHERE k < 1) + (SELECT sum(s) FROM d WHERE k > 3)
-    """
+    """  # noqa: S608
     check(spark, query, [(571, 1980)], shared=False, scans=4)
 
 
@@ -360,18 +359,18 @@ def test_ctes_in_different_sharing_states(spark):
     expected += [(11, 11), (30, 30), (30, 30), (30, 30), (30, 30)]
     assert sorted(tuple(row) for row in spark.sql(query).collect()) == sorted(expected)
     # A repeated reference below a projection of all its columns is replaced by its definition.
-    query = f"WITH {CTE} SELECT k, n, m FROM c UNION ALL SELECT k, n, m FROM c WHERE k > 5"
+    query = f"WITH {CTE} SELECT k, n, m FROM c UNION ALL SELECT k, n, m FROM c WHERE k > 5"  # noqa: S608
     expected = [(k, 143, 994 + k) for k in range(6)] + [(6, 142, 993), (6, 142, 993)]
     check(spark, query, expected, shared=False, scans=2)
 
 
 def test_single_reference_is_inlined(spark):
-    query = f"WITH {CTE} SELECT sum(n) FROM c"
+    query = f"WITH {CTE} SELECT sum(n) FROM c"  # noqa: S608
     check(spark, query, [(1000,)], shared=False, scans=1)
 
 
 def test_predicate_subquery_references_share_one_evaluation(spark):
-    query = f"WITH {CTE} SELECT sum(n) FROM c a WHERE EXISTS (SELECT 1 FROM c b WHERE a.k = b.k AND b.n > 142)"
+    query = f"WITH {CTE} SELECT sum(n) FROM c a WHERE EXISTS (SELECT 1 FROM c b WHERE a.k = b.k AND b.n > 142)"  # noqa: S608
     check(spark, query, [(858,)], shared=False, scans=2)
-    query = f"WITH {CTE} SELECT sum(n) FROM c a WHERE k IN (SELECT k FROM c)"
+    query = f"WITH {CTE} SELECT sum(n) FROM c a WHERE k IN (SELECT k FROM c)"  # noqa: S608
     check(spark, query, [(1000,)], shared=True, scans=1)
