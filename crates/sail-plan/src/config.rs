@@ -74,6 +74,10 @@ pub struct PlanConfig {
     pub pivot_max_values: usize,
     /// Default partition count for partitioning hints (`spark.sql.shuffle.partitions`).
     pub shuffle_partitions: usize,
+    /// Rows sampled for each output partition to pick range repartitioning split points
+    /// (`spark.sql.execution.rangeExchange.sampleSizePerPartition`). Spark checks that it
+    /// is positive only when it samples, so it is kept as set here.
+    pub range_exchange_sample_size_per_partition: i32,
     /// Whether a table-valued function may receive more than one `TABLE (...)` argument
     /// (`spark.sql.tvf.allowMultipleTableArguments.enabled`, default false). Multiple table
     /// arguments produce the cartesian product of their rows.
@@ -130,6 +134,7 @@ impl Default for PlanConfig {
             redaction_regex: "(?i)secret|password|token|access[.]?key".to_string(),
             pivot_max_values: 10000,
             shuffle_partitions: 200,
+            range_exchange_sample_size_per_partition: 100,
             tvf_allow_multiple_table_arguments: false,
             legacy_allow_parameterless_count: false,
         }

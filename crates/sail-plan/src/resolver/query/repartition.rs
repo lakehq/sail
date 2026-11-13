@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use datafusion_expr::{Extension, LogicalPlan};
+use datafusion_expr::{ExprSchemable, Extension, LogicalPlan, SortExpr};
 use sail_common::spec;
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
+use crate::function::common::normalize_range_floats;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::seeded_random::SeededRandomScope;
@@ -30,7 +31,6 @@ impl PlanResolver<'_> {
                 Arc::new(input),
                 Some(num_partitions),
                 kind,
-                vec![],
             )),
         }))
     }
@@ -49,6 +49,8 @@ impl PlanResolver<'_> {
             .await
     }
 
+    /// Plans range repartitioning when every expression is a sort order,
+    /// and hash repartitioning when none is, as Spark does.
     pub(super) async fn resolve_repartition_by_expression(
         &self,
         input: LogicalPlan,
@@ -56,6 +58,29 @@ impl PlanResolver<'_> {
         num_partitions: Option<usize>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        let num_sort_orders = partition_expressions
+            .iter()
+            .filter(|expr| matches!(expr, spec::Expr::SortOrder(_)))
+            .count();
+        let is_range = num_sort_orders > 0 && num_sort_orders == partition_expressions.len();
+        // Spark plans a single partition before it checks the expression kinds.
+        let is_single = num_partitions.unwrap_or(self.config.shuffle_partitions) == 1;
+        if !is_range && num_sort_orders > 0 && !is_single {
+            return Err(PlanError::invalid(
+                "requirement failed: RepartitionByExpression expects that either all its `partitionExpressions` are of type `SortOrder`, which means `RangePartitioning`, or none of them are `SortOrder`, which means `HashPartitioning`",
+            ));
+        }
+        let (partition_expressions, sort_options): (Vec<_>, Vec<_>) = partition_expressions
+            .into_iter()
+            .map(|expr| match expr {
+                spec::Expr::SortOrder(spec::SortOrder {
+                    child,
+                    direction,
+                    null_ordering,
+                }) => (*child, Some((direction, null_ordering))),
+                expr => (expr, None),
+            })
+            .unzip();
         let output_schema = Arc::clone(input.schema());
         // Like a filter, Spark recovers partitioning attributes removed by the input.
         let (expr, input) = self
@@ -64,12 +89,38 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_partition_expressions(input, expr, state)?;
         let (input, expr) =
             self.rewrite_seeded_random_expressions(input, expr, SeededRandomScope::Call, state)?;
+        let kind = if is_range {
+            let mut sorts: Vec<SortExpr> = vec![];
+            for (expr, (direction, null_ordering)) in
+                expr.into_iter().zip(sort_options.into_iter().flatten())
+            {
+                // A repeated key cannot break a tie, so only its first order counts.
+                if sorts.iter().any(|sort| sort.expr == expr) {
+                    continue;
+                }
+                sorts.push(Self::sort_with_options(expr, direction, null_ordering));
+            }
+            let sorts = sorts
+                .into_iter()
+                .map(|sort| {
+                    // Spark's ordering compares every NaN as one value, and -0.0 as 0.0.
+                    let data_type = sort.expr.get_type(input.schema())?;
+                    let expr = normalize_range_floats(sort.expr.clone(), &data_type);
+                    Ok(sort.with_expr(expr))
+                })
+                .collect::<PlanResult<Vec<_>>>()?;
+            ExplicitRepartitionKind::Range {
+                sorts,
+                sample_size_per_partition: self.config.range_exchange_sample_size_per_partition,
+            }
+        } else {
+            ExplicitRepartitionKind::Hash(expr)
+        };
         let plan = LogicalPlan::Extension(Extension {
             node: Arc::new(ExplicitRepartitionNode::new(
                 Arc::new(input),
                 num_partitions,
-                ExplicitRepartitionKind::Hash,
-                expr,
+                kind,
             )),
         });
         Self::restore_missing_input_output(plan, output_schema)

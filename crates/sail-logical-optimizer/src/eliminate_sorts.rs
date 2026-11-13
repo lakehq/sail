@@ -9,6 +9,7 @@ use datafusion_expr::expr::{Cast, TryCast};
 use datafusion_expr::logical_plan::{Aggregate, Join, Partitioning};
 use datafusion_expr::{
     AggregateUDF, BinaryExpr, Expr, ExprSchemable, JoinType, LogicalPlan, Operator,
+    UserDefinedLogicalNodeCore,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
@@ -304,12 +305,7 @@ fn remove_sorts(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                 Ok(Transformed::yes(remove_sorts(input)?.data))
             } else if node
                 .downcast_ref::<ExplicitRepartitionNode>()
-                .is_some_and(|repartition| {
-                    !repartition
-                        .partitioning_expressions()
-                        .iter()
-                        .any(Expr::is_volatile)
-                })
+                .is_some_and(|repartition| !repartition.expressions().iter().any(Expr::is_volatile))
             {
                 plan.map_children(remove_sorts)
             } else {

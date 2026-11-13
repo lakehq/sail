@@ -379,6 +379,18 @@ pub(crate) fn normalize_distinct_floats(argument: expr::Expr, data_type: &DataTy
     }
 }
 
+/// Normalizes NaN and `-0.0` in a range repartitioning key. Spark's ordering compares
+/// every NaN as equal and greater than any other value, and `-0.0` as equal to `0.0`,
+/// so all NaNs share the last partition and both zeros share a partition.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/SQLOrderingUtil.scala>
+pub(crate) fn normalize_range_floats(argument: expr::Expr, data_type: &DataType) -> expr::Expr {
+    if NormalizeFloatKeys::has_float(data_type) {
+        ScalarUDF::from(NormalizeFloatKeys::nan_and_zero()).call(vec![argument])
+    } else {
+        argument
+    }
+}
+
 pub(crate) fn get_null_treatment(ignore_nulls: Option<bool>) -> Option<NullTreatment> {
     match ignore_nulls {
         Some(true) => Some(NullTreatment::IgnoreNulls),

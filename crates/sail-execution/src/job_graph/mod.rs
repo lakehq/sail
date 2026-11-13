@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::physical_expr::{PhysicalExpr, RangePartitioning};
+use datafusion::physical_expr::{LexOrdering, PhysicalExpr, RangePartitioning};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -195,8 +195,18 @@ pub enum OutputDistribution {
         keys: Vec<Arc<dyn PhysicalExpr>>,
         channels: usize,
     },
+    /// Range distribution into `channels` channels. The partitioning can have fewer
+    /// partitions than channels, and then the last channels receive no rows.
     Range {
         partitioning: RangePartitioning,
+        channels: usize,
+    },
+    /// Range distribution whose split points are not known yet. The job runner samples
+    /// the input before it runs the job, so this only describes the job for EXPLAIN,
+    /// and the scheduler does not run it.
+    UnsampledRange {
+        ordering: LexOrdering,
+        channels: usize,
     },
     RoundRobinBatch {
         channels: usize,
@@ -213,7 +223,8 @@ impl OutputDistribution {
     pub fn channels(&self) -> usize {
         match self {
             OutputDistribution::Hash { channels, .. } => *channels,
-            OutputDistribution::Range { partitioning } => partitioning.partition_count(),
+            OutputDistribution::Range { channels, .. } => *channels,
+            OutputDistribution::UnsampledRange { channels, .. } => *channels,
             OutputDistribution::RoundRobinBatch { channels } => *channels,
             OutputDistribution::RoundRobinRow { channels } => *channels,
         }
@@ -227,7 +238,14 @@ impl fmt::Display for OutputDistribution {
                 let keys = keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
                 write!(f, "Hash(keys=[{}], channels={})", keys.join(", "), channels)
             }
-            OutputDistribution::Range { partitioning } => write!(f, "{partitioning}"),
+            OutputDistribution::Range {
+                partitioning,
+                channels,
+            } => write!(f, "{partitioning}, channels={channels}"),
+            OutputDistribution::UnsampledRange { ordering, channels } => write!(
+                f,
+                "Range([{ordering}], split points sampled at execution, channels={channels})"
+            ),
             OutputDistribution::RoundRobinBatch { channels } => {
                 write!(f, "RoundRobinBatch(channels={})", channels)
             }

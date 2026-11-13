@@ -81,6 +81,8 @@ message ExtendedPhysicalPlanNode {
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
     SeededRandomExecNode seeded_random = 67;
     IdentityGenerateExecNode identity_generate = 68;
+    RangePartitionSampleExecNode range_partition_sample = 69;
+    RangePartitionResampleExecNode range_partition_resample = 70;
   }
 }
 
@@ -1081,6 +1083,17 @@ message SeededRandomColumn {
 enum PartitionSeed {
   PARTITION_SEED_OFFSET = 0;
   PARTITION_SEED_JAVA_RANDOM = 1;
+}
+
+message RangePartitionSampleExecNode {
+  bytes input = 1;
+  uint64 sample_size = 2;
+}
+
+message RangePartitionResampleExecNode {
+  bytes input = 1;
+  double fraction = 2;
+  repeated uint64 partitions = 3;
 }
 
 message CoalesceExecNode {

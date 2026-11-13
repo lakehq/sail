@@ -152,7 +152,8 @@ impl PlanResolver<'_> {
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
 
-        if name.eq_ignore_ascii_case("REPARTITION") {
+        let is_range = name.eq_ignore_ascii_case("REPARTITION_BY_RANGE");
+        if is_range || name.eq_ignore_ascii_case("REPARTITION") {
             let mut parameters = parameters.into_iter().peekable();
             let num_partitions = if parameters.peek().is_some_and(is_partition_count_literal) {
                 let parameter = parameters
@@ -179,11 +180,27 @@ impl PlanResolver<'_> {
                             is_metadata_column: false,
                         })
                     }
-                    _ => Err(PlanError::analysis(
-                        "REPARTITION hint parameters must be column names after the optional partition count",
-                    )),
+                    _ => Err(PlanError::analysis(format!(
+                        "{} hint parameters must be column names after the optional partition count",
+                        name.to_ascii_uppercase()
+                    ))),
                 })
                 .collect::<PlanResult<Vec<_>>>()?;
+            // The range hint sorts each column ascending, like Spark.
+            let columns = if is_range {
+                columns
+                    .into_iter()
+                    .map(|column| {
+                        spec::Expr::SortOrder(spec::SortOrder {
+                            child: Box::new(column),
+                            direction: spec::SortDirection::Ascending,
+                            null_ordering: spec::NullOrdering::Unspecified,
+                        })
+                    })
+                    .collect()
+            } else {
+                columns
+            };
             let num_partitions = Some(num_partitions.unwrap_or(self.config.shuffle_partitions));
             if !columns.is_empty() {
                 return self
@@ -195,7 +212,6 @@ impl PlanResolver<'_> {
                     Arc::new(input),
                     num_partitions,
                     ExplicitRepartitionKind::RoundRobin,
-                    vec![],
                 )),
             }));
         }
@@ -215,7 +231,6 @@ impl PlanResolver<'_> {
                     Arc::new(input),
                     Some(num_partitions),
                     repartition_kind,
-                    vec![],
                 )),
             }));
         }
