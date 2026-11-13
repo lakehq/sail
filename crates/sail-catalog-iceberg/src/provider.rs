@@ -5888,4 +5888,37 @@ mod tests {
             "token-b".to_string()
         );
     }
+
+    #[tokio::test]
+    async fn prefix_from_config_is_used_verbatim() {
+        const PREFIX: &str = "arn%3Aaws%3As3tables%3Aus-east-1%3A111122223333%3Abucket%2Fb";
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/config"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "defaults": { "prefix": PREFIX },
+                "overrides": {}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/v1/{PREFIX}/namespaces")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "namespaces": [] })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let properties = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.uri())]);
+        let catalog = IcebergRestCatalogProvider::new(
+            String::new(),
+            IcebergRestCatalogOptions {
+                credentials: Arc::new(EmptyCatalogCredentials),
+                properties,
+            },
+        );
+        catalog.list_databases(None).await.unwrap();
+    }
 }

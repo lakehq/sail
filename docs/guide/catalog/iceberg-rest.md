@@ -15,7 +15,7 @@ An Iceberg REST catalog can be configured using the following options.
 - `name` (required): The catalog name.
 - `uri` (required): The base URI of the Iceberg REST catalog server.
 - `warehouse` (optional): The catalog warehouse location.
-- `prefix` (optional): The prefix for catalog API endpoints.
+- `prefix` (optional): The URL-encoded prefix for catalog API endpoints.
 - `namespace_separator` (optional): The client-side fallback for the Iceberg REST `namespace-separator` catalog property. Use the separator that the REST server expects, such as `::` or `/`. Sail also accepts URL-encoded values returned by REST servers, such as `%3A%3A` for `::`. If this option is not set or is empty, Sail uses the Iceberg REST default unit separator.
 - `access_delegation` (optional): The value of the `X-Iceberg-Access-Delegation` header sent when loading a table. The default is `vended-credentials`. Set this option to `none` or leave it empty to omit the header, which is needed for servers that reject the header.
 - `oauth_access_token` (optional): The OAuth 2.0 access token.
