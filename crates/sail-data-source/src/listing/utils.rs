@@ -2,14 +2,18 @@ use std::sync::Arc;
 
 use arrow_schema::FieldRef;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::cache::cache_manager::CachedFileList;
 use datafusion::logical_expr::{Expr, Volatility};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::tree_node::TreeNode;
-use datafusion_common::{DataFusionError, GetExt, Result, internal_datafusion_err, plan_err};
-use datafusion_datasource::ListingTableUrl;
+use datafusion_common::{
+    DFSchema, DataFusionError, GetExt, Result, ScalarValue, internal_datafusion_err, plan_err,
+};
 use datafusion_datasource::file_compression_type::FileCompressionType;
+use datafusion_datasource::{ListingTableUrl, PartitionedFile};
 use datafusion_session::Session;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -17,6 +21,8 @@ use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
+use crate::listing::commit::{decode_partition_component, partition_key, typed_partition_value};
+use crate::listing::internal::{ListingPolicy, TableListingStore};
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
 
@@ -165,7 +171,12 @@ pub async fn sample_listing_files<'a>(
     let mut samples = vec![];
     for url in urls {
         let store = ctx.runtime_env().object_store(url)?;
-        let objects: Vec<_> = list_all_files(url, ctx, store.as_ref(), path_glob_filter)
+        let listing = TableListingStore::new(
+            store.clone(),
+            url.prefix().clone(),
+            ListingPolicy::from_url(url.get_url()),
+        );
+        let objects: Vec<_> = list_all_files(url, ctx, &listing, path_glob_filter)
             .await?
             // Empty files can't contribute to schema / partition inference and may error when read.
             .try_filter(|meta| futures::future::ready(meta.size > 0))
@@ -184,11 +195,12 @@ pub async fn sample_listing_files<'a>(
 pub fn validate_partitions(
     files: &[ListingFileSample<'_>],
     table_partition_fields: &[FieldRef],
+    decode_names: bool,
 ) -> Result<()> {
     if table_partition_fields.is_empty() {
         return Ok(());
     }
-    let inferred = infer_partitions(files)?;
+    let inferred = infer_partitions(files, decode_names)?;
     if inferred.is_empty() {
         return Ok(());
     }
@@ -228,7 +240,10 @@ pub fn validate_partitions(
     Ok(())
 }
 
-pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<String>> {
+pub fn infer_partitions(
+    files: &[ListingFileSample<'_>],
+    decode_names: bool,
+) -> Result<Vec<String>> {
     let mut inferred: Option<Vec<String>> = None;
     for group in files {
         for file in &group.objects {
@@ -249,7 +264,16 @@ pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<String>> 
                 .skip(1) // get parents only and skip the file itself
                 .rev()
                 .filter(|s| s.contains('='))
-                .map(|s| s.split('=').next().unwrap_or("").to_string())
+                .map(|s| {
+                    let name = s.split('=').next().unwrap_or("");
+                    if decode_names {
+                        percent_encoding::percent_decode_str(name)
+                            .decode_utf8_lossy()
+                            .into_owned()
+                    } else {
+                        name.to_string()
+                    }
+                })
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>();
 
@@ -264,6 +288,252 @@ pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<String>> 
     }
 
     Ok(inferred.unwrap_or_default())
+}
+
+/// Decode Hive names, values, and nulls before type conversion and predicate evaluation.
+/// A decoded equality cannot determine the raw prefix: percent-encoded aliases
+/// may name the same logical partition.
+pub(super) async fn hive_partitioned_files<'a>(
+    ctx: &'a dyn Session,
+    store: &'a TableListingStore,
+    table_path: &'a ListingTableUrl,
+    filters: &'a [Expr],
+    columns: &'a [(String, DataType)],
+    validate_partition_columns: bool,
+    path_glob_filter: Option<&'a PathGlobFilter>,
+) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
+    let names = columns
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    let filter = HivePartitionFilter::new(ctx, columns, filters)?;
+    let prefixes =
+        hive_selected_directories(ctx, store, table_path, filters, columns, &filter).await?;
+    let files = match prefixes {
+        Some(prefixes) => futures::stream::iter(prefixes)
+            .flat_map(move |prefix| store.list(Some(&prefix)))
+            .map_err(DataFusionError::from)
+            .boxed(),
+        None => table_path.list_prefixed_files(ctx, store, None, "").await?,
+    };
+    let ignore_subdirectory = ctx
+        .config_options()
+        .execution
+        .listing_table_ignore_subdirectory;
+    let files = files
+        .try_filter_map(move |meta| {
+            let result = (|| {
+                if meta.size == 0
+                    || !table_path.contains(&meta.location, ignore_subdirectory)
+                    || has_hidden_path_component(table_path, &meta.location)
+                {
+                    return Ok(None);
+                }
+                let Some(values) = partition_key(&meta.location, table_path.prefix(), &names)
+                else {
+                    return Ok(None);
+                };
+                let values = values
+                    .iter()
+                    .zip(columns)
+                    .map(|(value, (_, dt))| {
+                        read_partition_value(value, dt, validate_partition_columns)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                // Spark discovers typed partition specs and prunes partitions before applying
+                // the reader's filename glob. Nonmatching filenames cannot hide invalid keys
+                // or real partition-predicate errors.
+                if !filter.matches(&values)?
+                    || !matches_path_glob_filter(path_glob_filter, &meta.location)
+                {
+                    return Ok(None);
+                }
+                let mut file = PartitionedFile::from(meta);
+                file.table_reference.clone_from(table_path.get_table_ref());
+                file.partition_values = values;
+                Ok(Some(file))
+            })();
+            futures::future::ready(result)
+        })
+        .boxed();
+    if validate_partition_columns {
+        // Validate the entire eligible listing before statistics or LIMIT can stop consumption.
+        // The fallback deliberately pays O(selected files) transient metadata memory, even when
+        // it must enumerate O(all files). This is not the shared full-table listing cache.
+        let files = files.try_collect::<Vec<_>>().await?;
+        Ok(futures::stream::iter(files.into_iter().map(Ok)).boxed())
+    } else {
+        Ok(files)
+    }
+}
+
+fn read_partition_value(value: &str, dt: &DataType, validate: bool) -> Result<ScalarValue> {
+    match typed_partition_value(value, dt) {
+        Ok(value) => Ok(value),
+        Err(_) if !validate => ScalarValue::try_from(dt),
+        Err(error) => Err(error),
+    }
+}
+
+/// IS TRUE preserves SQL three-valued filtering, using the query's execution properties.
+struct HivePartitionFilter {
+    schema: DFSchema,
+    expr: Option<Arc<dyn PhysicalExpr>>,
+}
+
+impl HivePartitionFilter {
+    fn new(ctx: &dyn Session, columns: &[(String, DataType)], filters: &[Expr]) -> Result<Self> {
+        let schema = DFSchema::from_unqualified_fields(
+            columns
+                .iter()
+                .map(|(name, dt)| Field::new(name, dt.clone(), true))
+                .collect(),
+            Default::default(),
+        )?;
+        let expr = datafusion_expr::utils::conjunction(filters.iter().cloned())
+            .map(|expr| ctx.create_physical_expr(Expr::IsTrue(Box::new(expr)), &schema))
+            .transpose()?;
+        Ok(Self { schema, expr })
+    }
+
+    fn matches(&self, values: &[ScalarValue]) -> Result<bool> {
+        let Some(expr) = &self.expr else {
+            return Ok(true);
+        };
+        let arrays = values
+            .iter()
+            .map(ScalarValue::to_array)
+            .collect::<Result<Vec<_>>>()?;
+        let batch = RecordBatch::try_new(self.schema.inner().clone(), arrays)?;
+        let result = expr.evaluate(&batch)?.into_array(1)?;
+        Ok(ScalarValue::try_from_array(&result, 0)? == ScalarValue::Boolean(Some(true)))
+    }
+}
+
+// Bound flat-store API invocations, not backend pagination. A fallback adds one native list.
+const MAX_HIVE_DISCOVERY_REQUESTS: usize = 32;
+
+/// Discover actual raw spellings, not synthesized equality prefixes. No output or recursive file
+/// listing is allowed until all directory keys are classified. Invalid directory-only keys and
+/// irregular layouts fall back to the file matcher: empty/hidden-only directories are not data.
+async fn hive_selected_directories(
+    ctx: &dyn Session,
+    store: &TableListingStore,
+    table_path: &ListingTableUrl,
+    filters: &[Expr],
+    columns: &[(String, DataType)],
+    full_filter: &HivePartitionFilter,
+) -> Result<Option<Vec<Path>>> {
+    if !table_path.is_collection()
+        || columns.is_empty()
+        || ctx
+            .runtime_env()
+            .cache_manager
+            .get_list_files_cache()
+            .is_some()
+        || table_path
+            .get_glob()
+            .as_ref()
+            .is_some_and(|glob| glob.as_str() != "[!._]*")
+    {
+        return Ok(None);
+    }
+    // Only whole predicates or top-level AND conjuncts fully bound at the first level qualify.
+    // Never peel OR/NOT or substitute null for an unknown suffix.
+    let root_filters = filters
+        .iter()
+        .flat_map(datafusion_expr::utils::split_conjunction)
+        .filter(|expr| {
+            !expr.column_refs().is_empty()
+                && can_be_evaluated_for_partition_pruning(&[columns[0].0.as_str()], expr)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if root_filters.is_empty() {
+        return Ok(None);
+    }
+    let root_filter = HivePartitionFilter::new(ctx, &columns[..1], &root_filters)?;
+    // Flat stores have a native recursive stream: avoid replacing it with unbounded RPC fan-out.
+    // Filesystems retain directory traversal to avoid recursively walking excluded file trees.
+    let flat = ListingPolicy::from_url(table_path.get_url()) == ListingPolicy::Flat;
+    let mut discovery_requests = 0;
+    let mut pending = vec![(table_path.prefix().clone(), vec![])];
+    let mut selected = vec![];
+    while let Some((prefix, values)) = pending.pop() {
+        if flat
+            && discovery_requests + 1 + pending.len() + selected.len() > MAX_HIVE_DISCOVERY_REQUESTS
+        {
+            return Ok(None);
+        }
+        discovery_requests += 1;
+        let listed = match store.list_with_delimiter(Some(&prefix)).await {
+            Ok(listed) => listed,
+            Err(object_store::Error::NotImplemented { .. }) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        if listed
+            .objects
+            .iter()
+            .any(|meta| meta.size > 0 && !has_hidden_path_component(table_path, &meta.location))
+        {
+            return Ok(None);
+        }
+        let mut children = vec![];
+        let mut excludes_root_child = false;
+        for child in listed.common_prefixes {
+            if has_hidden_path_component(table_path, &child) {
+                continue;
+            }
+            let classified = child.prefix_match(&prefix).and_then(|mut parts| {
+                let part = parts.next()?;
+                if parts.next().is_some() {
+                    return None;
+                }
+                let value = decode_partition_component(part.as_ref(), &columns[values.len()].0)?;
+                // Even relaxed reads fall back on bad casts to preserve file membership.
+                typed_partition_value(&value, &columns[values.len()].1).ok()
+            });
+            let Some(value) = classified else {
+                return Ok(None);
+            };
+            let mut key = values.clone();
+            key.push(value);
+            if values.is_empty() {
+                match root_filter.matches(&key) {
+                    Ok(matches) => excludes_root_child |= !matches,
+                    // Directory rows are speculative: an empty/hidden-only directory is not
+                    // a predicate input. The file matcher still propagates real-data errors.
+                    Err(_) => return Ok(None),
+                }
+            }
+            children.push((child, key));
+        }
+        // A flat namespace only fans out when the single root probe proves useful selectivity.
+        if values.is_empty() && flat && !excludes_root_child {
+            return Ok(None);
+        }
+        for (child, key) in children {
+            if key.len() < columns.len() {
+                // Strict validation must visit even excluded deeper keys. Relaxed mode shares
+                // this traversal; neither mode recursively enumerates excluded terminal files.
+                pending.push((child, key));
+            } else {
+                match full_filter.matches(&key) {
+                    Ok(true) => selected.push(child),
+                    Ok(false) => {}
+                    Err(_) => return Ok(None),
+                }
+            }
+            // Reserve all known directory probes and terminal lists before another request.
+            // No selected file streams have been opened yet, so fallback cannot duplicate output.
+            if flat
+                && discovery_requests + pending.len() + selected.len() > MAX_HIVE_DISCOVERY_REQUESTS
+            {
+                return Ok(None);
+            }
+        }
+    }
+    Ok(Some(selected))
 }
 
 pub async fn list_all_files<'a>(
@@ -379,12 +649,210 @@ pub fn can_be_evaluated_for_partition_pruning(
     matches!(unsupported, Ok(false))
 }
 
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+#[path = "hive_tests.rs"]
+mod hive_tests;
+
 #[expect(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use super::*;
+
+    #[derive(Debug, Default)]
+    struct CountingListingStore {
+        inner: object_store::memory::InMemory,
+        listed: Arc<std::sync::atomic::AtomicUsize>,
+        prefixes: std::sync::Mutex<Vec<Option<Path>>>,
+    }
+
+    impl std::fmt::Display for CountingListingStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "CountingListingStore")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for CountingListingStore {
+        async fn put_opts(
+            &self,
+            path: &Path,
+            payload: object_store::PutPayload,
+            options: object_store::PutOptions,
+        ) -> object_store::Result<object_store::PutResult> {
+            self.inner.put_opts(path, payload, options).await
+        }
+        async fn put_multipart_opts(
+            &self,
+            path: &Path,
+            options: object_store::PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+            self.inner.put_multipart_opts(path, options).await
+        }
+        async fn get_opts(
+            &self,
+            path: &Path,
+            options: object_store::GetOptions,
+        ) -> object_store::Result<object_store::GetResult> {
+            self.inner.get_opts(path, options).await
+        }
+        fn delete_stream(
+            &self,
+            paths: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.inner.delete_stream(paths)
+        }
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.prefixes.lock().unwrap().push(prefix.cloned());
+            let count = self.listed.clone();
+            self.inner
+                .list(prefix)
+                .map_ok(move |meta| {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    meta
+                })
+                .boxed()
+        }
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<object_store::ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: object_store::CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    #[tokio::test]
+    async fn hive_listing_filters_decoded_keys_after_listing() -> Result<()> {
+        use std::sync::atomic::Ordering;
+
+        use datafusion::logical_expr::{col, lit};
+        use datafusion::prelude::SessionContext;
+        let store = Arc::new(CountingListingStore::default());
+        for path in [
+            "ints/p=1/file",
+            "ints/p=2/file",
+            "ints/%70=1/file",
+            "ints/p=%31/file",
+            "ints/p=__HIVE_DEFAULT_PARTITION__/file",
+            "strings/p=a%3Db/file",
+            "strings/p=other/file",
+            "floats/p=1/file",
+            "floats/p=1.0/file",
+            "floats/p=2/file",
+        ] {
+            store
+                .put(
+                    &Path::parse(path)?,
+                    bytes::Bytes::from_static(b"data").into(),
+                )
+                .await?;
+        }
+        for (table, dt, filter, rows, listed, prefix) in [
+            (
+                "ints",
+                DataType::Int32,
+                col("p").eq(lit(1_i32)),
+                3,
+                5,
+                "ints",
+            ),
+            ("ints", DataType::Int32, col("p").is_null(), 1, 5, "ints"),
+            (
+                "strings",
+                DataType::Utf8,
+                col("p").eq(lit("a=b")),
+                1,
+                2,
+                "strings",
+            ),
+            (
+                "floats",
+                DataType::Float64,
+                col("p").eq(lit(1.0_f64)),
+                2,
+                3,
+                "floats",
+            ),
+        ] {
+            store.listed.store(0, Ordering::SeqCst);
+            let runtime = datafusion::execution::runtime_env::RuntimeEnvBuilder::new()
+                .with_cache_manager(
+                    datafusion::execution::cache::cache_manager::CacheManagerConfig::default()
+                        .with_list_files_cache_limit(0),
+                )
+                .build_arc()?;
+            let state = SessionContext::new_with_config_rt(Default::default(), runtime).state();
+            let url =
+                ListingTableUrl::parse(format!("memory://bucket/{table}/"))?.with_glob("**")?;
+            let listing =
+                TableListingStore::new(store.clone(), url.prefix().clone(), ListingPolicy::Flat);
+            let filters = [filter];
+            let columns = [("p".into(), dt)];
+            let files =
+                hive_partitioned_files(&state, &listing, &url, &filters, &columns, true, None)
+                    .await?
+                    .try_collect::<Vec<_>>()
+                    .await?;
+            assert_eq!(files.len(), rows);
+            assert_eq!(store.listed.load(Ordering::SeqCst), listed);
+            assert_eq!(
+                store.prefixes.lock().unwrap().last(),
+                Some(&Some(Path::parse(prefix)?))
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hive_partition_nulls_are_decoded_before_cast_and_pruning() -> Result<()> {
+        use datafusion::logical_expr::{col, lit};
+        use datafusion::prelude::SessionContext;
+        use object_store::memory::InMemory;
+        let store = Arc::new(InMemory::new());
+        let url = ListingTableUrl::parse("memory://bucket/table/")?;
+        let listing =
+            TableListingStore::new(store.clone(), url.prefix().clone(), ListingPolicy::Flat);
+        for path in [
+            "table/p=__HIVE_DEFAULT_PARTITION__/file.parquet",
+            "table/p=2/file.parquet",
+        ] {
+            store
+                .put(
+                    &Path::parse(path)?,
+                    bytes::Bytes::from_static(b"data").into(),
+                )
+                .await?;
+        }
+        let state = SessionContext::new().state();
+        let columns = vec![("p".into(), DataType::Int32)];
+        for (filter, expected) in [
+            (col("p").is_null(), ScalarValue::Int32(None)),
+            (col("p").eq(lit(2_i32)), ScalarValue::Int32(Some(2))),
+        ] {
+            let filters = [filter];
+            let files =
+                hive_partitioned_files(&state, &listing, &url, &filters, &columns, true, None)
+                    .await?
+                    .try_collect::<Vec<_>>()
+                    .await?;
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].partition_values, vec![expected]);
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_partition_pruning_function_volatility() {

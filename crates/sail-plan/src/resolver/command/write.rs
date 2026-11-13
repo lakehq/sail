@@ -20,7 +20,7 @@ use sail_catalog::provider::{
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableSort, LakehouseExecutionContext, LakehouseOperation,
-    TableColumnStatus, TableKind,
+    TableColumnStatus, TableKind, normalize_parquet_column_order,
 };
 use sail_common_datafusion::column_features::{
     ColumnFeatures, ColumnFeaturesBuilder, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
@@ -566,7 +566,7 @@ impl PlanResolver<'_> {
                         // ErrorIfExists or IgnoreIfExists
                         _ => CreateTableMode::Create,
                     };
-                    let columns = input
+                    let mut columns = input
                         .schema()
                         .inner()
                         .fields()
@@ -585,7 +585,14 @@ impl PlanResolver<'_> {
                             generated_always_as: None,
                             identity: None,
                         })
-                        .collect();
+                        .collect::<Vec<_>>();
+                    normalize_parquet_column_order(
+                        &write_format,
+                        &mut columns,
+                        &partition_by,
+                        self.config.case_sensitive,
+                        |column| &column.name,
+                    )?;
                     let is_iceberg = write_format.eq_ignore_ascii_case("iceberg");
                     // TODO: Revisit passing write options as table properties.
                     let properties: Vec<(String, String)> = sink_info
@@ -696,7 +703,9 @@ impl PlanResolver<'_> {
             .rewrite_delta_check_constraints_from_options(input, &write_format, &sink_info, state)
             .await?;
         if use_session_overwrite_mode && matches!(sink_info.mode, SinkMode::Overwrite) {
-            let option = if write_format.eq_ignore_ascii_case("delta") {
+            let option = if write_format.eq_ignore_ascii_case("delta")
+                || write_format.eq_ignore_ascii_case("parquet")
+            {
                 Some("partitionOverwriteMode")
             } else if write_format.eq_ignore_ascii_case("iceberg") {
                 Some("overwrite-mode")
@@ -847,6 +856,7 @@ impl PlanResolver<'_> {
                             items: properties.to_vec(),
                         }],
                         read_case_sensitive: self.config.case_sensitive,
+                        validate_partition_columns: self.config.validate_partition_columns,
                     };
                     if let Some(lake_source) = registry
                         .get_lake_source_if_supported(&format)
@@ -920,6 +930,7 @@ impl PlanResolver<'_> {
                             items: properties.to_vec(),
                         }],
                         read_case_sensitive: self.config.case_sensitive,
+                        validate_partition_columns: self.config.validate_partition_columns,
                     };
                     match lake_source.infer_metadata(&self.ctx.state(), info).await {
                         Ok(metadata) => {

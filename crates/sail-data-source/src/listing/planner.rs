@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::helpers::pruned_partition_list;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
@@ -18,10 +18,11 @@ use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalN
 use datafusion::physical_expr::create_lex_ordering;
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
-use datafusion_common::{Statistics, internal_err, plan_err, project_schema};
+use datafusion_common::{Statistics, internal_err, plan_datafusion_err, plan_err, project_schema};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{
@@ -34,11 +35,15 @@ use sail_common_datafusion::datasource::create_sort_order;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
 
+use crate::listing::commit::FilePartitionCommitExec;
 use crate::listing::delete::FileDeleteExec;
+use crate::listing::internal::{ListingPolicy, STAGING_DIRECTORY, TableListingStore};
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
+use crate::listing::staged::ParquetPartitionWriteExec;
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
-    can_be_evaluated_for_partition_pruning, has_hidden_path_component, matches_path_glob_filter,
+    can_be_evaluated_for_partition_pruning, has_hidden_path_component, hive_partitioned_files,
+    matches_path_glob_filter,
 };
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 
@@ -216,22 +221,39 @@ async fn plan_file_write(
         format,
         url,
         overwrite,
+        overwrite_partitions,
         partition_by,
         sort_by,
     } = node.options();
     let table_path = ListingTableUrl::try_new(url.clone(), None)?;
     let object_store_url = table_path.object_store();
+    let sink_path = if *overwrite_partitions {
+        partition_staging_path(url)?
+    } else {
+        table_path.clone()
+    };
     // We do not need to specify the exact data type for partition columns,
     // since the type is inferred from the record batch during writing.
     let table_partition_cols = partition_by
         .iter()
         .map(|field| (field.column.clone(), DataType::Null))
         .collect::<Vec<_>>();
+    let partition_schema = Arc::new(Schema::new(
+        partition_by
+            .iter()
+            .map(|field| {
+                physical_input
+                    .schema()
+                    .field_with_name(&field.column)
+                    .cloned()
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+    ));
     let conf = FileSinkConfig {
-        original_url: url.to_string(),
+        original_url: sink_path.as_str().to_string(),
         object_store_url: object_store_url.clone(),
         file_group: Default::default(),
-        table_paths: vec![table_path.clone()],
+        table_paths: vec![sink_path.clone()],
         output_schema: physical_input.schema(),
         table_partition_cols,
         insert_op: InsertOp::Append,
@@ -250,7 +272,27 @@ async fn plan_file_write(
             },
         )
         .await?;
-    if *overwrite {
+    if *overwrite_partitions {
+        let writer = plan
+            .downcast_ref::<ParquetPartitionWriteExec>()
+            .ok_or_else(|| {
+                plan_datafusion_err!(
+                    "dynamic partition overwrite requires a Parquet partition writer"
+                )
+            })?;
+        let writer = Arc::new(ParquetPartitionWriteExec::new(writer.input().clone(), true));
+        Ok(Arc::new(FilePartitionCommitExec::new(
+            Arc::new(CoalescePartitionsExec::new(writer)),
+            object_store_url,
+            table_path.prefix().clone(),
+            sink_path.prefix().clone(),
+            partition_by
+                .iter()
+                .map(|field| field.column.clone())
+                .collect(),
+            partition_schema,
+        )))
+    } else if *overwrite {
         let delete = Arc::new(FileDeleteExec::new(
             object_store_url,
             table_path.prefix().clone(),
@@ -259,6 +301,18 @@ async fn plan_file_write(
     } else {
         Ok(plan)
     }
+}
+
+fn partition_staging_path(url: &url::Url) -> datafusion_common::Result<ListingTableUrl> {
+    let mut staging_url = url.clone();
+    staging_url
+        .path_segments_mut()
+        .map_err(|_| plan_datafusion_err!("invalid listing write URL"))?
+        .pop_if_empty()
+        .push(STAGING_DIRECTORY)
+        .push(&uuid::Uuid::new_v4().to_string())
+        .push("");
+    ListingTableUrl::try_new(staging_url, None)
 }
 
 fn try_create_output_ordering(
@@ -360,26 +414,60 @@ async fn list_files_for_scan<'a>(
         .map(|field| (field.name().clone(), field.data_type().clone()))
         .collect();
 
-    let store_ref = store.as_ref();
+    let listing_stores = source
+        .config()
+        .table_paths
+        .iter()
+        .map(|path| {
+            TableListingStore::new(
+                store.clone(),
+                path.prefix().clone(),
+                ListingPolicy::from_url(path.get_url()),
+            )
+        })
+        .collect::<Vec<_>>();
     let partition_cols_ref = partition_cols.as_slice();
     let path_glob_filter = source.config().path_glob_filter.as_ref();
-    let file_list = future::try_join_all(source.config().table_paths.iter().map(
-        |table_path| async move {
-            let files =
-                pruned_partition_list(ctx, store_ref, table_path, filters, "", partition_cols_ref)
-                    .await?;
-            // Apply listing-level file-name filters so scans agree with `inputFiles` and sampling.
-            let files = files.try_filter(move |file| {
-                let location = &file.object_meta.location;
-                futures::future::ready(
-                    !has_hidden_path_component(table_path, location)
-                        && matches_path_glob_filter(path_glob_filter, location),
-                )
-            });
-            Ok::<_, datafusion_common::DataFusionError>(files.boxed())
-        },
-    ))
-    .await?;
+    let file_list =
+        future::try_join_all(source.config().table_paths.iter().zip(&listing_stores).map(
+            |(table_path, listing)| async move {
+                let store_ref: &dyn ObjectStore = listing;
+                let files = if source.config().read_format.hive_partition_paths()
+                    && !partition_cols_ref.is_empty()
+                {
+                    hive_partitioned_files(
+                        ctx,
+                        listing,
+                        table_path,
+                        filters,
+                        partition_cols_ref,
+                        source.config().validate_partition_columns,
+                        path_glob_filter,
+                    )
+                    .await?
+                } else {
+                    pruned_partition_list(
+                        ctx,
+                        store_ref,
+                        table_path,
+                        filters,
+                        "",
+                        partition_cols_ref,
+                    )
+                    .await?
+                };
+                // Apply listing-level file-name filters so scans agree with `inputFiles` and sampling.
+                let files = files.try_filter(move |file| {
+                    let location = &file.object_meta.location;
+                    futures::future::ready(
+                        !has_hidden_path_component(table_path, location)
+                            && matches_path_glob_filter(path_glob_filter, location),
+                    )
+                });
+                Ok::<_, datafusion_common::DataFusionError>(files.boxed())
+            },
+        ))
+        .await?;
 
     let meta_fetch_concurrency: usize =
         ctx.config_options().execution.meta_fetch_concurrency.into();
@@ -564,4 +652,40 @@ async fn get_files_with_limit(
 
     let inexact_stats = all_files.next().await.is_some();
     Ok((file_group, inexact_stats))
+}
+
+#[cfg(test)]
+mod staging_path_tests {
+    use super::*;
+
+    #[test]
+    fn stage_is_a_reserved_child_including_local_and_bucket_roots() -> datafusion_common::Result<()>
+    {
+        for input in [
+            "s3://bucket/",
+            "s3://bucket/table",
+            "s3://bucket/table/",
+            "file:///",
+            "file:///warehouse/table/",
+            "hdfs://namenode/table/",
+            "s3://bucket/escaped%20table/",
+        ] {
+            let table = ListingTableUrl::parse(input)?;
+            let staging = partition_staging_path(table.get_url())?;
+            assert_eq!(staging.object_store(), table.object_store());
+            let relative = staging
+                .prefix()
+                .prefix_match(table.prefix())
+                .ok_or_else(|| plan_datafusion_err!("stage outside table"))?
+                .collect::<Vec<_>>();
+            assert_eq!(relative.len(), 2);
+            assert_eq!(relative[0].as_ref(), STAGING_DIRECTORY);
+            assert!(
+                uuid::Uuid::parse_str(relative[1].as_ref())
+                    .is_ok_and(|id| id.to_string() == relative[1].as_ref())
+            );
+            assert!(staging.is_collection());
+        }
+        Ok(())
+    }
 }

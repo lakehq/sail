@@ -318,6 +318,7 @@ impl PlanResolver<'_> {
                                     items: properties.clone(),
                                 }],
                                 read_case_sensitive: true,
+                                validate_partition_columns: self.config.validate_partition_columns,
                             }),
                             predicates: vec![],
                         },
@@ -687,6 +688,7 @@ fn procedure_path_source(path: String) -> SourceInfo {
         sort_order: vec![],
         options: vec![],
         read_case_sensitive: true,
+        validate_partition_columns: true,
     }
 }
 

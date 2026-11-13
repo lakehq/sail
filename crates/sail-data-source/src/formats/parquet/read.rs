@@ -102,6 +102,10 @@ fn coerce_hinted_int96_timestamps(
 
 #[async_trait::async_trait]
 impl ReadFormat for ParquetReadFormat {
+    fn hive_partition_paths(&self) -> bool {
+        true
+    }
+
     async fn infer_compression(
         &self,
         _ctx: &dyn Session,

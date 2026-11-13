@@ -81,6 +81,8 @@ message ExtendedPhysicalPlanNode {
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
     SeededRandomExecNode seeded_random = 67;
     IdentityGenerateExecNode identity_generate = 68;
+    FilePartitionCommitExecNode file_partition_commit = 69;
+    ParquetPartitionWriteExecNode parquet_partition_write = 70;
   }
 }
 
@@ -1020,6 +1022,20 @@ message TextSinkExecNode {
   bytes line_sep = 4;
   CompressionTypeVariant compression_type_variant = 5;
   optional PhysicalSortExprNodeCollection sort_order = 6;
+}
+
+message ParquetPartitionWriteExecNode {
+  bytes input = 1;
+  bool staged = 2;
+}
+
+message FilePartitionCommitExecNode {
+  bytes input = 1;
+  string object_store_url = 2;
+  string table_path = 3;
+  string staging_path = 4;
+  repeated string partition_columns = 5;
+  bytes partition_schema = 6;
 }
 
 message FileDeleteExecNode {

@@ -216,6 +216,7 @@ pub async fn prepare_lake_procedure_execution(
             sort_order: vec![],
             options: vec![],
             read_case_sensitive: true,
+            validate_partition_columns: true,
         })),
         _ => {
             return Err(catalog_error(CatalogError::Conflict(format!(
@@ -312,6 +313,7 @@ async fn prepare_table_target(
         sort_order: vec![],
         options: vec![OptionLayer::TablePropertyList { items: properties }],
         read_case_sensitive: true,
+        validate_partition_columns: true,
     })))
 }
 

@@ -417,6 +417,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_SOURCES_VALIDATE_PARTITION_COLUMNS)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.validate_partition_columns = value;
+        }
+
+        if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_PIVOT_MAX_VALUES)
             .map(|x| x.trim().parse::<usize>())
             .transpose()?

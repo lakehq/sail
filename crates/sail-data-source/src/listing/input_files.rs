@@ -8,6 +8,7 @@ use datafusion_common::{DataFusionError, Result};
 use futures::TryStreamExt;
 use url::Url;
 
+use crate::listing::internal::{ListingPolicy, TableListingStore};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::list_all_files;
 
@@ -43,10 +44,14 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
             )) {
                 continue;
             }
-            let store = ctx.runtime_env().object_store(table_path)?;
+            let store = TableListingStore::new(
+                ctx.runtime_env().object_store(table_path)?,
+                table_path.prefix().clone(),
+                ListingPolicy::from_url(table_path.get_url()),
+            );
             let base = Url::parse(table_path.object_store().as_str())
                 .map_err(|e| DataFusionError::Internal(format!("invalid object store URL: {e}")))?;
-            let metas = list_all_files(table_path, &state, store.as_ref(), path_glob_filter)
+            let metas = list_all_files(table_path, &state, &store, path_glob_filter)
                 .await?
                 .try_collect::<Vec<_>>()
                 .await?;

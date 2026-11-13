@@ -151,7 +151,9 @@ impl PlanResolver<'_> {
         if partition.is_empty() {
             return Ok(());
         }
-        if !info.format.eq_ignore_ascii_case("delta") {
+        if !info.format.eq_ignore_ascii_case("delta")
+            && !info.format.eq_ignore_ascii_case("parquet")
+        {
             return Err(PlanError::todo("PARTITION for write"));
         }
         let mut seen = HashSet::new();
@@ -175,6 +177,11 @@ impl PlanResolver<'_> {
                     "duplicate partition column: {name}"
                 )));
             }
+        }
+        if info.format.eq_ignore_ascii_case("parquet") && seen.len() != info.partition_by.len() {
+            return Err(PlanError::analysis(
+                "PARTITION clause must contain all partition columns",
+            ));
         }
         Ok(())
     }

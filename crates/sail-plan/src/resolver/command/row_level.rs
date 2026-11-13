@@ -81,6 +81,7 @@ impl PlanResolver<'_> {
                             sort_order: vec![],
                             options: vec![],
                             read_case_sensitive: self.config.case_sensitive,
+                            validate_partition_columns: self.config.validate_partition_columns,
                         },
                     )
                     .await?;

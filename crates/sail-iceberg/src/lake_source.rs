@@ -1259,6 +1259,7 @@ async fn resolve_iceberg_read(
         sort_order: _,
         options,
         read_case_sensitive: _,
+        validate_partition_columns: _,
     } = info;
 
     match read_purpose {

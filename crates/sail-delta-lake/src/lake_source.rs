@@ -101,6 +101,7 @@ impl DataSource for DeltaLakeSource {
             sort_order: _,
             options,
             read_case_sensitive: _,
+            validate_partition_columns: _,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
@@ -118,6 +119,7 @@ impl DataSource for DeltaLakeSource {
             sort_order: _,
             options,
             read_case_sensitive: _,
+            validate_partition_columns: _,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
@@ -251,6 +253,7 @@ impl LakeSource for DeltaLakeSource {
             sort_order: _,
             options,
             read_case_sensitive: _,
+            validate_partition_columns: _,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;

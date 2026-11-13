@@ -23,6 +23,7 @@ use datafusion::physical_plan::{
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::lakeprocedure::LakeProcedureRootPlacement;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_data_source::listing::commit::FilePartitionCommitExec;
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_delta_lake::physical_plan::DeltaCommitExec;
 use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergProcedureExec};
@@ -50,7 +51,7 @@ impl JobGraph {
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
         let plan = ensure_single_probe_partition_for_nested_loop_join(plan)?;
         let plan = materialize_shared_file_scan_builds(plan)?;
-        let plan = ensure_worker_input_for_lake_procedure(plan)?;
+        let plan = ensure_worker_input_for_coordinator(plan)?;
         let mut graph = Self {
             stages: vec![],
             schema: plan.schema(),
@@ -70,7 +71,7 @@ impl JobGraph {
     }
 }
 
-fn ensure_worker_input_for_lake_procedure(
+fn ensure_worker_input_for_coordinator(
     plan: Arc<dyn ExecutionPlan>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     fn has_exchange(plan: &Arc<dyn ExecutionPlan>) -> bool {
@@ -82,7 +83,9 @@ fn ensure_worker_input_for_lake_procedure(
 
     Ok(plan
         .transform_up(|plan| {
-            let input = if let Some(procedure) = plan.downcast_ref::<IcebergProcedureExec>() {
+            let input = if let Some(commit) = plan.downcast_ref::<FilePartitionCommitExec>() {
+                Some(commit.input())
+            } else if let Some(procedure) = plan.downcast_ref::<IcebergProcedureExec>() {
                 procedure.input()
             } else if let Some(procedure) =
                 plan.downcast_ref::<sail_delta_lake::physical_plan::DeltaMaintenanceExec>()
@@ -620,6 +623,7 @@ fn plan_job_graph_stages(
         || subtree.plan.is::<CatalogCommandExec>()
         || is_coordinator_lake_procedure(&subtree.plan)
         || subtree.plan.is::<FileDeleteExec>()
+        || subtree.plan.is::<FilePartitionCommitExec>()
         || subtree.plan.is::<DeltaCommitExec>()
         || subtree.plan.is::<IcebergCommitExec>()
         || subtree.plan.is::<RemoteCheckpointCommitExec>()
@@ -772,6 +776,7 @@ fn is_driver_stage_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
         || plan.is::<CatalogCommandExec>()
         || is_coordinator_lake_procedure(plan)
         || plan.is::<FileDeleteExec>()
+        || plan.is::<FilePartitionCommitExec>()
         || plan.is::<DeltaCommitExec>()
         || plan.is::<IcebergCommitExec>()
         || plan.is::<RemoteCheckpointCommitExec>()
@@ -1572,6 +1577,148 @@ mod tests {
                 mode: InputMode::Rescale { partitions: 2 },
             }]
         ));
+    }
+
+    fn optimized_partition_writer(
+        staged: bool,
+    ) -> datafusion::common::Result<(Arc<dyn ExecutionPlan>, datafusion::prelude::SessionContext)>
+    {
+        use datafusion::arrow::array::{Float64Array, Int32Array, RecordBatch};
+        use datafusion::datasource::listing::ListingTableUrl;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::datasource::physical_plan::parquet::ParquetSink;
+        use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
+        use datafusion::datasource::sink::DataSinkExec;
+        use datafusion::logical_expr::dml::InsertOp;
+        use datafusion::physical_expr::{LexRequirement, PhysicalSortRequirement};
+        use datafusion::physical_planner::DefaultPhysicalPlanner;
+        use datafusion::prelude::{SessionConfig, SessionContext};
+        use sail_data_source::listing::staged::ParquetPartitionWriteExec;
+        let context =
+            SessionContext::new_with_config(SessionConfig::new().with_target_partitions(4));
+        let url = ListingTableUrl::parse("memory://bucket/staging/")?;
+        context.runtime_env().register_object_store(
+            url.get_url(),
+            Arc::new(object_store::memory::InMemory::new()),
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int32, false),
+            Field::new("p", DataType::Float64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![2, 1])),
+                Arc::new(Float64Array::from(vec![1.0, 1.0])),
+            ],
+        )?;
+        let input = MemorySourceConfig::try_new_exec(
+            &[vec![batch.clone()], vec![batch]],
+            schema.clone(),
+            None,
+        )?;
+        let sink = ParquetSink::new(
+            FileSinkConfig {
+                original_url: url.as_str().into(),
+                object_store_url: url.object_store(),
+                file_group: Default::default(),
+                table_paths: vec![url],
+                output_schema: schema.clone(),
+                table_partition_cols: vec![("p".into(), DataType::Float64)],
+                insert_op: InsertOp::Append,
+                keep_partition_by_columns: false,
+                file_extension: "parquet".into(),
+                file_output_mode: FileOutputMode::Automatic,
+            },
+            Default::default(),
+        );
+        let ordering = LexRequirement::new(vec![PhysicalSortRequirement::new(
+            col("value", &schema)?,
+            Some(Default::default()),
+        )]);
+        let plan = Arc::new(ParquetPartitionWriteExec::new(
+            Arc::new(DataSinkExec::new(input, Arc::new(sink), ordering)),
+            staged,
+        ));
+        let plan = DefaultPhysicalPlanner::default().optimize_physical_plan(
+            plan,
+            &context.state(),
+            |_, _| {},
+        )?;
+        Ok((plan, context))
+    }
+
+    #[tokio::test]
+    async fn optimized_traced_partition_writer_retains_sink_and_sort_metadata()
+    -> datafusion::common::Result<()> {
+        use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
+        use futures::TryStreamExt;
+        use object_store::ObjectStoreExt;
+        use sail_telemetry::{TracingExecOptions, trace_execution_plan};
+        for staged in [false, true] {
+            let (plan, context) = optimized_partition_writer(staged)?;
+            let plan = trace_execution_plan(plan, TracingExecOptions::default())?;
+            let batches = datafusion::physical_plan::collect(plan, context.task_ctx()).await?;
+            assert!(!batches.is_empty());
+            let store = context
+                .runtime_env()
+                .object_store(&ObjectStoreUrl::parse("memory://bucket")?)?;
+            let files = store.list(None).try_collect::<Vec<_>>().await?;
+            assert_eq!(files.len(), 1);
+            // Preserve the pre-existing native float path spelling, not Arrow's 1.0.
+            assert!(files[0].location.as_ref().contains("/p=1/"));
+            let bytes = store.get(&files[0].location).await?.bytes().await?;
+            let reader = SerializedFileReader::new(bytes)?;
+            let sorting = reader.metadata().row_group(0).sorting_columns().unwrap();
+            assert_eq!(sorting.len(), 1);
+            assert_eq!(sorting[0].column_idx, 0);
+            assert!(!sorting[0].descending);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn partition_commit_keeps_single_writer_on_worker() {
+        use datafusion::common::tree_node::TreeNode;
+        use datafusion::physical_planner::DefaultPhysicalPlanner;
+        use object_store::path::Path;
+        use sail_data_source::listing::commit::FilePartitionCommitExec;
+        use sail_data_source::listing::staged::ParquetPartitionWriteExec;
+        let (writer, context) = optimized_partition_writer(true).unwrap();
+        let commit = Arc::new(FilePartitionCommitExec::new(
+            writer,
+            ObjectStoreUrl::parse("memory://bucket").unwrap(),
+            Path::from("table"),
+            Path::from("staging"),
+            vec!["p".into()],
+            Arc::new(Schema::new(vec![Field::new("p", DataType::Float64, true)])),
+        ));
+        let commit = DefaultPhysicalPlanner::default()
+            .optimize_physical_plan(commit, &context.state(), |_, _| {})
+            .unwrap();
+        let graph = JobGraph::try_new(commit, flight_shuffle_options()).unwrap();
+        let mut writers = 0;
+        let mut commits = 0;
+        for stage in graph.stages() {
+            if stage
+                .plan
+                .exists(|plan| Ok(plan.is::<ParquetPartitionWriteExec>()))
+                .unwrap()
+            {
+                assert!(matches!(stage.placement, TaskPlacement::Worker));
+                writers += 1;
+            }
+            if stage
+                .plan
+                .exists(|plan| Ok(plan.is::<FilePartitionCommitExec>()))
+                .unwrap()
+            {
+                assert!(matches!(stage.placement, TaskPlacement::Driver));
+                assert_eq!(stage.plan.output_partitioning().partition_count(), 1);
+                commits += 1;
+            }
+        }
+        assert_eq!((writers, commits), (1, 1));
     }
 
     #[test]

@@ -238,6 +238,8 @@ pub struct SourceInfo {
     /// reconcile a requested schema against files on read (e.g. Parquet); it is
     /// inert for formats that resolve their schema from metadata.
     pub read_case_sensitive: bool,
+    /// Session-only policy for malformed typed Hive partition values.
+    pub validate_partition_columns: bool,
 }
 
 impl SourceInfo {

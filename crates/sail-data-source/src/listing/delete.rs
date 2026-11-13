@@ -13,7 +13,9 @@ use datafusion_common::{Result, exec_err, internal_err};
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 
-/// Deletes all object-store files under a listing table output path.
+use crate::listing::internal::{ListingPolicy, TableListingStore};
+
+/// Deletes listing table data while retaining internal operation records and sources.
 #[derive(Debug, Clone)]
 pub struct FileDeleteExec {
     object_store_url: ObjectStoreUrl,
@@ -107,7 +109,14 @@ impl ExecutionPlan for FileDeleteExec {
         let path = self.path.clone();
         let stream = futures::stream::once(async move {
             let store = context.runtime_env().object_store(&object_store_url)?;
-            let files = store.list(Some(&path)).map_ok(|meta| meta.location).boxed();
+            let listing = TableListingStore::new(
+                store.clone(),
+                path.clone(),
+                ListingPolicy::from_url(object_store_url.as_ref()),
+            );
+            let files = object_store::ObjectStore::list(&listing, Some(&path))
+                .map_ok(|meta| meta.location)
+                .boxed();
             store
                 .delete_stream(files)
                 .try_for_each(|_| futures::future::ready(Ok(())))
