@@ -684,8 +684,25 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_cte_references_share_or_inline() -> Result<(), Box<dyn std::error::Error>> {
+    #[test]
+    fn test_cte_references_share_or_inline() -> Result<(), String> {
+        // The plan resolver futures need more than the default test thread stack in debug builds.
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| e.to_string())?
+                    .block_on(cte_references_share_or_inline())
+                    .map_err(|e| e.to_string())
+            })
+            .map_err(|e| e.to_string())?
+            .join()
+            .unwrap_or_else(|e| std::panic::resume_unwind(e))
+    }
+
+    async fn cte_references_share_or_inline() -> Result<(), Box<dyn std::error::Error>> {
         use sail_common_datafusion::session::shared_cte::SharedCteConfig;
         use sail_plan::shared_cte::{
             CteReference, optimize_and_plan_shared_ctes, session_state_for_restart,
