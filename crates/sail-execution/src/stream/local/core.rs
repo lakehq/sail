@@ -50,7 +50,13 @@ impl LocalStreamManager {
         let create = |senders: Vec<_>| -> ExecutionResult<_> {
             match &shared {
                 Some(context) => {
-                    let (stream, sink) = SharedStream::try_new(replicas, senders, context, schema)?;
+                    let (stream, sink) = SharedStream::try_new(
+                        replicas,
+                        senders,
+                        self.options.task_stream_buffer,
+                        context,
+                        schema,
+                    )?;
                     Ok((LocalStreamState::Shared { stream }, sink))
                 }
                 None => {

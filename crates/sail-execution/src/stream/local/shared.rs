@@ -13,6 +13,7 @@ use sail_common_datafusion::error::CommonErrorCause;
 use sail_physical_plan::shared_cte::tee::{Tee, TeeReader};
 use sail_python_udf::error::PyErrExtractor;
 use tokio::sync::{Notify, mpsc};
+use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
 use crate::error::ExecutionResult;
 use crate::stream::error::{TaskStreamError, TaskStreamResult};
@@ -33,6 +34,8 @@ pub(crate) struct SharedStream {
     tee: Arc<Tee>,
     /// The number of replicas that are read.
     subscribed: usize,
+    /// The number of batches that each replica reads ahead.
+    buffer: usize,
 }
 
 impl SharedStream {
@@ -41,6 +44,7 @@ impl SharedStream {
     pub fn try_new(
         replicas: usize,
         senders: Vec<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
+        buffer: usize,
         context: &TaskContext,
         schema: SchemaRef,
     ) -> ExecutionResult<(Self, Box<dyn TaskStreamChannelSink>)> {
@@ -61,18 +65,13 @@ impl SharedStream {
             context,
             SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
         ));
-        let mut stream = Self { tee, subscribed: 0 };
+        let mut stream = Self {
+            tee,
+            subscribed: 0,
+            buffer,
+        };
         for tx in senders {
-            let mut reader = stream.reader()?;
-            tokio::spawn(async move {
-                // A batch is read only when the replica has room for it.
-                while let Ok(permit) = tx.reserve().await {
-                    match reader.next().await {
-                        Some(item) => permit.send(item),
-                        None => break,
-                    }
-                }
-            });
+            stream.forward(tx)?;
         }
         let sink = SharedStreamSender { demand, tx };
         Ok((stream, Box::new(sink)))
@@ -84,8 +83,27 @@ impl SharedStream {
         Ok(Box::pin(reader.map(|item| item.map_err(task_stream_error))))
     }
 
+    fn forward(&mut self, tx: mpsc::Sender<TaskStreamResult<RecordBatch>>) -> ExecutionResult<()> {
+        let mut reader = self.reader()?;
+        tokio::spawn(async move {
+            // A batch is read only when the replica has room for it.
+            while let Ok(permit) = tx.reserve().await {
+                tokio::select! {
+                    item = reader.next() => match item {
+                        Some(item) => permit.send(item),
+                        None => break,
+                    },
+                    _ = tx.closed() => break,
+                }
+            }
+        });
+        Ok(())
+    }
+
     pub fn subscribe(&mut self) -> ExecutionResult<TaskStreamSource> {
-        self.reader()
+        let (tx, rx) = mpsc::channel(self.buffer);
+        self.forward(tx)?;
+        Ok(Box::pin(ReceiverStream::new(rx)))
     }
 }
 
@@ -241,7 +259,8 @@ mod tests {
     #[tokio::test]
     async fn the_sink_writes_only_when_a_replica_asks_for_a_batch() {
         let context = TaskContext::default();
-        let (mut stream, mut sink) = SharedStream::try_new(2, vec![], &context, schema()).unwrap();
+        let (mut stream, mut sink) =
+            SharedStream::try_new(2, vec![], 1, &context, schema()).unwrap();
         // Nothing is asked before a replica reads.
         assert_eq!(is_ready(&mut sink).await, None);
         let mut a = stream.subscribe().unwrap();
@@ -252,10 +271,11 @@ mod tests {
             Some(TaskStreamWriteState::Active)
         );
         sink.write(batch(1)).await.unwrap();
-        assert_eq!(value(&a.next().await.unwrap().unwrap()), 1);
-        // The batch is kept for the other replica, which does not ask for a new one.
-        assert_eq!(value(&b.next().await.unwrap().unwrap()), 1);
+        // The batch is kept for the other replica, which does not ask for a new one,
+        // and neither replica asks for more than its buffer holds.
         assert_eq!(is_ready(&mut sink).await, None);
+        assert_eq!(value(&a.next().await.unwrap().unwrap()), 1);
+        assert_eq!(value(&b.next().await.unwrap().unwrap()), 1);
         drop(a);
         drop(b);
         // The sink stops once every replica is dropped.
@@ -268,7 +288,8 @@ mod tests {
     #[tokio::test]
     async fn replicas_read_to_the_end_or_to_the_error() {
         let context = TaskContext::default();
-        let (mut stream, mut sink) = SharedStream::try_new(2, vec![], &context, schema()).unwrap();
+        let (mut stream, mut sink) =
+            SharedStream::try_new(2, vec![], 1, &context, schema()).unwrap();
         let mut a = stream.subscribe().unwrap();
         let reader = tokio::spawn(async move {
             let mut values = vec![];
@@ -310,7 +331,8 @@ mod tests {
     async fn subscribed_replicas_are_sent_the_stream() {
         let context = TaskContext::default();
         let (tx, mut rx) = mpsc::channel(1);
-        let (_stream, mut sink) = SharedStream::try_new(1, vec![tx], &context, schema()).unwrap();
+        let (_stream, mut sink) =
+            SharedStream::try_new(1, vec![tx], 1, &context, schema()).unwrap();
         assert_eq!(sink.ready().await.unwrap(), TaskStreamWriteState::Active);
         sink.write(batch(7)).await.unwrap();
         assert_eq!(value(&rx.recv().await.unwrap().unwrap()), 7);
@@ -321,7 +343,8 @@ mod tests {
     #[tokio::test]
     async fn an_aborted_stream_is_an_error_for_its_replicas() {
         let context = TaskContext::default();
-        let (mut stream, mut sink) = SharedStream::try_new(1, vec![], &context, schema()).unwrap();
+        let (mut stream, mut sink) =
+            SharedStream::try_new(1, vec![], 1, &context, schema()).unwrap();
         let mut a = stream.subscribe().unwrap();
         let reader = tokio::spawn(async move { a.next().await });
         assert_eq!(sink.ready().await.unwrap(), TaskStreamWriteState::Active);
