@@ -14,6 +14,7 @@ mod adapter;
 mod provider;
 mod sigv4;
 mod sigv4_state;
+pub use sigv4_state::SigV4Options;
 
 #[expect(unused_imports)]
 #[expect(clippy::enum_variant_names)]

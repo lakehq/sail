@@ -911,6 +911,9 @@ pub enum CatalogType {
         /// Amazon S3 Tables or RustFS Iceberg REST endpoints.
         #[serde(skip_serializing_if = "Option::is_none")]
         sigv4_enabled: Option<bool>,
+        /// The SigV4 signing region. Defaults to the AWS region provider chain.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signing_region: Option<String>,
         /// The SigV4 signing name, such as `s3tables` or `s3`. Defaults to `execute-api`.
         #[serde(skip_serializing_if = "Option::is_none")]
         signing_name: Option<String>,

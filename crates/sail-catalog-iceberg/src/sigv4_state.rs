@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use aws_config::identity::IdentityCache;
-use aws_config::{BehaviorVersion, SdkConfig};
+use aws_config::{BehaviorVersion, ConfigLoader, Region, SdkConfig};
 use aws_credential_types::Credentials;
 use aws_smithy_async::rt::sleep::TokioSleep;
 use aws_smithy_async::time::SystemTimeSource;
@@ -28,6 +28,12 @@ use sail_catalog::error::{CatalogError, CatalogResult};
 
 use crate::r#gen::RequestSigner;
 use crate::sigv4::{PayloadHashMode, SigV4Signer};
+
+#[derive(Debug, Clone)]
+pub struct SigV4Options {
+    pub region: Option<String>,
+    pub service: String,
+}
 
 pub(crate) struct SigV4State {
     signer: Option<Arc<SigV4Signer>>,
@@ -62,7 +68,15 @@ impl SigV4State {
         }
     }
 
-    pub(crate) async fn from_env(service: impl Into<String>) -> CatalogResult<SigV4State> {
+    pub(crate) async fn from_options(options: &SigV4Options) -> CatalogResult<SigV4State> {
+        let loader = aws_config::defaults(BehaviorVersion::latest());
+        Self::from_options_with_loader(options, loader).await
+    }
+
+    pub(crate) async fn from_options_with_loader(
+        options: &SigV4Options,
+        loader: ConfigLoader,
+    ) -> CatalogResult<SigV4State> {
         let runtime_components = RuntimeComponentsBuilder::for_tests()
             .with_time_source(Some(SystemTimeSource::new()))
             .with_sleep_impl(Some(TokioSleep::new()))
@@ -70,14 +84,21 @@ impl SigV4State {
             .map_err(|e| {
                 CatalogError::External(format!("failed to build AWS runtime components: {e}"))
             })?;
-        let sdk_config = aws_config::defaults(BehaviorVersion::latest()).load().await;
-        Ok(Self::new(service, &sdk_config, runtime_components))
+        let loader = match &options.region {
+            Some(region) => loader.region(Region::new(region.clone())),
+            None => loader,
+        };
+        Ok(Self::new(
+            options.service.clone(),
+            &loader.load().await,
+            runtime_components,
+        ))
     }
 
     pub(crate) async fn new_request_signer(&self) -> CatalogResult<SigV4RequestSigner> {
         let Some(signer) = &self.signer else {
             return Err(CatalogError::InvalidArgument(
-                "no AWS region found for SigV4 signing; set AWS_REGION or a region in the AWS profile"
+                "no AWS region found for SigV4 signing; set signing_region, AWS_REGION, or a region in the AWS profile"
                     .to_string(),
             ));
         };

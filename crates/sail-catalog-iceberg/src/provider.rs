@@ -43,7 +43,7 @@ use sail_iceberg::{
 use tokio::sync::OnceCell;
 
 use crate::r#gen::{ApiClient, ApiError};
-use crate::sigv4_state::SigV4State;
+use crate::sigv4_state::{SigV4Options, SigV4State};
 
 pub const REST_CATALOG_PROP_URI: &str = "uri";
 
@@ -141,7 +141,7 @@ impl CatalogConfig<'_> {
 pub struct IcebergRestCatalogOptions {
     pub credentials: Arc<dyn CatalogCredentials>,
     pub properties: HashMap<String, String>,
-    pub sigv4_service: Option<String>,
+    pub sigv4: Option<SigV4Options>,
 }
 
 /// Provider for Apache Iceberg REST Catalog.
@@ -155,7 +155,7 @@ pub struct IcebergRestCatalogProvider {
 
 impl IcebergRestCatalogProvider {
     pub fn new(name: String, options: IcebergRestCatalogOptions) -> CatalogResult<Self> {
-        let http_client = if options.sigv4_service.is_some() {
+        let http_client = if options.sigv4.is_some() {
             reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
@@ -206,10 +206,10 @@ impl IcebergRestCatalogProvider {
     }
 
     async fn sigv4_state(&self) -> CatalogResult<Option<&SigV4State>> {
-        if let Some(sigv4_service) = &self.options.sigv4_service {
+        if let Some(options) = &self.options.sigv4 {
             let state = self
                 .sigv4_state
-                .get_or_try_init(|| SigV4State::from_env(sigv4_service))
+                .get_or_try_init(|| SigV4State::from_options(options))
                 .await?;
             Ok(Some(state))
         } else {
@@ -2652,12 +2652,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use arrow::datatypes::{DataType, Field};
-    use aws_config::{Region, SdkConfig};
+    use aws_config::BehaviorVersion;
     use aws_credential_types::Credentials;
-    use aws_credential_types::provider::SharedCredentialsProvider;
-    use aws_smithy_async::rt::sleep::TokioSleep;
-    use aws_smithy_async::time::SystemTimeSource;
-    use aws_smithy_runtime_api::client::runtime_components::RuntimeComponentsBuilder;
     use sail_catalog::credentials::{
         BasicCatalogCredentials, EmptyCatalogCredentials, FileCatalogCredentials,
     };
@@ -2816,43 +2812,41 @@ mod tests {
         }
     }
 
-    fn test_new_sigv4_state(service: impl Into<String>) -> SigV4State {
-        let credentials = Credentials::new(
-            "AKIDEXAMPLE",
-            "secret",
-            Some("token".to_string()),
-            None,
-            "test_new_sigv4_state",
-        );
-        SigV4State::new(
-            service,
-            &SdkConfig::builder()
-                .region(Region::new("us-east-1"))
-                .credentials_provider(SharedCredentialsProvider::new(credentials))
-                .build(),
-            RuntimeComponentsBuilder::for_tests()
-                .with_time_source(Some(SystemTimeSource::new()))
-                .with_sleep_impl(Some(TokioSleep::new()))
-                .build()
-                .unwrap(),
-        )
+    async fn test_new_sigv4_state(sigv4: SigV4Options) -> SigV4State {
+        let loader =
+            aws_config::defaults(BehaviorVersion::latest()).credentials_provider(Credentials::new(
+                "AKIDEXAMPLE",
+                "secret",
+                Some("token".to_string()),
+                None,
+                "test_new_sigv4_state",
+            ));
+        SigV4State::from_options_with_loader(&sigv4, loader)
+            .await
+            .unwrap()
     }
 
-    fn signed(mock: wiremock::MockBuilder) -> wiremock::MockBuilder {
-        mock.and(header_regex(
-            "authorization",
-            "^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/[^/]+/us-east-1/execute-api/aws4_request",
-        ))
-        .and(header_exists("x-amz-date"))
-        .and(header_exists("x-amz-content-sha256"))
-        .and(header("x-amz-security-token", "token"))
+    fn signed(method_name: &str, path_name: &str, sigv4: &SigV4Options) -> wiremock::MockBuilder {
+        let region = sigv4.region.as_deref().unwrap();
+        let service = &sigv4.service;
+        Mock::given(method(method_name))
+            .and(path(path_name))
+            .and(header_regex(
+                "authorization",
+                &format!(
+                    "^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/[^/]+/{region}/{service}/aws4_request"
+                ),
+            ))
+            .and(header_exists("x-amz-date"))
+            .and(header_exists("x-amz-content-sha256"))
+            .and(header("x-amz-security-token", "token"))
     }
 
     fn test_options(properties: HashMap<String, String>) -> IcebergRestCatalogOptions {
         IcebergRestCatalogOptions {
             credentials: Arc::new(EmptyCatalogCredentials),
             properties,
-            sigv4_service: None,
+            sigv4: None,
         }
     }
 
@@ -5754,7 +5748,7 @@ mod tests {
             IcebergRestCatalogOptions {
                 credentials: Arc::new(FileCatalogCredentials::new(&token_path)),
                 properties,
-                sigv4_service: None,
+                sigv4: None,
             },
         )
         .unwrap();
@@ -5794,7 +5788,7 @@ mod tests {
             IcebergRestCatalogOptions {
                 credentials: Arc::new(BasicCatalogCredentials::new("user", "pass")),
                 properties,
-                sigv4_service: None,
+                sigv4: None,
             },
         )
         .unwrap();
@@ -5806,8 +5800,12 @@ mod tests {
 
     #[tokio::test]
     async fn sigv4_signs_bootstrap_and_catalog_requests() {
+        let sigv4 = SigV4Options {
+            region: Some("eu-west-1".to_string()),
+            service: "s3tables".to_string(),
+        };
         let server = MockServer::start().await;
-        signed(Mock::given(method("GET")).and(path("/v1/config")))
+        signed("GET", "/v1/config", &sigv4)
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "overrides": { "warehouse": "s3://iceberg-catalog" },
                 "defaults": {}
@@ -5815,7 +5813,7 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        signed(Mock::given(method("GET")).and(path("/v1/namespaces/db1")))
+        signed("GET", "/v1/namespaces/db1", &sigv4)
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "namespace": ["db1"],
                 "properties": {}
@@ -5825,19 +5823,18 @@ mod tests {
             .await;
 
         let properties = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.uri())]);
-        let sigv4_service = "execute-api";
         let catalog = IcebergRestCatalogProvider::new(
             String::new(),
             IcebergRestCatalogOptions {
                 credentials: Arc::new(EmptyCatalogCredentials),
                 properties,
-                sigv4_service: Some(sigv4_service.to_string()),
+                sigv4: Some(sigv4.clone()),
             },
         )
         .unwrap();
         catalog
             .sigv4_state
-            .get_or_init(|| async { test_new_sigv4_state(sigv4_service) })
+            .get_or_init(|| test_new_sigv4_state(sigv4))
             .await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
         let result = catalog.get_database(&namespace).await.unwrap();
@@ -5846,8 +5843,12 @@ mod tests {
 
     #[tokio::test]
     async fn sigv4_moves_basic_auth_to_original_authorization() {
+        let sigv4 = SigV4Options {
+            region: Some("ap-southeast-2".to_string()),
+            service: "execute-api".to_string(),
+        };
         let server = MockServer::start().await;
-        signed(Mock::given(method("GET")).and(path("/v1/config")))
+        signed("GET", "/v1/config", &sigv4)
             .and(header("original-authorization", "Basic dXNlcjpwYXNz"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "overrides": { "warehouse": "s3://iceberg-catalog" },
@@ -5856,7 +5857,7 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        signed(Mock::given(method("GET")).and(path("/v1/namespaces/db1")))
+        signed("GET", "/v1/namespaces/db1", &sigv4)
             .and(header("original-authorization", "Basic dXNlcjpwYXNz"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "namespace": ["db1"],
@@ -5866,19 +5867,18 @@ mod tests {
             .mount(&server)
             .await;
         let properties = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.uri())]);
-        let sigv4_service = "execute-api";
         let catalog = IcebergRestCatalogProvider::new(
             String::new(),
             IcebergRestCatalogOptions {
                 credentials: Arc::new(BasicCatalogCredentials::new("user", "pass")),
                 properties,
-                sigv4_service: Some(sigv4_service.to_string()),
+                sigv4: Some(sigv4.clone()),
             },
         )
         .unwrap();
         catalog
             .sigv4_state
-            .get_or_init(|| async { test_new_sigv4_state(sigv4_service) })
+            .get_or_init(|| test_new_sigv4_state(sigv4))
             .await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
         let result = catalog.get_database(&namespace).await.unwrap();
@@ -5887,8 +5887,12 @@ mod tests {
 
     #[tokio::test]
     async fn sigv4_does_not_follow_redirects() {
+        let sigv4 = SigV4Options {
+            region: Some("us-east-1".to_string()),
+            service: "execute-api".to_string(),
+        };
         let server = MockServer::start().await;
-        signed(Mock::given(method("GET")).and(path("/v1/config")))
+        signed("GET", "/v1/config", &sigv4)
             .respond_with(
                 ResponseTemplate::new(302)
                     .insert_header("location", format!("{}/elsewhere", server.uri())),
@@ -5903,19 +5907,18 @@ mod tests {
             .mount(&server)
             .await;
         let properties = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.uri())]);
-        let sigv4_service = "execute-api";
         let catalog = IcebergRestCatalogProvider::new(
             String::new(),
             IcebergRestCatalogOptions {
                 credentials: Arc::new(EmptyCatalogCredentials),
                 properties,
-                sigv4_service: Some(sigv4_service.to_string()),
+                sigv4: Some(sigv4.clone()),
             },
         )
         .unwrap();
         catalog
             .sigv4_state
-            .get_or_init(|| async { test_new_sigv4_state(sigv4_service) })
+            .get_or_init(|| test_new_sigv4_state(sigv4))
             .await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
         let result = catalog.get_database(&namespace).await;
@@ -6065,7 +6068,7 @@ mod tests {
         let options = IcebergRestCatalogOptions {
             credentials: Arc::new(FileCatalogCredentials::new(&token_path)),
             properties: props,
-            sigv4_service: None,
+            sigv4: None,
         };
         let catalog = IcebergRestCatalogProvider::new(String::new(), options).unwrap();
 

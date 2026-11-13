@@ -14,7 +14,7 @@ use sail_catalog::provider::{
 };
 use sail_catalog_glue::{GlueCatalogConfig, GlueCatalogProvider};
 use sail_catalog_hms::{HmsCatalogConfig, HmsCatalogProvider};
-use sail_catalog_iceberg::{IcebergRestCatalogOptions, IcebergRestCatalogProvider};
+use sail_catalog_iceberg::{IcebergRestCatalogOptions, IcebergRestCatalogProvider, SigV4Options};
 use sail_catalog_memory::MemoryCatalogProvider;
 use sail_catalog_onelake::{OneLakeApiKind, OneLakeCatalogProvider};
 use sail_catalog_system::{SYSTEM_CATALOG_NAME, SystemCatalogProvider};
@@ -59,6 +59,7 @@ pub fn create_catalog_manager(
                     username,
                     password,
                     sigv4_enabled,
+                    signing_region,
                     signing_name,
                     cache,
                 } => {
@@ -90,11 +91,12 @@ pub fn create_catalog_manager(
                         password.as_ref(),
                     )?;
 
-                    let sigv4_service = if sigv4_enabled.unwrap_or(false) {
-                        signing_name.clone().or_else(|| Some("execute-api".to_string()))
-                    } else {
-                        None
-                    };
+                    let sigv4 = sigv4_enabled.unwrap_or(false).then(|| SigV4Options {
+                        region: signing_region.clone(),
+                        service: signing_name
+                            .clone()
+                            .unwrap_or_else(|| "execute-api".to_string()),
+                    });
 
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || {
@@ -103,7 +105,7 @@ pub fn create_catalog_manager(
                                 IcebergRestCatalogOptions {
                                     credentials,
                                     properties,
-                                    sigv4_service,
+                                    sigv4,
                                 },
                             )?;
                             Ok(provider)

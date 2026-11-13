@@ -102,7 +102,7 @@ impl OneLakeCatalogProvider {
                     IcebergRestCatalogOptions {
                         credentials,
                         properties,
-                        sigv4_service: None,
+                        sigv4: None,
                     },
                 )?)
             }
