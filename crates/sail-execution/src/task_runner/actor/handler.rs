@@ -275,15 +275,15 @@ impl TaskRunnerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_fetch_worker_stream(
+    pub(super) fn handle_fetch_worker_streams(
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        if self.tasks.is_job_closed(key.job_id) {
+        if self.tasks.is_job_closed(keys.job_id) {
             let _ = result.send(Err(ExecutionError::InvalidArgument(
                 "task or job has been canceled".into(),
             )));
@@ -294,9 +294,9 @@ impl TaskRunnerActor {
                 let driver = driver.clone();
                 ctx.spawn(async move {
                     let _ = driver
-                        .send(DriverMessage::FetchWorkerStream {
+                        .send(DriverMessage::FetchWorkerStreams {
                             worker_id,
-                            key,
+                            keys,
                             schema,
                             result,
                         })
@@ -307,13 +307,12 @@ impl TaskRunnerActor {
                 worker_id: this_worker_id,
                 ..
             } if worker_id == *this_worker_id => {
-                let _ = result.send(self.extensions.local_streams.fetch_stream(ctx, &key));
+                let _ = result.send(self.extensions.local_streams.fetch_streams(ctx, &keys));
             }
             TaskRunnerPlacement::Worker { peers, .. } => match peers.get_client_set(worker_id) {
                 Ok(client) => {
                     ctx.spawn(async move {
-                        let _ =
-                            result.send(client.flight.fetch_task_streams(key.into(), schema).await);
+                        let _ = result.send(client.flight.fetch_task_streams(keys, schema).await);
                     });
                 }
                 Err(error) => {

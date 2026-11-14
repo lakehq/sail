@@ -19,7 +19,7 @@ use crate::driver::worker_pool::state::WorkerState;
 use crate::driver::worker_pool::{WorkerDescriptor, WorkerPool, WorkerPoolOptions};
 use crate::driver::{DriverActor, DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKeySet, WorkerId};
 use crate::rpc::ClientOptions;
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
@@ -409,11 +409,11 @@ impl WorkerPool {
         });
     }
 
-    pub fn fetch_task_stream(
+    pub fn fetch_task_streams(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
         worker_id: WorkerId,
-        key: &TaskStreamKey,
+        keys: TaskStreamKeySet,
         schema: SchemaRef,
     ) -> ExecutionResult<TaskStreamSource> {
         let Some(worker) = self.workers.get_mut(&worker_id) else {
@@ -430,10 +430,9 @@ impl WorkerPool {
                 )));
             }
         };
-        let key = key.clone();
         let stream = futures::stream::once(async move {
             client
-                .fetch_task_streams(key.into(), schema.clone())
+                .fetch_task_streams(keys, schema.clone())
                 .await
                 .map_err(|e| TaskStreamError::External(Arc::new(e)))
         })

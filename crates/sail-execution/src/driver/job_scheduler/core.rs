@@ -1891,4 +1891,109 @@ pub(super) mod tests {
             );
         }
     }
+
+    #[tokio::test]
+    async fn input_that_is_read_in_order_has_one_task_per_partition()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_expr::expressions::col;
+        use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
+        use datafusion::physical_plan::sorts::sort::SortExec;
+        use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+        use datafusion::prelude::SessionContext;
+        use sail_common::actor::{ActorContext, ActorSystem};
+        use sail_common::config::{AppConfig, SystemCatalogStore};
+        use sail_common::runtime::RuntimeHandle;
+
+        use super::JobScheduler;
+        use crate::driver::job_scheduler::JobSchedulerOptions;
+        use crate::driver::{DriverActor, DriverComponents, DriverOptions};
+        use crate::id::{DriverId, WorkerId};
+        use crate::task::definition::TaskInputLocator;
+        use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter};
+        use crate::worker_manager::LocalWorkerManager;
+
+        /// Assigns the tasks to workers by their partition.
+        struct Workers(Vec<TaskAssignment>);
+
+        impl TaskAssignmentGetter for Workers {
+            fn get(&self, key: &TaskKey) -> Option<&TaskAssignment> {
+                self.0.get(key.partition % self.0.len())
+            }
+        }
+
+        let mut config = AppConfig::load()?;
+        config.catalog.system.store = SystemCatalogStore::Memory;
+        config.telemetry.export_traces = false;
+        config.telemetry.export_metrics = false;
+        config.telemetry.export_logs = false;
+        let reporter = event_reporter(&config)?;
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let options = DriverOptions::try_new(
+            &config,
+            runtime.clone(),
+            "ordered-input".into(),
+            DriverId::from(1),
+            0,
+        )?;
+        let mut scheduler =
+            JobScheduler::new(JobSchedulerOptions::from(&options), reporter.clone());
+        let mut system = ActorSystem::new();
+        let driver = system.spawn::<DriverActor>((
+            options,
+            DriverComponents {
+                worker_manager: Box::new(LocalWorkerManager::new(runtime, SessionContext::new())),
+                event_reporter: reporter,
+            },
+        ));
+        let mut ctx = ActorContext::new(&driver);
+
+        // Stage 1 merges the sorted partitions of stage 0 in order.
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
+        let input = MemorySourceConfig::try_new_exec(&vec![vec![]; 4], schema.clone(), None)?;
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(col("x", &schema)?)])
+            .ok_or("missing ordering")?;
+        let sort = SortExec::new(ordering.clone(), input).with_preserve_partitioning(true);
+        let plan = Arc::new(SortPreservingMergeExec::new(ordering, Arc::new(sort)));
+        let (job_id, _output) =
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        scheduler.refresh_job(job_id);
+        let key = TaskKey {
+            job_id,
+            stage: 1,
+            partition: 0,
+            attempt: 0,
+        };
+        let workers = Workers(
+            (1..=2)
+                .map(|worker_id| TaskAssignment::Worker {
+                    worker_id: WorkerId::from(worker_id),
+                    slot: 0,
+                })
+                .collect(),
+        );
+        let (definition, _) = scheduler.get_task_definition(&key, &workers)?;
+        let [input] = definition.inputs.as_slice() else {
+            return Err("the task must have one input".into());
+        };
+        let TaskInputLocator::Worker { keys } = input.locator.as_ref() else {
+            return Err("the input must be read from workers".into());
+        };
+
+        // The reader opens each partition of the input on its own and reads the
+        // partitions in the order of their data. So the streams of two tasks are never
+        // in the same partition of the input, where they would be fetched together and
+        // read in arbitrary order, although the tasks are on the same worker.
+        assert_eq!(keys.len(), 4);
+        for (partition, keys) in keys.iter().enumerate() {
+            assert!(!keys.is_empty());
+            assert!(keys.iter().all(|(_, key)| key.partition == partition));
+        }
+        Ok(())
+    }
 }
