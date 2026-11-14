@@ -36,6 +36,7 @@ impl TryFrom<TaskStreamTicket> for TaskStreamKeySet {
             partition,
             attempt,
             channel,
+            release,
         } = ticket;
         if partition.is_empty() || partition.len() != attempt.len() || channel.is_empty() {
             return Err(Status::invalid_argument(
@@ -51,6 +52,7 @@ impl TryFrom<TaskStreamTicket> for TaskStreamKeySet {
                 .map(|(partition, attempt)| (partition as usize, attempt as usize))
                 .collect(),
             channels: channel.into_iter().map(|x| x as usize).collect(),
+            release,
         })
     }
 }

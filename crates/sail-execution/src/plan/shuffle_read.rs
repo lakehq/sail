@@ -32,42 +32,54 @@ impl ShuffleReadExec {
 ///
 /// An operator can finish without reading one of its inputs (for example, a hash join
 /// with an empty build side never polls its probe side). If the input is dropped before
-/// it has been opened, it is still opened and closed in the background when the reader
-/// requires so. An open call that is in progress is completed rather than repeated,
+/// it has been opened, it is released in the background when the reader requires so.
+/// An open call that is in progress is completed and its output is closed instead,
 /// so that each stream of the partition is requested exactly once.
 struct ShuffleReadOpen {
-    close_unopened: bool,
+    reader: Arc<dyn TaskStreamReader>,
+    partition: usize,
+    /// The open call, which starts when the input is first polled.
     open: Option<BoxFuture<'static, Result<TaskStreamSource>>>,
+    opened: bool,
 }
 
 impl Future for ShuffleReadOpen {
     type Output = Result<TaskStreamSource>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let Some(open) = self.open.as_mut() else {
+        if self.opened {
             return Poll::Ready(internal_err!("shuffle input is opened more than once"));
-        };
+        }
+        let this = &mut *self;
+        let open = this.open.get_or_insert_with(|| {
+            let (reader, partition) = (this.reader.clone(), this.partition);
+            Box::pin(async move { reader.open(partition).await })
+        });
         let output = ready!(open.as_mut().poll(cx));
         self.open = None;
+        self.opened = true;
         Poll::Ready(output)
     }
 }
 
 impl Drop for ShuffleReadOpen {
     fn drop(&mut self) {
-        if !self.close_unopened {
+        if self.opened || !self.reader.close_unopened() {
             return;
         }
-        let Some(open) = self.open.take() else {
-            return;
-        };
-        // This is best-effort. If the input cannot be closed here, its data is
+        let (reader, partition) = (self.reader.clone(), self.partition);
+        let open = self.open.take();
+        // This is best-effort. If the input cannot be released here, its data is
         // released when the streams of the stage are cleaned up.
         // The spawned task is not cancelled along with the task that owned the input,
         // but it takes no longer than the open call of a normal read.
         if let Ok(handle) = Handle::try_current() {
             handle.spawn(async move {
-                let _ = open.await;
+                if let Some(open) = open {
+                    let _ = open.await;
+                } else {
+                    let _ = reader.release(partition).await;
+                }
             });
         }
     }
@@ -127,10 +139,11 @@ impl ExecutionPlan for ShuffleReadExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let reader = self.reader.clone();
         let output = futures::stream::once(ShuffleReadOpen {
-            close_unopened: reader.close_unopened(),
-            open: Some(Box::pin(async move { reader.open(partition).await })),
+            reader: self.reader.clone(),
+            partition,
+            open: None,
+            opened: false,
         })
         .map_ok(|source| {
             source.map(|item| {
@@ -204,6 +217,7 @@ mod tests {
         started: AtomicUsize,
         opened: AtomicUsize,
         closed: Arc<AtomicUsize>,
+        released: AtomicUsize,
     }
 
     impl TestReader {
@@ -214,6 +228,7 @@ mod tests {
                 started: AtomicUsize::new(0),
                 opened: AtomicUsize::new(0),
                 closed: Arc::new(AtomicUsize::new(0)),
+                released: AtomicUsize::new(0),
             })
         }
 
@@ -245,6 +260,11 @@ mod tests {
 
         fn close_unopened(&self) -> bool {
             self.close_unopened
+        }
+
+        async fn release(&self, _partition: usize) -> Result<()> {
+            self.released.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         }
     }
 
@@ -278,9 +298,9 @@ mod tests {
             .execute(0, Arc::new(TaskContext::default()))
     }
 
-    async fn wait_until_closed(reader: &TestReader) -> Result<()> {
+    async fn wait_until_positive(count: &AtomicUsize) -> Result<()> {
         tokio::time::timeout(Duration::from_secs(5), async {
-            while reader.closed.load(Ordering::SeqCst) == 0 {
+            while count.load(Ordering::SeqCst) == 0 {
                 tokio::task::yield_now().await;
             }
         })
@@ -289,14 +309,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn closes_only_unopened_input_on_drop() -> Result<()> {
-        // An input that has been read is not opened again.
+    async fn releases_only_unopened_input_on_drop() -> Result<()> {
+        // An input that has been read is not released.
         let read = TestReader::new(true, None);
         let mut stream = execute(&read)?;
         assert!(stream.try_next().await?.is_none());
         drop(stream);
 
-        // An input that does not need to be closed is never opened.
+        // An input that does not need to be closed is not released.
         let unaffected = TestReader::new(false, None);
         drop(execute(&unaffected)?);
 
@@ -305,14 +325,18 @@ mod tests {
         let stream = execute(&outside)?;
         let _ = std::thread::spawn(move || drop(stream)).join();
 
+        // An input that has not been opened is released without being opened.
         let unopened = TestReader::new(true, None);
         drop(execute(&unopened)?);
-        wait_until_closed(&unopened).await?;
+        wait_until_positive(&unopened.released).await?;
 
-        assert_eq!(unopened.counts(), (1, 1, 1));
+        assert_eq!(unopened.counts(), (0, 0, 0));
         assert_eq!(read.counts(), (1, 1, 1));
         assert_eq!(unaffected.counts(), (0, 0, 0));
         assert_eq!(outside.counts(), (0, 0, 0));
+        for (reader, released) in [(&unopened, 1), (&read, 0), (&unaffected, 0), (&outside, 0)] {
+            assert_eq!(reader.released.load(Ordering::SeqCst), released);
+        }
         Ok(())
     }
 
@@ -327,9 +351,10 @@ mod tests {
         if let Some(permits) = &reader.permits {
             permits.add_permits(1);
         }
-        wait_until_closed(&reader).await?;
+        wait_until_positive(&reader.closed).await?;
         // The open call that had started is the one that completes.
         assert_eq!(reader.counts(), (1, 1, 1));
+        assert_eq!(reader.released.load(Ordering::SeqCst), 0);
         Ok(())
     }
 }

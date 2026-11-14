@@ -86,6 +86,7 @@ fn keys(partitions: &[usize], channels: &[usize]) -> TaskStreamKeySet {
         stage: 0,
         tasks: partitions.iter().map(|&partition| (partition, 0)).collect(),
         channels: channels.to_vec(),
+        release: false,
     }
 }
 
@@ -256,6 +257,47 @@ async fn dropped_source_closes_all_its_streams() -> Result<(), TestError> {
             let batches = vec![Some(batch(0)?), Some(batch(1)?)];
             assert_eq!(sink.write(batches).await?, TaskStreamWriteState::Closed);
         }
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn released_streams_are_closed_without_data_for_the_reader() -> Result<(), TestError> {
+    with_timeout(async {
+        let mut system = ActorSystem::new();
+        let runner = task_runner(&mut system, "release")?;
+        let release = |partitions: &[usize], channels: &[usize]| TaskStreamKeySet {
+            release: true,
+            ..keys(partitions, channels)
+        };
+
+        // A stream that has data when it is released.
+        let mut written = create(&runner, 0, 1).await?;
+        let state = written.write(vec![Some(batch(0)?)]).await?;
+        assert_eq!(state, TaskStreamWriteState::Active);
+        let mut source = fetch(&runner, release(&[0, 1], &[0])).await??;
+        assert!(source.next().await.is_none());
+        let state = written.write(vec![Some(batch(1)?)]).await?;
+        assert_eq!(state, TaskStreamWriteState::Closed);
+
+        // A stream that is created after it has been released.
+        let mut late = create(&runner, 1, 1).await?;
+        let state = late.write(vec![Some(batch(0)?)]).await?;
+        assert_eq!(state, TaskStreamWriteState::Closed);
+
+        // The other streams of the tasks are not released.
+        let mut sink = create(&runner, 2, 2).await?;
+        drop(fetch(&runner, release(&[2], &[1])).await??);
+        let mut source = fetch(&runner, keys(&[2], &[0])).await??;
+        let state = sink.write(vec![Some(batch(7)?), Some(batch(8)?)]).await?;
+        assert_eq!(state, TaskStreamWriteState::Active);
+        sink.commit().await?;
+        let mut values = vec![];
+        while let Some(batch) = source.next().await {
+            values.push(value(&batch?));
+        }
+        assert_eq!(values, vec![7]);
         Ok(())
     })
     .await

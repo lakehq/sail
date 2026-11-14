@@ -57,6 +57,7 @@ impl TaskStreamFlightClient {
             partition: keys.tasks.iter().map(|x| x.0 as u64).collect(),
             attempt: keys.tasks.iter().map(|x| x.1 as u64).collect(),
             channel: keys.channels.iter().map(|&x| x as u64).collect(),
+            release: keys.release,
         };
         let ticket = match self.inner.owner {
             TaskStreamOwner::Driver { driver_id } => {

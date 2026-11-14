@@ -46,6 +46,7 @@ fn ticket_has_the_channels_of_several_tasks() -> Result<(), TestError> {
         partition: vec![0, 5, 2],
         attempt: vec![1, 0, 0],
         channel: vec![4, 0],
+        release: false,
     };
     let keys = TaskStreamKeySet::decode(&ticket.encode_to_vec())?;
     let expected = TaskStreamKeySet {
@@ -53,6 +54,18 @@ fn ticket_has_the_channels_of_several_tasks() -> Result<(), TestError> {
         stage: 3,
         tasks: vec![(0, 1), (5, 0), (2, 0)],
         channels: vec![4, 0],
+        release: false,
+    };
+    assert_eq!(keys, expected);
+    // The ticket of a reader that releases the streams.
+    let ticket = TaskStreamTicket {
+        release: true,
+        ..ticket
+    };
+    let keys = TaskStreamKeySet::decode(&ticket.encode_to_vec())?;
+    let expected = TaskStreamKeySet {
+        release: true,
+        ..expected
     };
     assert_eq!(keys, expected);
     let key = |partition, attempt, channel| TaskStreamKey {
@@ -80,6 +93,7 @@ fn ticket_has_the_channels_of_several_tasks() -> Result<(), TestError> {
         partition: vec![0],
         attempt: vec![0],
         channel: vec![0],
+        release: false,
     };
     assert_eq!(TaskStreamKey::try_from(ticket.clone())?, key(0, 0, 0));
     let keys = TaskStreamKeySet::decode(&ticket.encode_to_vec())?;
@@ -95,6 +109,7 @@ fn ticket_without_tasks_or_channels_is_rejected() {
         partition: partition.to_vec(),
         attempt: attempt.to_vec(),
         channel: channel.to_vec(),
+        release: false,
     };
     for invalid in [
         ticket(&[], &[], &[]),

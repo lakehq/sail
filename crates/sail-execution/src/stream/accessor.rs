@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::TaskContext;
-use futures::future::try_join_all;
+use futures::future::{join_all, try_join_all};
 use indexmap::IndexMap;
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
@@ -352,6 +352,29 @@ impl TaskStreamReader for MultiChannelTaskStreamReader {
             TaskInputLocator::Driver { .. } | TaskInputLocator::Worker { .. }
         )
     }
+
+    async fn release(&self, partition: usize) -> Result<()> {
+        match self.input.locator.as_ref() {
+            TaskInputLocator::Worker { keys } => {
+                let keys = keys.get(partition).ok_or_else(|| {
+                    DataFusionError::Execution(format!("input partition {partition} not found"))
+                })?;
+                let keys = worker_key_sets(self.key.job_id, self.input.stage, keys);
+                // The streams of each worker are released whether or not the release
+                // has failed for another worker.
+                let released = join_all(keys.into_iter().map(|(worker_id, mut keys)| {
+                    keys.release = true;
+                    self.streams
+                        .fetch_worker_streams(worker_id, keys, self.schema.clone())
+                }))
+                .await;
+                released.into_iter().try_for_each(|x| x.map(|_| ()))
+            }
+            // The streams on the driver are opened and closed.
+            TaskInputLocator::Driver { .. } => self.open(partition).await.map(|_| ()),
+            TaskInputLocator::Storage { .. } | TaskInputLocator::ShuffleService { .. } => Ok(()),
+        }
+    }
 }
 
 /// Groups the streams that a single call of [`TaskStreamReader::open`] reads from
@@ -395,6 +418,7 @@ fn worker_key_sets(
                 stage,
                 tasks,
                 channels,
+                release: false,
             };
             sets.push((worker_id, keys));
         }

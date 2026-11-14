@@ -126,12 +126,19 @@ impl LocalStreamManager {
     /// delay the others. If one of the streams cannot be fetched, the reader gets the
     /// error of the first such stream. All the other streams are still fetched, so
     /// that the reader gives up its place in each of them, and the tasks that write
-    /// them learn that it does not read them.
+    /// them learn that it does not read them. A reader that releases the streams
+    /// gives up its place in each of them and gets no data.
     pub fn fetch_streams(
         &mut self,
         ctx: &mut ActorContext<TaskRunnerActor>,
         keys: &TaskStreamKeySet,
     ) -> ExecutionResult<TaskStreamSource> {
+        if keys.release {
+            for key in keys.keys() {
+                self.release_stream(key);
+            }
+            return Ok(Box::pin(futures::stream::empty()));
+        }
         let mut sources = vec![];
         let mut error = None;
         for key in keys.keys() {
@@ -147,6 +154,28 @@ impl LocalStreamManager {
             return Ok(sources.swap_remove(0));
         }
         Ok(Box::pin(futures::stream::select_all(sources)))
+    }
+
+    /// Gives up the place of a reader in a stream. The task that writes the stream
+    /// learns so at once, or when it creates the stream. A stream that is not created
+    /// yet is not probed, since the reader does not wait for it.
+    fn release_stream(&mut self, key: TaskStreamKey) {
+        // The reader of this source has left.
+        let (waiter, _) = MemoryStream::pending();
+        match self.streams.entry(key) {
+            Entry::Occupied(mut entry) => match entry.get_mut() {
+                LocalStreamState::Created { stream } => {
+                    let _ = stream.subscribe();
+                }
+                LocalStreamState::Pending { waiters } => waiters.push(waiter),
+                LocalStreamState::Failed { .. } => {}
+            },
+            Entry::Vacant(entry) => {
+                entry.insert(LocalStreamState::Pending {
+                    waiters: vec![waiter],
+                });
+            }
+        }
     }
 
     pub fn remove_streams(&mut self, job_id: JobId, stage: Option<usize>) {

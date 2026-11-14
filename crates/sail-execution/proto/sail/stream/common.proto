@@ -12,6 +12,9 @@ message TaskStreamTicket {
   repeated uint64 partition = 3;
   repeated uint64 attempt = 4;
   repeated uint64 channel = 5;
+  // Whether the reader releases the streams, which it will not read.
+  // It receives no data.
+  bool release = 6;
 }
 
 message DriverTaskStreamTicket {

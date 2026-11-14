@@ -170,6 +170,9 @@ pub struct TaskStreamKeySet {
     /// The partition and the attempt of each task.
     pub tasks: Vec<(usize, usize)>,
     pub channels: Vec<usize>,
+    /// Whether the reader releases the streams, which it will not read.
+    /// The tasks that write the streams learn so, and the reader gets no data.
+    pub release: bool,
 }
 
 impl TaskStreamKeySet {
@@ -193,6 +196,7 @@ impl From<TaskStreamKey> for TaskStreamKeySet {
             stage: key.stage,
             tasks: vec![(key.partition, key.attempt)],
             channels: vec![key.channel],
+            release: false,
         }
     }
 }
