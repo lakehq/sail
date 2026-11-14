@@ -257,7 +257,14 @@
     ordered merge, a sort-merge join), and the result of a job are not limited. They
     count as well, so a large unread result or broadcast side can make other tasks
     of the process wait. Data in transit to readers on other workers is not counted.
-    If the value is `0`, there is no limit.
+    If the value is `0`, the limit is a third of the memory available to the process:
+    the memory limit of its container if there is one, or the physical memory of the
+    machine otherwise. There is no limit if this memory cannot be determined, which
+    is the case on systems other than Linux and macOS. The limit counts the data that
+    the streams hold. The process uses more memory than that for the streams, and its
+    tasks need memory as well, so a limit that is set by hand should stay well below
+    the memory of the process. To turn the limit off, set a value that is larger than
+    the memory of the machine.
   experimental: true
 
 - key: cluster.task_stream_creation_timeout_secs

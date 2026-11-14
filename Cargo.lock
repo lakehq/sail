@@ -7293,6 +7293,7 @@ dependencies = [
  "indexmap",
  "k8s-openapi",
  "kube",
+ "libc",
  "log",
  "object_store",
  "opentelemetry-proto",

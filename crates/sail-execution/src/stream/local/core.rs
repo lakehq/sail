@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use datafusion::arrow::datatypes::SchemaRef;
+use log::info;
 use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 
@@ -11,17 +12,49 @@ use crate::id::{JobId, TaskKey, TaskStreamKey, TaskStreamKeyDisplay, TaskStreamK
 use crate::stream::error::TaskStreamError;
 use crate::stream::local::memory::MemoryStream;
 use crate::stream::local::options::LocalStreamManagerOptions;
+use crate::stream::local::process_memory::available_memory;
 use crate::stream::local::queue::{QueueLimit, StreamMemory};
 use crate::stream::local::{LocalStreamManager, LocalStreamState};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::TaskStreamSink;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
-/// Returns the number of bytes that the task streams of the process can hold
+/// The share of the memory available to the process that its task streams can hold
+/// by default before tasks wait for the readers of their output, as a numerator and
+/// a denominator. The rest is for everything that is not counted: the operators of
+/// the tasks, data in transit, the memory that the allocator holds beyond the data
+/// of the streams, and other processes in the same container.
+const DEFAULT_CEILING_FRACTION: (u64, u64) = (1, 3);
+
+/// Returns the default number of bytes that the task streams of a process can hold
+/// before tasks wait for the readers of their output, given the memory available to
+/// the process. The task streams are not limited if the memory is not known.
+fn default_ceiling(available: Option<u64>) -> usize {
+    let (numerator, denominator) = DEFAULT_CEILING_FRACTION;
+    available.map_or(usize::MAX, |available| {
+        usize::try_from((available / denominator).saturating_mul(numerator)).unwrap_or(usize::MAX)
+    })
+}
+
+/// Returns the number of bytes that the task streams of this process can hold
 /// before tasks wait for the readers of their output, given the configured limit.
-fn resolve_ceiling(limit: usize) -> usize {
+/// The memory available to the process is read once, when a default is first needed.
+fn process_ceiling(limit: usize) -> usize {
+    static DEFAULT: OnceLock<usize> = OnceLock::new();
     match limit {
-        0 => usize::MAX,
+        0 => *DEFAULT.get_or_init(|| {
+            let available = available_memory();
+            let ceiling = default_ceiling(available);
+            let (numerator, denominator) = DEFAULT_CEILING_FRACTION;
+            match available {
+                Some(available) => info!(
+                    "task streams can hold {ceiling} bytes before tasks wait for their readers: \
+                    {numerator}/{denominator} of the {available} bytes of memory of the process"
+                ),
+                None => info!("task streams are not limited: the memory of the process is unknown"),
+            }
+            ceiling
+        }),
         limit => limit,
     }
 }
@@ -38,6 +71,7 @@ impl LocalStreamManager {
     pub fn new(options: LocalStreamManagerOptions) -> Self {
         Self {
             memory: process_stream_memory(),
+            ceiling: process_ceiling(options.task_stream_memory_limit),
             options,
             streams: HashMap::new(),
             cleaned: HashSet::new(),
@@ -93,7 +127,7 @@ impl LocalStreamManager {
         let buffer = self.options.task_stream_buffer;
         let limit = bounded.then(|| QueueLimit {
             rows: buffer.saturating_mul(self.options.batch_size),
-            ceiling: resolve_ceiling(self.options.task_stream_memory_limit),
+            ceiling: self.ceiling,
         });
         let memory = self.memory.clone();
         let (sink, streams) = MemoryStream::create(key, waiters, replicas, limit, memory);
@@ -388,6 +422,27 @@ mod tests {
         let mut manager = manager_with_memory_limit(9)?;
         let mut sink = manager.create_stream(&task_key(0), 1, 1, true, schema)?;
         assert!(!write_without_waiting(&mut sink)?);
+        Ok(())
+    }
+
+    #[test]
+    fn default_memory_limit_is_a_share_of_the_memory_of_the_process() -> TestResult {
+        let (numerator, denominator) = DEFAULT_CEILING_FRACTION;
+        let available = 64 << 30;
+        let ceiling = u64::try_from(default_ceiling(Some(available)))?;
+        assert!(0 < ceiling && ceiling <= available);
+        assert_eq!(ceiling, available / denominator * numerator);
+        assert_eq!(default_ceiling(None), usize::MAX);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn memory_limit_is_the_configured_number_or_the_default() -> TestResult {
+        assert_eq!(manager_with_memory_limit(1)?.ceiling, 1);
+        assert_eq!(manager_with_memory_limit(1 << 20)?.ceiling, 1 << 20);
+        // The memory of the process is known on these systems.
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        assert!(manager_with_memory_limit(0)?.ceiling < usize::MAX);
         Ok(())
     }
 
