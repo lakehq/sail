@@ -621,8 +621,7 @@ mod tests {
         OffsetSizeTrait, RunArray, StringArray, StringViewArray, StringViewBuilder, StructArray,
         UInt32Array, make_array,
     };
-    use datafusion::arrow::buffer::Buffer;
-    use datafusion::arrow::buffer::NullBuffer;
+    use datafusion::arrow::buffer::{Buffer, NullBuffer};
     use datafusion::arrow::compute::{cast, concat, concat_batches, take, take_record_batch};
     use datafusion::arrow::datatypes::{
         Field, Int8Type, Int16Type, Int32Type, Int64Type, SchemaRef,
