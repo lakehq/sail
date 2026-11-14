@@ -57,10 +57,14 @@ impl Actor for TaskRunnerActor {
             }
             TaskRunnerMessage::CreateLocalStream {
                 key,
+                channels,
                 replicas,
+                job_output,
                 schema,
                 result,
-            } => self.handle_create_local_stream(key, replicas, schema, result),
+            } => {
+                self.handle_create_local_stream(key, channels, replicas, job_output, schema, result)
+            }
             TaskRunnerMessage::CreateStorageStream {
                 key,
                 schema,

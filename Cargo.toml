@@ -124,6 +124,7 @@ reqwest = { version = "0.12.28", default-features = false, features = ["rustls-t
 percent-encoding = "2.3.2"
 rustls = "0.23.40"
 dashmap = "6.2.1"
+parking_lot = "0.12.5"
 itertools = "0.15.0"
 moka = { version = "0.12.15", features = ["sync", "future"] }
 bytes = "1.11.1"

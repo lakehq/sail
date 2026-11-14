@@ -418,6 +418,20 @@ impl JobScheduler {
             }
 
             for t in &region.tasks {
+                // The streams of the stage may have been cleaned up when the earlier
+                // attempts of its consumers succeeded. The new attempts create streams
+                // again, which are cleaned up when the new attempts of the consumers
+                // have succeeded.
+                if matches!(job.stages[t.stage].state, StageState::Inactive) {
+                    job.stages[t.stage].state = StageState::Active;
+                    event_reporter.report(SystemEvent::StageUpdated {
+                        session_id: session_id.to_string(),
+                        job_id: u64::from(job_id),
+                        stage: t.stage as u64,
+                        status: job.stages[t.stage].state.status().to_string(),
+                        updated_at: Utc::now(),
+                    });
+                }
                 let attempts = &mut job.stages[t.stage].tasks[t.partition].attempts;
                 attempts.push(TaskAttemptDescriptor {
                     state: TaskState::Created,
@@ -1072,6 +1086,9 @@ impl<'a> TaskOutputBuilder<'a> {
         let locator = match self.stage.mode {
             OutputMode::Pipelined => TaskOutputLocator::Pipelined {
                 replicas: self.job.graph.replicas(self.key.stage),
+                job_output: self.job.topology.stages[self.key.stage]
+                    .consumers
+                    .is_empty(),
             },
             OutputMode::Blocking => TaskOutputLocator::Blocking,
         };
@@ -1130,6 +1147,160 @@ mod tests {
     use crate::id::{JobId, TaskKey};
     use crate::task::scheduling::{TaskOutputKind, TaskSetEntry};
 
+    /// Returns the event reporter for a scheduler. Telemetry can only be initialized
+    /// once in a process, so the tests that need a scheduler share the initialization.
+    fn event_reporter(
+        config: &sail_common::config::AppConfig,
+    ) -> Result<sail_telemetry::events::SystemEventReporter, Box<dyn std::error::Error>> {
+        use std::sync::OnceLock;
+
+        use sail_telemetry::telemetry::{global_system_event_reporter, init_telemetry};
+        use sail_telemetry::{ResourceKind, ResourceOptions};
+
+        static INITIALIZED: OnceLock<Result<(), String>> = OnceLock::new();
+        INITIALIZED
+            .get_or_init(|| {
+                init_telemetry(
+                    &config.telemetry,
+                    &config.catalog.system,
+                    ResourceOptions {
+                        kind: ResourceKind::Server,
+                    },
+                )
+                .map_err(|error| error.to_string())
+            })
+            .clone()?;
+        Ok(global_system_event_reporter().ok_or("missing event reporter")?)
+    }
+
+    #[tokio::test]
+    async fn stage_is_cleaned_up_again_after_region_retry() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_expr::Partitioning;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+        use datafusion::prelude::SessionContext;
+        use sail_common::actor::{ActorContext, ActorSystem};
+        use sail_common::config::{AppConfig, SystemCatalogStore};
+        use sail_common::runtime::RuntimeHandle;
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        use super::{JobAction, JobScheduler, TaskState};
+        use crate::driver::job_scheduler::JobSchedulerOptions;
+        use crate::driver::{DriverActor, DriverComponents, DriverOptions};
+        use crate::id::DriverId;
+        use crate::worker_manager::LocalWorkerManager;
+
+        let mut config = AppConfig::load()?;
+        config.cluster.task_max_attempts = 4;
+        config.catalog.system.store = SystemCatalogStore::Memory;
+        config.telemetry.export_traces = false;
+        config.telemetry.export_metrics = false;
+        config.telemetry.export_logs = false;
+        let reporter = event_reporter(&config)?;
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let options = DriverOptions::try_new(
+            &config,
+            runtime.clone(),
+            "stage-cleanup-after-retry".into(),
+            DriverId::from(1),
+            0,
+        )?;
+        let mut scheduler =
+            JobScheduler::new(JobSchedulerOptions::from(&options), reporter.clone());
+        let mut system = ActorSystem::new();
+        let driver = system.spawn::<DriverActor>((
+            options,
+            DriverComponents {
+                worker_manager: Box::new(LocalWorkerManager::new(runtime, SessionContext::new())),
+                event_reporter: reporter,
+            },
+        ));
+        let mut ctx = ActorContext::new(&driver);
+
+        // Stage 0 is read by stage 1 through a shuffle, so all tasks are in one region.
+        let input =
+            MemorySourceConfig::try_new_exec(&vec![vec![]; 2], Arc::new(Schema::empty()), None)?;
+        let plan = Arc::new(RepartitionExec::try_new(
+            input,
+            Partitioning::RoundRobinBatch(2),
+        )?);
+        let (job_id, _output) =
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        scheduler.refresh_job(job_id);
+        let key = |stage, partition, attempt| TaskKey {
+            job_id,
+            stage,
+            partition,
+            attempt,
+        };
+        assert_eq!(
+            scheduler.task_region(&key(0, 0, 0)),
+            scheduler.task_region(&key(1, 1, 0))
+        );
+        let cleaned_stages = |actions: &[JobAction]| {
+            actions
+                .iter()
+                .filter_map(|action| match action {
+                    JobAction::CleanUpJob { stage, .. } => *stage,
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // The streams of stage 0 are cleaned up when the tasks that read them have succeeded.
+        for stage in 0..2 {
+            for partition in 0..2 {
+                scheduler.update_task(&key(stage, partition, 0), TaskState::Running, None, None);
+            }
+        }
+        assert!(cleaned_stages(&scheduler.refresh_job(job_id)).is_empty());
+        for partition in 0..2 {
+            scheduler.update_task(&key(1, partition, 0), TaskState::Succeeded, None, None);
+        }
+        assert_eq!(cleaned_stages(&scheduler.refresh_job(job_id)), vec![0]);
+
+        // A task of the region fails, and all tasks of the region get new attempts.
+        // The earlier attempts of the reading tasks do not count for the new streams.
+        scheduler.update_task(
+            &key(0, 0, 0),
+            TaskState::Failed,
+            None,
+            Some(CommonErrorCause::Execution(
+                "worker heartbeat timeout".into(),
+            )),
+        );
+        let actions = scheduler.refresh_job(job_id);
+        assert!(
+            actions
+                .iter()
+                .any(|action| matches!(action, JobAction::ScheduleTaskRegion { .. }))
+        );
+        assert!(cleaned_stages(&actions).is_empty());
+        for stage in 0..2 {
+            for partition in 0..2 {
+                assert!(matches!(
+                    scheduler.get_task_state(&key(stage, partition, 1)),
+                    Some(TaskState::Created)
+                ));
+                scheduler.update_task(&key(stage, partition, 1), TaskState::Running, None, None);
+            }
+        }
+        assert!(cleaned_stages(&scheduler.refresh_job(job_id)).is_empty());
+
+        // The streams of the new attempts are cleaned up as well.
+        for partition in 0..2 {
+            scheduler.update_task(&key(1, partition, 1), TaskState::Succeeded, None, None);
+        }
+        assert_eq!(cleaned_stages(&scheduler.refresh_job(job_id)), vec![0]);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn late_unknown_commit_cancels_queued_retry() -> Result<(), Box<dyn std::error::Error>> {
         use std::sync::Arc;
@@ -1144,8 +1315,6 @@ mod tests {
         use sail_common_datafusion::error::CommonErrorCause;
         use sail_iceberg::SnapshotUpdateKind;
         use sail_iceberg::physical_plan::IcebergCommitExec;
-        use sail_telemetry::telemetry::{global_system_event_reporter, init_telemetry};
-        use sail_telemetry::{ResourceKind, ResourceOptions};
         use url::Url;
 
         use super::{JobAction, JobScheduler, JobState, TaskState};
@@ -1163,14 +1332,7 @@ mod tests {
         config.telemetry.export_traces = false;
         config.telemetry.export_metrics = false;
         config.telemetry.export_logs = false;
-        init_telemetry(
-            &config.telemetry,
-            &config.catalog.system,
-            ResourceOptions {
-                kind: ResourceKind::Server,
-            },
-        )?;
-        let reporter = global_system_event_reporter().ok_or("missing event reporter")?;
+        let reporter = event_reporter(&config)?;
         let handle = tokio::runtime::Handle::current();
         let runtime = RuntimeHandle::new(handle.clone(), handle);
         let options = DriverOptions::try_new(
@@ -1346,6 +1508,60 @@ mod tests {
             JobScheduler::infer_job_failure_cause(&job),
             CommonErrorCause::CommitStateUnknown(message) if message == "ambiguous commit"
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn only_final_stage_produces_job_output() -> crate::error::ExecutionResult<()> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_expr::Partitioning;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+
+        use super::{JobDescriptor, JobState, TaskOutputBuilder};
+        use crate::job_graph::{JobGraph, JobGraphOptions};
+        use crate::proto::RemoteExecutionCodec;
+        use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+        use crate::task::definition::TaskOutputLocator;
+
+        let input =
+            MemorySourceConfig::try_new_exec(&vec![vec![]; 2], Arc::new(Schema::empty()), None)?;
+        let graph = JobGraph::try_new(
+            Arc::new(RepartitionExec::try_new(
+                input,
+                Partitioning::RoundRobinBatch(2),
+            )?),
+            JobGraphOptions {
+                shuffle_backend: ShuffleBackendKind::Flight {
+                    compression: ShuffleCompression::None,
+                    connection_count: std::num::NonZeroUsize::MIN,
+                    initial_stream_window_size: None,
+                    initial_connection_window_size: None,
+                },
+            },
+        )?;
+        let job =
+            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))?;
+        let stages = job.graph.stages();
+        assert_eq!(stages.len(), 2);
+        for (s, stage) in stages.iter().enumerate() {
+            let key = TaskKey {
+                job_id: JobId::from(1),
+                stage: s,
+                partition: 0,
+                attempt: 0,
+            };
+            let output =
+                TaskOutputBuilder::new(&job, &key, stage, &RemoteExecutionCodec).build()?;
+            // The first stage is read by the second stage, which is read by the driver.
+            assert!(matches!(
+                output.locator,
+                TaskOutputLocator::Pipelined { job_output, .. } if job_output == (s == 1)
+            ));
+        }
         Ok(())
     }
 

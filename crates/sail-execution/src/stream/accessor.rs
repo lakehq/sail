@@ -118,15 +118,19 @@ impl TaskStreamAccessor {
 
     async fn create_local_stream(
         &self,
-        key: TaskStreamKey,
+        key: TaskKey,
+        channels: usize,
         replicas: usize,
+        job_output: bool,
         schema: SchemaRef,
-    ) -> Result<Box<dyn TaskStreamChannelSink>> {
+    ) -> Result<Box<dyn TaskStreamSink>> {
         let (result, rx) = oneshot::channel();
         self.receive(
             TaskRunnerMessage::CreateLocalStream {
                 key,
+                channels,
                 replicas,
+                job_output,
                 schema,
                 result,
             },
@@ -339,6 +343,14 @@ impl TaskStreamReader for MultiChannelTaskStreamReader {
         };
         Ok(merged_stream(self.schema.clone(), streams))
     }
+
+    fn close_unopened(&self) -> bool {
+        // Pipelined streams stay in the memory of the producing tasks until they are read.
+        matches!(
+            self.input.locator.as_ref(),
+            TaskInputLocator::Driver { .. } | TaskInputLocator::Worker { .. }
+        )
+    }
 }
 
 pub(crate) struct MultiChannelTaskStreamWriter {
@@ -381,30 +393,34 @@ impl TaskStreamWriter for MultiChannelTaskStreamWriter {
             )));
         }
         let channels = self.output.channels();
-        let sinks = match &self.output.locator {
-            TaskOutputLocator::Pipelined { replicas } => {
-                try_join_all((0..channels).map(|channel| {
-                    self.streams.create_local_stream(
-                        self.key.task_stream_key(channel),
+        match &self.output.locator {
+            TaskOutputLocator::Pipelined {
+                replicas,
+                job_output,
+            } => {
+                self.streams
+                    .create_local_stream(
+                        self.key.clone(),
+                        channels,
                         *replicas,
+                        *job_output,
                         self.schema.clone(),
                     )
-                }))
-                .await?
+                    .await
             }
             TaskOutputLocator::Blocking => {
-                try_join_all((0..channels).map(|channel| {
+                let sinks = try_join_all((0..channels).map(|channel| {
                     self.streams.create_storage_stream(
                         self.key.task_stream_key(channel),
                         self.schema.clone(),
                     )
                 }))
-                .await?
+                .await?;
+                Ok(Box::new(MultiChannelTaskStreamSink {
+                    sinks: sinks.into_iter().map(Some).collect(),
+                }))
             }
-        };
-        Ok(Box::new(MultiChannelTaskStreamSink {
-            sinks: sinks.into_iter().map(Some).collect(),
-        }))
+        }
     }
 }
 
