@@ -21,7 +21,9 @@ use crate::driver::job_scheduler::state::{
 };
 use crate::driver::job_scheduler::topology::TaskRegionTopology;
 use crate::driver::job_scheduler::{JobAction, JobScheduler, JobState};
-use crate::driver::output::{JobOutputOutcome, build_job_output};
+use crate::driver::output::{
+    JobOutputDecision, JobOutputOutcome, JobOutputUpdate, build_job_output,
+};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
 use crate::job_graph::{
@@ -139,19 +141,120 @@ impl JobScheduler {
         });
     }
 
-    /// Records that the job output has received rows from the task streams of the task attempt.
-    pub fn mark_job_output_emitted(&mut self, key: &TaskKey) {
-        let Some(attempt) = self
-            .jobs
-            .get_mut(&key.job_id)
-            .and_then(|job| job.stages.get_mut(key.stage))
-            .and_then(|stage| stage.tasks.get_mut(key.partition))
-            .and_then(|task| task.attempts.get_mut(key.attempt))
-        else {
-            warn!("{} not found", TaskKeyDisplay(key));
-            return;
+    /// Decide output eligibility in the same actor turn that records accepted rows.
+    /// This also applies while successful tasks are still draining buffered output.
+    pub fn update_job_output(
+        &mut self,
+        key: &TaskKey,
+        update: JobOutputUpdate,
+    ) -> JobOutputDecision {
+        let Some(job) = self.jobs.get_mut(&key.job_id) else {
+            return JobOutputDecision::Fail(CommonErrorCause::Internal(format!(
+                "job {} not found while deciding output",
+                key.job_id
+            )));
         };
-        attempt.job_output_emitted = true;
+        Self::decide_job_output(job, key, update)
+    }
+
+    fn decide_job_output(
+        job: &mut JobDescriptor,
+        key: &TaskKey,
+        update: JobOutputUpdate,
+    ) -> JobOutputDecision {
+        // A terminal error such as an uncertain commit cannot be made safe by retrying
+        // or discarding the attempt, even when its control-plane report arrives later.
+        if let JobOutputUpdate::Fail(cause) = &update
+            && !cause.is_retryable()
+        {
+            return JobOutputDecision::Fail(cause.clone());
+        }
+        let fallback = || match &update {
+            JobOutputUpdate::Emit => CommonErrorCause::Internal(format!(
+                "{} cannot produce job output",
+                TaskKeyDisplay(key)
+            )),
+            JobOutputUpdate::Fail(cause) => cause.clone(),
+        };
+        if matches!(job.state, JobState::Failed) {
+            return JobOutputDecision::Fail(Self::infer_job_failure_cause(job));
+        }
+        if !matches!(job.state, JobState::Running { .. } | JobState::Draining) {
+            return JobOutputDecision::Fail(fallback());
+        }
+        let Some(task) = job
+            .stages
+            .get(key.stage)
+            .and_then(|stage| stage.tasks.get(key.partition))
+        else {
+            return JobOutputDecision::Fail(fallback());
+        };
+        let Some(attempt) = task.attempts.get(key.attempt) else {
+            return JobOutputDecision::Fail(fallback());
+        };
+        let Some(&region) =
+            job.topology
+                .task_regions
+                .get(&crate::driver::job_scheduler::topology::TaskTopology {
+                    stage: key.stage,
+                    partition: key.partition,
+                })
+        else {
+            return JobOutputDecision::Fail(fallback());
+        };
+        let region = &job.topology.regions[region];
+        let current_attempts = || {
+            region
+                .tasks
+                .iter()
+                .filter_map(|task| job.stages[task.stage].tasks[task.partition].attempts.last())
+        };
+        // An unrelated earlier retry must not replace this stream's transport error.
+        // Prefer a failed task's cause over the secondary errors of canceled peers.
+        let region_cause = || {
+            current_attempts()
+                .filter(|attempt| matches!(attempt.state, TaskState::Failed))
+                .find_map(|attempt| attempt.cause.clone())
+                .or_else(|| {
+                    current_attempts()
+                        .filter(|attempt| matches!(attempt.state, TaskState::Canceled))
+                        .find_map(|attempt| attempt.cause.clone())
+                })
+        };
+        if key.attempt + 1 != task.attempts.len() {
+            // A delayed stream from a replaced attempt may still hold buffered rows.
+            // Reject it before it contributes any rows, even after the retry succeeded.
+            return if attempt.job_output_emitted {
+                JobOutputDecision::Fail(region_cause().unwrap_or_else(fallback))
+            } else {
+                JobOutputDecision::Discard
+            };
+        }
+        let region_failed = current_attempts()
+            .any(|attempt| matches!(attempt.state, TaskState::Failed | TaskState::Canceled));
+        if region_failed {
+            let emitted = current_attempts().any(|attempt| attempt.job_output_emitted);
+            if !emitted && matches!(job.state, JobState::Running { .. }) {
+                // The scheduler has already observed the failure and will retry this
+                // region. No unaccepted output from the failed region may escape.
+                return JobOutputDecision::Discard;
+            }
+            return JobOutputDecision::Fail(region_cause().unwrap_or_else(fallback));
+        }
+        match update {
+            JobOutputUpdate::Emit => {
+                if !matches!(attempt.state, TaskState::Running | TaskState::Succeeded) {
+                    return JobOutputDecision::Discard;
+                }
+                job.stages[key.stage].tasks[key.partition].attempts[key.attempt]
+                    .job_output_emitted = true;
+                JobOutputDecision::Accept
+            }
+            // A current read failure is not evidence that its producer has failed.
+            // Fail output promptly; normal job cleanup cancels a producer that may
+            // still be blocked waiting for this reader to attach.
+            JobOutputUpdate::Fail(cause) => JobOutputDecision::Fail(cause),
+        }
     }
 
     pub fn get_task_state(&self, key: &TaskKey) -> Option<TaskState> {
@@ -263,20 +366,20 @@ impl JobScheduler {
 
     fn update_task_regions(job: &mut JobDescriptor, task_max_attempts: usize) {
         for (r, region) in job.topology.regions.iter().enumerate() {
-            // A retry of the region cannot take back the rows that the job output has
-            // received from the region, so the region fails instead.
+            // Output authorization is recorded before rows are delivered. Once granted,
+            // a failed region must stop rather than replay rows the client may have seen.
             let emitted = region.tasks.iter().any(|t| {
                 job.stages[t.stage].tasks[t.partition]
                     .attempts
-                    .iter()
-                    .any(|attempt| attempt.job_output_emitted)
+                    .last()
+                    .is_some_and(|attempt| attempt.job_output_emitted)
             });
             let failed = region.tasks.iter().any(|t| {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
                 if emitted
-                    && let Some((attempt, earlier)) = attempts.split_last()
-                    && (matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
-                        || earlier.iter().any(|attempt| attempt.job_output_emitted))
+                    && attempts.last().is_some_and(|attempt| {
+                        matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
+                    })
                 {
                     return true;
                 }
@@ -1450,17 +1553,6 @@ mod tests {
             CommonErrorCause::Io(message) if message == "transient failure"
         ));
 
-        // The region also fails if the rows of the job output are received after the
-        // retry of the region is scheduled.
-        let mut job = new_job()?;
-        job.stages[0].tasks[0]
-            .attempts
-            .push(attempt(TaskState::Failed, failure(), true));
-        job.stages[0].tasks[0]
-            .attempts
-            .push(attempt(TaskState::Scheduled, None, false));
-        JobScheduler::update_task_regions(&mut job, 4);
-        assert!(failed(&job));
         Ok(())
     }
 
@@ -1648,5 +1740,274 @@ mod tests {
                 1
             );
         }
+    }
+    fn output_decision_job(
+        state: super::JobState,
+    ) -> crate::error::ExecutionResult<super::JobDescriptor> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+
+        use crate::job_graph::{JobGraph, JobGraphOptions};
+        use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+
+        let graph = JobGraph::try_new(
+            MemorySourceConfig::try_new_exec(&[vec![]], Arc::new(Schema::empty()), None)?,
+            JobGraphOptions {
+                shuffle_backend: ShuffleBackendKind::Flight {
+                    compression: ShuffleCompression::None,
+                    connection_count: std::num::NonZeroUsize::MIN,
+                    initial_stream_window_size: None,
+                    initial_connection_window_size: None,
+                },
+            },
+        )?;
+        super::JobDescriptor::try_new(graph, state, Arc::new(TaskContext::default()))
+    }
+
+    fn output_decision_attempt(
+        state: super::TaskState,
+        cause: Option<sail_common_datafusion::error::CommonErrorCause>,
+    ) -> super::TaskAttemptDescriptor {
+        super::TaskAttemptDescriptor {
+            state,
+            messages: vec![],
+            cause,
+            job_output_fetched: true,
+            job_output_emitted: false,
+        }
+    }
+
+    #[test]
+    fn draining_job_discards_old_output_and_accepts_the_successful_replacement()
+    -> crate::error::ExecutionResult<()> {
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        use super::{JobScheduler, JobState, TaskState};
+        use crate::driver::output::{JobOutputDecision, JobOutputUpdate};
+
+        // Both fetches can complete after the retry has already succeeded and
+        // refresh_job has put the job into Draining. Admission must still validate
+        // the attempt, rather than relying on refresh_job to fail a running job.
+        let mut job = output_decision_job(JobState::Draining)?;
+        job.stages[0].tasks[0].attempts.extend([
+            output_decision_attempt(
+                TaskState::Failed,
+                Some(CommonErrorCause::Io("original attempt failed".into())),
+            ),
+            output_decision_attempt(TaskState::Succeeded, None),
+        ]);
+        let old = TaskKey {
+            job_id: JobId::from(1),
+            stage: 0,
+            partition: 0,
+            attempt: 0,
+        };
+        assert!(matches!(
+            JobScheduler::decide_job_output(&mut job, &old, JobOutputUpdate::Emit),
+            JobOutputDecision::Discard
+        ));
+        assert!(!job.stages[0].tasks[0].attempts[0].job_output_emitted);
+        assert!(!job.stages[0].tasks[0].attempts[1].job_output_emitted);
+        assert!(matches!(
+            JobScheduler::decide_job_output(
+                &mut job,
+                &old,
+                JobOutputUpdate::Fail(CommonErrorCause::Io("late old stream failure".into()))
+            ),
+            JobOutputDecision::Discard
+        ));
+        let replacement = TaskKey { attempt: 1, ..old };
+        assert!(matches!(
+            JobScheduler::decide_job_output(&mut job, &replacement, JobOutputUpdate::Emit),
+            JobOutputDecision::Accept
+        ));
+        assert!(job.stages[0].tasks[0].attempts[1].job_output_emitted);
+        assert!(matches!(job.state, JobState::Draining));
+        Ok(())
+    }
+
+    #[test]
+    fn reader_open_failure_fails_output_while_leaving_the_producer_cancelable()
+    -> crate::error::ExecutionResult<()> {
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        use super::{JobScheduler, JobState, TaskState};
+        use crate::driver::output::{
+            JobOutputDecision, JobOutputOutcome, JobOutputUpdate, test_job_output,
+        };
+
+        let (output, _receiver) = test_job_output();
+        let mut job = output_decision_job(JobState::Running { output })?;
+        job.stages[0].tasks[0]
+            .attempts
+            .push(output_decision_attempt(TaskState::Running, None));
+        let key = TaskKey {
+            job_id: JobId::from(1),
+            stage: 0,
+            partition: 0,
+            attempt: 0,
+        };
+        let decision = JobScheduler::decide_job_output(
+            &mut job,
+            &key,
+            JobOutputUpdate::Fail(CommonErrorCause::Io("do_get connection failed".into())),
+        );
+        assert!(
+            matches!(decision, JobOutputDecision::Fail(CommonErrorCause::Io(message)) if message == "do_get connection failed")
+        );
+        // Output failed to attach, but the producer itself has not reported a
+        // terminal state. Cleanup must still see it as running and cancel it.
+        assert!(matches!(
+            job.stages[0].tasks[0].attempts[0].state,
+            TaskState::Running
+        ));
+        assert!(job.stages[0].tasks[0].attempts[0].cause.is_none());
+        assert!(!job.stages[0].tasks[0].attempts[0].job_output_emitted);
+        job.state.finish_output(JobOutputOutcome::Failed);
+        assert_eq!(job.state.status(), "FAILED");
+        Ok(())
+    }
+
+    #[test]
+    fn confirmed_failure_allows_retry_only_before_output_is_accepted()
+    -> crate::error::ExecutionResult<()> {
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        use super::{JobScheduler, JobState, TaskState};
+        use crate::driver::output::{JobOutputDecision, JobOutputUpdate, test_job_output};
+
+        let (output, _receiver) = test_job_output();
+        let mut job = output_decision_job(JobState::Running { output })?;
+        job.stages[0].tasks[0]
+            .attempts
+            .push(output_decision_attempt(
+                TaskState::Failed,
+                Some(CommonErrorCause::Execution("worker task failed".into())),
+            ));
+        let key = TaskKey {
+            job_id: JobId::from(1),
+            stage: 0,
+            partition: 0,
+            attempt: 0,
+        };
+        assert!(matches!(
+            JobScheduler::decide_job_output(&mut job, &key, JobOutputUpdate::Emit),
+            JobOutputDecision::Discard
+        ));
+        assert!(matches!(
+            JobScheduler::decide_job_output(
+                &mut job,
+                &key,
+                JobOutputUpdate::Fail(CommonErrorCause::Io("reader disconnected".into()))
+            ),
+            JobOutputDecision::Discard
+        ));
+        job.stages[0].tasks[0].attempts[0].job_output_emitted = true;
+        assert!(matches!(JobScheduler::decide_job_output(&mut job, &key,
+            JobOutputUpdate::Fail(CommonErrorCause::Io("reader disconnected".into()))),
+            JobOutputDecision::Fail(CommonErrorCause::Execution(message)) if message == "worker task failed"));
+        Ok(())
+    }
+
+    #[test]
+    fn a_previous_attempt_error_does_not_replace_a_current_transport_error()
+    -> crate::error::ExecutionResult<()> {
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        use super::{JobScheduler, JobState, TaskState};
+        use crate::driver::output::{JobOutputDecision, JobOutputUpdate, test_job_output};
+
+        let (output, _receiver) = test_job_output();
+        let mut job = output_decision_job(JobState::Running { output })?;
+        job.stages[0].tasks[0].attempts.extend([
+            output_decision_attempt(
+                TaskState::Failed,
+                Some(CommonErrorCause::Io("previous attempt failed".into())),
+            ),
+            output_decision_attempt(TaskState::Running, None),
+        ]);
+        let current = TaskKey {
+            job_id: JobId::from(1),
+            stage: 0,
+            partition: 0,
+            attempt: 1,
+        };
+        assert!(matches!(JobScheduler::decide_job_output(&mut job, &current,
+            JobOutputUpdate::Fail(CommonErrorCause::Io("current reader disconnected".into()))),
+            JobOutputDecision::Fail(CommonErrorCause::Io(message)) if message == "current reader disconnected"));
+        assert!(matches!(
+            job.stages[0].tasks[0].attempts[1].state,
+            TaskState::Running
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn a_terminal_job_error_takes_precedence_over_a_late_stream_failure()
+    -> crate::error::ExecutionResult<()> {
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        use super::{JobScheduler, JobState, TaskState};
+        use crate::driver::output::{JobOutputDecision, JobOutputUpdate};
+
+        let mut job = output_decision_job(JobState::Failed)?;
+        job.stages[0].tasks[0]
+            .attempts
+            .push(output_decision_attempt(
+                TaskState::Failed,
+                Some(CommonErrorCause::Execution("original task failure".into())),
+            ));
+        let key = TaskKey {
+            job_id: JobId::from(1),
+            stage: 0,
+            partition: 0,
+            attempt: 0,
+        };
+        assert!(matches!(JobScheduler::decide_job_output(&mut job, &key,
+            JobOutputUpdate::Fail(CommonErrorCause::Io("stream was aborted".into()))),
+            JobOutputDecision::Fail(CommonErrorCause::Execution(message)) if message == "original task failure"));
+        Ok(())
+    }
+
+    #[test]
+    fn a_stale_stream_still_reports_an_unknown_commit_outcome() -> crate::error::ExecutionResult<()>
+    {
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        use super::{JobScheduler, JobState, TaskState};
+        use crate::driver::output::{JobOutputDecision, JobOutputUpdate, test_job_output};
+
+        let (output, _receiver) = test_job_output();
+        for state in [JobState::Running { output }, JobState::Draining] {
+            let mut job = output_decision_job(state)?;
+            job.stages[0].tasks[0].attempts.extend([
+                output_decision_attempt(
+                    TaskState::Failed,
+                    Some(CommonErrorCause::Io("worker disappeared".into())),
+                ),
+                output_decision_attempt(TaskState::Succeeded, None),
+            ]);
+            let old = TaskKey {
+                job_id: JobId::from(1),
+                stage: 0,
+                partition: 0,
+                attempt: 0,
+            };
+            // The read carries new evidence that the old write may have committed.
+            // Replacing that attempt does not make this terminal evidence safe to ignore.
+            assert!(matches!(JobScheduler::decide_job_output(&mut job, &old,
+                JobOutputUpdate::Fail(CommonErrorCause::CommitStateUnknown("commit response was lost".into()))),
+                JobOutputDecision::Fail(CommonErrorCause::CommitStateUnknown(message)) if message == "commit response was lost"));
+            assert!(
+                !job.stages[0].tasks[0]
+                    .attempts
+                    .iter()
+                    .any(|a| a.job_output_emitted)
+            );
+        }
+        Ok(())
     }
 }

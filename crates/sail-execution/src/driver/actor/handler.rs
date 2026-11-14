@@ -15,7 +15,7 @@ use tokio::time::Instant;
 
 use crate::driver::actor::DriverActor;
 use crate::driver::job_scheduler::{JobAction, TaskState};
-use crate::driver::output::{JobOutputItem, JobOutputOutcome};
+use crate::driver::output::{JobOutputDecision, JobOutputItem, JobOutputOutcome, JobOutputUpdate};
 use crate::driver::worker_scaler::{WorkerLaunchRequest, WorkerRetryRequest};
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
@@ -292,13 +292,14 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_job_output_emitted(
+    pub(super) fn handle_update_job_output(
         &mut self,
-        ctx: &mut ActorContext<Self>,
         key: TaskKey,
+        update: JobOutputUpdate,
+        result: oneshot::Sender<JobOutputDecision>,
     ) -> ActorAction {
-        self.job_scheduler.mark_job_output_emitted(&key);
-        self.refresh_job(ctx, key.job_id);
+        let decision = self.job_scheduler.update_job_output(&key, update);
+        let _ = result.send(decision);
         ActorAction::Continue
     }
 

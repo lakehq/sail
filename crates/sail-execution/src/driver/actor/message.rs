@@ -14,7 +14,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::driver::r#gen;
-use crate::driver::output::JobOutputOutcome;
+use crate::driver::output::{JobOutputDecision, JobOutputOutcome, JobOutputUpdate};
 use crate::driver::worker_scaler::WorkerRetryRequest;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
@@ -76,9 +76,11 @@ pub enum DriverMessage {
     ProbePendingTask {
         key: TaskKey,
     },
-    /// The job output has received rows from the task streams of the task attempt.
-    JobOutputEmitted {
+    /// Authorize output or resolve a stream failure against the current task attempt.
+    UpdateJobOutput {
         key: TaskKey,
+        update: JobOutputUpdate,
+        result: oneshot::Sender<JobOutputDecision>,
     },
     FetchDriverStream {
         key: TaskStreamKey,
@@ -156,7 +158,7 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::CleanUpJob { .. } => "CleanUpJob",
             DriverMessage::UpdateTask { .. } => "UpdateTask",
             DriverMessage::ProbePendingTask { .. } => "ProbePendingTask",
-            DriverMessage::JobOutputEmitted { .. } => "JobOutputEmitted",
+            DriverMessage::UpdateJobOutput { .. } => "UpdateJobOutput",
             DriverMessage::FetchDriverStream { .. } => "FetchDriverStream",
             DriverMessage::FetchWorkerStream { .. } => "FetchWorkerStream",
             DriverMessage::CelebornGetLifecycleManager { .. } => "CelebornGetLifecycleManager",
@@ -247,7 +249,7 @@ impl SpanAssociation for DriverMessage {
                         attempt,
                     },
             }
-            | DriverMessage::JobOutputEmitted {
+            | DriverMessage::UpdateJobOutput {
                 key:
                     TaskKey {
                         job_id,
@@ -255,6 +257,7 @@ impl SpanAssociation for DriverMessage {
                         partition,
                         attempt,
                     },
+                ..
             } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));

@@ -138,8 +138,8 @@ pub struct TaskAttemptDescriptor {
     /// This will always be false if the task does not belong to
     /// the final stages of the job.
     pub job_output_fetched: bool,
-    /// Whether the job output has received rows from the task streams.
-    /// The output cannot be taken back, so the task region is not retried.
+    /// Whether this attempt has been authorized to emit job output rows.
+    /// Authorization precedes delivery, so the task region cannot be retried.
     pub job_output_emitted: bool,
 }
 
