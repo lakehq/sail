@@ -30,6 +30,7 @@ out/
 # Editor directories and files
 .idea/
 .vscode/*
+.zed/*
 *.iml
 !.vscode/extensions.json
 !.vscode/settings.json
