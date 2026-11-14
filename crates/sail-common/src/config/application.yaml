@@ -346,7 +346,9 @@
     Each connection serves a limited number of shuffle streams at a time, so that
     streams that are not being read cannot stall the other streams on the connection.
     The limit is 1 GiB divided by the stream window size. More connections are
-    opened when all connections have reached the limit.
+    opened when all connections have reached the limit, up to 16 connections to a
+    peer, or up to this number if it is greater. When no more connections can be
+    opened, the streams share the connections beyond the limit.
   experimental: true
 
 - key: cluster.shuffle_backend.flight.initial_stream_window_size
@@ -354,9 +356,9 @@
   default: "0"
   description: |
     The initial HTTP/2 receive window size in bytes for each stream in the Flight
-    shuffle client. Set to `0` to use the default value. The
-    maximum value is `2147483647`, and values greater than `16777216` (16 MiB)
-    are reduced to `16777216`.
+    shuffle client. Set to `0` to use the default value of `262144` (256 KiB). The
+    maximum value is `2147483647`, and values greater than `2097152` (2 MiB)
+    are reduced to `2097152`.
   experimental: true
 
 - key: cluster.shuffle_backend.flight.initial_connection_window_size

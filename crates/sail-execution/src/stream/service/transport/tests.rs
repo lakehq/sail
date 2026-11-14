@@ -234,7 +234,7 @@ async fn custom_window_sizes_are_advertised_for_streams_and_connection()
     tokio::time::timeout(Duration::from_secs(15), async {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
-        let stream_window_size: u32 = 4 * 1024 * 1024;
+        let stream_window_size: u32 = 1024 * 1024;
         // The configured connection window size has no effect.
         let connection_window_size: u32 = MAX_WINDOW_SIZE;
         // Inspect the HTTP/2 preface directly so this verifies both flow-control levels.
@@ -363,19 +363,24 @@ async fn connect_rejects_invalid_window_sizes_before_opening_connection()
     Ok(())
 }
 
+type DataServer = (
+    ClientOptions,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+    AbortOnDropHandle<Result<(), TransportError>>,
+);
+
 /// A byte-level HTTP/2 peer that responds to /data/N with N bytes, as far as the client
 /// accepts them. It reports the number of connections and the number of bytes sent.
-async fn data_server() -> Result<
-    (
-        ClientOptions,
-        Arc<AtomicUsize>,
-        Arc<AtomicUsize>,
-        AbortOnDropHandle<Result<(), TransportError>>,
-    ),
-    TransportError,
-> {
+async fn data_server() -> Result<DataServer, TransportError> {
+    data_server_with_connections(usize::MAX).await
+}
+
+/// A peer as [`data_server`] that refuses connections after the given number of them.
+async fn data_server_with_connections(max: usize) -> Result<DataServer, TransportError> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address: SocketAddr = listener.local_addr()?;
+    let mut listener = Some(listener);
     let connections = Arc::new(AtomicUsize::new(0));
     let sent = Arc::new(AtomicUsize::new(0));
     let (count, total) = (connections.clone(), sent.clone());
@@ -383,9 +388,18 @@ async fn data_server() -> Result<
         let mut tasks = JoinSet::new();
         loop {
             tokio::select! {
-                accepted = listener.accept() => {
+                Some(accepted) = async {
+                    match &listener {
+                        Some(listener) => Some(listener.accept().await),
+                        None => None,
+                    }
+                } => {
                     let (socket, _) = accepted?;
                     let connection_id = count.fetch_add(1, Ordering::SeqCst);
+                    if connection_id + 1 >= max {
+                        // Closing the listener makes the peer refuse further connections.
+                        listener = None;
+                    }
                     let total = total.clone();
                     tasks.spawn(async move {
                         let mut connection = h2::server::handshake(socket).await?;
@@ -482,7 +496,7 @@ async fn pool_grows_when_connections_reach_stream_limit() -> Result<(), Transpor
         let (options, connections, _sent, _server) = data_server().await?;
         // Two streams can hold half of the connection window.
         let transport =
-            FlightTransport::connect_with_windows(&options, 64 * 1024, 256 * 1024).await?;
+            FlightTransport::connect_with_limits(&options, 64 * 1024, 256 * 1024, 16).await?;
         let mut unread = vec![];
         for connection_id in ["0", "0", "1"] {
             let response = transport
@@ -518,6 +532,52 @@ async fn pool_grows_when_connections_reach_stream_limit() -> Result<(), Transpor
             .await?;
         assert_eq!(response.headers()["connection-id"], "2");
         assert_eq!(connections.load(Ordering::SeqCst), 3);
+        Ok::<_, TransportError>(())
+    })
+    .await?
+}
+
+#[tokio::test]
+async fn pool_is_bounded() -> Result<(), TransportError> {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let (options, connections, _sent, _server) = data_server().await?;
+        // Two streams can hold half of the connection window, and the pool has two connections.
+        let transport =
+            FlightTransport::connect_with_limits(&options, 64 * 1024, 256 * 1024, 2).await?;
+        let mut unread = vec![];
+        for connection_id in ["0", "0", "1", "1", "0", "1"] {
+            // The last streams share the connections beyond the limit.
+            let response = transport
+                .clone()
+                .oneshot(request(&transport, "/data/1000000")?)
+                .await?;
+            assert_eq!(response.headers()["connection-id"], connection_id);
+            unread.push(response);
+        }
+        assert_eq!(connections.load(Ordering::SeqCst), 2);
+        Ok::<_, TransportError>(())
+    })
+    .await?
+}
+
+#[tokio::test]
+async fn request_survives_failed_growth() -> Result<(), TransportError> {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let (options, connections, _sent, _server) = data_server_with_connections(1).await?;
+        // Two streams can hold half of the connection window.
+        let transport =
+            FlightTransport::connect_with_limits(&options, 64 * 1024, 256 * 1024, 16).await?;
+        let mut unread = vec![];
+        for _ in 0..4 {
+            // The peer refuses the second connection, so that all streams share the first one.
+            let response = transport
+                .clone()
+                .oneshot(request(&transport, "/data/1000000")?)
+                .await?;
+            assert_eq!(response.headers()["connection-id"], "0");
+            unread.push(response);
+        }
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
         Ok::<_, TransportError>(())
     })
     .await?
