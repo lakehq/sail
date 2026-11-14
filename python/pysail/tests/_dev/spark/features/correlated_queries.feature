@@ -1042,3 +1042,30 @@ Feature: Correlated query results
       | key    | correlation                |
       | column | i.n = o.id                 |
       | cast   | CAST(i.k AS BIGINT) = o.id |
+
+  Scenario: A grouped IN aggregate groups by a cast correlation key and its grouping column
+    When query
+      """
+      SELECT o.id, o.v FROM VALUES (0L, 3), (0L, 2), (0L, 5), (1L, 4) o(id, v)
+      WHERE o.v IN (SELECT max(i.v) FROM VALUES ('0', 'a', 2), ('00', 'a', 3), ('0', 'b', 5), ('1', 'b', 4) i(k, g, v)
+                    WHERE CAST(i.k AS BIGINT) = o.id GROUP BY i.g)
+      ORDER BY o.id, o.v
+      """
+    Then query result ordered
+      | id | v |
+      | 0  | 3 |
+      | 0  | 5 |
+      | 1  | 4 |
+
+  Scenario: A grouped NOT EXISTS aggregate groups by a cast correlation key and its grouping column
+    When query
+      """
+      SELECT o.id, o.v FROM VALUES (0L, 3), (0L, 2), (0L, 5), (1L, 4), (2L, 1) o(id, v)
+      WHERE NOT EXISTS (SELECT max(i.v) FROM VALUES ('0', 'a', 2), ('00', 'a', 3), ('0', 'b', 5), ('1', 'b', 4) i(k, g, v)
+                        WHERE CAST(i.k AS BIGINT) = o.id GROUP BY i.g HAVING max(i.v) = o.v)
+      ORDER BY o.id, o.v
+      """
+    Then query result ordered
+      | id | v |
+      | 0  | 2 |
+      | 2  | 1 |

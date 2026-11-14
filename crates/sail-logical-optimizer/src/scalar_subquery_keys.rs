@@ -120,8 +120,12 @@ fn normalize_subqueries(
                 if query.outer_ref_columns.is_empty() {
                     return Ok(Transformed::no(expression));
                 }
-                let result =
-                    normalize_keys(&query.subquery, config.alias_generator(), &mut reserved)?;
+                let result = normalize_keys(
+                    &query.subquery,
+                    config.alias_generator(),
+                    &mut reserved,
+                    kind,
+                )?;
                 if result.transformed {
                     query.subquery = Arc::new(result.data);
                 }
@@ -313,6 +317,7 @@ fn normalize_keys(
     plan: &LogicalPlan,
     aliases: &AliasGenerator,
     reserved: &mut BTreeSet<String>,
+    kind: SubqueryKind,
 ) -> Result<Transformed<LogicalPlan>> {
     let mut has_aggregate = false;
     let mut has_cast = false;
@@ -461,9 +466,10 @@ fn normalize_keys(
     }
 
     // Preserve grouped producers when replacing a cast would violate native's
-    // requirement that every original grouping column occurs in a correlation.
-    // Like DataFusion's `check_aggregation_in_scalar_subquery`, this checks only
-    // the outermost aggregate; aggregates below it may group by anything.
+    // requirement that every original grouping column of a scalar subquery occurs
+    // in a correlation. Like DataFusion's `check_aggregation_in_scalar_subquery`,
+    // this checks only the outermost aggregate; aggregates below it may group by
+    // anything, and `IN` and `EXISTS` subqueries may group by any column.
     let (mut correlations, mut keyed) = (Vec::new(), Vec::new());
     let mut domains = BTreeSet::new();
     // Discover the complete set before validating retained predicates: a deeper
@@ -488,15 +494,17 @@ fn normalize_keys(
     {
         return Ok(Transformed::no(plan.clone()));
     }
-    for aggregate in keyed {
-        let correlated = collect_subquery_cols(&correlations, aggregate.input.schema())?;
-        if aggregate
-            .group_expr
-            .iter()
-            .flat_map(Expr::column_refs)
-            .any(|column| !correlated.contains(column))
-        {
-            return Ok(Transformed::no(plan.clone()));
+    if matches!(kind, SubqueryKind::Scalar) {
+        for aggregate in keyed {
+            let correlated = collect_subquery_cols(&correlations, aggregate.input.schema())?;
+            if aggregate
+                .group_expr
+                .iter()
+                .flat_map(Expr::column_refs)
+                .any(|column| !correlated.contains(column))
+            {
+                return Ok(Transformed::no(plan.clone()));
+            }
         }
     }
 
