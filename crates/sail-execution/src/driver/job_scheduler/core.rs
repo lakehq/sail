@@ -164,7 +164,8 @@ impl JobScheduler {
     ///   3. For each stage, if all the stages that consume it have succeeded, remove
     ///      the output streams of the stage if not already.
     ///   4. If any task fails without allowing a retry or exceeds the maximum allowed
-    ///      attempts, the task region and the job are marked as failed.
+    ///      attempts, or the task region needs a retry after its output has reached the
+    ///      client, the task region and the job are marked as failed.
     ///   5. If all the tasks in the final stages have succeeded, the job is marked as succeeded.
     ///   6. For each task region, schedule the tasks of the region if all the dependency
     ///      regions have succeeded.
@@ -196,6 +197,7 @@ impl JobScheduler {
         ));
 
         Self::update_task_regions(job, self.options.task_max_attempts);
+        let regions = Self::start_task_regions(job);
 
         if job
             .regions
@@ -239,6 +241,7 @@ impl JobScheduler {
         actions.extend(Self::schedule_task_regions(
             job_id,
             job,
+            regions,
             &event_reporter,
             &session_id,
         ));
@@ -384,16 +387,14 @@ impl JobScheduler {
         actions
     }
 
-    fn schedule_task_regions(
-        job_id: JobId,
-        job: &mut JobDescriptor,
-        event_reporter: &SystemEventReporter,
-        session_id: &str,
-    ) -> Vec<JobAction> {
-        let mut actions = vec![];
+    /// Finds the task regions that need new task attempts and starts their output.
+    /// A region whose output has reached the client cannot be started again,
+    /// so it is marked as failed instead.
+    fn start_task_regions(job: &mut JobDescriptor) -> Vec<usize> {
+        let mut regions = vec![];
 
         for (r, region) in job.topology.regions.iter().enumerate() {
-            if matches!(job.regions[r].state, TaskRegionState::Succeeded) {
+            if !matches!(job.regions[r].state, TaskRegionState::Running) {
                 continue;
             }
 
@@ -417,6 +418,33 @@ impl JobScheduler {
                 continue;
             }
 
+            // All the tasks in a region have the same number of attempts.
+            let attempt = region
+                .tasks
+                .first()
+                .map_or(0, |t| job.stages[t.stage].tasks[t.partition].attempts.len());
+            if !job.regions[r].output.start(attempt) {
+                job.regions[r].state = TaskRegionState::Failed;
+                continue;
+            }
+
+            regions.push(r);
+        }
+
+        regions
+    }
+
+    fn schedule_task_regions(
+        job_id: JobId,
+        job: &mut JobDescriptor,
+        regions: Vec<usize>,
+        event_reporter: &SystemEventReporter,
+        session_id: &str,
+    ) -> Vec<JobAction> {
+        let mut actions = vec![];
+
+        for r in regions {
+            let region = &job.topology.regions[r];
             for t in &region.tasks {
                 let attempts = &mut job.stages[t.stage].tasks[t.partition].attempts;
                 attempts.push(TaskAttemptDescriptor {
@@ -519,14 +547,14 @@ impl JobScheduler {
         };
         let mut actions = vec![];
         let schema = job.graph.schema().clone();
-        for (s, stage) in job.graph.stages().iter().enumerate() {
-            if !job.topology.stages[s].consumers.is_empty() {
-                // The stage is not a final stage.
-                continue;
-            }
-            let partitions = stage.plan.output_partitioning().partition_count();
-            let channels = stage.distribution.channels();
-            for (p, task) in job.stages[s].tasks[..partitions].iter_mut().enumerate() {
+        for (r, region) in job.topology.regions.iter().enumerate() {
+            for t in &region.tasks {
+                if !job.topology.stages[t.stage].consumers.is_empty() {
+                    // The stage is not a final stage.
+                    continue;
+                }
+                let channels = job.graph.stages()[t.stage].distribution.channels();
+                let task = &mut job.stages[t.stage].tasks[t.partition];
                 let Some((attempt, head)) = task.attempts.split_last_mut() else {
                     continue;
                 };
@@ -539,8 +567,8 @@ impl JobScheduler {
                 for c in 0..channels {
                     let key = TaskStreamKey {
                         job_id,
-                        stage: s,
-                        partition: p,
+                        stage: t.stage,
+                        partition: t.partition,
                         attempt: head.len(),
                         channel: c,
                     };
@@ -548,6 +576,7 @@ impl JobScheduler {
                         handle: output.handle(),
                         key,
                         schema: schema.clone(),
+                        region: job.regions[r].output.clone(),
                     });
                 }
             }
@@ -557,39 +586,47 @@ impl JobScheduler {
     }
 
     fn infer_job_failure_cause(job: &JobDescriptor) -> CommonErrorCause {
-        // a map from (stage, partition) to a list of causes
-        let mut causes: HashMap<(usize, usize), Vec<&CommonErrorCause>> = HashMap::new();
-        for (s, stage) in job.stages.iter().enumerate() {
-            for (t, task) in stage.tasks.iter().enumerate() {
-                for attempt in task.attempts.iter() {
-                    if let Some(cause) = &attempt.cause
-                        && !cause.is_retryable()
-                    {
-                        return cause.clone();
-                    }
-                    if matches!(attempt.state, TaskState::Failed)
-                        && let Some(cause) = &attempt.cause
-                    {
-                        causes.entry((s, t)).or_default().push(cause);
-                    }
-                }
+        for attempt in job
+            .stages
+            .iter()
+            .flat_map(|stage| &stage.tasks)
+            .flat_map(|task| &task.attempts)
+        {
+            if let Some(cause) = &attempt.cause
+                && !cause.is_retryable()
+            {
+                return cause.clone();
             }
         }
-        // Get the most recent cause from the most likely failed task.
-        if let Some((_, &[.., cause])) = causes.iter().map(|(k, v)| (k, v.as_slice())).min_by(
-            |((s1, p1), v1), ((s2, p2), v2)| {
-                // Find the task that fails the most number of times,
-                // and if there is a tie, choose the one with the smallest
-                // stage and partition.
-                v2.len().cmp(&v1.len()).then(s1.cmp(s2)).then(p1.cmp(p2))
-            },
-        ) {
-            cause.clone()
-        } else {
-            CommonErrorCause::new::<PyErrExtractor>(&ExecutionError::InternalError(
-                "job failed for unknown reason".to_string(),
-            ))
+        // Report the failed region. Among its failed task attempts, take the most recent
+        // attempt index, and then the smallest stage and partition.
+        if let Some(r) = job
+            .regions
+            .iter()
+            .position(|x| matches!(x.state, TaskRegionState::Failed))
+        {
+            let cause = job.topology.regions[r]
+                .tasks
+                .iter()
+                .flat_map(|t| {
+                    job.stages[t.stage].tasks[t.partition]
+                        .attempts
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, attempt)| matches!(attempt.state, TaskState::Failed))
+                        .filter_map(move |(a, attempt)| {
+                            let cause = attempt.cause.as_ref()?;
+                            Some(((std::cmp::Reverse(a), t.stage, t.partition), cause))
+                        })
+                })
+                .min_by_key(|(key, _)| *key);
+            if let Some((_, cause)) = cause {
+                return cause.clone();
+            }
         }
+        CommonErrorCause::new::<PyErrExtractor>(&ExecutionError::InternalError(
+            "job failed for unknown reason".to_string(),
+        ))
     }
 
     /// Determine the actions needed in the driver to clean up the job.
@@ -1124,11 +1161,37 @@ impl StageGroup {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    use super::StageGroup;
-    use crate::id::{JobId, TaskKey};
+    use datafusion::arrow::array::{ArrayRef, Int32Array, RecordBatch};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+    use datafusion::physical_expr::Partitioning;
+    use datafusion::physical_plan::ExecutionPlan;
+    use datafusion::physical_plan::repartition::RepartitionExec;
+    use datafusion::prelude::SessionContext;
+    use futures::StreamExt;
+    use sail_common::actor::{ActorContext, ActorSystem};
+    use sail_common::config::{AppConfig, SystemCatalogStore};
+    use sail_common::runtime::RuntimeHandle;
+    use sail_common_datafusion::error::CommonErrorCause;
+    use sail_telemetry::events::SystemEventReporter;
+    use sail_telemetry::telemetry::{global_system_event_reporter, init_telemetry};
+    use sail_telemetry::{ResourceKind, ResourceOptions};
+    use tokio::sync::mpsc;
+    use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
+
+    use super::{JobAction, JobScheduler, JobState, StageGroup, TaskState};
+    use crate::driver::job_scheduler::JobSchedulerOptions;
+    use crate::driver::output::JobOutputItem;
+    use crate::driver::{DriverActor, DriverComponents, DriverOptions};
+    use crate::id::{DriverId, JobId, TaskKey, TaskStreamKey};
+    use crate::stream::error::TaskStreamResult;
     use crate::task::scheduling::{TaskOutputKind, TaskSetEntry};
+    use crate::worker_manager::LocalWorkerManager;
 
     #[tokio::test]
     async fn late_unknown_commit_cancels_queued_retry() -> Result<(), Box<dyn std::error::Error>> {
@@ -1144,8 +1207,6 @@ mod tests {
         use sail_common_datafusion::error::CommonErrorCause;
         use sail_iceberg::SnapshotUpdateKind;
         use sail_iceberg::physical_plan::IcebergCommitExec;
-        use sail_telemetry::telemetry::{global_system_event_reporter, init_telemetry};
-        use sail_telemetry::{ResourceKind, ResourceOptions};
         use url::Url;
 
         use super::{JobAction, JobScheduler, JobState, TaskState};
@@ -1163,14 +1224,7 @@ mod tests {
         config.telemetry.export_traces = false;
         config.telemetry.export_metrics = false;
         config.telemetry.export_logs = false;
-        init_telemetry(
-            &config.telemetry,
-            &config.catalog.system,
-            ResourceOptions {
-                kind: ResourceKind::Server,
-            },
-        )?;
-        let reporter = global_system_event_reporter().ok_or("missing event reporter")?;
+        let reporter = test_event_reporter(&config)?;
         let handle = tokio::runtime::Handle::current();
         let runtime = RuntimeHandle::new(handle.clone(), handle);
         let options = DriverOptions::try_new(
@@ -1532,5 +1586,352 @@ mod tests {
                 1
             );
         }
+    }
+
+    type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
+
+    /// Telemetry can be initialized only once in a process, and the tests of
+    /// this module run in one process under `cargo test`.
+    fn test_event_reporter(config: &AppConfig) -> TestResult<SystemEventReporter> {
+        let _ = init_telemetry(
+            &config.telemetry,
+            &config.catalog.system,
+            ResourceOptions {
+                kind: ResourceKind::Server,
+            },
+        );
+        Ok(global_system_event_reporter().ok_or("missing event reporter")?)
+    }
+
+    struct TestDriver {
+        scheduler: JobScheduler,
+        ctx: ActorContext<DriverActor>,
+        _system: ActorSystem,
+    }
+
+    impl TestDriver {
+        fn try_new(session_id: &str, task_max_attempts: usize) -> TestResult<Self> {
+            let mut config = AppConfig::load()?;
+            config.cluster.task_max_attempts = task_max_attempts;
+            config.cluster.worker_task_slots = 1;
+            config.cluster.worker_max_count = 1;
+            config.catalog.system.store = SystemCatalogStore::Memory;
+            config.telemetry.export_traces = false;
+            config.telemetry.export_metrics = false;
+            config.telemetry.export_logs = false;
+            let reporter = test_event_reporter(&config)?;
+            let handle = tokio::runtime::Handle::current();
+            let runtime = RuntimeHandle::new(handle.clone(), handle);
+            let options = DriverOptions::try_new(
+                &config,
+                runtime.clone(),
+                session_id.into(),
+                DriverId::from(1),
+                0,
+            )?;
+            let scheduler =
+                JobScheduler::new(JobSchedulerOptions::from(&options), reporter.clone());
+            let mut system = ActorSystem::new();
+            let driver = system.spawn::<DriverActor>((
+                options,
+                DriverComponents {
+                    worker_manager: Box::new(LocalWorkerManager::new(
+                        runtime,
+                        SessionContext::new(),
+                    )),
+                    event_reporter: reporter,
+                },
+            ));
+            Ok(Self {
+                scheduler,
+                ctx: ActorContext::new(&driver),
+                _system: system,
+            })
+        }
+    }
+
+    /// A job whose output streams are fed by the test instead of by tasks.
+    struct TestJob {
+        driver: TestDriver,
+        job_id: JobId,
+        output: SendableRecordBatchStream,
+        streams: HashMap<TaskStreamKey, mpsc::Sender<TaskStreamResult<RecordBatch>>>,
+    }
+
+    #[derive(Default)]
+    struct TestRefresh {
+        /// The number of task regions scheduled.
+        scheduled: usize,
+        failure: Option<CommonErrorCause>,
+    }
+
+    impl TestJob {
+        /// Creates a job with a single stage, or with a shuffle to `output` partitions.
+        fn try_new(partitions: usize, output: Option<usize>) -> TestResult<Self> {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "value",
+                DataType::Int32,
+                false,
+            )]));
+            let mut plan: Arc<dyn ExecutionPlan> =
+                MemorySourceConfig::try_new_exec(&vec![vec![]; partitions], schema, None)?;
+            if let Some(output) = output {
+                plan = Arc::new(RepartitionExec::try_new(
+                    plan,
+                    Partitioning::RoundRobinBatch(output),
+                )?);
+            }
+            let mut driver = TestDriver::try_new("job-output", 3)?;
+            let (job_id, output) = driver.scheduler.accept_job(
+                &mut driver.ctx,
+                plan,
+                Arc::new(TaskContext::default()),
+            )?;
+            Ok(Self {
+                driver,
+                job_id,
+                output,
+                streams: HashMap::new(),
+            })
+        }
+
+        /// Refreshes the job and applies the job output actions.
+        async fn refresh(&mut self) -> TestRefresh {
+            let mut refresh = TestRefresh::default();
+            for action in self.driver.scheduler.refresh_job(self.job_id) {
+                match action {
+                    JobAction::ScheduleTaskRegion { .. } => refresh.scheduled += 1,
+                    JobAction::ExtendJobOutput {
+                        handle,
+                        key,
+                        region,
+                        ..
+                    } => {
+                        let (tx, rx) = mpsc::channel(1);
+                        self.streams.insert(key.clone(), tx);
+                        let stream = Box::pin(ReceiverStream::new(rx));
+                        let item = JobOutputItem::Stream {
+                            key,
+                            stream,
+                            region,
+                        };
+                        handle.send(item).await;
+                    }
+                    JobAction::FailJobOutput { handle, cause } => {
+                        refresh.failure = Some(cause.clone());
+                        handle.send(JobOutputItem::Error { cause }).await;
+                    }
+                    JobAction::CancelTask { .. } | JobAction::CleanUpJob { .. } => {}
+                }
+            }
+            refresh
+        }
+
+        fn update(
+            &mut self,
+            stage: usize,
+            partition: usize,
+            attempt: usize,
+            state: TaskState,
+            failure: Option<&str>,
+        ) {
+            let key = TaskKey {
+                job_id: self.job_id,
+                stage,
+                partition,
+                attempt,
+            };
+            let cause = failure.map(|x| CommonErrorCause::Execution(x.to_string()));
+            self.driver.scheduler.update_task(&key, state, None, cause);
+        }
+
+        /// Updates the latest attempt of all the tasks.
+        fn update_all(&mut self, state: TaskState) {
+            let job = &self.driver.scheduler.jobs[&self.job_id];
+            let tasks = job
+                .stages
+                .iter()
+                .enumerate()
+                .flat_map(|(s, stage)| {
+                    let tasks = stage.tasks.iter().enumerate();
+                    tasks.map(move |(p, task)| (s, p, task.attempts.len() - 1))
+                })
+                .collect::<Vec<_>>();
+            for (stage, partition, attempt) in tasks {
+                self.update(stage, partition, attempt, state, None);
+            }
+        }
+
+        fn stream_key(&self, stage: usize, partition: usize, attempt: usize) -> TaskStreamKey {
+            TaskStreamKey {
+                job_id: self.job_id,
+                stage,
+                partition,
+                attempt,
+                channel: 0,
+            }
+        }
+
+        /// Writes a batch to a job output stream that has been registered.
+        async fn write(
+            &mut self,
+            stage: usize,
+            partition: usize,
+            attempt: usize,
+            rows: i32,
+        ) -> TestResult<()> {
+            let batch = RecordBatch::try_from_iter([(
+                "value",
+                Arc::new(Int32Array::from_iter_values(0..rows)) as ArrayRef,
+            )])?;
+            let key = self.stream_key(stage, partition, attempt);
+            let stream = self.streams.get(&key).ok_or("missing job output stream")?;
+            // The job output may have dropped the stream already.
+            let _ = stream.send(Ok(batch)).await;
+            Ok(())
+        }
+
+        /// Ends a job output stream that has been registered.
+        fn end(&mut self, stage: usize, partition: usize, attempt: usize) -> TestResult<()> {
+            let key = self.stream_key(stage, partition, attempt);
+            self.streams
+                .remove(&key)
+                .ok_or("missing job output stream")?;
+            Ok(())
+        }
+
+        /// Reads the number of rows in the next batch that the client receives.
+        async fn read(&mut self) -> TestResult<Option<usize>> {
+            let batch = tokio::time::timeout(Duration::from_secs(10), self.output.next()).await?;
+            Ok(batch.transpose()?.map(|batch| batch.num_rows()))
+        }
+
+        fn state(&self) -> &JobState {
+            &self.driver.scheduler.jobs[&self.job_id].state
+        }
+    }
+
+    #[tokio::test]
+    async fn region_with_delivered_output_fails_with_task_cause() -> TestResult<()> {
+        let mut job = TestJob::try_new(2, Some(2))?;
+        assert_eq!(job.refresh().await.scheduled, 1);
+        job.update_all(TaskState::Running);
+        job.refresh().await;
+        job.write(1, 0, 0, 1).await?;
+        assert_eq!(job.read().await?, Some(1));
+
+        // An upstream task fails after rows of the region have reached the client.
+        job.update(0, 1, 0, TaskState::Failed, Some("upstream failure"));
+        let refresh = job.refresh().await;
+        assert_eq!(refresh.scheduled, 0);
+        assert!(matches!(
+            refresh.failure,
+            Some(CommonErrorCause::Execution(message)) if message == "upstream failure"
+        ));
+        assert!(matches!(job.state(), JobState::Failed));
+        assert!(matches!(
+            job.read().await,
+            Err(error) if error.to_string().contains("upstream failure")
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn region_without_delivered_output_restarts_and_drains() -> TestResult<()> {
+        let mut job = TestJob::try_new(2, Some(2))?;
+        assert_eq!(job.refresh().await.scheduled, 1);
+        job.update_all(TaskState::Running);
+        job.refresh().await;
+        // The job output reads the streams of the first attempt. Empty batches are not rows.
+        for partition in 0..2 {
+            job.write(1, partition, 0, 0).await?;
+            assert_eq!(job.read().await?, Some(0));
+        }
+
+        job.update(0, 1, 0, TaskState::Failed, Some("upstream failure"));
+        let refresh = job.refresh().await;
+        assert_eq!(refresh.scheduled, 1);
+        assert!(refresh.failure.is_none());
+        // The first attempt has been canceled. Its rows must not reach the client,
+        // and its output streams are left open.
+        job.write(1, 0, 0, 7).await?;
+
+        job.update_all(TaskState::Running);
+        job.refresh().await;
+        job.write(1, 0, 1, 1).await?;
+        job.write(1, 1, 1, 2).await?;
+        job.end(1, 0, 1)?;
+        job.end(1, 1, 1)?;
+        job.update_all(TaskState::Succeeded);
+        let refresh = job.refresh().await;
+        assert_eq!(refresh.scheduled, 0);
+        assert!(refresh.failure.is_none());
+        assert!(matches!(job.state(), JobState::Draining));
+
+        let mut rows = vec![];
+        while let Some(count) = job.read().await? {
+            rows.push(count);
+        }
+        rows.sort();
+        assert_eq!(rows, vec![1, 2]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn job_failure_reports_cause_of_failed_region() -> TestResult<()> {
+        // Each partition of a single-stage job is a task region.
+        let mut job = TestJob::try_new(2, None)?;
+        assert_eq!(job.refresh().await.scheduled, 2);
+
+        // The first region fails once and then succeeds.
+        job.update(0, 0, 0, TaskState::Failed, Some("recovered failure"));
+        assert_eq!(job.refresh().await.scheduled, 1);
+        job.update_all(TaskState::Running);
+        job.refresh().await;
+        job.end(0, 0, 1)?;
+        job.update(0, 0, 1, TaskState::Succeeded, None);
+        job.refresh().await;
+
+        // The second region fails after its rows have reached the client.
+        job.write(0, 1, 0, 1).await?;
+        assert_eq!(job.read().await?, Some(1));
+        job.update(0, 1, 0, TaskState::Failed, Some("final failure"));
+        let refresh = job.refresh().await;
+        assert_eq!(refresh.scheduled, 0);
+        assert!(matches!(
+            refresh.failure,
+            Some(CommonErrorCause::Execution(message)) if message == "final failure"
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn region_with_many_output_partitions_restarts_and_drains() -> TestResult<()> {
+        let partitions = 40;
+        let mut job = TestJob::try_new(1, Some(partitions))?;
+        assert_eq!(job.refresh().await.scheduled, 1);
+        job.update_all(TaskState::Running);
+        job.refresh().await;
+        assert_eq!(job.streams.len(), partitions);
+
+        job.update(0, 0, 0, TaskState::Failed, Some("upstream failure"));
+        assert_eq!(job.refresh().await.scheduled, 1);
+        job.update_all(TaskState::Running);
+        job.refresh().await;
+        assert_eq!(job.streams.len(), 2 * partitions);
+        for partition in 0..partitions {
+            job.write(1, partition, 1, 1).await?;
+            job.end(1, partition, 1)?;
+        }
+        job.update_all(TaskState::Succeeded);
+        job.refresh().await;
+        assert!(matches!(job.state(), JobState::Draining));
+
+        let mut rows = 0;
+        while let Some(count) = job.read().await? {
+            rows += count;
+        }
+        assert_eq!(rows, partitions);
+        Ok(())
     }
 }
