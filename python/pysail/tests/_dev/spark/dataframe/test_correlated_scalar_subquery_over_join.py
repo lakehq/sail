@@ -21,7 +21,7 @@ JOIN = f"(SELECT p.k, q.v FROM {W} p JOIN {W} q ON p.k = q.k)"  # noqa: S608
             [(k, 9 - k) for k in range(10)],
         ),
         (
-            f"SELECT a.k, (SELECT count(*) FROM (SELECT p.k, q.v FROM {W} p LEFT JOIN {W} q ON p.k = q.k) x "  # noqa: S608
+            f"SELECT a.k, (SELECT count(*) FROM (SELECT p.k, q.v FROM {W} p LEFT JOIN (SELECT * FROM {W} r WHERE r.k < 5) q ON p.k = q.k) x "  # noqa: S608
             f"WHERE x.k >= a.v) FROM {W} a",
             [(k, 10 - k) for k in range(10)],
         ),
