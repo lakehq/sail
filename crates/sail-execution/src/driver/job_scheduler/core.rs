@@ -139,6 +139,21 @@ impl JobScheduler {
         });
     }
 
+    /// Records that the job output has received rows from the task streams of the task attempt.
+    pub fn mark_job_output_emitted(&mut self, key: &TaskKey) {
+        let Some(attempt) = self
+            .jobs
+            .get_mut(&key.job_id)
+            .and_then(|job| job.stages.get_mut(key.stage))
+            .and_then(|stage| stage.tasks.get_mut(key.partition))
+            .and_then(|task| task.attempts.get_mut(key.attempt))
+        else {
+            warn!("{} not found", TaskKeyDisplay(key));
+            return;
+        };
+        attempt.job_output_emitted = true;
+    }
+
     pub fn get_task_state(&self, key: &TaskKey) -> Option<TaskState> {
         let attempt = self
             .jobs
@@ -248,8 +263,23 @@ impl JobScheduler {
 
     fn update_task_regions(job: &mut JobDescriptor, task_max_attempts: usize) {
         for (r, region) in job.topology.regions.iter().enumerate() {
+            // A retry of the region cannot take back the rows that the job output has
+            // received from the region, so the region fails instead.
+            let emitted = region.tasks.iter().any(|t| {
+                job.stages[t.stage].tasks[t.partition]
+                    .attempts
+                    .iter()
+                    .any(|attempt| attempt.job_output_emitted)
+            });
             let failed = region.tasks.iter().any(|t| {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
+                if emitted
+                    && let Some((attempt, earlier)) = attempts.split_last()
+                    && (matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
+                        || earlier.iter().any(|attempt| attempt.job_output_emitted))
+                {
+                    return true;
+                }
                 // A terminal cause can arrive after the attempt was canceled or replaced.
                 if attempts.iter().any(|attempt| {
                     attempt
@@ -424,6 +454,7 @@ impl JobScheduler {
                     messages: vec![],
                     cause: None,
                     job_output_fetched: false,
+                    job_output_emitted: false,
                 });
                 event_reporter.report(SystemEvent::TaskCreated {
                     session_id: session_id.to_string(),
@@ -1312,6 +1343,7 @@ mod tests {
             messages: vec![],
             cause,
             job_output_fetched: false,
+            job_output_emitted: false,
         };
         for _ in 0..2 {
             job.stages[0].tasks[0].attempts.push(attempt(
@@ -1346,6 +1378,89 @@ mod tests {
             JobScheduler::infer_job_failure_cause(&job),
             CommonErrorCause::CommitStateUnknown(message) if message == "ambiguous commit"
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn a_region_whose_job_output_is_emitted_fails_instead_of_being_retried()
+    -> crate::error::ExecutionResult<()> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        use super::{
+            JobDescriptor, JobScheduler, JobState, TaskAttemptDescriptor, TaskRegionState,
+            TaskState,
+        };
+        use crate::job_graph::{JobGraph, JobGraphOptions};
+        use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+
+        let new_job = || -> crate::error::ExecutionResult<JobDescriptor> {
+            let graph = JobGraph::try_new(
+                MemorySourceConfig::try_new_exec(&[vec![]], Arc::new(Schema::empty()), None)?,
+                JobGraphOptions {
+                    shuffle_backend: ShuffleBackendKind::Flight {
+                        compression: ShuffleCompression::None,
+                        connection_count: std::num::NonZeroUsize::MIN,
+                        initial_stream_window_size: None,
+                        initial_connection_window_size: None,
+                    },
+                },
+            )?;
+            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))
+        };
+        let attempt = |state, cause, emitted| TaskAttemptDescriptor {
+            state,
+            messages: vec![],
+            cause,
+            job_output_fetched: true,
+            job_output_emitted: emitted,
+        };
+        let failure = || Some(CommonErrorCause::Io("transient failure".into()));
+        let failed = |job: &JobDescriptor| {
+            job.regions
+                .iter()
+                .any(|r| matches!(r.state, TaskRegionState::Failed))
+        };
+
+        // A failed attempt is retried if the job output has not received its rows.
+        let mut job = new_job()?;
+        job.stages[0].tasks[0]
+            .attempts
+            .push(attempt(TaskState::Failed, failure(), false));
+        JobScheduler::update_task_regions(&mut job, 4);
+        assert!(!failed(&job));
+
+        // The region fails with the error of the task once the job output has received rows.
+        let mut job = new_job()?;
+        job.stages[0].tasks[0]
+            .attempts
+            .push(attempt(TaskState::Running, None, true));
+        JobScheduler::update_task_regions(&mut job, 4);
+        assert!(!failed(&job));
+        job.stages[0].tasks[0].attempts[0].state = TaskState::Failed;
+        job.stages[0].tasks[0].attempts[0].cause = failure();
+        JobScheduler::update_task_regions(&mut job, 4);
+        assert!(failed(&job));
+        assert!(matches!(
+            JobScheduler::infer_job_failure_cause(&job),
+            CommonErrorCause::Io(message) if message == "transient failure"
+        ));
+
+        // The region also fails if the rows of the job output are received after the
+        // retry of the region is scheduled.
+        let mut job = new_job()?;
+        job.stages[0].tasks[0]
+            .attempts
+            .push(attempt(TaskState::Failed, failure(), true));
+        job.stages[0].tasks[0]
+            .attempts
+            .push(attempt(TaskState::Scheduled, None, false));
+        JobScheduler::update_task_regions(&mut job, 4);
+        assert!(failed(&job));
         Ok(())
     }
 
@@ -1397,6 +1512,7 @@ mod tests {
             messages: vec![],
             cause: None,
             job_output_fetched: false,
+            job_output_emitted: false,
         };
         for stage in &mut job.stages {
             for task in &mut stage.tasks {

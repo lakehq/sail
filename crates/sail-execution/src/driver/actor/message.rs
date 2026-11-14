@@ -76,6 +76,10 @@ pub enum DriverMessage {
     ProbePendingTask {
         key: TaskKey,
     },
+    /// The job output has received rows from the task streams of the task attempt.
+    JobOutputEmitted {
+        key: TaskKey,
+    },
     FetchDriverStream {
         key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
@@ -152,6 +156,7 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::CleanUpJob { .. } => "CleanUpJob",
             DriverMessage::UpdateTask { .. } => "UpdateTask",
             DriverMessage::ProbePendingTask { .. } => "ProbePendingTask",
+            DriverMessage::JobOutputEmitted { .. } => "JobOutputEmitted",
             DriverMessage::FetchDriverStream { .. } => "FetchDriverStream",
             DriverMessage::FetchWorkerStream { .. } => "FetchWorkerStream",
             DriverMessage::CelebornGetLifecycleManager { .. } => "CelebornGetLifecycleManager",
@@ -234,6 +239,15 @@ impl SpanAssociation for DriverMessage {
                 }
             }
             DriverMessage::ProbePendingTask {
+                key:
+                    TaskKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                    },
+            }
+            | DriverMessage::JobOutputEmitted {
                 key:
                     TaskKey {
                         job_id,
