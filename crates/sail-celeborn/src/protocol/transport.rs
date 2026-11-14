@@ -5,7 +5,7 @@ use std::time::Duration;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::Mutex;
 
 use crate::error::{CelebornError, CelebornResult};
 use crate::protocol::StatusCode;
@@ -128,16 +128,6 @@ impl TransportFrame<'static> {
 }
 
 impl TransportFrame<'_> {
-    /// Returns the request ID of an RPC response or failure.
-    pub fn rpc_id(&self) -> Option<i64> {
-        match self.frame_type {
-            TransportFrameType::RpcResponse | TransportFrameType::RpcFailure => {
-                Some(i64::from_be_bytes(self.header.get(..8)?.try_into().ok()?))
-            }
-            _ => None,
-        }
-    }
-
     pub fn into_rpc_response(self, request_id: i64) -> CelebornResult<Vec<u8>> {
         let body = self.body.into_owned();
         match self.frame_type {
@@ -230,8 +220,7 @@ impl TransportFrame<'_> {
 ///
 /// Netty permits multiple outstanding RPCs, but a small client only needs one transaction at a
 /// time. The mutex gives clones a single reusable connection while retaining exact request/reply
-/// ordering. A transaction that does not complete (an I/O, timeout, or framing error, or a
-/// caller that stops waiting for the reply) invalidates the connection before it is reused.
+/// ordering. I/O, timeout, and framing errors invalidate the connection before it is reused.
 #[derive(Debug, Clone)]
 pub(crate) struct TransportConnection {
     host: String,
@@ -263,18 +252,10 @@ impl TransportConnection {
 
     /// Send a Netty RPC request and return its response payload.
     pub(crate) async fn send_rpc(&self, body: Vec<u8>) -> CelebornResult<Vec<u8>> {
-        self.send_rpc_with_id(self.next_request_id(), body).await
-    }
-
-    async fn send_rpc_with_id(&self, request_id: i64, body: Vec<u8>) -> CelebornResult<Vec<u8>> {
-        // A reply to another request on this connection, which arrives after that request
-        // has failed, is not the reply to this request. The requests that share the
-        // connection are not sent in the order of their IDs.
-        self.request_until(TransportFrame::rpc_request(request_id, body)?, |response| {
-            response.rpc_id().is_none_or(|id| id == request_id)
-        })
-        .await?
-        .into_rpc_response(request_id)
+        let request_id = self.next_request_id();
+        self.request(TransportFrame::rpc_request(request_id, body)?)
+            .await?
+            .into_rpc_response(request_id)
     }
 
     /// Push one map-data batch using Celeborn's `PushData` transport frame.
@@ -300,16 +281,17 @@ impl TransportConnection {
         header.push(0);
         write_bytes(&mut header, shuffle_key)?;
         write_bytes(&mut header, partition_unique_id)?;
-        let prefix = batch_header(map_id, attempt_id, batch_id, data_length);
+        let mut prefix = Vec::with_capacity(16);
+        prefix.extend_from_slice(&map_id.to_be_bytes());
+        prefix.extend_from_slice(&attempt_id.to_be_bytes());
+        prefix.extend_from_slice(&batch_id.to_be_bytes());
+        prefix.extend_from_slice(&data_length.to_be_bytes());
 
-        let frame = TransportFrame {
-            frame_type: TransportFrameType::PushData,
-            header,
-            body: TransportBody::PrefixAndData { prefix, data },
-        };
         let response = self
-            .request_until(frame, |response| {
-                response.rpc_id().is_none_or(|id| id == request_id)
+            .request(TransportFrame {
+                frame_type: TransportFrameType::PushData,
+                header,
+                body: TransportBody::PrefixAndData { prefix, data },
             })
             .await?
             .into_rpc_response(request_id)?;
@@ -342,12 +324,12 @@ impl TransportConnection {
         header.extend_from_slice(&chunk_index.to_be_bytes());
         header.extend_from_slice(&offset.to_be_bytes());
         header.extend_from_slice(&length.to_be_bytes());
-        // A late reply to an RPC on this connection is not the reply to this request.
         let response = self
-            .request_until(
-                TransportFrame::new(TransportFrameType::ChunkFetchRequest, header, Vec::new()),
-                |response| response.rpc_id().is_none(),
-            )
+            .request(TransportFrame::new(
+                TransportFrameType::ChunkFetchRequest,
+                header,
+                Vec::new(),
+            ))
             .await?;
         if response.frame_type != TransportFrameType::ChunkFetchSuccess
             || response.header.len() != 20
@@ -390,21 +372,11 @@ impl TransportConnection {
         Ok(response.body.into_owned())
     }
 
-    /// Sends the frame and returns the first response frame that is accepted, skipping
-    /// the frames before it.
-    async fn request_until(
-        &self,
-        frame: TransportFrame<'_>,
-        accept: impl Fn(&TransportFrame<'static>) -> bool + Send,
-    ) -> CelebornResult<TransportFrame<'static>> {
+    async fn request(&self, frame: TransportFrame<'_>) -> CelebornResult<TransportFrame<'static>> {
         // Keep the lock outside the I/O timeout. A caller queued behind another transaction must
         // not time out and clear the connection that the active transaction is using.
-        let mut transaction = Transaction {
-            stream: self.stream.lock().await,
-            completed: false,
-        };
+        let mut stream = self.stream.lock().await;
         let result = tokio::time::timeout(self.timeout, async {
-            let stream = &mut *transaction.stream;
             if stream.is_none() {
                 *stream = Some(TcpStream::connect((&*self.host, self.port)).await?);
             }
@@ -412,53 +384,25 @@ impl TransportConnection {
                 CelebornError::Protocol("connection was not initialized".to_string())
             })?;
             frame.write(stream).await?;
-            loop {
-                let response = TransportFrame::read(stream).await?;
-                if accept(&response) {
-                    return Ok(response);
-                }
-            }
+            TransportFrame::read(stream).await
         })
         .await;
         match result {
-            Ok(Ok(response)) => {
-                transaction.completed = true;
-                Ok(response)
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(error)) => {
+                // A failed transaction can leave unread bytes in the socket. Starting fresh is
+                // safer than allowing the next request to interpret those bytes as its reply.
+                *stream = None;
+                Err(error)
             }
-            Ok(Err(error)) => Err(error),
-            Err(_) => Err(CelebornError::Timeout),
+            Err(_) => {
+                // `timeout` cancels its future before it can run error cleanup. Discard the
+                // socket here, otherwise a late response can be mistaken for the next request.
+                *stream = None;
+                Err(CelebornError::Timeout)
+            }
         }
     }
-}
-
-/// A transaction on a connection, which discards the connection unless it completes.
-///
-/// A transaction that fails, times out, or is dropped by its caller after its request is
-/// written can leave unread bytes in the socket. Starting fresh is safer than allowing the
-/// next request to interpret those bytes as its reply.
-struct Transaction<'a> {
-    stream: MutexGuard<'a, Option<TcpStream>>,
-    completed: bool,
-}
-
-impl Drop for Transaction<'_> {
-    fn drop(&mut self) {
-        if !self.completed {
-            *self.stream = None;
-        }
-    }
-}
-
-/// Returns the header of a batch of pushed data, which the shuffle service reads when it
-/// sorts a shuffle file by map index. The fields are in little-endian byte order, as
-/// the shuffle service reads them in the native byte order of its platform.
-pub(crate) fn batch_header(map_id: i32, attempt_id: i32, batch_id: i32, length: i32) -> Vec<u8> {
-    let mut header = Vec::with_capacity(16);
-    header.extend_from_slice(&map_id.to_le_bytes());
-    header.extend_from_slice(&attempt_id.to_le_bytes());
-    header.extend_from_slice(&batch_id.to_le_bytes());
-    header.extend_from_slice(&length.to_le_bytes());
-    header
 }
 
 fn write_bytes(buffer: &mut Vec<u8>, bytes: &[u8]) -> CelebornResult<()> {
@@ -728,211 +672,5 @@ impl<'a> JavaReader<'a> {
             ));
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-#[expect(clippy::unwrap_used)]
-mod tests {
-    use std::time::Duration;
-
-    use tokio::net::TcpListener;
-
-    use super::{TransportConnection, TransportFrame, TransportFrameType};
-
-    fn response(
-        request_id: i64,
-        frame_type: TransportFrameType,
-        text: &[u8],
-    ) -> TransportFrame<'static> {
-        let mut header = request_id.to_be_bytes().to_vec();
-        header.extend_from_slice(&(text.len() as i32).to_be_bytes());
-        match frame_type {
-            TransportFrameType::RpcFailure => {
-                header.extend_from_slice(text);
-                TransportFrame::new(frame_type, header, vec![])
-            }
-            _ => TransportFrame::new(frame_type, header, text.to_vec()),
-        }
-    }
-
-    #[tokio::test]
-    async fn a_late_reply_to_an_earlier_request_is_skipped() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            // The first request is answered twice, as a worker can do when it fails.
-            TransportFrame::read(&mut socket).await.unwrap();
-            for frame in [
-                response(0, TransportFrameType::RpcFailure, b"failed"),
-                response(0, TransportFrameType::RpcFailure, b"failed again"),
-            ] {
-                frame.write(&mut socket).await.unwrap();
-            }
-            TransportFrame::read(&mut socket).await.unwrap();
-            response(1, TransportFrameType::RpcResponse, b"ok")
-                .write(&mut socket)
-                .await
-                .unwrap();
-        });
-        let connection = TransportConnection::new("127.0.0.1", port, Duration::from_secs(5));
-        assert!(connection.send_rpc(vec![1]).await.is_err());
-        assert_eq!(connection.send_rpc(vec![2]).await.unwrap(), b"ok");
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn a_late_reply_to_an_earlier_request_is_skipped_by_a_push() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            TransportFrame::read(&mut socket).await.unwrap();
-            for frame in [
-                response(0, TransportFrameType::RpcFailure, b"failed"),
-                response(0, TransportFrameType::RpcFailure, b"failed again"),
-            ] {
-                frame.write(&mut socket).await.unwrap();
-            }
-            TransportFrame::read(&mut socket).await.unwrap();
-            response(1, TransportFrameType::RpcResponse, b"")
-                .write(&mut socket)
-                .await
-                .unwrap();
-        });
-        let connection = TransportConnection::new("127.0.0.1", port, Duration::from_secs(5));
-        assert!(connection.send_rpc(vec![1]).await.is_err());
-        connection
-            .push_data("shuffle", "location", 0, 0, 0, b"data")
-            .await
-            .unwrap();
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn a_late_reply_to_a_later_request_is_skipped() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            // The request with ID 1 is sent first and answered twice, and then the request
-            // with ID 0 is answered.
-            TransportFrame::read(&mut socket).await.unwrap();
-            for frame in [
-                response(1, TransportFrameType::RpcResponse, b"one"),
-                response(1, TransportFrameType::RpcFailure, b"failed"),
-            ] {
-                frame.write(&mut socket).await.unwrap();
-            }
-            TransportFrame::read(&mut socket).await.unwrap();
-            response(0, TransportFrameType::RpcResponse, b"zero")
-                .write(&mut socket)
-                .await
-                .unwrap();
-        });
-        let connection = TransportConnection::new("127.0.0.1", port, Duration::from_secs(5));
-        // The request with ID 0 is sent after the request with ID 1.
-        assert_eq!(
-            connection.send_rpc_with_id(1, vec![2]).await.unwrap(),
-            b"one"
-        );
-        assert_eq!(
-            connection.send_rpc_with_id(0, vec![1]).await.unwrap(),
-            b"zero"
-        );
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn a_request_that_is_dropped_after_it_is_sent_does_not_leave_its_reply() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let (sent_tx, sent_rx) = tokio::sync::oneshot::channel::<()>();
-        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel::<()>();
-        let server = tokio::spawn(async move {
-            let mut signals = Some((sent_tx, dropped_rx));
-            loop {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let signals = signals.take();
-                tokio::spawn(async move {
-                    let mut signals = signals;
-                    while let Ok(request) = TransportFrame::read(&mut socket).await {
-                        let reply = match request.frame_type {
-                            TransportFrameType::ChunkFetchRequest => {
-                                // The chunk is sent after the client stops waiting for it.
-                                if let Some((sent, dropped)) = signals.take() {
-                                    sent.send(()).unwrap();
-                                    dropped.await.unwrap();
-                                }
-                                // The reply has the stream ID, chunk index, offset and
-                                // length of the request.
-                                TransportFrame::new(
-                                    TransportFrameType::ChunkFetchSuccess,
-                                    request.header.to_vec(),
-                                    b"chunk".to_vec(),
-                                )
-                            }
-                            _ => {
-                                let id =
-                                    i64::from_be_bytes(request.header[..8].try_into().unwrap());
-                                response(id, TransportFrameType::RpcResponse, b"ok")
-                            }
-                        };
-                        if reply.write(&mut socket).await.is_err() {
-                            break;
-                        }
-                    }
-                });
-            }
-        });
-        let connection = TransportConnection::new("127.0.0.1", port, Duration::from_secs(5));
-        let mut fetch = Box::pin(connection.fetch_chunk(1, 0, 0, 5));
-        tokio::select! {
-            _ = &mut fetch => panic!("the chunk is sent after the fetch is dropped"),
-            _ = sent_rx => {}
-        }
-        drop(fetch);
-        dropped_tx.send(()).unwrap();
-        assert_eq!(connection.send_rpc(vec![1]).await.unwrap(), b"ok");
-        server.abort();
-    }
-
-    #[tokio::test]
-    async fn a_late_reply_to_an_earlier_request_is_skipped_by_a_chunk_fetch() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            // The OpenStream RPC is answered twice.
-            TransportFrame::read(&mut socket).await.unwrap();
-            for frame in [
-                response(0, TransportFrameType::RpcResponse, b"handle"),
-                response(0, TransportFrameType::RpcFailure, b"failed again"),
-            ] {
-                frame.write(&mut socket).await.unwrap();
-            }
-            let request = TransportFrame::read(&mut socket).await.unwrap();
-            TransportFrame::new(
-                TransportFrameType::ChunkFetchSuccess,
-                request.header.to_vec(),
-                b"chunk".to_vec(),
-            )
-            .write(&mut socket)
-            .await
-            .unwrap();
-            TransportFrame::read(&mut socket).await.unwrap();
-            response(1, TransportFrameType::RpcResponse, b"ok")
-                .write(&mut socket)
-                .await
-                .unwrap();
-        });
-        let connection = TransportConnection::new("127.0.0.1", port, Duration::from_secs(5));
-        assert_eq!(connection.send_rpc(vec![1]).await.unwrap(), b"handle");
-        let fetched = connection.fetch_chunk(1, 0, 0, 5).await;
-        let next = connection.send_rpc(vec![2]).await;
-        assert_eq!(fetched.unwrap(), b"chunk");
-        assert_eq!(next.unwrap(), b"ok");
-        server.abort();
     }
 }
