@@ -515,7 +515,7 @@ fn take_batch(buffered: &mut BytesMut) -> CelebornResult<Option<Bytes>> {
     if buffered.len() < HEADER_LENGTH {
         return Ok(None);
     }
-    let length = i32::from_be_bytes(
+    let length = i32::from_le_bytes(
         buffered[12..HEADER_LENGTH]
             .try_into()
             .map_err(|_| CelebornError::Protocol("invalid batch header".to_string()))?,
@@ -547,8 +547,20 @@ fn endpoint(
 mod tests {
     use bytes::Bytes;
 
-    use super::{WorkerClientOptions, WorkerClientPool, compress, decompress};
+    use super::{WorkerClientOptions, WorkerClientPool, compress, decompress, take_batch};
     use crate::common::{CompressionCodec, PartitionLocation};
+    use crate::protocol::transport::batch_header;
+
+    #[test]
+    fn batch_header_is_little_endian() {
+        let header = batch_header(1, 2, 3, 4);
+        assert_eq!(header, [1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0]);
+        let mut buffered = bytes::BytesMut::from(&header[..]);
+        buffered.extend_from_slice(b"dataNEXT");
+        let batch = take_batch(&mut buffered).unwrap();
+        assert_eq!(batch, Some(Bytes::from_static(b"data")));
+        assert_eq!(&buffered[..], b"NEXT");
+    }
 
     fn location(id: i32) -> PartitionLocation {
         PartitionLocation {
