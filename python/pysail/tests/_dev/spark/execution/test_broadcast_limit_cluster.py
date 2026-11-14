@@ -31,12 +31,10 @@ def test_limit_read_by_every_task_of_a_join_keeps_the_same_rows(spark):
 
 def _broadcast_query(build, *, values=False, input_rows=200):
     fields = "a.id, a.value" if values else "a.id"
-    return (
-        f"""SELECT b.probe_partition, {fields} FROM ({build}) a
+    return f"""SELECT b.probe_partition, {fields} FROM ({build}) a
             JOIN (SELECT id % {input_rows} AS id,
             CAST(floor(id / {input_rows}) AS INT) AS probe_partition
             FROM range(0, {input_rows * 4}, 1, 4)) b ON a.id = b.id"""  # noqa: S608
-    )
 
 
 def _selected_rows(spark, query, expected_count):
