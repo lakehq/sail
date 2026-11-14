@@ -7428,7 +7428,6 @@ dependencies = [
  "clap",
  "regex",
  "sail-common-spark",
- "sail-spark-connect",
  "serde",
  "serde_json",
 ]
