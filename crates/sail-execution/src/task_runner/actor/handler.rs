@@ -173,14 +173,14 @@ impl TaskRunnerActor {
 
     pub(super) fn handle_create_local_stream(
         &mut self,
-        key: TaskStreamKey,
+        key: TaskKey,
+        channels: usize,
         replicas: usize,
+        job_output: bool,
         schema: Arc<Schema>,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
-        if self.tasks.is_job_closed(key.job_id)
-            || self.tasks.is_canceled(&TaskKey::from(key.clone()))
-        {
+        if self.tasks.is_job_closed(key.job_id) || self.tasks.is_canceled(&key) {
             let _ = result.send(Err(ExecutionError::InvalidArgument(
                 "task or job has been canceled".into(),
             )));
@@ -189,7 +189,7 @@ impl TaskRunnerActor {
         let _ = result.send(
             self.extensions
                 .local_streams
-                .create_stream(key, replicas, schema),
+                .create_stream(&key, channels, replicas, job_output, schema),
         );
         ActorAction::Continue
     }

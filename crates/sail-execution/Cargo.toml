@@ -62,6 +62,7 @@ readonly = { workspace = true }
 indexmap = { workspace = true }
 chrono = { workspace = true }
 bytes = { workspace = true }
+parking_lot = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
