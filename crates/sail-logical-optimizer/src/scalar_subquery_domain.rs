@@ -48,32 +48,49 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                     match node {
                         LogicalPlan::Aggregate(aggregate) => {
                             aggregates += 1;
-                            unsupported |= !aggregate.group_expr.is_empty();
+                            if !aggregate.group_expr.is_empty() {
+                                unsupported = true;
+                            }
                         }
                         LogicalPlan::Filter(filter) if filter.predicate.contains_outer() => {
                             // This traversal is top-down. A filter encountered
                             // before the aggregate is HAVING, not its input.
-                            unsupported |= aggregates == 0;
+                            if aggregates == 0 {
+                                unsupported = true;
+                            }
                             filters += 1;
-                            needs_domain |=
-                                split_conjunction(&filter.predicate).iter().any(|expr| {
-                                    expr.contains_outer()
-                                        && correlated_equality_key(expr, true).is_none()
-                                });
+                            if !needs_domain {
+                                needs_domain =
+                                    split_conjunction(&filter.predicate).iter().any(|expr| {
+                                        expr.contains_outer()
+                                            && correlated_equality_key(expr, true).is_none()
+                                    });
+                            }
                         }
                         // The domain joins the input of the correlated filter, so a join below
                         // the filter only produces that input.
                         LogicalPlan::Join(_) if filters > 0 => {
-                            unsupported |= node.contains_outer_reference();
+                            if node.contains_outer_reference() {
+                                unsupported = true;
+                            }
                         }
                         LogicalPlan::Join(_)
                         | LogicalPlan::Union(_)
                         | LogicalPlan::Window(_)
                         | LogicalPlan::Limit(_)
                         | LogicalPlan::Subquery(_) => unsupported = true,
-                        _ => unsupported |= node.contains_outer_reference(),
+                        _ => {
+                            if node.contains_outer_reference() {
+                                unsupported = true;
+                            }
+                        }
                     }
-                    Ok(TreeNodeRecursion::Continue)
+                    // An unsupported subquery is left as is, so the rest of it is not needed.
+                    Ok(if unsupported {
+                        TreeNodeRecursion::Stop
+                    } else {
+                        TreeNodeRecursion::Continue
+                    })
                 })?;
                 if unsupported || !needs_domain || aggregates != 1 || filters != 1 {
                     return Ok(Transformed::no(Expr::ScalarSubquery(query)));
