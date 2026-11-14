@@ -48,15 +48,15 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                     match node {
                         LogicalPlan::Aggregate(aggregate) => {
                             aggregates += 1;
-                            if !aggregate.group_expr.is_empty() {
-                                unsupported = true;
+                            if !unsupported {
+                                unsupported = !aggregate.group_expr.is_empty();
                             }
                         }
                         LogicalPlan::Filter(filter) if filter.predicate.contains_outer() => {
                             // This traversal is top-down. A filter encountered
                             // before the aggregate is HAVING, not its input.
-                            if aggregates == 0 {
-                                unsupported = true;
+                            if !unsupported {
+                                unsupported = aggregates == 0;
                             }
                             filters += 1;
                             if !needs_domain {
@@ -70,8 +70,8 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                         // The domain joins the input of the correlated filter, so a join below
                         // the filter only produces that input.
                         LogicalPlan::Join(_) if filters > 0 => {
-                            if node.contains_outer_reference() {
-                                unsupported = true;
+                            if !unsupported {
+                                unsupported = node.contains_outer_reference();
                             }
                         }
                         LogicalPlan::Join(_)
@@ -80,8 +80,8 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                         | LogicalPlan::Limit(_)
                         | LogicalPlan::Subquery(_) => unsupported = true,
                         _ => {
-                            if node.contains_outer_reference() {
-                                unsupported = true;
+                            if !unsupported {
+                                unsupported = node.contains_outer_reference();
                             }
                         }
                     }
