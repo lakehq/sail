@@ -254,9 +254,9 @@ mod tests {
         // Otherwise LIMIT 1 could stop polling before the source reports its error.
         let tail = Arc::new(TailExec::new(input, 2));
         let limited = Arc::new(GlobalLimitExec::new(tail, 0, Some(1)));
-        let error = collect(limited, Arc::new(TaskContext::default()))
-            .await
-            .expect_err("tail must propagate a terminal error before returning rows");
+        let Err(error) = collect(limited, Arc::new(TaskContext::default())).await else {
+            return exec_err!("tail must propagate a terminal error before returning rows");
+        };
         assert!(
             error
                 .to_string()
@@ -354,8 +354,8 @@ mod tests {
             TimeUnit::Microsecond,
             TimeUnit::Nanosecond,
         ] {
-            types.push(DataType::Duration(unit.clone()));
-            types.push(DataType::Timestamp(unit.clone(), None));
+            types.push(DataType::Duration(unit));
+            types.push(DataType::Timestamp(unit, None));
             types.push(DataType::Timestamp(unit, Some("UTC".into())));
         }
         for key in [

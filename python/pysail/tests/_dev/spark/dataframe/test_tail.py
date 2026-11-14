@@ -50,7 +50,7 @@ def test_tail_of_sorted_files(spark, tmp_path):
 def test_tail_of_seeded_nested_rows(spark, seed):
     """A stable total order gives a Python oracle for nullable, nested payloads after
     repartitioning. Counts cut both inside and beyond the retained rows."""
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # noqa: S311
     rows = [
         (
             i,
@@ -83,6 +83,6 @@ def test_tail_returns_the_last_rows_when_the_row_count_is_random(spark):
     )
     for _ in range(5):
         rows = df.tail(3)
-        assert len(rows) == 3, rows
+        assert len(rows) == 3, rows  # noqa: PLR2004
         total = rows[0].total
         assert [r.rn for r in rows] == [total - 2, total - 1, total], rows
