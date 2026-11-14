@@ -89,8 +89,8 @@ impl Actor for TaskRunnerActor {
                 schema,
                 result,
             } => self.handle_fetch_worker_stream(ctx, worker_id, key, schema, result),
-            TaskRunnerMessage::FetchLocalStream { key, result } => {
-                self.handle_fetch_local_stream(ctx, key, result)
+            TaskRunnerMessage::FetchLocalStreams { keys, result } => {
+                self.handle_fetch_local_streams(ctx, keys, result)
             }
             TaskRunnerMessage::FetchStorageStream {
                 key,

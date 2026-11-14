@@ -3,6 +3,8 @@ mod options;
 mod state;
 mod topology;
 
+#[cfg(test)]
+pub(crate) use core::tests::event_reporter;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;

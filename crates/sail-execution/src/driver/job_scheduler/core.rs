@@ -1161,7 +1161,7 @@ impl StageGroup {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::collections::HashSet;
 
     use super::StageGroup;
@@ -1170,7 +1170,7 @@ mod tests {
 
     /// Returns the event reporter for a scheduler. Telemetry can only be initialized
     /// once in a process, so the tests that need a scheduler share the initialization.
-    fn event_reporter(
+    pub(crate) fn event_reporter(
         config: &sail_common::config::AppConfig,
     ) -> Result<sail_telemetry::events::SystemEventReporter, Box<dyn std::error::Error>> {
         use std::sync::OnceLock;

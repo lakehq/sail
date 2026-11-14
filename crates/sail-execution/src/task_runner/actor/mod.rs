@@ -2,6 +2,8 @@ mod core;
 mod handler;
 mod message;
 mod options;
+#[cfg(test)]
+mod tests;
 
 use std::collections::HashMap;
 

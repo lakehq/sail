@@ -6,7 +6,7 @@ use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskKey, TaskStreamKey, TaskStreamKeyDisplay};
+use crate::id::{JobId, TaskKey, TaskStreamKey, TaskStreamKeyDisplay, TaskStreamKeySet};
 use crate::stream::error::TaskStreamError;
 use crate::stream::local::memory::MemoryStream;
 use crate::stream::local::options::LocalStreamManagerOptions;
@@ -119,6 +119,34 @@ impl LocalStreamManager {
                 Ok(source)
             }
         }
+    }
+
+    /// Fetches several streams for one reader, which reads them in arbitrary order.
+    /// Each stream is fetched on its own, so a stream that is not created yet does not
+    /// delay the others. If one of the streams cannot be fetched, the reader gets the
+    /// error of the first such stream. All the other streams are still fetched, so
+    /// that the reader gives up its place in each of them, and the tasks that write
+    /// them learn that it does not read them.
+    pub fn fetch_streams(
+        &mut self,
+        ctx: &mut ActorContext<TaskRunnerActor>,
+        keys: &TaskStreamKeySet,
+    ) -> ExecutionResult<TaskStreamSource> {
+        let mut sources = vec![];
+        let mut error = None;
+        for key in keys.keys() {
+            match self.fetch_stream(ctx, &key) {
+                Ok(source) => sources.push(source),
+                Err(e) => error = error.or(Some(e)),
+            }
+        }
+        if let Some(error) = error {
+            return Err(error);
+        }
+        if sources.len() == 1 {
+            return Ok(sources.swap_remove(0));
+        }
+        Ok(Box::pin(futures::stream::select_all(sources)))
     }
 
     pub fn remove_streams(&mut self, job_id: JobId, stage: Option<usize>) {

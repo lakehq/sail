@@ -69,7 +69,7 @@ impl TaskStreamKeyDecoder for DriverTaskStreamKey {
             stream.ok_or_else(|| Status::invalid_argument("task stream ticket is required"))?;
         Ok(Self {
             driver_id: driver_id.into(),
-            stream: stream.into(),
+            stream: stream.try_into()?,
         })
     }
 }

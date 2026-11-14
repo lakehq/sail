@@ -12,7 +12,7 @@ use tokio::sync::oneshot;
 
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskAttempt, TaskKey, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskAttempt, TaskKey, TaskStreamKey, TaskStreamKeySet, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
@@ -268,7 +268,7 @@ impl TaskRunnerActor {
             TaskRunnerPlacement::Worker { driver, .. } => {
                 let client = driver.flight.clone();
                 ctx.spawn(async move {
-                    let _ = result.send(client.fetch_task_stream(key, schema).await);
+                    let _ = result.send(client.fetch_task_streams(key.into(), schema).await);
                 });
             }
         }
@@ -312,7 +312,8 @@ impl TaskRunnerActor {
             TaskRunnerPlacement::Worker { peers, .. } => match peers.get_client_set(worker_id) {
                 Ok(client) => {
                     ctx.spawn(async move {
-                        let _ = result.send(client.flight.fetch_task_stream(key, schema).await);
+                        let _ =
+                            result.send(client.flight.fetch_task_streams(key.into(), schema).await);
                     });
                 }
                 Err(error) => {
@@ -324,19 +325,19 @@ impl TaskRunnerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_fetch_local_stream(
+    pub(super) fn handle_fetch_local_streams(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        if self.tasks.is_job_closed(key.job_id) {
+        if self.tasks.is_job_closed(keys.job_id) {
             let _ = result.send(Err(ExecutionError::InvalidArgument(
                 "task or job has been canceled".into(),
             )));
             return ActorAction::Continue;
         }
-        let _ = result.send(self.extensions.local_streams.fetch_stream(ctx, &key));
+        let _ = result.send(self.extensions.local_streams.fetch_streams(ctx, &keys));
         ActorAction::Continue
     }
 

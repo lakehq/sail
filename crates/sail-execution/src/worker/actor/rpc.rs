@@ -8,7 +8,7 @@ use tonic::async_trait;
 use tonic::codec::CompressionEncoding;
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::TaskStreamKey;
+use crate::id::TaskStreamKeySet;
 use crate::shuffle::ShuffleCompression;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::service::{TaskStreamFetcher, TaskStreamFlightServer};
@@ -23,14 +23,14 @@ struct WorkerTaskStreamFetcher {
 }
 
 #[async_trait]
-impl TaskStreamFetcher<TaskStreamKey> for WorkerTaskStreamFetcher {
+impl TaskStreamFetcher<TaskStreamKeySet> for WorkerTaskStreamFetcher {
     async fn fetch(
         &self,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         sender: Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ExecutionResult<()> {
-        let message = TaskRunnerMessage::FetchLocalStream {
-            key,
+        let message = TaskRunnerMessage::FetchLocalStreams {
+            keys,
             result: sender,
         };
         self.handle
@@ -60,7 +60,7 @@ impl WorkerActor {
             .send_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Zstd);
 
-        let flight_server = TaskStreamFlightServer::<TaskStreamKey>::new(
+        let flight_server = TaskStreamFlightServer::<TaskStreamKeySet>::new(
             Box::new(WorkerTaskStreamFetcher {
                 handle: task_runner,
             }),

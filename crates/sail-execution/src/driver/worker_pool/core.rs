@@ -433,7 +433,7 @@ impl WorkerPool {
         let key = key.clone();
         let stream = futures::stream::once(async move {
             client
-                .fetch_task_stream(key, schema.clone())
+                .fetch_task_streams(key.into(), schema.clone())
                 .await
                 .map_err(|e| TaskStreamError::External(Arc::new(e)))
         })
