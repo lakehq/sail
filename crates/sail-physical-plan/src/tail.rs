@@ -130,6 +130,16 @@ impl ExecutionPlan for TailExec {
             return exec_err!("TailExec: partition index out of range: {partition}");
         }
         let fetch = self.fetch;
+        // Planning enforces this distribution. Reject directly executed invalid plans
+        // instead of silently reading only partition zero. A zero tail reads no input.
+        if fetch > 0 {
+            let input_partitions = self.input.output_partitioning().partition_count();
+            if input_partitions != 1 {
+                return exec_err!(
+                    "TailExec requires a single input partition, got {input_partitions}"
+                );
+            }
+        }
         let reservation = MemoryConsumer::new("TailExec").register(context.memory_pool());
         let input = if fetch == 0 {
             None
@@ -376,6 +386,102 @@ mod tests {
                 .await?
                 .is_empty()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_direct_tail_validates_input_partitioning() -> Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use datafusion::arrow::datatypes::SchemaRef;
+        use datafusion::physical_plan::streaming::{PartitionStream, StreamingTableExec};
+
+        #[derive(Debug)]
+        struct CountingInput {
+            batch: RecordBatch,
+            calls: Arc<AtomicUsize>,
+        }
+        impl PartitionStream for CountingInput {
+            fn schema(&self) -> &SchemaRef {
+                self.batch.schema_ref()
+            }
+            fn execute(&self, _: Arc<TaskContext>) -> SendableRecordBatchStream {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(RecordBatchStreamAdapter::new(
+                    self.batch.schema(),
+                    stream::iter([Ok(self.batch.clone())]),
+                ))
+            }
+        }
+
+        let schema = memory_test_batch(0, 1)?.schema();
+        for count in [2, 1, 0] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let partitions = (0..count)
+                .map(|partition| {
+                    Ok(Arc::new(CountingInput {
+                        batch: memory_test_batch(partition * 10, 3)?,
+                        calls: Arc::clone(&calls),
+                    }) as Arc<dyn PartitionStream>)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let input: Arc<dyn ExecutionPlan> = Arc::new(StreamingTableExec::try_new(
+                Arc::clone(&schema),
+                partitions,
+                None,
+                [],
+                false,
+                None,
+            )?);
+            // Execute directly, bypassing the optimizer that normally merges input partitions.
+            let tail = TailExec::new(Arc::clone(&input), 1);
+            let result = tail.execute(0, Arc::new(TaskContext::default()));
+            if count == 1 {
+                let batches = result?.try_collect::<Vec<_>>().await?;
+                assert_eq!(batches.len(), 1);
+                assert_eq!(batches[0].column(0).as_primitive::<Int64Type>().value(0), 2);
+            } else {
+                let Err(error) = result else {
+                    return exec_err!("tail must reject {count} input partitions");
+                };
+                assert!(
+                    error.to_string().contains(&format!(
+                        "TailExec requires a single input partition, got {count}"
+                    )),
+                    "{error}"
+                );
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), usize::from(count == 1));
+            calls.store(0, Ordering::SeqCst);
+            // The empty result needs no input execution or distribution enforcement.
+            let output = TailExec::new(input, 0)
+                .execute(0, Arc::new(TaskContext::default()))?
+                .try_collect::<Vec<_>>()
+                .await?;
+            assert!(output.is_empty());
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_tail_rejects_nonzero_output_partition() -> Result<()> {
+        let batch = memory_test_batch(0, 3)?;
+        let input: Arc<dyn ExecutionPlan> =
+            MemorySourceConfig::try_new_exec(&[vec![batch.clone()]], batch.schema(), None)?;
+        for fetch in [0, 1] {
+            let result = TailExec::new(Arc::clone(&input), fetch)
+                .execute(1, Arc::new(TaskContext::default()));
+            let Err(error) = result else {
+                return exec_err!("tail must reject a nonzero output partition");
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("TailExec: partition index out of range: 1"),
+                "{error}"
+            );
+        }
         Ok(())
     }
 

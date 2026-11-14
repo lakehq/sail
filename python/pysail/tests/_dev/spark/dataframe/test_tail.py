@@ -39,6 +39,79 @@ def test_tail_of_sorted_input(spark):
     assert [r.id for r in df.tail(3)] == [2, 1, 0]
 
 
+@pytest.mark.parametrize("partitions", [1, 2, 4])
+@pytest.mark.parametrize("projection", ["drop", "alias", "reorder", "computed", "chain", "filter"])
+def test_tail_preserves_sort_with_projected_key(spark, partitions, projection):
+    df = spark.sql(
+        "SELECT * FROM VALUES (0, 'a', 'left'), (1, 'b', 'middle'), (2, 'c', 'right') AS t(k, payload, marker)"
+    )
+    df = df.repartition(partitions)
+    ordered = df.orderBy("k", ascending=False)
+    if projection == "drop":
+        projected = ordered.select("payload")
+        columns = ["payload"]
+        expected = [("c",), ("b",), ("a",)]
+    elif projection == "alias":
+        projected = ordered.selectExpr("payload AS value")
+        columns = ["value"]
+        expected = [("c",), ("b",), ("a",)]
+    elif projection == "reorder":
+        projected = ordered.select("marker", "payload")
+        columns = ["marker", "payload"]
+        expected = [("right", "c"), ("middle", "b"), ("left", "a")]
+    elif projection == "computed":
+        projected = (
+            df.selectExpr("k * k + 1 AS sort_key", "payload")
+            .orderBy("sort_key", ascending=False)
+            .selectExpr("upper(payload) AS value")
+        )
+        columns = ["value"]
+        expected = [("C",), ("B",), ("A",)]
+    elif projection == "filter":
+        projected = ordered.where("payload != 'b'").select("payload")
+        columns = ["payload"]
+        expected = [("c",), ("a",)]
+    else:
+        projected = (
+            ordered.selectExpr("k AS hidden", "payload AS first", "marker")
+            .selectExpr("marker", "concat(first, '!') AS second")
+            .selectExpr("second AS value")
+        )
+        columns = ["value"]
+        expected = [("c!",), ("b!",), ("a!",)]
+    assert projected.columns == columns
+    for count in [1, 2, 4]:
+        assert [tuple(row) for row in projected.tail(count)] == expected[-count:]
+
+
+@pytest.mark.parametrize("partitions", [1, 4])
+def test_tail_preserves_hidden_sort_over_multiple_batches(spark, partitions):
+    # This exceeds the default batch size so projection parallelization cannot
+    # be tested only on inputs that fit in one batch.
+    df = (
+        spark.range(0, 20000, 1, partitions)
+        .orderBy("id", ascending=False)
+        .selectExpr("concat('row-', cast(id as string)) AS payload")
+    )
+    for count in [17, 9000]:
+        assert [row.payload for row in df.tail(count)] == [f"row-{i}" for i in range(count - 1, -1, -1)]
+
+
+def test_tail_evaluates_projected_rows_outside_the_suffix(spark):
+    # The failing row is outside tail(1), so postponing this projection until
+    # after Tail would incorrectly suppress its error. One partition also makes
+    # Spark's take-from-end execution read the entire child partition.
+    df = (
+        spark.range(0, 20000, 1, 1)
+        .orderBy("id", ascending=False)
+        .selectExpr(
+            "CASE WHEN id = 10000 THEN raise_error('tail projection evaluated') ELSE cast(id as string) END AS payload"
+        )
+    )
+    with pytest.raises(PySparkException, match="tail projection evaluated"):
+        df.tail(1)
+
+
 def test_tail_of_sorted_files(spark, tmp_path):
     path = str(tmp_path / "data")
     spark.range(0, 40000, 1, 4).write.parquet(path)
@@ -67,11 +140,30 @@ def test_tail_of_seeded_nested_rows(spark, seed):
         "id INT, k INT, payload STRUCT<label:STRING,items:ARRAY<INT>>, tags MAP<STRING,INT>, raw BINARY",
     ).repartition(3)
     ordered = df.orderBy(df.k.asc_nulls_last(), df.id.desc())
-    expected_ids = [row[0] for row in sorted(rows, key=lambda row: (row[1] is None, row[1] or 0, -row[0]))]
+    ordered_rows = sorted(rows, key=lambda row: (row[1] is None, row[1] or 0, -row[0]))
     expected = ordered.collect()
-    assert [row.id for row in expected] == expected_ids
+    assert [row.id for row in expected] == [row[0] for row in ordered_rows]
+    projected = ordered.select("raw", "payload", "tags")
+    projected_expected = [
+        {
+            "raw": row[4],
+            "payload": None if row[2] is None else {"label": row[2][0], "items": row[2][1]},
+            "tags": row[3],
+        }
+        for row in ordered_rows
+    ]
+    # Keeping only the first sort key must also preserve the hidden tie-breaker
+    # within duplicate and null-key groups.
+    prefix_projected = ordered.select("k", "raw", "payload", "tags")
+    prefix_expected = [{"k": row[1], **projected_expected[index]} for index, row in enumerate(ordered_rows)]
     for count in [0, 1, 17, len(rows), len(rows) + 1]:
         assert ordered.tail(count) == (expected[-count:] if count else [])
+        assert [row.asDict(recursive=True) for row in projected.tail(count)] == (
+            projected_expected[-count:] if count else []
+        )
+        assert [row.asDict(recursive=True) for row in prefix_projected.tail(count)] == (
+            prefix_expected[-count:] if count else []
+        )
 
 
 def test_tail_returns_the_last_rows_when_the_row_count_is_random(spark):
@@ -82,7 +174,8 @@ def test_tail_returns_the_last_rows_when_the_row_count_is_random(spark):
         "FROM range(100) WHERE uuid() < '8' ORDER BY id"
     )
     for _ in range(5):
-        rows = df.tail(3)
-        assert len(rows) == 3, rows  # noqa: PLR2004
-        total = rows[0].total
-        assert [r.rn for r in rows] == [total - 2, total - 1, total], rows
+        for candidate in [df, df.select("rn", "total")]:
+            rows = candidate.tail(3)
+            assert len(rows) == 3, rows  # noqa: PLR2004
+            total = rows[0].total
+            assert [r.rn for r in rows] == [total - 2, total - 1, total], rows

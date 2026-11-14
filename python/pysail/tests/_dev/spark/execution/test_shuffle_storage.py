@@ -105,3 +105,6 @@ def test_sorted_tail_with_shuffle(spark):
     df = spark.range(0, 100, 1, 4).repartition(3).orderBy("id", ascending=False)
     assert [row.id for row in df.tail(7)] == list(range(6, -1, -1))
     assert [row.id for row in df.tail(101)] == list(range(99, -1, -1))
+    projected = df.selectExpr("concat('row-', cast(id as string)) AS payload")
+    assert [row.payload for row in projected.tail(7)] == [f"row-{i}" for i in range(6, -1, -1)]
+    assert [row.payload for row in projected.tail(101)] == [f"row-{i}" for i in range(99, -1, -1)]

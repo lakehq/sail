@@ -6,9 +6,10 @@ use datafusion::config::ConfigOptions;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::OrderingRequirements;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
-use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+
+use crate::requirements::EnsureRequirements;
 
 /// DataFusion's sort enforcement treats an offset without fetch as an order-preserving
 /// unary node. Changing its input ordering changes the rows it discards. Hide that
@@ -58,7 +59,7 @@ impl PhysicalOptimizerRule for OffsetSafeRequirements {
 
 /// Temporary optimizer node, removed before execution and serialization.
 #[derive(Debug)]
-struct OffsetBoundary(Arc<dyn ExecutionPlan>);
+pub(super) struct OffsetBoundary(Arc<dyn ExecutionPlan>);
 
 impl DisplayAs for OffsetBoundary {
     fn fmt_as(&self, _: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
