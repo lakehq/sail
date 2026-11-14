@@ -4,7 +4,7 @@ use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, Tr
 use datafusion::common::{JoinType, Result, plan_datafusion_err};
 use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
+use datafusion::physical_expr::{EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::joins::{
@@ -348,6 +348,26 @@ fn build_job_graph(
     plan_job_graph_stages(plan, usage, graph, DriverStageHandling::CreateStage, None)
 }
 
+// Plain exchanges finish at a reusable input, with no row selection, computation,
+// or ordering restoration remaining above the exchange.
+fn is_plain_exchange(plan: &dyn ExecutionPlan) -> bool {
+    plan.downcast_ref::<CoalescePartitionsExec>()
+        .is_some_and(|coalesce| coalesce.fetch().is_none())
+        || plan
+            .downcast_ref::<RepartitionExec>()
+            .is_some_and(|repartition| repartition_ordering_to_restore(repartition).is_none())
+        || plan.is::<ExplicitRepartitionExec>()
+        || plan.is::<CoalesceExec>()
+}
+
+fn repartition_ordering_to_restore(repartition: &RepartitionExec) -> Option<&LexOrdering> {
+    if repartition.preserve_order() {
+        repartition.properties().output_ordering()
+    } else {
+        None
+    }
+}
+
 fn plan_job_graph_stages(
     plan: Arc<dyn ExecutionPlan>,
     usage: PartitionUsage,
@@ -355,7 +375,9 @@ fn plan_job_graph_stages(
     driver_stage_handling: DriverStageHandling,
     scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<PlannedSubtree> {
-    if matches!(usage, PartitionUsage::Shared) && plan.output_partitioning().partition_count() == 1
+    if matches!(usage, PartitionUsage::Shared)
+        && plan.output_partitioning().partition_count() == 1
+        && !is_plain_exchange(plan.as_ref())
     {
         // The complete build relation is shared, including limits, TopK, pushed-down
         // fetches, and volatile expressions. Sharing only its inputs can select different
@@ -506,10 +528,7 @@ fn plan_job_graph_stages(
         PartitionUsage::Shared => ShuffleConsumption::Multiple,
     };
     let plan = if let Some(repartition) = subtree.plan.downcast_ref::<RepartitionExec>() {
-        let ordering = repartition
-            .preserve_order()
-            .then(|| repartition.properties().output_ordering().cloned())
-            .flatten();
+        let ordering = repartition_ordering_to_restore(repartition).cloned();
         if ordering.is_some() && repartition.properties().boundedness.is_unbounded() {
             return Err(ExecutionError::InternalError(
                 "order-preserving repartition of unbounded input is not supported in distributed execution".to_string()
@@ -594,8 +613,19 @@ fn plan_job_graph_stages(
         PlannedSubtree::new(plan, subtree.node_has_scalar_subquery_expr)
     } else if let Some(coalesce) = subtree.plan.downcast_ref::<CoalesceExec>() {
         let child = subtree.only_child()?;
-        let plan =
-            create_rescale_input(child, coalesce.output_partitions(), graph, scalar_context)?;
+        let plan = if matches!(usage, PartitionUsage::Shared) && coalesce.output_partitions() == 1 {
+            // Rescale reads this same set of streams but reserves only one replica.
+            // Broadcast makes the single coalesced partition reusable by every reader.
+            create_shuffle(
+                child,
+                graph,
+                coalesce.properties().clone(),
+                ShuffleConsumption::Multiple,
+                scalar_context,
+            )?
+        } else {
+            create_rescale_input(child, coalesce.output_partitions(), graph, scalar_context)?
+        };
         PlannedSubtree::without_pending_scalar_subquery_expr(plan)
     } else if subtree.plan.is::<SystemTableExec>()
         || subtree.plan.is::<CatalogCommandExec>()
@@ -1480,13 +1510,140 @@ mod tests {
     }
 
     #[test]
+    fn shared_plain_exchanges_broadcast_without_an_extra_producer() {
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let input = UnionExec::try_new(vec![empty_plan(); 4]).unwrap();
+            let builds: Vec<Arc<dyn ExecutionPlan>> = vec![
+                Arc::new(CoalescePartitionsExec::new(input.clone())),
+                Arc::new(
+                    RepartitionExec::try_new(input.clone(), Partitioning::RoundRobinBatch(1))
+                        .unwrap(),
+                ),
+                Arc::new(ExplicitRepartitionExec::new(
+                    input.clone(),
+                    Partitioning::RoundRobinBatch(1),
+                )),
+                Arc::new(CoalesceExec::new(input, 1)),
+            ];
+            for build in builds {
+                let explicit = build.is::<ExplicitRepartitionExec>();
+                let key = col("id", &schema()).unwrap();
+                let join = HashJoinExec::try_new(
+                    build,
+                    UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                    vec![(key.clone(), key)],
+                    None,
+                    &JoinType::Inner,
+                    None,
+                    PartitionMode::CollectLeft,
+                    NullEquality::NullEqualsNothing,
+                    false,
+                )
+                .unwrap();
+                let graph = JobGraph::try_new(Arc::new(join), options.clone()).unwrap();
+                let storage = matches!(options.shuffle_backend, ShuffleBackendKind::Storage { .. });
+                assert_eq!(graph.stages.len(), if storage { 3 } else { 2 });
+                let producer = &graph.stages[0];
+                assert!(producer.plan.is::<UnionExec>());
+                assert_eq!(producer.plan.output_partitioning().partition_count(), 4);
+                assert_eq!(producer.placement, TaskPlacement::Worker);
+                if explicit {
+                    assert!(matches!(
+                        producer.distribution,
+                        OutputDistribution::RoundRobinRow { channels: 1 }
+                    ));
+                } else {
+                    assert!(matches!(
+                        producer.distribution,
+                        OutputDistribution::RoundRobinBatch { channels: 1 }
+                    ));
+                }
+                let consumer = graph.stages.last().unwrap();
+                assert_eq!(consumer.plan.output_partitioning().partition_count(), 4);
+                let join = consumer.plan.downcast_ref::<HashJoinExec>().unwrap();
+                let input = join.children()[0]
+                    .downcast_ref::<StageInputExec<usize>>()
+                    .unwrap();
+                assert_eq!(
+                    input.properties().output_partitioning().partition_count(),
+                    1
+                );
+                let mut input = &consumer.inputs[*input.input()];
+                if storage {
+                    assert!(matches!(input.mode, InputMode::Forward));
+                    let collector = &graph.stages[input.stage];
+                    assert!(matches!(collector.mode, OutputMode::Blocking));
+                    let source = collector
+                        .plan
+                        .downcast_ref::<StageInputExec<usize>>()
+                        .unwrap();
+                    input = &collector.inputs[*source.input()];
+                }
+                assert_eq!(input.stage, 0);
+                assert!(matches!(input.mode, InputMode::Broadcast));
+                // In Storage mode the sole collector reads the producer once;
+                // otherwise each probe needs its own broadcast stream replica.
+                assert_eq!(graph.replicas(0), if storage { 1 } else { 4 });
+            }
+        }
+    }
+
+    #[test]
+    fn shared_ordered_repartition_materializes_the_restored_sort() {
+        let key = col("id", &schema()).unwrap();
+        let ordering: LexOrdering = [PhysicalSortExpr::new_default(key.clone())].into();
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let source = Arc::new(
+                SortExec::new(
+                    ordering.clone(),
+                    UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                )
+                .with_preserve_partitioning(true),
+            );
+            let build = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(1))
+                .unwrap()
+                .with_preserve_order();
+            assert!(build.preserve_order());
+            let join = HashJoinExec::try_new(
+                Arc::new(build),
+                UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                vec![(key.clone(), key.clone())],
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                false,
+            )
+            .unwrap();
+            let graph = JobGraph::try_new(Arc::new(join), options).unwrap();
+            let consumer = graph.stages.last().unwrap();
+            let producer = shared_build_producer(&graph, consumer);
+            let sort = producer.plan.downcast_ref::<SortExec>().unwrap();
+            assert!(sort.preserve_partitioning());
+            assert_eq!(sort.expr(), &ordering);
+            assert!(sort.input().properties().output_ordering().is_none());
+            let join = consumer.plan.downcast_ref::<HashJoinExec>().unwrap();
+            assert_eq!(join.children()[0].output_ordering(), Some(&ordering));
+        }
+    }
+
+    #[test]
     fn shared_selection_roots_preserve_the_complete_plan() {
         for options in [
             flight_shuffle_options(),
             blocking_shuffle_options(),
             celeborn_shuffle_options(),
         ] {
-            for fetch in [0, 3] {
+            for fetch in [None, Some(0), Some(3)] {
                 let input = UnionExec::try_new(vec![empty_plan(); 4]).unwrap();
                 let coalesced =
                     Arc::new(CoalescePartitionsExec::new(input.clone())) as Arc<dyn ExecutionPlan>;
@@ -1494,9 +1651,7 @@ mod tests {
                 let ordering: LexOrdering = [PhysicalSortExpr::new_default(key.clone())].into();
                 let filter = binary(key.clone(), Operator::Eq, key.clone(), &schema()).unwrap();
                 let roots: Vec<Arc<dyn ExecutionPlan>> = vec![
-                    Arc::new(
-                        SortExec::new(ordering.clone(), coalesced.clone()).with_fetch(Some(fetch)),
-                    ),
+                    Arc::new(SortExec::new(ordering.clone(), coalesced.clone()).with_fetch(fetch)),
                     Arc::new(
                         SortExec::new(
                             ordering.clone(),
@@ -1505,11 +1660,11 @@ mod tests {
                                 Partitioning::RoundRobinBatch(1),
                             )),
                         )
-                        .with_fetch(Some(fetch)),
+                        .with_fetch(fetch),
                     ),
                     FilterExec::try_new(filter, coalesced)
                         .unwrap()
-                        .with_fetch(Some(fetch))
+                        .with_fetch(fetch)
                         .unwrap(),
                     Arc::new(
                         SortPreservingMergeExec::new(
@@ -1518,7 +1673,7 @@ mod tests {
                                 SortExec::new(ordering, input).with_preserve_partitioning(true),
                             ),
                         )
-                        .with_fetch(Some(fetch)),
+                        .with_fetch(fetch),
                     ),
                 ];
                 for build in roots {
@@ -1541,7 +1696,7 @@ mod tests {
                     assert_eq!(consumer.plan.output_partitioning().partition_count(), 4);
                     let producer = shared_build_producer(&graph, consumer);
                     assert_eq!(producer.plan.name(), name);
-                    assert_eq!(producer.plan.fetch(), Some(fetch));
+                    assert_eq!(producer.plan.fetch(), fetch);
                     assert_eq!(producer.plan.output_ordering().cloned(), ordering);
                 }
             }
@@ -1912,27 +2067,29 @@ mod tests {
         let input =
             UnionExec::try_new(vec![empty_plan(), empty_plan(), empty_plan(), empty_plan()])
                 .unwrap();
-        let graph = JobGraph::try_new(
-            Arc::new(CoalesceExec::new(input, 2)),
-            flight_shuffle_options(),
-        )
-        .unwrap();
+        for output_partitions in [1, 2] {
+            let graph = JobGraph::try_new(
+                Arc::new(CoalesceExec::new(input.clone(), output_partitions)),
+                flight_shuffle_options(),
+            )
+            .unwrap();
 
-        assert_eq!(graph.stages().len(), 2);
-        assert_eq!(
-            graph.stages()[1]
-                .plan
-                .output_partitioning()
-                .partition_count(),
-            2
-        );
-        assert!(matches!(
-            graph.stages()[1].inputs.as_slice(),
-            [StageInput {
-                stage: 0,
-                mode: InputMode::Rescale { partitions: 2 },
-            }]
-        ));
+            assert_eq!(graph.stages().len(), 2);
+            assert_eq!(
+                graph.stages()[1]
+                    .plan
+                    .output_partitioning()
+                    .partition_count(),
+                output_partitions
+            );
+            assert!(matches!(
+                graph.stages()[1].inputs.as_slice(),
+                [StageInput {
+                    stage: 0,
+                    mode: InputMode::Rescale { partitions },
+                }] if *partitions == output_partitions
+            ));
+        }
     }
 
     #[test]
