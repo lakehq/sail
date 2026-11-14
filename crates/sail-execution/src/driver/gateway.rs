@@ -17,6 +17,7 @@ use crate::driver::server::DriverServer;
 use crate::driver::{DriverMessage, DriverRegistryAccessor};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{DriverId, TaskStreamKey};
+use crate::rpc::server_options;
 use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
 use crate::stream::r#gen::{DriverTaskStreamTicket, TaskStreamTicket};
 use crate::stream::reader::TaskStreamSource;
@@ -144,7 +145,7 @@ impl DriverGateway {
             .send_compressed(CompressionEncoding::Zstd);
 
         let handle = tokio::spawn(async move {
-            ServerBuilder::new("sail_driver", Default::default())
+            ServerBuilder::new("sail_driver", server_options())
                 .add_service(service, Some(crate::driver::r#gen::FILE_DESCRIPTOR_SET))
                 .await
                 .add_service(celeborn_service, None)

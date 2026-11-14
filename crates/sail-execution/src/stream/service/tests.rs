@@ -1,20 +1,40 @@
+use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
+use std::time::Duration;
 
+use arrow_flight::flight_service_server::FlightServiceServer;
 use datafusion::arrow::array::{
     Array, ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringArray,
 };
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use futures::TryStreamExt;
+use futures::future::BoxFuture;
 use prost::Message;
+use sail_common::server::ServerBuilder;
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
+use tokio::task::JoinSet;
+use tokio_util::task::AbortOnDropHandle;
+use tonic::body::Body;
+use tonic::codegen::http::Request;
+use tonic::server::NamedService;
+use tower::Service;
 
+use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskStreamKey, TaskStreamKeySet};
+use crate::rpc::{ClientOptions, server_options};
 use crate::shuffle::ShuffleCompression;
 use crate::stream::r#gen::TaskStreamTicket;
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::service::TaskStreamKeyDecoder;
 use crate::stream::service::client::decode_task_stream;
 use crate::stream::service::server::encode_task_stream;
+use crate::stream::service::{
+    TaskStreamFetcher, TaskStreamFlightClient, TaskStreamFlightServer, TaskStreamKeyDecoder,
+    TaskStreamOwner,
+};
 
 type TestError = Box<dyn std::error::Error>;
 
@@ -176,5 +196,110 @@ async fn batches_of_several_tasks_are_encoded_in_one_stream() -> Result<(), Test
         actual.sort();
         assert_eq!(actual, expected);
     }
+    Ok(())
+}
+
+/// A fetcher of streams that have no data. It counts the requests.
+struct EmptyStreamFetcher(Arc<AtomicUsize>);
+
+#[tonic::async_trait]
+impl TaskStreamFetcher<TaskStreamKeySet> for EmptyStreamFetcher {
+    async fn fetch(
+        &self,
+        _key: TaskStreamKeySet,
+        sender: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
+    ) -> ExecutionResult<()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        let _ = sender.send(Ok(Box::pin(futures::stream::empty())));
+        Ok(())
+    }
+}
+
+/// A service that gets each request after a delay, as the service of a busy server does.
+#[derive(Clone)]
+struct LateService<S>(S);
+
+impl<S: NamedService> NamedService for LateService<S> {
+    const NAME: &'static str = S::NAME;
+}
+
+impl<S> Service<Request<Body>> for LateService<S>
+where
+    S: Service<Request<Body>> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = BoxFuture<'static, Result<S::Response, S::Error>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.0.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: Request<Body>) -> Self::Future {
+        let mut service = self.0.clone();
+        Box::pin(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            service.call(request).await
+        })
+    }
+}
+
+#[tokio::test]
+async fn worker_server_keeps_connection_with_many_unread_tickets() -> Result<(), TestError> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let count = Arc::new(AtomicUsize::new(0));
+    let fetcher = EmptyStreamFetcher(count.clone());
+    let server = TaskStreamFlightServer::<TaskStreamKeySet>::new(
+        Box::new(fetcher),
+        ShuffleCompression::None,
+    );
+    let service = LateService(FlightServiceServer::new(server));
+    let _server = AbortOnDropHandle::new(tokio::spawn(async move {
+        ServerBuilder::new("test", server_options())
+            .add_service(service, None)
+            .await
+            .serve(listener, std::future::pending())
+            .await
+            .map_err(|e| e.to_string())
+    }));
+    let options = ClientOptions {
+        enable_tls: false,
+        host: address.ip().to_string(),
+        port: address.port(),
+        flight_connection_count: NonZeroUsize::MIN,
+        flight_initial_stream_window_size: None,
+        flight_initial_connection_window_size: None,
+    };
+    let client = TaskStreamFlightClient::new(options, TaskStreamOwner::Worker);
+    // With 1,000 partitions on 4 workers, the ticket of a reader has the 250 tasks of a
+    // worker. The server receives 1,000 such tickets before it reads the first one.
+    let mut keys = TaskStreamKeySet::from(TaskStreamKey {
+        job_id: JobId::from(1),
+        stage: 0,
+        partition: 0,
+        attempt: 0,
+        channel: 0,
+    });
+    keys.tasks = (0..250).map(|i| (4 * i, 0)).collect();
+    let schema = Arc::new(Schema::empty());
+    let mut readers = JoinSet::new();
+    for _ in 0..1000 {
+        let (client, keys, schema) = (client.clone(), keys.clone(), schema.clone());
+        readers.spawn(async move {
+            let stream = client.fetch_task_streams(keys, schema).await;
+            let stream = stream.map_err(|e| e.to_string())?;
+            // The stream has no data. Reading it to the end fails if the server has
+            // closed the connection.
+            let batches: Vec<RecordBatch> =
+                stream.try_collect().await.map_err(|e| e.to_string())?;
+            Ok::<_, String>(batches.len())
+        });
+    }
+    while let Some(result) = readers.join_next().await {
+        assert_eq!(result??, 0);
+    }
+    assert_eq!(count.load(Ordering::SeqCst), 1000);
     Ok(())
 }

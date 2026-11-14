@@ -18,15 +18,12 @@ use tonic::codegen::http::{Request, Response, Uri};
 use tower::{Service, ServiceBuilder, ServiceExt};
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::rpc::{CLIENT_MAX_HEADER_LIST_SIZE, ClientBuilder, ClientOptions};
+use crate::rpc::{CLIENT_MAX_HEADER_LIST_SIZE, ClientBuilder, ClientOptions, MAX_WINDOW_SIZE};
 
 #[cfg(test)]
 mod tests;
 
 type TransportError = Box<dyn std::error::Error + Send + Sync>;
-
-/// The largest HTTP/2 flow-control window size.
-const MAX_WINDOW_SIZE: u32 = i32::MAX as u32;
 
 pub(super) type FlightClient = FlightServiceClient<TracingClientService<FlightTransport>>;
 

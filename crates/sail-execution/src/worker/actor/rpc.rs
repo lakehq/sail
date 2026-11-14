@@ -9,6 +9,7 @@ use tonic::codec::CompressionEncoding;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::TaskStreamKeySet;
+use crate::rpc::server_options;
 use crate::shuffle::ShuffleCompression;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::service::{TaskStreamFetcher, TaskStreamFlightServer};
@@ -77,7 +78,7 @@ impl WorkerActor {
             .send(WorkerMessage::ServerReady { port, signal: tx })
             .await?;
 
-        ServerBuilder::new("sail_worker", Default::default())
+        ServerBuilder::new("sail_worker", server_options())
             .add_service(service, Some(crate::worker::r#gen::FILE_DESCRIPTOR_SET))
             .await
             .add_service(flight_service, None)
