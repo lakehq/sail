@@ -61,6 +61,7 @@ use sail_logical_plan::streaming::filter::StreamFilterNode;
 use sail_logical_plan::streaming::limit::StreamLimitNode;
 use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
+use sail_logical_plan::tail::TailNode;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
@@ -82,6 +83,7 @@ use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
+use sail_physical_plan::tail::TailExec;
 use sail_plan::catalog::CatalogCommandNode;
 use sail_plan::procedure::LakeProcedureNode;
 
@@ -534,6 +536,11 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 distribution,
                 node.fetch(),
             ))
+        } else if let Some(node) = node.as_any().downcast_ref::<TailNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!("TailExec requires exactly one physical input");
+            };
+            Arc::new(TailExec::new(input.clone(), node.fetch()))
         } else if let Some(node) = node.as_any().downcast_ref::<SchemaPivotNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("SchemaPivotExec requires exactly one physical input");

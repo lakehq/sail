@@ -451,6 +451,18 @@ impl JobScheduler {
             }
 
             for t in &region.tasks {
+                // The streams of the new attempt are removed when its consumers succeed,
+                // even if the streams of an earlier attempt were removed.
+                if matches!(job.stages[t.stage].state, StageState::Inactive) {
+                    job.stages[t.stage].state = StageState::Active;
+                    event_reporter.report(SystemEvent::StageUpdated {
+                        session_id: session_id.to_string(),
+                        job_id: u64::from(job_id),
+                        stage: t.stage as u64,
+                        status: job.stages[t.stage].state.status().to_string(),
+                        updated_at: Utc::now(),
+                    });
+                }
                 let attempts = &mut job.stages[t.stage].tasks[t.partition].attempts;
                 attempts.push(TaskAttemptDescriptor {
                     state: TaskState::Created,
@@ -847,6 +859,7 @@ impl<'a> TaskInputBuilder<'a> {
         Ok(TaskInput {
             stage: self.input.stage,
             locator: Arc::new(locator),
+            preserve_batches: matches!(self.producer.mode, OutputMode::Shared),
         })
     }
 
@@ -1167,6 +1180,31 @@ mod tests {
     use crate::id::{JobId, TaskKey};
     use crate::task::scheduling::{TaskOutputKind, TaskSetEntry};
 
+    fn test_event_reporter(
+        config: &sail_common::config::AppConfig,
+    ) -> Result<sail_telemetry::events::SystemEventReporter, Box<dyn std::error::Error>> {
+        use std::sync::OnceLock;
+
+        use sail_telemetry::telemetry::{global_system_event_reporter, init_telemetry};
+        use sail_telemetry::{ResourceKind, ResourceOptions};
+
+        static INITIALIZED: OnceLock<Result<(), String>> = OnceLock::new();
+        INITIALIZED
+            .get_or_init(|| {
+                init_telemetry(
+                    &config.telemetry,
+                    &config.catalog.system,
+                    ResourceOptions {
+                        kind: ResourceKind::Server,
+                    },
+                )
+                .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(|error| error.clone())?;
+        global_system_event_reporter().ok_or_else(|| "missing event reporter".into())
+    }
+
     #[tokio::test]
     async fn late_unknown_commit_cancels_queued_retry() -> Result<(), Box<dyn std::error::Error>> {
         use std::sync::Arc;
@@ -1181,8 +1219,6 @@ mod tests {
         use sail_common_datafusion::error::CommonErrorCause;
         use sail_iceberg::SnapshotUpdateKind;
         use sail_iceberg::physical_plan::IcebergCommitExec;
-        use sail_telemetry::telemetry::{global_system_event_reporter, init_telemetry};
-        use sail_telemetry::{ResourceKind, ResourceOptions};
         use url::Url;
 
         use super::{JobAction, JobScheduler, JobState, TaskState};
@@ -1200,14 +1236,7 @@ mod tests {
         config.telemetry.export_traces = false;
         config.telemetry.export_metrics = false;
         config.telemetry.export_logs = false;
-        init_telemetry(
-            &config.telemetry,
-            &config.catalog.system,
-            ResourceOptions {
-                kind: ResourceKind::Server,
-            },
-        )?;
-        let reporter = global_system_event_reporter().ok_or("missing event reporter")?;
+        let reporter = test_event_reporter(&config)?;
         let handle = tokio::runtime::Handle::current();
         let runtime = RuntimeHandle::new(handle.clone(), handle);
         let options = DriverOptions::try_new(
@@ -1331,6 +1360,14 @@ mod tests {
         use super::{JobDescriptor, JobScheduler, JobState, TaskAttemptDescriptor, TaskState};
         use crate::job_graph::{JobGraph, JobGraphOptions, OutputMode, TaskPlacement};
         use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+        use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter};
+
+        struct Assigned(TaskAssignment);
+        impl TaskAssignmentGetter for Assigned {
+            fn get(&self, _key: &TaskKey) -> Option<&TaskAssignment> {
+                Some(&self.0)
+            }
+        }
 
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
         let producer: Arc<dyn ExecutionPlan> =
@@ -1410,6 +1447,26 @@ mod tests {
                 .count();
             // The region needs no more task slots than its readers do.
             assert_eq!(slots, 4);
+
+            let assigned = Assigned(TaskAssignment::Worker {
+                worker_id: crate::id::WorkerId::from(1),
+                slot: 0,
+            });
+            for (stage, consumer) in job.graph.stages().iter().enumerate() {
+                for input in &consumer.inputs {
+                    if input.stage == shared {
+                        let key = TaskKey {
+                            job_id: JobId::from(1),
+                            stage,
+                            partition: 0,
+                            attempt: 0,
+                        };
+                        let input = super::TaskInputBuilder::try_new(&job, &key, input, &assigned)?
+                            .build()?;
+                        assert!(input.preserve_batches);
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -1512,6 +1569,179 @@ mod tests {
             }
             assert_eq!(shared, Some(20));
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_retried_shared_stage_is_cleaned_up_again() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::Statistics;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+        use datafusion::physical_plan::union::UnionExec;
+        use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, Partitioning};
+        use sail_common::config::{AppConfig, SystemCatalogStore};
+        use sail_common_datafusion::error::CommonErrorCause;
+        use sail_physical_plan::shared_cte::{SharedCte, SharedCteExec, SharedCteScanExec};
+
+        use super::{
+            JobAction, JobDescriptor, JobScheduler, JobState, TaskAttemptDescriptor, TaskState,
+        };
+        use crate::job_graph::{JobGraph, JobGraphOptions, OutputMode};
+        use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+
+        let mut config = AppConfig::load()?;
+        config.catalog.system.store = SystemCatalogStore::Memory;
+        config.telemetry.export_traces = false;
+        config.telemetry.export_metrics = false;
+        config.telemetry.export_logs = false;
+        let reporter = test_event_reporter(&config)?;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let producer: Arc<dyn ExecutionPlan> =
+            MemorySourceConfig::try_new_exec(&[vec![], vec![]], schema.clone(), None)?;
+        let cte = Arc::new(SharedCte::new(
+            0,
+            "c".to_string(),
+            producer.output_partitioning().clone(),
+        ));
+        let statistics = Statistics::new_unknown(&schema);
+        let scan = |reference: usize| -> Arc<dyn ExecutionPlan> {
+            Arc::new(
+                SharedCteScanExec::new(cte.clone(), schema.clone(), &statistics, None)
+                    .with_reference(reference),
+            )
+        };
+        let union = UnionExec::try_new(vec![scan(0), scan(1)])?;
+        let input = Arc::new(RepartitionExec::try_new(
+            union,
+            Partitioning::RoundRobinBatch(3),
+        )?);
+        let plan = Arc::new(SharedCteExec::new(input, vec![(cte.clone(), producer)]));
+        let graph = JobGraph::try_new(
+            plan,
+            JobGraphOptions {
+                shuffle_backend: ShuffleBackendKind::Flight {
+                    compression: ShuffleCompression::None,
+                    connection_count: std::num::NonZeroUsize::MIN,
+                    initial_stream_window_size: None,
+                    initial_connection_window_size: None,
+                },
+                worker_slots: None,
+            },
+        )?;
+        let shared = graph
+            .stages()
+            .iter()
+            .position(|x| matches!(x.mode, OutputMode::Shared))
+            .ok_or("no shared stage")?;
+        let mut job =
+            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))?;
+        let job_id = JobId::from(1);
+        let r = job
+            .topology
+            .regions
+            .iter()
+            .position(|x| x.tasks.iter().any(|t| t.stage == shared))
+            .ok_or("no region")?;
+        let region_tasks: Vec<(usize, usize)> = job.topology.regions[r]
+            .tasks
+            .iter()
+            .map(|t| (t.stage, t.partition))
+            .collect();
+        let consumers = job.topology.stages[shared].consumers.clone();
+        let others: Vec<(usize, usize)> = region_tasks
+            .iter()
+            .copied()
+            .filter(|(s, _)| *s != shared && !consumers.contains(s))
+            .collect();
+        assert!(!others.is_empty(), "need a non-reader task in the region");
+        let attempt = |state| TaskAttemptDescriptor {
+            state,
+            messages: vec![],
+            cause: None,
+            job_output_fetched: false,
+        };
+        for stage in &mut job.stages {
+            for task in &mut stage.tasks {
+                task.attempts.push(attempt(TaskState::Running));
+            }
+        }
+        // Attempt 0: every reader succeeds; a downstream task in the region fails
+        // with a retryable error; the shared producer is still running.
+        let set = |job: &mut JobDescriptor, s: usize, p: usize, state, cause| {
+            if let Some(a) = job.stages[s].tasks[p].attempts.last_mut() {
+                a.state = state;
+                a.cause = cause;
+            }
+        };
+        for &(s, p) in &region_tasks {
+            if consumers.contains(&s) {
+                set(&mut job, s, p, TaskState::Succeeded, None);
+            }
+        }
+        let (fs, fp) = others[0];
+        set(
+            &mut job,
+            fs,
+            fp,
+            TaskState::Failed,
+            Some(CommonErrorCause::Execution("transient".into())),
+        );
+        let refresh = |job: &mut JobDescriptor| -> Vec<JobAction> {
+            let mut actions =
+                JobScheduler::cascade_cancel_task_attempts(job_id, job, &reporter, "s");
+            actions.extend(JobScheduler::clean_up_job_by_stage(
+                job_id, job, &reporter, "s",
+            ));
+            JobScheduler::update_task_regions(job, 3);
+            actions.extend(JobScheduler::schedule_task_regions(
+                job_id, job, &reporter, "s",
+            ));
+            actions
+        };
+        let cleanups = |actions: &[JobAction]| -> Vec<Vec<usize>> {
+            actions
+                .iter()
+                .filter_map(|a| match a {
+                    JobAction::CleanUpJob {
+                        stage: Some(s),
+                        attempts,
+                        ..
+                    } if *s == shared => Some(attempts.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let actions = refresh(&mut job);
+        assert_eq!(
+            cleanups(&actions),
+            vec![vec![0; job.stages[shared].tasks.len()]]
+        );
+        // The region is retried: every task of the region has a new attempt.
+        for &(s, p) in &region_tasks {
+            assert_eq!(job.stages[s].tasks[p].attempts.len(), 2, "task {s}/{p}");
+        }
+        // Attempt 1: every reader and the downstream task succeed; the shared producer
+        // is still waiting in ready() for its stream to be closed.
+        for &(s, p) in &region_tasks {
+            let state = if s == shared {
+                TaskState::Running
+            } else {
+                TaskState::Succeeded
+            };
+            set(&mut job, s, p, state, None);
+        }
+        let actions = refresh(&mut job);
+        assert_eq!(
+            cleanups(&actions),
+            vec![vec![1; job.stages[shared].tasks.len()]],
+            "the retried attempt of the shared stage is never cleaned up, so its producer waits forever"
+        );
         Ok(())
     }
 
@@ -1831,6 +2061,7 @@ mod tests {
         };
         let consumer = key(1, 0, 0);
         let original = TaskInputBuilder::try_new(&job, &consumer, &edge, &assignments)?.build()?;
+        assert!(!original.preserve_batches);
         let TaskInputLocator::Worker { keys } = original.locator.as_ref() else {
             return Err(crate::error::ExecutionError::InternalError(
                 "expected worker routing".into(),

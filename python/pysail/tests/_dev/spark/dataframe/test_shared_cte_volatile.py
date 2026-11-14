@@ -406,3 +406,98 @@ def test_cte_reading_a_volatile_cte_through_a_scalar_subquery_is_evaluated_once(
         "c AS (SELECT id AS k, (SELECT max(r) FROM c0) AS s FROM range(10)) "
     )
     assert spark.sql(ctes + query).collect()[0][0] == expected
+
+
+# A CTE whose own correlated subquery refers to the input of the CTE.
+CORRELATED_CTE = (
+    "c AS (SELECT a.id, uuid() AS u, (SELECT count(*) FROM range(10) b WHERE b.id = a.id) AS n FROM range(10) a)"
+)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        f"WITH {CORRELATED_CTE} SELECT count(*), sum(x.n) FROM c x JOIN c y ON x.id = y.id AND x.u = y.u",  # noqa: S608
+        f"SELECT * FROM (SELECT (WITH {CORRELATED_CTE} SELECT count(*) FROM c x JOIN c y ON x.id = y.id AND x.u = y.u), "  # noqa: S608
+        f"(WITH {CORRELATED_CTE} SELECT sum(x.n) FROM c x JOIN c y ON x.id = y.id AND x.u = y.u))",
+    ],
+    ids=["top-level", "scalar-subquery"],
+)
+def test_cte_with_its_own_correlated_subquery_is_evaluated_once(spark, sql):
+    assert [tuple(r) for r in spark.sql(sql).collect()] == [(10, 10)]
+
+
+@pytest.mark.parametrize(
+    ("limit", "rows"),
+    [("LIMIT 0", 4), ("LIMIT 1", 1), ("LIMIT 1 OFFSET 1", 4)],
+    ids=["fetch-0", "limit", "offset"],
+)
+def test_exists_over_a_volatile_limit_cte_reads_the_same_evaluation(spark, limit, rows):
+    """`b` is the same evaluation as `a`, so `EXISTS` is true for every row of `a`. An independent
+    evaluation of `b` is often empty, which 40 runs are very likely to find."""
+    sql = (
+        f"WITH c AS (SELECT id FROM range({rows}) WHERE rand() < 0.5 {limit}) "  # noqa: S608
+        "SELECT EXISTS (SELECT a.id FROM c b) AS e FROM c a"
+    )
+    for _ in range(40):
+        assert all(r.e for r in spark.sql(sql).collect())
+
+
+PAIRS = (
+    "WITH c AS (SELECT id, uuid() AS u FROM range(5)) "
+    "SELECT x.id % 2 AS k, CASE WHEN x.u = y.u THEN 'same' ELSE 'different' END AS cat "
+    "FROM c x JOIN c y ON x.id = y.id"
+)
+
+
+def test_pivot_values_of_volatile_cte(spark):
+    df = spark.sql(PAIRS).groupBy("k").pivot("cat").count().orderBy("k")
+    assert df.columns == ["k", "same"]
+    assert [tuple(row) for row in df.collect()] == [(0, 3), (1, 2)]
+
+
+def test_crosstab_of_volatile_cte(spark):
+    df = spark.sql(PAIRS).crosstab("k", "cat")
+    assert df.columns == ["k_cat", "same"]
+    assert sorted(tuple(row) for row in df.collect()) == [("0", 3), ("1", 2)]
+
+
+def test_tail_reads_the_same_evaluation_of_a_volatile_cte(spark):
+    # Every row joins itself only if both references read the same `rand()` values.
+    df = spark.sql(
+        "WITH c AS (SELECT id, rand() AS r FROM range(100)) "
+        "SELECT x.id FROM c x JOIN c y ON x.id = y.id AND x.r = y.r ORDER BY x.id"
+    )
+    assert [r.id for r in df.tail(5)] == [95, 96, 97, 98, 99]
+    df = spark.sql("WITH c AS (SELECT id, uuid() AS u FROM range(10)) SELECT x.id FROM c x JOIN c y ON x.u <> y.u")
+    assert len(df.tail(3)) == 3
+
+
+def test_tail_returns_the_last_rows_when_the_row_count_is_random(spark):
+    # The number of rows depends on `rand()`; the window columns come from the same
+    # evaluation as the rows, so the last rows are numbered `total - 2` to `total`.
+    df = spark.sql(
+        "WITH c AS (SELECT id FROM range(100) WHERE rand() < 0.5) "
+        "SELECT x.id, row_number() OVER (ORDER BY x.id) AS rn, count(*) OVER () AS total "
+        "FROM c x JOIN c y ON x.id = y.id ORDER BY x.id"
+    )
+    for _ in range(5):
+        rows = df.tail(3)
+        assert len(rows) == 3, rows
+        total = rows[0].total
+        assert [r.rn for r in rows] == [total - 2, total - 1, total], rows
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific error for DEFAULT")
+def test_default_in_volatile_cte_of_insert(spark, tmp_path):
+    """A DEFAULT in a CTE definition is found through the references to the CTE."""
+    spark.sql(f"CREATE TABLE t_default (a INT, b INT DEFAULT 42) USING parquet LOCATION '{tmp_path / 't'}'")
+    try:
+        sql = (
+            "INSERT INTO t_default WITH c AS (SELECT a, b, rand() AS r FROM VALUES (1, DEFAULT) AS v(a, b)) "
+            "SELECT a, b FROM c UNION ALL SELECT a, b FROM c"
+        )
+        with pytest.raises(Exception, match="DEFAULT is only supported as a standalone VALUES item"):
+            spark.sql(sql)
+    finally:
+        spark.sql("DROP TABLE t_default")

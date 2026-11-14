@@ -32,13 +32,13 @@ def check(spark, query, expected, *, shared, scans, must_share=False):
         assert text.count("RangeExec") == scans, text
 
 
-def nested(depth):
+def nested(depth, projection="count(*)"):
     ctes = ["c0 AS (SELECT id FROM range(10))"]
     ctes.extend(
         f"c{i} AS (SELECT a.id FROM c{i - 1} a JOIN c{i - 1} b ON a.id = b.id)"  # noqa: S608
         for i in range(1, depth + 1)
     )
-    return f"WITH {', '.join(ctes)} SELECT count(*) FROM c{depth}"  # noqa: S608
+    return f"WITH {', '.join(ctes)} SELECT {projection} FROM c{depth}"  # noqa: S608
 
 
 @pytest.mark.parametrize("depth", [12, 16, 24])
@@ -55,6 +55,24 @@ def test_nested_cte_plan_is_linear_in_depth(spark, depth):
         # whose join is evaluated by each of its two references in the third one.
         assert text.count("RangeExec") == 4  # noqa: PLR2004
     assert spark.sql(query).collect() == [(10,)]
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark expands deterministic CTEs at every reference")
+@pytest.mark.timeout(60)
+def test_nested_cte_insert_plan_is_linear_in_depth(spark, tmp_path):
+    # Searching for DEFAULT in a write must visit CTE definitions without expanding
+    # the 2^depth references. EXPLAIN plans the sink without writing any rows.
+    depth = 24
+    spark.sql(f"CREATE TABLE nested_cte_insert (id BIGINT) USING parquet LOCATION '{tmp_path / 'data'}'")
+    try:
+        text = plan(spark, f"INSERT INTO nested_cte_insert {nested(depth, projection='id')}")
+        assert "DataSinkExec" in text, text
+        assert "SharedCteExec" in text, text
+        assert len(text.splitlines()) < 10 * depth + 30
+        assert "RangeExec" in text, text
+        assert spark.table("nested_cte_insert").collect() == []
+    finally:
+        spark.sql("DROP TABLE nested_cte_insert")
 
 
 @pytest.mark.parametrize("references", [2, 3, 4])
@@ -374,3 +392,54 @@ def test_predicate_subquery_references_share_one_evaluation(spark):
     check(spark, query, [(858,)], shared=False, scans=2)
     query = f"WITH {CTE} SELECT sum(n) FROM c a WHERE k IN (SELECT k FROM c)"  # noqa: S608
     check(spark, query, [(1000,)], shared=True, scans=1)
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (
+            "WITH c AS (SELECT id FROM range(4) LIMIT 1 OFFSET 1) SELECT EXISTS (SELECT a.id FROM c b) FROM c a",
+            [(True,)],
+        ),
+        (
+            "WITH c AS (SELECT id FROM range(4) OFFSET 1) SELECT EXISTS (SELECT a.id FROM c b) FROM c a",
+            [(True,)] * 3,
+        ),
+        (
+            "WITH c AS (SELECT id FROM range(4) LIMIT 1 OFFSET 1) "
+            "SELECT EXISTS (SELECT 1 FROM c b WHERE b.id = a.id) FROM c a",
+            [(True,)],
+        ),
+        (
+            "WITH c AS (SELECT id FROM range(4) OFFSET 1) "
+            "SELECT a.id, EXISTS (SELECT 1 FROM c b WHERE b.id = a.id + 1) FROM c a ORDER BY a.id",
+            [(1, True), (2, True), (3, False)],
+        ),
+        (
+            "WITH c AS (SELECT max(id) AS m FROM range(4)) SELECT EXISTS (SELECT 1 FROM c b WHERE b.m = a.m) FROM c a",
+            [(True,)],
+        ),
+        (
+            "WITH c AS (SELECT max(id) AS m FROM range(4)) SELECT EXISTS (SELECT 1 FROM c b WHERE b.m <> a.m) FROM c a",
+            [(False,)],
+        ),
+        (
+            "WITH c AS (SELECT max(id) AS m FROM range(4)) "
+            "SELECT r.id, EXISTS (SELECT 1 FROM c b WHERE b.m = r.id) FROM range(5) r, c ORDER BY r.id",
+            [(0, False), (1, False), (2, False), (3, True), (4, False)],
+        ),
+    ],
+    ids=[
+        "limit-offset",
+        "offset",
+        "offset-correlated-filter",
+        "offset-correlated-filter-mismatch",
+        "aggregate-correlated-filter",
+        "aggregate-correlated-filter-mismatch",
+        "aggregate-other-outer-query",
+    ],
+)
+def test_correlated_exists_over_cte_reference(spark, query, expected):
+    """The CTE reference in the EXISTS subquery is read as a relation, whose definition
+    does not refer to the outer query."""
+    assert [tuple(r) for r in spark.sql(query).collect()] == expected

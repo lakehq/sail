@@ -342,12 +342,12 @@ impl TransportConnection {
         header.extend_from_slice(&chunk_index.to_be_bytes());
         header.extend_from_slice(&offset.to_be_bytes());
         header.extend_from_slice(&length.to_be_bytes());
+        // A late reply to an RPC on this connection is not the reply to this request.
         let response = self
-            .request(TransportFrame::new(
-                TransportFrameType::ChunkFetchRequest,
-                header,
-                Vec::new(),
-            ))
+            .request_until(
+                TransportFrame::new(TransportFrameType::ChunkFetchRequest, header, Vec::new()),
+                |response| response.rpc_id().is_none(),
+            )
             .await?;
         if response.frame_type != TransportFrameType::ChunkFetchSuccess
             || response.header.len() != 20
@@ -388,10 +388,6 @@ impl TransportConnection {
             )));
         }
         Ok(response.body.into_owned())
-    }
-
-    async fn request(&self, frame: TransportFrame<'_>) -> CelebornResult<TransportFrame<'static>> {
-        self.request_until(frame, |_| true).await
     }
 
     /// Sends the frame and returns the first response frame that is accepted, skipping
@@ -899,6 +895,44 @@ mod tests {
         drop(fetch);
         dropped_tx.send(()).unwrap();
         assert_eq!(connection.send_rpc(vec![1]).await.unwrap(), b"ok");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_late_reply_to_an_earlier_request_is_skipped_by_a_chunk_fetch() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            // The OpenStream RPC is answered twice.
+            TransportFrame::read(&mut socket).await.unwrap();
+            for frame in [
+                response(0, TransportFrameType::RpcResponse, b"handle"),
+                response(0, TransportFrameType::RpcFailure, b"failed again"),
+            ] {
+                frame.write(&mut socket).await.unwrap();
+            }
+            let request = TransportFrame::read(&mut socket).await.unwrap();
+            TransportFrame::new(
+                TransportFrameType::ChunkFetchSuccess,
+                request.header.to_vec(),
+                b"chunk".to_vec(),
+            )
+            .write(&mut socket)
+            .await
+            .unwrap();
+            TransportFrame::read(&mut socket).await.unwrap();
+            response(1, TransportFrameType::RpcResponse, b"ok")
+                .write(&mut socket)
+                .await
+                .unwrap();
+        });
+        let connection = TransportConnection::new("127.0.0.1", port, Duration::from_secs(5));
+        assert_eq!(connection.send_rpc(vec![1]).await.unwrap(), b"handle");
+        let fetched = connection.fetch_chunk(1, 0, 0, 5).await;
+        let next = connection.send_rpc(vec![2]).await;
+        assert_eq!(fetched.unwrap(), b"chunk");
+        assert_eq!(next.unwrap(), b"ok");
         server.abort();
     }
 }

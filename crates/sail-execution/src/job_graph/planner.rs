@@ -1869,11 +1869,12 @@ mod tests {
 
     #[test]
     fn volatile_shared_cte_in_a_region_larger_than_the_cluster_runs_with_its_readers_on_flight() {
-        // Flight cannot materialize the CTE, so its stage stays, and the job fails at
-        // scheduling as it would without the shared CTE.
+        // Flight keeps mandatory sharing. The existing scheduler reports the region's
+        // twenty-slot requirement when only ten slots are configured.
         let options = with_worker_slots(flight_shuffle_options(), Some(10));
         let graph = JobGraph::try_new(union_of_shared_cte(true), options).unwrap();
         assert_eq!(shared_stages(&graph), (true, vec![]));
+        assert_eq!(max_worker_slots(&graph), 20);
         assert!(
             graph
                 .stages
@@ -2653,5 +2654,28 @@ mod tests {
                 .iter()
                 .any(|input| matches!(input.mode, InputMode::Broadcast))
         );
+    }
+    #[test]
+    fn nested_volatile_shared_ctes_keep_one_evaluation_and_their_capacity_requirement() {
+        use sail_physical_plan::shared_cte::share_ctes;
+        for outer_volatile in [false, true] {
+            for slots in [None, Some(10), Some(40)] {
+                let body = UnionExec::try_new(vec![empty_plan(); 10]).unwrap();
+                let (inner, inner_scan) = shared_cte(0, true, body.clone());
+                let outer_body = UnionExec::try_new(vec![inner_scan(), inner_scan()]).unwrap();
+                let (outer, outer_scan) = shared_cte(1, outer_volatile, outer_body.clone());
+                let plan = share_ctes(
+                    UnionExec::try_new(vec![outer_scan(), outer_scan()]).unwrap(),
+                    vec![(inner, body), (outer, outer_body)],
+                )
+                .unwrap();
+                let graph =
+                    JobGraph::try_new(plan, with_worker_slots(flight_shuffle_options(), slots))
+                        .unwrap();
+                assert_eq!(shared_stages(&graph), (true, vec![]));
+                assert_eq!(graph.shared_readers.len(), 4);
+                assert_eq!(max_worker_slots(&graph), 40);
+            }
+        }
     }
 }

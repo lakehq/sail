@@ -22,6 +22,8 @@ pub struct TaskDefinition {
 pub struct TaskInput {
     pub stage: usize,
     pub locator: Arc<TaskInputLocator>,
+    /// Shared replay keeps producer batch sizes instead of coalescing them at every reader.
+    pub preserve_batches: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -138,10 +140,15 @@ impl TryFrom<r#gen::TaskDefinition> for TaskDefinition {
 
 impl From<TaskInput> for r#gen::TaskInput {
     fn from(value: TaskInput) -> Self {
-        let TaskInput { stage, locator } = value;
+        let TaskInput {
+            stage,
+            locator,
+            preserve_batches,
+        } = value;
         r#gen::TaskInput {
             stage: stage as u64,
             locator: Some(locator.as_ref().clone().into()),
+            preserve_batches,
         }
     }
 }
@@ -161,6 +168,7 @@ impl TryFrom<r#gen::TaskInput> for TaskInput {
         Ok(TaskInput {
             stage: value.stage as usize,
             locator: Arc::new(locator),
+            preserve_batches: value.preserve_batches,
         })
     }
 }
@@ -608,5 +616,30 @@ impl TaskOutput {
                 Ok(ShufflePartitioning::RoundRobinRow(*channels))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use prost::Message;
+
+    use super::*;
+
+    #[test]
+    fn task_input_batch_policy_round_trips() -> ExecutionResult<()> {
+        for preserve_batches in [false, true] {
+            let input = TaskInput {
+                stage: 7,
+                locator: Arc::new(TaskInputLocator::Worker { keys: vec![] }),
+                preserve_batches,
+            };
+            let encoded = r#gen::TaskInput::from(input).encode_to_vec();
+            let decoded = r#gen::TaskInput::decode(encoded.as_slice())
+                .map_err(|e| ExecutionError::InvalidArgument(e.to_string()))?;
+            let input = TaskInput::try_from(decoded)?;
+            assert_eq!(input.stage, 7);
+            assert_eq!(input.preserve_batches, preserve_batches);
+        }
+        Ok(())
     }
 }

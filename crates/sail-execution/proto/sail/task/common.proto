@@ -11,6 +11,7 @@ message TaskDefinition {
 message TaskInput {
   uint64 stage = 1;
   TaskInputLocator locator = 2;
+  bool preserve_batches = 3;
 }
 
 message TaskInputLocator {

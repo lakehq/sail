@@ -146,6 +146,7 @@ impl TaskPreparation {
                     return Ok(Transformed::yes(Arc::new(ShuffleReadExec::new(
                         streams.reader(key.clone(), input.clone(), placeholder.schema()),
                         placeholder.properties().clone(),
+                        input.preserve_batches,
                     ))));
                 }
                 Ok(Transformed::no(node))

@@ -1,9 +1,10 @@
 import random
+from collections import defaultdict
 
 import pytest
 from pyspark.errors import PySparkException
 
-from pysail.testing.spark.session import spark_connect_server
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.common import is_jvm_spark, shares_deterministic_ctes
 from pysail.tests._dev.spark.dataframe.test_shared_cte_volatile import ROWS, VOLATILE, cte, query
 
@@ -127,3 +128,79 @@ def test_scalar_subquery_stage_reads_the_same_evaluation(spark, function):
     assert spark.sql(sql).collect()[0][0] >= 1
     sql = f"{cte(VOLATILE[function])} SELECT count_if(a.r <=> b.r) FROM c a JOIN c b ON a.id = b.id"  # noqa: S608
     assert spark.sql(sql).collect() == [(ROWS,)]
+
+
+@pytest.fixture(scope="module")
+def small_cluster_spark(request):
+    envs = {
+        "SAIL_MODE": "local-cluster",
+        "SAIL_CLUSTER__WORKER_MAX_COUNT": "1",
+        "SAIL_CLUSTER__WORKER_TASK_SLOTS": str(getattr(request, "param", 10)),
+    }
+    with spark_connect_server(envs=envs) as server, spark_session_factory(server.remote) as sessions:
+        yield sessions.create()
+
+
+@pytest.mark.timeout(60)
+@pytest.mark.parametrize(
+    ("small_cluster_spark", "function", "depth", "readers"),
+    [
+        pytest.param(20, "rand()", 1, 2, id="rand-leaf-twenty-slots"),
+        pytest.param(20, "uuid()", 1, 2, id="uuid-leaf-twenty-slots"),
+        pytest.param(40, "uuid()", 2, 2, id="uuid-nested-forty-slots"),
+    ],
+    indirect=["small_cluster_spark"],
+)
+def test_union_of_volatile_cte_with_sufficient_capacity(small_cluster_spark, function, depth, readers):
+    """Successfully scheduled references must share one evaluation."""
+    ctes = [f"c0 AS (SELECT id, {function} AS r FROM range(0, 100, 1, 10))"]  # noqa: S608
+    ctes.extend(
+        f"c{i} AS (SELECT * FROM c{i - 1} UNION ALL SELECT * FROM c{i - 1})"  # noqa: S608
+        for i in range(1, depth)
+    )
+    branches = " UNION ALL ".join([f"SELECT * FROM c{depth - 1}"] * readers)  # noqa: S608
+    query = f"WITH {', '.join(ctes)} {branches}"
+    values = defaultdict(list)
+    for row in small_cluster_spark.sql(query).collect():
+        values[row.id].append(row.r)
+    assert set(values) == set(range(100))
+    copies = readers * 2 ** (depth - 1)
+    assert all(len(items) == copies and len(set(items)) == 1 for items in values.values())
+    # Finishing the query must release its worker capacity for subsequent jobs.
+    assert small_cluster_spark.range(1).collect() == [(0,)]
+
+
+@pytest.mark.timeout(60)
+def test_union_of_volatile_cte_rejects_insufficient_capacity(small_cluster_spark):
+    query = "WITH c AS (SELECT id, uuid() AS r FROM range(0, 100, 1, 10)) SELECT * FROM c UNION ALL SELECT * FROM c"
+    # Insufficient capacity must report the existing error, rather than evaluating
+    # the volatile producer independently for each reference.
+    with pytest.raises(
+        PySparkException,
+        match=r"task region requires 20 worker task slots, but the configured maximum is 10",
+    ):
+        small_cluster_spark.sql(query).collect()
+    assert small_cluster_spark.range(1).collect() == [(0,)]
+
+
+@pytest.mark.timeout(60)
+@pytest.mark.parametrize("small_cluster_spark", [20], indirect=True, ids=["twenty-slots"])
+def test_insert_from_volatile_cte_on_finite_cluster(small_cluster_spark, tmp_path):
+    # The commit stage gathers twenty writer partitions, which also require twenty
+    # slots on the merge base. This exercises the supported write path.
+    small_cluster_spark.sql(
+        f"CREATE TABLE shared_cte_capacity_write (id BIGINT, r STRING) USING delta LOCATION '{tmp_path / 'data'}'"
+    )
+    try:
+        small_cluster_spark.sql(
+            "INSERT INTO shared_cte_capacity_write "
+            "WITH c AS (SELECT id, uuid() AS r FROM range(0, 100, 1, 10)) "
+            "SELECT * FROM c UNION ALL SELECT * FROM c"
+        )
+        values = defaultdict(list)
+        for row in small_cluster_spark.table("shared_cte_capacity_write").collect():
+            values[row.id].append(row.r)
+        assert set(values) == set(range(100))
+        assert all(len(items) == 2 and len(set(items)) == 1 for items in values.values())
+    finally:
+        small_cluster_spark.sql("DROP TABLE IF EXISTS shared_cte_capacity_write")

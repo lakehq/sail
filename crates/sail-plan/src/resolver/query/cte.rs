@@ -1,7 +1,11 @@
 use std::any::Any;
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 
+use datafusion::arrow::array::RecordBatch;
+use datafusion::physical_plan::collect;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias};
 use sail_common::spec;
@@ -18,11 +22,13 @@ use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
 
 use crate::error::PlanResult;
+use crate::plan_with_shared_ctes;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 use crate::scalar_subquery_key::is_volatile_call;
 use crate::shared_cte::{
-    CteDefinition, CteReference, inline_references, project_in_references, renew_cte_definitions,
+    CteDefinition, CteReference, contains_reference, inline_deterministic_references,
+    inline_references, project_in_references, renew_cte_definitions,
 };
 
 /// Whether a named relation is a CTE definition or a parameter view.
@@ -354,6 +360,36 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         Ok(inline_references(plan, &|_| true)?)
     }
+
+    /// Executes a plan whose output the resolver needs. Each volatile CTE that the plan
+    /// refers to is evaluated once for all its references in the plan, as in a query.
+    pub(in crate::resolver) fn execute_auxiliary_plan(
+        &self,
+        plan: LogicalPlan,
+    ) -> Pin<Box<dyn Future<Output = PlanResult<Vec<RecordBatch>>> + Send + '_>> {
+        // Keep auxiliary execution out of the recursive resolver futures, including
+        // the ordinary planning path used when there are no shared references.
+        Box::pin(async move {
+            let plan = inline_deterministic_references(plan)?;
+            if !contains_reference(&plan)? {
+                return Ok(self.ctx.execute_logical_plan(plan).await?.collect().await?);
+            }
+            // The plan refers to copies of the definitions, so that planning it leaves the
+            // definitions as they are for the query.
+            let mut index = 0;
+            let plan = renew_cte_definitions(
+                plan,
+                &mut || {
+                    index += 1;
+                    index - 1
+                },
+                &mut |_| {},
+            )?;
+            let session_state = self.ctx.state();
+            let (_, plan) = plan_with_shared_ctes(&session_state, plan).await?;
+            Ok(collect(plan, session_state.task_ctx()).await?)
+        })
+    }
 }
 
 /// Returns whether the references to the CTE definition can share one evaluation of it,
@@ -390,12 +426,15 @@ fn shareable_definition(plan: &Arc<LogicalPlan>, nested: bool) -> PlanResult<Opt
         };
     }
     let trivial = input.inputs().is_empty() && !subquery;
-    let mut shareable = true;
+    // Like Spark, only the operators of the definition can refer to the outer query.
+    // A subquery in the definition refers to the definition's own columns, since a
+    // query can only refer to the columns of its immediate outer query.
+    let mut shareable = !(nested && plan.exists(|plan| Ok(plan.contains_outer_reference()))?);
     let mut volatile = false;
     // Whether each reference evaluates the definition itself unless it is volatile.
     let mut per_reference = false;
     plan.apply_with_subqueries(|plan| {
-        shareable = !(nested && plan.contains_outer_reference())
+        shareable = shareable
             && match plan {
                 LogicalPlan::TableScan(scan) => {
                     let python = is_python_source(&scan.source);
@@ -481,4 +520,53 @@ fn is_nondeterministic_udtf(node: &dyn Any) -> bool {
     node.downcast_ref::<MapPartitionsNode>()
         .and_then(|node| (node.udf().as_ref() as &dyn Any).downcast_ref::<PySparkUDTF>())
         .is_some_and(|udtf| !udtf.deterministic())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::DataType;
+    use datafusion::functions::math::expr_fn::random;
+    use datafusion_common::Spans;
+    use datafusion_expr::{Expr, LogicalPlanBuilder, Subquery, col, lit, out_ref_col};
+
+    use super::shareable_definition;
+    use crate::error::PlanResult;
+
+    fn values(alias: &str) -> PlanResult<LogicalPlanBuilder> {
+        Ok(LogicalPlanBuilder::values(vec![vec![lit(1i64)]])?.alias(alias)?)
+    }
+
+    #[test]
+    fn test_nested_definition_with_outer_reference() -> PlanResult<()> {
+        // A subquery in the definition that refers to a column of the definition.
+        let subquery = values("b")?
+            .project(vec![out_ref_col(DataType::Int64, "v.column1")])?
+            .build()?;
+        let subquery = Expr::ScalarSubquery(Subquery {
+            subquery: Arc::new(subquery),
+            outer_ref_columns: vec![out_ref_col(DataType::Int64, "v.column1")],
+            spans: Spans::new(),
+        });
+        let plan = values("v")?
+            .project(vec![
+                col("v.column1"),
+                random().alias("r"),
+                subquery.alias("s"),
+            ])?
+            .build()?;
+        assert_eq!(shareable_definition(&Arc::new(plan), true)?, Some(true));
+
+        // An operator of the definition that refers to a column of the outer query.
+        let plan = values("v")?
+            .project(vec![
+                col("v.column1"),
+                random().alias("r"),
+                out_ref_col(DataType::Int64, "o.id").alias("o"),
+            ])?
+            .build()?;
+        assert_eq!(shareable_definition(&Arc::new(plan), true)?, None);
+        Ok(())
+    }
 }

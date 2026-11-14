@@ -12,6 +12,7 @@ from pyspark.errors import PySparkException
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+from pysail.testing.spark.utils.common import shares_deterministic_ctes
 from pysail.tests._dev.spark.execution.test_shuffle_storage import check_retried_cte_query_fails
 
 if TYPE_CHECKING:
@@ -172,7 +173,7 @@ _SHARED_CTE = "c AS (SELECT id % 7 AS k, count(*) AS n FROM range(1000) GROUP BY
 )
 def test_shared_cte_with_celeborn_shuffle(spark, query, expected):
     assert [tuple(row) for row in spark.sql(query).collect()] == expected
-    assert "SharedCteExec" in spark.sql(f"EXPLAIN {query}").collect()[0][0]
+    assert ("SharedCteExec" in spark.sql(f"EXPLAIN {query}").collect()[0][0]) == shares_deterministic_ctes()
 
 
 def test_shared_cte_error_with_celeborn_shuffle(spark):

@@ -370,27 +370,21 @@ impl PlanResolver<'_> {
         let left_column = self.resolve_one_column(input.schema(), left_column.as_ref(), state)?;
         let right_column = self.resolve_one_column(input.schema(), right_column.as_ref(), state)?;
 
-        let projected_plan =
-            LogicalPlanBuilder::from(Self::inline_shared_cte_references(input.clone())?)
-                .project(vec![
-                    Expr::Cast(expr::Cast::new(
-                        Box::new(col(right_column.clone())),
-                        DataType::Utf8,
-                    ))
-                    .alias_qualified(right_column.relation.clone(), right_column.name.clone()),
-                ])?
-                .build()?;
+        let projected_plan = LogicalPlanBuilder::from(input.clone())
+            .project(vec![
+                Expr::Cast(expr::Cast::new(
+                    Box::new(col(right_column.clone())),
+                    DataType::Utf8,
+                ))
+                .alias_qualified(right_column.relation.clone(), right_column.name.clone()),
+            ])?
+            .build()?;
         let distinct_values = LogicalPlanBuilder::from(projected_plan)
             .project(vec![Expr::Column(right_column.clone())])?
             .distinct()?
             .build()?;
         // TODO: This can be expensive for large input datasets
-        let distinct_values_batches = self
-            .ctx
-            .execute_logical_plan(distinct_values)
-            .await?
-            .collect()
-            .await?;
+        let distinct_values_batches = self.execute_auxiliary_plan(distinct_values).await?;
 
         let mut unique_values: Vec<(String, String)> = vec![];
         for batch in distinct_values_batches {

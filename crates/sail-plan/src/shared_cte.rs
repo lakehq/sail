@@ -872,7 +872,7 @@ fn with_optimized_schemas(plan: LogicalPlan) -> Result<LogicalPlan> {
     .data()
 }
 
-fn contains_reference(plan: &LogicalPlan) -> Result<bool> {
+pub(crate) fn contains_reference(plan: &LogicalPlan) -> Result<bool> {
     let mut found = false;
     plan.apply_with_subqueries(|plan| {
         if let LogicalPlan::TableScan(scan) = plan
