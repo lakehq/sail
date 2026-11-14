@@ -1,9 +1,13 @@
 use std::sync::Arc;
 
+use arrow::array::AsArray;
+use arrow::datatypes::Int64Type;
+use datafusion::functions_aggregate::count::count_udaf;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{Expr, Extension, Limit, LogicalPlan};
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
+use datafusion_expr::expr::AggregateFunctionParams;
+use datafusion_expr::{Aggregate, Expr, Limit, LogicalPlan, expr, lit};
 use sail_common::spec;
-use sail_logical_plan::tail::TailNode;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -63,14 +67,41 @@ impl PlanResolver<'_> {
             Expr::Literal(ScalarValue::UInt64(Some(value)), _metadata) => Ok(*value as i64),
             _ => Err(PlanError::invalid("`tail` limit must be an integer")),
         }?;
-        let Ok(fetch) = usize::try_from(limit_num) else {
-            return Err(PlanError::AnalysisError(format!(
-                "The limit like expression \"{limit_num}\" is invalid. \
-                 The tail expression must be equal to or greater than 0, but got {limit_num}."
-            )));
-        };
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(TailNode::new(Arc::new(input), fetch)),
+        // TODO: This can be expensive for large input datasets
+        //  According to Spark's docs:
+        //    Running tail requires moving data into the application's driver process, and doing so
+        //    with a very large `num` can crash the driver process with OutOfMemoryError.
+        let count_alias = state.register_field_name("COUNT(*)");
+        let count_expr = Expr::AggregateFunction(expr::AggregateFunction {
+            func: count_udaf(),
+            params: AggregateFunctionParams {
+                args: vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
+                distinct: false,
+                filter: None,
+                order_by: vec![],
+                null_treatment: None,
+            },
+        })
+        .alias(count_alias);
+        let count_plan = LogicalPlan::Aggregate(Aggregate::try_new(
+            Arc::new(input.clone()),
+            vec![],
+            vec![count_expr],
+        )?);
+        let count_batches = self
+            .ctx
+            .execute_logical_plan(count_plan)
+            .await?
+            .collect()
+            .await?;
+        let count = count_batches[0]
+            .column(0)
+            .as_primitive::<Int64Type>()
+            .value(0);
+        Ok(LogicalPlan::Limit(Limit {
+            skip: Some(Box::new(lit(0i64.max(count - limit_num)))),
+            fetch: Some(Box::new(limit)),
+            input: Arc::new(input),
         }))
     }
 }

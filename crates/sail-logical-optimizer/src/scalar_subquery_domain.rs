@@ -61,11 +61,6 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                                         && correlated_equality_key(expr, true).is_none()
                                 });
                         }
-                        // The domain joins the input of the correlated filter, so a join below
-                        // the filter only produces that input.
-                        LogicalPlan::Join(_) if filters > 0 => {
-                            unsupported |= node.contains_outer_reference();
-                        }
                         LogicalPlan::Join(_)
                         | LogicalPlan::Union(_)
                         | LogicalPlan::Window(_)

@@ -767,43 +767,16 @@ fn plan_job_graph_stages(
         let properties = coalesce.properties().clone();
         let fetch = coalesce.fetch();
         let child = subtree.only_child()?;
-        match (fetch, consumption) {
-            (Some(f), ShuffleConsumption::Multiple) => {
-                // Every task of the stage reads the partition, so the limit is applied
-                // once in a stage of its own, and its output is read by every task, rather
-                // than by each task, which would keep different rows.
-                let shuffled = create_shuffle(
-                    child,
-                    graph,
-                    properties.clone(),
-                    ShuffleConsumption::Single,
-                    scalar_context,
-                )?;
-                let limit = Arc::new(GlobalLimitExec::new(shuffled, 0, Some(f)));
-                let limit = PlannedSubtree::without_pending_scalar_subquery_expr(limit);
-                PlannedSubtree::without_pending_scalar_subquery_expr(create_shuffle(
-                    limit,
-                    graph,
-                    properties,
-                    ShuffleConsumption::Multiple,
-                    None,
-                )?)
-            }
-            (Some(f), ShuffleConsumption::Single) => {
-                let shuffled =
-                    create_shuffle(child, graph, properties, consumption, scalar_context)?;
-                PlannedSubtree::without_pending_scalar_subquery_expr(Arc::new(GlobalLimitExec::new(
-                    shuffled,
-                    0,
-                    Some(f),
-                ))
-                    as Arc<dyn ExecutionPlan>)
-            }
-            (None, _) => {
-                let shuffled =
-                    create_shuffle(child, graph, properties, consumption, scalar_context)?;
-                PlannedSubtree::without_pending_scalar_subquery_expr(shuffled)
-            }
+        let shuffled = create_shuffle(child, graph, properties, consumption, scalar_context)?;
+        if let Some(f) = fetch {
+            PlannedSubtree::without_pending_scalar_subquery_expr(Arc::new(GlobalLimitExec::new(
+                shuffled,
+                0,
+                Some(f),
+            ))
+                as Arc<dyn ExecutionPlan>)
+        } else {
+            PlannedSubtree::without_pending_scalar_subquery_expr(shuffled)
         }
     } else if subtree.plan.is::<SortPreservingMergeExec>() {
         let child = subtree.only_child()?;
@@ -1946,59 +1919,6 @@ mod tests {
                 "{} stages",
                 graph.stages.len()
             );
-        }
-    }
-
-    #[test]
-    fn broadcast_limit_is_applied_once() {
-        use datafusion::common::tree_node::TreeNode;
-
-        for options in [
-            flight_shuffle_options(),
-            blocking_shuffle_options(),
-            celeborn_shuffle_options(),
-        ] {
-            let limited =
-                CoalescePartitionsExec::new(UnionExec::try_new(vec![empty_plan(); 4]).unwrap())
-                    .with_fetch(Some(3));
-            let key = col("id", &schema()).unwrap();
-            let join = HashJoinExec::try_new(
-                Arc::new(limited),
-                UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
-                vec![(Arc::clone(&key), key)],
-                None,
-                &JoinType::Inner,
-                None,
-                PartitionMode::CollectLeft,
-                NullEquality::NullEqualsNothing,
-                false,
-            )
-            .unwrap();
-            let graph = JobGraph::try_new(Arc::new(join), options).unwrap();
-            let limits = graph
-                .stages
-                .iter()
-                .filter(|stage| {
-                    stage
-                        .plan
-                        .exists(|plan| Ok(plan.is::<GlobalLimitExec>()))
-                        .unwrap()
-                })
-                .collect::<Vec<_>>();
-            // The limit is applied by one task, whose output every task of the join reads.
-            assert_eq!(limits.len(), 1);
-            assert_eq!(limits[0].plan.output_partitioning().partition_count(), 1);
-            let join = graph
-                .stages
-                .iter()
-                .find(|stage| {
-                    stage
-                        .plan
-                        .exists(|plan| Ok(plan.is::<HashJoinExec>()))
-                        .unwrap()
-                })
-                .unwrap();
-            assert_eq!(join.plan.output_partitioning().partition_count(), 4);
         }
     }
 
