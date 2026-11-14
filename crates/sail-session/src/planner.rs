@@ -13,6 +13,7 @@ use datafusion::physical_expr::{
     LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
+use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
@@ -59,6 +60,7 @@ use sail_logical_plan::streaming::filter::StreamFilterNode;
 use sail_logical_plan::streaming::limit::StreamLimitNode;
 use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
+use sail_logical_plan::tail::TailNode;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
@@ -78,6 +80,7 @@ use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
+use sail_physical_plan::tail::TailExec;
 use sail_plan::catalog::CatalogCommandNode;
 use sail_plan::procedure::LakeProcedureNode;
 
@@ -479,6 +482,16 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 distribution,
                 node.fetch(),
             ))
+        } else if let Some(node) = node.as_any().downcast_ref::<TailNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!("TailExec requires exactly one physical input");
+            };
+            if node.fetch() == 0 {
+                // Remove producers before distributed job planning, not just at execution.
+                Arc::new(EmptyExec::new(input.schema()))
+            } else {
+                Arc::new(TailExec::new(input.clone(), node.fetch()))
+            }
         } else if let Some(node) = node.as_any().downcast_ref::<SchemaPivotNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("SchemaPivotExec requires exactly one physical input");
@@ -1136,6 +1149,56 @@ mod tests {
         LogicalPlanBuilder::scan("range", provider_as_source(provider), None)?
             .project(vec![col("id").alias(name)])?
             .build()
+    }
+
+    #[tokio::test]
+    async fn zero_tail_removes_input_before_distributed_planning() -> datafusion_common::Result<()>
+    {
+        let fail = create_udf(
+            "tail_input_error",
+            vec![DataType::Int64],
+            DataType::Int64,
+            Volatility::Volatile,
+            Arc::new(|_| datafusion_common::exec_err!("tail input evaluated")),
+        );
+        let input = LogicalPlanBuilder::from(range_table_scan("id", &[0, 10, 1, 4])?)
+            .project(vec![fail.call(vec![col("id")]).alias("value")])?
+            .build()?;
+        let state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_query_planner(new_query_planner())
+            .build();
+        let context = SessionContext::new_with_state(state);
+        let state = context.state();
+        let physical_input = state
+            .query_planner()
+            .create_physical_plan(&input, &state)
+            .await?;
+        assert_eq!(physical_input.output_partitioning().partition_count(), 4);
+        for fetch in [0, 1] {
+            let logical = LogicalPlan::Extension(datafusion_expr::Extension {
+                node: Arc::new(TailNode::new(Arc::new(input.clone()), fetch)),
+            });
+            let physical = state
+                .query_planner()
+                .create_physical_plan(&logical, &state)
+                .await?;
+            assert_eq!(physical.schema(), input.schema().inner().clone());
+            if fetch == 0 {
+                // A local execute() shortcut is insufficient: the cluster scheduler
+                // must not see any upstream producer stages in the physical plan.
+                assert!(physical.is::<EmptyExec>());
+                assert!(physical.children().is_empty());
+                assert!(collect(physical, context.task_ctx()).await?.is_empty());
+            } else {
+                let error = collect(physical, context.task_ctx()).await.unwrap_err();
+                assert!(
+                    error.to_string().contains("tail input evaluated"),
+                    "{error}"
+                );
+            }
+        }
+        Ok(())
     }
 
     #[tokio::test]

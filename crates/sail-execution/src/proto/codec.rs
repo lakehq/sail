@@ -338,6 +338,7 @@ use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
+use sail_physical_plan::tail::TailExec;
 use sail_python_udf::config::PySparkUdfConfig;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
@@ -502,6 +503,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let node = SystemTableExec::try_new(table, projection, filters, fetch)?;
                 Ok(Arc::new(node))
             }
+            NodeKind::Tail(r#gen::TailExecNode { input, fetch }) => Ok(Arc::new(TailExec::new(
+                try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
+                fetch as usize,
+            ))),
             NodeKind::SchemaPivot(r#gen::SchemaPivotExecNode {
                 input,
                 names,
@@ -2392,6 +2397,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 projection,
                 filters,
                 fetch,
+            })
+        } else if let Some(tail) = node.downcast_ref::<TailExec>() {
+            NodeKind::Tail(r#gen::TailExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    tail.input().clone(),
+                )?,
+                fetch: tail.fetch() as u64,
             })
         } else if let Some(schema_pivot) = node.downcast_ref::<SchemaPivotExec>() {
             let schema = try_encode_schema(schema_pivot.schema().as_ref())?;
@@ -7066,6 +7080,26 @@ mod tests {
             decoded.properties().output_partitioning().partition_count(),
             6
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_tail() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_physical_plan::tail::TailExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(TailExec::new(Arc::new(EmptyExec::new(schema.clone())), 3));
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<TailExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a TailExec"))?;
+        assert_eq!(decoded.fetch(), 3);
+        assert_eq!(decoded.schema(), schema);
+        assert!(decoded.input().is::<EmptyExec>());
         Ok(())
     }
 
