@@ -3931,7 +3931,7 @@ name: "test_derived_tpcds_query_plan[61]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#287@0 as promotions, #288@1 as total, #289@2 as ((promotions / total) * 100)]
+    ProjectionExec: expr=[#287@0 as promotions, #288@1 as total, #289@2 as ((CAST(promotions AS DECIMAL(15,4)) / CAST(total AS DECIMAL(15,4))) * 100)]
       SortExec: TopK(fetch=100), expr=[#288@1 ASC], preserve_partitioning=[false]
         ProjectionExec: expr=[#152@0 as #287, #286@1 as #288, CAST(#152@0 AS Decimal128(15, 4)) / CASE WHEN #286@1 = 0.00 THEN CAST(raise_error(Division by zero) AS Decimal128(15, 4)) ELSE CAST(#286@1 AS Decimal128(15, 4)) END * 100 as #289]
           CrossJoinExec

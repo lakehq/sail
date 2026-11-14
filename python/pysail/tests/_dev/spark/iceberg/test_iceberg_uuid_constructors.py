@@ -339,8 +339,15 @@ def test_uuid_cast_preserves_column_alias_and_chain_names(spark, cast, entry):
         try:
             frames = [
                 (spark.sql(f"SELECT {cast}(s AS UUID) FROM uuid_cast_source"), "s"),  # noqa: S608
-                (spark.sql(f"SELECT {cast}({cast}(s AS UUID) AS UUID) FROM uuid_cast_source"), "s"),  # noqa: S608
-                (spark.sql(f"SELECT {cast}({cast}(s AS UUID) AS BINARY) FROM uuid_cast_source"), "s"),  # noqa: S608
+                # SQL keeps the name of the child through a single cast only.
+                (
+                    spark.sql(f"SELECT {cast}({cast}(s AS UUID) AS UUID) FROM uuid_cast_source"),  # noqa: S608
+                    f"{cast}({cast}(s AS UUID) AS UUID)",
+                ),
+                (
+                    spark.sql(f"SELECT {cast}({cast}(s AS UUID) AS BINARY) FROM uuid_cast_source"),  # noqa: S608
+                    f"{cast}({cast}(s AS UUID) AS BINARY)",
+                ),
                 (spark.sql(f"SELECT {cast}(s AS UUID) AS renamed FROM uuid_cast_source"), "renamed"),  # noqa: S608
                 (spark.sql(f"SELECT {cast}('{VALUE}' AS UUID)"), f"{cast}({VALUE} AS UUID)"),
             ]

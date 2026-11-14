@@ -191,7 +191,28 @@ def query_column_types(datatable, query, spark):
 @when(parsers.parse("dataframe for {case}"), target_fixture="dataframe")
 def dataframe_for(case, spark):
     """Builds a DataFrame for a named BDD case."""
+
+    def cast_input():
+        return spark.range(1).select(F.col("id").cast("int").alias("k"))
+
     cases = {
+        "cast of a column": lambda: cast_input().select(F.col("k").cast("bigint")),
+        "chained casts of a column": lambda: cast_input().select(F.col("k").cast("bigint").cast("string")),
+        "cast of a column in arithmetic": lambda: cast_input().select(F.col("k").cast("bigint") + 1),
+        "chained casts of a column from a string expression": lambda: cast_input().selectExpr(
+            "CAST(CAST(k AS BIGINT) AS STRING)"
+        ),
+        "group by a cast of a column": lambda: cast_input().groupBy(F.col("k").cast("bigint")).count(),
+        "group by chained casts of a column": lambda: cast_input()
+        .groupBy(F.col("k").cast("bigint").cast("string"))
+        .count(),
+        "rollup by a cast of a column": lambda: cast_input().rollup(F.col("k").cast("bigint")).count(),
+        "pivot grouped by a cast of a column": lambda: cast_input()
+        .groupBy(F.col("k").cast("bigint"))
+        .pivot("k", [0])
+        .count(),
+        "aggregate a cast of a column": lambda: cast_input().groupBy("k").agg(F.col("k").cast("bigint")),
+        "aggregate a cast of an aggregate": lambda: cast_input().groupBy("k").agg(F.max("k").cast("string")),
         "null literal": lambda: spark.range(1).select(F.lit(None).alias("result")),
         "null literal alias projection": lambda: (
             spark.range(1).select(F.lit(None).alias("value")).select(F.col("value").alias("result"))

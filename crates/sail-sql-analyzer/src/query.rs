@@ -282,7 +282,10 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
 
     let projection = projection
         .into_items()
-        .map(from_ast_named_expression)
+        .map(|x| {
+            from_ast_named_expression(x)
+                .map(|x| x.with_projection_item_cast_naming(spec::CastNaming::SqlProjectionItem))
+        })
         .collect::<SqlResult<_>>()?;
 
     let group_by = group_by

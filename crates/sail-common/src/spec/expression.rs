@@ -32,8 +32,7 @@ pub enum Expr {
     Cast {
         expr: Box<Expr>,
         cast_to_type: DataType,
-        /// Whether to rename the expression to `CAST(... AS ...)`.
-        rename: bool,
+        naming: CastNaming,
         is_try: bool,
     },
     UnresolvedRegex {
@@ -150,6 +149,39 @@ pub enum Expr {
     },
 }
 
+impl Expr {
+    /// Returns the expression with the naming rule of an item of a projection list applied
+    /// to a cast at the top of the expression, where the cast keeps the name of its child
+    /// when the child is a named expression. The rule belongs to the projection list rather
+    /// than to the cast itself: the same cast nested in another expression is always named
+    /// `CAST(... AS ...)`, and a cast written in `selectExpr` follows the DataFrame API
+    /// rules rather than the SQL ones.
+    pub fn with_projection_item_cast_naming(self, naming: CastNaming) -> Self {
+        match self {
+            Self::Cast {
+                expr,
+                cast_to_type,
+                naming: _,
+                is_try,
+            } => Self::Cast {
+                // The DataFrame API looks through a whole chain of casts for a named
+                // expression, so that `df.a.cast("int").cast("string")` is named `a`,
+                // while SQL looks through a single cast only.
+                expr: match naming {
+                    CastNaming::DataFrameProjectionItem => {
+                        Box::new(expr.with_projection_item_cast_naming(naming))
+                    }
+                    CastNaming::Cast | CastNaming::SqlProjectionItem => expr,
+                },
+                cast_to_type,
+                naming,
+                is_try,
+            },
+            expr => expr,
+        }
+    }
+}
+
 /// An identifier with only one part.
 /// It is the raw value without quotes or escape characters.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -214,6 +246,25 @@ impl From<ObjectName> for Vec<String> {
     fn from(name: ObjectName) -> Self {
         name.0.into_iter().map(String::from).collect()
     }
+}
+
+/// How a cast expression is named.
+///
+/// A cast that is the top-level expression of a projection item keeps the name of its
+/// child when the child is a named expression, but the two Spark front ends unfold a
+/// chain of casts to a different depth before giving up on that rule. Anywhere else,
+/// including inside another expression, a cast is named `CAST(... AS ...)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CastNaming {
+    /// Name the expression `CAST(... AS ...)`.
+    Cast,
+    /// Keep the name of the child expression if the child is a named expression,
+    /// the way `ResolveAliases` names an item of a SQL projection list.
+    SqlProjectionItem,
+    /// Keep the name of the innermost expression of the cast chain if it is a named
+    /// expression, the way `Column.named` names an item of a DataFrame projection list.
+    DataFrameProjectionItem,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
