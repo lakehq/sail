@@ -528,11 +528,10 @@ impl JobScheduler {
     }
 
     fn extend_job_output(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
-        let JobState::Running { output, .. } = &mut job.state else {
+        if !matches!(job.state, JobState::Running { .. }) {
             return vec![];
-        };
-        let mut actions = vec![];
-        let schema = job.graph.schema().clone();
+        }
+        let mut keys = vec![];
         for (s, stage) in job.graph.stages().iter().enumerate() {
             if !job.topology.stages[s].consumers.is_empty() {
                 // The stage is not a final stage.
@@ -551,26 +550,50 @@ impl JobScheduler {
                 }
                 attempt.job_output_fetched = true;
                 for c in 0..channels {
-                    let key = TaskStreamKey {
+                    keys.push(TaskStreamKey {
                         job_id,
                         stage: s,
                         partition: p,
                         attempt: head.len(),
                         channel: c,
-                    };
-                    actions.push(JobAction::ExtendJobOutput {
-                        handle: output.handle(),
-                        key,
-                        schema: schema.clone(),
                     });
                 }
             }
         }
 
-        actions
+        // The output of a new attempt cannot replace the output that an earlier attempt
+        // has already produced for the job. The job fails in this case, with the cause
+        // of its task failures so far, as it is inferred for a job that fails.
+        let retry_cause = if keys.iter().any(|key| key.attempt > 0) {
+            Self::find_job_failure_cause(job)
+        } else {
+            None
+        };
+        let JobState::Running { output, .. } = &job.state else {
+            return vec![];
+        };
+        let schema = job.graph.schema().clone();
+        keys.into_iter()
+            .map(|key| JobAction::ExtendJobOutput {
+                handle: output.handle(),
+                retry_cause: retry_cause.clone().filter(|_| key.attempt > 0),
+                key,
+                schema: schema.clone(),
+            })
+            .collect()
     }
 
     fn infer_job_failure_cause(job: &JobDescriptor) -> CommonErrorCause {
+        Self::find_job_failure_cause(job).unwrap_or_else(|| {
+            CommonErrorCause::new::<PyErrExtractor>(&ExecutionError::InternalError(
+                "job failed for unknown reason".to_string(),
+            ))
+        })
+    }
+
+    /// Returns the cause of the task failures of the job, if any task attempt has
+    /// failed with a known cause.
+    fn find_job_failure_cause(job: &JobDescriptor) -> Option<CommonErrorCause> {
         // a map from (stage, partition) to a list of causes
         let mut causes: HashMap<(usize, usize), Vec<&CommonErrorCause>> = HashMap::new();
         for (s, stage) in job.stages.iter().enumerate() {
@@ -579,7 +602,7 @@ impl JobScheduler {
                     if let Some(cause) = &attempt.cause
                         && !cause.is_retryable()
                     {
-                        return cause.clone();
+                        return Some(cause.clone());
                     }
                     if matches!(attempt.state, TaskState::Failed)
                         && let Some(cause) = &attempt.cause
@@ -598,11 +621,9 @@ impl JobScheduler {
                 v2.len().cmp(&v1.len()).then(s1.cmp(s2)).then(p1.cmp(p2))
             },
         ) {
-            cause.clone()
+            Some(cause.clone())
         } else {
-            CommonErrorCause::new::<PyErrExtractor>(&ExecutionError::InternalError(
-                "job failed for unknown reason".to_string(),
-            ))
+            None
         }
     }
 
@@ -1436,6 +1457,127 @@ mod tests {
             ) && assignments.is_empty(),
             "late unknown commit must cancel its queued retry; actions: {actions:?}; assignments: {assignments:?}"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn job_output_of_retried_task_carries_failure_cause()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_expr::Partitioning;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+        use datafusion::prelude::SessionContext;
+        use sail_common::actor::{ActorContext, ActorSystem};
+        use sail_common::config::{AppConfig, SystemCatalogStore};
+        use sail_common::runtime::RuntimeHandle;
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        use super::{JobAction, JobScheduler, TaskState};
+        use crate::driver::job_scheduler::JobSchedulerOptions;
+        use crate::driver::{DriverActor, DriverComponents, DriverOptions};
+        use crate::id::DriverId;
+        use crate::worker_manager::LocalWorkerManager;
+
+        let mut config = AppConfig::load()?;
+        config.cluster.task_max_attempts = 4;
+        config.catalog.system.store = SystemCatalogStore::Memory;
+        config.telemetry.export_traces = false;
+        config.telemetry.export_metrics = false;
+        config.telemetry.export_logs = false;
+        let reporter = event_reporter(&config)?;
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let options = DriverOptions::try_new(
+            &config,
+            runtime.clone(),
+            "job-output-retry-cause".into(),
+            DriverId::from(1),
+            0,
+        )?;
+        let mut scheduler =
+            JobScheduler::new(JobSchedulerOptions::from(&options), reporter.clone());
+        let mut system = ActorSystem::new();
+        let driver = system.spawn::<DriverActor>((
+            options,
+            DriverComponents {
+                worker_manager: Box::new(LocalWorkerManager::new(runtime, SessionContext::new())),
+                event_reporter: reporter,
+            },
+        ));
+        let mut ctx = ActorContext::new(&driver);
+
+        // Stage 0 is read by stage 1 through a shuffle, so all tasks are in one region.
+        // Stage 1 produces the job output.
+        let input =
+            MemorySourceConfig::try_new_exec(&vec![vec![]; 2], Arc::new(Schema::empty()), None)?;
+        let plan = Arc::new(RepartitionExec::try_new(
+            input,
+            Partitioning::RoundRobinBatch(2),
+        )?);
+        let (job_id, _output) =
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        scheduler.refresh_job(job_id);
+        let key = |stage, partition, attempt| TaskKey {
+            job_id,
+            stage,
+            partition,
+            attempt,
+        };
+        // The attempt and the retry cause of each stream that is added to the job output.
+        let job_output = |actions: Vec<JobAction>| {
+            actions
+                .into_iter()
+                .filter_map(|action| match action {
+                    JobAction::ExtendJobOutput {
+                        key, retry_cause, ..
+                    } => Some((key.stage, key.attempt, retry_cause)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // The first attempts are not retries.
+        for stage in 0..2 {
+            for partition in 0..2 {
+                scheduler.update_task(&key(stage, partition, 0), TaskState::Running, None, None);
+            }
+        }
+        let output = job_output(scheduler.refresh_job(job_id));
+        assert_eq!(output.len(), 2);
+        assert!(
+            output
+                .iter()
+                .all(|(stage, attempt, cause)| *stage == 1 && *attempt == 0 && cause.is_none())
+        );
+
+        // A task that does not produce job output fails, and all tasks of the region get
+        // new attempts. The output of the new attempts carries the cause of the failure.
+        scheduler.update_task(
+            &key(0, 1, 0),
+            TaskState::Failed,
+            None,
+            Some(CommonErrorCause::Execution("forced task failure".into())),
+        );
+        assert!(job_output(scheduler.refresh_job(job_id)).is_empty());
+        for stage in 0..2 {
+            for partition in 0..2 {
+                scheduler.update_task(&key(stage, partition, 1), TaskState::Running, None, None);
+            }
+        }
+        let output = job_output(scheduler.refresh_job(job_id));
+        assert_eq!(output.len(), 2);
+        assert!(output.iter().all(|(stage, attempt, cause)| {
+            *stage == 1
+                && *attempt == 1
+                && matches!(
+                    cause,
+                    Some(CommonErrorCause::Execution(message)) if message == "forced task failure"
+                )
+        }));
         Ok(())
     }
 
