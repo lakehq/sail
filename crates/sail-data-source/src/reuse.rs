@@ -25,6 +25,18 @@ pub fn is_reusable_source(source: &Arc<dyn TableSource>) -> bool {
     }
 }
 
+/// Returns whether the source is a Python data source, possibly renamed.
+pub fn is_python_source(source: &Arc<dyn TableSource>) -> bool {
+    fn is_python_provider(provider: &dyn TableProvider) -> bool {
+        if let Some(rename) = provider.downcast_ref::<RenameTableProvider>() {
+            is_python_provider(rename.inner().as_ref())
+        } else {
+            provider.is::<PythonTableProvider>()
+        }
+    }
+    source_as_provider(source).is_ok_and(|provider| is_python_provider(provider.as_ref()))
+}
+
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -46,11 +58,15 @@ mod tests {
             Arc::clone(&python),
             vec!["y".to_string()],
         )?);
-        assert!(!is_reusable_source(&provider_as_source(python)));
-        assert!(!is_reusable_source(&provider_as_source(renamed)));
-        assert!(is_reusable_source(&provider_as_source(Arc::new(
-            EmptyTable::new(schema)
+        assert!(!is_reusable_source(&provider_as_source(Arc::clone(
+            &python
         ))));
+        assert!(!is_reusable_source(&provider_as_source(renamed.clone())));
+        assert!(is_python_source(&provider_as_source(python)));
+        assert!(is_python_source(&provider_as_source(renamed)));
+        let empty = provider_as_source(Arc::new(EmptyTable::new(schema)));
+        assert!(is_reusable_source(&empty));
+        assert!(!is_python_source(&empty));
         Ok(())
     }
 }

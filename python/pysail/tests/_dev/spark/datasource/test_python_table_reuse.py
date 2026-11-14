@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 
+from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 pytestmark = pytest.mark.spark(version=">=4", reason="Uses the Python DataSource API")
@@ -142,3 +143,15 @@ def test_python_data_source_is_checked_in_every_scan(spark, counting_table, tmp_
         assert reads(counter) == expected_reads
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {parquet_name}")
+
+
+def test_volatile_cte_over_python_data_source_is_evaluated_once(spark, counting_table):
+    """Spark reads the source for each reference, where exchange reuse gives them the same rows."""
+    table, counter = counting_table
+    query = (
+        f"WITH c AS (SELECT x, rand() AS r FROM {table}) "  # noqa: S608
+        "SELECT count(*) FROM c a JOIN c b ON a.x = b.x AND a.r = b.r"
+    )
+    assert spark.sql(query).collect() == [(1,)]
+    if not is_jvm_spark():
+        assert reads(counter) == 1

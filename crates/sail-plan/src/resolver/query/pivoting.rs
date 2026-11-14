@@ -225,7 +225,7 @@ impl PlanResolver<'_> {
             .aggregate(vec![pivot_column.clone()], Vec::<expr::Expr>::new())?
             .limit(0, Some(max_pivot_values.saturating_add(1)))?
             .build()?;
-        let batches = self.ctx.execute_logical_plan(plan).await?.collect().await?;
+        let batches = self.execute_auxiliary_plan(plan).await?;
         let mut values = Vec::new();
         for batch in &batches {
             let column = batch.column(0);

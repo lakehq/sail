@@ -90,8 +90,18 @@ impl PlanResolver<'_> {
             }
             let mut plan = cte.plan.as_ref().clone();
             if let Some(names) = cte.renew_reference(state)? {
-                plan = rename_logical_plan_reusing_projection(plan, &names)?;
+                plan = match cte.scan(false, state)? {
+                    // The scan is renamed below an alias, as the definition is.
+                    Some(scan) => LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+                        Arc::new(rename_logical_plan_reusing_projection(scan, &names)?),
+                        table_reference.clone(),
+                    )?),
+                    None => rename_logical_plan_reusing_projection(plan, &names)?,
+                };
                 state.register_missing_input_boundary(&plan);
+            } else if let Some(scan) = cte.scan(true, state)? {
+                // The scan keeps the names of the definition.
+                plan = scan;
             }
             return if let Some(table_sample) = sample {
                 self.apply_table_sample(plan, table_sample, state).await
@@ -342,8 +352,13 @@ impl PlanResolver<'_> {
                         "SQL time travel is not supported for temporary views",
                     ));
                 }
+                let plan = if self.share_ctes {
+                    self.renew_shared_cte_definitions(plan.as_ref().clone(), state)?
+                } else {
+                    Self::inline_shared_cte_references(plan.as_ref().clone())?
+                };
                 let names = state.register_fields(plan.schema().inner().fields());
-                let plan = rename_logical_plan(plan.as_ref().clone(), &names)?;
+                let plan = rename_logical_plan(plan, &names)?;
                 // The stored plan's internal field IDs belong to another resolver
                 // state. Missing-reference recovery must see only the fresh output.
                 state.register_missing_input_boundary(&plan);

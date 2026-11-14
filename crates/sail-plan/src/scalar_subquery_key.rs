@@ -488,6 +488,20 @@ impl NameNormalizer {
     }
 }
 
+/// Returns whether the expression is a call of a volatile function.
+pub(crate) fn is_volatile_call(expr: &Expr) -> bool {
+    let volatility = match expr {
+        Expr::ScalarFunction(function) => function.func.signature().volatility,
+        Expr::AggregateFunction(function) => function.func.signature().volatility,
+        Expr::WindowFunction(function) => match &function.fun {
+            WindowFunctionDefinition::AggregateUDF(udaf) => udaf.signature().volatility,
+            WindowFunctionDefinition::WindowUDF(udwf) => udwf.signature().volatility,
+        },
+        _ => return false,
+    };
+    volatility == Volatility::Volatile
+}
+
 /// Returns whether the extension node holds no source or state, and its equality compares
 /// everything that determines its output. Such nodes are shared even when their output is
 /// nondeterministic (e.g. monotonically increasing IDs or Python UDFs), as Spark reuses

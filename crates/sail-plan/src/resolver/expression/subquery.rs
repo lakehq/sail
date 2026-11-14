@@ -11,6 +11,7 @@ use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::predicate::coerce_in_subquery_pair;
 use crate::resolver::state::PlanResolverState;
+use crate::shared_cte::exists_in_plan_or_cte_definitions;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_in_subquery(
@@ -137,7 +138,9 @@ impl PlanResolver<'_> {
         if query.all_out_ref_exprs().is_empty() || query.schema().fields().len() != 1 {
             return Ok(expr_fn::scalar_subquery(Arc::new(query)));
         }
-        if query.exists(|plan| Ok(matches!(plan, LogicalPlan::Aggregate(_))))? {
+        if exists_in_plan_or_cte_definitions(&query, &mut |plan| {
+            Ok(matches!(plan, LogicalPlan::Aggregate(_)))
+        })? {
             return Ok(expr_fn::scalar_subquery(Arc::new(query)));
         }
         let mut limited = false;

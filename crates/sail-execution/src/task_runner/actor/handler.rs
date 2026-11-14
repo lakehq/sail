@@ -93,7 +93,9 @@ impl TaskRunnerActor {
 
     pub(super) fn handle_close_job(&mut self, job_id: JobId) -> ActorAction {
         self.tasks.close_job(job_id);
-        self.extensions.local_streams.remove_streams(job_id, None);
+        self.extensions
+            .local_streams
+            .remove_streams(job_id, None, &[]);
         self.signals.retain(|key, _| key.job_id != job_id);
         ActorAction::Continue
     }
@@ -175,6 +177,7 @@ impl TaskRunnerActor {
         &mut self,
         key: TaskStreamKey,
         replicas: usize,
+        shared: Option<Arc<TaskContext>>,
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     ) -> ActorAction {
@@ -189,7 +192,7 @@ impl TaskRunnerActor {
         let _ = result.send(
             self.extensions
                 .local_streams
-                .create_stream(key, replicas, schema),
+                .create_stream(key, replicas, shared, schema),
         );
         ActorAction::Continue
     }
@@ -393,8 +396,11 @@ impl TaskRunnerActor {
         &mut self,
         job_id: JobId,
         stage: Option<usize>,
+        attempts: &[usize],
     ) -> ActorAction {
-        self.extensions.local_streams.remove_streams(job_id, stage);
+        self.extensions
+            .local_streams
+            .remove_streams(job_id, stage, attempts);
         ActorAction::Continue
     }
 

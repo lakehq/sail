@@ -11,6 +11,7 @@ message TaskDefinition {
 message TaskInput {
   uint64 stage = 1;
   TaskInputLocator locator = 2;
+  bool preserve_batches = 3;
 }
 
 message TaskInputLocator {
@@ -109,6 +110,7 @@ message TaskOutputLocator {
   oneof Kind {
     TaskOutputPipelinedLocator pipelined = 1;
     TaskOutputBlockingLocator blocking = 2;
+    TaskOutputSharedLocator shared = 3;
   }
 }
 
@@ -117,4 +119,10 @@ message TaskOutputPipelinedLocator {
 }
 
 message TaskOutputBlockingLocator {
+}
+
+// The output is read by each replica at its own pace, and produced when a replica asks
+// for rows that no replica has read yet.
+message TaskOutputSharedLocator {
+  uint64 replicas = 1;
 }

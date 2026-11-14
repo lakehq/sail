@@ -271,7 +271,14 @@ async fn shuffle_write(
 ) -> Result<()> {
     let mut sink = writer.open(partition).await?;
     let result = async {
-        while let Some(batch) = stream.next().await {
+        loop {
+            // A batch is produced only when the sink asks for it.
+            if sink.ready().await? == TaskStreamWriteState::Closed {
+                return Ok::<_, datafusion::error::DataFusionError>(false);
+            }
+            let Some(batch) = stream.next().await else {
+                break;
+            };
             let batch = batch?;
             if batch.num_rows() == 0 {
                 continue;
@@ -294,9 +301,11 @@ async fn shuffle_write(
             // TODO: model successful early-stop separately from error-triggered aborts
             sink.abort().await
         }
-        Err(error) => {
-            let _ = sink.abort().await;
-            Err(error)
-        }
+        // A sink that returns the error to its readers ends the task normally, so that
+        // the error fails only the tasks that read it.
+        Err(error) => match sink.fail(&error).await {
+            Ok(true) => Ok(()),
+            _ => Err(error),
+        },
     }
 }

@@ -40,6 +40,8 @@ pub enum TaskRunnerMessage {
     CreateLocalStream {
         key: TaskStreamKey,
         replicas: usize,
+        /// The context of the task, if the stream is shared by its replicas.
+        shared: Option<Arc<TaskContext>>,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     },
@@ -87,6 +89,7 @@ pub enum TaskRunnerMessage {
     CleanUpLocalStreams {
         job_id: JobId,
         stage: Option<usize>,
+        attempts: Vec<usize>,
     },
     CleanUpStorageStreams {
         job_id: JobId,
@@ -283,7 +286,7 @@ impl SpanAssociation for TaskRunnerMessage {
                 properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
             }
-            Self::CleanUpLocalStreams { job_id, stage }
+            Self::CleanUpLocalStreams { job_id, stage, .. }
             | Self::CleanUpStorageStreams { job_id, stage, .. }
             | Self::CleanUpCelebornStreams { job_id, stage } => {
                 properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));

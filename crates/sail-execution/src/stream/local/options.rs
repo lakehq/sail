@@ -26,3 +26,13 @@ impl From<&WorkerOptions> for LocalStreamManagerOptions {
         }
     }
 }
+
+#[cfg(test)]
+impl LocalStreamManagerOptions {
+    pub fn new(task_stream_buffer: usize, task_stream_creation_timeout: Duration) -> Self {
+        Self {
+            task_stream_buffer,
+            task_stream_creation_timeout,
+        }
+    }
+}

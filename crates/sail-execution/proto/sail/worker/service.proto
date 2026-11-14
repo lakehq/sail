@@ -48,6 +48,9 @@ message CleanUpJobRequest {
   // An optional stage to clean up.
   // If not specified, clean up all stages for the job.
   optional uint64 stage = 2;
+  // The latest attempt of each partition of the stage to clean up, if a stage is specified.
+  // The streams of later attempts are kept.
+  repeated uint64 attempts = 3;
 }
 
 message CleanUpJobResponse {

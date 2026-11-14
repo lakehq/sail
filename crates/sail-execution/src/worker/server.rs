@@ -125,9 +125,14 @@ impl WorkerService for WorkerServer {
     ) -> Result<Response<CleanUpJobResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let CleanUpJobRequest { job_id, stage } = request;
+        let CleanUpJobRequest {
+            job_id,
+            stage,
+            attempts,
+        } = request;
         let job_id = job_id.into();
         let stage = stage.map(|x| x as usize);
+        let attempts = attempts.into_iter().map(|x| x as usize).collect();
         if stage.is_none() {
             self.task_runner
                 .send(TaskRunnerMessage::CloseJob { job_id })
@@ -135,7 +140,11 @@ impl WorkerService for WorkerServer {
                 .map_err(ExecutionError::from)?;
         }
         self.task_runner
-            .send(TaskRunnerMessage::CleanUpLocalStreams { job_id, stage })
+            .send(TaskRunnerMessage::CleanUpLocalStreams {
+                job_id,
+                stage,
+                attempts,
+            })
             .await
             .map_err(ExecutionError::from)?;
         self.task_runner

@@ -230,7 +230,7 @@ impl PlanResolver<'_> {
     async fn execute_time_travel_scalar(&self, expr: Expr) -> PlanResult<ScalarValue> {
         let expr = Self::cap_time_travel_scalar_subqueries(expr)?;
         let plan = Self::build_time_travel_scalar_plan(expr)?;
-        let batches = self.ctx.execute_logical_plan(plan).await?.collect().await?;
+        let batches = self.execute_auxiliary_plan(plan).await?;
         let mut total_rows = 0usize;
         let mut value = None;
         for batch in batches {

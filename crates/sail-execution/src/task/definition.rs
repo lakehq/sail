@@ -22,6 +22,8 @@ pub struct TaskDefinition {
 pub struct TaskInput {
     pub stage: usize,
     pub locator: Arc<TaskInputLocator>,
+    /// Shared replay keeps producer batch sizes instead of coalescing them at every reader.
+    pub preserve_batches: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -85,8 +87,15 @@ pub enum TaskOutputDistribution {
 
 #[derive(Debug, Clone)]
 pub enum TaskOutputLocator {
-    Pipelined { replicas: usize },
+    Pipelined {
+        replicas: usize,
+    },
     Blocking,
+    /// The output is read by each replica at its own pace, and produced when a replica
+    /// asks for rows that no replica has read yet.
+    Shared {
+        replicas: usize,
+    },
 }
 
 impl From<TaskDefinition> for r#gen::TaskDefinition {
@@ -131,10 +140,15 @@ impl TryFrom<r#gen::TaskDefinition> for TaskDefinition {
 
 impl From<TaskInput> for r#gen::TaskInput {
     fn from(value: TaskInput) -> Self {
-        let TaskInput { stage, locator } = value;
+        let TaskInput {
+            stage,
+            locator,
+            preserve_batches,
+        } = value;
         r#gen::TaskInput {
             stage: stage as u64,
             locator: Some(locator.as_ref().clone().into()),
+            preserve_batches,
         }
     }
 }
@@ -154,6 +168,7 @@ impl TryFrom<r#gen::TaskInput> for TaskInput {
         Ok(TaskInput {
             stage: value.stage as usize,
             locator: Arc::new(locator),
+            preserve_batches: value.preserve_batches,
         })
     }
 }
@@ -511,6 +526,11 @@ impl From<TaskOutputLocator> for r#gen::TaskOutputLocator {
             TaskOutputLocator::Blocking => {
                 r#gen::task_output_locator::Kind::Blocking(r#gen::TaskOutputBlockingLocator {})
             }
+            TaskOutputLocator::Shared { replicas } => {
+                r#gen::task_output_locator::Kind::Shared(r#gen::TaskOutputSharedLocator {
+                    replicas: replicas as u64,
+                })
+            }
         };
         r#gen::TaskOutputLocator { kind: Some(kind) }
     }
@@ -527,6 +547,11 @@ impl TryFrom<r#gen::TaskOutputLocator> for TaskOutputLocator {
                 replicas: replicas as usize,
             }),
             Some(r#gen::task_output_locator::Kind::Blocking(_)) => Ok(TaskOutputLocator::Blocking),
+            Some(r#gen::task_output_locator::Kind::Shared(r#gen::TaskOutputSharedLocator {
+                replicas,
+            })) => Ok(TaskOutputLocator::Shared {
+                replicas: replicas as usize,
+            }),
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task output locator".to_string(),
             )),
@@ -591,5 +616,30 @@ impl TaskOutput {
                 Ok(ShufflePartitioning::RoundRobinRow(*channels))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use prost::Message;
+
+    use super::*;
+
+    #[test]
+    fn task_input_batch_policy_round_trips() -> ExecutionResult<()> {
+        for preserve_batches in [false, true] {
+            let input = TaskInput {
+                stage: 7,
+                locator: Arc::new(TaskInputLocator::Worker { keys: vec![] }),
+                preserve_batches,
+            };
+            let encoded = r#gen::TaskInput::from(input).encode_to_vec();
+            let decoded = r#gen::TaskInput::decode(encoded.as_slice())
+                .map_err(|e| ExecutionError::InvalidArgument(e.to_string()))?;
+            let input = TaskInput::try_from(decoded)?;
+            assert_eq!(input.stage, 7);
+            assert_eq!(input.preserve_batches, preserve_batches);
+        }
+        Ok(())
     }
 }

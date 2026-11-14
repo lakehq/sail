@@ -11,6 +11,7 @@ pub struct JobSchedulerOptions {
     pub task_launch_timeout: Duration,
     pub task_max_attempts: usize,
     pub shuffle_backend: ShuffleBackendKind,
+    pub worker_slots: Option<usize>,
 }
 
 impl From<&DriverOptions> for JobSchedulerOptions {
@@ -20,6 +21,7 @@ impl From<&DriverOptions> for JobSchedulerOptions {
             task_launch_timeout: options.task_launch_timeout,
             task_max_attempts: options.task_max_attempts,
             shuffle_backend: options.shuffle_backend.clone(),
+            worker_slots: options.worker_slots(),
         }
     }
 }

@@ -1,10 +1,13 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion::common::{JoinType, Result, plan_datafusion_err};
+use datafusion::common::{JoinType, Result, internal_err, plan_datafusion_err};
 use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::projection::ProjectionExpr;
 use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -13,6 +16,7 @@ use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
 };
 use datafusion::physical_plan::limit::GlobalLimitExec;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -32,11 +36,13 @@ use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
+use sail_physical_plan::shared_cte::{SharedCte, SharedCteExec, SharedCteScanExec};
 
+use crate::driver::job_scheduler::topology::JobTopology;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
-    InputMode, JobGraph, JobGraphOptions, OutputDistribution, OutputMode, Stage, StageInput,
-    TaskPlacement,
+    InputMode, JobGraph, JobGraphOptions, OutputDistribution, OutputMode, SharedReader, Stage,
+    StageInput, TaskPlacement,
 };
 use crate::plan::{ShuffleConsumption, StageInputExec};
 use crate::shuffle::ShuffleBackendKind;
@@ -50,24 +56,184 @@ impl JobGraph {
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
         let plan = ensure_single_probe_partition_for_nested_loop_join(plan)?;
         let plan = materialize_shared_file_scan_builds(plan)?;
-        let plan = ensure_worker_input_for_lake_procedure(plan)?;
-        let mut graph = Self {
-            stages: vec![],
-            schema: plan.schema(),
-            options,
-        };
-        let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?.plan;
-        let (last, inputs) = rewrite_inputs(last)?;
-        graph.stages.push(Stage {
-            inputs,
-            plan: last,
-            group: String::new(),
-            mode: OutputMode::Pipelined,
-            distribution: OutputDistribution::RoundRobinBatch { channels: 1 },
-            placement: TaskPlacement::Worker,
-        });
-        Ok(graph)
+        let mut plan = ensure_worker_input_for_lake_procedure(plan)?;
+        let mut materialized = HashSet::new();
+        // Whether each shared CTE can be evaluated by its late references is decided on the
+        // plan as planned, since a CTE whose body reads another CTE that is evaluated in
+        // place of its references could double its plan at each level of the CTEs.
+        let ctes = shared_ctes(&plan)?;
+        loop {
+            let mut graph = Self {
+                stages: vec![],
+                schema: plan.schema(),
+                options: options.clone(),
+                shared_readers: vec![],
+                pending_shared_readers: HashMap::new(),
+                materialized_ctes: materialized.clone(),
+            };
+            let last = build_job_graph(Arc::clone(&plan), PartitionUsage::Once, &mut graph)?.plan;
+            push_stage(
+                last,
+                &mut graph,
+                OutputDistribution::RoundRobinBatch { channels: 1 },
+                TaskPlacement::Worker,
+                OutputMode::Pipelined,
+            )?;
+            // A reference whose stage runs only after another stage that runs with the
+            // stage of the shared CTE has finished cannot read the CTE in that region.
+            let late = late_shared_references(&graph);
+            // A region that needs more worker task slots than the cluster can provide cannot
+            // run. The shared CTEs in it are evaluated by their references or materialized,
+            // as for late references, so that the region splits as it would without them.
+            let late = if late.is_empty() {
+                oversized_shared_references(&graph, &ctes)?
+            } else {
+                late
+            };
+            if late.is_empty() {
+                return Ok(graph);
+            }
+            // A late reference to a deterministic CTE that reads no other shared CTE
+            // evaluates the CTE itself. Any other CTE with late references is materialized,
+            // since its own evaluation would make the plan grow exponentially with the depth
+            // of the CTEs, or evaluate a volatile CTE more than once.
+            let (inline, other) = late
+                .into_iter()
+                .partition::<HashSet<_>, _>(|(cte, _)| ctes.get(cte) == Some(&true));
+            materialized.extend(other.into_iter().map(|(cte, _)| cte));
+            if !inline.is_empty() {
+                plan = plan
+                    .transform_up(|plan| match plan.downcast_ref::<SharedCteExec>() {
+                        Some(shared) => Ok(Transformed::yes(shared.inline_references(&inline)?)),
+                        None => Ok(Transformed::no(plan)),
+                    })
+                    .data()?;
+            }
+        }
     }
+}
+
+/// Returns the shared CTEs in the plan, with whether each CTE can be evaluated by each of
+/// its references: whether it is deterministic and reads no other shared CTE.
+fn shared_ctes(plan: &Arc<dyn ExecutionPlan>) -> ExecutionResult<HashMap<usize, bool>> {
+    let mut ctes = HashMap::new();
+    plan.apply(|plan| {
+        if let Some(shared) = plan.downcast_ref::<SharedCteExec>() {
+            for (cte, body) in shared.ctes() {
+                let leaf = !body.exists(|plan| Ok(plan.is::<SharedCteScanExec>()))?;
+                ctes.insert(cte.id(), !cte.volatile() && leaf);
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(ctes)
+}
+
+/// Returns the references to shared CTEs whose stages are reachable, through an edge from
+/// a stage whose output is materialized, from another stage of the region that the stage
+/// of the shared CTE would join, as pairs of the identifier of the CTE and the number of
+/// the reference.
+fn late_shared_references(graph: &JobGraph) -> Vec<(usize, usize)> {
+    let stages = graph.stages();
+    if graph.shared_readers.is_empty() {
+        return vec![];
+    }
+    let n = stages.len();
+    // The stages that run together, as in the topology of the job.
+    let mut parent = (0..n).collect::<Vec<_>>();
+    fn find(parent: &mut [usize], x: usize) -> usize {
+        let mut x = x;
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+    for (s, stage) in stages.iter().enumerate() {
+        for input in &stage.inputs {
+            if matches!(
+                stages[input.stage].mode,
+                OutputMode::Pipelined | OutputMode::Shared
+            ) {
+                let (a, b) = (find(&mut parent, s), find(&mut parent, input.stage));
+                parent[a] = b;
+            }
+        }
+    }
+    // For each stage, its ancestors, and the ancestors from which it is reached through
+    // an edge from a materialized output. The stages are in topological order.
+    let mut ancestors: Vec<HashSet<usize>> = Vec::with_capacity(n);
+    let mut blocked: Vec<HashSet<usize>> = Vec::with_capacity(n);
+    for stage in stages {
+        let mut a = HashSet::new();
+        let mut b = HashSet::new();
+        for input in &stage.inputs {
+            let p = input.stage;
+            a.insert(p);
+            a.extend(ancestors[p].iter().copied());
+            b.extend(blocked[p].iter().copied());
+            if matches!(stages[p].mode, OutputMode::Blocking) {
+                b.insert(p);
+                b.extend(ancestors[p].iter().copied());
+            }
+        }
+        ancestors.push(a);
+        blocked.push(b);
+    }
+    graph
+        .shared_readers
+        .iter()
+        .filter(|reader| {
+            let component = find(&mut parent, reader.stage);
+            blocked[reader.stage]
+                .iter()
+                .any(|&x| find(&mut parent, x) == component)
+        })
+        .map(|reader| (reader.cte, reader.reference))
+        .collect()
+}
+
+/// Returns the references to the shared CTEs whose stages run in a region that needs more
+/// worker task slots than the cluster can provide, as pairs of the identifier of the CTE
+/// and the number of the reference. Without a shuffle backend that materializes outputs,
+/// only the CTEs that can be evaluated by each of their references are returned.
+fn oversized_shared_references(
+    graph: &JobGraph,
+    ctes: &HashMap<usize, bool>,
+) -> ExecutionResult<Vec<(usize, usize)>> {
+    let Some(capacity) = graph.options.worker_slots else {
+        return Ok(vec![]);
+    };
+    if graph.shared_readers.is_empty() {
+        return Ok(vec![]);
+    }
+    let topology = JobTopology::try_new(graph)?;
+    let mut oversized = HashSet::new();
+    for (r, region) in topology.regions.iter().enumerate() {
+        let stages = region.tasks.iter().map(|t| t.stage).collect::<HashSet<_>>();
+        let shared = stages
+            .iter()
+            .any(|&s| matches!(graph.stages()[s].mode, OutputMode::Shared));
+        if shared && topology.worker_slots(graph, r) > capacity {
+            oversized.extend(
+                graph
+                    .shared_readers
+                    .iter()
+                    .filter(|x| stages.contains(&x.stage))
+                    .map(|x| x.cte),
+            );
+        }
+    }
+    let materializes = !matches!(
+        graph.options.shuffle_backend,
+        ShuffleBackendKind::Flight { .. }
+    );
+    Ok(graph
+        .shared_readers
+        .iter()
+        .filter(|x| oversized.contains(&x.cte) && (materializes || ctes.get(&x.cte) == Some(&true)))
+        .map(|x| (x.cte, x.reference))
+        .collect())
 }
 
 fn ensure_worker_input_for_lake_procedure(
@@ -404,6 +570,14 @@ fn plan_job_graph_stages(
         return build_scalar_subquery_job_graph(scalar, usage, graph, driver_stage_handling);
     }
 
+    if let Some(shared) = plan.downcast_ref::<SharedCteExec>() {
+        return build_shared_cte_job_graph(shared, usage, graph, driver_stage_handling);
+    }
+
+    if let Some(reference) = plan.downcast_ref::<StageInputExec<SharedCteStage>>() {
+        return create_shared_cte_input(reference, usage, graph);
+    }
+
     if let Some(barrier) = plan.downcast_ref::<BarrierExec>() {
         return build_barrier_job_graph(barrier, usage, graph, scalar_context);
     }
@@ -704,6 +878,195 @@ fn build_scalar_subquery_job_graph(
         }),
     );
     Ok(PlannedSubtree::without_pending_scalar_subquery_expr(plan))
+}
+
+/// The stage of a shared CTE, as the placeholder of a reference to the CTE.
+#[derive(Debug, Clone)]
+struct SharedCteStage {
+    stage: usize,
+    /// The identifier of the shared CTE and the number of the reference.
+    reference: (usize, usize),
+    /// The columns of the shared CTE that the reference reads, or `None` for all columns.
+    projection: Option<Vec<usize>>,
+}
+
+impl std::fmt::Display for SharedCteStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SharedCteStage(stage={})", self.stage)
+    }
+}
+
+/// Plans each shared CTE as its own stage, which is read by the stages of its references.
+fn build_shared_cte_job_graph(
+    shared: &SharedCteExec,
+    usage: PartitionUsage,
+    graph: &mut JobGraph,
+    driver_stage_handling: DriverStageHandling,
+) -> ExecutionResult<PlannedSubtree> {
+    // The stage of each shared CTE planned so far.
+    let mut stages: HashMap<*const SharedCte, usize> = HashMap::new();
+    let locate = |plan: &Arc<dyn ExecutionPlan>, stages: &HashMap<*const SharedCte, usize>| {
+        Arc::clone(plan)
+            .transform_up(|plan| {
+                let Some(scan) = plan.downcast_ref::<SharedCteScanExec>() else {
+                    return Ok(Transformed::no(plan));
+                };
+                let Some(&stage) = stages.get(&Arc::as_ptr(scan.cte())) else {
+                    return internal_err!("shared CTE {} is not planned", scan.cte().id());
+                };
+                let input = SharedCteStage {
+                    stage,
+                    reference: (scan.cte().id(), scan.reference()),
+                    projection: scan.projection().map(|x| x.to_vec()),
+                };
+                Ok(Transformed::yes(Arc::new(StageInputExec::new(
+                    input,
+                    Arc::clone(plan.properties()),
+                ))
+                    as Arc<dyn ExecutionPlan>))
+            })
+            .data()
+    };
+    // A reference reads the partitions of the stage at its own pace, with any shuffle
+    // backend. The stage runs with the stages that read it, produces its output when a
+    // reference asks for rows that no reference has read yet, and returns its error only
+    // to the references that read up to it.
+    // A volatile CTE with references that cannot run with its stage is materialized by
+    // the shuffle backend, as one channel per partition for the shuffle service, which
+    // keeps the partitioning of the CTE.
+    for (cte, plan) in shared.ctes() {
+        let plan = plan_job_graph_stages(
+            locate(plan, &stages)?,
+            PartitionUsage::Once,
+            graph,
+            DriverStageHandling::CreateStage,
+            None,
+        )?;
+        let (mode, distribution) = if !graph.materialized_ctes.contains(&cte.id()) {
+            let distribution = OutputDistribution::RoundRobinBatch { channels: 1 };
+            (OutputMode::Shared, distribution)
+        } else if let ShuffleBackendKind::Celeborn { .. } = graph.options.shuffle_backend {
+            let partitioning = plan.plan.output_partitioning();
+            let channels = partitioning.partition_count();
+            let distribution = match partitioning {
+                Partitioning::Hash(keys, _) => OutputDistribution::Hash {
+                    keys: keys.clone(),
+                    channels,
+                },
+                _ => OutputDistribution::RoundRobinBatch { channels },
+            };
+            (OutputMode::Blocking, distribution)
+        } else {
+            let distribution = OutputDistribution::RoundRobinBatch { channels: 1 };
+            (OutputMode::Blocking, distribution)
+        };
+        let stage = push_stage(plan.plan, graph, distribution, TaskPlacement::Worker, mode)?;
+        stages.insert(Arc::as_ptr(cte), stage);
+    }
+    plan_job_graph_stages(
+        locate(shared.input(), &stages)?,
+        usage,
+        graph,
+        driver_stage_handling,
+        None,
+    )
+}
+
+/// Reads the stage of a shared CTE for one of its references.
+///
+/// Each partition of the reference reads the same partition of the stage, so the
+/// reference keeps the partitioning that it reported when the query was planned. If the
+/// plan of the stage does not have this partitioning anymore, its output is
+/// repartitioned for the reference.
+fn create_shared_cte_input(
+    reference: &StageInputExec<SharedCteStage>,
+    usage: PartitionUsage,
+    graph: &mut JobGraph,
+) -> ExecutionResult<PlannedSubtree> {
+    let SharedCteStage {
+        stage,
+        reference: (cte, number),
+        projection,
+    } = reference.input();
+    let partitioning = reference.properties().output_partitioning();
+    let schema = graph.stages[*stage].plan.schema();
+    let stage_partitioning = graph.stages[*stage].plan.output_partitioning().clone();
+    // The partitioning of the reference in terms of the columns of the stage.
+    let expected = match partitioning {
+        Partitioning::Hash(keys, partitions) => keys
+            .iter()
+            .map(|key| {
+                let position = key.downcast_ref::<Column>()?.index();
+                let index = match projection {
+                    Some(projection) => *projection.get(position)?,
+                    None => position,
+                };
+                let name = schema.fields().get(index)?.name();
+                Some(Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>)
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|keys| Partitioning::Hash(keys, *partitions)),
+        partitioning => Some(partitioning.clone()),
+    };
+    let preserved = match &expected {
+        Some(Partitioning::Hash(_, _)) => expected.as_ref() == Some(&stage_partitioning),
+        _ => partitioning.partition_count() == stage_partitioning.partition_count(),
+    };
+    let partitions = stage_partitioning.partition_count();
+    let materialized = graph.materialized_ctes.contains(cte);
+    let mode = match usage {
+        // The only partition of the reference is read by every task of its stage.
+        PartitionUsage::Shared if preserved && partitions == 1 => InputMode::Broadcast,
+        // Each partition of the shared CTE is a channel of the shuffle service.
+        _ if materialized
+            && matches!(
+                graph.options.shuffle_backend,
+                ShuffleBackendKind::Celeborn { .. }
+            ) =>
+        {
+            InputMode::Shuffle
+        }
+        _ => InputMode::Rescale { partitions },
+    };
+    let mut properties = stage_properties_with_unknown_partitioning(graph, *stage, partitions);
+    if preserved && let Some(expected) = expected {
+        properties = Arc::new(properties.as_ref().clone().with_partitioning(expected));
+    }
+    let input = stage_input_exec(*stage, mode, properties);
+    if !materialized {
+        // The stage that reads the input is found when it is created.
+        graph
+            .pending_shared_readers
+            .insert(Arc::as_ptr(&input) as *const () as usize, (*cte, *number));
+    }
+    let input = match projection {
+        Some(projection) => {
+            let schema = input.schema();
+            let expressions = projection
+                .iter()
+                .map(|&index| {
+                    let name = schema.field(index).name();
+                    ProjectionExpr::new(Arc::new(Column::new(name, index)), name.clone())
+                })
+                .collect::<Vec<_>>();
+            Arc::new(ProjectionExec::try_new(expressions, input)?) as Arc<dyn ExecutionPlan>
+        }
+        None => input,
+    };
+    if preserved {
+        return Ok(PlannedSubtree::without_pending_scalar_subquery_expr(input));
+    }
+    let partitioning = match partitioning {
+        Partitioning::UnknownPartitioning(partitions) => Partitioning::RoundRobinBatch(*partitions),
+        partitioning => partitioning.clone(),
+    };
+    plan_job_graph_stages(
+        Arc::new(RepartitionExec::try_new(input, partitioning)?),
+        usage,
+        graph,
+        DriverStageHandling::CreateStage,
+        None,
+    )
 }
 
 fn build_barrier_job_graph(
@@ -1013,6 +1376,20 @@ fn push_stage(
     placement: TaskPlacement,
     mode: OutputMode,
 ) -> ExecutionResult<usize> {
+    let index = graph.stages.len();
+    if !graph.pending_shared_readers.is_empty() {
+        plan.apply(|node| {
+            let address = Arc::as_ptr(node) as *const () as usize;
+            if let Some((cte, reference)) = graph.pending_shared_readers.remove(&address) {
+                graph.shared_readers.push(SharedReader {
+                    cte,
+                    reference,
+                    stage: index,
+                });
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
     let (plan, inputs) = rewrite_inputs(plan)?;
     let stage = Stage {
         inputs,
@@ -1022,7 +1399,6 @@ fn push_stage(
         distribution,
         placement,
     };
-    let index = graph.stages.len();
     graph.stages.push(stage);
     Ok(index)
 }
@@ -1106,6 +1482,7 @@ mod tests {
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
     use super::{JobGraph, JobGraphOptions, create_scalar_subquery_input};
+    use crate::driver::job_scheduler::topology::JobTopology;
     use crate::job_graph::{InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement};
     use crate::plan::StageInputExec;
     use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
@@ -1126,6 +1503,7 @@ mod tests {
                 initial_stream_window_size: None,
                 initial_connection_window_size: None,
             },
+            worker_slots: None,
         }
     }
 
@@ -1136,6 +1514,7 @@ mod tests {
                 max_file_size: 1,
                 compression: ShuffleCompression::None,
             },
+            worker_slots: None,
         }
     }
 
@@ -1149,6 +1528,7 @@ mod tests {
                 partition_split_threshold: 1_i64 << 30,
                 partition_split_mode: PartitionSplitMode::Soft,
             },
+            worker_slots: None,
         }
     }
 
@@ -1256,6 +1636,289 @@ mod tests {
                     assert_eq!(limit.input().output_partitioning().partition_count(), 1);
                 }
             }
+        }
+    }
+
+    /// A shared CTE of two partitions, and a function that returns its references.
+    fn shared_cte(
+        id: usize,
+        volatile: bool,
+        body: Arc<dyn ExecutionPlan>,
+    ) -> (
+        Arc<sail_physical_plan::shared_cte::SharedCte>,
+        impl Fn() -> Arc<dyn ExecutionPlan>,
+    ) {
+        use datafusion::common::Statistics;
+        use sail_physical_plan::shared_cte::{SharedCte, SharedCteScanExec};
+
+        let cte = Arc::new(
+            SharedCte::new(id, format!("c{id}"), body.output_partitioning().clone())
+                .with_volatile(volatile),
+        );
+        let scan = {
+            let cte = Arc::clone(&cte);
+            move || -> Arc<dyn ExecutionPlan> {
+                Arc::new(SharedCteScanExec::new(
+                    Arc::clone(&cte),
+                    schema(),
+                    &Statistics::new_unknown(&schema()),
+                    None,
+                ))
+            }
+        };
+        (cte, scan)
+    }
+
+    fn collect_left_join(
+        build: Arc<dyn ExecutionPlan>,
+        probe: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
+        let key = col("id", &schema()).unwrap();
+        Arc::new(
+            HashJoinExec::try_new(
+                Arc::new(CoalescePartitionsExec::new(build)),
+                probe,
+                vec![(Arc::clone(&key), key)],
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                false,
+            )
+            .unwrap(),
+        )
+    }
+
+    /// Returns whether the job has a stage of a shared CTE that runs with its readers, and
+    /// the shared CTEs that are materialized.
+    fn shared_stages(graph: &JobGraph) -> (bool, Vec<usize>) {
+        let shared = graph
+            .stages
+            .iter()
+            .any(|stage| matches!(stage.mode, OutputMode::Shared));
+        let mut materialized = graph.materialized_ctes.iter().copied().collect::<Vec<_>>();
+        materialized.sort_unstable();
+        (shared, materialized)
+    }
+
+    #[test]
+    fn shared_cte_references_behind_materialized_outputs_evaluate_the_cte() {
+        use sail_physical_plan::shared_cte::share_ctes;
+
+        for (options, shared) in [
+            (flight_shuffle_options(), true),
+            (blocking_shuffle_options(), false),
+            (celeborn_shuffle_options(), false),
+        ] {
+            let body = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
+            let (cte, scan) = shared_cte(0, false, body.clone());
+            // The probe side runs after the build side, which is materialized by a blocking
+            // shuffle backend, so it cannot read the CTE with the build side.
+            let plan = share_ctes(collect_left_join(scan(), scan()), vec![(cte, body)]).unwrap();
+            let graph = JobGraph::try_new(plan, options).unwrap();
+            assert_eq!(shared_stages(&graph), (shared, vec![]));
+        }
+    }
+
+    #[test]
+    fn shared_cte_references_that_run_together_read_the_cte() {
+        use sail_physical_plan::shared_cte::share_ctes;
+
+        for options in [blocking_shuffle_options(), celeborn_shuffle_options()] {
+            let body = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
+            let (cte, scan) = shared_cte(0, false, body.clone());
+            let plan = share_ctes(
+                UnionExec::try_new(vec![scan(), scan()]).unwrap(),
+                vec![(cte, body)],
+            )
+            .unwrap();
+            let graph = JobGraph::try_new(plan, options).unwrap();
+            assert_eq!(shared_stages(&graph), (true, vec![]));
+        }
+    }
+
+    #[test]
+    fn volatile_shared_cte_with_late_references_is_materialized() {
+        use sail_physical_plan::shared_cte::share_ctes;
+
+        for options in [blocking_shuffle_options(), celeborn_shuffle_options()] {
+            let celeborn = matches!(options.shuffle_backend, ShuffleBackendKind::Celeborn { .. });
+            let body = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
+            let (cte, scan) = shared_cte(0, true, body.clone());
+            let plan = share_ctes(collect_left_join(scan(), scan()), vec![(cte, body)]).unwrap();
+            let graph = JobGraph::try_new(plan, options).unwrap();
+            assert_eq!(shared_stages(&graph), (false, vec![0]));
+            let stage = graph
+                .stages
+                .iter()
+                .position(|x| matches!(x.mode, OutputMode::Blocking) && x.inputs.is_empty())
+                .unwrap();
+            // The shuffle service serves each partition of the CTE as a channel.
+            assert_eq!(
+                graph.stages[stage].distribution.channels(),
+                if celeborn { 2 } else { 1 }
+            );
+            let modes = graph
+                .stages
+                .iter()
+                .flat_map(|x| x.inputs.iter().filter(|i| i.stage == stage).map(|i| i.mode))
+                .collect::<Vec<_>>();
+            assert_eq!(modes.len(), 2);
+            assert!(modes.iter().all(|x| if celeborn {
+                matches!(x, InputMode::Shuffle)
+            } else {
+                matches!(x, InputMode::Rescale { .. })
+            }));
+        }
+    }
+
+    /// A plan whose two references to a shared CTE of ten partitions are read by a union
+    /// of twenty partitions, which runs in one region with the stage of the CTE.
+    fn union_of_shared_cte(volatile: bool) -> Arc<dyn ExecutionPlan> {
+        use sail_physical_plan::shared_cte::share_ctes;
+
+        let body = UnionExec::try_new(vec![empty_plan(); 10]).unwrap();
+        let (cte, scan) = shared_cte(0, volatile, body.clone());
+        share_ctes(
+            UnionExec::try_new(vec![scan(), scan()]).unwrap(),
+            vec![(cte, body)],
+        )
+        .unwrap()
+    }
+
+    fn with_worker_slots(options: JobGraphOptions, slots: Option<usize>) -> JobGraphOptions {
+        JobGraphOptions {
+            worker_slots: slots,
+            ..options
+        }
+    }
+
+    /// Returns the largest number of worker task slots that a region of the job needs.
+    fn max_worker_slots(graph: &JobGraph) -> usize {
+        let topology = JobTopology::try_new(graph).unwrap();
+        (0..topology.regions.len())
+            .map(|r| topology.worker_slots(graph, r))
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn shared_cte_in_a_region_larger_than_the_cluster_is_evaluated_by_its_references() {
+        let options = with_worker_slots(celeborn_shuffle_options(), Some(10));
+        let graph = JobGraph::try_new(union_of_shared_cte(false), options).unwrap();
+        assert_eq!(shared_stages(&graph), (false, vec![]));
+        assert!(max_worker_slots(&graph) <= 10);
+    }
+
+    #[test]
+    fn shared_cte_runs_with_its_readers_when_the_cluster_size_is_not_limited() {
+        let options = with_worker_slots(celeborn_shuffle_options(), None);
+        let graph = JobGraph::try_new(union_of_shared_cte(false), options).unwrap();
+        assert_eq!(shared_stages(&graph), (true, vec![]));
+        assert_eq!(max_worker_slots(&graph), 20);
+    }
+
+    #[test]
+    fn volatile_shared_cte_in_a_region_larger_than_the_cluster_is_materialized() {
+        let options = with_worker_slots(celeborn_shuffle_options(), Some(10));
+        let graph = JobGraph::try_new(union_of_shared_cte(true), options).unwrap();
+        assert_eq!(shared_stages(&graph), (false, vec![0]));
+        let stage = graph
+            .stages
+            .iter()
+            .position(|x| matches!(x.mode, OutputMode::Blocking) && x.inputs.is_empty())
+            .unwrap();
+        assert_eq!(graph.stages[stage].distribution.channels(), 10);
+        assert!(max_worker_slots(&graph) <= 10);
+    }
+
+    #[test]
+    fn shared_cte_in_a_region_larger_than_the_cluster_is_evaluated_by_its_references_on_flight() {
+        let options = with_worker_slots(flight_shuffle_options(), Some(10));
+        let graph = JobGraph::try_new(union_of_shared_cte(false), options).unwrap();
+        assert_eq!(shared_stages(&graph), (false, vec![]));
+    }
+
+    #[test]
+    fn volatile_shared_cte_in_a_region_larger_than_the_cluster_runs_with_its_readers_on_flight() {
+        // Flight keeps mandatory sharing. The existing scheduler reports the region's
+        // twenty-slot requirement when only ten slots are configured.
+        let options = with_worker_slots(flight_shuffle_options(), Some(10));
+        let graph = JobGraph::try_new(union_of_shared_cte(true), options).unwrap();
+        assert_eq!(shared_stages(&graph), (true, vec![]));
+        assert_eq!(max_worker_slots(&graph), 20);
+        assert!(
+            graph
+                .stages
+                .iter()
+                .all(|x| !matches!(x.mode, OutputMode::Blocking))
+        );
+    }
+
+    #[test]
+    fn late_references_are_found_across_shared_ctes() {
+        use sail_physical_plan::shared_cte::share_ctes;
+
+        for options in [blocking_shuffle_options(), celeborn_shuffle_options()] {
+            let body = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
+            let (inner, inner_scan) = shared_cte(0, false, body.clone());
+            // The outer CTE reads the inner one, and the regions of both join through the
+            // reference to the inner CTE that runs after the build side.
+            let outer_body = inner_scan();
+            let (outer, outer_scan) = shared_cte(1, false, Arc::clone(&outer_body));
+            let plan = share_ctes(
+                collect_left_join(outer_scan(), inner_scan()),
+                vec![(inner, body), (outer, outer_body)],
+            )
+            .unwrap();
+            let graph = JobGraph::try_new(plan, options).unwrap();
+            assert_eq!(shared_stages(&graph), (false, vec![]));
+        }
+    }
+
+    #[test]
+    fn nested_shared_ctes_with_late_references_stay_linear() {
+        use sail_physical_plan::shared_cte::share_ctes;
+
+        let join = |build: Arc<dyn ExecutionPlan>, probe: Arc<dyn ExecutionPlan>| {
+            let key = col("id", &schema()).unwrap();
+            Arc::new(
+                HashJoinExec::try_new(
+                    Arc::new(CoalescePartitionsExec::new(build)),
+                    probe,
+                    vec![(Arc::clone(&key), key)],
+                    None,
+                    &JoinType::Inner,
+                    Some(vec![0]),
+                    PartitionMode::CollectLeft,
+                    NullEquality::NullEqualsNothing,
+                    false,
+                )
+                .unwrap(),
+            ) as Arc<dyn ExecutionPlan>
+        };
+        let depth = 12;
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            // Each CTE joins two references to the CTE before it.
+            let mut body = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
+            let mut ctes = vec![];
+            for id in 0..depth {
+                let (cte, scan) = shared_cte(id, false, Arc::clone(&body));
+                ctes.push((cte, body));
+                body = join(scan(), scan());
+            }
+            let plan = share_ctes(body, ctes).unwrap();
+            let graph = JobGraph::try_new(plan, options).unwrap();
+            assert!(
+                graph.stages.len() < 20 * depth,
+                "{} stages",
+                graph.stages.len()
+            );
         }
     }
 
@@ -1518,6 +2181,9 @@ mod tests {
                 stages: vec![],
                 schema: schema(),
                 options,
+                shared_readers: vec![],
+                pending_shared_readers: Default::default(),
+                materialized_ctes: Default::default(),
             };
             let input = create_scalar_subquery_input(&empty_plan(), &mut graph).unwrap();
 
@@ -1908,5 +2574,28 @@ mod tests {
                 .iter()
                 .any(|input| matches!(input.mode, InputMode::Broadcast))
         );
+    }
+    #[test]
+    fn nested_volatile_shared_ctes_keep_one_evaluation_and_their_capacity_requirement() {
+        use sail_physical_plan::shared_cte::share_ctes;
+        for outer_volatile in [false, true] {
+            for slots in [None, Some(10), Some(40)] {
+                let body = UnionExec::try_new(vec![empty_plan(); 10]).unwrap();
+                let (inner, inner_scan) = shared_cte(0, true, body.clone());
+                let outer_body = UnionExec::try_new(vec![inner_scan(), inner_scan()]).unwrap();
+                let (outer, outer_scan) = shared_cte(1, outer_volatile, outer_body.clone());
+                let plan = share_ctes(
+                    UnionExec::try_new(vec![outer_scan(), outer_scan()]).unwrap(),
+                    vec![(inner, body), (outer, outer_body)],
+                )
+                .unwrap();
+                let graph =
+                    JobGraph::try_new(plan, with_worker_slots(flight_shuffle_options(), slots))
+                        .unwrap();
+                assert_eq!(shared_stages(&graph), (true, vec![]));
+                assert_eq!(graph.shared_readers.len(), 4);
+                assert_eq!(max_worker_slots(&graph), 40);
+            }
+        }
     }
 }

@@ -120,6 +120,7 @@ impl TaskStreamAccessor {
         &self,
         key: TaskStreamKey,
         replicas: usize,
+        shared: bool,
         schema: SchemaRef,
     ) -> Result<Box<dyn TaskStreamChannelSink>> {
         let (result, rx) = oneshot::channel();
@@ -127,6 +128,7 @@ impl TaskStreamAccessor {
             TaskRunnerMessage::CreateLocalStream {
                 key,
                 replicas,
+                shared: shared.then(|| Arc::clone(&self.context)),
                 schema,
                 result,
             },
@@ -382,11 +384,16 @@ impl TaskStreamWriter for MultiChannelTaskStreamWriter {
         }
         let channels = self.output.channels();
         let sinks = match &self.output.locator {
-            TaskOutputLocator::Pipelined { replicas } => {
+            TaskOutputLocator::Pipelined { replicas } | TaskOutputLocator::Shared { replicas } => {
+                let shared = matches!(self.output.locator, TaskOutputLocator::Shared { .. });
+                // A shared output has one channel, since a batch that is written to a channel
+                // whose replicas do not ask for it would wait for them.
+                debug_assert!(!shared || channels == 1);
                 try_join_all((0..channels).map(|channel| {
                     self.streams.create_local_stream(
                         self.key.task_stream_key(channel),
                         *replicas,
+                        shared,
                         self.schema.clone(),
                     )
                 }))

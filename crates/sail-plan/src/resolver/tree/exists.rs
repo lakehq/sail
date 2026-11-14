@@ -19,6 +19,7 @@ use sail_logical_optimizer::{exists_by_count, pull_up_correlated_filters_in_pred
 
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
+use crate::shared_cte::{CteReference, exists_in_plan_or_cte_definitions};
 
 pub(crate) struct ExistsRewriter<'s> {
     plan: LogicalPlan,
@@ -166,29 +167,60 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
 }
 
 impl ExistsRewriter<'_> {
+    /// Returns whether the rewrite of a correlated EXISTS subquery stops in the plan,
+    /// without a decision from an aggregation or a limit at the top of the plan
+    /// that does not depend on the rows of its input.
+    fn stops_in(plan: &LogicalPlan) -> bool {
+        match plan {
+            LogicalPlan::Projection(projection) => Self::stops_in(&projection.input),
+            LogicalPlan::SubqueryAlias(alias) => Self::stops_in(&alias.input),
+            LogicalPlan::Sort(sort) => Self::stops_in(&sort.input),
+            LogicalPlan::Aggregate(aggregate) => !aggregate.group_expr.is_empty(),
+            LogicalPlan::Limit(limit) => {
+                if matches!(limit.get_fetch_type(), Ok(FetchType::Literal(Some(0)))) {
+                    false
+                } else if matches!(limit.get_skip_type(), Ok(SkipType::Literal(0))) {
+                    Self::stops_in(&limit.input)
+                } else {
+                    // The rows are counted after skipping some of them.
+                    true
+                }
+            }
+            LogicalPlan::TableScan(scan) => match CteReference::try_from_scan(scan) {
+                Some(reference) => Self::stops_in(reference.definition().resolved()),
+                None => true,
+            },
+            _ => true,
+        }
+    }
+
+    /// Returns the plan in which the bounds of each limit are integer literals.
+    fn literal_limits(plan: LogicalPlan) -> Result<LogicalPlan> {
+        plan.transform_up(|plan| {
+            let LogicalPlan::Limit(mut limit) = plan else {
+                return Ok(Transformed::no(plan));
+            };
+            let evaluator = LiteralEvaluator::new();
+            for bound in [&mut limit.skip, &mut limit.fetch].into_iter().flatten() {
+                if bound.is_volatile() {
+                    return Err(plan_datafusion_err!("LIMIT/OFFSET must be constant"));
+                }
+                let value = evaluator.evaluate(bound)?;
+                **bound = lit(LiteralValue(&value).try_to_i64()?);
+            }
+            Ok(Transformed::yes(LogicalPlan::Limit(limit)))
+        })
+        .data()
+    }
+
     fn count_rows(&mut self, query: LogicalPlan, skip: usize) -> Result<Expr> {
         let output = self.state.register_field_name("");
         exists_by_count(query, skip, &output, Self::validate_correlated_operators)
     }
 
     fn correlated_exists(&mut self, query: LogicalPlan) -> Result<Expr> {
-        let mut query = pull_up_correlated_filters_in_predicate_subquery(query)?
-            .data
-            .transform_up(|plan| {
-                let LogicalPlan::Limit(mut limit) = plan else {
-                    return Ok(Transformed::no(plan));
-                };
-                let evaluator = LiteralEvaluator::new();
-                for bound in [&mut limit.skip, &mut limit.fetch].into_iter().flatten() {
-                    if bound.is_volatile() {
-                        return Err(plan_datafusion_err!("LIMIT/OFFSET must be constant"));
-                    }
-                    let value = evaluator.evaluate(bound)?;
-                    **bound = lit(LiteralValue(&value).try_to_i64()?);
-                }
-                Ok(Transformed::yes(LogicalPlan::Limit(limit)))
-            })
-            .data()?;
+        let mut query =
+            Self::literal_limits(pull_up_correlated_filters_in_predicate_subquery(query)?.data)?;
         let query = loop {
             query = match query {
                 LogicalPlan::Projection(projection) => Arc::unwrap_or_clone(projection.input),
@@ -207,10 +239,14 @@ impl ExistsRewriter<'_> {
                             if Self::scalar_aggregate_has_filter(&limit.input).is_some() {
                                 return Ok(lit(false));
                             }
-                            if limit.input.exists(|plan| {
-                                Ok(matches!(plan, LogicalPlan::Aggregate(aggregate) if aggregate.group_expr.is_empty()))
+                            if exists_in_plan_or_cte_definitions(&limit.input, &mut |plan| {
+                                Ok(
+                                    matches!(plan, LogicalPlan::Aggregate(aggregate) if aggregate.group_expr.is_empty()),
+                                )
                             })? {
-                                return not_impl_err!("projected correlated EXISTS with OFFSET over nested scalar aggregation");
+                                return not_impl_err!(
+                                    "projected correlated EXISTS with OFFSET over nested scalar aggregation"
+                                );
                             }
                             return self.count_rows(Arc::unwrap_or_clone(limit.input), skip);
                         }
@@ -221,10 +257,25 @@ impl ExistsRewriter<'_> {
                         }
                     }
                 }
+                // The rewrite looks at a CTE reference as at its definition, except that
+                // a reference to a volatile definition is kept when the rewrite would
+                // stop in the definition, so that it reads the evaluation of the other
+                // references.
+                LogicalPlan::TableScan(scan) => match CteReference::try_from_scan(&scan) {
+                    Some(reference)
+                        if !(reference.definition().volatile()
+                            && Self::stops_in(reference.definition().resolved())) =>
+                    {
+                        Self::literal_limits(reference.definition().resolved().as_ref().clone())?
+                    }
+                    _ => break LogicalPlan::TableScan(scan),
+                },
                 query => break query,
             };
         };
         // Pulling these operators above correlation would change empty-input semantics.
+        // The definition of a CTE reference does not refer to the outer query, so the
+        // correlation is not pulled up through it.
         if query.exists(|plan| {
             Ok(match plan {
                 LogicalPlan::Aggregate(aggregate) => aggregate.group_expr.is_empty(),

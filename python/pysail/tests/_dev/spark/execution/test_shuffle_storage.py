@@ -4,6 +4,7 @@ import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.errors import PySparkException
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.session import spark_connect_server
@@ -87,3 +88,26 @@ def test_repartition_collect_with_storage_shuffle(spark):
         Row(group=1, count=10),
         Row(group=2, count=10),
     ]
+
+
+# A CTE body that is shared, and that a stage of the same task region reads with a failing
+# expression, so that the region is retried after the input of the body is consumed.
+RETRIED_CTE_QUERY = (
+    "WITH c AS (SELECT k, max(v) AS v, 100 DIV (k - 3) AS f "
+    "FROM (SELECT id AS k, id AS v FROM range(0, 2000, 1, 3)) GROUP BY k) "
+    "SELECT (SELECT sum(CASE WHEN k <> 3 THEN f END) FROM c), (SELECT count(*) FROM c)"
+)
+
+
+def check_retried_cte_query_fails(spark):
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        for _ in range(24):
+            with pytest.raises(PySparkException, match=r"(?i)division by zero"):
+                spark.sql(RETRIED_CTE_QUERY).collect()
+    finally:
+        spark.conf.unset("spark.sql.ansi.enabled")
+
+
+def test_retried_region_reads_the_output_of_a_blocking_stage(spark):
+    check_retried_cte_query_fails(spark)

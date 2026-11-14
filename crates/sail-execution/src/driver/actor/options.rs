@@ -42,6 +42,13 @@ pub struct DriverComponents {
 }
 
 impl DriverOptions {
+    /// Returns the number of worker task slots that the cluster can provide, if the number
+    /// of workers is limited.
+    pub(crate) fn worker_slots(&self) -> Option<usize> {
+        (self.worker_max_count > 0)
+            .then(|| self.worker_max_count.saturating_mul(self.worker_task_slots))
+    }
+
     pub fn try_new(
         config: &AppConfig,
         runtime: RuntimeHandle,

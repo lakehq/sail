@@ -1,5 +1,6 @@
 mod planner;
 
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
@@ -13,6 +14,8 @@ use crate::shuffle::ShuffleBackendKind;
 #[derive(Debug, Clone)]
 pub struct JobGraphOptions {
     pub shuffle_backend: ShuffleBackendKind,
+    /// The number of worker task slots that the cluster can provide, if it is limited.
+    pub worker_slots: Option<usize>,
 }
 
 /// A job graph represents a distributed execution plan for a job.
@@ -29,6 +32,22 @@ pub struct JobGraph {
     /// The output schema of the job.
     schema: SchemaRef,
     options: JobGraphOptions,
+    /// The stages that read shared CTEs whose stages run with their readers.
+    shared_readers: Vec<SharedReader>,
+    /// The references to shared CTEs whose stages are not created yet, as pairs of the
+    /// identifier of the CTE and the number of the reference, by the address of the
+    /// placeholder of the input that reads the CTE.
+    pending_shared_readers: HashMap<usize, (usize, usize)>,
+    /// The shared CTEs whose output is materialized by the shuffle backend.
+    materialized_ctes: HashSet<usize>,
+}
+
+/// A stage that reads a shared CTE for one of its references.
+#[derive(Debug, Clone, Copy)]
+struct SharedReader {
+    cte: usize,
+    reference: usize,
+    stage: usize,
 }
 
 impl JobGraph {
@@ -177,6 +196,9 @@ impl fmt::Display for InputMode {
 #[derive(Debug, Clone, Copy)]
 pub enum OutputMode {
     Pipelined,
+    /// The output is read by each consumer at its own pace, in the region of its
+    /// consumers, and produced when a consumer asks for rows that no consumer has read.
+    Shared,
     Blocking,
 }
 
@@ -184,6 +206,7 @@ impl fmt::Display for OutputMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             OutputMode::Pipelined => write!(f, "Pipelined"),
+            OutputMode::Shared => write!(f, "Shared"),
             OutputMode::Blocking => write!(f, "Blocking"),
         }
     }

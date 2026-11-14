@@ -42,6 +42,7 @@ use super::delta::parse_delta_generation_expr;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
+use crate::shared_cte::exists_in_plan_or_cte_definitions;
 
 /// The write modes for all targets.
 ///
@@ -1785,8 +1786,8 @@ impl PlanResolver<'_> {
     }
 
     pub(super) fn plan_has_default_column_value(plan: &LogicalPlan) -> PlanResult<bool> {
-        let mut found = false;
-        plan.apply(|node| {
+        Ok(exists_in_plan_or_cte_definitions(plan, &mut |node| {
+            let mut found = false;
             node.apply_expressions(|expr| {
                 if Self::expr_contains_default_column_value(expr)? {
                     found = true;
@@ -1795,13 +1796,8 @@ impl PlanResolver<'_> {
                     Ok(TreeNodeRecursion::Continue)
                 }
             })?;
-            Ok(if found {
-                TreeNodeRecursion::Stop
-            } else {
-                TreeNodeRecursion::Continue
-            })
-        })?;
-        Ok(found)
+            Ok(found)
+        })?)
     }
 
     fn make_nullable_if_needed(expr: Expr, field: &Field, schema: &DFSchema) -> PlanResult<Expr> {

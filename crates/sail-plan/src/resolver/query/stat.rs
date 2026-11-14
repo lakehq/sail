@@ -384,12 +384,7 @@ impl PlanResolver<'_> {
             .distinct()?
             .build()?;
         // TODO: This can be expensive for large input datasets
-        let distinct_values_batches = self
-            .ctx
-            .execute_logical_plan(distinct_values)
-            .await?
-            .collect()
-            .await?;
+        let distinct_values_batches = self.execute_auxiliary_plan(distinct_values).await?;
 
         let mut unique_values: Vec<(String, String)> = vec![];
         for batch in distinct_values_batches {
