@@ -48,27 +48,49 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                     match node {
                         LogicalPlan::Aggregate(aggregate) => {
                             aggregates += 1;
-                            unsupported |= !aggregate.group_expr.is_empty();
+                            if !unsupported {
+                                unsupported = !aggregate.group_expr.is_empty();
+                            }
                         }
                         LogicalPlan::Filter(filter) if filter.predicate.contains_outer() => {
                             // This traversal is top-down. A filter encountered
                             // before the aggregate is HAVING, not its input.
-                            unsupported |= aggregates == 0;
+                            if !unsupported {
+                                unsupported = aggregates == 0;
+                            }
                             filters += 1;
-                            needs_domain |=
-                                split_conjunction(&filter.predicate).iter().any(|expr| {
-                                    expr.contains_outer()
-                                        && correlated_equality_key(expr, true).is_none()
-                                });
+                            if !needs_domain {
+                                needs_domain =
+                                    split_conjunction(&filter.predicate).iter().any(|expr| {
+                                        expr.contains_outer()
+                                            && correlated_equality_key(expr, true).is_none()
+                                    });
+                            }
+                        }
+                        // The domain joins the input of the correlated filter, so a join below
+                        // the filter only produces that input.
+                        LogicalPlan::Join(_) if filters > 0 => {
+                            if !unsupported {
+                                unsupported = node.contains_outer_reference();
+                            }
                         }
                         LogicalPlan::Join(_)
                         | LogicalPlan::Union(_)
                         | LogicalPlan::Window(_)
                         | LogicalPlan::Limit(_)
                         | LogicalPlan::Subquery(_) => unsupported = true,
-                        _ => unsupported |= node.contains_outer_reference(),
+                        _ => {
+                            if !unsupported {
+                                unsupported = node.contains_outer_reference();
+                            }
+                        }
                     }
-                    Ok(TreeNodeRecursion::Continue)
+                    // An unsupported subquery is left as is, so the rest of it is not needed.
+                    Ok(if unsupported {
+                        TreeNodeRecursion::Stop
+                    } else {
+                        TreeNodeRecursion::Continue
+                    })
                 })?;
                 if unsupported || !needs_domain || aggregates != 1 || filters != 1 {
                     return Ok(Transformed::no(Expr::ScalarSubquery(query)));
@@ -352,4 +374,57 @@ fn has_unreproducible_volatile_expression(plan: &LogicalPlan) -> Result<bool> {
         }
         Ok(false)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::datasource::empty::EmptyTable;
+    use datafusion::datasource::provider_as_source;
+    use datafusion::functions_aggregate::expr_fn::sum;
+    use datafusion::optimizer::OptimizerContext;
+    use datafusion_expr::{JoinType, col, scalar_subquery};
+
+    use super::*;
+
+    #[test]
+    fn keeps_correlated_join_below_correlated_inequality_filter() -> Result<()> {
+        let scan = |name| {
+            let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+            LogicalPlanBuilder::scan(
+                name,
+                provider_as_source(Arc::new(EmptyTable::new(schema))),
+                None,
+            )
+        };
+        let outer = Expr::OuterReferenceColumn(
+            Arc::new(Field::new("id", DataType::Int64, true)),
+            Column::new(Some("o"), "id"),
+        );
+        for correlated_join in [false, true] {
+            let mut on = col("l.id").eq(col("r.id"));
+            if correlated_join {
+                on = on.and(col("r.id").eq(outer.clone()));
+            }
+            let subquery = scan("l")?
+                .join_on(scan("r")?.build()?, JoinType::Inner, vec![on])?
+                .filter(col("l.id").lt(outer.clone()))?
+                .aggregate(Vec::<Expr>::new(), vec![sum(col("l.id"))])?
+                .build()?;
+            let plan = scan("o")?
+                .project(vec![scalar_subquery(Arc::new(subquery))])?
+                .build()?;
+            let result =
+                NormalizeScalarSubqueryDomain.rewrite(plan.clone(), &OptimizerContext::new())?;
+            if correlated_join {
+                assert!(!result.transformed);
+                assert_eq!(result.data, plan);
+            } else {
+                // The otherwise identical input is eligible for domain normalization.
+                assert!(result.transformed);
+                assert_ne!(result.data, plan);
+            }
+        }
+        Ok(())
+    }
 }
