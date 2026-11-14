@@ -816,39 +816,13 @@ fn create_shared_input(
     properties: Arc<PlanProperties>,
     scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    if !matches!(
-        graph.options.shuffle_backend,
-        ShuffleBackendKind::Flight { .. }
-    ) {
-        return create_shuffle(
-            plan,
-            graph,
-            properties,
-            ShuffleConsumption::Multiple,
-            scalar_context,
-        );
-    }
-
-    // Keep query execution on workers and retain its completed output on the driver.
-    // Consumers can then run in independent regions, and worker loss after collection
-    // cannot force a different choice of limited or volatile rows on a retry.
-    let plan = wrap_pending_scalar_subqueries(plan, scalar_context);
-    let producer = push_stage(
+    create_shuffle(
         plan,
         graph,
-        OutputDistribution::RoundRobinBatch { channels: 1 },
-        TaskPlacement::Worker,
-        OutputMode::Pipelined,
-    )?;
-    let input = stage_input_exec(producer, InputMode::Forward, properties.clone());
-    let retained = push_stage(
-        input,
-        graph,
-        OutputDistribution::RoundRobinBatch { channels: 1 },
-        TaskPlacement::Driver,
-        OutputMode::Retained,
-    )?;
-    Ok(stage_input_exec(retained, InputMode::Broadcast, properties))
+        properties,
+        ShuffleConsumption::Multiple,
+        scalar_context,
+    )
 }
 
 fn create_merge_input(
@@ -1198,22 +1172,7 @@ mod tests {
             input = &collector.inputs[*source.input()];
         }
         assert!(matches!(input.mode, InputMode::Broadcast));
-        let mut producer = &graph.stages[input.stage];
-        if matches!(
-            graph.options.shuffle_backend,
-            ShuffleBackendKind::Flight { .. }
-        ) {
-            assert!(matches!(producer.mode, OutputMode::Retained));
-            assert_eq!(producer.placement, TaskPlacement::Driver);
-            assert_eq!(producer.plan.output_partitioning().partition_count(), 1);
-            let source = producer
-                .plan
-                .downcast_ref::<StageInputExec<usize>>()
-                .unwrap();
-            let input = &producer.inputs[*source.input()];
-            assert!(matches!(input.mode, InputMode::Forward));
-            producer = &graph.stages[input.stage];
-        }
+        let producer = &graph.stages[input.stage];
         assert_eq!(producer.placement, TaskPlacement::Worker);
         assert_eq!(producer.plan.output_partitioning().partition_count(), 1);
         producer
@@ -1525,12 +1484,6 @@ mod tests {
             ) as Arc<dyn ExecutionPlan>;
             let graph = JobGraph::try_new(inner.clone(), options.clone()).unwrap();
             assert_eq!(graph.stages.len(), 1);
-            assert!(
-                !graph
-                    .stages
-                    .iter()
-                    .any(|stage| matches!(stage.mode, OutputMode::Retained))
-            );
 
             let outer = HashJoinExec::try_new(
                 inner,
@@ -1554,14 +1507,7 @@ mod tests {
                     .unwrap()
             );
             if matches!(options.shuffle_backend, ShuffleBackendKind::Flight { .. }) {
-                assert_eq!(
-                    graph
-                        .stages
-                        .iter()
-                        .filter(|stage| matches!(stage.mode, OutputMode::Retained))
-                        .count(),
-                    1
-                );
+                assert_eq!(graph.stages.len(), 2);
             }
         }
     }
