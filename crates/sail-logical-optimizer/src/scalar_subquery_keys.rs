@@ -9,7 +9,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Cast, GroupingSet};
 use datafusion_expr::expr_rewriter::{NamePreserver, strip_outer_reference};
-use datafusion_expr::logical_plan::{Aggregate, Filter, Projection};
+use datafusion_expr::logical_plan::{Aggregate, Filter, Projection, Subquery};
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, enumerate_grouping_sets, grouping_set_to_exprlist,
     split_conjunction,
@@ -41,42 +41,98 @@ impl OptimizerRule for NormalizeScalarSubqueryKeys {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        if !matches!(plan, LogicalPlan::Projection(_) | LogicalPlan::Filter(_))
-            || !expressions_exist(&plan, |expression| match expression {
-                Expr::ScalarSubquery(query) => !query.outer_ref_columns.is_empty(),
-                _ => false,
-            })?
-        {
-            return Ok(Transformed::no(plan));
-        }
-        let names = NamePreserver::new(&plan);
-        let mut reserved = BTreeSet::new();
-        reserve_key_names(&mut reserved, plan.schema());
-        plan.map_expressions(|expression| {
-            let name = names.save(&expression);
-            expression
-                .transform_up(|expression| {
-                    let Expr::ScalarSubquery(mut query) = expression else {
-                        return Ok(Transformed::no(expression));
-                    };
-                    if query.outer_ref_columns.is_empty() {
-                        return Ok(Transformed::no(Expr::ScalarSubquery(query)));
-                    }
-                    normalize_keys(&query.subquery, config.alias_generator(), &mut reserved).map(
-                        |result| {
-                            if result.transformed {
-                                query.subquery = Arc::new(result.data);
-                            }
-                            Transformed::new_transformed(
-                                Expr::ScalarSubquery(query),
-                                result.transformed,
-                            )
-                        },
-                    )
-                })
-                .map(|result| result.update_data(|expression| name.restore(expression)))
-        })
+        normalize_subqueries(plan, config, SubqueryKind::Scalar)
     }
+}
+
+/// Normalize grouping keys for native correlated `IN` and `EXISTS` aggregates,
+/// which DataFusion decorrelates before scalar subqueries.
+#[derive(Debug)]
+pub struct NormalizePredicateSubqueryKeys;
+
+impl OptimizerRule for NormalizePredicateSubqueryKeys {
+    fn name(&self) -> &str {
+        "normalize_predicate_subquery_keys"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::BottomUp)
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
+        normalize_subqueries(plan, config, SubqueryKind::Predicate)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SubqueryKind {
+    Scalar,
+    Predicate,
+}
+
+impl SubqueryKind {
+    fn subquery(self, expression: &Expr) -> Option<&Subquery> {
+        match (self, expression) {
+            (Self::Scalar, Expr::ScalarSubquery(query)) => Some(query),
+            (Self::Predicate, Expr::Exists(exists)) => Some(&exists.subquery),
+            (Self::Predicate, Expr::InSubquery(query)) => Some(&query.subquery),
+            _ => None,
+        }
+    }
+
+    fn subquery_mut(self, expression: &mut Expr) -> Option<&mut Subquery> {
+        match (self, expression) {
+            (Self::Scalar, Expr::ScalarSubquery(query)) => Some(query),
+            (Self::Predicate, Expr::Exists(exists)) => Some(&mut exists.subquery),
+            (Self::Predicate, Expr::InSubquery(query)) => Some(&mut query.subquery),
+            _ => None,
+        }
+    }
+}
+
+fn normalize_subqueries(
+    plan: LogicalPlan,
+    config: &dyn OptimizerConfig,
+    kind: SubqueryKind,
+) -> Result<Transformed<LogicalPlan>> {
+    if !matches!(plan, LogicalPlan::Projection(_) | LogicalPlan::Filter(_))
+        || !expressions_exist(&plan, |expression| {
+            kind.subquery(expression)
+                .is_some_and(|query| !query.outer_ref_columns.is_empty())
+        })?
+    {
+        return Ok(Transformed::no(plan));
+    }
+    let names = NamePreserver::new(&plan);
+    let mut reserved = BTreeSet::new();
+    reserve_key_names(&mut reserved, plan.schema());
+    plan.map_expressions(|expression| {
+        let name = names.save(&expression);
+        expression
+            .transform_up(|mut expression| {
+                let Some(query) = kind.subquery_mut(&mut expression) else {
+                    return Ok(Transformed::no(expression));
+                };
+                if query.outer_ref_columns.is_empty() {
+                    return Ok(Transformed::no(expression));
+                }
+                let result = normalize_keys(
+                    &query.subquery,
+                    config.alias_generator(),
+                    &mut reserved,
+                    kind,
+                )?;
+                if result.transformed {
+                    query.subquery = Arc::new(result.data);
+                }
+                Ok(Transformed::new_transformed(expression, result.transformed))
+            })
+            .map(|result| result.update_data(|expression| name.restore(expression)))
+    })
 }
 
 fn native_equality(expression: &Expr) -> Option<(&Expr, &Expr)> {
@@ -261,6 +317,7 @@ fn normalize_keys(
     plan: &LogicalPlan,
     aliases: &AliasGenerator,
     reserved: &mut BTreeSet<String>,
+    kind: SubqueryKind,
 ) -> Result<Transformed<LogicalPlan>> {
     let mut has_aggregate = false;
     let mut has_cast = false;
@@ -409,9 +466,10 @@ fn normalize_keys(
     }
 
     // Preserve grouped producers when replacing a cast would violate native's
-    // requirement that every original grouping column occurs in a correlation.
-    // Like DataFusion's `check_aggregation_in_scalar_subquery`, this checks only
-    // the outermost aggregate; aggregates below it may group by anything.
+    // requirement that every original grouping column of a scalar subquery occurs
+    // in a correlation. Like DataFusion's `check_aggregation_in_scalar_subquery`,
+    // this checks only the outermost aggregate; aggregates below it may group by
+    // anything, and `IN` and `EXISTS` subqueries may group by any column.
     let (mut correlations, mut keyed) = (Vec::new(), Vec::new());
     let mut domains = BTreeSet::new();
     // Discover the complete set before validating retained predicates: a deeper
@@ -436,15 +494,17 @@ fn normalize_keys(
     {
         return Ok(Transformed::no(plan.clone()));
     }
-    for aggregate in keyed {
-        let correlated = collect_subquery_cols(&correlations, aggregate.input.schema())?;
-        if aggregate
-            .group_expr
-            .iter()
-            .flat_map(Expr::column_refs)
-            .any(|column| !correlated.contains(column))
-        {
-            return Ok(Transformed::no(plan.clone()));
+    if matches!(kind, SubqueryKind::Scalar) {
+        for aggregate in keyed {
+            let correlated = collect_subquery_cols(&correlations, aggregate.input.schema())?;
+            if aggregate
+                .group_expr
+                .iter()
+                .flat_map(Expr::column_refs)
+                .any(|column| !correlated.contains(column))
+            {
+                return Ok(Transformed::no(plan.clone()));
+            }
         }
     }
 
@@ -479,7 +539,7 @@ fn normalize_keys(
     Ok(Transformed::yes(if carried.schema() == &schema {
         carried
     } else {
-        // The scalar result stays one column until native decorrelation consumes
+        // The subquery output keeps its columns until native decorrelation consumes
         // its correlation keys as join inputs.
         LogicalPlan::Projection(Projection::new_from_schema(Arc::new(carried), schema))
     }))

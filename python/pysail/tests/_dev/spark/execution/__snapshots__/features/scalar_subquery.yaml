@@ -91,6 +91,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -285,6 +288,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -398,6 +404,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -840,6 +849,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -990,6 +1002,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -1445,6 +1460,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -1595,6 +1613,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -2066,6 +2087,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -2307,6 +2331,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -2426,6 +2453,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -2970,6 +3000,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -3147,6 +3180,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -3679,6 +3715,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -3791,6 +3830,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -4161,6 +4203,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -4286,6 +4331,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -4687,6 +4735,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -4806,6 +4857,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -5270,6 +5324,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -5389,6 +5446,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -5854,6 +5914,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -5967,6 +6030,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -6352,6 +6418,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -6465,6 +6534,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -6905,6 +6977,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -7032,6 +7107,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -7459,6 +7537,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -7586,6 +7667,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -8024,6 +8108,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -8137,6 +8224,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -8551,6 +8641,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -8664,6 +8757,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -9094,6 +9190,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -9208,6 +9307,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -9638,6 +9740,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -9772,6 +9877,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -10250,6 +10358,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -10386,6 +10497,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -10824,6 +10938,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -10939,6 +11056,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -11385,6 +11505,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -11498,6 +11621,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -11883,6 +12009,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -11996,6 +12125,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -12381,6 +12513,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -12495,6 +12630,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -12911,6 +13049,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -13025,6 +13166,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -13454,6 +13598,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_predicate_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -13568,6 +13715,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_predicate_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:

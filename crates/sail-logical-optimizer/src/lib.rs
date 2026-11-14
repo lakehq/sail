@@ -33,7 +33,7 @@ use prune_seeded_random::PruneSeededRandomColumns;
 use resolve_lambda_variables::ResolveLambdaVariables;
 use rewrite_binary_grouping::RewriteBinaryGrouping;
 use scalar_iterator_udf::ExtractScalarIteratorUDF;
-use scalar_subquery_keys::NormalizeScalarSubqueryKeys;
+use scalar_subquery_keys::{NormalizePredicateSubqueryKeys, NormalizeScalarSubqueryKeys};
 
 use crate::type_coercion::TypeCoercion;
 
@@ -94,6 +94,7 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
             // are converted to joins.
             custom.push(Arc::new(correlated_limit::RemoveExistsLimit));
             custom.push(Arc::new(correlated_limit::DecorrelateLimit));
+            custom.push(Arc::new(NormalizePredicateSubqueryKeys));
             custom.push(rule);
             continue;
         }
