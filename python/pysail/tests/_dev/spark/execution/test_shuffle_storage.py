@@ -4,6 +4,7 @@ import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.errors import PySparkException
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.session import spark_connect_server
@@ -87,3 +88,14 @@ def test_repartition_collect_with_storage_shuffle(spark):
         Row(group=1, count=10),
         Row(group=2, count=10),
     ]
+
+
+def test_zero_tail_does_not_run_shuffle_producers(spark):
+    df = (
+        spark.range(0, 10, 1, 4)
+        .selectExpr("id", "raise_error(concat('tail input evaluated: ', cast(id as string))) AS value")
+        .repartition(3)
+    )
+    assert df.tail(0) == []
+    with pytest.raises(PySparkException, match="tail input evaluated"):
+        df.tail(1)

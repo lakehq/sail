@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{Distribution, Partitioning, PhysicalExpr};
+use datafusion::physical_expr::{Distribution, OrderingRequirements, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -67,8 +68,13 @@ impl ExecutionPlan for TailExec {
         vec![Distribution::SinglePartition]
     }
 
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        vec![self.input.output_ordering().cloned().map(Into::into)]
+    }
+
     fn maintains_input_order(&self) -> Vec<bool> {
-        vec![true]
+        // Changing the input ordering changes which rows the tail selects.
+        vec![false]
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -122,6 +128,7 @@ impl ExecutionPlan for TailExec {
             return exec_err!("TailExec: partition index out of range: {partition}");
         }
         let fetch = self.fetch;
+        let reservation = MemoryConsumer::new("TailExec").register(context.memory_pool());
         let input = if fetch == 0 {
             None
         } else {
@@ -129,10 +136,13 @@ impl ExecutionPlan for TailExec {
         };
         let output = stream::once(async move {
             let batches = match input {
-                Some(input) => take_last(last_rows(input, fetch).await?, fetch),
+                Some(input) => take_last(last_rows(input, fetch, &reservation).await?, fetch),
                 None => VecDeque::new(),
             };
-            Ok::<_, DataFusionError>(stream::iter(batches.into_iter().map(Ok)))
+            Ok::<_, DataFusionError>(stream::iter(batches.into_iter().map(move |batch| {
+                reservation.shrink(batch.bytes);
+                Ok(batch.batch)
+            })))
         })
         .try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -142,13 +152,20 @@ impl ExecutionPlan for TailExec {
     }
 }
 
+/// Keep the original charge when slicing a batch: the slice still retains its backing buffers.
+struct RetainedBatch {
+    batch: RecordBatch,
+    bytes: usize,
+}
+
 /// Returns the batches that hold the last rows of the stream, keeping no more batches than
-/// needed for them.
+/// needed for them. The caller owns the reservation until the retained batches are emitted.
 async fn last_rows(
     mut input: SendableRecordBatchStream,
     fetch: usize,
-) -> Result<VecDeque<RecordBatch>> {
-    let mut batches = VecDeque::new();
+    reservation: &MemoryReservation,
+) -> Result<VecDeque<RetainedBatch>> {
+    let mut batches: VecDeque<RetainedBatch> = VecDeque::new();
     let mut rows = 0;
     while let Some(batch) = input.next().await {
         let batch = batch?;
@@ -156,31 +173,33 @@ async fn last_rows(
             continue;
         }
         rows += batch.num_rows();
-        batches.push_back(batch);
+        // Release obsolete batches before reserving the new one, so replacement does not
+        // require enough pool capacity for both the old and new suffixes.
         while let Some(front) = batches.front()
-            && rows - front.num_rows() >= fetch
+            && rows - front.batch.num_rows() >= fetch
         {
-            rows -= front.num_rows();
-            batches.pop_front();
+            rows -= front.batch.num_rows();
+            if let Some(front) = batches.pop_front() {
+                reservation.shrink(front.bytes);
+            }
         }
+        // Include the queue entry so zero-column batches are accounted for too.
+        let bytes = batch.get_array_memory_size() + std::mem::size_of::<RetainedBatch>();
+        reservation.try_grow(bytes)?;
+        batches.push_back(RetainedBatch { batch, bytes });
     }
     Ok(batches)
 }
 
 /// Returns the last rows of the batches.
-fn take_last(mut batches: VecDeque<RecordBatch>, fetch: usize) -> VecDeque<RecordBatch> {
-    let mut rows = batches.iter().map(|x| x.num_rows()).sum::<usize>();
-    while let Some(front) = batches.front_mut()
+fn take_last(mut batches: VecDeque<RetainedBatch>, fetch: usize) -> VecDeque<RetainedBatch> {
+    let rows = batches.iter().map(|x| x.batch.num_rows()).sum::<usize>();
+    // last_rows already removed every batch wholly outside the suffix.
+    if let Some(front) = batches.front_mut()
         && rows > fetch
     {
         let excess = rows - fetch;
-        if front.num_rows() <= excess {
-            rows -= front.num_rows();
-            batches.pop_front();
-        } else {
-            *front = front.slice(excess, front.num_rows() - excess);
-            rows = fetch;
-        }
+        front.batch = front.batch.slice(excess, front.batch.num_rows() - excess);
     }
     batches
 }
@@ -277,6 +296,250 @@ mod tests {
                 .await?
                 .is_empty()
         );
+        Ok(())
+    }
+
+    fn memory_test_batch(start: i64, length: i64) -> Result<RecordBatch> {
+        Ok(RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)])),
+            vec![Arc::new(Int64Array::from_iter_values(
+                start..start + length,
+            ))],
+        )?)
+    }
+
+    fn memory_test_context(
+        pool: Arc<dyn datafusion::execution::memory_pool::MemoryPool>,
+    ) -> Result<Arc<TaskContext>> {
+        let runtime = datafusion::execution::runtime_env::RuntimeEnvBuilder::new()
+            .with_memory_pool(pool)
+            .build_arc()?;
+        Ok(Arc::new(TaskContext::default().with_runtime(runtime)))
+    }
+
+    #[tokio::test]
+    async fn test_tail_obeys_memory_limit_and_releases_on_error() -> Result<()> {
+        use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool};
+
+        let batch = memory_test_batch(0, 1024)?;
+        let bytes = batch.get_array_memory_size() + std::mem::size_of::<RetainedBatch>();
+        for pool in [
+            Arc::new(GreedyMemoryPool::new(bytes)) as Arc<dyn MemoryPool>,
+            Arc::new(FairSpillPool::new(bytes)) as Arc<dyn MemoryPool>,
+        ] {
+            let input = MemorySourceConfig::try_new_exec(
+                &[vec![batch.clone(), batch.clone()]],
+                batch.schema(),
+                None,
+            )?;
+            let tail = TailExec::new(input, usize::MAX);
+            let mut output = tail.execute(0, memory_test_context(Arc::clone(&pool))?)?;
+            let Some(Err(error)) = output.next().await else {
+                return exec_err!("retained tail batches must respect the task memory limit");
+            };
+            assert!(matches!(error, DataFusionError::ResourcesExhausted(_)));
+            assert_eq!(
+                pool.reserved(),
+                0,
+                "failed tail must release retained batches"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_tail_releases_evicted_and_emitted_batches() -> Result<()> {
+        use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+
+        let batches = (0..3)
+            .map(|index| memory_test_batch(index * 4, 4))
+            .collect::<Result<Vec<_>>>()?;
+        let bytes = batches[0].get_array_memory_size() + std::mem::size_of::<RetainedBatch>();
+        // A one-batch suffix must fit in a one-batch pool despite reading three batches.
+        for (fetch, capacity) in [(3, bytes), (5, 2 * bytes)] {
+            let pool = Arc::new(GreedyMemoryPool::new(capacity)) as Arc<dyn MemoryPool>;
+            let input = MemorySourceConfig::try_new_exec(
+                std::slice::from_ref(&batches),
+                batches[0].schema(),
+                None,
+            )?;
+            let mut output =
+                TailExec::new(input, fetch).execute(0, memory_test_context(Arc::clone(&pool))?)?;
+            let first = output.try_next().await?.ok_or_else(|| {
+                internal_datafusion_err!("tail must return its first retained batch")
+            })?;
+            assert_eq!(first.num_rows(), if fetch == 3 { 3 } else { 1 });
+            assert_eq!(pool.reserved(), capacity - bytes);
+            // This also covers cancellation with another retained output batch pending.
+            drop(output);
+            assert_eq!(pool.reserved(), 0);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_tail_releases_memory_on_input_error() -> Result<()> {
+        use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+        use datafusion::physical_plan::test::exec::MockExec;
+
+        let batch = memory_test_batch(0, 1024)?;
+        let pool = Arc::new(GreedyMemoryPool::new(1024 * 1024)) as Arc<dyn MemoryPool>;
+        let input = Arc::new(
+            MockExec::new(
+                vec![Ok(batch.clone()), exec_err!("input failed")],
+                batch.schema(),
+            )
+            .with_unknown_statistics()
+            .with_use_task(false),
+        );
+        let mut output =
+            TailExec::new(input, 2048).execute(0, memory_test_context(Arc::clone(&pool))?)?;
+        assert!(output.try_next().await.is_err());
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_tail_charges_backing_buffers_and_releases_on_cancellation() -> Result<()> {
+        use datafusion::arrow::datatypes::SchemaRef;
+        use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+        use datafusion::physical_plan::streaming::{PartitionStream, StreamingTableExec};
+
+        #[derive(Debug)]
+        struct PendingInput {
+            schema: SchemaRef,
+            batch: RecordBatch,
+        }
+        impl PartitionStream for PendingInput {
+            fn schema(&self) -> &SchemaRef {
+                &self.schema
+            }
+            fn execute(&self, _: Arc<TaskContext>) -> SendableRecordBatchStream {
+                Box::pin(RecordBatchStreamAdapter::new(
+                    Arc::clone(&self.schema),
+                    stream::iter([Ok(self.batch.clone())]).chain(stream::pending()),
+                ))
+            }
+        }
+
+        let full_batch = memory_test_batch(0, 1024)?;
+        let bytes = full_batch.get_array_memory_size();
+        let batch = full_batch.slice(1023, 1);
+        let pool = Arc::new(GreedyMemoryPool::new(bytes * 2)) as Arc<dyn MemoryPool>;
+        let input = Arc::new(StreamingTableExec::try_new(
+            batch.schema(),
+            vec![Arc::new(PendingInput {
+                schema: batch.schema(),
+                batch,
+            })],
+            None,
+            [],
+            false,
+            None,
+        )?);
+        let mut output =
+            TailExec::new(input, 1).execute(0, memory_test_context(Arc::clone(&pool))?)?;
+        assert!(futures::poll!(output.next()).is_pending());
+        assert!(
+            pool.reserved() >= bytes,
+            "a slice retains its full backing buffer"
+        );
+        drop(output);
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_zero_column_tail_obeys_memory_limit() -> Result<()> {
+        use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+
+        let schema = Arc::new(Schema::empty());
+        let batch = RecordBatch::try_new_with_options(
+            Arc::clone(&schema),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(1)),
+        )?;
+        let pool = Arc::new(GreedyMemoryPool::new(std::mem::size_of::<RetainedBatch>()))
+            as Arc<dyn MemoryPool>;
+        let input = MemorySourceConfig::try_new_exec(&[vec![batch; 2]], schema, None)?;
+        let mut output =
+            TailExec::new(input, 2).execute(0, memory_test_context(Arc::clone(&pool))?)?;
+        assert!(output.try_next().await.is_err());
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sort_enforcement_preserves_tail_selection() -> Result<()> {
+        use datafusion::arrow::compute::SortOptions;
+        use datafusion::common::config::ConfigOptions;
+        use datafusion::physical_expr::expressions::Column;
+        use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
+        use datafusion::physical_optimizer::PhysicalOptimizerRule;
+        use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
+        use datafusion::physical_plan::sorts::sort::SortExec;
+
+        let ordering = |descending| -> Result<LexOrdering> {
+            LexOrdering::new([PhysicalSortExpr::new(
+                Arc::new(Column::new("a", 0)),
+                SortOptions {
+                    descending,
+                    nulls_first: false,
+                },
+            )])
+            .ok_or_else(|| internal_datafusion_err!("nonempty sort ordering"))
+        };
+        for (descending, expected) in [(false, vec![9, 8, 7]), (true, vec![0, 1, 2])] {
+            for partitions in [1, 2] {
+                let batch = memory_test_batch(0, 10)?;
+                let input_batches = if partitions == 1 {
+                    vec![vec![batch.clone()]]
+                } else {
+                    vec![vec![batch.slice(0, 5)], vec![batch.slice(5, 5)]]
+                };
+                let input = MemorySourceConfig::try_new_exec(&input_batches, batch.schema(), None)?;
+                let input = Arc::new(
+                    SortExec::new(ordering(descending)?, input).with_preserve_partitioning(true),
+                );
+                let tail = Arc::new(TailExec::new(input, 3));
+                let plan = Arc::new(SortExec::new(ordering(!descending)?, tail));
+                let optimized =
+                    EnsureRequirements::new().optimize(plan, &ConfigOptions::default())?;
+                let batches = collect(optimized, Arc::new(TaskContext::default())).await?;
+                let actual = batches
+                    .iter()
+                    .flat_map(|batch| {
+                        batch
+                            .column(0)
+                            .as_primitive::<Int64Type>()
+                            .values()
+                            .to_vec()
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    actual, expected,
+                    "descending={descending}, partitions={partitions}"
+                );
+            }
+        }
+        // Even without declared child ordering, a parent sort must stay above Tail.
+        let batch = memory_test_batch(0, 10)?;
+        let input = MemorySourceConfig::try_new_exec(&[vec![batch.clone()]], batch.schema(), None)?;
+        let tail = Arc::new(TailExec::new(input, 3));
+        let plan = Arc::new(SortExec::new(ordering(true)?, tail));
+        let optimized = EnsureRequirements::new().optimize(plan, &ConfigOptions::default())?;
+        let batches = collect(optimized, Arc::new(TaskContext::default())).await?;
+        let actual = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int64Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, vec![9, 8, 7]);
         Ok(())
     }
 

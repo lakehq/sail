@@ -8,6 +8,7 @@ from urllib.request import urlopen
 
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
+from pyspark.errors import PySparkException
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
@@ -131,3 +132,14 @@ def test_consumed_celeborn_shuffle_data_is_removed(spark, celeborn_master: Maste
         time.sleep(0.05)
 
     assert shuffle_ids == [], "the Celeborn shuffle was not removed after the query completed"
+
+
+def test_zero_tail_does_not_run_shuffle_producers(spark):
+    df = (
+        spark.range(0, 10, 1, 4)
+        .selectExpr("id", "raise_error(concat('tail input evaluated: ', cast(id as string))) AS value")
+        .repartition(3)
+    )
+    assert df.tail(0) == []
+    with pytest.raises(PySparkException, match="tail input evaluated"):
+        df.tail(1)
