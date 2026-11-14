@@ -4,13 +4,10 @@ mod options;
 
 use std::collections::HashMap;
 
-use datafusion::arrow::array::RecordBatch;
 pub use options::LocalStreamManagerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
-use tokio::sync::mpsc;
 
 use crate::id::TaskStreamKey;
-use crate::stream::error::TaskStreamResult;
 
 pub struct LocalStreamManager {
     options: LocalStreamManagerOptions,
@@ -19,7 +16,7 @@ pub struct LocalStreamManager {
 
 pub enum LocalStreamState {
     Pending {
-        senders: Vec<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
+        senders: Vec<memory::MemoryStreamSender>,
     },
     Created {
         stream: memory::MemoryStream,
