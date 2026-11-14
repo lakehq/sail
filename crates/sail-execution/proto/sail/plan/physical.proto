@@ -81,6 +81,7 @@ message ExtendedPhysicalPlanNode {
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
     SeededRandomExecNode seeded_random = 67;
     IdentityGenerateExecNode identity_generate = 68;
+    TailExecNode tail = 69;
   }
 }
 
@@ -750,6 +751,11 @@ message SystemTableExecNode {
   optional PhysicalProjection projection = 2;
   repeated bytes filters = 3;
   optional uint64 fetch = 4;
+}
+
+message TailExecNode {
+  bytes input = 1;
+  uint64 fetch = 2;
 }
 
 message SchemaPivotExecNode {
