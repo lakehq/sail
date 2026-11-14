@@ -1,5 +1,6 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, OnceLock};
 
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common::actor::ActorContext;
@@ -10,14 +11,33 @@ use crate::id::{JobId, TaskKey, TaskStreamKey, TaskStreamKeyDisplay, TaskStreamK
 use crate::stream::error::TaskStreamError;
 use crate::stream::local::memory::MemoryStream;
 use crate::stream::local::options::LocalStreamManagerOptions;
+use crate::stream::local::queue::{QueueLimit, StreamMemory};
 use crate::stream::local::{LocalStreamManager, LocalStreamState};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::TaskStreamSink;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
+/// Returns the number of bytes that the task streams of the process can hold
+/// before tasks wait for the readers of their output, given the configured limit.
+fn resolve_ceiling(limit: usize) -> usize {
+    match limit {
+        0 => usize::MAX,
+        limit => limit,
+    }
+}
+
+/// Returns the memory of the task streams of this process. Memory belongs to
+/// a process, so the driver and the workers that run in the same process count
+/// their streams together.
+fn process_stream_memory() -> Arc<StreamMemory> {
+    static MEMORY: OnceLock<Arc<StreamMemory>> = OnceLock::new();
+    MEMORY.get_or_init(Arc::default).clone()
+}
+
 impl LocalStreamManager {
     pub fn new(options: LocalStreamManagerOptions) -> Self {
         Self {
+            memory: process_stream_memory(),
             options,
             streams: HashMap::new(),
             cleaned: HashSet::new(),
@@ -62,7 +82,7 @@ impl LocalStreamManager {
                 _ => vec![],
             })
             .collect();
-        // The sink waits for the readers only if the driver has found that each stream
+        // The sink can wait for the readers only if the driver has found that each stream
         // has a single reader that takes the data as it comes. This is not the case for
         // the result of a job, which is read at the pace of the client, or when the
         // reader decides which of its inputs it reads next. Besides, the sink never
@@ -70,12 +90,13 @@ impl LocalStreamManager {
         // read, or when the streams are created after the streams of the stage have
         // been removed, since nobody may ever read or remove them.
         let bounded = bounded && replicas == 1 && !self.cleaned.contains(&(key.job_id, key.stage));
-        let bound = if bounded {
-            self.options.task_stream_buffer
-        } else {
-            usize::MAX
-        };
-        let (sink, streams) = MemoryStream::create(waiters, replicas, bound);
+        let buffer = self.options.task_stream_buffer;
+        let limit = bounded.then(|| QueueLimit {
+            rows: buffer.saturating_mul(self.options.batch_size),
+            ceiling: resolve_ceiling(self.options.task_stream_memory_limit),
+        });
+        let memory = self.memory.clone();
+        let (sink, streams) = MemoryStream::create(key, waiters, replicas, limit, memory);
         for (key, stream) in keys.into_iter().zip(streams) {
             self.streams
                 .insert(key, LocalStreamState::Created { stream });
@@ -221,8 +242,9 @@ impl LocalStreamManager {
 mod tests {
     use std::sync::Arc;
 
-    use datafusion::arrow::array::RecordBatch;
+    use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
     use datafusion::arrow::datatypes::Schema;
+    use datafusion::arrow::error::ArrowError;
     use datafusion::prelude::SessionContext;
     use futures::{FutureExt, StreamExt};
     use sail_common::config::AppConfig;
@@ -234,14 +256,27 @@ mod tests {
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-    /// Creates a manager whose sinks wait when a replica holds more than one batch.
-    fn manager() -> Result<LocalStreamManager, Box<dyn std::error::Error>> {
+    /// Creates a manager whose sinks can always queue one batch of one row, and
+    /// wait beyond that when the task streams hold the given number of bytes.
+    fn manager_with_memory_limit(
+        limit: usize,
+    ) -> Result<LocalStreamManager, Box<dyn std::error::Error>> {
         let handle = tokio::runtime::Handle::current();
         let runtime = RuntimeHandle::new(handle.clone(), handle);
         let mut config = AppConfig::load()?;
+        config.execution.batch_size = 1;
         config.cluster.task_stream_buffer = 1;
+        config.cluster.task_stream_memory_limit = limit;
         let options = WorkerOptions::new(&config, runtime, SessionContext::new());
-        Ok(LocalStreamManager::new((&options).into()))
+        let mut manager = LocalStreamManager::new((&options).into());
+        // The tests do not count their streams together.
+        manager.memory = Arc::default();
+        Ok(manager)
+    }
+
+    /// Creates a manager whose sinks wait when their streams have one row.
+    fn manager() -> Result<LocalStreamManager, Box<dyn std::error::Error>> {
+        manager_with_memory_limit(1)
     }
 
     fn task_key(partition: usize) -> TaskKey {
@@ -253,16 +288,21 @@ mod tests {
         }
     }
 
-    fn batch() -> RecordBatch {
-        RecordBatch::new_empty(Arc::new(Schema::empty()))
+    /// Creates a batch with one row and no columns.
+    fn batch() -> Result<RecordBatch, ArrowError> {
+        let options = RecordBatchOptions::new().with_row_count(Some(1));
+        RecordBatch::try_new_with_options(Arc::new(Schema::empty()), vec![], &options)
     }
 
     /// Writes more batches than a sink that waits for readers would accept.
-    fn write_without_waiting(sink: &mut Box<dyn TaskStreamSink>) -> bool {
-        (0..10).all(|_| {
-            let state = sink.write(vec![Some(batch())]).now_or_never();
-            matches!(state, Some(Ok(TaskStreamWriteState::Active)))
-        })
+    fn write_without_waiting(sink: &mut Box<dyn TaskStreamSink>) -> Result<bool, ArrowError> {
+        for _ in 0..10 {
+            let state = sink.write(vec![Some(batch()?)]).now_or_never();
+            if !matches!(state, Some(Ok(TaskStreamWriteState::Active))) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Adds a reader for a stream that has not been created, as `fetch_stream` does.
@@ -290,7 +330,7 @@ mod tests {
         };
         manager.remove_streams(key.job_id, Some(key.stage));
         let mut sink = manager.create_stream(&key, 1, 1, true, schema.clone())?;
-        assert!(write_without_waiting(&mut sink));
+        assert!(write_without_waiting(&mut sink)?);
         assert!(matches!(sink.commit().now_or_never(), Some(Ok(()))));
 
         // The streams are not closed, so that a reader that does come gets all the data.
@@ -311,13 +351,13 @@ mod tests {
             ..key.clone()
         };
         let mut sink = manager.create_stream(&other, 1, 1, true, schema.clone())?;
-        assert!(!write_without_waiting(&mut sink));
+        assert!(!write_without_waiting(&mut sink)?);
 
         // The cleanup of the job ends the special case for its stages.
         manager.remove_streams(key.job_id, None);
         assert!(manager.cleaned.is_empty());
         let mut sink = manager.create_stream(&key, 1, 1, true, schema)?;
-        assert!(!write_without_waiting(&mut sink));
+        assert!(!write_without_waiting(&mut sink)?);
         Ok(())
     }
 
@@ -326,12 +366,28 @@ mod tests {
         let mut manager = manager()?;
         let schema = Arc::new(Schema::empty());
         let mut sink = manager.create_stream(&task_key(0), 1, 1, false, schema.clone())?;
-        assert!(write_without_waiting(&mut sink));
+        assert!(write_without_waiting(&mut sink)?);
         let mut sink = manager.create_stream(&task_key(1), 1, 1, true, schema.clone())?;
-        assert!(!write_without_waiting(&mut sink));
+        assert!(!write_without_waiting(&mut sink)?);
         // Some replicas may never be read, so the sink does not wait for any of them.
         let mut sink = manager.create_stream(&task_key(2), 1, 2, true, schema)?;
-        assert!(write_without_waiting(&mut sink));
+        assert!(write_without_waiting(&mut sink)?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn streams_wait_only_at_the_memory_limit() -> TestResult {
+        let schema = Arc::new(Schema::empty());
+        let mut manager = manager_with_memory_limit(0)?;
+        let mut sink = manager.create_stream(&task_key(0), 1, 1, true, schema.clone())?;
+        assert!(write_without_waiting(&mut sink)?);
+        // Each batch counts as one byte.
+        let mut manager = manager_with_memory_limit(10)?;
+        let mut sink = manager.create_stream(&task_key(0), 1, 1, true, schema.clone())?;
+        assert!(write_without_waiting(&mut sink)?);
+        let mut manager = manager_with_memory_limit(9)?;
+        let mut sink = manager.create_stream(&task_key(0), 1, 1, true, schema)?;
+        assert!(!write_without_waiting(&mut sink)?);
         Ok(())
     }
 
@@ -344,7 +400,7 @@ mod tests {
         let key = task_key(0);
         let mut sink = manager.create_stream(&key, 1, 1, true, schema.clone())?;
         manager.remove_streams(key.job_id, Some(key.stage));
-        let state = sink.write(vec![Some(batch())]).await?;
+        let state = sink.write(vec![Some(batch()?)]).await?;
         assert_eq!(state, TaskStreamWriteState::Closed);
 
         // The stream is created after the cleanup. Its reader has requested it and left.
@@ -352,7 +408,7 @@ mod tests {
         drop(fetch_pending(&mut manager, key.task_stream_key(0)));
         manager.remove_streams(key.job_id, Some(key.stage));
         let mut sink = manager.create_stream(&key, 1, 1, true, schema.clone())?;
-        let state = sink.write(vec![Some(batch())]).await?;
+        let state = sink.write(vec![Some(batch()?)]).await?;
         assert_eq!(state, TaskStreamWriteState::Closed);
 
         // A reader that is still waiting for the stream gets its data.
@@ -360,7 +416,7 @@ mod tests {
         let mut reader = fetch_pending(&mut manager, key.task_stream_key(0));
         manager.remove_streams(key.job_id, Some(key.stage));
         let mut sink = manager.create_stream(&key, 1, 1, true, schema)?;
-        let state = sink.write(vec![Some(batch())]).await?;
+        let state = sink.write(vec![Some(batch()?)]).await?;
         assert_eq!(state, TaskStreamWriteState::Active);
         sink.commit().await?;
         assert!(matches!(reader.next().await, Some(Ok(_))));
@@ -372,7 +428,6 @@ mod tests {
     async fn creation_timeout_ignores_readers_that_have_left() -> TestResult {
         let mut manager = manager()?;
         let schema = Arc::new(Schema::empty());
-        let batch = RecordBatch::new_empty(schema.clone());
 
         // The reader leaves before the stream is created. The stream can still be
         // created later, and the replica for that reader is closed.
@@ -380,7 +435,7 @@ mod tests {
         drop(fetch_pending(&mut manager, key.task_stream_key(0)));
         manager.fail_stream_if_pending(&key.task_stream_key(0));
         let mut sink = manager.create_stream(&key, 1, 1, true, schema.clone())?;
-        let state = sink.write(vec![Some(batch)]).await?;
+        let state = sink.write(vec![Some(batch()?)]).await?;
         assert_eq!(state, TaskStreamWriteState::Closed);
 
         // A reader that is still waiting gets the error, and the stream cannot be created.

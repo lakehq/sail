@@ -25,6 +25,7 @@ def remote(request):
     envs = {
         "SAIL_MODE": "local-cluster",
         "SAIL_CLUSTER__TASK_STREAM_BUFFER": "1",
+        "SAIL_CLUSTER__TASK_STREAM_MEMORY_LIMIT": "1",
         "SAIL_EXECUTION__BATCH_SIZE": "256",
     }
     compression, connection_count, stream_window_size, connection_window_size = request.param

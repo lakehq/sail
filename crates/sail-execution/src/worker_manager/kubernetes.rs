@@ -136,6 +136,7 @@ impl KubernetesWorkerService {
             driver_external_port,
             worker_heartbeat_interval,
             task_stream_buffer,
+            task_stream_memory_limit,
             task_stream_creation_timeout,
             rpc_retry_strategy,
             shuffle_backend,
@@ -233,6 +234,11 @@ impl KubernetesWorkerService {
             EnvVar {
                 name: ClusterConfigEnv::TASK_STREAM_BUFFER.to_string(),
                 value: Some(task_stream_buffer.to_string()),
+                value_from: None,
+            },
+            EnvVar {
+                name: ClusterConfigEnv::TASK_STREAM_MEMORY_LIMIT.to_string(),
+                value: Some(task_stream_memory_limit.to_string()),
                 value_from: None,
             },
             EnvVar {
@@ -545,6 +551,7 @@ mod tests {
                 driver_external_port: 1234,
                 worker_heartbeat_interval: Duration::from_secs(1),
                 task_stream_buffer: 1,
+                task_stream_memory_limit: 0,
                 task_stream_creation_timeout: Duration::from_secs(1),
                 rpc_retry_strategy: RetryStrategy::Fixed {
                     max_count: 1,

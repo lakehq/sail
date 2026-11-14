@@ -29,6 +29,7 @@ pub struct DriverOptions {
     pub worker_launch_retry_strategy: RetryStrategy,
     pub task_launch_timeout: Duration,
     pub task_stream_buffer: usize,
+    pub task_stream_memory_limit: usize,
     pub task_stream_creation_timeout: Duration,
     pub task_max_attempts: usize,
     pub shuffle_backend: ShuffleBackendKind,
@@ -77,6 +78,7 @@ impl DriverOptions {
             rpc_retry_strategy: (&config.cluster.rpc_retry_strategy).into(),
             task_launch_timeout: Duration::from_secs(config.cluster.task_launch_timeout_secs),
             task_stream_buffer: config.cluster.task_stream_buffer,
+            task_stream_memory_limit: config.cluster.task_stream_memory_limit,
             task_stream_creation_timeout: Duration::from_secs(
                 config.cluster.task_stream_creation_timeout_secs,
             ),

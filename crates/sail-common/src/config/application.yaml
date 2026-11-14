@@ -239,14 +239,25 @@
   type: number
   default: "16"
   description: |
-    The number of batches (after partitioning by channel) that a task can queue in
-    memory for each reader of its output before the task waits for the readers. The
-    task does not wait while one of its readers is waiting for data, so this is not
-    a strict limit: more batches are queued for the other readers when one reader
-    keeps waiting, for example when the task produces no data for that reader. Data
-    that is in transit to readers on other workers is not counted. A very large
-    value disables waiting. The tasks that produce the result of a job never wait
-    for the client to read it.
+    The number of batches of `execution.batch_size` rows that a task can always queue
+    in memory for the tasks that read its output, counted over all its readers. Beyond
+    that, the task waits for its readers when the task streams are at
+    `cluster.task_stream_memory_limit`.
+  experimental: true
+
+- key: cluster.task_stream_memory_limit
+  type: number
+  default: "0"
+  description: |
+    The amount of memory in bytes that the task streams of a process (a worker, or
+    the whole process in local-cluster mode) can hold before tasks wait for the
+    readers of their output. A task can always queue `cluster.task_stream_buffer`
+    batches. Outputs that every reader collects in full (the build side of a broadcast
+    join), outputs whose reader chooses by the data which input it reads next (an
+    ordered merge, a sort-merge join), and the result of a job are not limited. They
+    count as well, so a large unread result or broadcast side can make other tasks
+    of the process wait. Data in transit to readers on other workers is not counted.
+    If the value is `0`, there is no limit.
   experimental: true
 
 - key: cluster.task_stream_creation_timeout_secs
