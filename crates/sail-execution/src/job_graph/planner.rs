@@ -408,6 +408,28 @@ fn plan_job_graph_stages(
         return build_barrier_job_graph(barrier, usage, graph, scalar_context);
     }
 
+    if plan.is::<GlobalLimitExec>() && matches!(usage, PartitionUsage::Shared) {
+        // Apply the complete limit once before broadcasting its output. Independent
+        // readers can merge the input streams in different orders and select different rows.
+        let properties = plan.properties().clone();
+        let limited = plan_job_graph_stages(
+            plan,
+            PartitionUsage::Once,
+            graph,
+            driver_stage_handling,
+            scalar_context,
+        )?;
+        return Ok(PlannedSubtree::without_pending_scalar_subquery_expr(
+            create_shuffle(
+                limited,
+                graph,
+                properties,
+                ShuffleConsumption::Multiple,
+                scalar_context,
+            )?,
+        ));
+    }
+
     // Recursively build the job graph for the children first
     // and propagate partition usage information.
     let children = if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
@@ -1337,6 +1359,95 @@ mod tests {
                 .unwrap();
             assert_eq!(join.plan.output_partitioning().partition_count(), 4);
         }
+    }
+
+    #[test]
+    fn broadcast_global_limit_preserves_skip_and_fetch() {
+        use datafusion::common::tree_node::TreeNode;
+
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            for explicit_coalesce in [false, true] {
+                for (skip, fetch) in [(0, Some(3)), (2, Some(3)), (2, None), (0, Some(0))] {
+                    let input = UnionExec::try_new(vec![empty_plan(); 4]).unwrap();
+                    let input = if explicit_coalesce {
+                        Arc::new(CoalescePartitionsExec::new(input)) as Arc<dyn ExecutionPlan>
+                    } else {
+                        // Exercise the no-fetch coalesce inserted by JobGraph::try_new too.
+                        input
+                    };
+                    let limited = Arc::new(GlobalLimitExec::new(input, skip, fetch));
+                    let key = col("id", &schema()).unwrap();
+                    let join = HashJoinExec::try_new(
+                        limited,
+                        UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                        vec![(Arc::clone(&key), key)],
+                        None,
+                        &JoinType::Inner,
+                        None,
+                        PartitionMode::CollectLeft,
+                        NullEquality::NullEqualsNothing,
+                        false,
+                    )
+                    .unwrap();
+                    let graph = JobGraph::try_new(Arc::new(join), options.clone()).unwrap();
+                    let stage = graph.stages.last().unwrap();
+                    let join = stage.plan.downcast_ref::<HashJoinExec>().unwrap();
+                    assert_eq!(stage.plan.output_partitioning().partition_count(), 4);
+                    assert!(
+                        !stage
+                            .plan
+                            .exists(|plan| Ok(plan.is::<GlobalLimitExec>()))
+                            .unwrap()
+                    );
+                    let input = join.children()[0]
+                        .downcast_ref::<StageInputExec<usize>>()
+                        .unwrap();
+                    let input = &stage.inputs[*input.input()];
+                    let input =
+                        if matches!(options.shuffle_backend, ShuffleBackendKind::Storage { .. }) {
+                            // Storage forwards the materialized broadcast through a collector.
+                            assert!(matches!(input.mode, InputMode::Forward));
+                            let collector = &graph.stages[input.stage];
+                            assert_eq!(collector.plan.output_partitioning().partition_count(), 1);
+                            let input = collector
+                                .plan
+                                .downcast_ref::<StageInputExec<usize>>()
+                                .unwrap();
+                            &collector.inputs[*input.input()]
+                        } else {
+                            input
+                        };
+                    assert!(matches!(input.mode, InputMode::Broadcast));
+                    let producer = &graph.stages[input.stage];
+                    let limit = producer.plan.downcast_ref::<GlobalLimitExec>().unwrap();
+                    assert_eq!((limit.skip(), limit.fetch()), (skip, fetch));
+                    assert_eq!(producer.plan.output_partitioning().partition_count(), 1);
+                    assert_eq!(limit.input().output_partitioning().partition_count(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unshared_global_limit_stays_in_its_consuming_stage() {
+        let input = UnionExec::try_new(vec![empty_plan(); 4]).unwrap();
+        let plan = Arc::new(GlobalLimitExec::new(input, 2, Some(3)));
+        let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
+        assert_eq!(graph.stages.len(), 2);
+        let stage = graph.stages.last().unwrap();
+        let limit = stage.plan.downcast_ref::<GlobalLimitExec>().unwrap();
+        assert_eq!((limit.skip(), limit.fetch()), (2, Some(3)));
+        assert_eq!(limit.input().output_partitioning().partition_count(), 1);
+        assert!(
+            stage
+                .inputs
+                .iter()
+                .all(|input| matches!(input.mode, InputMode::Shuffle))
+        );
     }
 
     #[test]
