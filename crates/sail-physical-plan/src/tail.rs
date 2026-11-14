@@ -12,7 +12,9 @@ use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, ReplaceChildrenOptions,
 };
-use datafusion_common::{DataFusionError, Result, exec_err, internal_datafusion_err};
+use datafusion_common::{
+    DataFusionError, Result, exec_err, internal_datafusion_err, resources_datafusion_err,
+};
 use futures::{StreamExt, TryStreamExt, stream};
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -136,13 +138,10 @@ impl ExecutionPlan for TailExec {
         };
         let output = stream::once(async move {
             let batches = match input {
-                Some(input) => take_last(last_rows(input, fetch, &reservation).await?, fetch),
-                None => VecDeque::new(),
+                Some(input) => take_last(last_rows(input, fetch, reservation).await?, fetch),
+                None => RetainedBatches::new(reservation),
             };
-            Ok::<_, DataFusionError>(stream::iter(batches.into_iter().map(move |batch| {
-                reservation.shrink(batch.bytes);
-                Ok(batch.batch)
-            })))
+            Ok::<_, DataFusionError>(stream::iter(batches.map(Ok)))
         })
         .try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -153,52 +152,133 @@ impl ExecutionPlan for TailExec {
 }
 
 /// Keep the original charge when slicing a batch: the slice still retains its backing buffers.
+/// Fields drop in order, freeing the batch before returning its array reservation to the pool.
 struct RetainedBatch {
     batch: RecordBatch,
-    bytes: usize,
+    array_reservation: MemoryReservation,
+}
+
+/// Own the queue allocation and its reservation together, including during output iteration.
+/// The deque drops before its capacity reservation, and each entry owns its array reservation.
+struct RetainedBatches {
+    batches: VecDeque<RetainedBatch>,
+    reservation: MemoryReservation,
+}
+
+impl RetainedBatches {
+    fn new(reservation: MemoryReservation) -> Self {
+        Self {
+            batches: VecDeque::new(),
+            reservation,
+        }
+    }
+
+    fn push_back(&mut self, batch: RecordBatch) -> Result<()> {
+        // All reservations share one registered consumer. Entry ownership releases array
+        // bytes on eviction, emission, failure or cancellation without changing the queue charge.
+        let retained = RetainedBatch {
+            batch,
+            array_reservation: self.reservation.new_empty(),
+        };
+        retained
+            .array_reservation
+            .try_grow(retained.batch.get_array_memory_size())?;
+        self.reserve_slot()?;
+        self.batches.push_back(retained);
+        Ok(())
+    }
+
+    fn reserve_slot(&mut self) -> Result<()> {
+        if self.batches.len() < self.batches.capacity() {
+            return Ok(());
+        }
+        let capacity = self
+            .batches
+            .capacity()
+            .checked_mul(2)
+            .map(|capacity| capacity.max(1))
+            .ok_or_else(|| resources_datafusion_err!("TailExec queue capacity overflow"))?;
+        let bytes = capacity
+            .checked_mul(std::mem::size_of::<RetainedBatch>())
+            .ok_or_else(|| resources_datafusion_err!("TailExec queue allocation size overflow"))?;
+
+        // Reserve the entire new allocation while the old allocation remains charged.
+        // Construct it separately so both allocations are covered even when growth moves it.
+        let reservation = self.reservation.new_empty();
+        reservation.try_grow(bytes)?;
+        let mut batches = VecDeque::new();
+        batches.try_reserve_exact(capacity).map_err(|error| {
+            resources_datafusion_err!("TailExec queue allocation failed: {error}")
+        })?;
+        // Account for the actual capacity rather than relying on allocator growth behavior.
+        reservation.try_resize(batches.capacity() * std::mem::size_of::<RetainedBatch>())?;
+        batches.extend(self.batches.drain(..));
+        self.batches = batches;
+        // The old deque allocation was freed by the assignment above.
+        self.reservation = reservation;
+        Ok(())
+    }
+}
+
+impl Iterator for RetainedBatches {
+    type Item = RecordBatch;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let retained = self.batches.pop_front()?;
+        if self.batches.is_empty() {
+            // Free the allocation before its charge, including when the consumer never
+            // polls again after receiving the final batch.
+            self.batches = VecDeque::new();
+            self.reservation.free();
+        }
+        // The array reservation ends when ownership of this batch passes downstream.
+        Some(retained.batch)
+    }
 }
 
 /// Returns the batches that hold the last rows of the stream, keeping no more batches than
-/// needed for them. The caller owns the reservation until the retained batches are emitted.
+/// needed for them. The queue owns all reservations until their allocations are released.
 async fn last_rows(
     mut input: SendableRecordBatchStream,
     fetch: usize,
-    reservation: &MemoryReservation,
-) -> Result<VecDeque<RetainedBatch>> {
-    let mut batches: VecDeque<RetainedBatch> = VecDeque::new();
-    let mut rows = 0;
+    reservation: MemoryReservation,
+) -> Result<RetainedBatches> {
+    let mut batches = RetainedBatches::new(reservation);
+    // Zero-column batches can have usize::MAX rows without allocating their values.
+    // Two such batch lengths can exceed usize while the retained suffix still fits.
+    let mut rows = 0_u128;
     while let Some(batch) = input.next().await {
         let batch = batch?;
         if batch.num_rows() == 0 {
             continue;
         }
-        rows += batch.num_rows();
-        // Release obsolete batches before reserving the new one, so replacement does not
-        // require enough pool capacity for both the old and new suffixes.
-        while let Some(front) = batches.front()
-            && rows - front.batch.num_rows() >= fetch
+        rows += batch.num_rows() as u128;
+        // Release obsolete arrays before reserving the new one. The deque's allocated
+        // capacity remains charged even when eviction leaves it empty.
+        while let Some(front) = batches.batches.front()
+            && rows - front.batch.num_rows() as u128 >= fetch as u128
         {
-            rows -= front.batch.num_rows();
-            if let Some(front) = batches.pop_front() {
-                reservation.shrink(front.bytes);
-            }
+            rows -= front.batch.num_rows() as u128;
+            batches.batches.pop_front();
         }
-        // Include the queue entry so zero-column batches are accounted for too.
-        let bytes = batch.get_array_memory_size() + std::mem::size_of::<RetainedBatch>();
-        reservation.try_grow(bytes)?;
-        batches.push_back(RetainedBatch { batch, bytes });
+        batches.push_back(batch)?;
     }
     Ok(batches)
 }
 
 /// Returns the last rows of the batches.
-fn take_last(mut batches: VecDeque<RetainedBatch>, fetch: usize) -> VecDeque<RetainedBatch> {
-    let rows = batches.iter().map(|x| x.batch.num_rows()).sum::<usize>();
+fn take_last(mut batches: RetainedBatches, fetch: usize) -> RetainedBatches {
+    let rows = batches
+        .batches
+        .iter()
+        .map(|x| x.batch.num_rows() as u128)
+        .sum::<u128>();
     // last_rows already removed every batch wholly outside the suffix.
-    if let Some(front) = batches.front_mut()
-        && rows > fetch
+    if let Some(front) = batches.batches.front_mut()
+        && rows > fetch as u128
     {
-        let excess = rows - fetch;
+        // The suffix invariant guarantees the excess is smaller than the first batch.
+        let excess = (rows - fetch as u128) as usize;
         front.batch = front.batch.slice(excess, front.batch.num_rows() - excess);
     }
     batches
@@ -354,9 +434,18 @@ mod tests {
         let batches = (0..3)
             .map(|index| memory_test_batch(index * 4, 4))
             .collect::<Result<Vec<_>>>()?;
-        let bytes = batches[0].get_array_memory_size() + std::mem::size_of::<RetainedBatch>();
+        let array_bytes = batches[0].get_array_memory_size();
+        let slot_bytes = std::mem::size_of::<RetainedBatch>();
         // A one-batch suffix must fit in a one-batch pool despite reading three batches.
-        for (fetch, capacity) in [(3, bytes), (5, 2 * bytes)] {
+        // Growing to two entries temporarily needs both the old and new queue allocations.
+        for (fetch, capacity, remaining) in [
+            (3, array_bytes + slot_bytes, 0),
+            (
+                5,
+                2 * array_bytes + 3 * slot_bytes,
+                array_bytes + 2 * slot_bytes,
+            ),
+        ] {
             let pool = Arc::new(GreedyMemoryPool::new(capacity)) as Arc<dyn MemoryPool>;
             let input = MemorySourceConfig::try_new_exec(
                 std::slice::from_ref(&batches),
@@ -369,11 +458,87 @@ mod tests {
                 internal_datafusion_err!("tail must return its first retained batch")
             })?;
             assert_eq!(first.num_rows(), if fetch == 3 { 3 } else { 1 });
-            assert_eq!(pool.reserved(), capacity - bytes);
+            assert_eq!(pool.reserved(), remaining);
             // This also covers cancellation with another retained output batch pending.
             drop(output);
             assert_eq!(pool.reserved(), 0);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_tail_queue_growth_reserves_old_and_new_allocations() -> Result<()> {
+        use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool};
+
+        let schema = Arc::new(Schema::empty());
+        let batch = RecordBatch::try_new_with_options(
+            schema,
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(1)),
+        )?;
+        let slot_bytes = std::mem::size_of::<RetainedBatch>();
+        for budget in [2, 3] {
+            for pool in [
+                Arc::new(GreedyMemoryPool::new(budget * slot_bytes)) as Arc<dyn MemoryPool>,
+                Arc::new(FairSpillPool::new(budget * slot_bytes)) as Arc<dyn MemoryPool>,
+            ] {
+                let mut retained =
+                    RetainedBatches::new(MemoryConsumer::new("tail-test").register(&pool));
+                retained.push_back(batch.clone())?;
+                assert_eq!(retained.batches.capacity(), 1);
+                assert_eq!(pool.reserved(), slot_bytes);
+                let result = retained.push_back(batch.clone());
+                if budget == 2 {
+                    // The final two-entry queue would fit, but the old allocation must
+                    // remain charged while its replacement is being allocated.
+                    assert!(matches!(
+                        result,
+                        Err(DataFusionError::ResourcesExhausted(_))
+                    ));
+                    assert_eq!(retained.batches.len(), 1);
+                    assert_eq!(retained.batches.capacity(), 1);
+                    assert_eq!(pool.reserved(), slot_bytes);
+                } else {
+                    result?;
+                    assert_eq!(retained.batches.len(), 2);
+                    assert_eq!(pool.reserved(), retained.batches.capacity() * slot_bytes);
+                    assert!(retained.next().is_some());
+                    assert_eq!(pool.reserved(), 2 * slot_bytes);
+                    assert!(retained.next().is_some());
+                    assert_eq!(retained.batches.capacity(), 0);
+                    assert_eq!(
+                        pool.reserved(),
+                        0,
+                        "last emission frees queue without another poll"
+                    );
+                }
+                drop(retained);
+                assert_eq!(pool.reserved(), 0);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_tail_queue_growth_failure_releases_incoming_array() -> Result<()> {
+        use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+
+        let batch = memory_test_batch(0, 4)?;
+        let array_bytes = batch.get_array_memory_size();
+        let slot_bytes = std::mem::size_of::<RetainedBatch>();
+        // Both arrays fit, but replacing the one-slot queue requires three slots temporarily.
+        let pool = Arc::new(GreedyMemoryPool::new(2 * array_bytes + 2 * slot_bytes))
+            as Arc<dyn MemoryPool>;
+        let mut retained = RetainedBatches::new(MemoryConsumer::new("tail-test").register(&pool));
+        retained.push_back(batch.clone())?;
+        assert!(matches!(
+            retained.push_back(batch),
+            Err(DataFusionError::ResourcesExhausted(_))
+        ));
+        assert_eq!(retained.batches.len(), 1);
+        assert_eq!(pool.reserved(), array_bytes + slot_bytes);
+        drop(retained);
+        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 

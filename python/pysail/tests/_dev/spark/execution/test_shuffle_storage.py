@@ -99,3 +99,9 @@ def test_zero_tail_does_not_run_shuffle_producers(spark):
     assert df.tail(0) == []
     with pytest.raises(PySparkException, match="tail input evaluated"):
         df.tail(1)
+
+
+def test_sorted_tail_with_shuffle(spark):
+    df = spark.range(0, 100, 1, 4).repartition(3).orderBy("id", ascending=False)
+    assert [row.id for row in df.tail(7)] == list(range(6, -1, -1))
+    assert [row.id for row in df.tail(101)] == list(range(99, -1, -1))
