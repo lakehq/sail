@@ -30,7 +30,7 @@ def test_tasks_do_not_keep_their_slots_while_the_client_reads_the_result(spark):
     count = 1_600_000
     result = spark.sql(f"""
         SELECT id, sha2(CAST(id AS STRING), 512) AS pad FROM range(0, {count}, 1, 4)
-    """).toLocalIterator()
+    """).toLocalIterator()  # noqa: S608
     try:
         rows = 0
         for _ in result:

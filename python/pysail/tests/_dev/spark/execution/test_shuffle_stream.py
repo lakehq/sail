@@ -209,7 +209,7 @@ def test_ordered_merge_finishes_when_partitions_are_read_one_after_another(spark
         SELECT id, pad FROM (
             SELECT id, sha2(CAST(id AS STRING), 512) AS pad FROM range(0, {count}, 1, 40)
         ) ORDER BY id LIMIT 5 OFFSET {count - 10}
-    """).collect()
+    """).collect()  # noqa: S608
 
     assert [row.id for row in rows] == list(range(count - 10, count - 5))
 
