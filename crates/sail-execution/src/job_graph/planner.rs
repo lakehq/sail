@@ -1071,6 +1071,7 @@ fn create_driver_stage(
 mod tests {
     use std::sync::Arc;
 
+    use datafusion::arrow::compute::SortOptions;
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion::common::{JoinType, NullEquality, ScalarValue};
     use datafusion::execution::object_store::ObjectStoreUrl;
@@ -1080,7 +1081,7 @@ mod tests {
         ScalarSubqueryResults, SubqueryIndex,
     };
     use datafusion::physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion::physical_expr::expressions::{binary, col};
+    use datafusion::physical_expr::expressions::{binary, col, lit};
     use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
     use datafusion::physical_expr::{
         LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning, SplitPoint,
@@ -1090,12 +1091,15 @@ mod tests {
     use datafusion::physical_plan::coop::CooperativeExec;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::filter::FilterExec;
-    use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
+    use datafusion::physical_plan::joins::{
+        HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    };
     use datafusion::physical_plan::limit::GlobalLimitExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
     use datafusion::physical_plan::sorts::sort::SortExec;
-    use datafusion::physical_plan::union::UnionExec;
+    use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+    use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
     use sail_catalog::command::CatalogCommand;
     use sail_celeborn::common::PartitionSplitMode;
@@ -1106,7 +1110,10 @@ mod tests {
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
     use super::{JobGraph, JobGraphOptions, create_scalar_subquery_input};
-    use crate::job_graph::{InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement};
+    use crate::job_graph::{
+        InputMode, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
+        reads_inputs_in_fixed_order,
+    };
     use crate::plan::StageInputExec;
     use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
 
@@ -1908,5 +1915,255 @@ mod tests {
                 .iter()
                 .any(|input| matches!(input.mode, InputMode::Broadcast))
         );
+    }
+
+    /// Plans a job, and returns for each stage and each of its inputs whether the
+    /// input is neither broadcast nor merged in order, and whether the tasks that
+    /// produce it wait for their readers.
+    fn bounded_inputs(plan: Arc<dyn ExecutionPlan>) -> Vec<Vec<(bool, bool)>> {
+        let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
+        let stages = graph.stages().iter();
+        stages
+            .map(|stage| {
+                let inputs = stage.inputs.iter().map(|input| {
+                    let streamed = !matches!(input.mode, InputMode::Broadcast | InputMode::Merge);
+                    (streamed, graph.bounded_output(input.stage))
+                });
+                inputs.collect()
+            })
+            .collect()
+    }
+
+    /// Creates the exchange of some partitions by a key.
+    fn shuffle(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        let partitioning = Partitioning::Hash(vec![col("id", &schema()).unwrap()], 4);
+        Arc::new(RepartitionExec::try_new(input, partitioning).unwrap())
+    }
+
+    fn source() -> Arc<dyn ExecutionPlan> {
+        UnionExec::try_new(vec![empty_plan(); 2]).unwrap()
+    }
+
+    fn sort_merge_join(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
+        let key = |input: &Arc<dyn ExecutionPlan>| col("id", &input.schema()).unwrap();
+        let sort = |input: Arc<dyn ExecutionPlan>| {
+            let ordering: LexOrdering = [PhysicalSortExpr::new_default(key(&input))].into();
+            Arc::new(SortExec::new(ordering, input).with_preserve_partitioning(true))
+        };
+        let on = vec![(key(&left), key(&right))];
+        let join = SortMergeJoinExec::try_new(
+            sort(left),
+            sort(right),
+            on,
+            None,
+            JoinType::Inner,
+            vec![SortOptions::default()],
+            NullEquality::NullEqualsNothing,
+        );
+        Arc::new(join.unwrap())
+    }
+
+    #[test]
+    fn test_bounded_output_under_an_ordered_merge() {
+        let schema = schema();
+        let ordering: LexOrdering =
+            [PhysicalSortExpr::new_default(col("id", &schema).unwrap())].into();
+        let predicate = binary(
+            col("id", &schema).unwrap(),
+            Operator::Gt,
+            lit(0_i32),
+            &schema,
+        )
+        .unwrap();
+
+        // The exchange of a single sorted partition keeps the order of the rows in each
+        // channel, and the merge on top reads the channels in the order of the data.
+        let source = Arc::new(SortExec::new(ordering.clone(), empty_plan()));
+        let exchange =
+            Arc::new(RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(4)).unwrap());
+        let filter = Arc::new(FilterExec::try_new(predicate, exchange).unwrap());
+        let merge = SortPreservingMergeExec::new(ordering, filter);
+        let graph = JobGraph::try_new(Arc::new(merge), flight_shuffle_options()).unwrap();
+        assert_eq!(graph.stages().len(), 3);
+        assert!(matches!(
+            graph.stages()[1].inputs.as_slice(),
+            [StageInput {
+                stage: 0,
+                mode: InputMode::Shuffle,
+            }]
+        ));
+        assert!(matches!(
+            graph.stages()[2].inputs.as_slice(),
+            [StageInput {
+                stage: 1,
+                mode: InputMode::Merge,
+            }]
+        ));
+        // The tasks under the merge cannot wait for it, since the merge may need the
+        // rest of one channel before it takes anything else from the other channels.
+        // So they always take the data of the exchange, whose task can wait for them.
+        assert!(graph.bounded_output(0));
+        assert!(!graph.bounded_output(1));
+        assert!(!graph.bounded_output(2));
+    }
+
+    #[test]
+    fn test_bounded_output_requires_a_single_reader_that_reads_as_the_data_comes() {
+        let stage = |inputs: Vec<(usize, InputMode)>| Stage {
+            inputs: inputs
+                .into_iter()
+                .map(|(stage, mode)| StageInput { stage, mode })
+                .collect(),
+            plan: empty_plan(),
+            group: String::new(),
+            mode: OutputMode::Pipelined,
+            distribution: OutputDistribution::RoundRobinBatch { channels: 1 },
+            placement: TaskPlacement::Worker,
+        };
+        let graph = JobGraph {
+            stages: vec![
+                stage(vec![]),
+                stage(vec![]),
+                stage(vec![]),
+                stage(vec![]),
+                stage(vec![]),
+                stage(vec![]),
+                stage(vec![
+                    (0, InputMode::Shuffle),
+                    (1, InputMode::Forward),
+                    (2, InputMode::Rescale { partitions: 2 }),
+                    (3, InputMode::Broadcast),
+                    (4, InputMode::Merge),
+                    (5, InputMode::Broadcast),
+                ]),
+                stage(vec![(5, InputMode::Broadcast), (6, InputMode::Shuffle)]),
+            ],
+            schema: schema(),
+            options: flight_shuffle_options(),
+        };
+        // The stages with a single reader that takes the data as it comes.
+        assert!(graph.bounded_output(0));
+        assert!(graph.bounded_output(1));
+        assert!(graph.bounded_output(2));
+        assert!(graph.bounded_output(6));
+        // The output is read in full by every task of the reading stage.
+        assert!(!graph.bounded_output(3));
+        // The output is merged in order.
+        assert!(!graph.bounded_output(4));
+        // The output is read by two stages.
+        assert!(!graph.bounded_output(5));
+        // The output is the result of the job.
+        assert!(!graph.bounded_output(7));
+    }
+
+    #[test]
+    fn test_bounded_output_with_operators_that_read_inputs_in_fixed_order() {
+        let key = || col("id", &schema()).unwrap();
+        let hash_join = |mode| {
+            let join = HashJoinExec::try_new(
+                shuffle(source()),
+                shuffle(source()),
+                vec![(key(), key())],
+                None,
+                &JoinType::Inner,
+                None,
+                mode,
+                NullEquality::NullEqualsNothing,
+                false,
+            );
+            Arc::new(join.unwrap()) as Arc<dyn ExecutionPlan>
+        };
+        let nested_loop_join = NestedLoopJoinExec::try_new(
+            shuffle(source()),
+            shuffle(source()),
+            None,
+            &JoinType::Inner,
+            None,
+        );
+        let inputs = vec![shuffle(source()), shuffle(source())];
+        let interleave = InterleaveExec::try_new(inputs.clone());
+        let plans: Vec<Arc<dyn ExecutionPlan>> = vec![
+            hash_join(PartitionMode::Partitioned),
+            hash_join(PartitionMode::CollectLeft),
+            Arc::new(nested_loop_join.unwrap()),
+            UnionExec::try_new(inputs).unwrap(),
+            Arc::new(interleave.unwrap()),
+        ];
+        for plan in plans {
+            // The producers of all inputs wait, unless the input is broadcast.
+            let stages = bounded_inputs(plan.clone());
+            let inputs = stages.last().unwrap();
+            let plan = displayable(plan.as_ref()).one_line().to_string();
+            assert_eq!(inputs.len(), 2, "{plan}");
+            assert!(inputs.iter().any(|(_, bounded)| *bounded), "{plan}");
+            for (streamed, bounded) in stages.into_iter().flatten() {
+                assert_eq!(streamed, bounded, "{plan}");
+            }
+        }
+
+        // The stage of a barrier is planned in a different way.
+        let barrier = BarrierExec::new(vec![empty_plan()], empty_plan());
+        let barrier = Arc::new(barrier) as Arc<dyn ExecutionPlan>;
+        assert!(reads_inputs_in_fixed_order(&barrier));
+    }
+
+    #[test]
+    fn test_bounded_output_with_scalar_subquery() {
+        let results = ScalarSubqueryResults::new(1);
+        let predicate = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Boolean,
+            false,
+            SubqueryIndex::new(0),
+            results.clone(),
+        ));
+        let filtered = Arc::new(FilterExec::try_new(predicate, shuffle(source())).unwrap());
+        let plan = Arc::new(ScalarSubqueryExec::new(
+            filtered,
+            vec![ScalarSubqueryLink {
+                plan: shuffle(source()),
+                index: SubqueryIndex::new(0),
+            }],
+            results,
+        ));
+        // The stage waits for the tasks that read it, but not for the subquery to be read.
+        let stages = bounded_inputs(plan);
+        let mut inputs = stages.last().unwrap().clone();
+        inputs.sort();
+        assert_eq!(inputs, [(false, false), (true, true)]);
+    }
+
+    #[test]
+    fn test_bounded_output_with_operators_that_may_read_inputs_in_any_order() {
+        // The join decides by the data which input it reads next.
+        let stages = bounded_inputs(sort_merge_join(shuffle(source()), shuffle(source())));
+        assert_eq!(stages.last().unwrap(), &[(true, false), (true, false)]);
+
+        // This applies to all inputs of the stage that has such an operator, whichever
+        // operator reads them, but not to the stages that the stage does not read.
+        let key = || col("id", &schema()).unwrap();
+        let hash_join = HashJoinExec::try_new(
+            shuffle(source()),
+            shuffle(source()),
+            vec![(key(), key())],
+            None,
+            &JoinType::LeftSemi,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        );
+        let predicate = binary(key(), Operator::Gt, lit(0_i32), &schema()).unwrap();
+        let other = Arc::new(FilterExec::try_new(predicate, shuffle(source())).unwrap());
+        let other = shuffle(other);
+        let stages = bounded_inputs(sort_merge_join(Arc::new(hash_join.unwrap()), other));
+        assert_eq!(
+            stages.last().unwrap(),
+            &[(true, false), (true, false), (true, false)]
+        );
+        let others = &stages[..stages.len() - 1];
+        assert_eq!(others.iter().flatten().collect::<Vec<_>>(), [&(true, true)]);
     }
 }

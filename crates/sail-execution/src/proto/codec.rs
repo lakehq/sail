@@ -9393,7 +9393,7 @@ mod tests {
             },
             locator: TaskOutputLocator::Pipelined {
                 replicas: 1,
-                job_output: false,
+                bounded: false,
             },
         };
 
@@ -9447,7 +9447,7 @@ mod tests {
             distribution,
             locator: TaskOutputLocator::Pipelined {
                 replicas: 1,
-                job_output: false,
+                bounded: false,
             },
         };
 

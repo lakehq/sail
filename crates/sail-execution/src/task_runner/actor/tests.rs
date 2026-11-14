@@ -106,7 +106,7 @@ async fn create(
         },
         channels,
         replicas: 1,
-        job_output: false,
+        bounded: true,
         schema: schema(),
         result,
     };

@@ -176,7 +176,7 @@ impl TaskRunnerActor {
         key: TaskKey,
         channels: usize,
         replicas: usize,
-        job_output: bool,
+        bounded: bool,
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
@@ -189,7 +189,7 @@ impl TaskRunnerActor {
         let _ = result.send(
             self.extensions
                 .local_streams
-                .create_stream(&key, channels, replicas, job_output, schema),
+                .create_stream(&key, channels, replicas, bounded, schema),
         );
         ActorAction::Continue
     }

@@ -1107,9 +1107,7 @@ impl<'a> TaskOutputBuilder<'a> {
         let locator = match self.stage.mode {
             OutputMode::Pipelined => TaskOutputLocator::Pipelined {
                 replicas: self.job.graph.replicas(self.key.stage),
-                job_output: self.job.topology.stages[self.key.stage]
-                    .consumers
-                    .is_empty(),
+                bounded: self.job.graph.bounded_output(self.key.stage),
             },
             OutputMode::Blocking => TaskOutputLocator::Blocking,
         };
@@ -1654,7 +1652,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn only_final_stage_produces_job_output() -> crate::error::ExecutionResult<()> {
+    fn only_stages_with_a_reading_stage_have_bounded_output() -> crate::error::ExecutionResult<()> {
         use std::sync::Arc;
 
         use datafusion::arrow::datatypes::Schema;
@@ -1699,9 +1697,10 @@ pub(super) mod tests {
             let output =
                 TaskOutputBuilder::new(&job, &key, stage, &RemoteExecutionCodec).build()?;
             // The first stage is read by the second stage, which is read by the driver.
+            // The tasks that produce the result of the job never wait for the client.
             assert!(matches!(
                 output.locator,
-                TaskOutputLocator::Pipelined { job_output, .. } if job_output == (s == 1)
+                TaskOutputLocator::Pipelined { bounded, .. } if bounded == (s == 0)
             ));
         }
         Ok(())

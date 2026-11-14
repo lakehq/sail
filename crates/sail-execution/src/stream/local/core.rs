@@ -31,7 +31,7 @@ impl LocalStreamManager {
         key: &TaskKey,
         channels: usize,
         replicas: usize,
-        job_output: bool,
+        bounded: bool,
         _schema: SchemaRef,
     ) -> ExecutionResult<Box<dyn TaskStreamSink>> {
         let keys = (0..channels)
@@ -62,15 +62,18 @@ impl LocalStreamManager {
                 _ => vec![],
             })
             .collect();
-        // The result of a job is read at the pace of the client, and the tasks that
-        // produce it must not keep their resources while the client is slow or away.
-        // The streams of a stage are removed once, when its readers have finished.
-        // The streams that are created afterwards may never be read or removed.
-        // The sink does not wait for readers in these cases.
-        let bound = if job_output || self.cleaned.contains(&(key.job_id, key.stage)) {
-            usize::MAX
-        } else {
+        // The sink waits for the readers only if the driver has found that each stream
+        // has a single reader that takes the data as it comes. This is not the case for
+        // the result of a job, which is read at the pace of the client, or when the
+        // reader decides which of its inputs it reads next. Besides, the sink never
+        // waits when the streams have several replicas, some of which may never be
+        // read, or when the streams are created after the streams of the stage have
+        // been removed, since nobody may ever read or remove them.
+        let bounded = bounded && replicas == 1 && !self.cleaned.contains(&(key.job_id, key.stage));
+        let bound = if bounded {
             self.options.task_stream_buffer
+        } else {
+            usize::MAX
         };
         let (sink, streams) = MemoryStream::create(waiters, replicas, bound);
         for (key, stream) in keys.into_iter().zip(streams) {
@@ -286,7 +289,7 @@ mod tests {
             ..task_key(0)
         };
         manager.remove_streams(key.job_id, Some(key.stage));
-        let mut sink = manager.create_stream(&key, 1, 1, false, schema.clone())?;
+        let mut sink = manager.create_stream(&key, 1, 1, true, schema.clone())?;
         assert!(write_without_waiting(&mut sink));
         assert!(matches!(sink.commit().now_or_never(), Some(Ok(()))));
 
@@ -307,25 +310,28 @@ mod tests {
             stage: key.stage + 1,
             ..key.clone()
         };
-        let mut sink = manager.create_stream(&other, 1, 1, false, schema.clone())?;
+        let mut sink = manager.create_stream(&other, 1, 1, true, schema.clone())?;
         assert!(!write_without_waiting(&mut sink));
 
         // The cleanup of the job ends the special case for its stages.
         manager.remove_streams(key.job_id, None);
         assert!(manager.cleaned.is_empty());
-        let mut sink = manager.create_stream(&key, 1, 1, false, schema)?;
+        let mut sink = manager.create_stream(&key, 1, 1, true, schema)?;
         assert!(!write_without_waiting(&mut sink));
         Ok(())
     }
 
     #[tokio::test]
-    async fn streams_of_job_output_never_wait() -> TestResult {
+    async fn streams_wait_only_when_bounded_and_not_replicated() -> TestResult {
         let mut manager = manager()?;
         let schema = Arc::new(Schema::empty());
-        let mut sink = manager.create_stream(&task_key(0), 1, 1, true, schema.clone())?;
+        let mut sink = manager.create_stream(&task_key(0), 1, 1, false, schema.clone())?;
         assert!(write_without_waiting(&mut sink));
-        let mut sink = manager.create_stream(&task_key(1), 1, 1, false, schema)?;
+        let mut sink = manager.create_stream(&task_key(1), 1, 1, true, schema.clone())?;
         assert!(!write_without_waiting(&mut sink));
+        // Some replicas may never be read, so the sink does not wait for any of them.
+        let mut sink = manager.create_stream(&task_key(2), 1, 2, true, schema)?;
+        assert!(write_without_waiting(&mut sink));
         Ok(())
     }
 
@@ -336,7 +342,7 @@ mod tests {
 
         // The stream exists when the cleanup happens.
         let key = task_key(0);
-        let mut sink = manager.create_stream(&key, 1, 1, false, schema.clone())?;
+        let mut sink = manager.create_stream(&key, 1, 1, true, schema.clone())?;
         manager.remove_streams(key.job_id, Some(key.stage));
         let state = sink.write(vec![Some(batch())]).await?;
         assert_eq!(state, TaskStreamWriteState::Closed);
@@ -345,7 +351,7 @@ mod tests {
         let key = task_key(1);
         drop(fetch_pending(&mut manager, key.task_stream_key(0)));
         manager.remove_streams(key.job_id, Some(key.stage));
-        let mut sink = manager.create_stream(&key, 1, 1, false, schema.clone())?;
+        let mut sink = manager.create_stream(&key, 1, 1, true, schema.clone())?;
         let state = sink.write(vec![Some(batch())]).await?;
         assert_eq!(state, TaskStreamWriteState::Closed);
 
@@ -353,7 +359,7 @@ mod tests {
         let key = task_key(2);
         let mut reader = fetch_pending(&mut manager, key.task_stream_key(0));
         manager.remove_streams(key.job_id, Some(key.stage));
-        let mut sink = manager.create_stream(&key, 1, 1, false, schema)?;
+        let mut sink = manager.create_stream(&key, 1, 1, true, schema)?;
         let state = sink.write(vec![Some(batch())]).await?;
         assert_eq!(state, TaskStreamWriteState::Active);
         sink.commit().await?;
@@ -373,7 +379,7 @@ mod tests {
         let key = task_key(0);
         drop(fetch_pending(&mut manager, key.task_stream_key(0)));
         manager.fail_stream_if_pending(&key.task_stream_key(0));
-        let mut sink = manager.create_stream(&key, 1, 1, false, schema.clone())?;
+        let mut sink = manager.create_stream(&key, 1, 1, true, schema.clone())?;
         let state = sink.write(vec![Some(batch)]).await?;
         assert_eq!(state, TaskStreamWriteState::Closed);
 
@@ -383,7 +389,7 @@ mod tests {
         manager.fail_stream_if_pending(&key.task_stream_key(0));
         assert!(matches!(reader.next().await, Some(Err(_))));
         assert!(reader.next().await.is_none());
-        assert!(manager.create_stream(&key, 1, 1, false, schema).is_err());
+        assert!(manager.create_stream(&key, 1, 1, true, schema).is_err());
         Ok(())
     }
 }
