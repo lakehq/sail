@@ -1389,6 +1389,96 @@ mod tests {
         }
     }
 
+    // TODO: Unignore after upgrading Arrow to 60.1.0 or newer, which fixes IPC
+    // serialization of empty RunEnd slices:
+    // https://github.com/apache/arrow-rs/blob/60.1.0/arrow-ipc/src/writer.rs#L1331-L1338
+    #[tokio::test]
+    #[ignore = "Arrow 59.2 IPC cannot serialize this empty RunEnd slice"]
+    async fn shared_limit_transports_empty_run_end_list() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use arrow_flight::decode::FlightRecordBatchStream;
+        use arrow_flight::encode::FlightDataEncoderBuilder;
+        use arrow_flight::error::FlightError;
+        use datafusion::arrow::array::{
+            Array, ArrayRef, Int16Array, Int32Array, ListArray, RecordBatch, RunArray, StringArray,
+        };
+        use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
+        use datafusion::arrow::datatypes::Int16Type;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_plan::collect;
+        use futures::TryStreamExt;
+
+        let child: ArrayRef = Arc::new(RunArray::<Int16Type>::try_new(
+            &Int16Array::from(vec![2, 4, 6]),
+            &StringArray::from(vec!["first", "middle", "last"]),
+        )?);
+        let payload: ArrayRef = Arc::new(ListArray::try_new(
+            Arc::new(Field::new("item", child.data_type().clone(), true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 2, 2, 6])),
+            child,
+            None,
+        )?);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("payload", payload.data_type().clone(), false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![0, 1, 2])), payload],
+        )?;
+        let source = MemorySourceConfig::try_new_exec(&[vec![batch]], schema.clone(), None)?;
+        // The selected row contains an empty list, while its underlying run-end
+        // values still contain the nonempty neighboring rows. The batch is nonempty.
+        let limited = Arc::new(GlobalLimitExec::new(source, 1, Some(1)));
+        let key = col("id", &schema)?;
+        let join = HashJoinExec::try_new(
+            limited,
+            UnionExec::try_new(vec![empty_plan(); 2])?,
+            vec![(key.clone(), key)],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        let graph = JobGraph::try_new(Arc::new(join), flight_shuffle_options())?;
+        let consumer = graph.stages.last().unwrap();
+        assert_eq!(consumer.plan.output_partitioning().partition_count(), 2);
+        let producer = shared_build_producer(&graph, consumer);
+        assert!(producer.plan.is::<GlobalLimitExec>());
+        let batches = collect(producer.plan.clone(), Arc::new(TaskContext::default())).await?;
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 1);
+        for column in batches[0].columns() {
+            column.to_data().validate_full()?;
+        }
+
+        let stream = futures::stream::iter(batches.into_iter().map(Ok::<_, FlightError>));
+        let encoded = FlightDataEncoderBuilder::new().build(stream);
+        let decoded: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(encoded)
+            .try_collect()
+            .await?;
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].schema(), schema);
+        assert_eq!(decoded[0].num_rows(), 1);
+        let id = decoded[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id.value(0), 1);
+        let payload = decoded[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(payload.value_length(0), 0);
+        payload.to_data().validate_full()?;
+        Ok(())
+    }
+
     #[test]
     fn shared_selection_roots_preserve_the_complete_plan() {
         for options in [
@@ -2018,6 +2108,139 @@ mod tests {
                 mode: InputMode::Forward,
             }]
         ));
+    }
+
+    #[test]
+    fn shared_build_keeps_scalar_subquery_context() {
+        for wrapper_is_shared in [false, true] {
+            let results = ScalarSubqueryResults::new(1);
+            let predicate = Arc::new(ScalarSubqueryExpr::new(
+                DataType::Boolean,
+                false,
+                SubqueryIndex::new(0),
+                results.clone(),
+            ));
+            let filtered = Arc::new(FilterExec::try_new(predicate, empty_plan()).unwrap())
+                as Arc<dyn ExecutionPlan>;
+            let wrap =
+                |input| {
+                    Arc::new(ScalarSubqueryExec::new(
+                        input,
+                        vec![ScalarSubqueryLink {
+                            plan: Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![
+                                Field::new("keep", DataType::Boolean, true),
+                            ])))),
+                            index: SubqueryIndex::new(0),
+                        }],
+                        results.clone(),
+                    )) as Arc<dyn ExecutionPlan>
+                };
+            let build = if wrapper_is_shared {
+                wrap(filtered)
+            } else {
+                filtered
+            };
+            let key = col("id", &schema()).unwrap();
+            let join = Arc::new(
+                HashJoinExec::try_new(
+                    build,
+                    UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                    vec![(key.clone(), key)],
+                    None,
+                    &JoinType::Inner,
+                    None,
+                    PartitionMode::CollectLeft,
+                    NullEquality::NullEqualsNothing,
+                    false,
+                )
+                .unwrap(),
+            ) as Arc<dyn ExecutionPlan>;
+            let plan = if wrapper_is_shared { join } else { wrap(join) };
+            let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
+            let producer = shared_build_producer(&graph, graph.stages.last().unwrap());
+            let scalar = producer.plan.downcast_ref::<ScalarSubqueryExec>().unwrap();
+            assert_eq!(scalar.subqueries().len(), 1);
+            let filter = scalar.input().downcast_ref::<FilterExec>().unwrap();
+            let predicate = filter
+                .predicate()
+                .downcast_ref::<ScalarSubqueryExpr>()
+                .unwrap();
+            assert!(ScalarSubqueryResults::ptr_eq(scalar.results(), &results));
+            assert!(ScalarSubqueryResults::ptr_eq(
+                scalar.results(),
+                predicate.results()
+            ));
+            let link = scalar.subqueries()[0]
+                .plan
+                .downcast_ref::<StageInputExec<usize>>()
+                .unwrap();
+            assert!(matches!(
+                producer.inputs[*link.input()].mode,
+                InputMode::Broadcast
+            ));
+            assert_eq!(
+                graph
+                    .stages
+                    .iter()
+                    .filter(|stage| stage.plan.is::<ScalarSubqueryExec>())
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn shared_build_keeps_driver_barrier_and_preconditions() {
+        let precondition = Arc::new(
+            RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(1)).unwrap(),
+        );
+        let command = Arc::new(CooperativeExec::new(Arc::new(CatalogCommandExec::new(
+            CatalogCommand::CurrentCatalog,
+            schema(),
+        ))));
+        let build = Arc::new(BarrierExec::new(vec![precondition], command));
+        let key = col("id", &schema()).unwrap();
+        let join = HashJoinExec::try_new(
+            build,
+            UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+            vec![(key.clone(), key)],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap();
+        let graph = JobGraph::try_new(Arc::new(join), flight_shuffle_options()).unwrap();
+        let producer = shared_build_producer(&graph, graph.stages.last().unwrap());
+        let input = producer
+            .plan
+            .downcast_ref::<StageInputExec<usize>>()
+            .unwrap();
+        let input = &producer.inputs[*input.input()];
+        assert!(matches!(input.mode, InputMode::Forward));
+        let driver = &graph.stages[input.stage];
+        assert_eq!(driver.placement, TaskPlacement::Driver);
+        let barrier = driver.plan.downcast_ref::<BarrierExec>().unwrap();
+        let command = barrier.plan().downcast_ref::<CooperativeExec>().unwrap();
+        assert!(command.input().is::<CatalogCommandExec>());
+        assert_eq!(barrier.preconditions().len(), 1);
+        let precondition = barrier.preconditions()[0]
+            .downcast_ref::<StageInputExec<usize>>()
+            .unwrap();
+        assert!(matches!(
+            driver.inputs[*precondition.input()].mode,
+            InputMode::Shuffle
+        ));
+        assert_eq!(
+            graph
+                .stages
+                .iter()
+                .filter(|stage| stage.plan.is::<BarrierExec>())
+                .count(),
+            1
+        );
     }
 
     #[test]
