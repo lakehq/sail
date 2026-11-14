@@ -14,10 +14,16 @@ pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail cluster mode")
 
 
 def test_limit_read_by_every_task_of_a_join_keeps_the_same_rows(spark):
-    # Every row of the limited side has a match, so the join returns as many rows as the limit.
+    # Each probe partition contains every build key, so compare the selected key sets.
     query = (
-        "SELECT count(*) FROM (SELECT id, id * 2 AS x FROM range(0, 200, 1, 4) LIMIT 50) a "
-        "JOIN (SELECT id, id * 3 AS y FROM range(0, 200, 1, 4)) b ON a.id = b.id"
+        "SELECT b.probe_partition, a.id "
+        "FROM (SELECT id FROM range(0, 200, 1, 4) LIMIT 50) a "
+        "JOIN (SELECT id % 200 AS id, CAST(floor(id / 200) AS INT) AS probe_partition "
+        "FROM range(0, 800, 1, 4)) b ON a.id = b.id"
     )
     for _ in range(20):
-        assert spark.sql(query).collect()[0][0] == 50  # noqa: PLR2004
+        selected = [set() for _ in range(4)]
+        for row in spark.sql(query).collect():
+            selected[row.probe_partition].add(row.id)
+        assert len(selected[0]) == 50  # noqa: PLR2004
+        assert all(keys == selected[0] for keys in selected)
