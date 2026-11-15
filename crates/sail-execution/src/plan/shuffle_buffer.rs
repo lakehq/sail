@@ -234,8 +234,10 @@ impl ShuffleBuffer {
         }
         // Each list keeps the capacity of the most rows its channel has had in one batch, so
         // when batches go to different channels the lists together can keep a batch per
-        // channel. Release them once they hold over four times what one batch needs; normal
-        // growth stays under twice.
+        // channel. Release them once they keep over four entries per row of a batch: a batch
+        // needs one entry per row, a list that grows by doubling can keep two, and rows moving
+        // between channels from batch to batch can double that again, so ordinary input stays
+        // under four.
         if capacity > 4 * (self.batch_size.max(batch.num_rows()) + rows.len()) {
             rows.fill_with(Vec::new);
         }
