@@ -92,17 +92,6 @@ impl SharedBuffers {
         (distinct, distinct && !self.written.contains(&pointer))
     }
 
-    /// Returns the bytes of a buffer unless the held batches, or those of the previous
-    /// flush, have it.
-    fn fresh_bytes(&self, buffer: &Buffer) -> usize {
-        let pointer = buffer.data_ptr().as_ptr() as usize;
-        if self.held.contains(&pointer) || self.written.contains(&pointer) {
-            0
-        } else {
-            buffer.capacity()
-        }
-    }
-
     /// Returns the bytes that a buffer adds to the held batches.
     ///
     /// A buffer that the batches of the previous flush had as well belongs to the input
@@ -201,12 +190,22 @@ impl ShuffleBuffer {
         batch: RecordBatch,
         flush: bool,
     ) -> Result<Vec<Round>> {
-        let (schema, columns, rows) = batch.into_parts();
+        let (schema, mut columns, rows) = batch.into_parts();
         self.pieces.push(Piece {
             channel: channel as u32,
             start: 0,
         });
         let large = rows > self.batch_size / 2;
+        if !large {
+            // A slice of a larger batch would fill the budget by itself.
+            columns = columns
+                .into_iter()
+                .map(|column| match oversized(&column) {
+                    true => copy(&column),
+                    false => detach(column),
+                })
+                .collect::<Result<_>>()?;
+        }
         self.push(schema, columns, rows, large, flush)
     }
 
@@ -245,39 +244,9 @@ impl ShuffleBuffer {
         }
         let columns = take_arrays(batch.columns(), &UInt32Array::from(order), None)?
             .into_iter()
-            .zip(&self.views)
-            .map(|(column, views)| self.detach(column, views.is_some()))
+            .map(detach)
             .collect::<Result<Vec<_>>>()?;
         self.push(batch.schema(), columns, batch.num_rows(), false, flush)
-    }
-
-    /// Compacts a reordered column that keeps much more of its input alive than its rows
-    /// use, as the rows of a slice of a larger batch do.
-    ///
-    /// Holding such columns as they are would fill the budget with a few rows. Whether
-    /// the rows use what they keep alive is only known for the strings of a view column,
-    /// so other columns are compacted whenever they share a large part of the budget.
-    fn detach(&self, column: ArrayRef, views: bool) -> Result<ArrayRef> {
-        if column.data_type().is_primitive() {
-            return Ok(column);
-        }
-        let data = column.to_data();
-        let sparse = if views {
-            let strings: usize = data.buffers()[1..].iter().map(Buffer::capacity).sum();
-            strings > 2 * referenced_bytes(&data)
-        } else {
-            let mut shared = 0;
-            array_bytes(&data, false, &mut |buffer| {
-                shared += self.shared.fresh_bytes(buffer);
-                0
-            });
-            shared >= self.budget / 8
-        };
-        if sparse {
-            trim(column, false)
-        } else {
-            Ok(column)
-        }
     }
 
     fn push(
@@ -617,6 +586,44 @@ fn place(rounds: &mut Vec<Round>, round: &mut usize, channel: usize, batch: Reco
     }
     rounds[*round].push((channel, batch));
     *round += 1;
+}
+
+/// Compacts a held column that keeps alive more than twice what its rows use, as the
+/// rows of a slice of a larger batch do. Holding it as it is would fill the budget with
+/// a few rows.
+fn detach(column: ArrayRef) -> Result<ArrayRef> {
+    if !column.data_type().is_primitive() && sparse(&column.to_data()) {
+        trim(column, false)
+    } else {
+        Ok(column)
+    }
+}
+
+/// Returns whether an array, or an array nested in it, has more than twice the view
+/// strings, dictionary values, or list view values that its rows use.
+fn sparse(data: &ArrayData) -> bool {
+    let values = |used: usize| data.child_data()[0].len() > 2 * used;
+    let here = match data.data_type() {
+        DataType::Utf8View | DataType::BinaryView => {
+            let strings: usize = data.buffers()[1..].iter().map(Buffer::capacity).sum();
+            strings > 2 * referenced_bytes(data)
+        }
+        DataType::Dictionary(_, _) => values(data.len()),
+        DataType::ListView(_) => values(
+            data.buffer::<i32>(1)[..data.len()]
+                .iter()
+                .map(|size| *size as usize)
+                .sum(),
+        ),
+        DataType::LargeListView(_) => values(
+            data.buffer::<i64>(1)[..data.len()]
+                .iter()
+                .map(|size| *size as usize)
+                .sum(),
+        ),
+        _ => false,
+    };
+    here || data.child_data().iter().any(sparse)
 }
 
 /// Returns the bytes of the strings of a view array that are too long to inline,

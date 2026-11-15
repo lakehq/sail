@@ -1937,6 +1937,33 @@ mod tests {
         Ok(())
     }
 
+    /// Small batches that are slices of one large batch are combined, although each of
+    /// them keeps the whole of it alive.
+    #[tokio::test]
+    async fn shuffle_combines_small_whole_batches_that_are_slices_of_a_larger_one() -> Result<()> {
+        let large = input_with_rows(1, 2 * 1024 * 1024)?.remove(0);
+        let input: Vec<RecordBatch> = (0..16).map(|i| large.slice(i * 1000, 1000)).collect();
+        let schema = large.schema();
+        for partitioning in [
+            ShufflePartitioning::RoundRobinBatch(2),
+            hash(&schema, "a", 1)?,
+        ] {
+            let capture = shuffle_with(
+                stream(&input, false)?,
+                partitioning,
+                TaskStreamWriteState::Active,
+            )
+            .await?;
+            let output: Vec<RecordBatch> = capture.channels.iter().flatten().cloned().collect();
+            assert!(output.len() <= 4, "{} batches", output.len());
+            assert_eq!(matrix_rows(&output)?, matrix_rows(&input)?);
+            for (channel, output) in capture.channels.iter().enumerate() {
+                assert_compact(channel, output)?;
+            }
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn hash_shuffle_output_matches_batch_partitioner_for_any_channel_count() -> Result<()> {
         let input = input(4)?;
