@@ -577,8 +577,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 }
                 Ok(format!("{name}({arg})"))
             }
-            "from_csv" | "schema_of_csv" | "schema_of_json" | "to_csv" | "to_json"
-            | "any_value" | "first_value" | "last_value" => {
+            "from_csv" | "schema_of_csv" | "schema_of_json" | "schema_of_xml" | "to_csv"
+            | "to_json" | "any_value" | "first_value" | "last_value" => {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
             }

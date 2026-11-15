@@ -111,3 +111,23 @@ def check_retried_cte_query_fails(spark):
 
 def test_retried_region_reads_the_output_of_a_blocking_stage(spark):
     check_retried_cte_query_fails(spark)
+
+
+def test_zero_tail_does_not_run_shuffle_producers(spark):
+    df = (
+        spark.range(0, 10, 1, 4)
+        .selectExpr("id", "raise_error(concat('tail input evaluated: ', cast(id as string))) AS value")
+        .repartition(3)
+    )
+    assert df.tail(0) == []
+    with pytest.raises(PySparkException, match="tail input evaluated"):
+        df.tail(1)
+
+
+def test_sorted_tail_with_shuffle(spark):
+    df = spark.range(0, 100, 1, 4).repartition(3).orderBy("id", ascending=False)
+    assert [row.id for row in df.tail(7)] == list(range(6, -1, -1))
+    assert [row.id for row in df.tail(101)] == list(range(99, -1, -1))
+    projected = df.selectExpr("concat('row-', cast(id as string)) AS payload")
+    assert [row.payload for row in projected.tail(7)] == [f"row-{i}" for i in range(6, -1, -1)]
+    assert [row.payload for row in projected.tail(101)] == [f"row-{i}" for i in range(99, -1, -1)]

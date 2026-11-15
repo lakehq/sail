@@ -51,6 +51,7 @@ postcard = { version = "1.1.3", default-features = false, features = ["use-std"]
 smallvec = { version = "1.16.5", features = ["serde"] }
 xee-xpath = "0.1.5"
 xot = "0.31.2"
+quick-xml = "0.39.4"
 # TODO: `serde_yaml` is deprecated. No satisfactory alternative exists yet, we may need to build our own in the future.
 serde_yaml = "0.9.34"
 monostate = "1.0.2"

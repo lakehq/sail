@@ -196,3 +196,23 @@ def test_celeborn_shuffle_is_usable_after_a_shared_cte_without_output(spark):
         assert [tuple(row) for row in spark.sql(query).collect()] == [(0,)]
         query_with_output = f"WITH {_SHARED_CTE} SELECT count(*), sum(a.n + b.n) FROM c a JOIN c b ON a.k = b.k"  # noqa: S608
         assert [tuple(row) for row in spark.sql(query_with_output).collect()] == [(7, 2000)]
+
+
+def test_zero_tail_does_not_run_shuffle_producers(spark):
+    df = (
+        spark.range(0, 10, 1, 4)
+        .selectExpr("id", "raise_error(concat('tail input evaluated: ', cast(id as string))) AS value")
+        .repartition(3)
+    )
+    assert df.tail(0) == []
+    with pytest.raises(PySparkException, match="tail input evaluated"):
+        df.tail(1)
+
+
+def test_sorted_tail_with_shuffle(spark):
+    df = spark.range(0, 100, 1, 4).repartition(3).orderBy("id", ascending=False)
+    assert [row.id for row in df.tail(7)] == list(range(6, -1, -1))
+    assert [row.id for row in df.tail(101)] == list(range(99, -1, -1))
+    projected = df.selectExpr("concat('row-', cast(id as string)) AS payload")
+    assert [row.payload for row in projected.tail(7)] == [f"row-{i}" for i in range(6, -1, -1)]
+    assert [row.payload for row in projected.tail(101)] == [f"row-{i}" for i in range(99, -1, -1)]

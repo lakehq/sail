@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+use datafusion::arrow::compute::kernels::cast_utils::parse_decimal;
 use datafusion::arrow::datatypes::*;
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::{
@@ -15,6 +16,8 @@ use xee_xpath::Documents;
 
 use crate::functions_utils::make_scalar_function;
 use crate::scalar::datetime::format::{DateTimeFormat, ParsedDateTime};
+use crate::scalar::datetime::spark_timestamp::TimestampParser;
+use crate::scalar::datetime::timestamp_parser::parse_timestamp_string;
 
 #[cfg(test)]
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
@@ -34,7 +37,8 @@ impl SparkFromXml {
     pub fn new(session_timezone: Arc<str>) -> Self {
         Self {
             session_timezone,
-            signature: Signature::user_defined(Volatility::Immutable),
+            // Time-only timestamps use the current date in the effective time zone.
+            signature: Signature::user_defined(Volatility::Stable),
         }
     }
 
@@ -52,16 +56,18 @@ enum ParseMode {
 #[derive(Debug)]
 struct SparkFromXmlOptions {
     null_value: Option<String>,
+    ignore_surrounding_spaces: bool,
     attribute_prefix: String,
     value_tag: String,
-    timestamp_ltz_format: DateTimeFormat,
-    timestamp_ntz_format: DateTimeFormat,
+    timestamp_ltz_format: Option<DateTimeFormat>,
+    timestamp_ntz_format: Option<DateTimeFormat>,
     date_format: DateTimeFormat,
     mode: ParseMode,
 }
 
 impl SparkFromXmlOptions {
     const NULL_VALUE_OPTION: &'static str = "nullValue";
+    const IGNORE_SURROUNDING_SPACES_OPTION: &'static str = "ignoreSurroundingSpaces";
     const ATTRIBUTE_PREFIX_OPTION: &'static str = "attributePrefix";
     const ATTRIBUTE_PREFIX_DEFAULT: &'static str = "_";
     const VALUE_TAG_OPTION: &'static str = "valueTag";
@@ -70,12 +76,20 @@ impl SparkFromXmlOptions {
     const TIMESTAMP_NTZ_FORMAT_OPTION: &'static str = "timestampNTZFormat";
     const DATE_FORMAT_OPTION: &'static str = "dateFormat";
     const MODE_OPTION: &'static str = "mode";
-    const TIMESTAMP_LTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
-    const TIMESTAMP_NTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
     const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     fn from_map(map: &MapArray) -> Result<Self> {
         let null_value = find_key_value(map, Self::NULL_VALUE_OPTION);
+        let ignore_surrounding_spaces =
+            match find_key_value(map, Self::IGNORE_SURROUNDING_SPACES_OPTION)
+                .as_deref()
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                None | Some("true") => true,
+                Some("false") => false,
+                _ => return plan_err!("`ignoreSurroundingSpaces` must be true or false"),
+            };
         let attribute_prefix = find_key_value(map, Self::ATTRIBUTE_PREFIX_OPTION)
             .unwrap_or_else(|| Self::ATTRIBUTE_PREFIX_DEFAULT.to_string());
         let value_tag = find_key_value(map, Self::VALUE_TAG_OPTION)
@@ -89,21 +103,11 @@ impl SparkFromXmlOptions {
         let timestamp_ltz_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
             .map(DateTimeFormat::for_parsing)
-            .transpose()?
-            .unwrap_or_else(|| {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_LTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp LTZ format should be valid")
-            });
+            .transpose()?;
         let timestamp_ntz_format = find_key_value(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
             .as_deref()
             .map(DateTimeFormat::for_parsing)
-            .transpose()?
-            .unwrap_or_else(|| {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp NTZ format should be valid")
-            });
+            .transpose()?;
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
             .map(DateTimeFormat::for_parsing)
@@ -126,6 +130,7 @@ impl SparkFromXmlOptions {
         };
         Ok(Self {
             null_value,
+            ignore_surrounding_spaces,
             attribute_prefix,
             value_tag,
             timestamp_ltz_format,
@@ -134,24 +139,45 @@ impl SparkFromXmlOptions {
             mode,
         })
     }
+
+    fn parse_timestamp(
+        &self,
+        value: &str,
+        has_timezone: bool,
+        session_timezone: &str,
+    ) -> Result<i64> {
+        let format = if has_timezone {
+            &self.timestamp_ltz_format
+        } else {
+            &self.timestamp_ntz_format
+        };
+        if let Some(format) = format {
+            let parsed = format.parse_datetime_value(value)?;
+            return parsed_timestamp_to_micros(parsed, has_timezone, session_timezone);
+        }
+        let parser = if has_timezone {
+            TimestampParser::Ltz {
+                default_timezone: session_timezone.to_string(),
+            }
+        } else {
+            if parse_timestamp_string(value).is_some_and(|p| p.timezone.is_some()) {
+                return exec_err!("TIMESTAMP_NTZ XML values must not contain a time zone");
+            }
+            TimestampParser::Ntz
+        };
+        parser.parse_unformatted(value)
+    }
 }
 
 impl Default for SparkFromXmlOptions {
     fn default() -> Self {
         Self {
             null_value: None,
+            ignore_surrounding_spaces: true,
             attribute_prefix: Self::ATTRIBUTE_PREFIX_DEFAULT.to_string(),
             value_tag: Self::VALUE_TAG_DEFAULT.to_string(),
-            timestamp_ltz_format: {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_LTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp LTZ format should be valid")
-            },
-            timestamp_ntz_format: {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp NTZ format should be valid")
-            },
+            timestamp_ltz_format: None,
+            timestamp_ntz_format: None,
             date_format: {
                 #[expect(clippy::expect_used)]
                 DateTimeFormat::for_parsing(Self::DATE_FORMAT_DEFAULT)
@@ -559,6 +585,28 @@ fn append_xml_field(
     session_timezone: &str,
 ) -> Result<()> {
     if field_name == options.value_tag {
+        if let XmlFieldBuilder::List {
+            offsets,
+            values,
+            nulls,
+            ..
+        } = builder
+        {
+            let mut count = 0;
+            for child in xot.children(parent) {
+                if let xot::Value::Text(text) = xot.value(child)
+                    && !text.get().trim_matches([' ', '\t', '\n', '\r']).is_empty()
+                {
+                    append_text(Some(text.get()), values, options, session_timezone)?;
+                    count += 1;
+                }
+            }
+
+            nulls.push(count > 0);
+            offsets.push(offsets.last().copied().unwrap_or(0) + count);
+            return Ok(());
+        }
+
         let text = element_text_content(xot, parent);
         return append_text(text.as_deref(), builder, options, session_timezone);
     }
@@ -660,6 +708,7 @@ fn append_text(
 ) -> Result<()> {
     let raw = match text {
         None => return append_null_to_field(builder),
+        Some(s) if options.ignore_surrounding_spaces => s.trim_matches(|c| c <= '\u{20}'),
         Some(s) => s,
     };
 
@@ -714,30 +763,14 @@ fn append_text(
             Err(_) => b.append_null(),
         },
         XmlFieldBuilder::TimestampMicrosecond { builder: b, has_tz } => {
-            let fmt = if *has_tz {
-                &options.timestamp_ltz_format
-            } else {
-                &options.timestamp_ntz_format
-            };
-            match fmt.parse_datetime_value(raw) {
-                Ok(parsed) => {
-                    let micros = parsed_timestamp_to_micros(parsed, *has_tz, session_timezone)?;
-                    b.append_value(micros);
-                }
+            match options.parse_timestamp(raw, *has_tz, session_timezone) {
+                Ok(micros) => b.append_value(micros),
                 Err(_) => b.append_null(),
             }
         }
         XmlFieldBuilder::TimestampNanosecond { builder: b, has_tz } => {
-            let fmt = if *has_tz {
-                &options.timestamp_ltz_format
-            } else {
-                &options.timestamp_ntz_format
-            };
-            match fmt.parse_datetime_value(raw) {
-                Ok(parsed) => {
-                    let micros = parsed_timestamp_to_micros(parsed, *has_tz, session_timezone)?;
-                    b.append_value(micros * 1_000);
-                }
+            match options.parse_timestamp(raw, *has_tz, session_timezone) {
+                Ok(micros) => b.append_value(micros * 1_000),
                 Err(_) => b.append_null(),
             }
         }
@@ -775,38 +808,7 @@ fn parsed_timestamp_to_micros(
 }
 
 fn parse_decimal128(raw: &str, precision: u8, scale: i8) -> Option<i128> {
-    let raw = raw.trim();
-    let is_negative = raw.starts_with('-');
-    let raw = if is_negative { &raw[1..] } else { raw };
-
-    let (int_part, frac_part) = if let Some(pos) = raw.find('.') {
-        (&raw[..pos], &raw[pos + 1..])
-    } else {
-        (raw, "")
-    };
-
-    let int_val: i128 = int_part.parse().ok()?;
-
-    let scale = scale as usize;
-    let frac_val: i128 = if frac_part.len() >= scale {
-        frac_part[..scale].parse().ok()?
-    } else {
-        let padded = format!("{:0<width$}", frac_part, width = scale);
-        padded.parse().ok()?
-    };
-
-    let scale_factor: i128 = 10_i128.checked_pow(scale as u32)?;
-    let value = int_val.checked_mul(scale_factor)?.checked_add(frac_val)?;
-    let value = if is_negative {
-        value.checked_neg()?
-    } else {
-        value
-    };
-    let max_value = 10_i128.checked_pow(precision as u32)?;
-    if value.abs() >= max_value {
-        return None; // overflow
-    }
-    Some(value)
+    parse_decimal::<Decimal128Type>(&raw.replace(',', ""), precision, scale).ok()
 }
 
 fn child_elements_named(xot: &xot::Xot, parent: xot::Node, name: &str) -> Vec<xot::Node> {
