@@ -560,6 +560,8 @@ impl PlanResolver<'_> {
                 }
                 DataType::List(field)
                 | DataType::LargeList(field)
+                | DataType::ListView(field)
+                | DataType::LargeListView(field)
                 | DataType::FixedSizeList(field, _) => {
                     let DataType::Struct(fields) = field.data_type() else {
                         return Ok(None);
@@ -578,6 +580,8 @@ impl PlanResolver<'_> {
                     let data_type = match data_type {
                         DataType::List(_) => DataType::List(item),
                         DataType::LargeList(_) => DataType::LargeList(item),
+                        DataType::ListView(_) => DataType::ListView(item),
+                        DataType::LargeListView(_) => DataType::LargeListView(item),
                         DataType::FixedSizeList(_, size) => DataType::FixedSizeList(item, *size),
                         _ => unreachable!("list data type matched above"),
                     };

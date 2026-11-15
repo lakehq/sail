@@ -334,7 +334,11 @@ impl PlanResolver<'_> {
         if let spec::Expr::Literal(spec::Literal::Utf8 { value: Some(field) }) = &extraction
             && matches!(
                 &data_type,
-                DataType::List(item) | DataType::LargeList(item) | DataType::FixedSizeList(item, _)
+                DataType::List(item)
+                    | DataType::LargeList(item)
+                    | DataType::ListView(item)
+                    | DataType::LargeListView(item)
+                    | DataType::FixedSizeList(item, _)
                     if matches!(item.data_type(), DataType::Struct(_))
             )
         {
