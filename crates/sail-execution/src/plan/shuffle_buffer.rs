@@ -553,11 +553,32 @@ fn place(rounds: &mut Vec<Round>, round: &mut usize, channel: usize, batch: Reco
 /// rows of a slice of a larger batch do. Holding it as it is would fill the budget with
 /// a few rows.
 fn detach(column: ArrayRef) -> Result<ArrayRef> {
-    if !column.data_type().is_primitive() && sparse(&column.to_data()) {
-        trim(column, false)
-    } else {
-        Ok(column)
+    if column.data_type().is_primitive() || !sparse(&column.to_data()) {
+        return Ok(column);
     }
+    match column.data_type() {
+        DataType::Utf8View => copy_used_views::<StringViewType>(column),
+        DataType::BinaryView => copy_used_views::<BinaryViewType>(column),
+        _ => trim(column, false),
+    }
+}
+
+/// Copies the views of a column, and each of the strings they point at once, into one
+/// new buffer.
+fn copy_used_views<T: ByteViewType>(column: ArrayRef) -> Result<ArrayRef> {
+    let rows = column.len();
+    let held = [Held {
+        schema: Arc::new(Schema::empty()),
+        columns: vec![column],
+        rows,
+        pieces_end: 0,
+    }];
+    let run = Run {
+        batch: 0,
+        start: 0,
+        rows: rows as u32,
+    };
+    copy_shared_views::<T>(&held, 0, &[run], rows)
 }
 
 /// Returns whether an array, or an array nested in it, has more than twice the view
