@@ -187,38 +187,26 @@ impl ShuffleBuffer {
         self.push(schema, columns, rows, large, flush)
     }
 
-    /// Holds a batch with the channel of each of its rows, and returns what is to be written.
+    /// Holds a batch with the rows of each channel, and returns what is to be written.
+    /// The lists of rows are left empty.
     ///
-    /// The rows are reordered by channel with one `take`, which keeps the order of the
-    /// rows of each channel.
+    /// The rows are reordered by channel with one `take`.
     pub(super) fn push_rows(
         &mut self,
         batch: RecordBatch,
-        channels: &[u32],
+        rows: &mut [Vec<u32>],
         flush: bool,
     ) -> Result<Vec<Round>> {
-        self.counts.clear();
-        self.counts.resize(self.channels, 0);
-        for &channel in channels {
-            self.counts[channel as usize] += 1;
-        }
-        let mut start = 0;
-        for (channel, count) in self.counts.iter_mut().enumerate() {
-            let rows = *count;
-            if rows > 0 {
+        let mut order: Vec<u32> = Vec::with_capacity(batch.num_rows());
+        for (channel, rows) in rows.iter_mut().enumerate() {
+            if !rows.is_empty() {
                 self.pieces.push(Piece {
                     channel: channel as u32,
-                    start,
+                    start: order.len() as u32,
                 });
+                order.extend_from_slice(rows);
+                rows.clear();
             }
-            *count = start;
-            start += rows;
-        }
-        let mut order = vec![0u32; channels.len()];
-        for (row, &channel) in channels.iter().enumerate() {
-            let position = &mut self.counts[channel as usize];
-            order[*position as usize] = row as u32;
-            *position += 1;
         }
         let columns = take_arrays(batch.columns(), &UInt32Array::from(order), None)?
             .into_iter()
@@ -773,11 +761,14 @@ mod tests {
     fn held_bytes_do_not_grow_with_the_channels() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
         let mut buffer = ShuffleBuffer::try_new(&schema, 4000, 8192, usize::MAX, false)?;
+        let mut rows = vec![vec![]; 4000];
         for i in 0..100u32 {
             let k = Int64Array::from_iter_values(0..4);
             let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k)])?;
-            let channels = [i, 1000 + i, 2000 + i, 3000 + i];
-            assert!(buffer.push_rows(batch, &channels, false)?.is_empty());
+            for (row, channel) in [i, 1000 + i, 2000 + i, 3000 + i].into_iter().enumerate() {
+                rows[channel as usize].push(row as u32);
+            }
+            assert!(buffer.push_rows(batch, &mut rows, false)?.is_empty());
         }
         // Each batch has a buffer of 64 bytes for its rows, and 8 bytes for each channel
         // that they go to.

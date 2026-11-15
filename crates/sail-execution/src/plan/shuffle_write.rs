@@ -92,6 +92,79 @@ fn flush_budget(_channels: usize) -> usize {
     8 * 1024 * 1024
 }
 
+// [CREDIT]: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L940-L1010
+/// Computes `value % divisor` without division in the hot loop when `divisor`
+/// is fixed for many values.
+///
+/// Hash repartitioning computes a remainder for every row. Integer division is
+/// relatively expensive, so this precomputes the strength-reduced form of the
+/// divisor: powers of two use a bit mask, and other divisors use a reciprocal
+/// multiply to recover the quotient and therefore the remainder. This is the
+/// same invariant-divisor optimization compilers use for `%` by a constant.
+#[derive(Debug, Clone, Copy)]
+enum StrengthReducedU64 {
+    PowerOfTwo { mask: u64 },
+    Reciprocal { divisor: u64, reciprocal: u128 },
+}
+
+impl StrengthReducedU64 {
+    fn new(divisor: u64) -> Self {
+        debug_assert!(divisor > 0);
+
+        if divisor.is_power_of_two() {
+            Self::PowerOfTwo { mask: divisor - 1 }
+        } else {
+            Self::Reciprocal {
+                divisor,
+                // ceil(2^128 / divisor), computed without representing 2^128
+                reciprocal: u128::MAX / u128::from(divisor) + 1,
+            }
+        }
+    }
+
+    fn partition_indices(self, hash_buffer: &[u64], indices: &mut [Vec<u32>]) {
+        match self {
+            Self::PowerOfTwo { mask } => {
+                for (index, hash) in hash_buffer.iter().enumerate() {
+                    indices[(*hash & mask) as usize].push(index as u32);
+                }
+            }
+            Self::Reciprocal {
+                divisor,
+                reciprocal,
+            } => {
+                for (index, hash) in hash_buffer.iter().enumerate() {
+                    let quotient = Self::quotient(*hash, reciprocal);
+                    let partition = *hash - quotient * divisor;
+                    indices[partition as usize].push(index as u32);
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn remainder(self, value: u64) -> u64 {
+        match self {
+            Self::PowerOfTwo { mask } => value & mask,
+            Self::Reciprocal {
+                divisor,
+                reciprocal,
+            } => value - Self::quotient(value, reciprocal) * divisor,
+        }
+    }
+
+    #[inline]
+    fn quotient(value: u64, reciprocal: u128) -> u64 {
+        let reciprocal_low = reciprocal as u64;
+        let reciprocal_high = (reciprocal >> 64) as u64;
+        let low_product = u128::from(value) * u128::from(reciprocal_low);
+        let high_product = u128::from(value) * u128::from(reciprocal_high);
+        let carry = ((high_product & u128::from(u64::MAX)) + (low_product >> 64)) >> 64;
+
+        ((high_product >> 64) + carry) as u64
+    }
+}
+
 /// Assigns the rows of the input to output channels, in the same way as DataFusion's
 /// `BatchPartitioner` and as `RowRoundRobinPartitioner`, without moving any row.
 enum Router {
@@ -104,7 +177,8 @@ enum Router {
     },
     Hash {
         expressions: Vec<Arc<dyn PhysicalExpr>>,
-        channels: u64,
+        channels: usize,
+        reducer: StrengthReducedU64,
         hashes: Vec<u64>,
     },
     Range(RangeExpr),
@@ -126,7 +200,8 @@ impl Router {
             }
             ShufflePartitioning::Hash(expressions, channels) => Self::Hash {
                 expressions: expressions.clone(),
-                channels: *channels as u64,
+                channels: *channels,
+                reducer: StrengthReducedU64::new(*channels as u64),
                 hashes: vec![],
             },
             ShufflePartitioning::Range(range) if range.split_points().is_empty() => Self::Batch {
@@ -140,6 +215,8 @@ impl Router {
                     .iter()
                     .map(|sort_expr| Arc::clone(&sort_expr.expr))
                     .collect();
+                // TODO: Uncomment after DataFusion 56
+                // Self::Range(RangeExpr::try_new_with_schema(keys, range, schema)?)
                 Self::Range(RangeExpr::try_new(keys, range)?)
             }
             ShufflePartitioning::RoundRobinBatch(channels) => Self::Batch {
@@ -185,15 +262,14 @@ impl Router {
     }
 
     /// Holds a batch in the buffer by the channels of its rows, and returns what is to
-    /// be written.
+    /// be written. `rows` has the rows of each channel, and is left empty.
     fn push(
         &mut self,
         batch: RecordBatch,
-        rows: &mut Vec<u32>,
+        rows: &mut Vec<Vec<u32>>,
         buffer: &mut ShuffleBuffer,
         flush: bool,
     ) -> Result<Vec<Round>> {
-        rows.clear();
         match self {
             Self::Batch {
                 channels,
@@ -205,26 +281,37 @@ impl Router {
                 *next = (*next + 1) % *channels;
                 return buffer.push_batch(channel, batch, flush);
             }
+            // [CREDIT]: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L1249-L1274
             Self::Hash {
                 expressions,
                 channels,
+                reducer,
                 hashes,
             } => {
-                let arrays = evaluate_expressions_to_arrays(expressions.iter(), &batch)?;
+                let arrays = evaluate_expressions_to_arrays(expressions.as_slice(), &batch)?;
+
                 hashes.clear();
                 hashes.resize(batch.num_rows(), 0);
+
                 create_hashes(&arrays, REPARTITION_RANDOM_STATE.random_state(), hashes)?;
-                rows.extend(hashes.iter().map(|hash| (hash % *channels) as u32));
+
+                rows.resize(*channels, vec![]);
+
+                reducer.partition_indices(hashes, rows);
             }
             Self::Range(expression) => {
                 let channels = expression.evaluate(&batch)?.into_array(batch.num_rows())?;
                 let channels = channels.as_primitive::<UInt64Type>();
-                rows.extend(channels.values().iter().map(|channel| *channel as u32));
+                rows.resize(expression.split_points().len() + 1, vec![]);
+                for (row, channel) in channels.values().iter().enumerate() {
+                    rows[*channel as usize].push(row as u32);
+                }
             }
             Self::RoundRobinRow { channels, next } => {
+                rows.resize(*channels, vec![]);
                 let mut channel = *next;
-                for _ in 0..batch.num_rows() {
-                    rows.push(channel as u32);
+                for row in 0..batch.num_rows() {
+                    rows[channel].push(row as u32);
                     channel += 1;
                     if channel == *channels {
                         channel = 0;
@@ -2042,6 +2129,83 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    // [CREDIT]: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L2745-L2819
+    #[test]
+    fn strength_reduced_u64_remainder_matches_modulo() {
+        let divisors = [
+            1,
+            2,
+            3,
+            4,
+            5,
+            7,
+            8,
+            10,
+            16,
+            31,
+            32,
+            63,
+            64,
+            65,
+            97,
+            u64::from(u32::MAX),
+            u64::from(u32::MAX) + 1,
+            1_u64 << 32,
+            (1_u64 << 63) - 1,
+            1_u64 << 63,
+            u64::MAX - 1,
+            u64::MAX,
+        ];
+        let values = [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            31,
+            32,
+            33,
+            63,
+            64,
+            65,
+            u64::from(u32::MAX) - 1,
+            u64::from(u32::MAX),
+            u64::from(u32::MAX) + 1,
+            (1_u64 << 32) - 1,
+            1_u64 << 32,
+            (1_u64 << 32) + 1,
+            (1_u64 << 63) - 1,
+            1_u64 << 63,
+            (1_u64 << 63) + 1,
+            u64::MAX - 1,
+            u64::MAX,
+        ];
+
+        for divisor in divisors {
+            let reducer = StrengthReducedU64::new(divisor);
+            for value in values {
+                assert_eq!(
+                    reducer.remainder(value),
+                    value % divisor,
+                    "value={value} divisor={divisor}"
+                );
+            }
+
+            let mut value = 0x1234_5678_9abc_def0 ^ divisor;
+            for _ in 0..10_000 {
+                value = value
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                assert_eq!(
+                    reducer.remainder(value),
+                    value % divisor,
+                    "value={value} divisor={divisor}"
+                );
+            }
+        }
     }
 
     mod memory;
