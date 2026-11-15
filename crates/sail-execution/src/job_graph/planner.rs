@@ -382,6 +382,11 @@ fn plan_job_graph_stages(
         // The complete build relation is shared, including limits, TopK, pushed-down
         // fetches, and volatile expressions. Sharing only its inputs can select different
         // rows in different join tasks. This also materializes single-partition file scans.
+        // With Flight shuffle, the broadcast puts the producer and all join partitions in one
+        // task region that is scheduled as a whole, so a join whose partitions could run as
+        // independent single-slot regions now needs one worker slot per partition at once.
+        // This is acceptable since Flight shuffle usually assumes all nodes are interconnected
+        // to form a single task region.
         let properties = plan.properties().clone();
         let build = plan_job_graph_stages(
             plan,
