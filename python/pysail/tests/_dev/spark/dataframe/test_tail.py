@@ -108,6 +108,20 @@ def test_tail_preserves_hidden_sort_over_multiple_batches(spark, partitions):
 
 
 @pytest.mark.parametrize("partitions", [1, 4])
+def test_tail_preserves_hidden_tie_breaker_over_multiple_batches(spark, partitions):
+    # The rows that tie on the remaining sort key keep the order of the hidden one.
+    df = (
+        spark.range(0, 20000, 1, partitions)
+        .withColumn("k", sf.col("id") % 3)
+        .orderBy("k", sf.col("id").desc())
+        .selectExpr("k", "cast(id as string) AS payload")
+    )
+    expected = sorted(((i % 3, i) for i in range(20000)), key=lambda row: (row[0], -row[1]))
+    for count in [5, 9000]:
+        assert [(row.k, int(row.payload)) for row in df.tail(count)] == expected[-count:]
+
+
+@pytest.mark.parametrize("partitions", [1, 4])
 def test_tail_preserves_hidden_sort_expression_and_limit(spark, partitions):
     df = spark.range(0, 20000, 1, partitions)
     by_expression = df.orderBy((df.id % 1000).desc(), df.id.asc()).selectExpr("cast(id as string) AS payload")
