@@ -23,6 +23,9 @@ def remote(request):
     envs = {
         "SAIL_MODE": "local-cluster",
         "SAIL_CLUSTER__TASK_STREAM_BUFFER": "1",
+        # The shuffle writer passes each input batch on, so that the tests observe
+        # how the shuffle reader combines batches.
+        "SAIL_CLUSTER__SHUFFLE_WRITE_BUFFER_SIZE": "1",
         "SAIL_EXECUTION__BATCH_SIZE": "256",
     }
     compression, connection_count, stream_window_size, connection_window_size = request.param
@@ -89,8 +92,8 @@ def test_shuffle_remains_usable_after_repeated_limits(spark):
     [
         ([64] * 32 + [13], 4, [256, 256]),
         ([64, 1024, 32], 2, [256, 256]),
-        ([128, 128, 128, 1024], 2, [192, 512]),
-        ([1024], 2, [512]),
+        ([128, 128, 128, 1024], 2, [192, 256, 256]),
+        ([600], 2, [150, 150]),
         ([0, 13, 0], 4, []),
         ([0], 4, []),
     ],
