@@ -1,7 +1,6 @@
 import pytest
 
 from pysail.testing.spark.session import spark_connect_server
-from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 @pytest.fixture(scope="module")
@@ -10,7 +9,7 @@ def remote():
         yield server.remote
 
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail cluster mode")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail cluster mode")
 
 
 def test_limit_read_by_every_task_of_a_join_keeps_the_same_rows(spark):
