@@ -759,7 +759,7 @@ fn split_views<T: ByteViewType>(column: &ArrayRef, pieces: &[Piece]) -> (ArrayRe
     let mut rest_pieces: Vec<(Range<usize>, usize)> = vec![];
     // Where each string of a piece goes among its strings, by the piece and the address
     // and length of the string.
-    let mut offsets: HashMap<(usize, usize, u32), usize> = HashMap::new();
+    let mut offsets: HashMap<(usize, usize, u32), usize> = HashMap::with_capacity(array.len());
     let mut strings: Vec<&[u8]> = vec![];
     for (i, piece) in pieces.iter().enumerate() {
         let start = piece.start as usize;
@@ -1062,7 +1062,7 @@ fn copy_shared_views<T: ByteViewType>(
 ) -> Result<ArrayRef> {
     let mut views: Vec<u128> = Vec::with_capacity(rows);
     // Where each string goes in the new buffer, by its address and length.
-    let mut offsets: HashMap<(usize, u32), usize> = HashMap::new();
+    let mut offsets: HashMap<(usize, u32), usize> = HashMap::with_capacity(rows);
     let mut strings: Vec<&[u8]> = vec![];
     let mut bytes = 0;
     for run in runs {
