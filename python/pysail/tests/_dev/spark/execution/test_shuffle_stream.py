@@ -4,7 +4,7 @@ import pyarrow as pa
 import pytest
 from pyspark.sql import Row
 
-from pysail.testing.spark.session import spark_connect_server
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 
 pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail local-cluster mode only")
 
@@ -19,13 +19,10 @@ pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail local-cluster mode
     ],
     ids=["default", "none-one-connection", "lz4-three-connections", "zstd-four-connections"],
 )
-def remote(request):
+def envs(request):
     envs = {
         "SAIL_MODE": "local-cluster",
         "SAIL_CLUSTER__TASK_STREAM_BUFFER": "1",
-        # The shuffle writer passes each input batch on, so that the tests observe
-        # how the shuffle reader combines batches.
-        "SAIL_CLUSTER__SHUFFLE_WRITE_BUFFER_SIZE": "1",
         "SAIL_EXECUTION__BATCH_SIZE": "256",
     }
     compression, connection_count, stream_window_size, connection_window_size = request.param
@@ -37,8 +34,22 @@ def remote(request):
         envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__INITIAL_STREAM_WINDOW_SIZE"] = str(stream_window_size)
     if connection_window_size is not None:
         envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__INITIAL_CONNECTION_WINDOW_SIZE"] = str(connection_window_size)
+    return envs
+
+
+@pytest.fixture(scope="module")
+def remote(envs):
     with spark_connect_server(envs=envs) as server:
         yield server.remote
+
+
+@pytest.fixture(scope="module")
+def spark_with_unbuffered_shuffle_write(envs, remote):  # noqa: ARG001
+    # The shuffle writer passes each input batch on, so that a test observes how the
+    # shuffle reader combines batches. This server stops before the one of `remote`.
+    envs = {**envs, "SAIL_CLUSTER__SHUFFLE_WRITE_BUFFER_SIZE": "1"}
+    with spark_connect_server(envs=envs) as server, spark_session_factory(server.remote) as sessions:
+        yield sessions.create()
 
 
 @pytest.mark.timeout(15)
@@ -94,6 +105,7 @@ def test_shuffle_remains_usable_after_repeated_limits(spark):
         ([64, 1024, 32], 2, [256, 256]),
         ([128, 128, 128, 1024], 2, [192, 256, 256]),
         ([600], 2, [150, 150]),
+        ([96, 96, 512, 32], 1, [192, 512]),
         ([0, 13, 0], 4, []),
         ([0], 4, []),
     ],
@@ -102,12 +114,17 @@ def test_shuffle_remains_usable_after_repeated_limits(spark):
         "multiple-completed-batches",
         "flush-before-bypass",
         "large-batch-bypass",
+        "large-batch-bypass-single-channel",
         "residual",
         "empty",
     ],
 )
 @pytest.mark.spark(cross_version=True)
-def test_shuffle_reader_coalesces_batches_in_channel_order(spark, input_sizes, partitions, completed_sizes):
+def test_shuffle_reader_coalesces_batches_in_channel_order(
+    spark_with_unbuffered_shuffle_write, input_sizes, partitions, completed_sizes
+):
+    spark = spark_with_unbuffered_shuffle_write
+
     def make_batches(batches):
         for _ in batches:
             offset = 0
