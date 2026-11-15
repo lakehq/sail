@@ -954,6 +954,7 @@ fn refresh_catalog_delta_field(catalog_field: &Field, snapshot_field: &Field) ->
         .clone()
         .with_name(snapshot_field.name())
         .with_data_type(data_type)
+        .with_nullable(snapshot_field.is_nullable())
 }
 
 /// Refreshes map entries by position, since the catalog and the Delta log may name
@@ -1137,6 +1138,58 @@ mod tests {
         assert_eq!(refreshed.fields().len(), 2);
         assert_eq!(refreshed.field(0).data_type(), &catalog_timestamp);
         assert_eq!(refreshed.field(1).name(), "extra");
+    }
+
+    #[test]
+    fn catalog_schema_refresh_uses_snapshot_nullability_recursively() {
+        let schema = |nullable, timestamp: DataType, source: &str| {
+            let metadata = HashMap::from([("source".to_string(), source.to_string())]);
+            let field = |name, data_type| {
+                Field::new(name, data_type, nullable).with_metadata(metadata.clone())
+            };
+            let element = Arc::new(field("element", timestamp));
+            let nested =
+                DataType::Struct(vec![field("items", DataType::List(element.clone()))].into());
+            Schema::new_with_metadata(
+                vec![
+                    field("scalar", DataType::Int32),
+                    field("payload", nested.clone()),
+                    field(
+                        "list",
+                        DataType::List(Arc::new(field("element", nested.clone()))),
+                    ),
+                    field("large_list", DataType::LargeList(element.clone())),
+                    field("fixed_list", DataType::FixedSizeList(element, 2)),
+                    field(
+                        "map",
+                        DataType::Map(
+                            Arc::new(Field::new(
+                                "entries",
+                                DataType::Struct(
+                                    vec![
+                                        field("key", DataType::Utf8).with_nullable(false),
+                                        field("value", nested),
+                                    ]
+                                    .into(),
+                                ),
+                                false,
+                            )),
+                            false,
+                        ),
+                    ),
+                ],
+                metadata,
+            )
+        };
+        let catalog_timestamp = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let snapshot_timestamp = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        for nullable in [false, true] {
+            let catalog = schema(!nullable, catalog_timestamp.clone(), "catalog");
+            let snapshot = schema(nullable, snapshot_timestamp.clone(), "snapshot");
+            let expected = schema(nullable, catalog_timestamp.clone(), "catalog");
+
+            assert_eq!(refresh_catalog_delta_schema(catalog, &snapshot), expected);
+        }
     }
 
     #[test]

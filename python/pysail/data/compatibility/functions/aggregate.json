@@ -377,5 +377,17 @@
     "module": "pyspark.sql.functions",
     "function": "variance",
     "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "vector_avg",
+    "status": "supported",
+    "note": "This is Spark SQL only (not available in PySpark)."
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "vector_sum",
+    "status": "supported",
+    "note": "This is Spark SQL only (not available in PySpark)."
   }
 ]

@@ -23,6 +23,7 @@ pub mod formatter;
 pub mod function;
 pub mod procedure;
 pub mod resolver;
+pub mod scalar_subquery_key;
 mod streaming;
 
 /// Executes a logical plan.

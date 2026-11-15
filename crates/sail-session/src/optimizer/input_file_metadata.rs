@@ -1,10 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, Result, plan_err};
 use datafusion::config::ConfigOptions;
-use datafusion::logical_expr::{Expr, LogicalPlan, Projection, Window};
+use datafusion::logical_expr::{Expr, LogicalPlan, Projection, TableSource, Window};
 use datafusion::optimizer::AnalyzerRule;
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_data_source::listing::table::ListingTableSource;
@@ -64,6 +64,9 @@ impl AnalyzerRule for ResolveInputFileMetadata {
         let plan = if metadata_required {
             // Constant-projection Iceberg scans synthesize rows without file context.
             // Mark query-local sources, including subqueries, before physical planning.
+            // Scans of the same source keep sharing one marked source. The original sources
+            // are kept alive by the plan, so their addresses identify them.
+            let mut marked_sources = HashMap::<*const (), Arc<dyn TableSource>>::new();
             plan.transform_up_with_subqueries(|plan| {
                 let LogicalPlan::TableScan(mut scan) = plan else {
                     return Ok(Transformed::no(plan));
@@ -71,7 +74,11 @@ impl AnalyzerRule for ResolveInputFileMetadata {
                 if let Some(source) = scan.source.downcast_ref::<IcebergTableSource>() {
                     let marked = source.with_input_file_metadata_required();
                     if !Arc::ptr_eq(source.scan(), marked.scan()) {
-                        scan.source = Arc::new(marked);
+                        scan.source = Arc::clone(
+                            marked_sources
+                                .entry(Arc::as_ptr(&scan.source).cast::<()>())
+                                .or_insert_with(|| Arc::new(marked)),
+                        );
                         return Ok(Transformed::yes(LogicalPlan::TableScan(scan)));
                     }
                 }

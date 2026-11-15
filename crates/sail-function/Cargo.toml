@@ -1,20 +1,28 @@
 [package]
 name = "sail-function"
 version = { workspace = true }
+authors = { workspace = true }
 edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+repository = { workspace = true }
 rust-version = { workspace = true }
 
 [lints]
 workspace = true
 
 [dependencies]
+sail-common-spark = { path = "../sail-common-spark" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
 arrow = { workspace = true }
-arrow-schema ={ workspace = true }
+arrow-schema = { workspace = true }
+arrow-select = { workspace = true }
 async-trait = { workspace = true }
+arrow-buffer = { workspace = true }
 bytes = { workspace = true }
 chumsky = { workspace = true }
 datafusion = { workspace = true }
@@ -25,13 +33,15 @@ datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-spark = { workspace = true }
+datafusion-functions-aggregate-common = { workspace = true }
+datafusion-macros = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 rand = { workspace = true }
-rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
 ordered-float = { workspace = true }
 lazy_static = { workspace = true }
@@ -55,5 +65,10 @@ tokio = { workspace = true }
 uuid = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+postcard = { workspace = true }
+quick-xml = { workspace = true }
 xee-xpath = { workspace = true }
 xot = { workspace = true }
+itertools = { workspace = true }
+hashbrown = { workspace = true }
+memchr = { workspace = true }

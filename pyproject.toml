@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.7.2"
+version = "0.7.3"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -32,9 +32,10 @@ classifiers = [
 [project.optional-dependencies]
 test = [
     # The dependencies for testing the installed package.
-    "pyspark-client==4.2.0",
+    "pyspark-client==4.3.0",
     "pandas<3",
     "duckdb>=1.0,<2",
+    "packaging>=21.3,<27",
     "pytest>=9.1,<9.2",
     "pytest-xdist>=3.7,<4",
     "pytest-rerunfailures>=16.7,<17",
@@ -96,10 +97,12 @@ python = "3.11"
 installer = "pip"
 skip-install = true
 dependencies = [
-    "pyspark[connect]==4.2.0",
+    "pyspark[connect]==4.3.0",
     "ibis-framework>=12,<13",
     "pandas<3",
+    "packaging>=21.3,<27",
     "pytest>=9.1,<9.2",
+    "pytest-xdist>=3.7,<4",
     "pytest-timeout>=2.4,<3",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
@@ -156,6 +159,7 @@ installer = "pip"
 skip-install = true
 dependencies = [
     "pandas<3",
+    "packaging>=21.3,<27",
     "pytest>=9.1,<9.2",
     "pytest-xdist>=3.7,<4",
     "pytest-rerunfailures>=16.7,<17",
@@ -180,22 +184,29 @@ dependencies = [
 ]
 
 [[tool.hatch.envs.test.matrix]]
-spark = ["3.5.9", "4.0.4", "4.1.3", "4.2.0"]
+spark = ["3.5.9", "4.0.5", "4.1.4", "4.2.1", "4.3.0"]
 
 [tool.hatch.envs.test.overrides]
 matrix.spark.path = [
     { value = ".venvs/test.spark-3.5.9", if = ["3.5.9"] },
-    { value = ".venvs/test.spark-4.0.4", if = ["4.0.4"] },
-    { value = ".venvs/test.spark-4.1.3", if = ["4.1.3"] },
-    { value = ".venvs/test.spark-4.2.0", if = ["4.2.0"] },
+    { value = ".venvs/test.spark-4.0.5", if = ["4.0.5"] },
+    { value = ".venvs/test.spark-4.1.4", if = ["4.1.4"] },
+    { value = ".venvs/test.spark-4.2.1", if = ["4.2.1"] },
+    { value = ".venvs/test.spark-4.3.0", if = ["4.3.0"] },
 ]
 matrix.spark.extra-dependencies = [
     { value = "pyspark[connect]==3.5.9", if = ["3.5.9"] },
-    { value = "pyspark[connect]==4.0.4", if = ["4.0.4"] },
-    { value = "pyspark[connect]==4.1.3", if = ["4.1.3"] },
-    { value = "pyspark[connect]==4.2.0", if = ["4.2.0"] },
+    { value = "pyspark[connect]==4.0.5", if = ["4.0.5"] },
+    { value = "pyspark[connect]==4.1.4", if = ["4.1.4"] },
+    { value = "pyspark[connect]==4.2.1", if = ["4.2.1"] },
+    { value = "pyspark[connect]==4.3.0", if = ["4.3.0"] },
 ]
 env.CI.installer = "uv"
+
+[tool.hatch.envs.test-discovery]
+template = "test"
+extra-dependencies = ["pyspark-client==4.3.0"]
+path = ".venvs/test-discovery"
 
 [tool.hatch.envs.test-spark]
 matrix-name-format = "{variable}-{value}"
@@ -210,7 +221,7 @@ dependencies = [
 ]
 
 [[tool.hatch.envs.test-spark.matrix]]
-spark = ["3.5.9", "4.2.0"]
+spark = ["3.5.9", "4.3.0"]
 
 [tool.hatch.envs.test-spark.extra-scripts]
 install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[connect] @ opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz' 'pandas<3' 'pyarrow>=24.0,<25'"
@@ -218,7 +229,7 @@ install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[con
 [tool.hatch.envs.test-spark.overrides]
 matrix.spark.path = [
     { value = ".venvs/test-spark.spark-3.5.9", if = ["3.5.9"] },
-    { value = ".venvs/test-spark.spark-4.2.0", if = ["4.2.0"] },
+    { value = ".venvs/test-spark.spark-4.3.0", if = ["4.3.0"] },
 ]
 env.CI.installer = "uv"
 
@@ -238,7 +249,7 @@ dependencies = [
     "filelock>=3.7.0,<4",
     "fsspec[s3]",
     "hypothesis>=6.58.0,<7",
-    "packaging>=21.3",
+    "packaging>=21.3,<27",
     # without this constraint, pyspark starts to fail some memtable cleanup tests
     # with pytest 8.4.0
     "pytest>=8.2.0,<8.4.0",
@@ -262,17 +273,21 @@ path = ".venvs/test-ibis"
 [tool.hatch.envs.test-ibis.overrides]
 env.CI.installer = "uv"
 
-[tool.hatch.build.targets.sdist]
-packages = ["python/pysail"]
-
-[tool.hatch.build.targets.wheel]
-packages = ["python/pysail"]
-
 [tool.ruff]
 line-length = 120
 
+[tool.ruff.lint]
+extend-select = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"pysail.tests._dev".msg = "Development tests must not be used by the release package."
+"pysail.testing._dev".msg = "Development helpers must not be used by the release package."
+
 [tool.ruff.lint.per-file-ignores]
+"!python/pysail/**" = ["TID251"]
 "crates/**/*.py" = ["INP001", "PLC0415"]
+"python/pysail/testing/_dev/**/*.py" = ["TID251"]
+"python/pysail/tests/_dev/**/*.py" = ["TID251"]
 "python/pysail/docs/conf.py" = ["INP001"]
 "python/pysail/examples/**/*.py" = ["T201", "PLC0415"]
 "python/pysail/testing/**/*.py" = ["S101"]
@@ -289,6 +304,7 @@ testpaths = ["python"]
 
 [tool.maturin]
 python-source = "python"
+exclude = ["python/pysail/tests/_dev/**", "python/pysail/testing/_dev/**"]
 module-name = "pysail._native"
 manifest-path = "crates/sail-python/Cargo.toml"
 features = [

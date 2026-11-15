@@ -40,14 +40,22 @@ pub async fn create_row_level_write_physical_plan(
                 condition: node.condition().cloned(),
                 expanded_input: None,
                 change_data_plan: None,
+                change_data_preimage: None,
                 touched_file_plan: None,
                 deletion_vector_plan: None,
                 deletion_vector_operation_mode: None,
                 with_schema_evolution: false,
                 operation: None,
             };
-            create_delta_row_level_writer(ctx, node.mode(), info, target_snapshot, node.output())
-                .await
+            create_delta_row_level_writer(
+                ctx,
+                node.mode(),
+                info,
+                target_snapshot,
+                node.output(),
+                Vec::new(),
+            )
+            .await
         }
         RowLevelCommand::Merge => {
             let expanded_input = effects.write_rows.ok_or_else(|| {
@@ -56,6 +64,7 @@ pub async fn create_row_level_write_physical_plan(
 
             let info = RowLevelWriteInfo {
                 command: RowLevelCommand::Merge,
+                change_data_preimage: node.effects().change_data_preimage().map(str::to_owned),
                 target,
                 condition: None,
                 expanded_input: Some(expanded_input),
@@ -66,8 +75,28 @@ pub async fn create_row_level_write_physical_plan(
                 with_schema_evolution: node.with_schema_evolution(),
                 operation: build_merge_operation(node),
             };
-            create_delta_row_level_writer(ctx, node.mode(), info, target_snapshot, node.output())
-                .await
+            let tracked = node
+                .merge_options()
+                .map(|options| {
+                    options
+                        .identity_columns
+                        .iter()
+                        .filter(|(name, _)| {
+                            sail_logical_plan::merge::merge_generates_identity(options, name)
+                        })
+                        .map(|(name, _)| name.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            create_delta_row_level_writer(
+                ctx,
+                node.mode(),
+                info,
+                target_snapshot,
+                node.output(),
+                tracked,
+            )
+            .await
         }
         RowLevelCommand::Update => {
             let expanded_input = effects.write_rows.ok_or_else(|| {
@@ -75,6 +104,7 @@ pub async fn create_row_level_write_physical_plan(
             })?;
             let info = RowLevelWriteInfo {
                 command: RowLevelCommand::Update,
+                change_data_preimage: None,
                 target,
                 condition: node.condition().cloned(),
                 expanded_input: Some(expanded_input),
@@ -89,8 +119,15 @@ pub async fn create_row_level_write_physical_plan(
                         .and_then(|condition| condition.source.clone()),
                 }),
             };
-            create_delta_row_level_writer(ctx, node.mode(), info, target_snapshot, node.output())
-                .await
+            create_delta_row_level_writer(
+                ctx,
+                node.mode(),
+                info,
+                target_snapshot,
+                node.output(),
+                Vec::new(),
+            )
+            .await
         }
     }
 }
@@ -144,6 +181,7 @@ async fn create_delta_row_level_writer(
     info: RowLevelWriteInfo,
     target_snapshot: Arc<DeltaSnapshot>,
     output: CommandOutput,
+    identity_columns_to_track: Vec<String>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let (target_options, _) =
         split_delta_write_options_and_table_properties(info.target.options.clone())?;
@@ -163,6 +201,7 @@ async fn create_delta_row_level_writer(
         true,
     )
     .with_output(output)
+    .with_identity_columns_to_track(identity_columns_to_track)
     .with_table_snapshot(Some(target_snapshot))
     .with_lakehouse_table(info.target.lakehouse_table.clone());
     let planner_ctx = PlannerContext::new(ctx, config);

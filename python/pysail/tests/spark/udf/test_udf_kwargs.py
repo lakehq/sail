@@ -6,10 +6,7 @@ from pyspark.sql.types import ArrayType, DataType, IntegerType, LongType, Row, S
 
 from pysail.testing.spark.utils.common import pyspark_version
 
-pytestmark = pytest.mark.skipif(
-    pyspark_version() < (4,),
-    reason="UDF/UDTF keyword arguments require PySpark 4+",
-)
+pytestmark = pytest.mark.spark(version=">=4", reason="Uses UDF and UDTF keyword arguments")
 
 
 @pytest.fixture(scope="module")
@@ -129,10 +126,7 @@ def test_udtf_row_output_invalid_scalar_raises_pickle_exception():
         RowOutputUDTF().collect()
 
 
-@pytest.mark.skipif(
-    pyspark_version() < (4, 1),
-    reason="Arrow UDTF tests require PySpark 4.1+",
-)
+@pytest.mark.spark(version=">=4.1", reason="Tests Arrow UDTF conversion error classes")
 def test_arrow_udtf_type_conversion_error_class_is_preserved():
     from pyspark.errors.exceptions.connect import PythonException
 
@@ -165,10 +159,36 @@ def test_arrow_udtf_lateral_view_uses_argument_schema(spark, use_arrow):
     assert df.collect() == [Row(passthrough=b"passthrough", value="value", output="value")]
 
 
-@pytest.mark.skipif(
-    pyspark_version() < (4, 1),
-    reason="UDTF analyze tests require PySpark 4.1+",
-)
+@pytest.mark.spark(version=">=4.1", reason="Uses configurable Arrow UDTF conversion")
+@pytest.mark.parametrize("legacy_conversion", [False, True])
+@pytest.mark.parametrize("emitting_values", [(1, 2), (1,), ()])
+def test_arrow_udtf_preserves_passthrough_with_empty_results_and_terminate(spark, legacy_conversion, emitting_values):
+    key = "spark.sql.legacy.execution.pythonUDTF.pandas.conversion.enabled"
+    original = spark.conf.get(key)
+    spark.conf.set(key, str(legacy_conversion).lower())
+    try:
+
+        @udtf(returnType="output: long", useArrow=True)
+        class Expand:
+            def eval(self, value):
+                if value in emitting_values:
+                    yield (value,)
+                    yield (value + 10,)
+
+            def terminate(self):
+                yield (99,)
+
+        spark.udtf.register("expand_arrow_with_terminate", Expand)
+        result = spark.sql(
+            "SELECT id, output FROM range(0, 3, 1, 1) LATERAL VIEW expand_arrow_with_terminate(id) AS output"
+        ).orderBy("id", "output")
+        expected = [Row(id=value, output=output) for value in emitting_values for output in (value, value + 10)]
+        assert result.collect() == [*expected, Row(id=2, output=99)]
+    finally:
+        spark.conf.set(key, original)
+
+
+@pytest.mark.spark(version=">=4.1", reason="Tests UDTF analysis of argument types")
 def test_udtf_analyze_preserves_array_type():
     from pyspark.sql.udtf import AnalyzeArgument, AnalyzeResult
 
@@ -189,10 +209,7 @@ def test_udtf_analyze_preserves_array_type():
     assert df.collect() == [Row(a=[1, 2, 3])]
 
 
-@pytest.mark.skipif(
-    pyspark_version() < (4, 1),
-    reason="UDTF table arguments require PySpark 4.1+",
-)
+@pytest.mark.spark(version=">=4.1", reason="Uses UDTF table arguments")
 def test_udtf_analyze_marks_table_argument(spark):
     from pyspark.sql.udtf import AnalyzeArgument, AnalyzeResult
 

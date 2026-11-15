@@ -23,12 +23,16 @@ use crate::streaming::{
 #[derive(Debug, Clone)]
 pub(crate) struct SparkSessionOptions {
     pub execution_heartbeat_interval: Duration,
+    /// The Sail `parquet.binary_as_string` option, which applies while
+    /// `spark.sql.parquet.binaryAsString` is not set in the session.
+    pub parquet_binary_as_string: bool,
 }
 
 /// A Spark session extension to the DataFusion [`SessionContext`].
 ///
 /// [`SessionContext`]: datafusion::prelude::SessionContext
 pub(crate) struct SparkSession {
+    server_session_id: String,
     session_id: String,
     user_id: String,
     options: SparkSessionOptions,
@@ -38,6 +42,7 @@ pub(crate) struct SparkSession {
 impl Debug for SparkSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SparkSession")
+            .field("server_session_id", &self.server_session_id)
             .field("session_id", &self.session_id)
             .field("user_id", &self.user_id)
             .field("options", &self.options)
@@ -66,11 +71,13 @@ impl SessionConfigProvider for SparkSession {
 
 impl SparkSession {
     pub(crate) fn try_new(
+        server_session_id: String,
         session_id: String,
         user_id: String,
         options: SparkSessionOptions,
     ) -> SparkResult<Self> {
         let extension = Self {
+            server_session_id,
             session_id,
             user_id,
             options,
@@ -81,6 +88,10 @@ impl SparkSession {
             value: Some(get_system_timezone()?),
         }])?;
         Ok(extension)
+    }
+
+    pub(crate) fn server_session_id(&self) -> &str {
+        &self.server_session_id
     }
 
     pub(crate) fn session_id(&self) -> &str {
@@ -140,6 +151,15 @@ impl SparkSession {
             })
             .collect();
         Ok(kv)
+    }
+
+    /// Returns the value set in the session, ignoring the default of the configuration entry.
+    pub(crate) fn get_config_if_set(&self, key: &str) -> SparkResult<Option<String>> {
+        let state = self.state.lock()?;
+        Ok(state
+            .config
+            .get_with_default(key, None)
+            .map(|x| x.to_string()))
     }
 
     pub(crate) fn set_config(&self, kv: Vec<ConfigKeyValue>) -> SparkResult<()> {

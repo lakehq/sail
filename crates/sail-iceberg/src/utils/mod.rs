@@ -18,12 +18,12 @@ pub mod snapshot_id;
 pub mod timestamp;
 pub mod transform;
 
-use std::path::Path;
 use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion::execution::context::TaskContext;
 use datafusion_common::{DataFusionError, Result};
+pub use sail_data_source::{file_url_from_absolute_path, parse_absolute_url};
 use url::Url;
 
 pub const WRITE_RELATIVE_PROP: &str = "sail.iceberg.write_relative_paths";
@@ -50,31 +50,6 @@ pub fn join_table_uri(table_uri: &str, rel: &str, mode: &WritePathMode) -> Strin
         WritePathMode::Absolute => format!("{}{}", table_uri, rel),
         WritePathMode::Relative => rel.to_string(),
     }
-}
-
-pub fn parse_absolute_url(raw: &str) -> Option<Url> {
-    Url::parse(raw).ok().filter(|url| url.scheme().len() > 1)
-}
-
-pub fn file_url_from_absolute_path(path: &str) -> Option<Url> {
-    if Path::new(path).is_absolute() {
-        return Url::from_file_path(path).ok();
-    }
-    windows_drive_path_to_file_url(path)
-}
-
-fn windows_drive_path_to_file_url(path: &str) -> Option<Url> {
-    let bytes = path.as_bytes();
-    if bytes.len() < 3
-        || !bytes[0].is_ascii_alphabetic()
-        || bytes[1] != b':'
-        || !matches!(bytes[2], b'/' | b'\\')
-    {
-        return None;
-    }
-
-    let path = path.replace('\\', "/");
-    Url::parse(&format!("file:///{path}")).ok()
 }
 
 pub fn url_to_object_path(url: &Url) -> Result<object_store::path::Path> {

@@ -4,6 +4,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
+use datafusion_common::types::NativeType;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit, try_cast, when};
 use datafusion_functions_nested::expr_fn::array_element;
@@ -14,12 +15,17 @@ use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::length::SparkLengthFunc;
 use regex_syntax::hir::Look;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
-use sail_function::scalar::spark_to_string::SparkToUtf8;
+use sail_function::scalar::conversion::spark_cast_string_to_int32::SparkCastStringToInt32;
+use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
+use sail_function::scalar::string::btrim::BTrimFunc;
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
+use sail_function::scalar::string::lower::LowerFunc;
+use sail_function::scalar::string::ltrim::LtrimFunc;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::randstr::Randstr;
+use sail_function::scalar::string::replace::ReplaceFunc;
+use sail_function::scalar::string::rtrim::RtrimFunc;
 use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
@@ -36,9 +42,10 @@ use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_function::scalar::string::spark_to_char::SparkToChar;
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
+use sail_function::scalar::string::upper::UpperFunc;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
 use crate::function::scalar::datetime::date_format;
 use crate::function::scalar::lambda::lambda_with_fresh_parameter;
 
@@ -219,23 +226,47 @@ fn space(n: expr::Expr) -> expr::Expr {
     expr_fn::repeat(lit(" "), n)
 }
 
-fn replace(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    let replacement = (args.len() == 3)
-        .then(|| args.pop())
+fn replace(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        mut arguments,
+        function_context,
+    } = input;
+    let replacement = (arguments.len() == 3)
+        .then(|| arguments.pop())
         .flatten()
         .unwrap_or_else(|| lit(""));
-    let (str, substr) = args
+    let (str, substr) = arguments
         .two()
         .map_err(|_| PlanError::invalid("replace requires 2 or 3 arguments"))?;
-    Ok(expr_fn::replace(str, substr, replacement))
+    let arguments = [str, substr, replacement]
+        .into_iter()
+        .map(|arg| implicit_string_argument(arg, &function_context))
+        .collect::<PlanResult<Vec<_>>>()?;
+    Ok(ScalarUDF::from(ReplaceFunc::new()).call(arguments))
+}
+
+/// Like Spark's `upper` and `lower`, binary input becomes a string with each invalid UTF-8
+/// sequence replaced by U+FFFD, and non-null input stays non-null.
+fn case_conversion_argument(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
+    let arg = input.arguments.one()?;
+    match arg.get_type(schema)? {
+        DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_) => {
+            Ok(ScalarUDF::from(MakeValidUtf8::preserving_nullability()).call(vec![arg]))
+        }
+        _ => cast_to_logical_string_or_try(arg, schema, false),
+    }
 }
 
 fn lower(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    Ok(expr_fn::lower(validate_utf8(input)?))
+    Ok(ScalarUDF::from(LowerFunc::new()).call(vec![case_conversion_argument(input)?]))
 }
 
 fn upper(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    Ok(expr_fn::upper(validate_utf8(input)?))
+    Ok(ScalarUDF::from(UpperFunc::new()).call(vec![case_conversion_argument(input)?]))
 }
 
 fn startswith(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -307,18 +338,68 @@ fn btrim(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let arguments = input
         .arguments
         .into_iter()
-        .map(|arg| {
-            // Spark implicitly casts either numeric argument to string in both ANSI modes.
-            if arg.get_type(input.function_context.schema)?.is_numeric() {
-                // TODO: Match Spark's scientific notation for floats and non-ANSI decimals
-                //  once the shared numeric formatter supports it.
-                Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![arg]))
-            } else {
-                Ok(arg)
-            }
-        })
+        .map(|arg| implicit_string_argument(arg, &input.function_context))
         .collect::<PlanResult<Vec<_>>>()?;
-    Ok(expr_fn::btrim(arguments))
+    Ok(ScalarUDF::from(BTrimFunc::new()).call(arguments))
+}
+
+/// `trim`, `ltrim` and `rtrim` take the trim string first, unlike the native functions.
+fn trim_function(
+    func: impl Fn(Vec<expr::Expr>) -> expr::Expr + Send + Sync + 'static,
+) -> impl Fn(ScalarFunctionInput) -> PlanResult<expr::Expr> + Send + Sync + 'static {
+    move |input: ScalarFunctionInput| {
+        let ScalarFunctionInput {
+            arguments,
+            function_context,
+        } = input;
+        let arguments = arguments
+            .into_iter()
+            .rev()
+            .map(|arg| implicit_string_argument(arg, &function_context))
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok(func(arguments))
+    }
+}
+
+/// Spark implicitly casts an atomic argument of a string function, such as `trim` or `replace`,
+/// to a string in both ANSI modes (`ImplicitCastInputTypes`, where `Cast.canANSIStoreAssign`
+/// accepts any atomic type for a string). A value is cast like `CAST(value AS STRING)`, and binary
+/// is cast like it is for `upper` and `lower`. Nested values are left as they are, so the function
+/// signature rejects them like Spark does.
+fn implicit_string_argument(
+    arg: expr::Expr,
+    function_context: &FunctionContextInput,
+) -> PlanResult<expr::Expr> {
+    let schema = function_context.schema;
+    let (_, field) = arg.to_field(schema)?;
+    Ok(match NativeType::from(field.data_type()) {
+        NativeType::Null
+        | NativeType::String
+        | NativeType::List(_)
+        | NativeType::FixedSizeList(_, _)
+        | NativeType::Struct(_)
+        | NativeType::Union(_)
+        | NativeType::Map(_) => arg,
+        NativeType::Binary => cast_to_logical_string_or_try(arg, schema, false)?,
+        NativeType::FixedSizeBinary(_) => cast(cast(arg, DataType::Binary), DataType::Utf8),
+        _ => {
+            // TODO: Match Spark's scientific notation for non-ANSI decimals
+            //  once the shared numeric formatter supports it.
+            let mut arguments = vec![arg];
+            if let Some(interval) = field
+                .metadata()
+                .get(sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+            {
+                // Physical expression serialization does not preserve intermediate field metadata.
+                arguments.push(lit(interval.clone()));
+            }
+            ScalarUDF::new_from_impl(
+                SparkToUtf8::new()
+                    .with_timezone(Some(function_context.plan_config.session_timezone_label())),
+            )
+            .call(arguments)
+        }
+    })
 }
 
 fn cast_to_logical_string_or_try(
@@ -376,12 +457,6 @@ fn in_str_out_i32(
     func: impl Fn(expr::Expr) -> expr::Expr,
 ) -> impl Fn(ScalarFunctionInput) -> PlanResult<expr::Expr> {
     move |input: ScalarFunctionInput| Ok(cast(func(validate_utf8(input)?), DataType::Int32))
-}
-
-fn rev_args(
-    func: impl Fn(Vec<expr::Expr>) -> expr::Expr,
-) -> impl Fn(Vec<expr::Expr>) -> expr::Expr {
-    move |args: Vec<expr::Expr>| func(args.into_iter().rev().collect())
 }
 
 /// Dispatch for `to_char(expr, format)` and its alias `to_varchar`, following Spark's
@@ -470,7 +545,12 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("locate", F::custom(position)),
         ("lower", F::custom(lower)),
         ("lpad", F::var_arg(expr_fn::lpad)),
-        ("ltrim", F::var_arg(rev_args(expr_fn::ltrim))),
+        (
+            "ltrim",
+            F::custom(trim_function(|args| {
+                ScalarUDF::from(LtrimFunc::new()).call(args)
+            })),
+        ),
         ("luhn_check", F::unary(string_fn::luhn_check)),
         ("make_valid_utf8", F::udf(MakeValidUtf8::new())),
         ("mask", F::udf(SparkMask::new())),
@@ -487,10 +567,15 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("regexp_replace", F::ternary(regexp_replace)),
         ("regexp_substr", F::custom(regexp_substr)),
         ("repeat", F::binary(expr_fn::repeat)),
-        ("replace", F::var_arg(replace)),
+        ("replace", F::custom(replace)),
         ("right", F::binary(expr_fn::right)),
         ("rpad", F::var_arg(expr_fn::rpad)),
-        ("rtrim", F::var_arg(rev_args(expr_fn::rtrim))),
+        (
+            "rtrim",
+            F::custom(trim_function(|args| {
+                ScalarUDF::from(RtrimFunc::new()).call(args)
+            })),
+        ),
         ("sentences", F::udf(SparkSentences::new())),
         ("soundex", F::udf(Soundex::new())),
         ("space", F::unary(space)),
@@ -505,7 +590,12 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("to_number", F::udf(SparkToNumber::new(false))),
         ("to_varchar", F::custom(to_char)),
         ("translate", F::ternary(expr_fn::translate)),
-        ("trim", F::var_arg(rev_args(expr_fn::trim))),
+        (
+            "trim",
+            F::custom(trim_function(|args| {
+                ScalarUDF::from(BTrimFunc::new()).call(args)
+            })),
+        ),
         ("try_to_binary", F::udf(SparkTryToBinary::new())),
         ("try_to_number", F::udf(SparkToNumber::new(true))),
         ("try_validate_utf8", F::custom(try_validate_utf8)),

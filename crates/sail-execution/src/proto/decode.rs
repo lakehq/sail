@@ -24,6 +24,7 @@ use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
 use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
+use sail_function::scalar::conditional::coalesce_lazy::CoalesceLazy;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
 use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
@@ -256,6 +257,9 @@ pub(super) fn try_decode_higher_order_udf(
         }) => Arc::new(HigherOrderUDF::new_from_impl(SparkSequenceLazy::new(
             SparkSequence::new(Arc::from(session_timezone), ansi_mode),
         ))),
+        HigherOrderUdfKind::CoalesceLazy(r#gen::CoalesceLazyUdf {}) => {
+            Arc::new(HigherOrderUDF::new_from_impl(CoalesceLazy::new()))
+        }
         HigherOrderUdfKind::ConvertTzLazy(r#gen::ConvertTzUdf {
             classic,
             null_short_circuit,

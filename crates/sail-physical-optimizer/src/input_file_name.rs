@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Schema, SchemaBuilder};
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion::common::{Constraints, JoinType, Result, Statistics};
+use datafusion::common::{Constraints, JoinType, Result, Statistics, internal_err};
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, FileSource};
 use datafusion::datasource::source::DataSourceExec;
@@ -23,7 +23,10 @@ use sail_common_datafusion::input_file::{
     is_input_file_metadata_function, projection_references_input_file_metadata,
     rewrite_input_file_metadata_projection,
 };
+use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
+use sail_physical_plan::seeded_random::SeededRandomExec;
+use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 
 use crate::projection_pushdown::ContextSafeProjectionPushdown;
 
@@ -219,22 +222,29 @@ fn extract_metadata_expressions(
                 .map(|result| result.data)
         })?;
     // Lambda parameters follow the input columns in the physical evaluation schema.
-    let expressions = expressions.try_map_exprs(|expression| {
-        expression
-            .transform_up(|expression| {
-                if let Some(variable) = expression.downcast_ref::<LambdaVariable>() {
-                    Ok(Transformed::yes(Arc::new(LambdaVariable::new(
-                        variable.index() + extracted.len(),
-                        Arc::clone(variable.field()),
-                    ))
-                        as Arc<dyn PhysicalExpr>))
-                } else {
-                    Ok(Transformed::no(expression))
-                }
-            })
-            .map(|result| result.data)
-    })?;
+    let expressions = expressions
+        .try_map_exprs(|expression| shift_lambda_variables(expression, extracted.len()))?;
     Ok((expressions, extracted))
+}
+
+/// Lambda parameters follow the input columns, including newly appended metadata.
+fn shift_lambda_variables(
+    expression: Arc<dyn PhysicalExpr>,
+    offset: usize,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expression
+        .transform_up(|expression| {
+            if let Some(variable) = expression.downcast_ref::<LambdaVariable>() {
+                Ok(Transformed::yes(Arc::new(LambdaVariable::new(
+                    variable.index() + offset,
+                    Arc::clone(variable.field()),
+                ))
+                    as Arc<dyn PhysicalExpr>))
+            } else {
+                Ok(Transformed::no(expression))
+            }
+        })
+        .map(|result| result.data)
 }
 
 fn push_metadata_through_file_context(
@@ -311,6 +321,69 @@ fn push_metadata_through_file_context(
         )?;
         return Ok(Transformed::yes(Arc::new(rewritten)));
     }
+    if let Some(input) = partition_sensitive_input(projection.input()) {
+        let schema = input.schema();
+        let (expressions, metadata) = extract_metadata_expressions(projection, &schema)?;
+        let input_len = schema.fields().len();
+        let metadata_len = metadata.len();
+        let identity = ProjectionExprs::from_indices(&(0..input_len).collect::<Vec<_>>(), &schema);
+        let input = Arc::new(ProjectionExec::try_new(
+            identity.iter().cloned().chain(metadata),
+            Arc::clone(input),
+        )?) as Arc<dyn ExecutionPlan>;
+        // The node appends its columns after the metadata columns of its input.
+        let node = projection.input();
+        let mut node_schema = SchemaBuilder::from(input.schema().as_ref());
+        node_schema.extend(node.schema().fields().iter().skip(input_len).cloned());
+        let node_schema = Arc::new(node_schema.finish());
+        let node: Arc<dyn ExecutionPlan> =
+            if let Some(node) = node.downcast_ref::<SeededRandomExec>() {
+                Arc::new(SeededRandomExec::try_new(
+                    input,
+                    node.columns()
+                        .iter()
+                        .cloned()
+                        .map(|mut column| {
+                            column.expr = shift_lambda_variables(column.expr, metadata_len)?;
+                            Ok(column)
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                    node_schema,
+                )?)
+            } else if let Some(node) = node.downcast_ref::<MonotonicIdExec>() {
+                Arc::new(MonotonicIdExec::try_new(
+                    input,
+                    node.column_name(),
+                    node_schema,
+                )?)
+            } else if let Some(node) = node.downcast_ref::<SparkPartitionIdExec>() {
+                Arc::new(SparkPartitionIdExec::try_new(
+                    input,
+                    node.column_name(),
+                    node_schema,
+                )?)
+            } else {
+                return internal_err!("unexpected partition-sensitive operator");
+            };
+        // The extracted expressions read the metadata columns after the node columns.
+        let column_len = node.schema().fields().len();
+        let indices = (0..input_len)
+            .chain(input_len + metadata_len..column_len)
+            .chain(input_len..input_len + metadata_len)
+            .collect::<Vec<_>>();
+        let node = Arc::new(ProjectionExec::try_new(
+            ProjectionExprs::from_indices(&indices, &node.schema())
+                .iter()
+                .cloned(),
+            node,
+        )?);
+        let rewritten = ProjectionExec::try_new_with_schema_metadata(
+            expressions.iter().cloned(),
+            node,
+            projection.schema().as_ref(),
+        )?;
+        return Ok(Transformed::yes(Arc::new(rewritten)));
+    }
     let project = |input: &Arc<dyn ExecutionPlan>| -> Result<Arc<dyn ExecutionPlan>> {
         let schema = input.schema();
         let expressions = projection
@@ -357,6 +430,19 @@ fn push_metadata_through_file_context(
         ))));
     }
     Ok(Transformed::no(plan))
+}
+
+/// Returns the input of an operator that appends columns computed for the rows of each
+/// partition after the columns of its input.
+fn partition_sensitive_input(plan: &Arc<dyn ExecutionPlan>) -> Option<&Arc<dyn ExecutionPlan>> {
+    if let Some(node) = plan.downcast_ref::<SeededRandomExec>() {
+        Some(node.input())
+    } else if let Some(node) = plan.downcast_ref::<MonotonicIdExec>() {
+        Some(node.input())
+    } else {
+        plan.downcast_ref::<SparkPartitionIdExec>()
+            .map(|node| node.input())
+    }
 }
 
 /// Uses the final join orientation and exchanges to follow only a streamed probe context.
@@ -635,7 +721,6 @@ mod tests {
     use datafusion::common::{DFSchema, JoinSide, NullEquality, ScalarValue};
     use datafusion::datasource::physical_plan::ParquetSource;
     use datafusion::execution::object_store::ObjectStoreUrl;
-    use datafusion::functions::core::coalesce::CoalesceFunc;
     use datafusion::functions::core::input_file_name::InputFileNameFunc;
     use datafusion::functions::expr_fn;
     use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
@@ -655,6 +740,7 @@ mod tests {
     use datafusion::physical_plan::sorts::sort::SortExec;
     use datafusion_physical_expr::create_physical_exprs;
     use sail_common_datafusion::input_file::{InputFileBlockLengthFunc, InputFileBlockStartFunc};
+    use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 
     use super::*;
 
@@ -667,10 +753,11 @@ mod tests {
 
     fn metadata_expressions(schema: &Schema) -> Vec<ProjectionExpr> {
         let expressions = [
-            expr_fn::coalesce(vec![expr_fn::input_file_name(), lit("")]),
+            ScalarUDF::from(CoalesceFunc::new()).call(vec![expr_fn::input_file_name(), lit("")]),
             ScalarUDF::from(InputFileBlockStartFunc::new()).call(vec![]),
             ScalarUDF::from(InputFileBlockLengthFunc::new()).call(vec![]),
-            expr_fn::coalesce(vec![expr_fn::input_file_name(), lit("alias")]),
+            ScalarUDF::from(CoalesceFunc::new())
+                .call(vec![expr_fn::input_file_name(), lit("alias")]),
         ];
         create_physical_exprs(
             &expressions,
@@ -1234,7 +1321,7 @@ mod tests {
             ),
         );
         let expressions = [
-            expr_fn::coalesce(vec![expr_fn::input_file_name(), lit("")]),
+            ScalarUDF::from(CoalesceFunc::new()).call(vec![expr_fn::input_file_name(), lit("")]),
             block_start,
             block_length,
         ];

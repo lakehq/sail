@@ -35,6 +35,7 @@ def test_scalar_pandas_batch_sizes_and_values(spark, arrow_batch_size, eval_type
 @pytest.mark.parametrize("arrow_batch_size", [3], indirect=True)
 @pytest.mark.parametrize("count", [10, 20003])
 @pytest.mark.parametrize("invocation", ["inline", "registered", "constant"])
+@pytest.mark.suite(name="slow")
 def test_scalar_iterator_preserves_state_across_batches(spark, arrow_batch_size, count, invocation):  # noqa: ARG001
     @pandas_udf("long", PandasUDFType.SCALAR_ITER)
     def running_offset(batches):
@@ -81,6 +82,7 @@ def test_scalar_pandas_batches_preserve_struct_decimal_and_timestamp(spark, arro
 
 
 @pytest.mark.parametrize("arrow_batch_size", [3], indirect=True)
+@pytest.mark.suite(name="slow")
 def test_scalar_pandas_input_spans_engine_batches(spark, arrow_batch_size):
     @pandas_udf("long", PandasUDFType.SCALAR_ITER)
     def identity(batches):

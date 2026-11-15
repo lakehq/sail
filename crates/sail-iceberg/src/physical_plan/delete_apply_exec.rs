@@ -47,8 +47,8 @@ use url::Url;
 
 use crate::io::StoreContext;
 use crate::physical_plan::merge_metadata_exec::IcebergMergeMetadataExec;
-use crate::spec::Schema as IcebergSchema;
-use crate::spec::delete_index::{DeleteFileRef, PositionDeleteFile};
+use crate::spec::delete_index::{EqualityDeleteFile, PositionDeleteFile};
+use crate::spec::{DataFileFormat, Schema as IcebergSchema};
 
 /// Column name used in Iceberg position-delete files for the target data-file path.
 const POS_DELETE_FILE_PATH_COL: &str = "file_path";
@@ -230,10 +230,10 @@ pub struct IcebergDeleteApplyExec {
     /// Used to narrow position-delete rows: `file_path == data_file_path` and, for
     /// partition-scoped position deletes, to identify positions relevant to this file.
     data_file_path: String,
-    /// Applicable position-delete file references.
-    positional_deletes: Vec<DeleteFileRef>,
-    /// Applicable equality-delete file references.
-    equality_deletes: Vec<DeleteFileRef>,
+    /// Applicable position-delete read descriptors.
+    positional_deletes: Vec<PositionDeleteFile>,
+    /// Applicable equality-delete read descriptors.
+    equality_deletes: Vec<EqualityDeleteFile>,
     /// Table root URL for resolving delete-file paths via the object store.
     table_url: String,
     /// Iceberg schema used to map equality-delete `equality_ids` (field ids) to
@@ -262,8 +262,8 @@ impl IcebergDeleteApplyExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         data_file_path: String,
-        positional_deletes: Vec<DeleteFileRef>,
-        equality_deletes: Vec<DeleteFileRef>,
+        positional_deletes: Vec<PositionDeleteFile>,
+        equality_deletes: Vec<EqualityDeleteFile>,
         table_url: String,
         iceberg_schema: IcebergSchema,
     ) -> Self {
@@ -299,10 +299,10 @@ impl IcebergDeleteApplyExec {
     pub fn data_file_path(&self) -> &str {
         &self.data_file_path
     }
-    pub fn positional_deletes(&self) -> &[DeleteFileRef] {
+    pub fn positional_deletes(&self) -> &[PositionDeleteFile] {
         &self.positional_deletes
     }
-    pub fn equality_deletes(&self) -> &[DeleteFileRef] {
+    pub fn equality_deletes(&self) -> &[EqualityDeleteFile] {
         &self.equality_deletes
     }
     pub fn table_url(&self) -> &str {
@@ -520,9 +520,6 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
                 .map_err(|error| DataFusionError::External(Box::new(error)))?;
             let store_ctx = StoreContext::new(base_store, &parsed_table_url)?;
 
-            let positional_deletes = positional_deletes.iter()
-                .map(|delete| PositionDeleteFile::try_from(&delete.data_file))
-                .collect::<Result<Vec<_>>>()?;
             let mut deleted_positions =
                 load_deleted_positions(&store_ctx, &positional_deletes, &data_file_path).await?;
 
@@ -611,7 +608,18 @@ pub(crate) async fn load_deleted_positions(
                 .await?;
                 continue;
             }
-            PositionDeleteFile::Parquet { path, size } => (path, *size),
+            PositionDeleteFile::File {
+                path,
+                size,
+                file_format,
+            } => {
+                if *file_format != DataFileFormat::Parquet {
+                    return datafusion_common::exec_err!(
+                        "Unsupported Iceberg position delete file: {path}"
+                    );
+                }
+                (path, *size)
+            }
         };
         let (store, path) = store_ctx.resolve(file_path)?;
         let delete_batches = read_parquet_all(store.clone(), &path, file_size).await?;
@@ -736,7 +744,7 @@ fn resolve_equality_key_fields(
 
 async fn load_equality_deletes(
     store_ctx: &StoreContext,
-    delete_files: &[DeleteFileRef],
+    delete_files: &[EqualityDeleteFile],
     iceberg_schema: &IcebergSchema,
 ) -> Result<Vec<LoadedEqualityDelete>> {
     if delete_files.is_empty() {
@@ -745,14 +753,19 @@ async fn load_equality_deletes(
 
     let mut equality_deletes = Vec::with_capacity(delete_files.len());
     for delete_file in delete_files {
-        if delete_file.data_file.equality_ids.is_empty() {
+        if delete_file.file_format != DataFileFormat::Parquet {
+            return datafusion_common::exec_err!(
+                "Unsupported Iceberg equality delete file: {}",
+                delete_file.path
+            );
+        }
+        if delete_file.equality_ids.is_empty() {
             return Err(DataFusionError::Plan(format!(
                 "equality delete file {} has empty equality_ids",
-                delete_file.data_file.file_path
+                delete_file.path
             )));
         }
-        let key_fields =
-            resolve_equality_key_fields(iceberg_schema, &delete_file.data_file.equality_ids)?;
+        let key_fields = resolve_equality_key_fields(iceberg_schema, &delete_file.equality_ids)?;
         let sort_fields: Vec<SortField> = key_fields
             .iter()
             .map(|field| SortField::new(field.data_type.clone()))
@@ -760,14 +773,13 @@ async fn load_equality_deletes(
         let converter = RowConverter::new(sort_fields)
             .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
 
-        let (store, path) = store_ctx.resolve(&delete_file.data_file.file_path)?;
-        let size = delete_file.data_file.file_size_in_bytes;
+        let (store, path) = store_ctx.resolve(&delete_file.path)?;
         let key_batches = read_equality_delete_keys(
             store.clone(),
             &path,
-            size,
+            delete_file.size,
             &key_fields,
-            &delete_file.data_file.file_path,
+            &delete_file.path,
         )
         .await?;
         let mut deleted_rows = HashSet::new();
@@ -1033,6 +1045,43 @@ mod tests {
 
     use super::*;
 
+    #[tokio::test]
+    async fn unsupported_delete_formats_are_rejected_before_file_io() -> Result<()> {
+        let store_ctx = StoreContext::new(
+            Arc::new(InMemory::new()),
+            &Url::parse("memory://iceberg/table/").unwrap(),
+        )?;
+        let schema = IcebergSchema::builder().build().unwrap();
+        for file_format in [DataFileFormat::Avro, DataFileFormat::Orc] {
+            let path = "memory://iceberg/table/missing".to_string();
+            let positions = [PositionDeleteFile::File {
+                path: path.clone(),
+                size: 123,
+                file_format,
+            }];
+            let error = load_deleted_positions(&store_ctx, &positions, "data.parquet")
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, DataFusionError::Execution(message) if message == format!("Unsupported Iceberg position delete file: {path}"))
+            );
+            let equality = [EqualityDeleteFile {
+                path: path.clone(),
+                size: 123,
+                file_format,
+                equality_ids: vec![1],
+            }];
+            let error = load_equality_deletes(&store_ctx, &equality, &schema)
+                .await
+                .err()
+                .unwrap();
+            assert!(
+                matches!(error, DataFusionError::Execution(message) if message == format!("Unsupported Iceberg equality delete file: {path}"))
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn row_selection_preserves_positions_and_bounds_fragmentation() {
         let positions = RoaringTreemap::from_iter([0, 1, 5, 6, 9]);
@@ -1173,14 +1222,9 @@ mod tests {
             scan,
             data_file_path.to_string(),
             vectors
-                .into_iter()
-                .map(|data_file| DeleteFileRef {
-                    data_file,
-                    data_sequence_number: 2,
-                    partition_spec_id: 0,
-                    is_unpartitioned_spec: true,
-                })
-                .collect(),
+                .iter()
+                .map(PositionDeleteFile::try_from)
+                .collect::<Result<_>>()?,
             vec![],
             table_url.to_string(),
             IcebergSchema::builder().build().unwrap(),

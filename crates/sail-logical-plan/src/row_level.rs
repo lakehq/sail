@@ -23,7 +23,7 @@ use sail_common_datafusion::datasource::{
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
-use sail_function::scalar::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_function::StructFunction;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
 
@@ -185,6 +185,8 @@ pub struct RowLevelEffectPlans {
     touched_files: Option<Arc<LogicalPlan>>,
     row_index_deletes: Option<Arc<LogicalPlan>>,
     change_data: Option<Arc<LogicalPlan>>,
+    /// Packed preimages on the write stream, consumed by a single data/CDC writer.
+    change_data_preimage: Option<String>,
 }
 
 impl RowLevelEffectPlans {
@@ -199,7 +201,17 @@ impl RowLevelEffectPlans {
             touched_files,
             row_index_deletes,
             change_data,
+            change_data_preimage: None,
         }
+    }
+
+    pub fn with_change_data_preimage(mut self, column: Option<String>) -> Self {
+        self.change_data_preimage = column;
+        self
+    }
+
+    pub fn change_data_preimage(&self) -> Option<&str> {
+        self.change_data_preimage.as_deref()
     }
 
     pub fn write_rows(&self) -> Option<&Arc<LogicalPlan>> {
@@ -264,6 +276,7 @@ impl RowLevelEffectPlans {
             touched_files: replace(self.touched_files.is_some())?,
             row_index_deletes: replace(self.row_index_deletes.is_some())?,
             change_data: replace(self.change_data.is_some())?,
+            change_data_preimage: self.change_data_preimage.clone(),
         })
     }
 }
@@ -935,13 +948,21 @@ pub fn expand_update(
     )?;
 
     let change_data = if requirements.change_data {
-        let mut before = normalized.field_names.iter().map(col).collect::<Vec<_>>();
+        let mut before = normalized
+            .field_names
+            .iter()
+            .map(|name| Expr::Column(Column::from_name(name)))
+            .collect::<Vec<_>>();
         before.push(lit("update_preimage").alias("_change_type"));
         let before = LogicalPlanBuilder::from(normalized.plan.clone())
             .filter(predicate.clone())?
             .project(before)?
             .build()?;
-        let mut after = normalized.field_names.iter().map(col).collect::<Vec<_>>();
+        let mut after = normalized
+            .field_names
+            .iter()
+            .map(|name| Expr::Column(Column::from_name(name)))
+            .collect::<Vec<_>>();
         after.push(lit("update_postimage").alias("_change_type"));
         let after = LogicalPlanBuilder::from(write_rows.clone())
             .filter(col(OPERATION_COLUMN).eq(lit(RowLevelOperationType::Update.as_i32())))?

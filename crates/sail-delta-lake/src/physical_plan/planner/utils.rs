@@ -16,8 +16,8 @@ use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion::common::{
     Column as LogicalColumn, DataFusionError, Result, ScalarValue, ToDFSchema,
 };
-use datafusion::logical_expr::Expr;
 use datafusion::logical_expr::expr::{Case, Cast, ScalarFunction};
+use datafusion::logical_expr::{Expr, ScalarUDF};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -30,6 +30,7 @@ use datafusion_functions_nested::extract::array_element_udf;
 use datafusion_functions_nested::map_extract::map_extract_udf;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use url::Url;
 
@@ -569,7 +570,7 @@ async fn build_log_replay_pipeline_with_files(
     };
 
     let replay_path = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
-        datafusion::functions::core::coalesce(),
+        Arc::new(ScalarUDF::from(CoalesceFunc::new())),
         vec![add_key, remove_key],
     )))?;
 
@@ -615,7 +616,7 @@ async fn build_log_replay_pipeline_with_files(
         DataType::Int64,
     ));
     let size_expr = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
-        datafusion::functions::core::coalesce(),
+        Arc::new(ScalarUDF::from(CoalesceFunc::new())),
         vec![size_expr_i64, lit_i64(0)],
     )))?;
 
@@ -624,7 +625,7 @@ async fn build_log_replay_pipeline_with_files(
         DataType::Int64,
     ));
     let mod_time_expr = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
-        datafusion::functions::core::coalesce(),
+        Arc::new(ScalarUDF::from(CoalesceFunc::new())),
         vec![mod_time_expr_i64, lit_i64(0)],
     )))?;
 

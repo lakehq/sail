@@ -1,6 +1,158 @@
 {
   "tests": [
     {
+      "input": "cast(a as TIMESTAMP(7) WITH LOCAL TIME ZONE)",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "cast(a as TIMESTAMP(7) WITHOUT TIME ZONE)",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "cast(a as TIMESTAMP(8) WITH LOCAL TIME ZONE)",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "cast(a as TIMESTAMP(8) WITHOUT TIME ZONE)",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "cast(a as TIMESTAMP(9) WITH LOCAL TIME ZONE)",
+      "output": {
+        "success": {
+          "cast": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null,
+                "isMetadataColumn": false
+              }
+            },
+            "castToType": {
+              "timestamp": {
+                "timeUnit": "nanosecond",
+                "timestampType": "withLocalTimeZone"
+              }
+            },
+            "rename": true,
+            "isTry": false
+          }
+        }
+      }
+    },
+    {
+      "input": "cast(a as TIMESTAMP(9) WITHOUT TIME ZONE)",
+      "output": {
+        "success": {
+          "cast": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null,
+                "isMetadataColumn": false
+              }
+            },
+            "castToType": {
+              "timestamp": {
+                "timeUnit": "nanosecond",
+                "timestampType": "withoutTimeZone"
+              }
+            },
+            "rename": true,
+            "isTry": false
+          }
+        }
+      }
+    },
+    {
+      "input": "cast(a as TIMESTAMP_LTZ(7))",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "cast(a as TIMESTAMP_LTZ(8))",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "cast(a as TIMESTAMP_LTZ(9))",
+      "output": {
+        "success": {
+          "cast": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null,
+                "isMetadataColumn": false
+              }
+            },
+            "castToType": {
+              "timestamp": {
+                "timeUnit": "nanosecond",
+                "timestampType": "withLocalTimeZone"
+              }
+            },
+            "rename": true,
+            "isTry": false
+          }
+        }
+      }
+    },
+    {
+      "input": "cast(a as TIMESTAMP_NTZ(7))",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "cast(a as TIMESTAMP_NTZ(8))",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "cast(a as TIMESTAMP_NTZ(9))",
+      "output": {
+        "success": {
+          "cast": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null,
+                "isMetadataColumn": false
+              }
+            },
+            "castToType": {
+              "timestamp": {
+                "timeUnit": "nanosecond",
+                "timestampType": "withoutTimeZone"
+              }
+            },
+            "rename": true,
+            "isTry": false
+          }
+        }
+      }
+    },
+    {
       "input": "cast(a as array<int>)",
       "output": {
         "success": {

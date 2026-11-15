@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
-use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, Result, plan_err};
 use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition, col, lit,
+    AggregateUDF, Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowFunctionDefinition, col, lit,
 };
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
     RowLevelCommand, RowLevelOperationType, RowLevelWriteMode,
 };
+use sail_common_datafusion::min_max::min_max_agg::Max;
 
 use crate::datasource::scan::IcebergScan;
 use crate::logical::IcebergTableSource;
@@ -157,7 +157,7 @@ pub(crate) fn select_copy_on_write_rows(plan: LogicalPlan) -> Result<LogicalPlan
         .map(Expr::Column)
         .collect::<Vec<_>>();
     let touched = Expr::WindowFunction(Box::new(WindowFunction {
-        fun: WindowFunctionDefinition::AggregateUDF(max_udaf()),
+        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(Max::new()))),
         params: WindowFunctionParams {
             args: vec![col(OPERATION_COLUMN)],
             partition_by: vec![col(MERGE_FILE_COLUMN)],

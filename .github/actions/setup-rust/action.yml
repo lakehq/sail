@@ -71,6 +71,7 @@ runs:
         target/**/build/
         target/**/deps/
         target/**/.fingerprint/
+        target/maturin/pyo3-config-*.txt
         tmp/mtime.jsonl
         TEXT
         EOF
@@ -85,13 +86,6 @@ runs:
         path: ${{ steps.config.outputs.path }}
         key: ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-${{ steps.config.outputs.hash }}
 
-    - name: Save mtime
-      if: ${{ github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true' }}
-      run: |
-        mkdir -p tmp
-        git ls-files | .github/workflows/mtime/save_mtime.py > tmp/mtime.jsonl
-      shell: bash
-
     # We save the cache only for push events, so that more cache space can be reserved
     # for the default branch and cache eviction is less likely to happen.
     # Pull request and scheduled runs restore caches saved on the default branch. The cache is still useful
@@ -104,11 +98,24 @@ runs:
         restore-keys: |
           ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-
 
+    # Fetch unpacks registry crates so their original timestamps can be saved or
+    # restored before Cargo checks the cached build artifacts for freshness.
+    - name: Fetch Rust dependencies
+      run: |
+        cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
+      shell: bash
+
+    - name: Save mtime
+      if: ${{ github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true' }}
+      run: |
+        mkdir -p tmp
+        .github/workflows/mtime/save_mtime.py > tmp/mtime.jsonl
+      shell: bash
+
     - name: Restore mtime
-      # Restore mtime for non-push events, including pull requests and scheduled runs.
-      # For push events, we build all workspace crates for correctness,
+      # Scheduled runs validate builds without timestamp restoration
       # in case restoring mtime causes unexpected issues.
-      if: ${{ github.event_name != 'push' }}
+      if: ${{ github.event_name != 'schedule' }}
       run: |
         if [[ -f tmp/mtime.jsonl ]]; then
           .github/workflows/mtime/restore_mtime.py < tmp/mtime.jsonl
@@ -117,7 +124,7 @@ runs:
 
     # Incremental compilation is not beneficial for CI builds.
     # So we turn it off to speed up the build and reduce the cache size.
-    # This step is skipped for Claude Code setup.
+    # Leave incremental compilation unchanged for other event types.
     - name: Turn off incremental compilation
       if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'schedule' }}
       run: |

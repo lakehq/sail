@@ -485,6 +485,28 @@
     },
     {
       "input": {
+        "query": "SELECT current_timestamp(9);",
+        "result": [
+          "2020-04-25 15:49:11.914120463"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_timestamp()",
+              "nullable": false,
+              "type": "timestamp_ltz(9)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT current_timestamp;",
         "result": [
           "2020-04-25 15:49:11.914"
@@ -617,6 +639,28 @@
     },
     {
       "input": {
+        "query": "SELECT date_format(TIME'14:30:45', 'HH:mm:ss');",
+        "result": [
+          "14:30:45"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "date_format(TIME '14:30:45', HH:mm:ss)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Execution error: spark_date_format: expected timestamp scalar, got Time64Microsecond(\"52245000000\")"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT date_from_unix_date(1);",
         "result": [
           "1970-01-02"
@@ -628,6 +672,28 @@
               "name": "date_from_unix_date(1)",
               "nullable": false,
               "type": "date",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT date_part('HOUR', TIME'09:08:01.000001');",
+        "result": [
+          "9"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "date_part(HOUR, TIME '09:08:01.000001')",
+              "nullable": true,
+              "type": "integer",
               "metadata": {}
             }
           ]
@@ -881,6 +947,28 @@
     },
     {
       "input": {
+        "query": "SELECT date_trunc('MICROSECOND', TIMESTAMP_NTZ '2015-03-05 09:32:05.123456789');",
+        "result": [
+          "2015-03-05 09:32:05.123456"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "date_trunc(MICROSECOND, TIMESTAMP_NTZ '2015-03-05 09:32:05.123456789')",
+              "nullable": true,
+              "type": "timestamp_ntz(9)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT date_trunc('MILLISECOND', '2015-03-05T09:32:05.123456');",
         "result": [
           "2015-03-05 09:32:05.123"
@@ -1000,6 +1088,28 @@
           "fields": [
             {
               "name": "datediff(2009-07-31, 2009-07-30)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT datepart('HOUR', TIME'09:08:01.000001');",
+        "result": [
+          "9"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "datepart(HOUR FROM TIME '09:08:01.000001')",
               "nullable": true,
               "type": "integer",
               "metadata": {}
@@ -1211,6 +1321,28 @@
     },
     {
       "input": {
+        "query": "SELECT day(TIMESTAMP_NTZ '2009-07-30 12:00:00.123456789');",
+        "result": [
+          "30"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "day(TIMESTAMP_NTZ '2009-07-30 12:00:00.123456789')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT dayname(DATE('2008-02-20'));",
         "result": [
           "Wed"
@@ -1221,6 +1353,28 @@
             {
               "name": "dayname(2008-02-20)",
               "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT dayname(TIMESTAMP_NTZ '2008-02-20 12:00:00.123456789');",
+        "result": [
+          "Wed"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "dayname(TIMESTAMP_NTZ '2008-02-20 12:00:00.123456789')",
+              "nullable": false,
               "type": "string",
               "metadata": {}
             }
@@ -1255,6 +1409,28 @@
     },
     {
       "input": {
+        "query": "SELECT dayofmonth(TIMESTAMP_NTZ '2009-07-30 12:00:00.123456789');",
+        "result": [
+          "30"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "dayofmonth(TIMESTAMP_NTZ '2009-07-30 12:00:00.123456789')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT dayofweek('2009-07-30');",
         "result": [
           "5"
@@ -1277,6 +1453,28 @@
     },
     {
       "input": {
+        "query": "SELECT dayofweek(TIMESTAMP_NTZ '2009-07-30 12:00:00.123456789');",
+        "result": [
+          "5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "dayofweek(TIMESTAMP_NTZ '2009-07-30 12:00:00.123456789')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT dayofyear('2016-04-09');",
         "result": [
           "100"
@@ -1287,6 +1485,28 @@
             {
               "name": "dayofyear(2016-04-09)",
               "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT dayofyear(TIMESTAMP_NTZ '2016-04-09 12:00:00.123456789');",
+        "result": [
+          "100"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "dayofyear(TIMESTAMP_NTZ '2016-04-09 12:00:00.123456789')",
+              "nullable": false,
               "type": "integer",
               "metadata": {}
             }
@@ -1651,6 +1871,50 @@
     },
     {
       "input": {
+        "query": "SELECT hour(TIMESTAMP_LTZ '2018-02-14 12:58:59.123456789');",
+        "result": [
+          "12"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hour(TIMESTAMP_LTZ '2018-02-14 12:58:59.123456789')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hour(TIMESTAMP_NTZ '2018-02-14 12:58:59.123456789');",
+        "result": [
+          "12"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hour(TIMESTAMP_NTZ '2018-02-14 12:58:59.123456789')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT last_day('2009-01-12');",
         "result": [
           "2009-01-31"
@@ -1673,6 +1937,116 @@
     },
     {
       "input": {
+        "query": "SELECT localtime();",
+        "result": [
+          "15:49:11.914120"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_time(6)",
+              "nullable": false,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: localtime"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT localtime(0);",
+        "result": [
+          "15:49:11"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_time(0)",
+              "nullable": false,
+              "type": "time(0)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: localtime"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT localtime(1+1);",
+        "result": [
+          "15:49:11.91"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_time((1 + 1))",
+              "nullable": false,
+              "type": "time(2)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: localtime"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT localtime(3);",
+        "result": [
+          "15:49:11.914"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_time(3)",
+              "nullable": false,
+              "type": "time(3)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: localtime"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT localtime;",
+        "result": [
+          "15:49:11.914120"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_time(6)",
+              "nullable": false,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "analysis error: attribute ObjectName([Identifier(\"localtime\")]) is missing from the schema: cannot resolve attribute"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT localtimestamp();",
         "result": [
           "2020-04-25 15:49:11.914"
@@ -1691,6 +2065,28 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT localtimestamp(9);",
+        "result": [
+          "2020-04-25 15:49:11.914120463"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "localtimestamp()",
+              "nullable": false,
+              "type": "timestamp_ntz(9)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: current_timestamp takes 0 arguments, got [Literal(Int32(9), None)]"
       }
     },
     {
@@ -2377,6 +2773,50 @@
     },
     {
       "input": {
+        "query": "SELECT minute(TIMESTAMP_LTZ '2009-07-30 12:58:59.123456789');",
+        "result": [
+          "58"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "minute(TIMESTAMP_LTZ '2009-07-30 12:58:59.123456789')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT minute(TIMESTAMP_NTZ '2009-07-30 12:58:59.123456789');",
+        "result": [
+          "58"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "minute(TIMESTAMP_NTZ '2009-07-30 12:58:59.123456789')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT month('2016-07-30');",
         "result": [
           "7"
@@ -2399,6 +2839,28 @@
     },
     {
       "input": {
+        "query": "SELECT month(TIMESTAMP_NTZ '2016-07-30 12:00:00.123456789');",
+        "result": [
+          "7"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "month(TIMESTAMP_NTZ '2016-07-30 12:00:00.123456789')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT monthname('2008-02-20');",
         "result": [
           "Feb"
@@ -2409,6 +2871,28 @@
             {
               "name": "monthname(2008-02-20)",
               "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT monthname(TIMESTAMP_NTZ '2008-02-20 12:00:00.123456789');",
+        "result": [
+          "Feb"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "monthname(TIMESTAMP_NTZ '2008-02-20 12:00:00.123456789')",
+              "nullable": false,
               "type": "string",
               "metadata": {}
             }
@@ -2509,6 +2993,28 @@
     },
     {
       "input": {
+        "query": "SELECT now(9);",
+        "result": [
+          "2020-04-25 15:49:11.914120463"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_timestamp()",
+              "nullable": false,
+              "type": "timestamp_ltz(9)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: current_timestamp takes 0 arguments, got [Literal(Int32(9), None)]"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT quarter('2016-08-31');",
         "result": [
           "3"
@@ -2519,6 +3025,28 @@
             {
               "name": "quarter(2016-08-31)",
               "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT quarter(TIMESTAMP_NTZ '2016-08-31 12:00:00.123456789');",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "quarter(TIMESTAMP_NTZ '2016-08-31 12:00:00.123456789')",
+              "nullable": false,
               "type": "integer",
               "metadata": {}
             }
@@ -2563,6 +3091,50 @@
             {
               "name": "second(TIME '13:25:59.999999')",
               "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT second(TIMESTAMP_LTZ '2018-02-14 12:58:59.123456789');",
+        "result": [
+          "59"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "second(TIMESTAMP_LTZ '2018-02-14 12:58:59.123456789')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT second(TIMESTAMP_NTZ '2018-02-14 12:58:59.123456789');",
+        "result": [
+          "59"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "second(TIMESTAMP_NTZ '2018-02-14 12:58:59.123456789')",
+              "nullable": false,
               "type": "integer",
               "metadata": {}
             }
@@ -3319,6 +3891,28 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT timestamp_nanos(1230219000123456789);",
+        "result": [
+          "2008-12-25 07:30:00.123456789"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "timestamp_nanos(1230219000123456789)",
+              "nullable": false,
+              "type": "timestamp_ltz(9)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: timestamp_nanos"
       }
     },
     {
@@ -4511,6 +5105,28 @@
     },
     {
       "input": {
+        "query": "SELECT unix_micros(TIMESTAMP_NTZ '2008-12-25 15:30:00.123456789');",
+        "result": [
+          "1230219000123456"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "unix_micros(TIMESTAMP_NTZ '2008-12-25 15:30:00.123456789')",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT unix_millis(TIMESTAMP('1970-01-01 00:00:01Z'));",
         "result": [
           "1000"
@@ -4533,6 +5149,50 @@
     },
     {
       "input": {
+        "query": "SELECT unix_millis(TIMESTAMP_NTZ '2008-12-25 15:30:00.123456789');",
+        "result": [
+          "1230219000123"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "unix_millis(TIMESTAMP_NTZ '2008-12-25 15:30:00.123456789')",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT unix_nanos(TIMESTAMP_NTZ '2008-12-25 15:30:00.123456789');",
+        "result": [
+          "1230219000123456789"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "unix_nanos(TIMESTAMP_NTZ '2008-12-25 15:30:00.123456789')",
+              "nullable": false,
+              "type": "decimal(21, 0)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: unix_nanos"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT unix_seconds(TIMESTAMP('1970-01-01 00:00:01Z'));",
         "result": [
           "1"
@@ -4543,6 +5203,28 @@
             {
               "name": "unix_seconds(1970-01-01 00:00:01Z)",
               "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT unix_seconds(TIMESTAMP_NTZ '2008-12-25 15:30:00.123456789');",
+        "result": [
+          "1230219000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "unix_seconds(TIMESTAMP_NTZ '2008-12-25 15:30:00.123456789')",
+              "nullable": false,
               "type": "long",
               "metadata": {}
             }
@@ -4621,6 +5303,28 @@
     },
     {
       "input": {
+        "query": "SELECT weekday(TIMESTAMP_NTZ '2009-07-30 12:00:00.123456789');",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "weekday(TIMESTAMP_NTZ '2009-07-30 12:00:00.123456789')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT weekofyear('2008-02-20');",
         "result": [
           "8"
@@ -4631,6 +5335,28 @@
             {
               "name": "weekofyear(2008-02-20)",
               "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT weekofyear(TIMESTAMP_NTZ '2008-02-20 12:00:00.123456789');",
+        "result": [
+          "8"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "weekofyear(TIMESTAMP_NTZ '2008-02-20 12:00:00.123456789')",
+              "nullable": false,
               "type": "integer",
               "metadata": {}
             }
@@ -4661,6 +5387,56 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT year(TIMESTAMP_NTZ '2016-07-30 12:00:00.123456789');",
+        "result": [
+          "2016"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "year(TIMESTAMP_NTZ '2016-07-30 12:00:00.123456789')",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SET spark.sql.timestampNanosTypes.enabled=true;",
+        "result": [
+          "spark.sql.timestampNanosTypes.enabled\ttrue"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "key",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "value",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Invalid or Unsupported Configuration: Could not find config namespace \"spark\""
       }
     }
   ]

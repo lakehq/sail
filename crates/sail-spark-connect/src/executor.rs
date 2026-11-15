@@ -14,7 +14,9 @@ use fastrace::Span;
 use fastrace::future::FutureExt;
 use futures::stream::StreamExt;
 use futures::{Stream, stream};
-use sail_common_datafusion::schema::{normalize_record_batch, record_batch_has_views};
+use sail_common_datafusion::schema::{
+    normalize_record_batch, record_batch_has_views, spark_arrow_schema,
+};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -492,7 +494,8 @@ pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
             batch
         };
         let cursor = Cursor::new(&mut output.data);
-        let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
+        let schema = spark_arrow_schema(batch.schema().as_ref());
+        let mut writer = StreamWriter::try_new(cursor, &schema)?;
         writer.write(batch)?;
         output.row_count += batch.num_rows() as i64;
         writer.finish()?;

@@ -46,12 +46,12 @@ impl SessionManager {
 
     pub async fn get_or_create_session_context(
         &self,
-        session_id: String,
+        client_session_id: String,
         user_id: String,
     ) -> SessionResult<SessionContext> {
         let (tx, rx) = oneshot::channel();
         let message = SessionManagerMessage::GetOrCreateSession {
-            session_id,
+            client_session_id,
             user_id,
             result: tx,
         };
@@ -60,10 +60,15 @@ impl SessionManager {
             .map_err(|e| SessionError::internal(format!("failed to get session: {e}")))?
     }
 
-    pub async fn delete_session(&self, session_id: String) -> SessionResult<()> {
+    pub async fn delete_session(
+        &self,
+        client_session_id: String,
+        user_id: String,
+    ) -> SessionResult<String> {
         let (tx, rx) = oneshot::channel();
         let message = SessionManagerMessage::DeleteSession {
-            session_id,
+            client_session_id,
+            user_id,
             result: tx,
         };
         self.handle.send(message).await?;

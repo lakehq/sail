@@ -3,6 +3,28 @@ use std::collections::BTreeMap;
 use datafusion::common::{DataFusionError, Result, plan_err};
 use sail_common_datafusion::lakeprocedure::{LakeProcedureInvocation, LakeProcedureValue};
 
+pub(super) fn optional_bool(
+    invocation: &LakeProcedureInvocation,
+    name: &str,
+) -> Result<Option<bool>> {
+    match invocation.argument(name) {
+        Some(LakeProcedureValue::Boolean(value)) => Ok(Some(*value)),
+        Some(LakeProcedureValue::Null) | None => Ok(None),
+        value => plan_err!("Procedure argument '{name}' is not a boolean: {value:?}"),
+    }
+}
+
+pub(super) fn optional_i32(
+    invocation: &LakeProcedureInvocation,
+    name: &str,
+) -> Result<Option<i32>> {
+    match invocation.argument(name) {
+        Some(LakeProcedureValue::Int32(value)) => Ok(Some(*value)),
+        Some(LakeProcedureValue::Null) | None => Ok(None),
+        value => plan_err!("Procedure argument '{name}' is not an int32: {value:?}"),
+    }
+}
+
 pub(super) fn required_i64(invocation: &LakeProcedureInvocation, name: &str) -> Result<i64> {
     optional_i64(invocation, name)?.ok_or_else(|| {
         DataFusionError::Plan(format!("Missing required procedure argument '{name}'"))

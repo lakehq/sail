@@ -17,9 +17,12 @@ An Iceberg REST catalog can be configured using the following options.
 - `warehouse` (optional): The catalog warehouse location.
 - `prefix` (optional): The prefix for catalog API endpoints.
 - `namespace_separator` (optional): The client-side fallback for the Iceberg REST `namespace-separator` catalog property. Use the separator that the REST server expects, such as `::` or `/`. Sail also accepts URL-encoded values returned by REST servers, such as `%3A%3A` for `::`. If this option is not set or is empty, Sail uses the Iceberg REST default unit separator.
+- `access_delegation` (optional): The value of the `X-Iceberg-Access-Delegation` header sent when loading a table. The default is `vended-credentials`. Set this option to `none` or leave it empty to omit the header, which is needed for servers that reject the header.
 - `oauth_access_token` (optional): The OAuth 2.0 access token.
 - `bearer_access_token` (optional): The bearer token for authentication. This option takes precedence over `oauth_access_token`.
 - `bearer_access_token_file` (optional): The path to a file that holds the bearer token. This option takes precedence over `bearer_access_token` and `oauth_access_token`. Sail reads the token from this file for every request, so it picks up a rotated token, such as a kubelet-projected service account token, without restarting the server. If a request is rejected with `401 Unauthorized`, Sail reloads the file and retries the request once. The file must contain the raw token without the `Bearer ` prefix for the HTTP `Authorization` header. Surrounding whitespace in the file is trimmed. Empty or unreadable files produce an error rather than falling back to other options.
+- `username` (optional): The user name for HTTP Basic authentication, which some REST catalog servers, such as Apache Gravitino, accept instead of a token. Must be set together with `password`.
+- `password` (optional): The password for HTTP Basic authentication. Sail sends `Authorization: Basic <base64(username:password)>`. Basic authentication cannot be combined with `oauth_access_token`, `bearer_access_token`, or `bearer_access_token_file`.
 
 See [Common Options](./index.md#common-options) for caching configuration.
 
@@ -59,10 +62,22 @@ This example reads a bearer token from a file, such as a kubelet-projected servi
 export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://catalog.example.com", warehouse="s3://data/warehouse", bearer_access_token_file="/var/run/secrets/tokens/catalog-token"}]'
 ```
 
+This example uses HTTP Basic authentication.
+
+```bash
+export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://catalog.example.com", warehouse="s3://data/warehouse", username="...", password="..."}]'
+```
+
 This example configures a client-side namespace separator fallback.
 
 ```bash
 export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://catalog.example.com", namespace_separator="::"}]'
+```
+
+This example omits the access delegation header.
+
+```bash
+export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://catalog.example.com", access_delegation="none"}]'
 ```
 
 ## Table DDL

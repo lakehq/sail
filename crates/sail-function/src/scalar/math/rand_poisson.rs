@@ -80,7 +80,8 @@ impl ScalarUDFImpl for RandPoisson {
             Some(ColumnarValue::Scalar(scalar)) => match scalar {
                 ScalarValue::Int64(Some(value)) => Some(*value as u64),
                 ScalarValue::UInt64(Some(value)) => Some(*value),
-                ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => None,
+                // A null seed is zero, as for the other random functions.
+                ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => Some(0),
                 _ => {
                     return exec_err!("`random_poisson` expects an integer seed, got {scalar}");
                 }

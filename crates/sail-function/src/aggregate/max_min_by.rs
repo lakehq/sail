@@ -1,19 +1,23 @@
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::ops::Deref;
+use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/max_min_by.rs>
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::ScalarValue;
 use datafusion::error::DataFusionError;
-use datafusion::functions_aggregate::first_last::last_value_udaf;
 use datafusion::logical_expr::expr::{AggregateFunction, Sort};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::format_state_name;
-use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility, function};
+use datafusion::logical_expr::{
+    Accumulator, AggregateUDF, AggregateUDFImpl, Signature, Volatility, function,
+};
 use datafusion::prelude::Expr;
+
+use crate::aggregate::first_last::LastValue;
 
 #[derive(Debug)]
 struct MaxMinByAccumulator {
@@ -175,7 +179,7 @@ impl AggregateUDFImpl for MaxByFunction {
             order_by.push(Sort::new(second_arg, true, true)); // ASC,  NULLS FIRST
 
             Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                last_value_udaf(),
+                Arc::new(AggregateUDF::from(LastValue::new())),
                 vec![first_arg],
                 aggr_func.params.distinct,
                 filter,
@@ -277,7 +281,7 @@ impl AggregateUDFImpl for MinByFunction {
             order_by.push(Sort::new(second_arg, false, true)); // DESC, NULLS FIRST
 
             Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                last_value_udaf(),
+                Arc::new(AggregateUDF::from(LastValue::new())),
                 vec![first_arg],
                 aggr_func.params.distinct,
                 filter,

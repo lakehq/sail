@@ -19,6 +19,11 @@
     "defaultValue": "1073741824"
   },
   {
+    "key": "spark.databricks.delta.replaceWhere.constraintCheck.enabled",
+    "doc": "Validates that incoming rows satisfy the Delta conditional overwrite predicate.",
+    "defaultValue": "true"
+  },
+  {
     "key": "spark.databricks.delta.retentionDurationCheck.enabled",
     "doc": "Rejects VACUUM retention periods shorter than the table's deleted-file retention duration.",
     "defaultValue": "true"

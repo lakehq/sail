@@ -4,8 +4,10 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::expr::FieldMetadata;
+use datafusion_expr::logical_plan::Values;
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, cast};
 use sail_common::spec;
+use sail_logical_optimizer::type_coercion::cast_nested_value;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -37,7 +39,26 @@ impl PlanResolver<'_> {
             Ok::<_, PlanError>(results)
         }
         .await?;
-        let plan = LogicalPlanBuilder::values(values)?.build()?;
+        let plan = match LogicalPlanBuilder::values(values)?.build()? {
+            // Spark casts the values of an inline table to the type of their column
+            // (`EvaluateUnresolvedInlineTable`). Nested values are cast even if they have the
+            // column type already, since constant folding can make their nested fields
+            // non-nullable later (e.g. `array(named_struct('a', 1))`), but every value must have
+            // exactly the column type.
+            LogicalPlan::Values(Values { schema, values }) => {
+                let values = values
+                    .into_iter()
+                    .map(|row| {
+                        row.into_iter()
+                            .zip(schema.fields())
+                            .map(|(value, field)| cast_nested_value(value, field.data_type()))
+                            .collect()
+                    })
+                    .collect();
+                LogicalPlan::Values(Values { schema, values })
+            }
+            plan => plan,
+        };
         let expr = plan
             .schema()
             .columns()

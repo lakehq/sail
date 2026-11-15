@@ -3,8 +3,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from pysail.testing.spark.steps.plan import normalize_plan_text
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.plan import normalize_plan_text
 from pysail.testing.spark.utils.sql import (
     format_show_string,
     normalize_floating_point_string,
@@ -31,7 +30,7 @@ def data(spark, duck):
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)], ids=[f"{x + 1:02}" for x in range(99)])
-@pytest.mark.skipif(is_jvm_spark(), reason="slow tests in JVM Spark")
+@pytest.mark.spark(skip_if_jvm=True, reason="slow tests in JVM Spark")
 @pytest.mark.yamlsnapshot(group="result")
 def test_derived_tpcds_query_result(spark, query, snapshot):
     for sql in read_sql(query):
@@ -44,7 +43,7 @@ def test_derived_tpcds_query_result(spark, query, snapshot):
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)], ids=[f"{x + 1:02}" for x in range(99)])
-@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
+@pytest.mark.spark(skip_if_jvm=True, reason="different plans in JVM Spark")
 @pytest.mark.yamlsnapshot(group="plan")
 def test_derived_tpcds_query_plan(spark, query, snapshot):
     for sql in read_sql(query):

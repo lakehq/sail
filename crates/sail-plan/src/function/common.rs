@@ -11,6 +11,7 @@ use datafusion_expr::{
     WindowFunctionDefinition, WindowUDF, cast, expr, lit,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
 
@@ -361,6 +362,20 @@ impl WinFunctionBuilder {
     pub fn unknown(name: &str) -> WinFunction {
         let name = name.to_string();
         Arc::new(move |_| Err(PlanError::todo(format!("unknown window function: {name}"))))
+    }
+}
+
+/// Normalizes `-0.0` to `0.0` in the floating-point values of an argument that is deduplicated,
+/// as in `collect_set` and DISTINCT `collect_list`/`array_agg`, so that `-0.0` and `0.0` are one
+/// value and the result holds `0.0`. Spark normalizes the elements of `collect_set` and the
+/// arguments of DISTINCT aggregates before comparing them.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/collect.scala#L236-L255>
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/core/src/main/scala/org/apache/spark/sql/execution/SparkStrategies.scala#L632-L645>
+pub(crate) fn normalize_distinct_floats(argument: expr::Expr, data_type: &DataType) -> expr::Expr {
+    if NormalizeFloatKeys::has_float(data_type) {
+        ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![argument])
+    } else {
+        argument
     }
 }
 

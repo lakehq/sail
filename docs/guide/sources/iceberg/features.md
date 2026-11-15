@@ -35,9 +35,10 @@ Sail creates **version 2** Iceberg tables by default. Set the `format-version` t
 | Predicate overwrite                                | :warning:          | `DataFrameWriterV2.overwrite(condition)` on identity-partition columns. Requires compatible live partition specs and no active delete files.                                                                |
 | Dynamic partition overwrite                        | :warning:          | `overwritePartitions()` or `overwrite-mode = dynamic` on existing tables with compatible live partition specs and no active delete files. Replaces partitions present in the input. Empty input is a no-op. |
 | Time travel                                        | :white_check_mark: | Snapshot ID, timestamp, or an existing branch/tag reference. Requires the referenced metadata and data files.                                                                                               |
-| Branch/tag creation and branch writes              | :construction:     | —                                                                                                                                                                                                           |
+| Branch/tag lifecycle DDL                           | :white_check_mark: | Create, replace, drop, and retention metadata.                                                                                                                                                              |
+| Branch-targeted data writes                        | :construction:     | —                                                                                                                                                                                                           |
 | Table property DDL                                 | :warning:          | `SET/UNSET TBLPROPERTIES` and format upgrades through Memory, HMS, Glue, and Iceberg REST. See [Table DDL](#table-ddl) for catalog requirements.                                                            |
-| Column type and default DDL                        | :warning:          | Top-level type promotions and `SET/DROP DEFAULT`; defaults require format version 3 and typed literals. See [Table DDL](#table-ddl).                                                                        |
+| Column type and default DDL                        | :warning:          | Supported column changes include nested type promotions and `SET/DROP DEFAULT`; defaults require format version 3 and typed literals. See [Table DDL](#table-ddl).                                          |
 | Commit conflict handling                           | :warning:          | Validates metadata requirements and the expected snapshot, with limited metadata publication retries. Row-level conflicts require replanning, including with `snapshot` isolation.                          |
 
 ## Table DDL
@@ -46,33 +47,51 @@ DDL support varies by catalog provider. See the [Iceberg DDL support matrix](../
 
 ## DML Operations
 
-Copy-on-write rewrites affected data files, while merge-on-read records deletes separately. Sail uses copy-on-write by default for `DELETE`, `UPDATE`, and `MERGE INTO`. The `write.delete.mode`, `write.update.mode`, and `write.merge.mode` table properties let you choose a mode for each operation. For merge-on-read, version 2 `MERGE` uses Parquet position-delete files, while version 3 DML uses Puffin deletion vectors.
+Copy-on-write rewrites affected data files, while merge-on-read records deletes separately. Sail uses copy-on-write by default for `DELETE`, `UPDATE`, and `MERGE INTO`. The `write.delete.mode`, `write.update.mode`, and `write.merge.mode` table properties let you choose a mode for each operation. For merge-on-read, version 2 `UPDATE` and `MERGE` use Parquet position-delete files, while version 3 DML uses Puffin deletion vectors.
 
 | Operation                                       | Copy-on-write (v1–v3) | Merge-on-read (v2) | Merge-on-read (v3) | Notes                                                                                                                                                                                  |
 | ----------------------------------------------- | --------------------- | ------------------ | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DELETE`                                        | :white_check_mark:    | :warning:          | :white_check_mark: | V2 uses equality-delete files on unpartitioned tables, with all columns as equality keys. Nested, floating-point, `unknown`, and `variant` fields are unsupported in that writer path. |
-| `UPDATE`                                        | :white_check_mark:    | :construction:     | :white_check_mark: | V3 merge-on-read supports updates that move rows between partitions.                                                                                                                   |
+| `UPDATE`                                        | :white_check_mark:    | :white_check_mark: | :white_check_mark: | Writes replacement rows and records deleted positions. V3 supports updates that move rows between partitions.                                                                          |
 | `MERGE INTO` with inserts, updates, and deletes | :white_check_mark:    | :white_check_mark: | :white_check_mark: | Matched, insert, and `WHEN NOT MATCHED BY SOURCE` clauses. Multiple source matches cannot update one target row.                                                                       |
 | `MERGE WITH SCHEMA EVOLUTION`                   | :construction:        | :construction:     | :construction:     | —                                                                                                                                                                                      |
 
-When metadata shows that a delete removes every row in a file, Sail removes the file reference directly, including for partitioned tables. Version 3 merge-on-read works with partitioned and non-partitioned tables. Merge-on-read `UPDATE` (version 3) and `MERGE` (versions 2 and 3) append replacement data for updated rows.
+When metadata shows that a delete removes every row in a file, Sail removes the file reference directly, including for partitioned tables. Version 3 merge-on-read works with partitioned and non-partitioned tables. Merge-on-read `UPDATE` and `MERGE` (versions 2 and 3) append replacement data for updated rows.
+
+| Additional operation | Supported          | Notes                                                                         |
+| -------------------- | ------------------ | ----------------------------------------------------------------------------- |
+| `TRUNCATE TABLE`     | :white_check_mark: | Removes current data-file references; retains historical snapshots and files. |
 
 ## Metadata, Schema, and Layout
 
 Across the supported format versions, Sail reads and writes table metadata, tracks fields by ID, and uses available partition and file metrics when planning queries. The table below lists the details and limits.
 
-| Feature                                                  | Supported          | Notes                                                                                                                                             |
-| -------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Table metadata, snapshots, manifest lists, and manifests | :white_check_mark: | Reads and writes the supported version-specific fields.                                                                                           |
-| Field IDs and schema history                             | :white_check_mark: | Resolves evolved columns by ID, including nested fields.                                                                                          |
-| Partition transforms                                     | :white_check_mark: | Identity, bucket, truncate, year, month, day, and hour. Existing void transforms are handled.                                                     |
-| Partition evolution                                      | :warning:          | Reads existing specs and writes using the current spec. Schema-replacing overwrite can change partitioning. No partition-evolution DDL.           |
-| Sort orders                                              | :warning:          | Honors supported existing single-source sort transforms and records sort-order IDs on data files. No sort-order DDL or multi-argument transforms. |
-| Column metrics                                           | :white_check_mark: | Uses file counts, null counts, bounds, and other available metrics for planning.                                                                  |
-| NaN value counts                                         | :warning:          | Reads existing counts. The data writer does not populate `nan_value_counts`.                                                                      |
-| Name mapping                                             | :white_check_mark: | Reads imported files without field IDs using an existing `schema.name-mapping.default`.                                                           |
-| Statistics-file generation and query use                 | :construction:     | Preserves existing statistics-file metadata. No statistics-file creation or query consumption.                                                    |
-| Snapshot/reference history                               | :white_check_mark: | Preserves history and reads existing refs.                                                                                                        |
+| Feature                                                  | Supported          | Notes                                                                                                                                                   |
+| -------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Table metadata, snapshots, manifest lists, and manifests | :white_check_mark: | Reads and writes the supported version-specific fields.                                                                                                 |
+| Identifier fields                                        | :white_check_mark: | Metadata only; does not enforce uniqueness.                                                                                                             |
+| Field IDs and schema history                             | :white_check_mark: | Resolves evolved columns by ID, including nested fields.                                                                                                |
+| Partition transforms                                     | :white_check_mark: | Identity, bucket, truncate, year, month, day, and hour. Existing void transforms are handled.                                                           |
+| Partition evolution                                      | :warning:          | Reads existing specs and writes using the current spec. Supports `ADD`, `DROP`, and `REPLACE PARTITION FIELD`; older files retain their original specs. |
+| Sort orders                                              | :warning:          | `WRITE ORDERED BY`, `WRITE LOCALLY ORDERED BY`, `WRITE UNORDERED`, and `WRITE DISTRIBUTED BY PARTITION`; single-source transforms.                      |
+| Column metrics                                           | :white_check_mark: | Uses file counts, null counts, bounds, and other available metrics for planning.                                                                        |
+| NaN value counts                                         | :warning:          | Reads existing counts. The data writer does not populate `nan_value_counts`.                                                                            |
+| Name mapping                                             | :white_check_mark: | Reads imported files without field IDs using an existing `schema.name-mapping.default`.                                                                 |
+| Statistics-file generation and query use                 | :construction:     | Preserves existing statistics-file metadata. No statistics-file creation or query consumption.                                                          |
+| Snapshot/reference history                               | :white_check_mark: | Preserves history and reads existing refs.                                                                                                              |
+
+### Metadata Tables
+
+Query with SQL or `spark.table()`, for example `SELECT * FROM users.snapshots`.
+
+| Metadata table         | Supported          |
+| ---------------------- | ------------------ |
+| `files`                | :white_check_mark: |
+| `history`              | :white_check_mark: |
+| `metadata_log_entries` | :white_check_mark: |
+| `snapshots`            | :white_check_mark: |
+| `refs`                 | :white_check_mark: |
+| `manifests`            | :white_check_mark: |
 
 ## Version 2: Delete Files
 
@@ -80,7 +99,7 @@ Across the supported format versions, Sail reads and writes table metadata, trac
 | ------------------------------------ | ------------------ | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Sequence numbers and inheritance     | :white_check_mark: | :white_check_mark: | Used to determine delete applicability.                                                                                                             |
 | Manifest and data-file content types | :white_check_mark: | :white_check_mark: | Distinguishes data, equality deletes, and position deletes.                                                                                         |
-| Position-delete files                | :white_check_mark: | :warning:          | Written by version 2 merge-on-read `MERGE`. Existing files can still be read after an upgrade to version 3.                                         |
+| Position-delete files                | :white_check_mark: | :warning:          | Written by version 2 merge-on-read `UPDATE` and `MERGE`. Existing files can still be read after an upgrade to version 3.                            |
 | Equality-delete files                | :white_check_mark: | :warning:          | Written by version 2 merge-on-read `DELETE`. Reads bind keys by field ID and apply partition/sequence rules. See [DML Operations](#dml-operations). |
 | Delete-aware scan planning           | :white_check_mark: | :construction:     | Applies supported deletes before returning rows, including scans with a limit.                                                                      |
 
@@ -102,15 +121,19 @@ Across the supported format versions, Sail reads and writes table metadata, trac
 
 Sail works with filesystem-backed tables and tables in [Iceberg REST](../../catalog/iceberg-rest), [AWS Glue](../../catalog/glue), or [Hive Metastore](../../catalog/hms). For a catalog-backed table, use its catalog name so reads follow the catalog metadata location and commits publish new metadata through the catalog.
 
-| Feature                            | Supported          | Notes                                                                                                                  |
-| ---------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| Catalog-backed reads and commits   | :white_check_mark: | Uses the catalog metadata pointer. Filesystem discovery and `version-hint.text` cannot replace it.                     |
-| Iceberg REST views                 | :warning:          | Create, load, list, and drop when the server provides those endpoints. Other lifecycle operations are not implemented. |
-| Iceberg SQL UDF specification      | :construction:     | —                                                                                                                      |
-| Snapshot expiration                | :construction:     | —                                                                                                                      |
-| Data-file compaction               | :construction:     | `rewrite_data_files`.                                                                                                  |
-| Position-delete rewrite procedures | :construction:     | —                                                                                                                      |
-| Multi-table atomic transactions    | :construction:     | —                                                                                                                      |
-| Z-order clustering                 | :construction:     | —                                                                                                                      |
-| Write-audit-publish                | :construction:     | —                                                                                                                      |
-| Streaming reads and writes         | :construction:     | —                                                                                                                      |
+| Feature                                     | Supported          | Notes                                                                                                                  |
+| ------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| Catalog-backed reads and commits            | :white_check_mark: | Uses the catalog metadata pointer. Filesystem discovery and `version-hint.text` cannot replace it.                     |
+| Iceberg REST views                          | :warning:          | Create, load, list, and drop when the server provides those endpoints. Other lifecycle operations are not implemented. |
+| Iceberg SQL UDF specification               | :construction:     | —                                                                                                                      |
+| Snapshot expiration and orphan-file cleanup | :construction:     | Retention metadata does not perform cleanup.                                                                           |
+| Manifest rewrite and statistics computation | :construction:     | —                                                                                                                      |
+| Data-file compaction                        | :warning:          | `rewrite_data_files`: main-branch binpack.                                                                             |
+| Snapshot inspection and management          | :white_check_mark: | `ancestors_of`, `rollback_to_snapshot`, `rollback_to_timestamp`, `set_current_snapshot`, and `fast_forward`.           |
+| Position-delete rewrite procedures          | :construction:     | —                                                                                                                      |
+| Multi-table atomic transactions             | :construction:     | —                                                                                                                      |
+| Z-order clustering                          | :construction:     | —                                                                                                                      |
+| Write-audit-publish                         | :construction:     | —                                                                                                                      |
+| Streaming reads and writes                  | :construction:     | —                                                                                                                      |
+
+Use SQL `CALL` for the supported procedures; see [maintenance examples](./examples#metadata-and-maintenance).

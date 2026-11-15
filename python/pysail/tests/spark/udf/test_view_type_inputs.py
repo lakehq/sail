@@ -56,7 +56,7 @@ def test_arrow_optimized_udf_normalizes_nested_view_types(view_type_df):
     assert actual == [Row(id=id_, value=value) for id_, value, _ in VALUES[:2]]
 
 
-@pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udf requires PySpark 4.1+")
+@pytest.mark.spark(version=">=4.1", reason="Uses arrow_udf")
 @pytest.mark.parametrize("use_large", [False, True])
 def test_arrow_udf_receives_spark_boundary_types(spark, view_type_df, use_large):
     from pyspark.sql.functions import arrow_udf
@@ -122,7 +122,7 @@ def test_map_udfs_normalize_view_types(view_type_df):
         assert arrow_rows == expected_rows()
 
 
-@pytest.mark.skipif(pyspark_version() < (4, 1), reason="UDTF table arguments require PySpark 4.1+")
+@pytest.mark.spark(version=">=4.1", reason="Uses UDTF table arguments")
 @pytest.mark.parametrize("use_arrow", [False, True])
 def test_udtf_normalizes_view_type_table_argument(spark, view_type_df, use_arrow):
     @udtf(returnType="id int, value binary, text string", useArrow=use_arrow)
@@ -134,7 +134,7 @@ def test_udtf_normalizes_view_type_table_argument(spark, view_type_df, use_arrow
     assert run_table_udtf(spark, view_type_df, name, Echo) == expected_rows()
 
 
-@pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udtf requires PySpark 4.1+")
+@pytest.mark.spark(version=">=4.1", reason="Uses arrow_udtf")
 @pytest.mark.parametrize("use_large", [False, True])
 def test_arrow_udtf_receives_spark_boundary_types(spark, view_type_df, use_large):
     from pyspark.sql.functions import arrow_udtf
@@ -165,7 +165,7 @@ def test_arrow_udtf_receives_spark_boundary_types(spark, view_type_df, use_large
         spark.conf.set(key, previous)
 
 
-@pytest.mark.skipif(pyspark_version() < (4, 1), reason="UDTF analyze requires PySpark 4.1+")
+@pytest.mark.spark(version=">=4.1", reason="Tests UDTF analysis of table arguments")
 def test_udtf_analyze_normalizes_view_type_table_argument(spark, view_type_df):
     from pyspark.sql.udtf import AnalyzeArgument, AnalyzeResult
 

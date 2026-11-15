@@ -54,12 +54,9 @@ impl PlanResolver<'_> {
             let plan_id = ref_plan
                 .plan_id
                 .ok_or_else(|| PlanError::invalid("subquery reference missing plan_id"))?;
-            if state.insert_subquery_reference(plan_id, ref_plan).is_some() {
-                return Err(PlanError::invalid(format!(
-                    "duplicate subquery reference for plan_id {}",
-                    plan_id
-                )));
-            }
+            // A plan can be referenced more than once, e.g. when a scalar subquery column
+            // is used twice. As in Spark, the last reference for a plan ID is used.
+            state.insert_subquery_reference(plan_id, ref_plan);
         }
         self.resolve_command_plan(root, scope.state()).await
     }

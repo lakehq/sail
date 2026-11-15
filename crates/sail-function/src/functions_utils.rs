@@ -1,57 +1,14 @@
 /// [Credit]: <https://github.com/apache/datafusion/blob/e6e1eb229440591263c82bb2b913a4d5a16f9b70/datafusion/functions/src/utils.rs>
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::sync::Arc;
 
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::ArrowNativeType;
+use arrow_schema::DataType;
 use datafusion::arrow::array::ArrayRef;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::ColumnarValue;
 use datafusion_expr::function::Hint;
-use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
-
-/// Creates a scalar function implementation for the given function.
-/// * `inner` - the function to be executed
-/// * `hints` - hints to be used when expanding scalars to arrays
-pub(super) fn make_scalar_function<F>(inner: F, hints: Vec<Hint>) -> ScalarFunctionImplementation
-where
-    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
-{
-    Arc::new(move |args: &[ColumnarValue]| {
-        // first, identify if any of the arguments is an Array. If yes, store its `len`,
-        // as any scalar will need to be converted to an array of len `len`.
-        let len = args
-            .iter()
-            .fold(Option::<usize>::None, |acc, arg| match arg {
-                ColumnarValue::Scalar(_) => acc,
-                ColumnarValue::Array(a) => Some(a.len()),
-            });
-
-        let is_scalar = len.is_none();
-
-        let inferred_length = len.unwrap_or(1);
-        let args = args
-            .iter()
-            .zip(hints.iter().chain(std::iter::repeat(&Hint::Pad)))
-            .map(|(arg, hint)| {
-                // Decide on the length to expand this scalar to depending
-                // on the given hints.
-                let expansion_len = match hint {
-                    Hint::AcceptsSingular => 1,
-                    Hint::Pad => inferred_length,
-                };
-                arg.to_array(expansion_len)
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let result = (inner)(&args);
-        if is_scalar {
-            // If all inputs are scalar, keeps output as scalar
-            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
-            result.map(ColumnarValue::Scalar)
-        } else {
-            result.map(ColumnarValue::Array)
-        }
-    })
-}
 
 /// Cap on memoized entries. A compiled `Regex` holds roughly 75 KiB once
 /// used, so memoizing a whole batch of unique patterns would pin hundreds of
@@ -118,13 +75,257 @@ impl<'a, T> StrMemo<'a, T> {
     }
 }
 
+// TODO: Remove all usage of `make_scalar_function` and implement `ScalarUDFImpl` directly.
+/// Creates a scalar function implementation for the given function.
+/// * `inner` - the function to be executed
+/// * `hints` - hints to be used when expanding scalars to arrays
+pub(super) fn make_scalar_function<F>(
+    inner: F,
+    hints: Vec<Hint>,
+) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue>
+where
+    F: Fn(&[ArrayRef]) -> Result<ArrayRef>,
+{
+    move |args: &[ColumnarValue]| {
+        // first, identify if any of the arguments is an Array. If yes, store its `len`,
+        // as any scalar will need to be converted to an array of len `len`.
+        let len = args
+            .iter()
+            .fold(Option::<usize>::None, |acc, arg| match arg {
+                ColumnarValue::Scalar(_) => acc,
+                ColumnarValue::Array(a) => Some(a.len()),
+            });
+
+        let is_scalar = len.is_none();
+
+        let inferred_length = len.unwrap_or(1);
+        let args = args
+            .iter()
+            .zip(hints.iter().chain(std::iter::repeat(&Hint::Pad)))
+            .map(|(arg, hint)| {
+                // Decide on the length to expand this scalar to depending
+                // on the given hints.
+                let expansion_len = match hint {
+                    Hint::AcceptsSingular => 1,
+                    Hint::Pad => inferred_length,
+                };
+                arg.to_array(expansion_len)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let result = (inner)(&args);
+        if is_scalar {
+            // If all inputs are scalar, keeps output as scalar
+            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
+            result.map(ColumnarValue::Scalar)
+        } else {
+            result.map(ColumnarValue::Array)
+        }
+    }
+}
+
+// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/common/src/utils/mod.rs#L1226-L1235
+/// Returns the number of values covered by an offset buffer.
+///
+/// Slicing a variable-length array narrows its offsets but retains its entire
+/// values buffer. Use this span to size output buffers: it counts child elements
+/// for lists and bytes for strings/binary arrays, including values in null rows.
+/// An empty array still has one offset and therefore a span of zero.
+#[inline]
+pub fn offset_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> usize {
+    offset_span(offsets).1
+}
+
+// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/common/src/utils/mod.rs#L1237-L1254
+/// Returns the start and length of the values covered by an offset buffer.
+///
+/// The returned pair can be passed to [`Array::slice`] to select the visible
+/// child values of a sliced list or map. For strings/binary arrays, the start
+/// and length are measured in bytes. Values in null rows are included.
+/// An empty array has a length of zero but may have a nonzero start.
+#[inline]
+pub fn offset_span<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> (usize, usize) {
+    // TODO: Uncomment after DataFusion 56
+    // let start = offsets.first().as_usize();
+    // (start, offsets.last().as_usize() - start)
+    let start = offsets[0].as_usize();
+    (start, offsets[offsets.len() - 1].as_usize() - start)
+}
+
+// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/utils.rs#L21-L67
+/// Creates a function to identify the optimal return type of a string function given
+/// the type of its first argument.
+///
+/// If the input type is `LargeUtf8` or `LargeBinary` the return type is
+/// `$largeUtf8Type`,
+///
+/// If the input type is `Utf8` or `Binary` the return type is `$utf8Type`,
+///
+/// If the input type is `Utf8View`, `BinaryView` or `FixedSizeBinary` the
+/// return type is `$utf8Type`,
+macro_rules! get_optimal_return_type {
+    ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
+        pub(crate) fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
+            Ok(match arg_type {
+                // LargeBinary inputs are automatically coerced to Utf8
+                DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
+                // Binary inputs are automatically coerced to Utf8
+                DataType::Utf8 | DataType::Binary => $utf8Type,
+                // Utf8View max offset size is u32::MAX, the same as UTF8
+                DataType::Utf8View | DataType::BinaryView => $utf8Type,
+                // FixedSizeBinary sizes are declared as i32
+                DataType::FixedSizeBinary(_) => $utf8Type,
+                DataType::Null => DataType::Null,
+                DataType::Dictionary(_, value_type) => match **value_type {
+                    DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
+                    DataType::Utf8 | DataType::Binary => $utf8Type,
+                    DataType::FixedSizeBinary(_) => $utf8Type,
+                    DataType::Null => DataType::Null,
+                    _ => {
+                        return datafusion_common::exec_err!(
+                            "The {} function can only accept strings, but got {:?}.",
+                            name.to_uppercase(),
+                            **value_type
+                        );
+                    }
+                },
+                data_type => {
+                    return datafusion_common::exec_err!(
+                        "The {} function can only accept strings, but got {:?}.",
+                        name.to_uppercase(),
+                        data_type
+                    );
+                }
+            })
+        }
+    };
+}
+
+// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/utils.rs#L69-L70
+// `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.
+get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::cell::Cell;
 
     use datafusion_common::exec_err;
 
     use super::*;
+
+    /// $FUNC ScalarUDFImpl to test
+    /// $ARGS arguments (vec) to pass to function
+    /// $EXPECTED a Result<ColumnarValue>
+    /// $EXPECTED_TYPE is the expected value type
+    /// $EXPECTED_DATA_TYPE is the expected result type
+    /// $ARRAY_TYPE is the column type after function applied
+    /// $CONFIG_OPTIONS config options to pass to function
+    macro_rules! test_function {
+    ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident, $CONFIG_OPTIONS:expr) => {
+        let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
+        let func = $FUNC;
+
+        let data_array = $ARGS.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
+        let cardinality = $ARGS
+            .iter()
+            .fold(Option::<usize>::None, |acc, arg| match arg {
+                ColumnarValue::Scalar(_) => acc,
+                ColumnarValue::Array(a) => Some(a.len()),
+            })
+            .unwrap_or(1);
+
+            let scalar_arguments = $ARGS.iter().map(|arg| match arg {
+                ColumnarValue::Scalar(scalar) => Some(scalar.clone()),
+                ColumnarValue::Array(_) => None,
+            }).collect::<Vec<_>>();
+            let scalar_arguments_refs = scalar_arguments.iter().map(|arg| arg.as_ref()).collect::<Vec<_>>();
+
+            let nullables = $ARGS.iter().map(|arg| match arg {
+                ColumnarValue::Scalar(scalar) => scalar.is_null(),
+                ColumnarValue::Array(a) => a.null_count() > 0,
+            }).collect::<Vec<_>>();
+
+            let field_array = data_array.into_iter().zip(nullables).enumerate()
+                .map(|(idx, (data_type, nullable))| arrow::datatypes::Field::new(format!("field_{idx}"), data_type, nullable))
+            .map(std::sync::Arc::new)
+            .collect::<Vec<_>>();
+
+        let return_field = func.return_field_from_args(datafusion_expr::ReturnFieldArgs {
+            arg_fields: &field_array,
+            scalar_arguments: &scalar_arguments_refs,
+        });
+            let arg_fields = $ARGS.iter()
+            .enumerate()
+                .map(|(idx, arg)| arrow::datatypes::Field::new(format!("f_{idx}"), arg.data_type(), true).into())
+            .collect::<Vec<_>>();
+
+        match expected {
+            Ok(expected) => {
+                assert_eq!(return_field.is_ok(), true);
+                let return_field = return_field.unwrap();
+                let return_type = return_field.data_type();
+                assert_eq!(return_type, &$EXPECTED_DATA_TYPE);
+
+                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{
+                    args: $ARGS,
+                    arg_fields,
+                    number_rows: cardinality,
+                    return_field,
+                        config_options: $CONFIG_OPTIONS
+                });
+                    assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
+
+                    let result = result.unwrap().to_array(cardinality).expect("Failed to convert to array");
+                    let result = result.as_any().downcast_ref::<$ARRAY_TYPE>().expect("Failed to convert to type");
+                assert_eq!(result.data_type(), &$EXPECTED_DATA_TYPE);
+
+                // value is correct
+                match expected {
+                    Some(v) => assert_eq!(result.value(0), v),
+                    None => assert!(result.is_null(0)),
+                };
+            }
+            Err(expected_error) => {
+                if let Ok(return_field) = return_field {
+                    // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
+                    match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs {
+                        args: $ARGS,
+                        arg_fields,
+                        number_rows: cardinality,
+                        return_field,
+                        config_options: $CONFIG_OPTIONS,
+                    }) {
+                        Ok(_) => assert!(false, "expected error"),
+                        Err(error) => {
+                            assert!(expected_error
+                                .strip_backtrace()
+                                .starts_with(&error.strip_backtrace()));
+                        }
+                    }
+                } else if let Err(error) = return_field {
+                    datafusion_common::assert_contains!(
+                        expected_error.strip_backtrace(),
+                        error.strip_backtrace()
+                    );
+                }
+            }
+        };
+    };
+
+        ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident) => {
+            test_function!(
+                $FUNC,
+                $ARGS,
+                $EXPECTED,
+                $EXPECTED_TYPE,
+                $EXPECTED_DATA_TYPE,
+                $ARRAY_TYPE,
+                std::sync::Arc::new(datafusion_common::config::ConfigOptions::default())
+            )
+        };
+    }
+
+    pub(crate) use test_function;
 
     #[test]
     fn str_memo_computes_each_distinct_key_once_and_does_not_cache_errors() -> Result<()> {

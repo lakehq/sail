@@ -14,3 +14,4 @@ pub mod spark_array_sort;
 pub mod spark_array_transform;
 pub mod spark_array_zip_with;
 pub mod spark_sequence;
+pub mod spark_shuffle;

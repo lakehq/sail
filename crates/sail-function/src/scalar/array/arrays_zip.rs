@@ -14,7 +14,7 @@ use datafusion_expr::{
 };
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
-use crate::scalar::struct_function::to_struct_array;
+use crate::scalar::r#struct::struct_function::to_struct_array;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ArraysZip {

@@ -9,6 +9,7 @@ use sail_common::actor::ActorSystem;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
+use sail_common_datafusion::extension::SessionExtension;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_plan::catalog::SparkCatalogObjectDisplay;
 use sail_plan::formatter::SparkPlanFormatter;
@@ -19,6 +20,16 @@ use sail_session::session_manager::{SessionManager, create_session_manager};
 
 use crate::error::FlightError;
 
+pub(crate) struct FlightSession {
+    pub session_id: String,
+}
+
+impl SessionExtension for FlightSession {
+    fn name() -> &'static str {
+        "flight session"
+    }
+}
+
 pub struct FlightSessionMutator {
     #[expect(dead_code)]
     config: Arc<AppConfig>,
@@ -28,13 +39,18 @@ impl ServerSessionMutator for FlightSessionMutator {
     fn mutate_config(
         &self,
         config: SessionConfig,
-        _info: &ServerSessionInfo,
+        info: &ServerSessionInfo,
     ) -> Result<SessionConfig> {
         let plan_service = PlanService::new(
             Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
             Box::new(SparkPlanFormatter),
         );
-        Ok(config.with_extension(Arc::new(plan_service)))
+        let session = FlightSession {
+            session_id: info.session_id.clone(),
+        };
+        Ok(config
+            .with_extension(Arc::new(plan_service))
+            .with_extension(Arc::new(session)))
     }
 
     fn mutate_state(

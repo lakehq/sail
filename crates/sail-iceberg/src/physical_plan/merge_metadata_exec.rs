@@ -127,7 +127,7 @@ impl IcebergMergeMetadataExec {
             .flatten();
         let metadata_columns =
             RowLevelMetadataColumns::new(appended_file_column, row_index_column_name.as_deref());
-        let metadata_columns = if data_file_path.is_some() {
+        let metadata_columns = if appended_file_column.is_some() {
             metadata_columns.with_delete_file_metadata()
         } else {
             metadata_columns
@@ -401,6 +401,86 @@ mod tests {
 
     use super::*;
     use crate::row_lineage::{LINEAGE_COLUMNS, RowLineage, lineage_fields};
+
+    #[tokio::test]
+    async fn unnamed_metadata_preserves_user_columns_and_materializes_physical_lineage()
+    -> Result<()> {
+        let names = [
+            MERGE_FILE_COLUMN,
+            MERGE_ROW_INDEX_COLUMN,
+            MERGE_PARTITION_SPEC_ID_COLUMN,
+            MERGE_FILE_METADATA_COLUMN,
+            "__sail_iceberg_row_position",
+        ];
+        let mut fields = names
+            .iter()
+            .map(|name| Arc::new(Field::new(*name, DataType::Utf8, false)))
+            .collect::<Vec<_>>();
+        fields.extend(lineage_fields());
+        let data_schema = Arc::new(Schema::new(fields.clone()));
+        fields.push(crate::row_level_metadata::parquet_row_position_field(
+            &data_schema,
+        ));
+        let input_schema = Arc::new(Schema::new(fields));
+        let mut columns = names
+            .iter()
+            .map(|name| Arc::new(StringArray::from(vec![*name; 3])) as ArrayRef)
+            .collect::<Vec<_>>();
+        columns.extend([
+            Arc::new(Int64Array::from(vec![None, Some(777), None])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![None, Some(2), None])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![0, 4, 9])) as ArrayRef,
+        ]);
+        let batch = RecordBatch::try_new(input_schema.clone(), columns)?;
+        for lineage in [
+            None,
+            Some(RowLineage {
+                first_row_id: Some(100),
+                data_sequence_number: 7,
+            }),
+        ] {
+            let input = MemorySourceConfig::try_new_exec(
+                &[vec![batch.slice(0, 2), batch.slice(2, 1)]],
+                input_schema.clone(),
+                None,
+            )?;
+            let plan = Arc::new(IcebergMergeMetadataExec::try_new(
+                input,
+                "data.parquet".to_string(),
+                0,
+                String::new(),
+                None,
+                None,
+                lineage,
+            )?);
+            assert_eq!(plan.schema(), data_schema);
+            let batches = collect(plan, Arc::new(TaskContext::default())).await?;
+            let output = concat_batches(&data_schema, &batches)?;
+            for index in 0..names.len() {
+                assert_eq!(output.column(index), batch.column(index));
+            }
+            let expected_ids = if lineage.is_some() {
+                vec![Some(100), Some(777), Some(109)]
+            } else {
+                vec![None, Some(777), None]
+            };
+            let expected_sequences = if lineage.is_some() {
+                vec![Some(7), Some(2), Some(7)]
+            } else {
+                vec![None, Some(2), None]
+            };
+            for (name, values) in LINEAGE_COLUMNS
+                .into_iter()
+                .zip([expected_ids, expected_sequences])
+            {
+                assert_eq!(
+                    output.column(data_schema.index_of(name)?).as_ref(),
+                    &Int64Array::from(values) as &dyn Array,
+                );
+            }
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn partitioned_lineage_uses_reader_positions_across_batches() -> Result<()> {

@@ -79,7 +79,25 @@ message ExtendedPhysicalPlanNode {
     InputFileMetadataExecNode input_file_metadata = 64;
     DeltaMaintenanceExecNode delta_maintenance = 65;
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
+    SeededRandomExecNode seeded_random = 67;
+    IdentityGenerateExecNode identity_generate = 68;
+    TailExecNode tail = 69;
   }
+}
+
+message IdentityGenerateExecNode {
+  bytes input = 1;
+  repeated IdentityGenerateColumn columns = 2;
+  uint64 allocation_partitions = 3;
+}
+
+message IdentityGenerateColumn {
+  string output = 1;
+  optional uint64 mask_index = 2;
+  sint64 start = 3;
+  sint64 step = 4;
+  optional sint64 high_water_mark = 5;
+  string column_name = 6;
 }
 
 message InputFileMetadataExecNode {
@@ -115,7 +133,14 @@ message ExtendedPhysicalExprNode {
     LambdaVariableExprNode lambda_variable = 4;
     IcebergPartitionTransformExprNode iceberg_partition_transform = 5;
     SchemaEvolutionDefaultExprNode schema_evolution_default = 6;
+    Float16LiteralExprNode float16_literal = 7;
   }
+}
+
+message Float16LiteralExprNode {
+  // Absent means null; otherwise the raw IEEE 754 binary16 bits (0..65535).
+  optional uint32 bits = 1;
+  map<string, string> metadata = 2;
 }
 
 message SchemaEvolutionDefaultExprNode {
@@ -171,10 +196,13 @@ message HigherOrderUdf {
     SparkRegexpInstrUdf regexp_instr = 10;
     SparkTransformValuesUdf transform_values = 11;
     SparkTransformKeysUdf transform_keys = 12;
-    SparkMapZipWithUdf map_zip_with = 13;
-    SparkArrayZipWithUdf zip_with = 14;
+    CoalesceLazyUdf coalesce_lazy = 13;
+    SparkMapZipWithUdf map_zip_with = 14;
+    SparkArrayZipWithUdf zip_with = 15;
   }
 }
+
+message CoalesceLazyUdf {}
 
 message SparkMapZipWithUdf {
   bool ansi_mode = 1;
@@ -278,6 +306,9 @@ message ExtendedScalarUdf {
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
     SparkToStringUdf spark_to_string = 40;
+    UuidCastUdf uuid_cast = 41;
+    SparkIntervalUdf spark_interval = 42;
+    SparkSchemaOfXmlUdf spark_schema_of_xml = 43;
   }
 }
 
@@ -303,11 +334,26 @@ message ExtendedAggregateUdf {
     PySparkGroupMapUdaf py_spark_group_map = 3;
     PySparkBatchCollectorUdaf py_spark_batch_collector = 4;
     PercentileDiscUdaf percentile_disc = 5;
+    ArrayAggUdaf array_agg = 6;
+    FirstValueUdaf first_value = 7;
+    LastValueUdaf last_value = 8;
   }
 }
 
 message PercentileDiscUdaf {
   bool ansi_mode = 1;
+}
+
+message ArrayAggUdaf {
+  bool is_input_pre_ordered = 1;
+}
+
+message FirstValueUdaf {
+  bool is_input_pre_ordered = 1;
+}
+
+message LastValueUdaf {
+  bool is_input_pre_ordered = 1;
 }
 
 message StandardUdf {}
@@ -456,6 +502,17 @@ message SparkNegativeUdf {
 
 message SparkFromCsvUdf {
   string session_timezone = 1;
+}
+
+message SparkIntervalUdf {
+  // SparkIntervalMetadata JSON, decoded once when reconstructing the UDF.
+  optional string qualifier = 1;
+  bool safe = 2;
+}
+
+message UuidCastUdf {
+  bytes target = 1;
+  bool safe = 2;
 }
 
 message SparkStructRenameUdf {
@@ -706,6 +763,11 @@ message SystemTableExecNode {
   optional uint64 fetch = 4;
 }
 
+message TailExecNode {
+  bytes input = 1;
+  uint64 fetch = 2;
+}
+
 message SchemaPivotExecNode {
   bytes input = 1;
   repeated string names = 2;
@@ -859,6 +921,8 @@ message DeltaSnapshotContext {
 
 message DeltaCommitContext {
   optional DeltaSnapshotContext base_snapshot = 1;
+  repeated string identity_columns_to_track = 2;
+  optional uint64 identity_writer_partitions = 3;
 }
 
 message DeltaWriteContext {
@@ -1018,6 +1082,23 @@ message SparkPartitionIdExecNode {
   bytes schema = 3;
 }
 
+message SeededRandomExecNode {
+  bytes input = 1;
+  repeated SeededRandomColumn columns = 2;
+  bytes schema = 3;
+}
+
+message SeededRandomColumn {
+  string name = 1;
+  bytes expr = 2;
+  PartitionSeed seed = 3;
+}
+
+enum PartitionSeed {
+  PARTITION_SEED_OFFSET = 0;
+  PARTITION_SEED_JAVA_RANDOM = 1;
+}
+
 message CoalesceExecNode {
   bytes input = 1;
   uint64 output_partitions = 2;
@@ -1121,12 +1202,16 @@ message IcebergCommitExecNode {
     CommandOutput command_output = 9;
     IcebergRewriteDataFilesOutput rewrite_data_files_output = 10;
   }
+  // Typed private replacement metadata and staged catalog identity, never a live guard.
+  optional string table_replacement_json = 11;
 }
 
 message IcebergRewriteDataFilesOutput {
   bytes schema = 1;
   int32 rewritten_data_files_count = 2;
   int64 rewritten_bytes_count = 3;
+  // V2 pins the starting data sequence; V3 inherits the new commit sequence.
+  optional int64 starting_sequence_number = 4;
 }
 
 message IcebergManifestScanExecNode {
@@ -1338,4 +1423,9 @@ message DeltaOptimizeRewriteExecNode {
 
 message DeltaOptimizeGroupAssignment {
   repeated uint64 groups = 1;
+}
+
+message SparkSchemaOfXmlUdf {
+  bool case_sensitive = 1;
+  bool timestamp_ntz = 2;
 }

@@ -127,12 +127,13 @@ impl PlanResolver<'_> {
         mut query: LogicalPlan,
         state: &mut PlanResolverState,
     ) -> PlanResult<Expr> {
-        use datafusion::functions_aggregate::expr_fn::{count, first_value};
+        use datafusion::functions_aggregate::expr_fn::count;
         use datafusion_common::Column;
         use datafusion_expr::{LogicalPlanBuilder, ScalarUDF, lit};
         use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
+        use sail_function::aggregate::first_last::first_value;
         use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
-        use sail_function::scalar::struct_function::StructFunction;
+        use sail_function::scalar::r#struct::struct_function::StructFunction;
         if query.all_out_ref_exprs().is_empty() || query.schema().fields().len() != 1 {
             return Ok(expr_fn::scalar_subquery(Arc::new(query)));
         }
@@ -256,7 +257,7 @@ impl PlanResolver<'_> {
             .aggregate(
                 Vec::<Expr>::new(),
                 vec![
-                    first_value(Expr::Column(output.clone()), order).alias(&value_name),
+                    first_value(Expr::Column(output.clone()), order)?.alias(&value_name),
                     count(lit(1_i64)).alias(&count_name),
                 ],
             )?

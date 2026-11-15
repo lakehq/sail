@@ -4,8 +4,6 @@ from pandas.testing import assert_frame_equal
 from pyspark.sql import Window
 from pyspark.sql.functions import PandasUDFType, pandas_udf
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
 
 def test_registered_pandas_grouped_agg_udf_as_window_function(spark):
     @pandas_udf("double", PandasUDFType.GROUPED_AGG)
@@ -32,7 +30,7 @@ def test_registered_pandas_grouped_agg_udf_as_window_function(spark):
     assert_frame_equal(actual, expected)
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail only: error message differs from JVM Spark")
+@pytest.mark.spark(skip_if_jvm=True, reason="Tests a Sail error message that differs from JVM Spark")
 def test_registered_pandas_scalar_udf_rejected_as_window_function(spark):
     @pandas_udf("string", PandasUDFType.SCALAR)
     def my_upper(s):

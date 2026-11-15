@@ -2314,10 +2314,21 @@ impl std::future::IntoFuture for PostCommit {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
-    use object_store::ObjectStore;
+    use datafusion_common::DataFusionError;
+    use futures::stream::{self, BoxStream};
+    use futures::{StreamExt, TryStreamExt};
     use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::prefix::PrefixStore;
+    use object_store::{
+        CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
+        ObjectMeta, ObjectStore, PutMultipartOptions, PutPayload, PutResult,
+    };
+    use sail_common_datafusion::error::{
+        CommitStateUnknownError, CommonErrorCause, PythonErrorCause, PythonErrorCauseExtractor,
+    };
     use url::Url;
 
     use super::*;
@@ -2325,8 +2336,8 @@ mod tests {
     use crate::schema::protocol_for_create;
     use crate::spec::{
         Action, Add, CommitAction, CommitInfo, DataType, DeletionVectorDescriptor, DeltaError,
-        DomainMetadata, Metadata, Protocol, Remove, SaveMode, StorageType, StructField, StructType,
-        TableFeature, VersionChecksum, checksum_path,
+        DomainMetadata, LastCheckpointHint, Metadata, Protocol, Remove, SaveMode, StorageType,
+        StructField, StructType, TableFeature, VersionChecksum, checksum_path, commit_path,
     };
 
     fn test_log_store(store: Arc<dyn ObjectStore>) -> LogStoreRef {
@@ -2336,6 +2347,734 @@ mod tests {
             &Url::parse("memory:///").unwrap(),
             &StorageConfig,
         )
+    }
+
+    #[derive(Debug)]
+    enum CommitPutFault {
+        Landed,
+        Collision(Bytes),
+        Denied,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum CommitReadFault {
+        Denied,
+        NotFound,
+        Body,
+    }
+
+    impl CommitReadFault {
+        fn error(self, path: &Path) -> ObjectStoreError {
+            let source = Box::new(std::io::Error::other("injected commit read failure"));
+            match self {
+                Self::Denied => ObjectStoreError::PermissionDenied {
+                    path: path.to_string(),
+                    source,
+                },
+                Self::NotFound => ObjectStoreError::NotFound {
+                    path: path.to_string(),
+                    source,
+                },
+                Self::Body => ObjectStoreError::Generic {
+                    store: "commit-body",
+                    source,
+                },
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct CommitFaultStore {
+        inner: Arc<dyn ObjectStore>,
+        target: Path,
+        fault: Mutex<Option<(CommitPutFault, Option<CommitReadFault>)>>,
+        read_fault: Mutex<Option<CommitReadFault>>,
+        puts: Mutex<Vec<(Path, Bytes)>>,
+        gets: Mutex<Vec<Path>>,
+        deletes: Arc<Mutex<Vec<Path>>>,
+    }
+
+    impl CommitFaultStore {
+        fn new(inner: Arc<dyn ObjectStore>, version: i64) -> Self {
+            Self {
+                inner,
+                target: commit_path(version),
+                fault: Mutex::new(None),
+                read_fault: Mutex::new(None),
+                puts: Mutex::new(Vec::new()),
+                gets: Mutex::new(Vec::new()),
+                deletes: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn arm(&self, put: CommitPutFault, read: Option<CommitReadFault>) {
+            *self.fault.lock().unwrap() = Some((put, read));
+        }
+
+        fn commit_attempts(&self) -> Vec<Path> {
+            self.puts
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(path, _)| {
+                    crate::delta_log::parse_commit_version_from_location(path).is_some()
+                })
+                .map(|(path, _)| path.clone())
+                .collect()
+        }
+
+        fn attempted_bytes(&self) -> Bytes {
+            self.puts
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(path, _)| path == &self.target)
+                .unwrap()
+                .1
+                .clone()
+        }
+    }
+
+    impl std::fmt::Display for CommitFaultStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "CommitFaultStore")
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for CommitFaultStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.puts
+                .lock()
+                .unwrap()
+                .push((location.clone(), payload.clone().into()));
+            let fault = if location == &self.target {
+                assert_eq!(opts.mode, PutMode::Create);
+                self.fault.lock().unwrap().take()
+            } else {
+                None
+            };
+            if let Some((fault, read_fault)) = fault {
+                let landed = match fault {
+                    CommitPutFault::Landed => payload.clone(),
+                    CommitPutFault::Collision(bytes) => bytes.into(),
+                    CommitPutFault::Denied => {
+                        return Err(ObjectStoreError::PermissionDenied {
+                            path: location.to_string(),
+                            source: Box::new(std::io::Error::other("injected commit put failure")),
+                        });
+                    }
+                };
+                self.inner.put_opts(location, landed, opts.clone()).await?;
+                *self.read_fault.lock().unwrap() = read_fault;
+                // Model the conditional retry after a landed PUT's response was lost.
+            }
+            self.inner.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            self.gets.lock().unwrap().push(location.clone());
+            let fault = (location == &self.target)
+                .then(|| *self.read_fault.lock().unwrap())
+                .flatten();
+            match fault {
+                Some(fault @ (CommitReadFault::Denied | CommitReadFault::NotFound)) => {
+                    Err(fault.error(location))
+                }
+                Some(CommitReadFault::Body) => {
+                    let result = self.inner.get_opts(location, options).await?;
+                    let error = CommitReadFault::Body.error(location);
+                    Ok(GetResult {
+                        meta: result.meta.clone(),
+                        range: result.range.clone(),
+                        attributes: result.attributes.clone(),
+                        // Even a complete matching first chunk must not hide a stream error.
+                        payload: GetResultPayload::Stream(
+                            result
+                                .into_stream()
+                                .chain(stream::once(async { Err(error) }))
+                                .boxed(),
+                        ),
+                    })
+                }
+                None => self.inner.get_opts(location, options).await,
+            }
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            let deletes = self.deletes.clone();
+            self.inner.delete_stream(
+                locations
+                    .map_ok(move |path| {
+                        deletes.lock().unwrap().push(path.clone());
+                        path
+                    })
+                    .boxed(),
+            )
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    struct NoPythonError;
+
+    impl PythonErrorCauseExtractor for NoPythonError {
+        fn extract(_: &(dyn std::error::Error + 'static)) -> Option<PythonErrorCause> {
+            None
+        }
+    }
+
+    #[expect(clippy::panic)]
+    fn assert_unknown_commit(error: TransactionError, fault: CommitReadFault, version: i64) {
+        let TransactionError::LogStoreError { msg, source } = &error else {
+            panic!("expected ambiguous outcome, got {error:?}");
+        };
+        assert!(msg.contains("commit outcome unknown; commit may have succeeded"));
+        assert!(msg.contains(&format!("version {version}")));
+        assert!(msg.contains(commit_path(version).as_ref()));
+        let marker = source.downcast_ref::<CommitStateUnknownError>().unwrap();
+        let original = std::error::Error::source(marker)
+            .unwrap()
+            .downcast_ref::<ObjectStoreError>()
+            .unwrap();
+        match (fault, original) {
+            (CommitReadFault::Denied, ObjectStoreError::PermissionDenied { path, .. })
+            | (CommitReadFault::NotFound, ObjectStoreError::NotFound { path, .. }) => {
+                assert_eq!(path, commit_path(version).as_ref());
+            }
+            (CommitReadFault::Body, ObjectStoreError::Generic { store, .. }) => {
+                assert_eq!(*store, "commit-body");
+            }
+            _ => panic!("original error was not preserved: {original:?}"),
+        }
+        assert_eq!(
+            std::error::Error::source(original).unwrap().to_string(),
+            "injected commit read failure"
+        );
+        let expected = format!("commit state unknown: {msg}: {original}");
+        let error = DataFusionError::from(DeltaError::from(error));
+        assert!(matches!(&error, DataFusionError::External(_)));
+        let cause = CommonErrorCause::new::<NoPythonError>(&error);
+        assert!(
+            matches!(&cause, CommonErrorCause::CommitStateUnknown(message) if message == &expected)
+        );
+        assert!(!cause.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn log_store_commit_compares_exact_bytes() {
+        let attempted = Bytes::from_static(b"{\"commitInfo\":{}}\n");
+        // A true collision must contain different bytes.
+        for existing in [
+            None,
+            Some(attempted.clone()),
+            Some(Bytes::from_static(b"{\"commitInfo\":{\"timestamp\":1}}\n")),
+            Some(Bytes::from_static(b"{ \"commitInfo\": {} }\n")),
+        ] {
+            let root = Arc::new(InMemory::new());
+            let prefixed = Arc::new(PrefixStore::new(root.clone(), "table"));
+            let store = Arc::new(CommitFaultStore::new(prefixed.clone(), 7));
+            let log_store = default_logstore(
+                store.clone(),
+                root.clone(),
+                &Url::parse("memory:///table").unwrap(),
+                &StorageConfig,
+            );
+            if let Some(bytes) = &existing {
+                prefixed
+                    .put(&commit_path(7), bytes.clone().into())
+                    .await
+                    .unwrap();
+            }
+            let result = log_store
+                .write_commit_entry(
+                    7,
+                    CommitOrBytes::LogBytes(attempted.clone()),
+                    Uuid::new_v4(),
+                )
+                .await;
+            if existing.as_ref().is_some_and(|bytes| bytes != &attempted) {
+                assert!(matches!(
+                    result,
+                    Err(TransactionError::VersionAlreadyExists(7))
+                ));
+                log_store
+                    .write_commit_entry(
+                        8,
+                        CommitOrBytes::LogBytes(attempted.clone()),
+                        Uuid::new_v4(),
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                result.unwrap();
+            }
+            assert_eq!(
+                *store.gets.lock().unwrap(),
+                if existing.is_some() {
+                    vec![commit_path(7)]
+                } else {
+                    vec![]
+                }
+            );
+            let persisted = root
+                .get(&Path::from("table/_delta_log/00000000000000000007.json"))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            assert_eq!(persisted, existing.unwrap_or_else(|| attempted.clone()));
+            assert!(store.deletes.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn log_store_landed_commit_is_success() {
+        let store = Arc::new(CommitFaultStore::new(Arc::new(InMemory::new()), 7));
+        let log_store = test_log_store(store.clone());
+        store.arm(CommitPutFault::Landed, None);
+        let bytes = Bytes::from_static(b"{\"commitInfo\":{}}\n");
+        log_store
+            .write_commit_entry(7, CommitOrBytes::LogBytes(bytes.clone()), Uuid::new_v4())
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .inner
+                .get(&commit_path(7))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+            bytes
+        );
+        assert_eq!(store.commit_attempts(), vec![commit_path(7)]);
+        assert_eq!(*store.gets.lock().unwrap(), vec![commit_path(7)]);
+        assert!(store.deletes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn log_store_commit_read_failures_are_unknown() {
+        for fault in [
+            CommitReadFault::Denied,
+            CommitReadFault::NotFound,
+            CommitReadFault::Body,
+        ] {
+            let store = Arc::new(CommitFaultStore::new(Arc::new(InMemory::new()), 7));
+            store.arm(CommitPutFault::Landed, Some(fault));
+            let error = test_log_store(store.clone())
+                .write_commit_entry(
+                    7,
+                    CommitOrBytes::LogBytes(Bytes::from_static(b"{}\n")),
+                    Uuid::new_v4(),
+                )
+                .await
+                .unwrap_err();
+            assert_unknown_commit(error, fault, 7);
+            assert_eq!(store.commit_attempts(), vec![commit_path(7)]);
+            assert_eq!(*store.gets.lock().unwrap(), vec![commit_path(7)]);
+            assert!(store.deletes.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn log_store_other_put_errors_are_unchanged() {
+        let store = Arc::new(CommitFaultStore::new(Arc::new(InMemory::new()), 7));
+        store.arm(CommitPutFault::Denied, None);
+        let error = test_log_store(store.clone())
+            .write_commit_entry(7, CommitOrBytes::LogBytes(Bytes::new()), Uuid::new_v4())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            TransactionError::ObjectStore {
+                source: ObjectStoreError::PermissionDenied { .. }
+            }
+        ));
+        assert!(store.gets.lock().unwrap().is_empty());
+        assert!(
+            store
+                .inner
+                .list(None)
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(store.deletes.lock().unwrap().is_empty());
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum CommitCase {
+        Create,
+        Append,
+        Overwrite,
+        Remove,
+    }
+
+    impl CommitCase {
+        fn version(self) -> i64 {
+            if matches!(self, Self::Create) { 0 } else { 1 }
+        }
+
+        fn expected_paths(self) -> Vec<&'static str> {
+            match self {
+                Self::Create => vec!["base.parquet"],
+                Self::Append => vec!["base.parquet", "new.parquet"],
+                Self::Overwrite => vec!["new.parquet"],
+                Self::Remove => vec![],
+            }
+        }
+    }
+
+    fn commit_test_add(path: &str) -> Add {
+        Add {
+            path: path.to_string(),
+            size: 5,
+            data_change: true,
+            stats: Some(r#"{"numRecords":1}"#.to_string()),
+            ..Default::default()
+        }
+    }
+
+    async fn commit_fault_fixture(
+        case: CommitCase,
+    ) -> (Arc<CommitFaultStore>, LogStoreRef, PreCommit) {
+        let inner = Arc::new(InMemory::new());
+        // These sentinels verify that failure handling never deletes a data object.
+        for path in ["base.parquet", "new.parquet", "winner.parquet"] {
+            inner
+                .put(&Path::from(path), Bytes::from_static(b"data!").into())
+                .await
+                .unwrap();
+        }
+        let store = Arc::new(CommitFaultStore::new(inner, case.version()));
+        let log_store = test_log_store(store.clone());
+        let protocol = Protocol::new(1, 2, None, None);
+        let metadata = test_metadata([("delta.checkpointInterval", "1")]);
+        let create = CommitBuilder::from(CommitProperties::default())
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+                CommitAction::Add(commit_test_add("base.parquet")),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            );
+        if matches!(case, CommitCase::Create) {
+            return (store, log_store, create);
+        }
+        let snapshot = create.await.unwrap().snapshot;
+        let remove = CommitAction::Remove(Remove {
+            path: "base.parquet".to_string(),
+            deletion_timestamp: Some(Utc::now().timestamp_millis()),
+            data_change: true,
+            extended_file_metadata: Some(true),
+            partition_values: Some(HashMap::new()),
+            size: Some(5),
+            ..Default::default()
+        });
+        let (actions, operation) = match case {
+            CommitCase::Append => (
+                vec![CommitAction::Add(commit_test_add("new.parquet"))],
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            ),
+            CommitCase::Overwrite => (
+                vec![remove, CommitAction::Add(commit_test_add("new.parquet"))],
+                DeltaOperation::Write {
+                    mode: SaveMode::Overwrite,
+                    partition_by: None,
+                    predicate: None,
+                },
+            ),
+            CommitCase::Remove => (vec![remove], DeltaOperation::Delete { predicate: None }),
+            CommitCase::Create => unreachable!(),
+        };
+        let commit = CommitBuilder::from(CommitProperties::default())
+            .with_actions(actions)
+            .build(snapshot, log_store.clone(), operation);
+        (store, log_store, commit)
+    }
+
+    async fn assert_commit_artifacts_untouched(store: &CommitFaultStore, version: i64) {
+        let mut versions = store
+            .inner
+            .list(None)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .iter()
+            .filter_map(|entry| {
+                crate::delta_log::parse_commit_version_from_location(&entry.location)
+            })
+            .collect::<Vec<_>>();
+        versions.sort_unstable();
+        assert_eq!(versions, (0..=version).collect::<Vec<_>>());
+        assert!(store.deletes.lock().unwrap().is_empty());
+        for path in ["base.parquet", "new.parquet", "winner.parquet"] {
+            assert_eq!(
+                store
+                    .inner
+                    .get(&Path::from(path))
+                    .await
+                    .unwrap()
+                    .bytes()
+                    .await
+                    .unwrap(),
+                "data!"
+            );
+        }
+    }
+
+    async fn assert_landed_commit(case: CommitCase) {
+        let (store, log_store, commit) = commit_fault_fixture(case).await;
+        let expected_file_actions = commit
+            .data
+            .actions
+            .iter()
+            .filter(|action| matches!(action, CommitAction::Add(_) | CommitAction::Remove(_)))
+            .cloned()
+            .map(Action::from)
+            .collect::<Vec<_>>();
+        store.arm(CommitPutFault::Landed, None);
+        let result = commit.await.unwrap();
+        let version = case.version();
+        assert_eq!(result.snapshot.unwrap().version(), version);
+        assert_eq!(result.metrics.num_retries, 0);
+        assert_eq!(
+            store.commit_attempts(),
+            (0..=version).map(commit_path).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            log_store.read_commit_entry(version).await.unwrap().unwrap(),
+            store.attempted_bytes()
+        );
+        let actions = read_commit_actions(&log_store, version).await;
+        let files = actions
+            .into_iter()
+            .filter(|action| matches!(action, Action::Add(_) | Action::Remove(_)))
+            .collect::<Vec<_>>();
+        assert_eq!(files, expected_file_actions);
+        let checksum = read_version_checksum(&log_store, version).await;
+        assert_eq!(checksum.num_files, case.expected_paths().len() as i64);
+        assert_eq!(checksum.table_size_bytes, checksum.num_files * 5);
+        assert_eq!(result.metrics.new_checkpoint_created, version == 1);
+        if version == 1 {
+            let bytes = store
+                .inner
+                .get(&Path::from("_delta_log/_last_checkpoint"))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            let hint: LastCheckpointHint = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(hint.version, version);
+            store
+                .inner
+                .head(&Path::from(
+                    "_delta_log/00000000000000000001.checkpoint.parquet",
+                ))
+                .await
+                .unwrap();
+        }
+        let reopened = DeltaSnapshot::try_new(log_store.as_ref(), Default::default(), None, None)
+            .await
+            .unwrap();
+        assert_eq!(reopened.version(), version);
+        let mut paths = reopened
+            .adds()
+            .iter()
+            .map(|add| add.path.as_str())
+            .collect::<Vec<_>>();
+        paths.sort_unstable();
+        assert_eq!(paths, case.expected_paths());
+        assert_commit_artifacts_untouched(&store, version).await;
+    }
+
+    #[tokio::test]
+    async fn landed_create_finishes_at_original_version() {
+        assert_landed_commit(CommitCase::Create).await;
+    }
+
+    #[tokio::test]
+    async fn landed_blind_append_finishes_at_original_version() {
+        assert_landed_commit(CommitCase::Append).await;
+    }
+
+    #[tokio::test]
+    async fn landed_nonblind_overwrite_finishes_at_original_version() {
+        assert_landed_commit(CommitCase::Overwrite).await;
+    }
+
+    #[tokio::test]
+    async fn landed_remove_finishes_at_original_version() {
+        assert_landed_commit(CommitCase::Remove).await;
+    }
+
+    #[tokio::test]
+    #[expect(clippy::panic)]
+    async fn landed_commit_read_failures_stop_without_retries() {
+        for case in [
+            CommitCase::Create,
+            CommitCase::Append,
+            CommitCase::Overwrite,
+            CommitCase::Remove,
+        ] {
+            for fault in [
+                CommitReadFault::Denied,
+                CommitReadFault::NotFound,
+                CommitReadFault::Body,
+            ] {
+                let (store, _, commit) = commit_fault_fixture(case).await;
+                store.arm(CommitPutFault::Landed, Some(fault));
+                let error = commit.await.err().unwrap();
+                let DeltaError::Transaction(error) = error else {
+                    panic!("unexpected error: {error:?}");
+                };
+                let version = case.version();
+                assert_unknown_commit(error, fault, version);
+                assert_eq!(
+                    store.commit_attempts(),
+                    (0..=version).map(commit_path).collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    store
+                        .inner
+                        .get(&commit_path(version))
+                        .await
+                        .unwrap()
+                        .bytes()
+                        .await
+                        .unwrap(),
+                    store.attempted_bytes()
+                );
+                assert!(matches!(
+                    store.inner.head(&checksum_path(version)).await,
+                    Err(ObjectStoreError::NotFound { .. })
+                ));
+                assert_commit_artifacts_untouched(&store, version).await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn different_commit_bytes_preserve_retry_policy() {
+        for case in [
+            CommitCase::Create,
+            CommitCase::Append,
+            CommitCase::Overwrite,
+            CommitCase::Remove,
+        ] {
+            let (store, log_store, commit) = commit_fault_fixture(case).await;
+            let mut winner = commit
+                .data
+                .actions
+                .iter()
+                .filter(|action| {
+                    matches!(
+                        action,
+                        CommitAction::Protocol(_) | CommitAction::Metadata(_)
+                    )
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            winner.push(CommitAction::Add(commit_test_add("winner.parquet")));
+            let winner = CommitData::new(
+                winner,
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+                HashMap::new(),
+                OperationMetrics::default(),
+                vec![],
+                Some("competing writer".to_string()),
+            );
+            let winner_bytes = actions_to_log_bytes(&winner.actions).unwrap();
+            store.arm(CommitPutFault::Collision(winner_bytes.clone()), None);
+            let result = commit.await;
+            let version = case.version();
+            assert_eq!(
+                log_store.read_commit_entry(version).await.unwrap().unwrap(),
+                winner_bytes
+            );
+            assert_ne!(store.attempted_bytes(), winner_bytes);
+            let expected_version = if matches!(case, CommitCase::Create | CommitCase::Append) {
+                let result = result.unwrap();
+                assert_eq!(result.metrics.num_retries, 1);
+                assert_eq!(result.snapshot.unwrap().version(), version + 1);
+                version + 1
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(DeltaError::Transaction(
+                        TransactionError::MaxCommitAttempts(0)
+                    ))
+                ));
+                version
+            };
+            assert_eq!(
+                store.commit_attempts(),
+                (0..=expected_version).map(commit_path).collect::<Vec<_>>()
+            );
+            assert_commit_artifacts_untouched(&store, expected_version).await;
+        }
     }
 
     fn test_metadata(

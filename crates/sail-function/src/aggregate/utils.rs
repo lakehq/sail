@@ -12,10 +12,20 @@ use datafusion::logical_expr::ColumnarValue;
 use datafusion::physical_expr::PhysicalExpr;
 use sail_common_datafusion::literal::LiteralValue;
 
-///
 /// This is part of the shared contract for bitmap aggregate functions that
 /// interoperate on the same binary bitmap representation.
 pub(crate) const BITMAP_NUM_BYTES: usize = 4 * 1024;
+
+pub fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
+    let empty_schema = Arc::new(Schema::empty());
+    let batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
+    match expr.evaluate(&batch)? {
+        ColumnarValue::Scalar(s) => Ok(s),
+        _ => Err(DataFusionError::Internal(
+            "Didn't expect ColumnarValue::Array".to_string(),
+        )),
+    }
+}
 
 /// Casts an array to the target type if it doesn't already match.
 ///
@@ -41,21 +51,10 @@ pub fn cast_to_type_with_safe(
             safe,
             ..Default::default()
         };
-        datafusion::arrow::compute::cast_with_options(array, target_type, &options)
+        arrow::compute::cast_with_options(array, target_type, &options)
             .map_err(DataFusionError::from)
     } else {
         Ok(Arc::clone(array))
-    }
-}
-
-pub fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
-    let empty_schema = Arc::new(Schema::empty());
-    let batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
-    match expr.evaluate(&batch)? {
-        ColumnarValue::Scalar(s) => Ok(s),
-        _ => Err(DataFusionError::Internal(
-            "Didn't expect ColumnarValue::Array".to_string(),
-        )),
     }
 }
 

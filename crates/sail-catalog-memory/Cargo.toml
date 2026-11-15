@@ -1,7 +1,12 @@
 [package]
 name = "sail-catalog-memory"
 version = { workspace = true }
+authors = { workspace = true }
 edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+repository = { workspace = true }
 rust-version = { workspace = true }
 
 [lints]
@@ -14,3 +19,4 @@ sail-catalog = { path = "../sail-catalog" }
 arrow = { workspace = true }
 async-trait = { workspace = true }
 dashmap = { workspace = true }
+tokio = { workspace = true }

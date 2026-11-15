@@ -91,12 +91,13 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::datasource::empty::EmptyTable;
     use datafusion::datasource::provider_as_source;
-    use datafusion::functions::core::expr_fn::{coalesce, input_file_name};
+    use datafusion::functions::core::expr_fn::input_file_name;
     use datafusion::optimizer::{Optimizer, OptimizerContext};
     use datafusion_common::internal_err;
     use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_expr::{LogicalPlanBuilder, ScalarUDF, col};
     use sail_common_datafusion::input_file::{InputFileBlockLengthFunc, InputFileBlockStartFunc};
+    use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 
     use super::*;
 
@@ -113,7 +114,7 @@ mod tests {
         vec![
             input_file_name(),
             // Sail's filename expression also supplies Spark's non-nullable schema.
-            coalesce(vec![input_file_name(), lit("")]),
+            ScalarUDF::from(CoalesceFunc::new()).call(vec![input_file_name(), lit("")]),
             ScalarUDF::from(InputFileBlockStartFunc::new()).call(vec![]),
             ScalarUDF::from(InputFileBlockLengthFunc::new()).call(vec![]),
         ]
