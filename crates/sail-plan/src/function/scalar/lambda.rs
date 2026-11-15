@@ -26,7 +26,7 @@ use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
 use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
 use sail_function::scalar::map::utils::map_type_from_key_value_types;
-use sail_function::scalar::spark_to_string::SparkToUtf8;
+use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
 use sail_logical_optimizer::type_coercion::TypeCoercionRewriter;
 
 use crate::config::MapKeyDedupPolicy;
