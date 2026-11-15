@@ -50,6 +50,16 @@ struct Held {
     own: Vec<u32>,
 }
 
+impl Held {
+    /// Returns the bytes of the batch apart from the buffers of its columns.
+    fn bytes(&self) -> usize {
+        // A column is a pointer to an array that is allocated with two counters.
+        let column = |column: &ArrayRef| size_of::<[usize; 4]>() + size_of_val(&**column);
+        let columns: usize = self.columns.iter().map(column).sum();
+        size_of::<Self>() + columns + self.own.len() * size_of::<u32>()
+    }
+}
+
 /// Rows of a held batch that are copied into one output batch.
 #[derive(Clone, Copy, Default)]
 struct Run {
@@ -100,7 +110,8 @@ pub(super) struct ShuffleBuffer {
     held: Vec<Held>,
     pieces: Vec<Piece>,
     rows: usize,
-    /// The bytes of the buffers of the held batches, each counted once.
+    /// The bytes of the buffers of the held batches, each counted once, and of the
+    /// batches apart from their buffers.
     bytes: usize,
     /// What each view column holds, and `None` for the columns of other types.
     views: Vec<Option<ViewBytes>>,
@@ -252,13 +263,18 @@ impl ShuffleBuffer {
             self.count(&columns);
         }
         let first = self.held.len();
-        self.held.push(Held {
+        let held = Held {
             schema,
             columns,
             rows,
             pieces_end: self.pieces.len(),
             own,
-        });
+        };
+        // Many batches of few rows hold more memory apart from their buffers than in them.
+        if !large {
+            self.bytes += held.bytes();
+        }
+        self.held.push(held);
         self.rows += rows;
         let bytes = self.held_bytes();
         let full =
@@ -1154,7 +1170,9 @@ fn concat_runs(
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::{Int64Array, StringViewArray, StringViewBuilder, make_view};
+    use datafusion::arrow::array::{
+        Int64Array, StringViewArray, StringViewBuilder, make_view, new_null_array,
+    };
     use datafusion::arrow::datatypes::Field;
     use datafusion::arrow::ipc::reader::StreamReader;
     use datafusion::arrow::ipc::writer::StreamWriter;
@@ -1212,7 +1230,12 @@ mod tests {
             assert!(buffer.push_rows(batch, &mut channels, false)?.is_empty());
         }
         let pieces = batches * 2 * size_of::<Piece>();
-        Ok((buffer.held_bytes() - pieces, shared, buffer.flush()?))
+        let batches: usize = buffer.held.iter().map(Held::bytes).sum();
+        Ok((
+            buffer.held_bytes() - pieces - batches,
+            shared,
+            buffer.flush()?,
+        ))
     }
 
     /// Returns the data buffers of the view column of each batch in the rounds, after
@@ -1530,7 +1553,8 @@ mod tests {
         }
         // Each batch has a buffer of 64 bytes for its rows, and 8 bytes for each channel
         // that they go to.
-        assert!(buffer.held_bytes() <= 100 * (64 + 4 * 8));
+        let batches: usize = buffer.held.iter().map(Held::bytes).sum();
+        assert!(buffer.held_bytes() <= 100 * (64 + 4 * 8) + batches);
         let rounds = buffer.flush()?;
         assert_eq!(rounds.len(), 1);
         assert_eq!(rounds[0].len(), 400);
@@ -1599,6 +1623,34 @@ mod tests {
             lists.push(rows.iter().map(|rows| rows.as_ptr()).collect::<Vec<_>>());
         }
         assert!(lists.iter().all(|list| *list == lists[0]));
+        Ok(())
+    }
+
+    /// Batches of one row are written before the memory that they hold apart from their
+    /// buffers exceeds the budget, although their columns have no buffers.
+    #[test]
+    fn batches_of_few_rows_are_held_up_to_the_budget() -> Result<()> {
+        let fields: Vec<_> = (0..50)
+            .map(|i| Field::new(format!("c{i}"), DataType::Null, true))
+            .collect();
+        let schema = Arc::new(Schema::new(fields));
+        let budget = 1024 * 1024;
+        let mut buffer = ShuffleBuffer::try_new(&schema, 1000, 8192, budget, false)?;
+        let mut rows = vec![vec![]; 1000];
+        let mut pushed = 0;
+        loop {
+            let columns = (0..50)
+                .map(|_| new_null_array(&DataType::Null, 1))
+                .collect();
+            let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
+            rows[pushed % 1000].push(0);
+            pushed += 1;
+            if !buffer.push_rows(batch, &mut rows, false)?.is_empty() {
+                break;
+            }
+            // Each batch holds a pointer to each of its columns.
+            assert!(pushed * 50 * size_of::<ArrayRef>() <= budget);
+        }
         Ok(())
     }
 
