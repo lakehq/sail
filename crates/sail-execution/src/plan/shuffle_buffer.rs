@@ -12,7 +12,8 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
 use datafusion::arrow::compute::{concat, take};
 use datafusion::arrow::datatypes::{
-    BinaryViewType, ByteViewType, DataType, Schema, SchemaRef, StringViewType,
+    BinaryViewType, ByteViewType, DataType, Int16Type, Int32Type, Int64Type, Schema, SchemaRef,
+    StringViewType,
 };
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::common::{HashMap, Result};
@@ -53,11 +54,83 @@ struct Held {
 impl Held {
     /// Returns the bytes of the batch apart from the buffers of its columns.
     fn bytes(&self) -> usize {
-        // A column is a pointer to an array that is allocated with two counters.
-        let column = |column: &ArrayRef| size_of::<[usize; 4]>() + size_of_val(&**column);
-        let columns: usize = self.columns.iter().map(column).sum();
+        let columns: usize = self.columns.iter().map(array_own_bytes).sum();
         size_of::<Self>() + columns + self.own.len() * size_of::<u32>()
     }
+}
+
+/// Returns the bytes of an array and of the arrays inside it, apart from their buffers.
+/// An array that several arrays share is counted for each of them.
+fn array_own_bytes(array: &ArrayRef) -> usize {
+    // An array is behind a pointer, and is allocated with two counters.
+    let own = size_of::<[usize; 4]>() + size_of_val(&**array);
+    let inside: usize = match array.data_type() {
+        DataType::Struct(_) => array
+            .as_struct()
+            .columns()
+            .iter()
+            .map(array_own_bytes)
+            .sum(),
+        DataType::List(_) => array_own_bytes(array.as_list::<i32>().values()),
+        DataType::LargeList(_) => array_own_bytes(array.as_list::<i64>().values()),
+        DataType::ListView(_) => array_own_bytes(array.as_list_view::<i32>().values()),
+        DataType::LargeListView(_) => array_own_bytes(array.as_list_view::<i64>().values()),
+        DataType::FixedSizeList(_, _) => array_own_bytes(array.as_fixed_size_list().values()),
+        // The entries of a map are in the map itself, and have its keys and values.
+        DataType::Map(_, _) => {
+            let entries = array.as_map().entries();
+            entries.columns().iter().map(array_own_bytes).sum()
+        }
+        DataType::Dictionary(_, _) => array_own_bytes(array.as_any_dictionary().values()),
+        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+            DataType::Int16 => array_own_bytes(array.as_run::<Int16Type>().values()),
+            DataType::Int32 => array_own_bytes(array.as_run::<Int32Type>().values()),
+            DataType::Int64 => array_own_bytes(array.as_run::<Int64Type>().values()),
+            _ => 0,
+        },
+        DataType::Union(fields, _) => {
+            let union = array.as_union();
+            // A union has a pointer for every type id up to its largest.
+            let ids = fields.iter().map(|(id, _)| id as usize + 1).max();
+            let unused = ids.unwrap_or(0).saturating_sub(fields.len());
+            let children = fields
+                .iter()
+                .map(|(id, _)| array_own_bytes(union.child(id)));
+            unused * size_of::<Option<ArrayRef>>() + children.sum::<usize>()
+        }
+        DataType::Null
+        | DataType::Boolean
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Float16
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Timestamp(_, _)
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Duration(_)
+        | DataType::Interval(_)
+        | DataType::Binary
+        | DataType::FixedSizeBinary(_)
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => 0,
+    };
+    own + inside
 }
 
 /// Rows of a held batch that are copied into one output batch.
@@ -1176,7 +1249,7 @@ mod tests {
     use datafusion::arrow::array::{
         Int64Array, StringViewArray, StringViewBuilder, make_view, new_null_array,
     };
-    use datafusion::arrow::datatypes::Field;
+    use datafusion::arrow::datatypes::{Field, Fields, UnionFields, UnionMode};
     use datafusion::arrow::ipc::reader::StreamReader;
     use datafusion::arrow::ipc::writer::StreamWriter;
     use datafusion::common::DataFusionError;
@@ -1629,12 +1702,14 @@ mod tests {
         Ok(())
     }
 
-    /// Batches of one row are written before the memory that they hold apart from their
-    /// buffers exceeds the budget, although their columns have no buffers.
-    #[test]
-    fn batches_of_few_rows_are_held_up_to_the_budget() -> Result<()> {
-        let fields: Vec<_> = (0..50)
-            .map(|i| Field::new(format!("c{i}"), DataType::Null, true))
+    /// Pushes batches of one row until they are written, and checks that the pointers to
+    /// arrays that each batch has, of which there are at least `pointers`, do not exceed
+    /// the budget. The columns have no buffers, or small ones.
+    fn check_few_rows(types: Vec<DataType>, pointers: usize) -> Result<()> {
+        let fields: Vec<_> = types
+            .iter()
+            .enumerate()
+            .map(|(i, data_type)| Field::new(format!("c{i}"), data_type.clone(), true))
             .collect();
         let schema = Arc::new(Schema::new(fields));
         let budget = 1024 * 1024;
@@ -1642,17 +1717,61 @@ mod tests {
         let mut rows = vec![vec![]; 1000];
         let mut pushed = 0;
         loop {
-            let columns = (0..50)
-                .map(|_| new_null_array(&DataType::Null, 1))
+            let columns = types
+                .iter()
+                .map(|data_type| new_null_array(data_type, 1))
                 .collect();
             let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
             rows[pushed % 1000].push(0);
             pushed += 1;
             if !buffer.push_rows(batch, &mut rows, false)?.is_empty() {
-                break;
+                return Ok(());
             }
-            // Each batch holds a pointer to each of its columns.
-            assert!(pushed * 50 * size_of::<ArrayRef>() <= budget);
+            assert!(
+                pushed * pointers * size_of::<ArrayRef>() <= budget,
+                "{types:?}"
+            );
+        }
+    }
+
+    /// Batches of one row are written before the memory that they hold apart from their
+    /// buffers exceeds the budget, although their columns have no buffers.
+    #[test]
+    fn batches_of_few_rows_are_held_up_to_the_budget() -> Result<()> {
+        check_few_rows(vec![DataType::Null; 50], 50)
+    }
+
+    /// The same holds for the arrays inside the columns, for every type that has them.
+    #[test]
+    fn batches_of_few_rows_of_nested_types_are_held_up_to_the_budget() -> Result<()> {
+        let nulls: Fields = (0..50)
+            .map(|i| Field::new(format!("f{i}"), DataType::Null, true))
+            .collect();
+        let item = || Arc::new(Field::new("item", DataType::Struct(nulls.clone()), true));
+        let entries = Fields::from(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Struct(nulls.clone()), true),
+        ]);
+        let entries = Arc::new(Field::new("entries", DataType::Struct(entries), false));
+        let run_ends = Arc::new(Field::new("run_ends", DataType::Int32, false));
+        let union: UnionFields = (0..50).zip(nulls.iter().map(Arc::clone)).collect();
+        for data_type in [
+            DataType::Struct(nulls.clone()),
+            DataType::List(item()),
+            DataType::LargeList(item()),
+            DataType::ListView(item()),
+            DataType::LargeListView(item()),
+            DataType::FixedSizeList(item(), 1),
+            DataType::Map(entries, false),
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Struct(nulls.clone())),
+            ),
+            DataType::RunEndEncoded(run_ends, item()),
+            DataType::Union(union.clone(), UnionMode::Sparse),
+            DataType::Union(union, UnionMode::Dense),
+        ] {
+            check_few_rows(vec![data_type], 50)?;
         }
         Ok(())
     }
