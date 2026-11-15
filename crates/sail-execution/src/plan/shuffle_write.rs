@@ -1,36 +1,29 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use datafusion::arrow::array::ArrayRef;
-use datafusion::arrow::compute::BatchCoalescer;
-use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion::arrow::array::AsArray;
+use datafusion::arrow::datatypes::{Schema, UInt64Type};
+use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::hash_utils::create_hashes;
 use datafusion::common::tree_node::TreeNodeRecursion;
-use datafusion::common::{Result, plan_err};
+use datafusion::common::{Result, internal_err, plan_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::UnKnownColumn;
 use datafusion::physical_expr::{
     EquivalenceProperties, Partitioning, PhysicalExpr, RangePartitioning,
 };
+use datafusion::physical_expr_common::utils::evaluate_expressions_to_arrays;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion::physical_plan::repartition::BatchPartitioner;
+use datafusion::physical_plan::repartition::{REPARTITION_RANDOM_STATE, RangeExpr};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, ReplaceChildrenOptions, apply_expression_roots,
 };
 use futures::StreamExt;
-use sail_physical_plan::repartition::RowRoundRobinPartitioner;
 
-use crate::plan::shuffle_compact::{
-    contains_dictionary, copy, dictionary_capacities, dictionary_sizes, oversized, trim,
-};
+use crate::plan::shuffle_buffer::{Round, ShuffleBuffer};
 use crate::stream::writer::{TaskStreamSink, TaskStreamWriteState, TaskStreamWriter};
-
-enum ShufflePartitioner {
-    Batch(BatchPartitioner),
-    RoundRobin(RowRoundRobinPartitioner),
-}
 
 /// The partitioning scheme for shuffle output.
 ///
@@ -94,15 +87,153 @@ impl Display for ShufflePartitioning {
     }
 }
 
-impl ShufflePartitioner {
-    fn partition<F>(&mut self, batch: RecordBatch, f: F) -> Result<()>
-    where
-        F: FnMut(usize, RecordBatch) -> Result<()>,
-    {
+/// Returns the bytes of rows that a shuffle write holds before it writes every channel.
+fn flush_budget(_channels: usize) -> usize {
+    8 * 1024 * 1024
+}
+
+/// Assigns the rows of the input to output channels, in the same way as DataFusion's
+/// `BatchPartitioner` and as `RowRoundRobinPartitioner`, without moving any row.
+enum Router {
+    /// Each batch goes to one channel as a whole, one channel after the other.
+    Batch {
+        channels: usize,
+        next: usize,
+        /// The hash expressions of a single channel, which are still evaluated.
+        expressions: Vec<Arc<dyn PhysicalExpr>>,
+    },
+    Hash {
+        expressions: Vec<Arc<dyn PhysicalExpr>>,
+        channels: u64,
+        hashes: Vec<u64>,
+    },
+    Range(RangeExpr),
+    RoundRobinRow {
+        channels: usize,
+        next: usize,
+    },
+}
+
+impl Router {
+    fn try_new(
+        partitioning: &ShufflePartitioning,
+        partition: usize,
+        num_input_partitions: usize,
+    ) -> Result<Self> {
+        let router = match partitioning {
+            ShufflePartitioning::Hash(_, 0) => {
+                return internal_err!("Hash repartition requires at least one partition");
+            }
+            ShufflePartitioning::Hash(expressions, channels) => Self::Hash {
+                expressions: expressions.clone(),
+                channels: *channels as u64,
+                hashes: vec![],
+            },
+            ShufflePartitioning::Range(range) if range.split_points().is_empty() => Self::Batch {
+                channels: 1,
+                next: 0,
+                expressions: vec![],
+            },
+            ShufflePartitioning::Range(range) => {
+                let keys = range
+                    .ordering()
+                    .iter()
+                    .map(|sort_expr| Arc::clone(&sort_expr.expr))
+                    .collect();
+                Self::Range(RangeExpr::try_new(keys, range)?)
+            }
+            ShufflePartitioning::RoundRobinBatch(channels) => Self::Batch {
+                channels: *channels,
+                next: (partition * channels) / num_input_partitions,
+                expressions: vec![],
+            },
+            ShufflePartitioning::RoundRobinRow(channels) => {
+                if *channels == 0 {
+                    return internal_err!(
+                        "round-robin repartition requires at least one output partition"
+                    );
+                }
+                if num_input_partitions == 0 {
+                    return internal_err!(
+                        "round-robin repartition requires at least one input partition"
+                    );
+                }
+                Self::RoundRobinRow {
+                    channels: *channels,
+                    next: (partition * channels) / num_input_partitions,
+                }
+            }
+        };
+        // With one channel there is nothing to compute for the rows.
+        Ok(match router {
+            Self::Hash {
+                expressions,
+                channels: 1,
+                ..
+            } => Self::Batch {
+                channels: 1,
+                next: 0,
+                expressions,
+            },
+            Self::RoundRobinRow { channels: 1, .. } => Self::Batch {
+                channels: 1,
+                next: 0,
+                expressions: vec![],
+            },
+            router => router,
+        })
+    }
+
+    /// Holds a batch in the buffer by the channels of its rows, and returns what is to
+    /// be written.
+    fn push(
+        &mut self,
+        batch: RecordBatch,
+        rows: &mut Vec<u32>,
+        buffer: &mut ShuffleBuffer,
+        flush: bool,
+    ) -> Result<Vec<Round>> {
+        rows.clear();
         match self {
-            Self::Batch(partitioner) => partitioner.partition(batch, f),
-            Self::RoundRobin(partitioner) => partitioner.partition(batch, f),
+            Self::Batch {
+                channels,
+                next,
+                expressions,
+            } => {
+                evaluate_expressions_to_arrays(expressions.iter(), &batch)?;
+                let channel = *next;
+                *next = (*next + 1) % *channels;
+                return buffer.push_batch(channel, batch, flush);
+            }
+            Self::Hash {
+                expressions,
+                channels,
+                hashes,
+            } => {
+                let arrays = evaluate_expressions_to_arrays(expressions.iter(), &batch)?;
+                hashes.clear();
+                hashes.resize(batch.num_rows(), 0);
+                create_hashes(&arrays, REPARTITION_RANDOM_STATE.random_state(), hashes)?;
+                rows.extend(hashes.iter().map(|hash| (hash % *channels) as u32));
+            }
+            Self::Range(expression) => {
+                let channels = expression.evaluate(&batch)?.into_array(batch.num_rows())?;
+                let channels = channels.as_primitive::<UInt64Type>();
+                rows.extend(channels.values().iter().map(|channel| *channel as u32));
+            }
+            Self::RoundRobinRow { channels, next } => {
+                let mut channel = *next;
+                for _ in 0..batch.num_rows() {
+                    rows.push(channel as u32);
+                    channel += 1;
+                    if channel == *channels {
+                        channel = 0;
+                    }
+                }
+                *next = channel;
+            }
         }
+        buffer.push_rows(batch, rows, flush)
     }
 }
 
@@ -220,61 +351,26 @@ impl ExecutionPlan for ShuffleWriteExec {
         let writer = self.writer.clone();
         let batch_size = context.session_config().batch_size();
         let stream = self.plan.execute(partition, context)?;
-        // TODO: Support metrics in batch partitioner
         let num_input_partitions = self
             .plan
             .properties()
             .output_partitioning()
             .partition_count();
-        let partitioner = match &self.partitioning {
-            ShufflePartitioning::Hash(expressions, partitions) => {
-                ShufflePartitioner::Batch(BatchPartitioner::try_new(
-                    Partitioning::Hash(expressions.clone(), *partitions),
-                    Default::default(),
-                    partition,
-                    num_input_partitions,
-                )?)
-            }
-            ShufflePartitioning::Range(partitioning) => {
-                ShufflePartitioner::Batch(BatchPartitioner::try_new(
-                    Partitioning::Range(partitioning.clone()),
-                    Default::default(),
-                    partition,
-                    num_input_partitions,
-                )?)
-            }
-            ShufflePartitioning::RoundRobinBatch(partitions) => {
-                ShufflePartitioner::Batch(BatchPartitioner::try_new(
-                    Partitioning::RoundRobinBatch(*partitions),
-                    Default::default(),
-                    partition,
-                    num_input_partitions,
-                )?)
-            }
-            ShufflePartitioning::RoundRobinRow(partitions) => ShufflePartitioner::RoundRobin(
-                RowRoundRobinPartitioner::new(*partitions, partition, num_input_partitions)?,
-            ),
-        };
+        let router = Router::try_new(&self.partitioning, partition, num_input_partitions)?;
         let empty = RecordBatch::new_empty(self.schema());
         let channels = self.partitioning.partition_count();
-        // Partitioned batches can be slices sharing the whole input batch's buffers,
-        // so they are copied into full batches before being queued. Unbounded input
-        // is not coalesced so that partial batches flow promptly.
-        let slices = matches!(
-            self.partitioning,
-            ShufflePartitioning::Hash(..) | ShufflePartitioning::Range(_)
-        );
-        let coalescers = (!self.plan.properties().boundedness.is_unbounded())
-            .then(|| Coalescers::new(stream.schema(), channels, batch_size, slices));
+        let buffer = ShuffleBuffer::try_new(
+            &stream.schema(),
+            channels,
+            batch_size,
+            flush_budget(channels),
+            matches!(router, Router::Batch { .. }),
+        )?;
+        // The rows of unbounded input are written as they arrive.
+        let unbounded = self.plan.properties().boundedness.is_unbounded();
         let output = futures::stream::once(async move {
             shuffle_write(
-                writer,
-                stream,
-                partition,
-                channels,
-                partitioner,
-                slices,
-                coalescers,
+                writer, stream, partition, channels, router, buffer, unbounded,
             )
             .await?;
             Ok(empty)
@@ -291,40 +387,24 @@ async fn shuffle_write(
     mut stream: SendableRecordBatchStream,
     partition: usize,
     channels: usize,
-    mut partitioner: ShufflePartitioner,
-    slices: bool,
-    mut coalescers: Option<Coalescers>,
+    mut router: Router,
+    mut buffer: ShuffleBuffer,
+    unbounded: bool,
 ) -> Result<()> {
     let mut sink = writer.open(partition).await?;
     let result = async {
+        let mut rows = vec![];
         while let Some(batch) = stream.next().await {
             let batch = batch?;
             if batch.num_rows() == 0 {
                 continue;
             }
-            let mut partitions: Vec<Option<RecordBatch>> = vec![None; channels];
-            partitioner.partition(batch, |p, batch| {
-                partitions[p] = Some(batch);
-                Ok(())
-            })?;
-            let active = match &mut coalescers {
-                Some(coalescers) => {
-                    coalescers.push(partitions)?;
-                    write_completed(sink.as_mut(), &mut coalescers.channels).await?
-                }
-                None => {
-                    let partitions = compact_unbounded(partitions, slices)?;
-                    sink.write(partitions).await? == TaskStreamWriteState::Active
-                }
-            };
-            if !active {
+            let rounds = router.push(batch, &mut rows, &mut buffer, unbounded)?;
+            if !write_rounds(sink.as_mut(), rounds, channels).await? {
                 return Ok::<_, datafusion::error::DataFusionError>(false);
             }
         }
-        if let Some(coalescers) = &mut coalescers {
-            return write_buffered(sink.as_mut(), &mut coalescers.channels).await;
-        }
-        Ok(true)
+        write_rounds(sink.as_mut(), buffer.flush()?, channels).await
     }
     .await;
     match result {
@@ -340,291 +420,22 @@ async fn shuffle_write(
     }
 }
 
-/// One batch coalescer per output channel.
-struct Coalescers {
-    channels: Vec<Channel>,
-    /// Whether partitioned batches are slices of one batch holding every channel's rows,
-    /// rather than whole input batches or batches taken for one channel.
-    slices: bool,
-    batch_rows: usize,
-    pass_through_rows: usize,
-    /// How many values each dictionary in the schema can hold before its keys overflow.
-    dictionary_capacities: Vec<usize>,
-}
-
-impl Coalescers {
-    fn new(schema: SchemaRef, channels: usize, batch_rows: usize, slices: bool) -> Self {
-        // The same limit as DataFusion's coalescer for passing large batches through.
-        let pass_through_rows = batch_rows / 2;
-        let dictionary_capacities = dictionary_capacities(&schema);
-        Self {
-            channels: (0..channels)
-                .map(|_| Channel {
-                    coalescer: BatchCoalescer::new(Arc::clone(&schema), batch_rows)
-                        .with_biggest_coalesce_batch_size(Some(pass_through_rows)),
-                    dictionary_values: vec![0; dictionary_capacities.len()],
-                })
-                .collect(),
-            slices,
-            batch_rows,
-            pass_through_rows,
-            dictionary_capacities,
-        }
-    }
-
-    /// Adds the partitioned batches of one input batch to their channels.
-    fn push(&mut self, partitions: Vec<Option<RecordBatch>>) -> Result<()> {
-        for (channel, batch) in self.channels.iter_mut().zip(partitions) {
-            if let Some(batch) = batch {
-                channel.push_partition(
-                    batch,
-                    self.slices,
-                    self.batch_rows,
-                    self.pass_through_rows,
-                    &self.dictionary_capacities,
-                )?;
-            }
-        }
-        Ok(())
-    }
-}
-
-struct Channel {
-    coalescer: BatchCoalescer,
-    /// The number of values of each dictionary in the buffered rows.
-    dictionary_values: Vec<usize>,
-}
-
-impl Channel {
-    /// Adds a partitioned batch, copying the columns the coalescer would otherwise keep
-    /// sharing buffers with rows that are not in its output.
-    fn push_partition(
-        &mut self,
-        batch: RecordBatch,
-        slices: bool,
-        batch_rows: usize,
-        pass_through_rows: usize,
-        dictionary_capacities: &[usize],
-    ) -> Result<()> {
-        let rows = batch.num_rows();
-        let buffered = self.coalescer.get_buffered_rows();
-        let large = rows > pass_through_rows;
-        if large && (buffered == 0 || buffered > pass_through_rows) {
-            // The coalescer passes the batch on as it is.
-            let batch = if slices {
-                map_columns(batch, |column| copy(&column))?
-            } else {
-                map_columns(batch, compact_input)?
-            };
-            return self.push(batch, dictionary_capacities, None);
-        }
-        if large && rows > batch_rows - buffered {
-            // The coalescer merges a large batch into a small buffered one rather than passing
-            // it through, and the full batches after the first would then share its buffers.
-            // So the rows of each output batch are copied on their own, with passing through
-            // turned off to keep the same batch boundaries.
-            self.coalescer.set_biggest_coalesce_batch_size(None);
-            let mut offset = 0;
-            while offset < rows {
-                let len = (batch_rows - self.coalescer.get_buffered_rows()).min(rows - offset);
-                let part = map_columns(batch.slice(offset, len), copy_unless_coalesced)?;
-                self.push(part, dictionary_capacities, None)?;
-                offset += len;
-            }
-            self.coalescer
-                .set_biggest_coalesce_batch_size(Some(pass_through_rows));
-            return Ok(());
-        }
-        let batch = if slices {
-            map_columns(batch, copy_unless_coalesced)?
-        } else {
-            map_columns(batch, |column| {
-                if copied_by_coalescer(column.data_type()) {
-                    Ok(column)
-                } else {
-                    compact_input(column)
-                }
-            })?
-        };
-        self.push(batch, dictionary_capacities, Some(pass_through_rows))
-    }
-
-    /// Adds a batch to the coalescer, first finishing the buffered batch if concatenating
-    /// their dictionaries could overflow the keys.
-    ///
-    /// Arrow panics on such an overflow for values it cannot merge. A batch's dictionaries
-    /// have been compacted to the values its keys use, so they always fit on their own.
-    ///
-    /// `pass_through_rows` is set for a batch with columns left for the coalescer to copy,
-    /// which must not be passed through when finishing early empties the buffer.
-    fn push(
-        &mut self,
-        batch: RecordBatch,
-        dictionary_capacities: &[usize],
-        pass_through_rows: Option<usize>,
-    ) -> Result<()> {
-        if dictionary_capacities.is_empty() {
-            return Ok(self.coalescer.push_batch(batch)?);
-        }
-        let incoming = dictionary_sizes(&batch);
-        let overflows = self
-            .dictionary_values
-            .iter()
-            .zip(&incoming)
-            .zip(dictionary_capacities)
-            .any(|((buffered, incoming), capacity)| buffered + incoming > *capacity);
-        let finished = overflows && self.coalescer.get_buffered_rows() > 0;
-        if finished {
-            self.coalescer.finish_buffered_batch()?;
-            self.dictionary_values.fill(0);
-        }
-        let held = pass_through_rows.filter(|_| finished);
-        if held.is_some() {
-            self.coalescer.set_biggest_coalesce_batch_size(None);
-        }
-        let expected = self.coalescer.get_buffered_rows() + batch.num_rows();
-        self.coalescer.push_batch(batch)?;
-        if held.is_some() {
-            self.coalescer.set_biggest_coalesce_batch_size(held);
-        }
-        let buffered = self.coalescer.get_buffered_rows();
-        if buffered == 0 {
-            self.dictionary_values.fill(0);
-        } else if buffered < expected {
-            // A batch was completed, and only the rest of this one is still buffered.
-            self.dictionary_values = incoming;
-        } else {
-            for (values, incoming) in self.dictionary_values.iter_mut().zip(incoming) {
-                *values += incoming;
-            }
-        }
-        Ok(())
-    }
-}
-
-// The coalescer keeps columns of other types as slices of their input until it
-// finishes a batch, and passes on a batch made of one slice without copying it.
-// It copies view strings only when their buffers look mostly unused, and completed
-// batches are compacted for the rest.
-/// Returns whether the coalescer copies rows of this type as they arrive.
-fn copied_by_coalescer(data_type: &DataType) -> bool {
-    data_type.is_primitive() || matches!(data_type, DataType::Utf8View | DataType::BinaryView)
-}
-
-fn copy_unless_coalesced(column: ArrayRef) -> Result<ArrayRef> {
-    if copied_by_coalescer(column.data_type()) {
-        Ok(column)
-    } else {
-        copy(&column)
-    }
-}
-
-/// Copies a column of a whole input batch if it holds much more memory than its rows need,
-/// and compacts its dictionaries so that they hold only the values its keys use.
-///
-/// An input batch can be a slice of a larger batch from upstream.
-fn compact_input(column: ArrayRef) -> Result<ArrayRef> {
-    if oversized(&column) {
-        copy(&column)
-    } else if contains_dictionary(column.data_type()) {
-        trim(column, false)
-    } else {
-        Ok(column)
-    }
-}
-
-fn map_columns(
-    batch: RecordBatch,
-    f: impl Fn(ArrayRef) -> Result<ArrayRef>,
-) -> Result<RecordBatch> {
-    let (schema, columns, rows) = batch.into_parts();
-    let columns = columns.into_iter().map(f).collect::<Result<_>>()?;
-    let options = RecordBatchOptions::new().with_row_count(Some(rows));
-    Ok(RecordBatch::try_new_with_options(
-        schema, columns, &options,
-    )?)
-}
-
-/// Writes the batch still buffered in each channel, returning `false` if every channel is closed.
-async fn write_buffered(sink: &mut dyn TaskStreamSink, channels: &mut [Channel]) -> Result<bool> {
-    let batches = channels
-        .iter_mut()
-        .map(|channel| {
-            channel.coalescer.finish_buffered_batch()?;
-            // The buffered batch can be a slice of the last batch pushed, which shrinking
-            // cannot release.
-            let Some(batch) = channel.coalescer.next_completed_batch() else {
-                return Ok(None);
-            };
-            let batch = map_columns(batch, copy_unless_coalesced)?;
-            compact_completed(batch).map(Some)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    if batches.iter().all(Option::is_none) {
-        return Ok(true);
-    }
-    Ok(sink.write(batches).await? == TaskStreamWriteState::Active)
-}
-
-/// Writes the completed batches of all channels, returning `false` once every channel is closed.
-async fn write_completed(sink: &mut dyn TaskStreamSink, channels: &mut [Channel]) -> Result<bool> {
-    loop {
-        let batches: Vec<Option<RecordBatch>> = channels
-            .iter_mut()
-            .map(|channel| {
-                channel
-                    .coalescer
-                    .next_completed_batch()
-                    .map(compact_completed)
-                    .transpose()
-            })
-            .collect::<Result<_>>()?;
-        if batches.iter().all(Option::is_none) {
-            return Ok(true);
+/// Writes each round to the sink, returning `false` once every channel is closed.
+async fn write_rounds(
+    sink: &mut dyn TaskStreamSink,
+    rounds: Vec<Round>,
+    channels: usize,
+) -> Result<bool> {
+    for round in rounds {
+        let mut batches = vec![None; channels];
+        for (channel, batch) in round {
+            batches[channel] = Some(batch);
         }
         if sink.write(batches).await? == TaskStreamWriteState::Closed {
             return Ok(false);
         }
     }
-}
-
-/// Releases the memory a completed batch holds but does not use.
-///
-/// A completed batch can end inside a partitioned batch and still hold the view strings,
-/// dictionary values, and list view values of rows in the next one.
-fn compact_completed(batch: RecordBatch) -> Result<RecordBatch> {
-    map_columns(batch, |mut column| {
-        // The coalescer reserves a full batch for each column, and copies view strings
-        // into blocks that grow from batch to batch. A column shared with another
-        // batch cannot be reallocated.
-        if let Some(column) = Arc::get_mut(&mut column) {
-            column.shrink_to_fit();
-        }
-        trim(column, false)
-    })
-}
-
-/// Copies or compacts each partitioned batch of unbounded input, which is queued as it is.
-fn compact_unbounded(
-    partitions: Vec<Option<RecordBatch>>,
-    slices: bool,
-) -> Result<Vec<Option<RecordBatch>>> {
-    partitions
-        .into_iter()
-        .map(|batch| {
-            batch
-                .map(|batch| {
-                    map_columns(batch, |column| {
-                        if slices || oversized(&column) {
-                            copy(&column)
-                        } else {
-                            trim(column, false)
-                        }
-                    })
-                })
-                .transpose()
-        })
-        .collect()
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -633,24 +444,26 @@ mod tests {
     use std::panic::AssertUnwindSafe;
 
     use datafusion::arrow::array::{
-        Array, ArrayData, AsArray, BooleanArray, ByteView, DictionaryArray, FixedSizeBinaryArray,
-        FixedSizeListArray, GenericListViewArray, Int8Array, Int16Array, Int32Array, Int64Array,
-        LargeListArray, ListArray, ListBuilder, ListViewArray, MapArray, OffsetSizeTrait, RunArray,
-        StringArray, StringViewArray, StringViewBuilder, StructArray, UInt32Array, UnionArray,
-        make_array,
+        Array, ArrayData, ArrayRef, AsArray, BooleanArray, ByteView, DictionaryArray,
+        FixedSizeBinaryArray, FixedSizeListArray, GenericListViewArray, Int8Array, Int16Array,
+        Int32Array, Int64Array, LargeListArray, ListArray, ListBuilder, ListViewArray, MapArray,
+        NullArray, OffsetSizeTrait, RunArray, StringArray, StringViewArray, StringViewBuilder,
+        StructArray, UInt32Array, UnionArray, make_array,
     };
     use datafusion::arrow::buffer::{Buffer, NullBuffer, OffsetBuffer};
     use datafusion::arrow::compute::{
         cast, concat, concat_batches, sort_to_indices, take, take_record_batch,
     };
     use datafusion::arrow::datatypes::{
-        Field, Int8Type, Int16Type, Int32Type, Int64Type, SchemaRef, UnionFields,
+        DataType, Field, Int8Type, Int16Type, Int32Type, Int64Type, SchemaRef, UnionFields,
     };
+    use datafusion::arrow::record_batch::RecordBatchOptions;
     use datafusion::common::ScalarValue;
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::physical_expr::expressions::col;
     use datafusion::physical_expr::{PhysicalSortExpr, SplitPoint};
     use datafusion::physical_plan::common::collect;
+    use datafusion::physical_plan::repartition::BatchPartitioner;
     use datafusion::physical_plan::streaming::{PartitionStream, StreamingTableExec};
     use datafusion::prelude::SessionConfig;
     use futures::FutureExt;
@@ -1557,10 +1370,12 @@ mod tests {
                 concat_batches(&schema, &expected)?,
                 "channel {channel}"
             );
-            // Every batch is full except the residual flushed at the end.
-            let (last, full) = actual.split_last().unzip();
-            assert!(full.is_some_and(|full| full.iter().all(|b| b.num_rows() == batch_size)));
-            assert!(last.is_some_and(|last| last.num_rows() > 0 && last.num_rows() <= batch_size));
+            assert!(!actual.is_empty());
+            assert!(
+                actual
+                    .iter()
+                    .all(|b| b.num_rows() > 0 && b.num_rows() <= batch_size)
+            );
         }
         Ok(())
     }
@@ -2010,4 +1825,173 @@ mod tests {
         );
         Ok(())
     }
+
+    /// Rows that point at the same long strings are not given a copy of them each.
+    #[tokio::test]
+    async fn hash_shuffle_output_of_strings_shared_by_rows_holds_them_once() -> Result<()> {
+        let input = shared_string_input(4)?;
+        let capture = assert_shuffle_compact(memory(&input)?, &input, "a", CHANNELS, true).await?;
+        let strings = |batches: &[RecordBatch]| -> usize {
+            batches
+                .iter()
+                .flat_map(|batch| batch.column(1).as_string_view().data_buffers())
+                .map(Buffer::len)
+                .sum()
+        };
+        let output: Vec<RecordBatch> = capture.channels.into_iter().flatten().collect();
+        assert!(strings(&output) <= strings(&input));
+        Ok(())
+    }
+
+    /// The strings of every input batch are in one buffer that is larger than the budget
+    /// of the write, which does not make each batch fill the budget.
+    #[tokio::test]
+    async fn hash_shuffle_holds_input_batches_that_share_a_large_buffer() -> Result<()> {
+        const BATCHES: usize = 16;
+        const BATCH_ROWS: usize = 1024;
+        const LEN: usize = 1024;
+        let text: String = (0..BATCHES * BATCH_ROWS)
+            .map(|i| format!("{i:0>LEN$}"))
+            .collect();
+        let mut strings = StringViewBuilder::new();
+        let block = strings.append_block(Buffer::from(text.into_bytes()));
+        for i in 0..BATCHES * BATCH_ROWS {
+            strings.try_append_view(block, (i * LEN) as u32, LEN as u32)?;
+        }
+        let strings: ArrayRef = Arc::new(strings.finish());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("v", DataType::Utf8View, false),
+        ]));
+        let input = (0..BATCHES)
+            .map(|i| {
+                let rows = i * BATCH_ROWS..(i + 1) * BATCH_ROWS;
+                let a = Int64Array::from_iter_values(rows.map(|row| row as i64));
+                let v = strings.slice(i * BATCH_ROWS, BATCH_ROWS);
+                Ok(RecordBatch::try_new(schema.clone(), vec![Arc::new(a), v])?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let capture = assert_shuffle_compact(stream(&input, false)?, &input, "a", 4, false).await?;
+        // The first batch is written with the buffer, and the others by the megabyte of
+        // strings that each of them has copied.
+        assert!(
+            (3..BATCHES / 2).contains(&capture.writes),
+            "{} writes",
+            capture.writes
+        );
+        Ok(())
+    }
+
+    /// An input batch larger than the budget of the write is written apart from the rows
+    /// held before it. The string offsets of an output batch then overflow only if those
+    /// of an input batch do.
+    #[tokio::test]
+    async fn hash_shuffle_writes_an_input_batch_above_the_budget_apart() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, false),
+            Field::new("s", DataType::Utf8, false),
+        ]));
+        let batch = |rows: usize, len: usize| -> Result<RecordBatch> {
+            let k = Int64Array::from_iter_values(std::iter::repeat_n(0, rows));
+            let s = StringArray::from_iter_values((0..rows).map(|row| format!("{row:0>len$}")));
+            Ok(RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(k), Arc::new(s)],
+            )?)
+        };
+        // 1 MiB, 12 MiB, and 1 MiB of strings, all for one channel.
+        let input = vec![batch(1000, 1024)?, batch(3000, 4096)?, batch(1000, 1024)?];
+        let capture = assert_shuffle_compact(stream(&input, false)?, &input, "k", 2, true).await?;
+        let rows: Vec<usize> = capture
+            .channels
+            .iter()
+            .flatten()
+            .map(|batch| batch.num_rows())
+            .collect();
+        assert_eq!(rows, [1000, 3000, 1000]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hash_shuffle_output_matches_batch_partitioner_for_any_channel_count() -> Result<()> {
+        let input = input(4)?;
+        for channels in [2, 3, 7, 13, 97, 1009] {
+            assert_shuffle_compact(memory(&input)?, &input, "a", channels, true).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shuffle_writes_the_rows_of_batches_without_columns() -> Result<()> {
+        let schema = Arc::new(Schema::empty());
+        let batch = |rows: usize| -> Result<RecordBatch> {
+            let options = RecordBatchOptions::new().with_row_count(Some(rows));
+            Ok(RecordBatch::try_new_with_options(
+                schema.clone(),
+                vec![],
+                &options,
+            )?)
+        };
+        let input = vec![batch(10)?, batch(5000)?, batch(7)?];
+        for (partitioning, expected) in [
+            (ShufflePartitioning::RoundRobinBatch(3), [10, 5000, 7]),
+            (ShufflePartitioning::RoundRobinRow(3), [1673, 1672, 1672]),
+        ] {
+            for unbounded in [false, true] {
+                let capture = shuffle_with(
+                    stream(&input, unbounded)?,
+                    partitioning.clone(),
+                    TaskStreamWriteState::Active,
+                )
+                .await?;
+                let rows: Vec<usize> = capture
+                    .channels
+                    .iter()
+                    .map(|output| output.iter().map(|batch| batch.num_rows()).sum())
+                    .collect();
+                assert_eq!(rows, expected);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shuffle_writes_null_columns() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, false),
+            Field::new("n", DataType::Null, true),
+        ]));
+        let mut base = 0;
+        let input = [100, 5000, 3]
+            .into_iter()
+            .map(|rows| {
+                let k = Int64Array::from_iter_values(base..base + rows as i64);
+                base += rows as i64;
+                Ok(RecordBatch::try_new(
+                    schema.clone(),
+                    vec![Arc::new(k), Arc::new(NullArray::new(rows))],
+                )?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for partitioning in [
+            hash(&schema, "k", 3)?,
+            ShufflePartitioning::RoundRobinRow(3),
+            ShufflePartitioning::RoundRobinBatch(2),
+        ] {
+            for unbounded in [false, true] {
+                let capture = shuffle_with(
+                    stream(&input, unbounded)?,
+                    partitioning.clone(),
+                    TaskStreamWriteState::Active,
+                )
+                .await?;
+                let output: Vec<RecordBatch> = capture.channels.into_iter().flatten().collect();
+                assert_eq!(matrix_rows(&output)?, matrix_rows(&input)?);
+            }
+        }
+        Ok(())
+    }
+
+    mod memory;
+    mod probe;
 }

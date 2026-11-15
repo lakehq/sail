@@ -120,7 +120,8 @@ fn trim_list<O: OffsetSizeTrait>(array: ArrayRef, detach: bool) -> Result<ArrayR
     let offsets = &data.buffers()[0].typed_data::<O>()[data.offset()..=data.offset() + data.len()];
     let start = offsets[0].as_usize();
     let end = offsets[data.len()].as_usize();
-    let values = make_array(data.child_data()[0].slice(start, end - start));
+    // Slicing the data of a struct and making an array of it would apply the offset twice.
+    let values = make_array(data.child_data()[0].clone()).slice(start, end - start);
     let trimmed = trim(Arc::clone(&values), detach)?;
     if Arc::ptr_eq(&values, &trimmed) {
         return Ok(array);
@@ -488,7 +489,7 @@ fn contains(data_type: &DataType, matches: &dyn Fn(&DataType) -> bool) -> bool {
 }
 
 /// Returns whether a type has list views, which `MutableArrayData` would copy value by value.
-fn contains_list_view(data_type: &DataType) -> bool {
+pub(super) fn contains_list_view(data_type: &DataType) -> bool {
     contains(data_type, &|t| {
         matches!(t, DataType::ListView(_) | DataType::LargeListView(_))
     })
