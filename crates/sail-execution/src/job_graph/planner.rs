@@ -357,9 +357,10 @@ fn build_job_graph(
     plan_job_graph_stages(plan, usage, graph, DriverStageHandling::CreateStage, None)
 }
 
-// Plain exchanges finish at a reusable input, with no row selection, computation,
-// or ordering restoration remaining above the exchange. A merge without a fetch is
-// also plain, since every reading task merges the same input streams in full.
+// Plain exchanges finish at a reusable input that every reading task receives in full,
+// with no row selection, computation, or added sort above the exchange. A merge without
+// a fetch merges the sorted input streams directly, while an order-preserving
+// repartition needs a sort above the shuffle.
 fn is_plain_exchange(plan: &dyn ExecutionPlan) -> bool {
     plan.downcast_ref::<CoalescePartitionsExec>()
         .is_some_and(|coalesce| coalesce.fetch().is_none())
@@ -382,8 +383,9 @@ fn repartition_ordering_to_restore(repartition: &RepartitionExec) -> Option<&Lex
 }
 
 /// Returns whether every join task that computes this build itself gets the same rows.
-/// This holds for projections and filters without volatile expressions over in-memory or
-/// range sources, or over plain exchanges, whose complete output every reading task receives.
+/// This holds for projections and filters without volatile expressions over in-memory, range,
+/// empty, or placeholder sources, or over plain exchanges, whose complete output every reading
+/// task receives.
 /// Other operators, such as limits, aggregates, or windows over rows read from a shuffle,
 /// may give different rows in different tasks.
 fn is_reproducible_build(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
@@ -444,7 +446,7 @@ fn plan_job_graph_stages(
     if matches!(usage, PartitionUsage::Shared)
         && plan.output_partitioning().partition_count() == 1
         && !is_plain_exchange(plan.as_ref())
-        && (contains_file_scan(&plan)? || !is_reproducible_build(&plan)?)
+        && (!is_reproducible_build(&plan)? || contains_file_scan(&plan)?)
     {
         // The complete build relation is shared, including limits, TopK, pushed-down
         // fetches, and volatile expressions. Sharing only its inputs can select different
@@ -1632,7 +1634,7 @@ mod tests {
                 let key = col("id", &schema()).unwrap();
                 let ordering: LexOrdering = [PhysicalSortExpr::new_default(key.clone())].into();
                 let filter = binary(key.clone(), Operator::Eq, key.clone(), &schema()).unwrap();
-                let mut roots: Vec<Arc<dyn ExecutionPlan>> = vec![
+                let roots: Vec<Arc<dyn ExecutionPlan>> = vec![
                     Arc::new(SortExec::new(ordering.clone(), coalesced.clone()).with_fetch(fetch)),
                     Arc::new(
                         SortExec::new(
@@ -1658,11 +1660,11 @@ mod tests {
                         .with_fetch(fetch),
                     ),
                 ];
-                if fetch.is_none() {
-                    // Every join task recomputes a filter or merge without a fetch itself.
-                    roots.truncate(2);
-                }
                 for build in roots {
+                    if fetch.is_none() && !build.is::<SortExec>() {
+                        // Every join task computes a filter or merge without a fetch itself.
+                        continue;
+                    }
                     let name = build.name().to_string();
                     let ordering = build.output_ordering().cloned();
                     let join = HashJoinExec::try_new(
@@ -1864,7 +1866,7 @@ mod tests {
     }
 
     #[test]
-    fn nondeterministic_shared_builds_are_materialized() {
+    fn shared_builds_that_may_differ_per_task_are_materialized() {
         use datafusion::config::ConfigOptions;
         use datafusion::datasource::memory::MemorySourceConfig;
         use datafusion::physical_expr::ScalarFunctionExpr;
@@ -1957,7 +1959,7 @@ mod tests {
             };
             for build in [
                 project(file_scan(1)),
-                // The scan is already read once, but the projection is still shared.
+                // As on main, a file scan anywhere in the build materializes it.
                 project(Arc::new(CoalescePartitionsExec::new(file_scan(2)))),
             ] {
                 let graph = JobGraph::try_new(shared_join(build), options.clone()).unwrap();
