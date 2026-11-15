@@ -684,7 +684,7 @@ fn rewrite_map_zip_with_temporal_key(
     ));
     let body = match (source_key_type, target_key_type) {
         (
-            DataType::Date32 | DataType::Date64,
+            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None),
             DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
         ) => cast_timestamp_ntz_to_ltz(
             cast(key, DataType::Timestamp(TimeUnit::Microsecond, None)),
