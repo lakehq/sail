@@ -14,7 +14,6 @@ workspace = true
 
 [dependencies]
 sail-common-spark = { path = "../sail-common-spark" }
-sail-spark-connect = { path = "../sail-spark-connect" }
 
 clap = { workspace = true }
 serde = { workspace = true }
