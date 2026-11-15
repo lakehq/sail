@@ -660,7 +660,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rejects_unresolved_or_invalid_lambda_parameters() {
+    fn test_rejects_unresolved_or_invalid_lambda_parameters() -> Result<()> {
         let error = resolve_test_parameters(InferenceBehavior::NeverCompletes)
             .expect_err("non-converging inference must fail");
         assert!(error.to_string().contains("within 2 iterations"));
