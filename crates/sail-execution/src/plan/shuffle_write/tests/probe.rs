@@ -5,6 +5,9 @@
 //! write on the test thread, and the other tests of the binary run on their own threads,
 //! so the count is exact however many tests run at once. Memory that a write allocates on
 //! another thread is not counted.
+//!
+//! The `#[global_allocator]` of this module is the allocator of every unit test of this
+//! crate, and it counts only inside a probe.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;

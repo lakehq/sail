@@ -188,6 +188,7 @@ impl ShuffleBuffer {
         self.push(schema, columns, rows, large, flush)
     }
 
+    // [CREDIT]: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L1345-L1392
     /// Holds a batch with the rows of each channel, and returns what is to be written.
     /// The lists of rows are left empty.
     ///

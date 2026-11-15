@@ -173,10 +173,10 @@ enum Router {
         expressions: Vec<Arc<dyn PhysicalExpr>>,
     },
     Hash {
-        expressions: Vec<Arc<dyn PhysicalExpr>>,
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
         channels: usize,
-        reducer: StrengthReducedU64,
-        hashes: Vec<u64>,
+        partition_reducer: StrengthReducedU64,
+        hash_buffer: Vec<u64>,
     },
     Range(RangeExpr),
     RoundRobinRow {
@@ -195,11 +195,11 @@ impl Router {
             ShufflePartitioning::Hash(_, 0) => {
                 return internal_err!("Hash repartition requires at least one partition");
             }
-            ShufflePartitioning::Hash(expressions, channels) => Self::Hash {
-                expressions: expressions.clone(),
+            ShufflePartitioning::Hash(exprs, channels) => Self::Hash {
+                exprs: exprs.clone(),
                 channels: *channels,
-                reducer: StrengthReducedU64::new(*channels as u64),
-                hashes: vec![],
+                partition_reducer: StrengthReducedU64::new(*channels as u64),
+                hash_buffer: vec![],
             },
             ShufflePartitioning::Range(range) if range.split_points().is_empty() => Self::Batch {
                 channels: 1,
@@ -212,10 +212,11 @@ impl Router {
                     .iter()
                     .map(|sort_expr| Arc::clone(&sort_expr.expr))
                     .collect();
-                // TODO: Uncomment after DataFusion 56
+                // TODO: Uncomment after DataFusion 56, and pass the input schema to the router.
                 // Self::Range(RangeExpr::try_new_with_schema(keys, range, schema)?)
                 Self::Range(RangeExpr::try_new(keys, range)?)
             }
+            // [CREDIT]: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L1056-L1069
             ShufflePartitioning::RoundRobinBatch(channels) => Self::Batch {
                 channels: *channels,
                 next: (partition * channels) / num_input_partitions,
@@ -241,13 +242,11 @@ impl Router {
         // With one channel there is nothing to compute for the rows.
         Ok(match router {
             Self::Hash {
-                expressions,
-                channels: 1,
-                ..
+                exprs, channels: 1, ..
             } => Self::Batch {
                 channels: 1,
                 next: 0,
-                expressions,
+                expressions: exprs,
             },
             Self::RoundRobinRow { channels: 1, .. } => Self::Batch {
                 channels: 1,
@@ -259,15 +258,16 @@ impl Router {
     }
 
     /// Holds a batch in the buffer by the channels of its rows, and returns what is to
-    /// be written. `rows` has the rows of each channel, and is left empty.
+    /// be written. `indices` has the rows of each channel, and is left empty.
     fn push(
         &mut self,
         batch: RecordBatch,
-        rows: &mut Vec<Vec<u32>>,
+        indices: &mut Vec<Vec<u32>>,
         buffer: &mut ShuffleBuffer,
         flush: bool,
     ) -> Result<Vec<Round>> {
         match self {
+            // [CREDIT]: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L1241-L1248
             Self::Batch {
                 channels,
                 next,
@@ -280,35 +280,39 @@ impl Router {
             }
             // [CREDIT]: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L1249-L1274
             Self::Hash {
-                expressions,
+                exprs,
                 channels,
-                reducer,
-                hashes,
+                partition_reducer,
+                hash_buffer,
             } => {
-                let arrays = evaluate_expressions_to_arrays(expressions.as_slice(), &batch)?;
+                let arrays = evaluate_expressions_to_arrays(exprs.as_slice(), &batch)?;
 
-                hashes.clear();
-                hashes.resize(batch.num_rows(), 0);
+                hash_buffer.clear();
+                hash_buffer.resize(batch.num_rows(), 0);
 
-                create_hashes(&arrays, REPARTITION_RANDOM_STATE.random_state(), hashes)?;
+                create_hashes(
+                    &arrays,
+                    REPARTITION_RANDOM_STATE.random_state(),
+                    hash_buffer,
+                )?;
 
-                rows.resize(*channels, vec![]);
+                indices.resize(*channels, vec![]);
 
-                reducer.partition_indices(hashes, rows);
+                partition_reducer.partition_indices(hash_buffer, indices);
             }
             Self::Range(expression) => {
                 let channels = expression.evaluate(&batch)?.into_array(batch.num_rows())?;
                 let channels = channels.as_primitive::<UInt64Type>();
-                rows.resize(expression.split_points().len() + 1, vec![]);
+                indices.resize(expression.split_points().len() + 1, vec![]);
                 for (row, channel) in channels.values().iter().enumerate() {
-                    rows[*channel as usize].push(row as u32);
+                    indices[*channel as usize].push(row as u32);
                 }
             }
             Self::RoundRobinRow { channels, next } => {
-                rows.resize(*channels, vec![]);
+                indices.resize(*channels, vec![]);
                 let mut channel = *next;
                 for row in 0..batch.num_rows() {
-                    rows[channel].push(row as u32);
+                    indices[channel].push(row as u32);
                     channel += 1;
                     if channel == *channels {
                         channel = 0;
@@ -317,7 +321,7 @@ impl Router {
                 *next = channel;
             }
         }
-        buffer.push_rows(batch, rows, flush)
+        buffer.push_rows(batch, indices, flush)
     }
 }
 
