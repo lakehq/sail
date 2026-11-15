@@ -2142,16 +2142,6 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobinBatch(channels=1)
-    placement=Worker
-    ProjectionExec: expr=[id@0 as __sail_src_id, true as __sail_merge_source_row_present]
-      FilterExec: id@0 < 10
-        RangeExec: start=0, end=10, step=1, num_partitions=1, projection=[0]
-
-    === stage 1 ===
-    inputs=[]
-    mode=Pipelined
-    partitions=1
     distribution=RoundRobinBatch(channels=4)
     placement=Worker
     ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_file_metadata@4 as __sail_iceberg_file_metadata, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
@@ -2160,18 +2150,20 @@ data:
           IcebergMergeMetadataExec: data_file_column=__sail_file_path
             DataSourceExec: file_groups={1 group: [[<tmp>/distributed_iceberg_commit/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_file_metadata, __sail_iceberg_row_position], output_partitioning=Hash([__sail_file_path@1, __sail_iceberg_partition_spec_id@2, __sail_iceberg_file_metadata@3], 1), file_type=parquet
 
-    === stage 2 ===
-    inputs=[StageInput(stage=0, mode=Broadcast), StageInput(stage=1, mode=Shuffle)]
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
     mode=Pipelined
     partitions=4
     distribution=Hash(keys=[__sail_merge_target_row_id@5], channels=4)
     placement=Worker
     HashJoinExec: mode=CollectLeft, join_type=Right, on=[(__sail_src_id@0, id@0)], filter=id@0 < 10, projection=[id@2, __sail_file_path@3, __sail_file_row_index@4, __sail_iceberg_partition_spec_id@5, __sail_iceberg_file_metadata@6, __sail_merge_target_row_id@7, __sail_merge_target_row_present@8, __sail_src_id@0, __sail_merge_source_row_present@1]
-      StageInputExec: input=0, partitioning=RoundRobinBatch(1)
-      StageInputExec: input=1, partitioning=RoundRobinBatch(4)
+      ProjectionExec: expr=[id@0 as __sail_src_id, true as __sail_merge_source_row_present]
+        FilterExec: id@0 < 10
+          RangeExec: start=0, end=10, step=1, num_partitions=1, projection=[0]
+      StageInputExec: input=0, partitioning=RoundRobinBatch(4)
 
-    === stage 3 ===
-    inputs=[StageInput(stage=2, mode=Shuffle)]
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Shuffle)]
     mode=Pipelined
     partitions=4
     distribution=Hash(keys=[__sail_file_path@1], channels=4)
@@ -2181,8 +2173,8 @@ data:
         MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
           StageInputExec: input=0, partitioning=Hash([__sail_merge_target_row_id@5], 4)
 
-    === stage 4 ===
-    inputs=[StageInput(stage=3, mode=Shuffle)]
+    === stage 3 ===
+    inputs=[StageInput(stage=2, mode=Shuffle)]
     mode=Pipelined
     partitions=4
     distribution=RoundRobinBatch(channels=1)
@@ -2193,8 +2185,8 @@ data:
           SortExec: expr=[__sail_file_path@1 ASC NULLS LAST, __sail_operation_type@5 DESC NULLS LAST], preserve_partitioning=[true]
             StageInputExec: input=0, partitioning=Hash([__sail_file_path@1], 4)
 
-    === stage 5 ===
-    inputs=[StageInput(stage=4, mode=Shuffle)]
+    === stage 4 ===
+    inputs=[StageInput(stage=3, mode=Shuffle)]
     mode=Pipelined
     partitions=1
     distribution=RoundRobinBatch(channels=1)
@@ -2202,8 +2194,8 @@ data:
     IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/)
       StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 
-    === stage 6 ===
-    inputs=[StageInput(stage=5, mode=Forward)]
+    === stage 5 ===
+    inputs=[StageInput(stage=4, mode=Forward)]
     mode=Pipelined
     partitions=1
     distribution=RoundRobinBatch(channels=1)
