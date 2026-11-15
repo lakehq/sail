@@ -9,12 +9,6 @@ pub struct ShuffleWriteConfig {
     buffer_size: usize,
 }
 
-impl Default for ShuffleWriteConfig {
-    fn default() -> Self {
-        Self::new(DEFAULT_SHUFFLE_WRITE_BUFFER_SIZE)
-    }
-}
-
 impl ShuffleWriteConfig {
     pub fn new(buffer_size: usize) -> Self {
         Self { buffer_size }
