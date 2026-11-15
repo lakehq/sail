@@ -235,6 +235,7 @@ impl ShuffleBuffer {
         // A list keeps the memory of the most rows that its channel has had in one batch,
         // which adds up to a batch for every channel when the rows of each batch go to
         // other channels than those of the batch before.
+        // Four times, as a list starts with four entries and doubles, and rows change channels.
         if capacity > 4 * (self.batch_size.max(batch.num_rows()) + rows.len()) {
             rows.fill_with(Vec::new);
         }
