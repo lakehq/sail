@@ -1872,10 +1872,9 @@ mod tests {
             })
             .collect::<Result<Vec<_>>>()?;
         let capture = assert_shuffle_compact(stream(&input, false)?, &input, "a", 4, false).await?;
-        // The first batch is written with the buffer, and the others by the megabyte of
-        // strings that each of them has copied.
+        // The batches are held by the megabyte of strings that each of them uses.
         assert!(
-            (3..BATCHES / 2).contains(&capture.writes),
+            (2..BATCHES / 2).contains(&capture.writes),
             "{} writes",
             capture.writes
         );
@@ -1909,6 +1908,32 @@ mod tests {
             .map(|batch| batch.num_rows())
             .collect();
         assert_eq!(rows, [1000, 3000, 1000]);
+        Ok(())
+    }
+
+    /// The rows of a slice of a larger batch keep its strings and list values alive, which
+    /// does not make each input batch fill the budget of the write.
+    #[tokio::test]
+    async fn hash_shuffle_holds_input_batches_that_are_slices_of_larger_ones() -> Result<()> {
+        for kind in [
+            "utf8_view",
+            "nullable_list",
+            "struct_of_list_view",
+            "dictionary",
+        ] {
+            // Each batch is a quarter of one that has several megabytes of strings.
+            let input = matrix_input(kind, "sliced", &[2000; 4])?;
+            let partitioning = hash(&input[0].schema(), "k", 13)?;
+            let capture = shuffle_with(
+                stream(&input, false)?,
+                partitioning,
+                TaskStreamWriteState::Active,
+            )
+            .await?;
+            assert_eq!(capture.writes, 1, "{kind}");
+            let output: Vec<RecordBatch> = capture.channels.into_iter().flatten().collect();
+            assert_eq!(matrix_rows(&output)?, matrix_rows(&input)?, "{kind}");
+        }
         Ok(())
     }
 

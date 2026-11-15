@@ -92,6 +92,17 @@ impl SharedBuffers {
         (distinct, distinct && !self.written.contains(&pointer))
     }
 
+    /// Returns the bytes of a buffer unless the held batches, or those of the previous
+    /// flush, have it.
+    fn fresh_bytes(&self, buffer: &Buffer) -> usize {
+        let pointer = buffer.data_ptr().as_ptr() as usize;
+        if self.held.contains(&pointer) || self.written.contains(&pointer) {
+            0
+        } else {
+            buffer.capacity()
+        }
+    }
+
     /// Returns the bytes that a buffer adds to the held batches.
     ///
     /// A buffer that the batches of the previous flush had as well belongs to the input
@@ -232,8 +243,41 @@ impl ShuffleBuffer {
             order[*position as usize] = row as u32;
             *position += 1;
         }
-        let columns = take_arrays(batch.columns(), &UInt32Array::from(order), None)?;
+        let columns = take_arrays(batch.columns(), &UInt32Array::from(order), None)?
+            .into_iter()
+            .zip(&self.views)
+            .map(|(column, views)| self.detach(column, views.is_some()))
+            .collect::<Result<Vec<_>>>()?;
         self.push(batch.schema(), columns, batch.num_rows(), false, flush)
+    }
+
+    /// Compacts a reordered column that keeps much more of its input alive than its rows
+    /// use, as the rows of a slice of a larger batch do.
+    ///
+    /// Holding such columns as they are would fill the budget with a few rows. Whether
+    /// the rows use what they keep alive is only known for the strings of a view column,
+    /// so other columns are compacted whenever they share a large part of the budget.
+    fn detach(&self, column: ArrayRef, views: bool) -> Result<ArrayRef> {
+        if column.data_type().is_primitive() {
+            return Ok(column);
+        }
+        let data = column.to_data();
+        let sparse = if views {
+            let strings: usize = data.buffers()[1..].iter().map(Buffer::capacity).sum();
+            strings > 2 * referenced_bytes(&data)
+        } else {
+            let mut shared = 0;
+            array_bytes(&data, false, &mut |buffer| {
+                shared += self.shared.fresh_bytes(buffer);
+                0
+            });
+            shared >= self.budget / 8
+        };
+        if sparse {
+            trim(column, false)
+        } else {
+            Ok(column)
+        }
     }
 
     fn push(
@@ -317,7 +361,8 @@ impl ShuffleBuffer {
                 self.bytes += if self.whole || column.data_type().is_primitive() {
                     column.get_buffer_memory_size()
                 } else {
-                    shared_bytes(&column.to_data(), false, &mut self.shared)
+                    let shared = &mut self.shared;
+                    array_bytes(&column.to_data(), false, &mut |buffer| shared.bytes(buffer))
                 };
                 continue;
             };
@@ -337,12 +382,7 @@ impl ShuffleBuffer {
                     views.fresh += buffer.capacity();
                 }
             }
-            views.referenced += data.buffer::<u128>(0)[..data.len()]
-                .iter()
-                .map(|&view| view as u32)
-                .filter(|&len| len > MAX_INLINE_VIEW_LEN)
-                .map(|len| len as usize)
-                .sum::<usize>();
+            views.referenced += referenced_bytes(&data);
         }
     }
 
@@ -579,12 +619,23 @@ fn place(rounds: &mut Vec<Round>, round: &mut usize, channel: usize, batch: Reco
     *round += 1;
 }
 
+/// Returns the bytes of the strings of a view array that are too long to inline,
+/// counted for every view.
+fn referenced_bytes(data: &ArrayData) -> usize {
+    data.buffer::<u128>(0)[..data.len()]
+        .iter()
+        .map(|&view| view as u32)
+        .filter(|&len| len > MAX_INLINE_VIEW_LEN)
+        .map(|len| len as usize)
+        .sum()
+}
+
 /// Returns the bytes of the buffers of an array whose rows have been taken from an input
-/// batch, counting once the buffers that it shares with other held batches.
+/// batch, with `count` giving the bytes of each buffer that it shares with its input.
 ///
 /// `take` leaves the strings of views and the values of dictionaries and list views in
 /// the buffers of its input. `shared` is set for an array inside such values.
-fn shared_bytes(data: &ArrayData, shared: bool, buffers: &mut SharedBuffers) -> usize {
+fn array_bytes(data: &ArrayData, shared: bool, count: &mut dyn FnMut(&Buffer) -> usize) -> usize {
     let views = matches!(data.data_type(), DataType::Utf8View | DataType::BinaryView);
     let mut bytes = 0;
     let nulls = data.nulls().map(|nulls| nulls.buffer());
@@ -592,7 +643,7 @@ fn shared_bytes(data: &ArrayData, shared: bool, buffers: &mut SharedBuffers) -> 
         // The nulls come after the buffers, and a view array has them of its own.
         let strings = views && (1..data.buffers().len()).contains(&i);
         bytes += if shared || strings {
-            buffers.bytes(buffer)
+            count(buffer)
         } else {
             buffer.capacity()
         };
@@ -603,7 +654,7 @@ fn shared_bytes(data: &ArrayData, shared: bool, buffers: &mut SharedBuffers) -> 
             DataType::Dictionary(_, _) | DataType::ListView(_) | DataType::LargeListView(_)
         );
     for child in data.child_data() {
-        bytes += shared_bytes(child, shared, buffers);
+        bytes += array_bytes(child, shared, count);
     }
     bytes
 }
