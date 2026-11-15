@@ -12,11 +12,10 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
 use futures::FutureExt;
 
-use super::probe::{
-    HeapProbe, arrays, channel_batch_limit, heap_held, heap_take_peak, key_partitioning,
-    output_limit, probed_shuffle, task_batch_limit,
+use super::probe::{arrays, key_partitioning, output_limit, probed_shuffle};
+use super::{
+    assert_compact, matrix_column, matrix_input, matrix_list, matrix_rows, shuffle_with, stream,
 };
-use super::{assert_compact, matrix_column, matrix_input, matrix_list, matrix_rows};
 use crate::stream::writer::TaskStreamWriteState;
 
 const BATCH_SIZE: usize = 8192;
@@ -28,15 +27,14 @@ const BUDGET: usize = 8 * 1024 * 1024;
 /// size for each.
 ///
 /// The wide input has 50 columns of integers, floats, strings, and view strings.
-const INPUTS: [(&str, usize, usize); 3] = [
+pub(super) const INPUTS: [(&str, usize, usize); 3] = [
     ("narrow", 4000, BATCH_SIZE),
     ("strings", 2000, BATCH_SIZE),
     ("wide", 1000, BATCH_SIZE),
 ];
 
-/// Inputs with the batch size and the number of partitions that the published TPC-DS
-/// runs are configured with.
-const LARGE_BATCH_INPUTS: [(&str, usize, usize); 2] =
+/// Inputs for a large batch size with a few hundred channels.
+pub(super) const LARGE_BATCH_INPUTS: [(&str, usize, usize); 2] =
     [("narrow", 256, 262144), ("wide", 256, 262144)];
 
 fn input_kinds(name: &str) -> Vec<&'static str> {
@@ -107,7 +105,11 @@ fn few_rows_input(name: &str, batches: usize, rows: usize) -> Result<Vec<RecordB
 /// Hash, range, and row round-robin partitioning spread each of eight input batches over
 /// all the channels. Batch round-robin partitioning gives a whole input batch to one
 /// channel, so its input is two batches of four rows for each channel.
-fn few_rows_per_channel(name: &str, scheme: &str, channels: usize) -> Result<Vec<RecordBatch>> {
+pub(super) fn few_rows_per_channel(
+    name: &str,
+    scheme: &str,
+    channels: usize,
+) -> Result<Vec<RecordBatch>> {
     if scheme == "round_robin_batch" {
         few_rows_input(name, 2 * channels, 4)
     } else {
@@ -118,7 +120,7 @@ fn few_rows_per_channel(name: &str, scheme: &str, channels: usize) -> Result<Vec
 /// Shuffles each input and compares the heap that the write holds as it pulls each input
 /// batch, and at most in between, with the bytes of the input pulled so far.
 ///
-/// Returns where it holds more than they account for. The measurements are printed.
+/// Returns where it holds more than they account for.
 async fn few_rows_per_channel_violations(
     scheme: &str,
     unbounded: bool,
@@ -150,16 +152,6 @@ async fn few_rows_per_channel_violations(
             );
         }
         let found = probe.heap_violations(channels, arrays(&input[0]), batch_size);
-        println!(
-            "shuffle-memory: scheme={scheme} unbounded={unbounded} input={name} \
-             channels={channels} batch_size={batch_size} input_bytes={} held={} peak={} \
-             batches={} violations={}",
-            probe.input_bytes,
-            probe.max_held(),
-            probe.max_peak(),
-            probe.written_batches,
-            found.len()
-        );
         violations.extend(found.into_iter().map(|violation| {
             format!(
                 "{scheme} shuffle (unbounded: {unbounded}), {name} input, {channels} channels, \
@@ -192,23 +184,6 @@ async fn check_large_batch_size(unbounded: bool) -> Result<()> {
         violations.join("\n")
     );
     Ok(())
-}
-
-#[test]
-fn heap_probe_counts_the_memory_of_its_thread() {
-    const MIB: usize = 1024 * 1024;
-    let probe = HeapProbe::start();
-    let block = std::hint::black_box(vec![1u8; MIB]);
-    assert!(heap_held() >= MIB);
-    // Memory of other threads is not counted.
-    let other = std::thread::spawn(|| std::hint::black_box(vec![1u8; 4 * MIB]).len());
-    assert!(other.join().is_ok());
-    assert!(heap_held() < 2 * MIB);
-    drop(block);
-    assert!(heap_held() < MIB / 16);
-    assert!(heap_take_peak() >= MIB);
-    assert!(heap_take_peak() < MIB / 16);
-    drop(probe);
 }
 
 #[tokio::test]
@@ -286,7 +261,6 @@ async fn shuffle_memory_of_few_rows_per_channel_does_not_grow_with_the_batch_siz
             assert_eq!(probe.written_rows, 8 * channels);
             held.push(probe.max_held());
         }
-        println!("shuffle-batch-size: scheme={scheme} channels={channels} held={held:?}");
         if held[1].max(held[2]) > 2 * held[0] + 64 * 1024 {
             failures.push(format!(
                 "{scheme} shuffle holds {held:?} bytes with batches of 512, 8192, and 262144 rows"
@@ -335,11 +309,6 @@ async fn shuffle_output_of_few_rows_per_channel_holds_little_memory() -> Result<
                 }
                 let input_bytes: usize = input.iter().map(|b| b.get_array_memory_size()).sum();
                 let limit = output_limit(input_bytes, probe.written_batches, arrays(&input[0]));
-                println!(
-                    "shuffle-output: {case} input_bytes={input_bytes} batches={} held={} \
-                     limit={limit} compact={compact}",
-                    probe.written_batches, probe.held_at_end
-                );
                 if !compact {
                     failures.push(format!(
                         "{case}: a channel holds batches that are not compact"
@@ -390,8 +359,13 @@ async fn shuffle_output_of_many_rows_per_channel_has_few_batches() -> Result<()>
         assert_eq!(probe.written_rows, task_rows);
         for (channel, output) in probe.channels.iter().enumerate() {
             let rows: usize = output.iter().map(|batch| batch.num_rows()).sum();
-            let limit =
-                channel_batch_limit(rows, task_rows, task_bytes, channels, BATCH_SIZE, BUDGET);
+            // Twice the fewest batches that can hold the rows, and one for each time that
+            // the write can write every channel: when it holds a batch of rows for each
+            // of them, or as many bytes as it may.
+            let limit = 2 * rows.div_ceil(BATCH_SIZE)
+                + task_rows.div_ceil(channels * BATCH_SIZE)
+                + task_bytes.div_ceil(BUDGET)
+                + 1;
             assert!(
                 output.len() <= limit,
                 "channel {channel} of a {scheme} shuffle has {} batches for {rows} rows, limit {limit}",
@@ -402,7 +376,8 @@ async fn shuffle_output_of_many_rows_per_channel_has_few_batches() -> Result<()>
                 "channel {channel} of a {scheme} shuffle has a batch above the batch size"
             );
         }
-        let limit = task_batch_limit(task_rows, task_bytes, channels, BATCH_SIZE, BUDGET);
+        let limit = 2 * (task_rows.div_ceil(BATCH_SIZE) + channels * task_bytes.div_ceil(BUDGET))
+            + channels;
         assert!(
             probe.written_batches <= limit,
             "a {scheme} shuffle wrote {} batches for {task_rows} rows, limit {limit}",
@@ -485,19 +460,13 @@ async fn shuffle_of_sliced_nested_input_writes_its_rows() -> Result<()> {
             for unbounded in [false, true] {
                 let case = format!("{kind} column, {scheme} shuffle (unbounded: {unbounded})");
                 let partitioning = key_partitioning(scheme, &input, 3)?;
-                let shuffle = probed_shuffle(
-                    &input,
-                    partitioning,
-                    unbounded,
-                    BATCH_SIZE,
-                    TaskStreamWriteState::Active,
-                    true,
-                );
-                let Ok(probe) = AssertUnwindSafe(shuffle).catch_unwind().await else {
+                let state = TaskStreamWriteState::Active;
+                let shuffle = shuffle_with(stream(&input, unbounded)?, partitioning, state);
+                let Ok(capture) = AssertUnwindSafe(shuffle).catch_unwind().await else {
                     failures.push(format!("{case}: the write panicked"));
                     continue;
                 };
-                let output: Vec<RecordBatch> = probe?.channels.into_iter().flatten().collect();
+                let output: Vec<RecordBatch> = capture?.channels.into_iter().flatten().collect();
                 if output.is_empty() || matrix_rows(&output)? != matrix_rows(&input)? {
                     failures.push(format!("{case}: the output rows differ from the input"));
                 }

@@ -111,10 +111,10 @@ unsafe impl GlobalAlloc for ThreadHeap {
 static HEAP: ThreadHeap = ThreadHeap;
 
 /// Counts the heap memory of the current thread from zero until it is dropped.
-pub(super) struct HeapProbe(());
+struct HeapProbe(());
 
 impl HeapProbe {
-    pub(super) fn start() -> Self {
+    fn start() -> Self {
         COUNTERS.with(|counters| {
             counters.live.set(0);
             counters.peak.set(0);
@@ -131,12 +131,12 @@ impl Drop for HeapProbe {
 }
 
 /// Returns the bytes that the current thread has allocated and not freed since its probe started.
-pub(super) fn heap_held() -> usize {
+fn heap_held() -> usize {
     COUNTERS.with(|counters| counters.live.get().max(0) as usize)
 }
 
 /// Returns the most bytes held since the probe started or since the last call.
-pub(super) fn heap_take_peak() -> usize {
+fn heap_take_peak() -> usize {
     COUNTERS.with(|counters| {
         let peak = counters.peak.get().max(0) as usize;
         counters.peak.set(counters.live.get());
@@ -186,11 +186,9 @@ pub(super) struct Probe {
     pub(super) input_bytes: usize,
     pub(super) written_rows: usize,
     pub(super) written_batches: usize,
-    /// One sample before each input batch is pulled, one at the end of the input, and one
-    /// at each write.
+    /// One sample before each input batch is pulled, one at the end of the input, one at
+    /// each write, and one when the write is over.
     pub(super) samples: Vec<Sample>,
-    /// The most held after the last sample.
-    pub(super) last_peak: usize,
     /// The heap held once the write is over, which is the retained output.
     pub(super) held_at_end: usize,
 }
@@ -218,24 +216,13 @@ impl Probe {
             .unwrap_or(0)
     }
 
-    /// Returns the most heap held at any time.
-    pub(super) fn max_peak(&self) -> usize {
-        self.samples
-            .iter()
-            .map(|sample| sample.peak)
-            .max()
-            .unwrap_or(0)
-            .max(self.last_peak)
-    }
-
     /// Describes where a write that discarded its output held more heap than the input
     /// pulled by then accounts for, giving the worst case of each kind.
     ///
-    /// Between two input batches the write holds only what it buffers, which is limited
-    /// by the input alone. While it partitions or writes a batch, each channel can also
-    /// have one small output batch in flight, and the rows pulled so far can be in full
-    /// batches. `arrays` is the number of arrays in a batch of the schema, counting
-    /// nested ones.
+    /// As it pulls input, the write holds only what it buffers, which is limited by the
+    /// input alone. While it partitions or writes a batch, each channel can also have one
+    /// small output batch in flight, and the rows pulled so far can be in full batches.
+    /// `arrays` is the number of arrays in a batch of the schema, counting nested ones.
     pub(super) fn heap_violations(
         &self,
         channels: usize,
@@ -247,49 +234,26 @@ impl Probe {
             let batches = channels + sample.input_rows / batch_size;
             output_limit(sample.input_bytes, batches, arrays)
         };
-        let mut violations = vec![];
+        let describe = |what: &str, held: usize, limit: usize, sample: &Sample| {
+            format!(
+                "{held} bytes held {what} {} of {} input batches ({} bytes of input so far), \
+                 limit {limit}",
+                sample.input_batches, self.input_batches, sample.input_bytes
+            )
+        };
         let held = self
             .samples
             .iter()
             .filter(|sample| !sample.at_write && sample.held > held_limit(sample))
-            .max_by_key(|sample| sample.held - held_limit(sample));
-        if let Some(sample) = held {
-            violations.push(format!(
-                "{} bytes held after {} of {} input batches ({} bytes of input so far), limit {}",
-                sample.held,
-                sample.input_batches,
-                self.input_batches,
-                sample.input_bytes,
-                held_limit(sample)
-            ));
-        }
+            .max_by_key(|sample| sample.held - held_limit(sample))
+            .map(|sample| describe("after", sample.held, held_limit(sample), sample));
         let peak = self
             .samples
             .iter()
             .filter(|sample| sample.peak > peak_limit(sample))
-            .max_by_key(|sample| sample.peak - peak_limit(sample));
-        if let Some(sample) = peak {
-            violations.push(format!(
-                "{} bytes held at most within {} of {} input batches ({} bytes of input so far), limit {}",
-                sample.peak,
-                sample.input_batches,
-                self.input_batches,
-                sample.input_bytes,
-                peak_limit(sample)
-            ));
-        }
-        let last_limit = output_limit(
-            self.input_bytes,
-            channels + self.input_rows / batch_size,
-            arrays,
-        );
-        if self.last_peak > last_limit {
-            violations.push(format!(
-                "{} bytes held at most after the last write ({} bytes of input), limit {last_limit}",
-                self.last_peak, self.input_bytes
-            ));
-        }
-        violations
+            .max_by_key(|sample| sample.peak - peak_limit(sample))
+            .map(|sample| describe("at most within", sample.peak, peak_limit(sample), sample));
+        held.into_iter().chain(peak).collect()
     }
 }
 
@@ -298,34 +262,6 @@ pub(super) fn output_limit(input_bytes: usize, batches: usize, arrays: usize) ->
     INPUT_FACTOR * input_bytes
         + TASK_BYTES
         + batches * (OUTPUT_BATCH_BYTES + arrays * OUTPUT_ARRAY_BYTES)
-}
-
-/// Returns how many batches a channel may receive for its rows of bounded input: twice
-/// the fewest that can hold them, and one for each time that the write can write every
-/// channel because it holds a batch of rows for each of them or `budget` bytes.
-pub(super) fn channel_batch_limit(
-    channel_rows: usize,
-    task_rows: usize,
-    task_bytes: usize,
-    channels: usize,
-    batch_size: usize,
-    budget: usize,
-) -> usize {
-    2 * channel_rows.div_ceil(batch_size)
-        + task_rows.div_ceil(channels * batch_size)
-        + task_bytes.div_ceil(budget)
-        + 1
-}
-
-/// Returns how many batches bounded input may be written as, over all channels.
-pub(super) fn task_batch_limit(
-    task_rows: usize,
-    task_bytes: usize,
-    channels: usize,
-    batch_size: usize,
-    budget: usize,
-) -> usize {
-    2 * (task_rows.div_ceil(batch_size) + channels * task_bytes.div_ceil(budget)) + channels
 }
 
 /// Returns the number of arrays in a batch, counting nested ones.
@@ -503,7 +439,7 @@ pub(super) async fn probed_shuffle(
         let peak = heap_take_peak();
         with(&probe, |probe| {
             probe.held_at_end = held;
-            probe.last_peak = peak;
+            probe.sample(true, held, peak);
         });
         result
     };
@@ -563,4 +499,21 @@ pub(super) fn key_partitioning(
         "round_robin_batch" => ShufflePartitioning::RoundRobinBatch(channels),
         _ => ShufflePartitioning::RoundRobinRow(channels),
     })
+}
+
+#[test]
+fn heap_probe_counts_the_memory_of_its_thread() {
+    const MIB: usize = 1024 * 1024;
+    let probe = HeapProbe::start();
+    let block = std::hint::black_box(vec![1u8; MIB]);
+    assert!(heap_held() >= MIB);
+    // Memory of other threads is not counted.
+    let other = std::thread::spawn(|| std::hint::black_box(vec![1u8; 4 * MIB]).len());
+    assert!(other.join().is_ok());
+    assert!(heap_held() < 2 * MIB);
+    drop(block);
+    assert!(heap_held() < MIB / 16);
+    assert!(heap_take_peak() >= MIB);
+    assert!(heap_take_peak() < MIB / 16);
+    drop(probe);
 }

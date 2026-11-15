@@ -1068,7 +1068,7 @@ mod tests {
     /// Checks that a channel's batches share no memory with the input.
     ///
     /// This only holds when every channel receives a small part of each input batch,
-    /// since the coalescer otherwise keeps sharing view payloads it mostly uses.
+    /// since a channel otherwise keeps sharing view payloads that it mostly uses.
     fn assert_not_shared(input: &[RecordBatch], channel: usize, output: &[RecordBatch]) {
         let input_ranges = batch_ranges(input);
         let shared = batch_ranges(output)
@@ -1191,7 +1191,7 @@ mod tests {
         Ok(())
     }
 
-    /// The coalescer copies view strings into blocks that grow from batch to batch.
+    /// Each channel is written with the rows of many input batches at once.
     #[tokio::test]
     async fn hash_shuffle_output_of_many_string_batches_is_compact() -> Result<()> {
         let input = nested_input(32, ROWS)?;
@@ -1243,7 +1243,7 @@ mod tests {
         Ok(())
     }
 
-    /// The coalescer merges a large whole input batch into a small buffered one.
+    /// A large whole input batch arrives while a small one is held.
     #[tokio::test]
     async fn round_robin_shuffle_output_of_large_input_batch_after_small_one_does_not_retain_it()
     -> Result<()> {
@@ -1431,7 +1431,7 @@ mod tests {
         Ok(())
     }
 
-    /// Unbounded input is queued without coalescing, as slices of each input batch.
+    /// Each batch of unbounded input is written before the next one is read.
     #[tokio::test]
     async fn hash_shuffle_output_of_unbounded_input_does_not_retain_it() -> Result<()> {
         let input = nested_input(4, ROWS)?;
@@ -1866,7 +1866,7 @@ mod tests {
         Ok(())
     }
 
-    /// Checks every column type through every partitioning scheme and coalescing path.
+    /// Checks every column type through every partitioning scheme and path of the write.
     #[tokio::test]
     async fn shuffle_output_is_compact_for_every_type_and_path() -> Result<()> {
         let sizes: [&[usize]; 3] = [
