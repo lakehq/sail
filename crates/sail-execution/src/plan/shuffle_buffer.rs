@@ -18,8 +18,8 @@ use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::common::{HashMap, Result};
 
 use crate::plan::shuffle_compact::{
-    contains_dictionary, contains_list_view, copy, dictionary_capacities, dictionary_sizes,
-    oversized, trim,
+    allocated_bytes, contains_dictionary, contains_list_view, copy, dictionary_capacities,
+    dictionary_sizes, oversized, trim,
 };
 
 macro_rules! primitive_runs {
@@ -673,8 +673,7 @@ fn sparse(data: &ArrayData) -> bool {
     let values = |used: usize| data.child_data()[0].len() > 2 * used;
     let here = match data.data_type() {
         DataType::Utf8View | DataType::BinaryView => {
-            let strings: usize = data.buffers()[1..].iter().map(Buffer::capacity).sum();
-            strings > 2 * referenced_bytes(data)
+            allocated_bytes(&data.buffers()[1..]) > 2 * referenced_bytes(data)
         }
         DataType::Dictionary(_, _) => values(data.len()),
         DataType::ListView(_) => values(
@@ -953,8 +952,10 @@ fn concat_runs(
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::{Int64Array, StringViewArray, make_view};
+    use datafusion::arrow::array::{Int64Array, StringViewArray, StringViewBuilder, make_view};
     use datafusion::arrow::datatypes::Field;
+    use datafusion::arrow::ipc::reader::StreamReader;
+    use datafusion::arrow::ipc::writer::StreamWriter;
 
     use super::*;
 
@@ -1234,6 +1235,54 @@ mod tests {
     fn rows_are_held_up_to_a_batch_for_every_channel_without_a_budget() -> Result<()> {
         // 4000 channels with batches of 8192 rows, in batches of 131072 rows.
         assert_eq!(megabytes_held(0)?, 250);
+        Ok(())
+    }
+    /// Returns the batch as it is read from an IPC message that it has been written to.
+    fn read_from_ipc(batch: &RecordBatch) -> Result<RecordBatch> {
+        let mut writer = StreamWriter::try_new(vec![], &batch.schema())?;
+        writer.write(batch)?;
+        let message = writer.into_inner()?;
+        let reader = StreamReader::try_new(message.as_slice(), None)?;
+        let batches = reader.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(batches[0].clone())
+    }
+
+    /// The data buffers of a view column read from an IPC message are all in the memory
+    /// of the message, which is not counted once for each of them: the column is held
+    /// as it is if its rows use the strings, and compacted if they use few of them.
+    #[test]
+    fn view_strings_read_from_ipc_are_compacted_only_if_few_are_used() -> Result<()> {
+        let mut strings = StringViewBuilder::new().with_fixed_block_size(64 * 1024);
+        for row in 0..1000 {
+            strings.append_value(format!("{row:0>200}"));
+        }
+        let schema = Schema::new(vec![Field::new("s", DataType::Utf8View, false)]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(strings.finish())])?;
+        let piece = [Piece {
+            channel: 0,
+            start: 0,
+        }];
+
+        let column = Arc::clone(read_from_ipc(&batch)?.column(0));
+        let buffers = column.as_string_view().data_buffers();
+        assert!(buffers.len() > 2);
+        assert!(
+            buffers
+                .iter()
+                .all(|buffer| buffer.data_ptr() == buffers[0].data_ptr())
+        );
+        let (held, _) = detach(Arc::clone(&column), &piece)?;
+        assert!(Arc::ptr_eq(&held, &column));
+        assert!(Arc::ptr_eq(&trim(Arc::clone(&column), false)?, &column));
+
+        // A slice is written with all the strings of its array.
+        let column = Arc::clone(read_from_ipc(&batch.slice(0, 10))?.column(0));
+        assert!(column.as_string_view().data_buffers().len() > 2);
+        for held in [detach(Arc::clone(&column), &piece)?.0, trim(column, false)?] {
+            let buffers = held.as_string_view().data_buffers();
+            let bytes: usize = buffers.iter().map(Buffer::capacity).sum();
+            assert_eq!(bytes, 10 * 200);
+        }
         Ok(())
     }
 }

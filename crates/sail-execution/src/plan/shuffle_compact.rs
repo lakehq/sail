@@ -1,5 +1,6 @@
 //! Copies and compacts arrays so that queued shuffle output holds little more than its rows.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_select::dictionary::garbage_collect_any_dictionary;
@@ -163,6 +164,18 @@ fn uses_all_children(array: &ArrayRef) -> bool {
     }
 }
 
+/// Returns the bytes of the allocations that the buffers are in. An allocation that
+/// several of the buffers are in, as those of an array read from an IPC message are, is
+/// counted once.
+pub(super) fn allocated_bytes(buffers: &[Buffer]) -> usize {
+    let mut allocations = HashSet::new();
+    buffers
+        .iter()
+        .filter(|buffer| allocations.insert(buffer.data_ptr()))
+        .map(Buffer::capacity)
+        .sum()
+}
+
 /// Copies the bytes that views use into new buffers if they use at most half of their
 /// buffers, copying bytes that several views share only once.
 fn trim_views<T: ByteViewType + ?Sized>(
@@ -185,8 +198,7 @@ fn trim_views<T: ByteViewType + ?Sized>(
         .collect();
     let ranges = merge_ranges(ranges);
     let used: usize = ranges.iter().map(|(_, start, end)| end - start).sum();
-    let held: usize = buffers.iter().map(Buffer::capacity).sum();
-    if held <= 2 * used {
+    if allocated_bytes(buffers) <= 2 * used {
         return Ok(None);
     }
     let mut blocks = vec![];
