@@ -199,7 +199,8 @@ impl ShuffleBuffer {
     /// Holds a batch with the rows of each channel, and returns what is to be written.
     /// The lists of rows are left empty.
     ///
-    /// The rows are reordered by channel with one `take`.
+    /// The rows are reordered by channel with one `take`. The lists keep their memory for
+    /// the next batch, unless they have more of it than four times what a batch needs.
     pub(super) fn push_rows(
         &mut self,
         batch: RecordBatch,
@@ -208,7 +209,9 @@ impl ShuffleBuffer {
     ) -> Result<Vec<Round>> {
         let mut order: Vec<u32> = Vec::with_capacity(batch.num_rows());
         let first = self.pieces.len();
+        let mut capacity = 0;
         for (channel, rows) in rows.iter_mut().enumerate() {
+            capacity += rows.capacity();
             if !rows.is_empty() {
                 self.pieces.push(Piece {
                     channel: channel as u32,
@@ -217,6 +220,12 @@ impl ShuffleBuffer {
                 order.extend_from_slice(rows);
                 rows.clear();
             }
+        }
+        // A list keeps the memory of the most rows that its channel has had in one batch,
+        // which adds up to a batch for every channel when the rows of each batch go to
+        // other channels than those of the batch before.
+        if capacity > 4 * (self.batch_size.max(batch.num_rows()) + rows.len()) {
+            rows.fill_with(Vec::new);
         }
         let pieces = &self.pieces[first..];
         let order = UInt32Array::from(order);
@@ -1557,6 +1566,39 @@ mod tests {
         for (column, input) in written[1].1.columns().iter().zip(large.columns()) {
             assert!(Arc::ptr_eq(column, input));
         }
+        Ok(())
+    }
+
+    /// The lists of rows do not keep the memory of a batch for every channel when each
+    /// batch goes to another channel, and keep their memory when the batches are alike.
+    #[test]
+    fn lists_of_rows_keep_the_memory_of_a_few_batches() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let batch = |rows: i64| {
+            let k = Int64Array::from_iter_values(0..rows);
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k)])
+        };
+        let capacity = |rows: &[Vec<u32>]| rows.iter().map(Vec::capacity).sum::<usize>();
+
+        let mut buffer = ShuffleBuffer::try_new(&schema, 1000, 8192, 1024 * 1024, false)?;
+        let mut rows = vec![vec![]; 1000];
+        for channel in 0..100 {
+            rows[channel].extend(0..65536);
+            buffer.push_rows(batch(65536)?, &mut rows, false)?;
+            assert!(capacity(&rows) <= 4 * (65536 + 1000));
+        }
+
+        let mut buffer = ShuffleBuffer::try_new(&schema, 8, 8192, 1024 * 1024, false)?;
+        let mut rows = vec![vec![]; 8];
+        let mut lists = vec![];
+        for _ in 0..100 {
+            for row in 0..8192 {
+                rows[row % 8].push(row as u32);
+            }
+            buffer.push_rows(batch(8192)?, &mut rows, false)?;
+            lists.push(rows.iter().map(|rows| rows.as_ptr()).collect::<Vec<_>>());
+        }
+        assert!(lists.iter().all(|list| *list == lists[0]));
         Ok(())
     }
 
