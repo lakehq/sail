@@ -6,6 +6,9 @@ including both Arrow RecordBatch and tuple-based paths.
 """
 
 import json
+import os
+import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -483,6 +486,58 @@ def test_python_session_isolation(remote: str):
         # because datasources are registered per-session
         with pytest.raises(Exception, match=r"session_isolation_test|not found|unknown"):
             spark_b.read.format("session_isolation_test").load().collect()
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Starts a Sail server in a subprocess")
+def test_python_datasource_backpressure_with_python_udf():
+    """Test that a reader with a full output channel does not block a downstream Python UDF."""
+    # The query runs in a subprocess since a reader that holds the GIL while waiting
+    # for the channel would block all Python threads, including the pytest timeout.
+    code = """
+import runpy
+import sys
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+checks = runpy.run_path(sys.argv[1])
+with spark_connect_server() as server, spark_session_factory(server.remote) as sessions:
+    checks["_check_backpressure_with_python_udf"](sessions.create())
+"""
+    env = {**os.environ}
+    env.pop("SPARK_REMOTE", None)
+    result = subprocess.run(
+        [sys.executable, "-c", code, __file__],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _check_backpressure_with_python_udf(spark):
+    from pyspark.sql.datasource import DataSource, DataSourceReader
+
+    num_batches = 1000
+
+    class BackpressureDataSource(DataSource):
+        @classmethod
+        def name(cls):
+            return "backpressure_test"
+
+        def schema(self):
+            return "id long"
+
+        def reader(self, schema):  # noqa: ARG002
+            return BackpressureReader()
+
+    class BackpressureReader(DataSourceReader):
+        def read(self, partition):  # noqa: ARG002
+            for i in range(num_batches):
+                yield pa.RecordBatch.from_pydict({"id": [i]})
+
+    spark.dataSource.register(BackpressureDataSource)
+    df = spark.read.format("backpressure_test").load()
+    assert len(df.mapInArrow(lambda batches: batches, "id long").collect()) == num_batches
 
 
 # ============================================================================
