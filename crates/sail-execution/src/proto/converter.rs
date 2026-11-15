@@ -662,11 +662,13 @@ mod tests {
     #[test]
     fn test_rejects_unresolved_or_invalid_lambda_parameters() -> Result<()> {
         let error = resolve_test_parameters(InferenceBehavior::NeverCompletes)
-            .expect_err("non-converging inference must fail");
+            .err()
+            .ok_or_else(|| plan_datafusion_err!("non-converging inference was accepted"))?;
         assert!(error.to_string().contains("within 2 iterations"));
 
         let error = resolve_test_parameters(InferenceBehavior::WrongParameterCount)
-            .expect_err("wrong parameter count must fail");
+            .err()
+            .ok_or_else(|| plan_datafusion_err!("wrong parameter count was accepted"))?;
         assert!(error.to_string().contains("expected 1"));
         Ok(())
     }
