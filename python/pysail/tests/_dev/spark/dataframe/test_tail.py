@@ -35,6 +35,7 @@ def test_tail_of_empty_input(spark):
     assert spark.range(0, 10, 1, 3).where("id < 0").tail(3) == []
 
 
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark Connect evaluates scalar subqueries for tail(0)")
 def test_zero_tail_does_not_evaluate_subqueries(spark):
     # This matches `limit(0)` and the classic Spark API (`executeTail(0)`). Spark Connect
     # still prepares the scalar subqueries of the input of a zero tail and fails.
