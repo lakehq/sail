@@ -22,7 +22,6 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::{PartitionStream, StreamingTableExec};
-use datafusion::prelude::SessionConfig;
 
 use super::super::{ShufflePartitioning, ShuffleWriteExec};
 use crate::stream::writer::{TaskStreamSink, TaskStreamWriteState, TaskStreamWriter};
@@ -420,7 +419,7 @@ pub(super) async fn probed_shuffle(
         state,
         retain,
     });
-    let config = SessionConfig::new().with_batch_size(batch_size);
+    let config = super::session_config().with_batch_size(batch_size);
     let context = Arc::new(TaskContext::default().with_session_config(config));
     let result = {
         let _heap = HeapProbe::start();

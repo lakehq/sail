@@ -11,7 +11,6 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
 use futures::FutureExt;
-use sail_common_datafusion::session::shuffle::DEFAULT_SHUFFLE_WRITE_BUFFER_SIZE;
 
 use super::probe::{arrays, key_partitioning, output_limit, probed_shuffle};
 use super::{
@@ -22,7 +21,7 @@ use crate::stream::writer::TaskStreamWriteState;
 const BATCH_SIZE: usize = 8192;
 
 /// The bytes that a write is taken to buffer before it writes every channel.
-const BUDGET: usize = DEFAULT_SHUFFLE_WRITE_BUFFER_SIZE;
+const BUDGET: usize = super::BUFFER_SIZE;
 
 /// The inputs of these tests, by name, with the number of output channels and the batch
 /// size for each.

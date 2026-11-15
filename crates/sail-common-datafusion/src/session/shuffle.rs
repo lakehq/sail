@@ -1,9 +1,5 @@
 use crate::extension::SessionExtension;
 
-/// The buffer size of a shuffle write in a session without [`ShuffleWriteConfig`].
-/// The default of `cluster.shuffle_write_buffer_size` is in the application configuration.
-pub const DEFAULT_SHUFFLE_WRITE_BUFFER_SIZE: usize = 32 * 1024 * 1024;
-
 #[derive(Debug)]
 pub struct ShuffleWriteConfig {
     buffer_size: usize,

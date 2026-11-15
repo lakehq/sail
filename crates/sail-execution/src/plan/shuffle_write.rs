@@ -22,9 +22,7 @@ use datafusion::physical_plan::{
 };
 use futures::StreamExt;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::shuffle::{
-    DEFAULT_SHUFFLE_WRITE_BUFFER_SIZE, ShuffleWriteConfig,
-};
+use sail_common_datafusion::session::shuffle::ShuffleWriteConfig;
 
 use crate::plan::shuffle_buffer::{Round, ShuffleBuffer};
 use crate::stream::writer::{TaskStreamSink, TaskStreamWriteState, TaskStreamWriter};
@@ -436,10 +434,7 @@ impl ExecutionPlan for ShuffleWriteExec {
     ) -> Result<SendableRecordBatchStream> {
         let writer = self.writer.clone();
         let batch_size = context.session_config().batch_size();
-        let buffer_size = context
-            .extension::<ShuffleWriteConfig>()
-            .map(|config| config.buffer_size())
-            .unwrap_or(DEFAULT_SHUFFLE_WRITE_BUFFER_SIZE);
+        let buffer_size = context.extension::<ShuffleWriteConfig>()?.buffer_size();
         let stream = self.plan.execute(partition, context)?;
         let num_input_partitions = self
             .plan
@@ -564,6 +559,13 @@ mod tests {
 
     const CHANNELS: usize = 32;
     const ROWS: i64 = 8192;
+
+    /// The bytes that the shuffle writes of these tests hold before they write every channel.
+    const BUFFER_SIZE: usize = 32 * 1024 * 1024;
+
+    fn session_config() -> SessionConfig {
+        SessionConfig::new().with_extension(Arc::new(ShuffleWriteConfig::new(BUFFER_SIZE)))
+    }
 
     #[derive(Debug, Default)]
     struct Capture {
@@ -915,7 +917,8 @@ mod tests {
             state,
         });
         let exec = ShuffleWriteExec::new(plan, writer, partitioning);
-        collect(exec.execute(0, Arc::new(TaskContext::default()))?).await?;
+        let context = TaskContext::default().with_session_config(session_config());
+        collect(exec.execute(0, Arc::new(context))?).await?;
         let capture = std::mem::take(&mut *capture.lock().await);
         Ok(capture)
     }
@@ -1856,7 +1859,7 @@ mod tests {
         });
         let exec = ShuffleWriteExec::new(stream(input, unbounded)?, writer, partitioning);
         let context = TaskContext::default()
-            .with_session_config(SessionConfig::new().with_batch_size(MATRIX_BATCH_ROWS));
+            .with_session_config(session_config().with_batch_size(MATRIX_BATCH_ROWS));
         collect(exec.execute(0, Arc::new(context))?).await?;
         let capture = std::mem::take(&mut *capture.lock().await);
         let output: Vec<RecordBatch> = capture.channels.iter().flatten().cloned().collect();
@@ -1938,7 +1941,7 @@ mod tests {
     #[tokio::test]
     async fn hash_shuffle_holds_input_batches_that_share_a_large_buffer() -> Result<()> {
         // Twice the megabytes of the budget.
-        const BATCHES: usize = 2 * DEFAULT_SHUFFLE_WRITE_BUFFER_SIZE / (BATCH_ROWS * LEN);
+        const BATCHES: usize = 2 * BUFFER_SIZE / (BATCH_ROWS * LEN);
         const BATCH_ROWS: usize = 1024;
         const LEN: usize = 1024;
         let text: String = (0..BATCHES * BATCH_ROWS)
@@ -1983,7 +1986,7 @@ mod tests {
             })
             .collect::<Result<Vec<_>>>()?;
         // The rows of each input batch take 8000 bytes.
-        for (buffer_size, writes) in [(None, 1), (Some(0), 1), (Some(16000), 4), (Some(1), 8)] {
+        for (buffer_size, writes) in [(BUFFER_SIZE, 1), (0, 1), (16000, 4), (1, 8)] {
             let capture = Arc::new(Mutex::new(Capture::default()));
             let writer = Arc::new(CaptureWriter {
                 capture: Arc::clone(&capture),
@@ -1991,13 +1994,13 @@ mod tests {
             });
             let partitioning = hash(&schema, "a", CHANNELS)?;
             let exec = ShuffleWriteExec::new(stream(&input, false)?, writer, partitioning);
-            let mut config = SessionConfig::new();
-            if let Some(buffer_size) = buffer_size {
-                config = config.with_extension(Arc::new(ShuffleWriteConfig::new(buffer_size)));
-            }
+            let config =
+                SessionConfig::new().with_extension(Arc::new(ShuffleWriteConfig::new(buffer_size)));
             let context = TaskContext::default().with_session_config(config);
             collect(exec.execute(0, Arc::new(context))?).await?;
-            assert_eq!(capture.lock().await.writes, writes, "{buffer_size:?}");
+            assert_eq!(capture.lock().await.writes, writes, "{buffer_size}");
+            // The buffer size is required of the session.
+            assert!(exec.execute(0, Arc::new(TaskContext::default())).is_err());
         }
         Ok(())
     }
@@ -2020,7 +2023,7 @@ mod tests {
             )?)
         };
         // 1 MiB of strings, more of them than the budget, and 1 MiB, all for one channel.
-        let len = DEFAULT_SHUFFLE_WRITE_BUFFER_SIZE / 3000 + 1024;
+        let len = BUFFER_SIZE / 3000 + 1024;
         let input = vec![batch(1000, 1024)?, batch(3000, len)?, batch(1000, 1024)?];
         let capture = assert_shuffle_compact(stream(&input, false)?, &input, "k", 2, true).await?;
         let rows: Vec<usize> = capture
