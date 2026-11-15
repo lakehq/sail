@@ -10,22 +10,11 @@ use sail_common_datafusion::utils::items::ItemTaker;
 pub struct TailNode {
     input: Arc<LogicalPlan>,
     fetch: usize,
-    /// The input columns that determine the input order. They are kept in the input
-    /// even if they are not used by the output, so that the order stays visible.
-    keys: Vec<Expr>,
 }
 
 impl TailNode {
     pub fn new(input: Arc<LogicalPlan>, fetch: usize) -> Self {
-        Self {
-            input,
-            fetch,
-            keys: vec![],
-        }
-    }
-
-    pub fn with_keys(self, keys: Vec<Expr>) -> Self {
-        Self { keys, ..self }
+        Self { input, fetch }
     }
 
     pub fn fetch(&self) -> usize {
@@ -47,18 +36,17 @@ impl UserDefinedLogicalNodeCore for TailNode {
     }
 
     fn expressions(&self) -> Vec<Expr> {
-        self.keys.clone()
+        vec![]
     }
 
     fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "Tail: fetch={}", self.fetch)
     }
 
-    fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
+    fn with_exprs_and_inputs(&self, _exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
         Ok(Self {
             input: Arc::new(inputs.one()?),
             fetch: self.fetch,
-            keys: exprs,
         })
     }
 

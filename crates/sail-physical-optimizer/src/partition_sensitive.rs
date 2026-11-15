@@ -4,6 +4,7 @@ use datafusion::common::Result;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::config::ConfigOptions;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -18,6 +19,7 @@ use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::seeded_random::SeededRandomExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
+use sail_physical_plan::tail::TailExec;
 
 /// Keeps the input partitions of the operators whose output depends on the partition of each
 /// row and on the order of the rows in the partition (monotonically increasing IDs, partition
@@ -32,6 +34,9 @@ use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 /// operator instead, so that the operators above keep their parallelism, unless it would lose
 /// the order of the rows that the operators above rely on. It is merged into a round-robin
 /// repartition that directly follows it.
+///
+/// The tail selects the last rows in the order of its input, so the round-robin repartitions
+/// below the partition coalescing of its input are removed in the same way.
 #[derive(Debug, Default)]
 pub struct KeepPartitionSensitiveInputs;
 
@@ -42,6 +47,30 @@ impl PhysicalOptimizerRule for KeepPartitionSensitiveInputs {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|plan| {
+            if let Some(tail) = plan.downcast_ref::<TailExec>() {
+                let input = Arc::clone(tail.input());
+                let input = match input.downcast_ref::<CoalescePartitionsExec>() {
+                    Some(coalesce) => {
+                        remove_round_robin(Arc::clone(coalesce.input()))?.map_data(|child| {
+                            if child.output_partitioning().partition_count() == 1
+                                && coalesce.fetch().is_none()
+                            {
+                                Ok(child)
+                            } else {
+                                replace_children_if_necessary(Arc::clone(&input), vec![child])
+                            }
+                        })?
+                    }
+                    None => remove_round_robin(input)?,
+                };
+                if !input.transformed {
+                    return Ok(Transformed::no(plan));
+                }
+                return Ok(Transformed::yes(replace_children_if_necessary(
+                    plan,
+                    vec![input.data],
+                )?));
+            }
             if let Some(input) = round_robin_input(&plan)
                 && let Some(inner) = round_robin_input(input)
                 && is_partition_sensitive(inner)
@@ -251,6 +280,26 @@ mod tests {
         assert!(lines[2].starts_with("FilterExec"), "{plan}");
         assert!(lines[3].starts_with("UnionExec"), "{plan}");
         assert_eq!(plan.matches("RepartitionExec").count(), 1, "{plan}");
+        Ok(())
+    }
+
+    #[test]
+    fn round_robin_repartitions_below_tail_are_removed() -> Result<()> {
+        for partitions in [1, 3] {
+            let input = filter(round_robin(source(partitions)?, 10)?)?;
+            let plan = optimize(Arc::new(TailExec::new(
+                Arc::new(CoalescePartitionsExec::new(input)),
+                1,
+            )))?;
+            let lines = plan.lines().map(str::trim_start).collect::<Vec<_>>();
+            let coalesce = usize::from(partitions > 1);
+            assert!(lines[0].starts_with("TailExec"), "{plan}");
+            if partitions > 1 {
+                assert!(lines[1].starts_with("CoalescePartitionsExec"), "{plan}");
+            }
+            assert!(lines[1 + coalesce].starts_with("FilterExec"), "{plan}");
+            assert!(!plan.contains("RepartitionExec"), "{plan}");
+        }
         Ok(())
     }
 

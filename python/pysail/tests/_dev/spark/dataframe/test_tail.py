@@ -36,9 +36,11 @@ def test_tail_of_empty_input(spark):
 
 
 def test_zero_tail_does_not_evaluate_subqueries(spark):
+    # This matches `limit(0)` and the classic Spark API (`executeTail(0)`). Spark Connect
+    # still prepares the scalar subqueries of the input of a zero tail and fails.
     df = spark.sql("SELECT id, (SELECT id FROM range(2)) AS x FROM range(3)")
     assert df.tail(0) == []
-    with pytest.raises(PySparkException, match="more than one row"):
+    with pytest.raises(PySparkException, match=r"(?i)more than one row"):
         df.tail(1)
 
 
@@ -118,6 +120,56 @@ def test_tail_preserves_hidden_sort_expression_and_limit(spark, partitions):
 def test_tail_preserves_hidden_random_sort(spark, partitions):
     ordered = spark.range(0, 20000, 1, partitions).orderBy(sf.rand(7))
     expected = [str(row.id) for row in ordered.collect()][-17:]
+    df = ordered.selectExpr("cast(id as string) AS payload")
+    assert [row.payload for row in df.tail(17)] == expected
+
+
+def _row_local_path(spark, path):
+    # The inputs exceed the default batch size, so that the operators between the
+    # order and Tail could be parallelized.
+    ordered = spark.range(0, 20000, 1, 4).orderBy(sf.col("id").desc())
+    if path == "single-partition":
+        return spark.range(0, 20000, 1, 1)
+    if path == "sort-within-partitions":
+        return spark.range(0, 20000, 1, 1).sortWithinPartitions(sf.col("id").desc())
+    if path == "rand":
+        return ordered.withColumn("r", sf.rand(7)).where("r < 2")
+    if path == "monotonic-id":
+        return ordered.withColumn("m", sf.monotonically_increasing_id())
+    if path == "partition-id":
+        return ordered.withColumn("m", sf.spark_partition_id())
+    if path == "explode":
+        return ordered.select(sf.explode(sf.array("id", "id")).alias("id"))
+    if path == "left-semi-join":
+        return ordered.join(spark.range(0, 20000, 1, 3).where("id % 2 = 0"), "id", "left_semi")
+    if path == "offset":
+        return ordered.limit(15000).offset(5)
+    ordered.createOrReplaceTempView("tail_ordered")
+    return spark.sql("SELECT * FROM (SELECT * FROM tail_ordered ORDER BY id DESC) AS s")
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("single-partition", ["19996", "19997", "19998", "19999"]),
+        ("sort-within-partitions", ["3", "2", "1", "0"]),
+        ("rand", ["3", "2", "1", "0"]),
+        ("monotonic-id", ["3", "2", "1", "0"]),
+        ("partition-id", ["3", "2", "1", "0"]),
+        ("explode", ["1", "1", "0", "0"]),
+        ("left-semi-join", ["6", "4", "2", "0"]),
+        ("offset", ["5003", "5002", "5001", "5000"]),
+        ("subquery", ["3", "2", "1", "0"]),
+    ],
+)
+def test_tail_preserves_order_through_row_local_operators(spark, path, expected):
+    df = _row_local_path(spark, path).selectExpr("cast(id as string) AS payload")
+    assert [row.payload for row in df.tail(4)] == expected
+
+
+def test_tail_preserves_order_through_sample(spark):
+    ordered = spark.range(0, 20000, 1, 4).orderBy(sf.col("id").desc()).sample(fraction=0.5, seed=3)
+    expected = [str(row.id) for row in ordered.tail(17)]
     df = ordered.selectExpr("cast(id as string) AS payload")
     assert [row.payload for row in df.tail(17)] == expected
 
