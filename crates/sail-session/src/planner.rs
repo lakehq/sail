@@ -50,6 +50,7 @@ use sail_logical_plan::remote_checkpoint::{
 };
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
+use sail_logical_plan::seeded_random::SeededRandomNode;
 use sail_logical_plan::show_string::ShowStringNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
@@ -70,6 +71,7 @@ use sail_physical_plan::remote_checkpoint::{
 };
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
+use sail_physical_plan::seeded_random::{SeededRandomExec, SeededRandomExprColumn};
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
@@ -353,6 +355,40 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 node.udf().clone(),
                 UserDefinedLogicalNode::schema(node).inner().clone(),
             ))
+        } else if let Some(node) =
+            node.as_any()
+                .downcast_ref::<sail_logical_plan::identity_generate::IdentityGenerateNode>()
+        {
+            let [input] = physical_inputs else {
+                return internal_err!("IdentityGenerate requires one physical input");
+            };
+            let columns = node
+                .columns()
+                .iter()
+                .map(|column| {
+                    Ok(
+                        sail_physical_plan::identity_generate::IdentityGenerateColumn {
+                            output: column.output.clone(),
+                            column_name: column.column_name.clone(),
+                            mask: column
+                                .mask
+                                .as_ref()
+                                .map(|mask| input.schema().index_of(mask))
+                                .transpose()?,
+                            start: column.start,
+                            step: column.step,
+                            high_water_mark: column.high_water_mark,
+                        },
+                    )
+                })
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
+            Arc::new(
+                sail_physical_plan::identity_generate::IdentityGenerateExec::try_new(
+                    input.clone(),
+                    columns,
+                    None,
+                )?,
+            )
         } else if let Some(node) = node.as_any().downcast_ref::<MonotonicIdNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("MonotonicIdExec requires exactly one physical input");
@@ -369,6 +405,34 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             Arc::new(SparkPartitionIdExec::try_new(
                 input.clone(),
                 node.column_name().to_string(),
+                UserDefinedLogicalNode::schema(node).inner().clone(),
+            )?)
+        } else if let Some(node) = node.as_any().downcast_ref::<SeededRandomNode>() {
+            let [logical_input] = logical_inputs else {
+                return internal_err!("SeededRandomExec requires exactly one logical input");
+            };
+            let [input] = physical_inputs else {
+                return internal_err!("SeededRandomExec requires exactly one physical input");
+            };
+            let columns = node
+                .columns()
+                .iter()
+                .map(|column| {
+                    Ok(SeededRandomExprColumn {
+                        name: column.name.clone(),
+                        expr: planner.create_physical_expr(
+                            &column.expr,
+                            logical_input.schema(),
+                            session,
+                            planning_ctx,
+                        )?,
+                        seed: column.seed,
+                    })
+                })
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
+            Arc::new(SeededRandomExec::try_new(
+                input.clone(),
+                columns,
                 UserDefinedLogicalNode::schema(node).inner().clone(),
             )?)
         } else if let Some(node) = node.as_any().downcast_ref::<SortWithinPartitionsNode>() {
@@ -646,6 +710,7 @@ mod tests {
     use datafusion::arrow::array::{AsArray, Int64Array};
     use datafusion::arrow::compute::concat_batches;
     use datafusion::arrow::datatypes::{DataType, Field, Float64Type, Int64Type, Schema};
+    use datafusion::catalog::TableFunctionArgs;
     use datafusion::datasource::{MemTable, provider_as_source};
     use datafusion::execution::SessionStateBuilder;
     use datafusion::execution::runtime_env::RuntimeEnv;
@@ -659,13 +724,14 @@ mod tests {
     use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_common::{ScalarValue, ToDFSchema};
     use datafusion_expr::{
-        AggregateUDF, ColumnarValue, LogicalPlanBuilder, TableSource, Volatility, cast, col,
-        create_udf, lit, rollup, scalar_subquery, when,
+        AggregateUDF, ColumnarValue, LogicalPlanBuilder, ScalarUDF, TableSource, Volatility, cast,
+        col, create_udf, lit, rollup, scalar_subquery, when,
     };
     use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
     use object_store::memory::InMemory;
     use sail_common::spec;
     use sail_common_datafusion::min_max::min_max_agg::Max;
+    use sail_function::scalar::math::random::Random;
     use sail_plan::config::PlanConfig;
 
     use super::*;
@@ -982,28 +1048,264 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn scalar_subqueries_over_extension_nodes_are_not_shared() -> datafusion_common::Result<()>
-    {
-        let range = LogicalPlan::Extension(datafusion_expr::Extension {
-            node: Arc::new(RangeNode::try_new("id".to_string(), 0, 1, 1, 1)?),
-        });
-        let subquery = |name: &str| -> datafusion_common::Result<Expr> {
-            let subquery = LogicalPlanBuilder::from(range.clone())
-                .project(vec![col("id").alias(name)])?
-                .build()?;
-            Ok(scalar_subquery(Arc::new(subquery)))
-        };
-        let plan = LogicalPlanBuilder::empty(true)
-            .project(vec![subquery("#1")?.alias("a"), subquery("#2")?.alias("b")])?
-            .build()?;
+    /// Builds a range the way Sail resolves `spark.range`, which gives each reference a
+    /// generated output name.
+    fn range(name: &str, end: i64) -> datafusion_common::Result<LogicalPlan> {
+        Ok(LogicalPlan::Extension(datafusion_expr::Extension {
+            node: Arc::new(RangeNode::try_new(name.to_string(), 0, end, 1, 2)?),
+        }))
+    }
 
-        let (display, _) = plan_and_collect(plan).await?;
+    /// Builds `(SELECT max(<input>) FROM <input>)` with the aggregate aliased above it.
+    fn max_scalar_subquery(
+        input: LogicalPlan,
+        input_name: &str,
+        output_name: &str,
+    ) -> datafusion_common::Result<Expr> {
+        let max = Arc::new(AggregateUDF::new_from_impl(Max::new()));
+        let subquery = LogicalPlanBuilder::from(input)
+            .aggregate(Vec::<Expr>::new(), vec![max.call(vec![col(input_name)])])?
+            .build()?;
+        let aggregate = subquery.schema().field(0).name().clone();
+        let subquery = LogicalPlanBuilder::from(subquery)
+            .project(vec![col(aggregate).alias(output_name)])?
+            .build()?;
+        Ok(scalar_subquery(Arc::new(subquery)))
+    }
+
+    async fn plan_two_scalar_subqueries(
+        a: Expr,
+        b: Expr,
+    ) -> datafusion_common::Result<(String, RecordBatch)> {
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(vec![a.alias("a"), b.alias("b")])?
+            .build()?;
+        plan_and_collect(plan).await
+    }
+
+    fn int64_values(batch: &RecordBatch) -> Vec<i64> {
+        batch
+            .columns()
+            .iter()
+            .map(|column| column.as_primitive::<Int64Type>().value(0))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_ranges_are_shared() -> datafusion_common::Result<()> {
+        let (display, batch) = plan_two_scalar_subqueries(
+            max_scalar_subquery(range("#1", 10)?, "#1", "#2")?,
+            max_scalar_subquery(range("#3", 10)?, "#3", "#4")?,
+        )
+        .await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=1"),
+            "{display}"
+        );
+        assert_eq!(int64_values(&batch), vec![9, 9]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_different_ranges_are_not_shared()
+    -> datafusion_common::Result<()> {
+        let (display, batch) = plan_two_scalar_subqueries(
+            max_scalar_subquery(range("#1", 10)?, "#1", "#2")?,
+            max_scalar_subquery(range("#3", 20)?, "#3", "#4")?,
+        )
+        .await?;
 
         assert!(
             display.contains("ScalarSubqueryExec: subqueries=2"),
             "{display}"
         );
+        assert_eq!(int64_values(&batch), vec![9, 19]);
+        Ok(())
+    }
+
+    /// Builds a scan of the `range` table function the way Sail resolves `range(<args>)` in
+    /// SQL, which creates a new table source for every reference.
+    fn range_table_scan(name: &str, args: &[i64]) -> datafusion_common::Result<LogicalPlan> {
+        let function = sail_plan::function::get_built_in_table_function("range")
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        let state = SessionContext::new().state();
+        let args = args.iter().map(|arg| lit(*arg)).collect::<Vec<_>>();
+        let provider =
+            function.create_table_provider_with_args(TableFunctionArgs::new(&args, &state))?;
+        LogicalPlanBuilder::scan("range", provider_as_source(provider), None)?
+            .project(vec![col("id").alias(name)])?
+            .build()
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_range_table_functions_are_shared()
+    -> datafusion_common::Result<()> {
+        let (display, batch) = plan_two_scalar_subqueries(
+            max_scalar_subquery(range_table_scan("#1", &[10])?, "#1", "#2")?,
+            max_scalar_subquery(range_table_scan("#3", &[10])?, "#3", "#4")?,
+        )
+        .await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=1"),
+            "{display}"
+        );
+        assert_eq!(int64_values(&batch), vec![9, 9]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_different_range_table_functions_are_not_shared()
+    -> datafusion_common::Result<()> {
+        let (display, batch) = plan_two_scalar_subqueries(
+            max_scalar_subquery(range_table_scan("#1", &[10])?, "#1", "#2")?,
+            max_scalar_subquery(range_table_scan("#3", &[20])?, "#3", "#4")?,
+        )
+        .await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=2"),
+            "{display}"
+        );
+        assert_eq!(int64_values(&batch), vec![9, 19]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_range_table_functions_with_different_partitions_are_not_shared()
+    -> datafusion_common::Result<()> {
+        let (display, batch) = plan_two_scalar_subqueries(
+            max_scalar_subquery(range_table_scan("#1", &[0, 10, 1, 2])?, "#1", "#2")?,
+            max_scalar_subquery(range_table_scan("#3", &[0, 10, 1, 3])?, "#3", "#4")?,
+        )
+        .await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=2"),
+            "{display}"
+        );
+        assert_eq!(int64_values(&batch), vec![9, 9]);
+        Ok(())
+    }
+
+    /// Builds `SELECT <name> FROM range(10) SORT BY <name>` with a required sort and a
+    /// fetch above it, the way Sail keeps the sort below an ordered aggregate.
+    fn sorted_range(name: &str, asc: bool) -> datafusion_common::Result<LogicalPlan> {
+        let sort = vec![col(name).sort(asc, true)];
+        let sort_within_partitions = LogicalPlan::Extension(datafusion_expr::Extension {
+            node: Arc::new(SortWithinPartitionsNode::new(
+                Arc::new(range(name, 10)?),
+                sort.clone(),
+                None,
+            )),
+        });
+        Ok(LogicalPlan::Extension(datafusion_expr::Extension {
+            node: Arc::new(RequiredSortNode::new(
+                Arc::new(sort_within_partitions),
+                sort,
+                Some(1),
+                false,
+            )),
+        }))
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_sorts_are_shared() -> datafusion_common::Result<()> {
+        let (display, batch) = plan_two_scalar_subqueries(
+            max_scalar_subquery(sorted_range("#1", false)?, "#1", "#2")?,
+            max_scalar_subquery(sorted_range("#3", false)?, "#3", "#4")?,
+        )
+        .await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=1"),
+            "{display}"
+        );
+        assert_eq!(int64_values(&batch), vec![9, 9]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_different_sorts_are_not_shared() -> datafusion_common::Result<()>
+    {
+        let (display, batch) = plan_two_scalar_subqueries(
+            max_scalar_subquery(sorted_range("#1", false)?, "#1", "#2")?,
+            max_scalar_subquery(sorted_range("#3", true)?, "#3", "#4")?,
+        )
+        .await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=2"),
+            "{display}"
+        );
+        assert_eq!(int64_values(&batch), vec![9, 0]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_monotonic_ids_are_shared() -> datafusion_common::Result<()> {
+        let monotonic_id = |input: &str, output: &str| -> datafusion_common::Result<LogicalPlan> {
+            Ok(LogicalPlan::Extension(datafusion_expr::Extension {
+                node: Arc::new(MonotonicIdNode::try_new(
+                    Arc::new(range(input, 10)?),
+                    output.to_string(),
+                )?),
+            }))
+        };
+        let (display, batch) = plan_two_scalar_subqueries(
+            max_scalar_subquery(monotonic_id("#1", "#2")?, "#2", "#3")?,
+            max_scalar_subquery(monotonic_id("#4", "#5")?, "#5", "#6")?,
+        )
+        .await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=1"),
+            "{display}"
+        );
+        let values = int64_values(&batch);
+        assert_eq!(values[0], values[1]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_over_seeded_random_values_are_shared()
+    -> datafusion_common::Result<()> {
+        let random = ScalarUDF::from(Random::new());
+        let subquery = |seed: Vec<Expr>, name: &str| -> datafusion_common::Result<Expr> {
+            let subquery = LogicalPlanBuilder::empty(true)
+                .project(vec![random.call(seed).alias(name)])?
+                .build()?;
+            Ok(scalar_subquery(Arc::new(subquery)))
+        };
+
+        // A null seed is zero, as in Spark.
+        for seed in [lit(42_i64), lit(ScalarValue::Int64(None))] {
+            let (display, batch) = plan_two_scalar_subqueries(
+                subquery(vec![seed.clone()], "#1")?,
+                subquery(vec![seed], "#2")?,
+            )
+            .await?;
+            assert!(
+                display.contains("ScalarSubqueryExec: subqueries=1"),
+                "{display}"
+            );
+            let values = batch
+                .columns()
+                .iter()
+                .map(|column| column.as_primitive::<Float64Type>().value(0))
+                .collect::<Vec<_>>();
+            assert_eq!(values[0], values[1]);
+        }
+
+        for (a, b) in [(vec![lit(42_i64)], vec![lit(43_i64)]), (vec![], vec![])] {
+            let (display, _) =
+                plan_two_scalar_subqueries(subquery(a, "#1")?, subquery(b, "#2")?).await?;
+            assert!(
+                display.contains("ScalarSubqueryExec: subqueries=2"),
+                "{display}"
+            );
+        }
         Ok(())
     }
 

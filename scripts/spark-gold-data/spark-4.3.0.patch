@@ -12,7 +12,7 @@ index 3fac57dbe5d..38584fb1b8c 100644
    try {
      // We use reflection here to handle the case where users remove the
 diff --git a/core/src/test/scala/org/apache/spark/SparkTestSuite.scala b/core/src/test/scala/org/apache/spark/SparkTestSuite.scala
-index 10504684be9..f3bb4a8f15e 100644
+index 0fd595bf3fd..b3a22cfe66b 100644
 --- a/core/src/test/scala/org/apache/spark/SparkTestSuite.scala
 +++ b/core/src/test/scala/org/apache/spark/SparkTestSuite.scala
 @@ -91,15 +91,54 @@ trait SparkTestSuite
@@ -111,7 +111,7 @@ index c997a102a70..93403dc7454 100644
    }
  
 diff --git a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala b/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala
-index 29bf924f244..dee33a596e2 100644
+index 378eab0c23f..9cd46a0c8dc 100644
 --- a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala
 +++ b/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala
 @@ -28,6 +28,7 @@ import org.apache.spark.sql.errors.QueryParsingErrors
@@ -158,7 +158,7 @@ index 29bf924f244..dee33a596e2 100644
        val ctx = parser.singleMultipartIdentifier()
        withErrorHandling(ctx, Some(sqlText)) {
          astBuilder.visitSingleMultipartIdentifier(ctx)
-@@ -74,7 +75,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+@@ -84,7 +85,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
  
    /** Creates LogicalPlan for a given SQL string of query. */
    override def parseQuery(sqlText: String): LogicalPlan =
@@ -167,7 +167,7 @@ index 29bf924f244..dee33a596e2 100644
        if (!SQLConf.get.getConf(SQLConf.LEGACY_PARSE_QUERY_WITHOUT_EOF)) {
          val ctx = parser.singleQuery()
  
-@@ -91,7 +92,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+@@ -101,7 +102,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
      }
  
    /** Creates LogicalPlan for a given SQL string. */

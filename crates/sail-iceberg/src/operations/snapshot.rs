@@ -441,14 +441,14 @@ pub(crate) struct PreparedSnapshotCommit {
     cleanup: CreatedPathCleanup,
 }
 
-struct CreatedPathCleanup {
+pub(crate) struct CreatedPathCleanup {
     store_ctx: StoreContext,
     created_paths: Vec<ObjectPath>,
     cleanup_on_drop: bool,
 }
 
 impl CreatedPathCleanup {
-    fn new(store_ctx: StoreContext) -> Self {
+    pub(crate) fn new(store_ctx: StoreContext) -> Self {
         Self {
             store_ctx,
             created_paths: Vec::new(),
@@ -456,22 +456,26 @@ impl CreatedPathCleanup {
         }
     }
 
-    async fn cleanup(&mut self) {
+    pub(crate) fn register(&mut self, path: ObjectPath) {
+        self.created_paths.push(path);
+    }
+
+    pub(crate) async fn cleanup(&mut self) {
         let paths = std::mem::take(&mut self.created_paths);
         self.cleanup_on_drop = false;
         cleanup_created_paths(&self.store_ctx, &paths).await;
     }
 
-    fn disarm(&mut self) {
+    pub(crate) fn disarm(&mut self) {
         self.cleanup_on_drop = false;
         self.created_paths.clear();
     }
 
-    fn publication_started(&mut self) {
+    pub(crate) fn publication_started(&mut self) {
         self.cleanup_on_drop = false;
     }
 
-    fn publication_did_not_happen(&mut self) {
+    pub(crate) fn publication_did_not_happen(&mut self) {
         self.cleanup_on_drop = true;
     }
 }

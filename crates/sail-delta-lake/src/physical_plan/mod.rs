@@ -30,6 +30,7 @@ mod commit_exec;
 pub mod discovery_exec;
 mod dv_writer_exec;
 mod log_replay_exec;
+mod merge_change_data;
 mod meta_adds;
 mod metadata_stats_exec;
 mod path_decode;

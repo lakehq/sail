@@ -39,6 +39,13 @@ impl JavaRandom {
         }
     }
 
+    /// Returns the next random `i64`, matching `Random.nextLong()`.
+    pub fn next_i64(&mut self) -> i64 {
+        let high = self.next_bits(32) as i64;
+        let low = self.next_bits(32) as i64;
+        (high << 32).wrapping_add(low)
+    }
+
     fn next_bits(&mut self, bits: u32) -> i32 {
         self.state = self.state.wrapping_mul(0x5DEECE66D).wrapping_add(0xB) & ((1u64 << 48) - 1);
         (self.state >> (48 - bits)) as i32
@@ -150,6 +157,18 @@ mod tests {
                 actual
             );
         }
+    }
+
+    #[test]
+    fn test_java_random_next_i64() {
+        // `new java.util.Random(seed).nextLong()` in Java.
+        let mut rng = JavaRandom::new(7);
+        assert_eq!(rng.next_i64(), -4967725919621401576);
+        assert_eq!(rng.next_i64(), -4627004027837150407);
+        assert_eq!(rng.next_i64(), 6425179856112732765);
+        let mut rng = JavaRandom::new(-3_i64 as u64);
+        assert_eq!(rng.next_i64(), 4957811011739826691);
+        assert_eq!(rng.next_i64(), 6481425337609949509);
     }
 
     #[test]

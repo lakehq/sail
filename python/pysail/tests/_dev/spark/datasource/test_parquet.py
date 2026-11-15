@@ -192,6 +192,61 @@ def test_parquet_read_options(spark, sample_df, tmp_path):
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
+def write_unannotated_binary(path):
+    """Writes a BYTE_ARRAY column without the UTF-8 annotation and without the Arrow schema,
+    as produced by writers that do not distinguish binary data from strings."""
+    path.mkdir()
+    pq.write_table(
+        pa.table({"value": pa.array([b"abc"], type=pa.binary())}),
+        path / "data.parquet",
+        store_schema=False,
+    )
+    return str(path)
+
+
+def test_parquet_session_binary_as_string(spark, tmp_path):
+    key = "spark.sql.parquet.binaryAsString"
+    path = write_unannotated_binary(tmp_path / "session_binary_as_string")
+    assert spark.read.parquet(path).dtypes == [("value", "binary")]
+    try:
+        spark.conf.set(key, "true")
+        assert spark.read.parquet(path).dtypes == [("value", "string")]
+        assert spark.read.parquet(path).first()[0] == "abc"
+
+        spark.conf.set(key, "false")
+        assert spark.read.parquet(path).dtypes == [("value", "binary")]
+    finally:
+        spark.conf.unset(key)
+    assert spark.read.parquet(path).dtypes == [("value", "binary")]
+
+
+def test_parquet_invalid_session_binary_as_string(spark, tmp_path):
+    key = "spark.sql.parquet.binaryAsString"
+    path = write_unannotated_binary(tmp_path / "invalid_session_binary_as_string")
+    try:
+        spark.conf.set(key, "true")
+        with pytest.raises(Exception, match=r"INVALID_CONF_VALUE\.TYPE_MISMATCH"):
+            spark.conf.set(key, "yes")
+        assert spark.conf.get(key) == "true"
+        assert spark.read.parquet(path).dtypes == [("value", "string")]
+    finally:
+        spark.conf.unset(key)
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="`binaryAsString` is a Sail-only read option")
+def test_parquet_read_option_overrides_session_binary_as_string(spark, tmp_path):
+    key = "spark.sql.parquet.binaryAsString"
+    path = write_unannotated_binary(tmp_path / "read_option_over_session_binary_as_string")
+    try:
+        spark.conf.set(key, "true")
+        assert spark.read.option("binaryAsString", "false").parquet(path).dtypes == [("value", "binary")]
+
+        spark.conf.set(key, "false")
+        assert spark.read.option("binaryAsString", "true").parquet(path).dtypes == [("value", "string")]
+    finally:
+        spark.conf.unset(key)
+
+
 @pytest.mark.parametrize(
     ("physical_schema", "requested_schema", "value"),
     [

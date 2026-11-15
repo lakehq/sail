@@ -2114,6 +2114,50 @@
     },
     {
       "input": {
+        "query": "SELECT try_add(time'09:00:00', interval 1 hour);",
+        "result": [
+          "10:00:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_add(TIME '09:00:00', INTERVAL '01' HOUR)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Execution error: Function 'try_add' user-defined coercion failed with: Execution error: Unsupported Data Type: Spark `spark_try_add` function expects Int32, Int64, Date32 or Interval(YearMonth), got Time64(µs), Duration(µs). No function matches the given name and argument types 'try_add(Time64(µs), Duration(µs))'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttry_add(UserDefined)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_add(time'23:00:00', interval 2 hour);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_add(TIME '23:00:00', INTERVAL '02' HOUR)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Execution error: Function 'try_add' user-defined coercion failed with: Execution error: Unsupported Data Type: Spark `spark_try_add` function expects Int32, Int64, Date32 or Interval(YearMonth), got Time64(µs), Duration(µs). No function matches the given name and argument types 'try_add(Time64(µs), Duration(µs))'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttry_add(UserDefined)"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT try_add(timestamp'2021-01-01 00:00:00', interval 1 day);",
         "result": [
           "2021-01-02 00:00:00"
@@ -2506,6 +2550,50 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_subtract(time'00:30:00', interval 1 hour);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_subtract(TIME '00:30:00', INTERVAL '01' HOUR)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Execution error: Function 'try_subtract' user-defined coercion failed with: Execution error: Unsupported Data Type: Spark `spark_try_subtract` function expects Int32, Int64, Date32 or Interval(YearMonth), got Time64(µs), Duration(µs). No function matches the given name and argument types 'try_subtract(Time64(µs), Duration(µs))'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttry_subtract(UserDefined)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_subtract(time'09:00:00', interval 1 hour);",
+        "result": [
+          "08:00:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_subtract(TIME '09:00:00', INTERVAL '01' HOUR)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: Execution error: Function 'try_subtract' user-defined coercion failed with: Execution error: Unsupported Data Type: Spark `spark_try_subtract` function expects Int32, Int64, Date32 or Interval(YearMonth), got Time64(µs), Duration(µs). No function matches the given name and argument types 'try_subtract(Time64(µs), Duration(µs))'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttry_subtract(UserDefined)"
       }
     },
     {

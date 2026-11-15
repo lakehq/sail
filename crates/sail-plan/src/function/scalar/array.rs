@@ -10,7 +10,6 @@ use datafusion_expr::{
 };
 use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
-use datafusion_spark::function::array::expr_fn as array_fn;
 use sail_common::utils::string::SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
@@ -20,6 +19,7 @@ use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
+use sail_function::scalar::array::spark_shuffle::SparkShuffle;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
@@ -633,7 +633,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("flatten", F::custom(flatten)),
         ("get", F::binary(array_element)),
         ("sequence", F::custom(sequence)),
-        ("shuffle", F::unary(array_fn::shuffle)),
+        ("shuffle", F::udf(SparkShuffle::new())),
         ("slice", F::custom(slice)),
         ("sort_array", F::custom(sort_array)),
     ]

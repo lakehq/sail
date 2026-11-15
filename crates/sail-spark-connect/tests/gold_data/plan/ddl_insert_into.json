@@ -822,6 +822,33 @@
       }
     },
     {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl () REPLACE WHERE a > 5 SELECT * FROM source",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'. SQLSTATE: 42601 (line 1, pos 33)\n\n== SQL ==\nINSERT INTO testcat.ns1.ns2.tbl () REPLACE WHERE a > 5 SELECT * FROM source\n---------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: found ) at 33:34 expected identifier, or query"
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl (a, b) BY NAME REPLACE WHERE a > 5 SELECT * FROM source",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'BY'. SQLSTATE: 42601 (line 1, pos 39)\n\n== SQL ==\nINSERT INTO testcat.ns1.ns2.tbl (a, b) BY NAME REPLACE WHERE a > 5 SELECT * FROM source\n---------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: found BY at 39:41 expected query"
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl (a, b) REPLACE ON col1 = col2 SELECT * FROM source",
+      "exception": "\n[INSERT_REPLACE_ON_COLUMN_LIST_NOT_ALLOWED] A column list is not allowed with INSERT INTO ... REPLACE ON. SQLSTATE: 42000\n== SQL (line 1, position 1) ==\nINSERT INTO testcat.ns1.ns2.tbl (a, b) REPLACE ON col1 = col2 SELECT * FROM source\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found REPLACE at 39:46 expected query"
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl (a, b) REPLACE WHERE a > 5 SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found REPLACE at 39:46 expected query"
+      }
+    },
+    {
       "input": "INSERT INTO testcat.ns1.ns2.tbl (a, b) SELECT * FROM source",
       "output": {
         "success": {
@@ -897,6 +924,13 @@
       }
     },
     {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl AS t (a, b) REPLACE WHERE a > 5 SELECT * FROM source",
+      "exception": "\n[INSERT_REPLACE_WHERE_TABLE_ALIAS_NOT_ALLOWED] Table alias is not allowed with INSERT INTO ... REPLACE WHERE because the WHERE condition is evaluated against the target table directly.\nUse INSERT INTO ... REPLACE ON if you need to reference the target table via an alias. SQLSTATE: 42000\n== SQL (line 1, position 1) ==\nINSERT INTO testcat.ns1.ns2.tbl AS t (a, b) REPLACE WHERE a > 5 SELECT * FROM source\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found AS at 32:34 expected '.', 'REPLACE', 'PARTITION', 'IF', 'BY', '(', or query"
+      }
+    },
+    {
       "input": "INSERT INTO testcat.ns1.ns2.tbl AS t BY NAME REPLACE ON t.col1 = col2 SELECT * FROM source",
       "output": {
         "failure": "invalid argument: found AS at 32:34 expected '.', 'REPLACE', 'PARTITION', 'IF', 'BY', '(', or query"
@@ -944,6 +978,13 @@
       "exception": "\n[INSERT_REPLACE_WHERE_TABLE_ALIAS_NOT_ALLOWED] Table alias is not allowed with INSERT INTO ... REPLACE WHERE because the WHERE condition is evaluated against the target table directly.\nUse INSERT INTO ... REPLACE ON if you need to reference the target table via an alias. SQLSTATE: 42000\n== SQL (line 1, position 1) ==\nINSERT INTO testcat.ns1.ns2.tbl AS t REPLACE WHERE a > 5 SELECT * FROM source\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found AS at 32:34 expected '.', 'REPLACE', 'PARTITION', 'IF', 'BY', '(', or query"
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl BY NAME (a, b) REPLACE WHERE a > 5 SELECT * FROM source",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'a'. SQLSTATE: 42601 (line 1, pos 41)\n\n== SQL ==\nINSERT INTO testcat.ns1.ns2.tbl BY NAME (a, b) REPLACE WHERE a > 5 SELECT * FROM source\n-----------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: found a at 41:42 expected query"
       }
     },
     {
@@ -1167,6 +1208,12 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl WITH (key = 'value') (a, b) REPLACE WHERE a > 5 SELECT * FROM source",
+      "output": {
+        "failure": "invalid argument: found ( at 37:38 expected 'RECURSIVE', or identifier"
       }
     }
   ]

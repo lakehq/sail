@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::mem;
 use std::sync::Arc;
 
-use datafusion::functions_aggregate::expr_fn::count;
 use datafusion::functions_nested::expr_fn::{array_element, make_array};
 use datafusion::optimizer::decorrelate::PullUpCorrelatedExpr;
 use datafusion_common::tree_node::{
@@ -16,6 +15,7 @@ use datafusion_expr::{
 };
 use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
+use sail_logical_optimizer::{exists_by_count, pull_up_correlated_filters_in_predicate_subquery};
 
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
@@ -30,8 +30,8 @@ impl<'s> PlanRewriter<'s> for ExistsRewriter<'s> {
         Self { plan, state }
     }
 
-    fn into_plan(self) -> LogicalPlan {
-        self.plan
+    fn into_plan(self) -> Result<LogicalPlan> {
+        Ok(self.plan)
     }
 }
 
@@ -168,19 +168,12 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
 impl ExistsRewriter<'_> {
     fn count_rows(&mut self, query: LogicalPlan, skip: usize) -> Result<Expr> {
         let output = self.state.register_field_name("");
-        let skip = i64::try_from(skip).map_err(|error| plan_datafusion_err!("{error}"))?;
-        // COUNT produces one non-null result even when the subquery has no rows.
-        let query = LogicalPlanBuilder::from(query)
-            .aggregate(Vec::<Expr>::new(), vec![count(lit(1_i64)).alias(&output)])?
-            .project(vec![ident(output).gt(lit(skip))])?
-            .build()?;
-        Self::validate_correlated_operators(&query)?;
-        Ok(ScalarUDF::from(CoalesceFunc::new())
-            .call(vec![expr_fn::scalar_subquery(Arc::new(query)), lit(false)]))
+        exists_by_count(query, skip, &output, Self::validate_correlated_operators)
     }
 
     fn correlated_exists(&mut self, query: LogicalPlan) -> Result<Expr> {
-        let mut query = query
+        let mut query = pull_up_correlated_filters_in_predicate_subquery(query)?
+            .data
             .transform_up(|plan| {
                 let LogicalPlan::Limit(mut limit) = plan else {
                     return Ok(Transformed::no(plan));

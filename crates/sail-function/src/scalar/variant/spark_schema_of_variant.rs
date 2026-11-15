@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow_schema::DataType;
-use datafusion::common::{DataFusionError, exec_datafusion_err, exec_err};
+use datafusion::common::{exec_datafusion_err, exec_err};
 use datafusion::error::Result;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -13,7 +13,7 @@ use parquet_variant_compute::VariantArray;
 
 use crate::error::invalid_arg_count_exec_err;
 use crate::scalar::variant::utils::helper::{try_field_as_variant_array, try_parse_variant_scalar};
-use crate::schema_inference::{InferredType, TypeMerger};
+use crate::utils::schema_inference::{InferredType, TypeMerger};
 
 /// Returns the schema (type string) of a variant value using Spark type names.
 ///
@@ -171,104 +171,7 @@ impl TypeMerger for VariantTypeMerger {
 }
 
 pub(crate) fn variant_type_to_spark_type(inferred: &InferredType) -> String {
-    match inferred {
-        InferredType::Null => "VOID".to_string(),
-        InferredType::Boolean => "BOOLEAN".to_string(),
-        InferredType::Long => "BIGINT".to_string(),
-        InferredType::Float => "FLOAT".to_string(),
-        InferredType::Decimal(precision, scale) => format!("DECIMAL({precision},{scale})"),
-        InferredType::Double => "DOUBLE".to_string(),
-        InferredType::String => "STRING".to_string(),
-        InferredType::Binary => "BINARY".to_string(),
-        InferredType::Date => "DATE".to_string(),
-        InferredType::Timestamp => "TIMESTAMP".to_string(),
-        InferredType::TimestampNtz => "TIMESTAMP_NTZ".to_string(),
-        InferredType::Array(element) => {
-            format!("ARRAY<{}>", variant_type_to_spark_type(element))
-        }
-        InferredType::Struct(fields) => {
-            let fields = fields
-                .iter()
-                .map(|(name, ty)| format!("{name}: {}", variant_type_to_spark_type(ty)))
-                .collect::<Vec<_>>();
-            format!("OBJECT<{}>", fields.join(", "))
-        }
-        InferredType::Variant => "VARIANT".to_string(),
-    }
-}
-
-pub(crate) fn variant_type_from_spark_type(s: &str) -> Result<InferredType> {
-    match s {
-        "VOID" => return Ok(InferredType::Null),
-        "BOOLEAN" => return Ok(InferredType::Boolean),
-        "BIGINT" => return Ok(InferredType::Long),
-        "FLOAT" => return Ok(InferredType::Float),
-        "DOUBLE" => return Ok(InferredType::Double),
-        "STRING" => return Ok(InferredType::String),
-        "BINARY" => return Ok(InferredType::Binary),
-        "DATE" => return Ok(InferredType::Date),
-        "TIMESTAMP" => return Ok(InferredType::Timestamp),
-        "TIMESTAMP_NTZ" => return Ok(InferredType::TimestampNtz),
-        "VARIANT" => return Ok(InferredType::Variant),
-        _ => {}
-    }
-    if let Some(inner) = s.strip_circumfix("DECIMAL(", ')') {
-        let (precision, scale) = inner.split_once(',').ok_or_else(|| {
-            DataFusionError::Execution(format!("invalid inferred decimal type '{s}'"))
-        })?;
-        let precision = precision.parse::<u8>().map_err(|_| {
-            DataFusionError::Execution(format!("invalid inferred decimal precision '{precision}'"))
-        })?;
-        let scale = scale.parse::<u8>().map_err(|_| {
-            DataFusionError::Execution(format!("invalid inferred decimal scale '{scale}'"))
-        })?;
-        return Ok(InferredType::Decimal(precision, scale));
-    }
-    if let Some(inner) = s.strip_circumfix("ARRAY<", '>') {
-        return Ok(InferredType::Array(Box::new(variant_type_from_spark_type(
-            inner,
-        )?)));
-    }
-    if let Some(inner) = s.strip_circumfix("OBJECT<", '>') {
-        let mut fields = Vec::new();
-        for field in split_top_level(inner) {
-            let (name, ty) = field.split_once(": ").ok_or_else(|| {
-                DataFusionError::Execution(format!("invalid inferred object field '{field}'"))
-            })?;
-            fields.push((
-                name.trim().to_string(),
-                variant_type_from_spark_type(ty.trim())?,
-            ));
-        }
-        return Ok(InferredType::Struct(fields));
-    }
-    Err(DataFusionError::Execution(format!(
-        "invalid inferred variant type '{s}'"
-    )))
-}
-
-fn split_top_level(s: &str) -> Vec<&str> {
-    let mut fields = Vec::new();
-    let mut angle_depth = 0usize;
-    let mut paren_depth = 0usize;
-    let mut start = 0;
-    for (i, ch) in s.char_indices() {
-        match ch {
-            '<' => angle_depth += 1,
-            '>' => angle_depth = angle_depth.saturating_sub(1),
-            '(' => paren_depth += 1,
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            ',' if angle_depth == 0 && paren_depth == 0 => {
-                fields.push(s[start..i].trim());
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-    if start < s.len() {
-        fields.push(s[start..].trim());
-    }
-    fields
+    inferred.to_ddl("OBJECT")
 }
 
 /// Compute the decimal precision from the integer value and scale.

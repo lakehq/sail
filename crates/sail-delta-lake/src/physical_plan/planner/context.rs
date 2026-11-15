@@ -60,6 +60,7 @@ pub struct DeltaPlannerConfig {
     /// projection rewrites.
     pub metadata_schema: Option<SchemaRef>,
     pub identity_columns: HashMap<String, CatalogTableColumnIdentity>,
+    pub identity_columns_to_track: Vec<String>,
     pub table_snapshot: Option<Arc<DeltaSnapshot>>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
 }
@@ -86,6 +87,7 @@ impl DeltaPlannerConfig {
             target_nullability: HashMap::new(),
             metadata_schema: None,
             identity_columns: HashMap::new(),
+            identity_columns_to_track: Vec::new(),
             table_snapshot: None,
             lakehouse_table: None,
         }
@@ -127,6 +129,11 @@ impl DeltaPlannerConfig {
         identity_columns: HashMap<String, CatalogTableColumnIdentity>,
     ) -> Self {
         self.identity_columns = identity_columns;
+        self
+    }
+
+    pub fn with_identity_columns_to_track(mut self, columns: Vec<String>) -> Self {
+        self.identity_columns_to_track = columns;
         self
     }
 
@@ -234,9 +241,12 @@ impl<'a> PlannerContext<'a> {
     }
 
     pub fn commit_context(&self) -> DeltaCommitContext {
-        self.table_snapshot()
+        let mut context = self
+            .table_snapshot()
             .map(|snapshot| DeltaCommitContext::from_snapshot(snapshot.as_ref()))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        context.identity_columns_to_track = self.config.identity_columns_to_track.clone();
+        context
     }
 
     pub fn prepare_write_context(
@@ -251,7 +261,7 @@ impl<'a> PlannerContext<'a> {
             .with_target_nullability(self.target_nullability().clone())
             .with_identity_columns(self.identity_columns().clone());
         let input_schema = self.metadata_schema().unwrap_or(input_schema);
-        prepare_delta_write_context(
+        let mut context = prepare_delta_write_context(
             self.table_url(),
             self.table_snapshot().map(|snapshot| snapshot.as_ref()),
             &options,
@@ -261,7 +271,10 @@ impl<'a> PlannerContext<'a> {
             self.table_exists(),
             input_schema,
             operation_override,
-        )
+        )?;
+        context.commit_context.identity_columns_to_track =
+            self.config.identity_columns_to_track.clone();
+        Ok(context)
     }
 
     pub fn into_config(self) -> DeltaPlannerConfig {

@@ -23,8 +23,11 @@ Update the PySpark version pins in `pyproject.toml`.
 1. Update the `test` optional dependency when updating the latest supported Spark version.
 2. Update the `default` environment when updating the latest supported Spark version.
 3. Update the `test` environment when adding or updating a supported Spark minor version.
-4. Update the `test-spark` environment when changing a Spark version used for parity tests.
-5. Update the `test-ibis` environment only when changing the Spark patch version used for Ibis tests, unless the Ibis version is also being updated.
+4. Update the `test-discovery` environment when updating the latest supported Spark version.
+5. Update the `test-spark` environment when changing a Spark version used for parity tests.
+6. Update the `test-ibis` environment only when changing the Spark patch version used for Ibis tests, unless the Ibis version is also being updated.
+
+When adding a Spark minor version, keep the existing versions in the `test` matrix and update its environment path and dependency overrides.
 
 ### Spark Configuration
 
@@ -40,19 +43,28 @@ env SPARK_LOCAL_IP=127.0.0.1 \
 ```
 
 Update `crates/sail-spark-connect/build.rs` when adding support for a new Spark minor version.
+Also update the runtime configuration selection in `crates/sail-spark-connect/src/config.rs` so that it recognizes the new version.
+Review configuration defaults and update the overrides in Sail if necessary.
 
 ### Documentation
 
 Please search for all mentions of Spark versions in the documentation in the `docs` directory and update them accordingly.
+Keep historical version references accurate, such as those in changelog entries and benchmark results.
 
 ### GitHub Actions Workflows
 
 Please search for all mentions of Spark versions in the GitHub Actions workflows in the `.github` directory and update them accordingly.
+Check build and test matrices, package artifacts, and test reports.
+Update related agent instructions as needed.
 
 ### Spark Connect Protocol Buffers
 
-When updating the latest supported Spark version, copy the `.proto` files from Spark to the `crates/sail-spark-connect/proto` directory.
+When updating the latest supported Spark version, copy the `.proto` files from the corresponding Spark release tag to the `crates/sail-spark-connect/proto` directory.
+Make sure each file ends with a newline.
+
 You may need to adjust the Rust code to work with the generated Spark Connect gRPC service code.
+Review new relation, expression, literal, and data type variants.
+Return an unsupported error for features that Sail does not implement yet.
 
 ### Parity Tests
 
@@ -70,8 +82,13 @@ First, update the patch file. Here are example steps for updating from Spark `3.
 6. Remove the old patch `scripts/spark-tests/spark-3.5.8.patch`.
 
 The patch must include all PySpark tests in the built package. Make sure the patched `setup.py` includes all test subpackages in the corresponding Spark version.
+Compare the package list against test directories containing `__init__.py` in the new release.
+Make sure the package also includes the required test data files.
+Verify that the generated patch applies cleanly to the unmodified release tag.
 
-The following command verifies that the patched PySpark package can be built successfully for the new Spark version. Note that the command may take a long time to run. For example, in GitHub Actions, it takes about 30 minutes.
+Run the following command to verify that the patched PySpark package can be built successfully for the new Spark version.
+The script builds Spark from source before packaging PySpark.
+Note that the command may take a long time to run. For example, in GitHub Actions, it takes about 30 minutes.
 
 ```bash
 env SPARK_VERSION=3.5.9 scripts/spark-tests/build-pyspark.sh
@@ -80,6 +97,7 @@ env SPARK_VERSION=3.5.9 scripts/spark-tests/build-pyspark.sh
 ### Gold Data
 
 Update the gold data patch whenever changing the Spark version used by `scripts/spark-gold-data/bootstrap.sh`.
+Also update the Spark checkout tag in `.github/workflows/gold-data-script-validation.yml`.
 
 First, update the patch file. Here are example steps for updating from Spark `3.5.8` to `3.5.9`.
 
@@ -111,10 +129,24 @@ Then generate the Sail test output using the following command.
 env SAIL_UPDATE_GOLD_DATA=1 cargo test
 ```
 
+### Validation
+
+Run the project formatting and linting checks and rebuild the native extension before testing.
+Run the Spark session, configuration, UDF, and UDTF tests with the new version.
+When changing code shared by multiple Spark versions, also run the relevant tests with older supported versions.
+
+Verify that tests can be collected with all supported Spark versions and without building the native extension.
+Build the documentation after updating it.
+
 ## Non-standard Procedures
 
-Review changes to the PySpark UDF and UDTF code in `worker.py` and related Spark files. Identify version-specific logic and update the codebase accordingly.
+Review changes to the PySpark UDF and UDTF code in `worker.py` and related Spark files.
+Check how function payloads are loaded and how inputs and outputs are converted.
+Update version checks and compatibility code in Sail accordingly.
+
+Review integration dependencies that require a particular Spark version.
+Update the dependencies or test version requirements as needed.
 
 Review the patch files closely, especially if they are edited directly after being generated.
-Patch files with ad-hoc edits can have incorrect line numbers or file hashes even if the patch applies cleanly.
+Patch files edited manually can have incorrect line numbers or file hashes even if the patch applies cleanly.
 It is recommended to generate the patch again using only `git` commands (`git apply` and `git diff`) to ensure the patch is correct.

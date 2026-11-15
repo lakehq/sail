@@ -1,12 +1,16 @@
 use std::collections::{HashMap, HashSet};
+use std::mem;
 use std::sync::Arc;
 
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, TableReference};
 use datafusion_expr::expr::{Alias, FieldMetadata, ScalarFunction};
 use datafusion_expr::expr_rewriter::normalize_col;
-use datafusion_expr::utils::{columnize_expr, expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, Projection};
+use datafusion_expr::utils::{
+    columnize_expr, conjunction, expand_qualified_wildcard, expand_wildcard,
+    split_conjunction_owned,
+};
+use datafusion_expr::{Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, Projection};
 use sail_common::spec;
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -21,6 +25,9 @@ use crate::resolver::tree::PlanRewriter;
 use crate::resolver::tree::exists::ExistsRewriter;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::seeded_random::{
+    SeededRandomRewriter, SeededRandomScope, contains_generator, contains_seeded_random_call,
+};
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 
@@ -45,21 +52,59 @@ impl PlanResolver<'_> {
         };
         let (input, expr) = self.resolve_projection_list(input, expr, state).await?;
         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
-        let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
-        let (input, expr) =
-            self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
-        let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
+        // In an aggregate query, the partition-dependent functions outside the aggregate
+        // functions are evaluated over the aggregate output, as in Spark, so only the
+        // arguments of the aggregate functions are rewritten over the input here.
+        let aggregate_arguments_only = Self::has_aggregate(&expr);
+        let (input, expr) = if !aggregate_arguments_only
+            && expr.iter().any(|e| contains_generator(&e.expr))
+        {
+            // Spark evaluates the expressions other than the generators over the output of
+            // the generators (`ExtractGenerator`), so they are rewritten afterwards.
+            // TODO: The seeded calls in the window functions of these expressions stay
+            //   scalar functions, since the window functions are planned before the
+            //   second pass.
+            let (input, expr) =
+                self.rewrite_generator_projection::<MonotonicIdRewriter>(input, expr, state)?;
+            let (input, expr) =
+                self.rewrite_generator_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
+            let (input, expr) =
+                self.rewrite_generator_projection::<SeededRandomRewriter>(input, expr, state)?;
+            let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
+            let (input, expr) =
+                self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
+            self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?
+        } else {
+            let (input, expr) = self.rewrite_projection_with::<MonotonicIdRewriter>(
+                input,
+                expr,
+                aggregate_arguments_only,
+                state,
+            )?;
+            let (input, expr) = self.rewrite_projection_with::<SparkPartitionIdRewriter>(
+                input,
+                expr,
+                aggregate_arguments_only,
+                state,
+            )?;
+            let (input, expr) = self.rewrite_projection_with::<SeededRandomRewriter>(
+                input,
+                expr,
+                aggregate_arguments_only,
+                state,
+            )?;
+            self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?
+        };
         let (input, expr) = self.rewrite_window_projection(input, expr, state)?;
+        // The expressions around the window functions can be evaluated as a whole now.
+        let (input, expr) = self.rewrite_projection_with::<SeededRandomRewriter>(
+            input,
+            expr,
+            aggregate_arguments_only,
+            state,
+        )?;
         let expr = self.rewrite_multi_expr(expr)?;
-        let has_aggregate = expr.iter().any(|e| {
-            e.expr
-                .exists(|e| match e {
-                    Expr::AggregateFunction(_) => Ok(true),
-                    _ => Ok(false),
-                })
-                .unwrap_or(false)
-        });
-        if has_aggregate {
+        if Self::has_aggregate(&expr) {
             self.rewrite_aggregate(input, expr, vec![], None, false, state)
         } else {
             let (input, expr) = self.rewrite_projection::<ExistsRewriter>(input, expr, state)?;
@@ -378,22 +423,43 @@ impl PlanResolver<'_> {
         // require staging their expressions across separate projections.
         let (mut input, expressions) =
             self.materialize_window_input_file_metadata(input, expressions, &columns, state)?;
+        // Spark extracts the generators before resolving lateral aliases (`ExtractGenerator`),
+        // so the nondeterministic expressions are evaluated over the output of the generators.
+        let aliases = columns.iter().cloned().collect::<HashSet<_>>();
+        let volatile = expressions.iter().any(|named| named.expr.is_volatile());
+        let (generators, others): (Vec<_>, Vec<_>) = expressions
+            .into_iter()
+            .zip(columns)
+            .enumerate()
+            .partition(|(_, (named, _))| {
+                volatile
+                    && contains_generator(&named.expr)
+                    && !named
+                        .expr
+                        .column_refs()
+                        .into_iter()
+                        .any(|c| aliases.contains(c))
+            });
         let mut resolved = vec![];
-        for (named, column) in expressions.into_iter().zip(columns) {
+        for (index, (named, column)) in generators.into_iter().chain(others) {
             // A grouping key may already have materialized this alias below
             // the aggregate and carried it into the aggregate output.
             if input.schema().has_column(&column)
                 && named.expr.clone().unalias() == Expr::Column(column.clone())
             {
-                resolved.push(named);
+                resolved.push((index, named));
                 continue;
             }
             let (next, named) =
                 self.rewrite_projection::<MonotonicIdRewriter>(input, vec![named], state)?;
             let (next, named) =
                 self.rewrite_projection::<SparkPartitionIdRewriter>(next, named, state)?;
+            let (next, named) =
+                self.rewrite_projection::<SeededRandomRewriter>(next, named, state)?;
             let (next, named) = self.rewrite_projection::<ExplodeRewriter>(next, named, state)?;
             let (next, named) = self.rewrite_projection::<WindowRewriter>(next, named, state)?;
+            let (next, named) =
+                self.rewrite_projection::<SeededRandomRewriter>(next, named, state)?;
             let (next, named) = self.rewrite_projection::<ExistsRewriter>(next, named, state)?;
             input = next;
             let named = named.one()?;
@@ -409,11 +475,16 @@ impl PlanResolver<'_> {
                     .alias_qualified(column.relation.clone(), &column.name),
             );
             input = LogicalPlan::Projection(Projection::try_new(exprs, Arc::new(input))?);
-            resolved.push(NamedExpr {
-                expr: Expr::Column(column),
-                ..named
-            });
+            resolved.push((
+                index,
+                NamedExpr {
+                    expr: Expr::Column(column),
+                    ..named
+                },
+            ));
         }
+        resolved.sort_by_key(|(index, _)| *index);
+        let resolved = resolved.into_iter().map(|(_, named)| named).collect();
         Ok((input, resolved))
     }
 
@@ -664,10 +735,36 @@ impl PlanResolver<'_> {
         Ok((input, expressions))
     }
 
+    fn has_aggregate(expr: &[NamedExpr]) -> bool {
+        expr.iter().any(|e| {
+            e.expr
+                .exists(|e| match e {
+                    Expr::AggregateFunction(_) => Ok(true),
+                    _ => Ok(false),
+                })
+                .unwrap_or(false)
+        })
+    }
+
     pub(super) fn rewrite_projection<'s, T>(
         &self,
         input: LogicalPlan,
         expr: Vec<NamedExpr>,
+        state: &'s mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)>
+    where
+        T: PlanRewriter<'s> + TreeNodeRewriter<Node = Expr>,
+    {
+        self.rewrite_projection_with::<T>(input, expr, false, state)
+    }
+
+    /// Rewrites the projection, or only the aggregate functions in it if
+    /// `aggregate_functions_only` is true.
+    pub(super) fn rewrite_projection_with<'s, T>(
+        &self,
+        input: LogicalPlan,
+        expr: Vec<NamedExpr>,
+        aggregate_functions_only: bool,
         state: &'s mut PlanResolverState,
     ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)>
     where
@@ -682,14 +779,55 @@ impl PlanResolver<'_> {
                     expr,
                     metadata,
                 } = e;
+                let expr = if aggregate_functions_only {
+                    expr.transform_down(|expr| {
+                        if !matches!(expr, Expr::AggregateFunction(_)) {
+                            return Ok(Transformed::no(expr));
+                        }
+                        let Transformed {
+                            data, transformed, ..
+                        } = expr.rewrite(&mut rewriter)?;
+                        Ok(Transformed::new(data, transformed, TreeNodeRecursion::Jump))
+                    })?
+                    .data
+                } else {
+                    expr.rewrite(&mut rewriter)?.data
+                };
                 Ok(NamedExpr {
                     name,
-                    expr: expr.rewrite(&mut rewriter)?.data,
+                    expr,
                     metadata,
                 })
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        Ok((rewriter.into_plan(), expr))
+        Ok((rewriter.into_plan()?, expr))
+    }
+
+    /// Rewrites only the expressions that contain generators.
+    pub(super) fn rewrite_generator_projection<'s, T>(
+        &self,
+        input: LogicalPlan,
+        expr: Vec<NamedExpr>,
+        state: &'s mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)>
+    where
+        T: PlanRewriter<'s> + TreeNodeRewriter<Node = Expr>,
+    {
+        let mut rewriter = T::new_from_plan(input, state);
+        let expr = expr
+            .into_iter()
+            .map(|e| {
+                if contains_generator(&e.expr) {
+                    Ok(NamedExpr {
+                        expr: e.expr.rewrite(&mut rewriter)?.data,
+                        ..e
+                    })
+                } else {
+                    Ok(e)
+                }
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok((rewriter.into_plan()?, expr))
     }
 
     /// Materialize partition-dependent functions before evaluating an operator's expressions.
@@ -704,13 +842,125 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|expr| Ok(expr.rewrite(&mut rewriter)?.data))
             .collect::<PlanResult<Vec<_>>>()?;
-        let input = rewriter.into_plan();
+        let input = rewriter.into_plan()?;
         let mut rewriter = SparkPartitionIdRewriter::new_from_plan(input, state);
         let expressions = expressions
             .into_iter()
             .map(|expr| Ok(expr.rewrite(&mut rewriter)?.data))
             .collect::<PlanResult<Vec<_>>>()?;
-        Ok((rewriter.into_plan(), expressions))
+        Ok((rewriter.into_plan()?, expressions))
+    }
+
+    /// Materializes the calls of random functions with a seed before evaluating an operator's
+    /// expressions, so that each call is seeded once per partition.
+    pub(super) fn rewrite_seeded_random_expressions(
+        &self,
+        input: LogicalPlan,
+        expressions: Vec<Expr>,
+        scope: SeededRandomScope,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<Expr>)> {
+        let mut rewriter = SeededRandomRewriter::new(input, state, scope);
+        let expressions = expressions
+            .into_iter()
+            .map(|expr| Ok(expr.rewrite(&mut rewriter)?.data.unalias()))
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok((rewriter.into_plan()?, expressions))
+    }
+
+    /// Builds the filter of a predicate. Spark evaluates the conjuncts of a filter in order,
+    /// each for the rows that satisfy the previous ones, so a conjunct with calls of random
+    /// functions with a seed is evaluated after filtering by the previous conjuncts.
+    ///
+    /// Spark rewrites `IN` and correlated `EXISTS` subqueries to joins above the other
+    /// conjuncts (`RewritePredicateSubquery`), so those conjuncts are applied last, in order.
+    pub(super) fn rewrite_seeded_random_filter(
+        &self,
+        input: LogicalPlan,
+        predicate: Expr,
+        having: bool,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let filter = |input: LogicalPlan, predicate: Expr| -> PlanResult<LogicalPlan> {
+            Ok(if having {
+                LogicalPlanBuilder::from(input).having(predicate)?.build()?
+            } else {
+                LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(input))?)
+            })
+        };
+        if !contains_seeded_random_call(&predicate) {
+            return filter(input, predicate);
+        }
+        if predicate.contains_outer() {
+            // Spark removes the correlated conjuncts from a subquery when it decorrelates it,
+            // and evaluates those it cannot remove before the others, so they are applied
+            // first. The optimizer moves them above the nodes when they can be removed.
+            let (correlated, uncorrelated): (Vec<_>, Vec<_>) =
+                split_conjunction_owned(predicate.clone())
+                    .into_iter()
+                    .partition(Expr::contains_outer);
+            if having || correlated.iter().any(contains_seeded_random_call) {
+                return filter(input, predicate);
+            }
+            let Some(correlated) = conjunction(correlated) else {
+                return filter(input, predicate);
+            };
+            let plan = filter(input, correlated)?;
+            return match conjunction(uncorrelated) {
+                Some(predicate) => {
+                    self.rewrite_seeded_random_filter(plan, predicate, having, state)
+                }
+                None => Ok(plan),
+            };
+        }
+        let (joined, conjuncts): (Vec<_>, Vec<_>) = split_conjunction_owned(predicate)
+            .into_iter()
+            .partition(has_join_subquery);
+        let mut plan = input;
+        let mut pending = vec![];
+        for conjunct in conjuncts {
+            if !contains_seeded_random_call(&conjunct) {
+                pending.push(conjunct);
+                continue;
+            }
+            if let Some(predicate) = conjunction(mem::take(&mut pending)) {
+                plan = filter(plan, predicate)?;
+            }
+            plan = self.rewrite_seeded_random_conjunct(plan, conjunct, &filter, state)?;
+        }
+        if !joined.iter().any(contains_seeded_random_call) {
+            return match conjunction(pending.into_iter().chain(joined)) {
+                Some(predicate) => filter(plan, predicate),
+                None => Ok(plan),
+            };
+        }
+        if let Some(predicate) = conjunction(pending) {
+            plan = filter(plan, predicate)?;
+        }
+        for conjunct in joined {
+            plan = if contains_seeded_random_call(&conjunct) {
+                self.rewrite_seeded_random_conjunct(plan, conjunct, &filter, state)?
+            } else {
+                filter(plan, conjunct)?
+            };
+        }
+        Ok(plan)
+    }
+
+    fn rewrite_seeded_random_conjunct(
+        &self,
+        input: LogicalPlan,
+        conjunct: Expr,
+        filter: &impl Fn(LogicalPlan, Expr) -> PlanResult<LogicalPlan>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let (input, conjunct) = self.rewrite_seeded_random_expressions(
+            input,
+            vec![conjunct],
+            SeededRandomScope::Expression,
+            state,
+        )?;
+        filter(input, conjunct.one()?)
     }
 
     pub(super) fn rewrite_multi_expr(&self, expr: Vec<NamedExpr>) -> PlanResult<Vec<NamedExpr>> {
@@ -857,6 +1107,19 @@ impl PlanResolver<'_> {
             schema,
         )?))
     }
+}
+
+/// Returns whether the expression has an `IN` or a correlated `EXISTS` subquery, which Spark
+/// rewrites to a join.
+fn has_join_subquery(expr: &Expr) -> bool {
+    expr.exists(|e| {
+        Ok(match e {
+            Expr::InSubquery(_) | Expr::SetComparison(_) => true,
+            Expr::Exists(exists) => !exists.subquery.outer_ref_columns.is_empty(),
+            _ => false,
+        })
+    })
+    .unwrap_or(true)
 }
 
 #[cfg(test)]

@@ -3,11 +3,12 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{FieldRef, Schema};
-use datafusion::common::{Result, plan_datafusion_err, plan_err};
+use datafusion::arrow::datatypes::{ArrowPrimitiveType, FieldRef, Float16Type, Schema};
+use datafusion::common::metadata::FieldMetadata;
+use datafusion::common::{Result, ScalarValue, plan_datafusion_err, plan_err};
 use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion::logical_expr::{LambdaParametersProgress, ValueOrLambda};
-use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
+use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable, Literal};
 use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
@@ -22,7 +23,8 @@ use prost::Message;
 
 use crate::plan::r#gen::extended_physical_expr_node::ExprKind;
 use crate::plan::r#gen::{
-    ExtendedPhysicalExprNode, HigherOrderUdfExprNode, LambdaExprNode, LambdaVariableExprNode,
+    ExtendedPhysicalExprNode, Float16LiteralExprNode, HigherOrderUdfExprNode, LambdaExprNode,
+    LambdaVariableExprNode,
 };
 use crate::proto::decode::{try_decode_field_ref, try_decode_higher_order_udf};
 use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
@@ -70,6 +72,24 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let decoded = match decode_remote_expr_kind(proto)? {
+            Some((ExprKind::Float16Literal(node), inputs)) => {
+                if !inputs.is_empty() {
+                    return plan_err!("Float16Literal expects no inputs, got {}", inputs.len());
+                }
+                let value = node
+                    .bits
+                    .map(|bits| -> Result<_> {
+                        let bits = u16::try_from(bits).map_err(|_| {
+                            plan_datafusion_err!("Float16Literal bits {bits} do not fit in u16")
+                        })?;
+                        Ok(<Float16Type as ArrowPrimitiveType>::Native::from_bits(bits))
+                    })
+                    .transpose()?;
+                Ok(Arc::new(Literal::new_with_metadata(
+                    ScalarValue::Float16(value),
+                    Some(FieldMetadata::from(node.metadata)),
+                )) as Arc<dyn PhysicalExpr>)
+            }
             Some((ExprKind::HigherOrderUdf(node), inputs)) => {
                 self.higher_order_proto_to_expr(node, inputs, input_schema, ctx)
             }
@@ -118,6 +138,19 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<PhysicalExprNode> {
+        if let Some(literal) = expr.downcast_ref::<Literal>()
+            && let ScalarValue::Float16(value) = literal.value()
+        {
+            // DataFusion's scalar protobuf widens non-null Float16 values to Float32.
+            return extension_expr_to_proto(
+                expr,
+                ExprKind::Float16Literal(Float16LiteralExprNode {
+                    bits: value.map(|value| u32::from(value.to_bits())),
+                    metadata: literal.return_field(&Schema::empty())?.metadata().clone(),
+                }),
+                vec![],
+            );
+        }
         if let Some(hof) = expr.downcast_ref::<HigherOrderFunctionExpr>() {
             return self.higher_order_expr_to_proto(expr, hof, codec);
         }
@@ -358,4 +391,158 @@ fn extend_lambda_schema(base: &Schema, params: &[String], fields: &[FieldRef]) -
         output.push(Arc::new(field.as_ref().clone().with_name(name)));
     }
     Schema::new_with_metadata(output, base.metadata().clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::DataType;
+    use datafusion::execution::TaskContext;
+    use datafusion::logical_expr::Operator;
+    use datafusion::physical_expr::expressions::BinaryExpr;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::projection::ProjectionExec;
+    use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
+
+    use super::*;
+
+    fn round_trip(expr: &Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
+        let converter = RemotePhysicalProtoConverter::default();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let task_ctx = TaskContext::default();
+        let ctx = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+        let proto = converter.physical_expr_to_proto(expr, &codec)?;
+        let proto = PhysicalExprNode::decode(proto.encode_to_vec().as_slice())
+            .map_err(|e| plan_datafusion_err!("{e}"))?;
+        converter.proto_to_physical_expr(&proto, &Schema::empty(), &ctx)
+    }
+
+    #[test]
+    fn float16_literal_round_trip_preserves_bits_and_metadata() -> Result<()> {
+        let metadata = HashMap::from([("source".to_string(), "literal".to_string())]);
+        // Finite values, subnormals, signed zeros/infinities, and NaN payloads.
+        for bits in [
+            Some(0x3c00),
+            Some(0xc100),
+            Some(0x0001),
+            Some(0x8001),
+            Some(0x0000),
+            Some(0x8000),
+            Some(0x7c00),
+            Some(0xfc00),
+            Some(0x7e01),
+            Some(0xfd23),
+            None,
+        ] {
+            let value = bits.map(<Float16Type as ArrowPrimitiveType>::Native::from_bits);
+            let expr: Arc<dyn PhysicalExpr> = Arc::new(Literal::new_with_metadata(
+                ScalarValue::Float16(value),
+                Some(FieldMetadata::from(metadata.clone())),
+            ));
+            let decoded = round_trip(&expr)?;
+            let literal = decoded
+                .downcast_ref::<Literal>()
+                .ok_or_else(|| plan_datafusion_err!("expected literal"))?;
+            let ScalarValue::Float16(value) = literal.value() else {
+                return plan_err!("Float16 literal changed type");
+            };
+            assert_eq!(value.map(|value| value.to_bits()), bits);
+            assert_eq!(decoded.data_type(&Schema::empty())?, DataType::Float16);
+            assert_eq!(decoded.nullable(&Schema::empty())?, bits.is_none());
+            assert_eq!(
+                decoded.return_field(&Schema::empty())?,
+                expr.return_field(&Schema::empty())?
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn float32_literal_keeps_standard_encoding() -> Result<()> {
+        for value in [Some(1.25), None] {
+            let expr: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(ScalarValue::Float32(value)));
+            let proto = RemotePhysicalProtoConverter::default()
+                .physical_expr_to_proto(&expr, &DefaultPhysicalExtensionCodec {})?;
+            assert!(matches!(
+                proto.expr_type,
+                Some(physical_expr_node::ExprType::Literal(_))
+            ));
+            let decoded = round_trip(&expr)?;
+            assert_eq!(
+                decoded
+                    .downcast_ref::<Literal>()
+                    .ok_or_else(|| plan_datafusion_err!("expected literal"))?
+                    .value(),
+                &ScalarValue::Float32(value)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn float16_literal_rejects_invalid_payloads() -> Result<()> {
+        let converter = RemotePhysicalProtoConverter::default();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let task_ctx = TaskContext::default();
+        let ctx = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(ScalarValue::Float16(None)));
+        for (bits, inputs, message) in [
+            (Some(65536), vec![], "do not fit in u16"),
+            (Some(u32::MAX), vec![], "do not fit in u16"),
+            (None, vec![PhysicalExprNode::default()], "expects no inputs"),
+        ] {
+            let proto = extension_expr_to_proto(
+                &expr,
+                ExprKind::Float16Literal(Float16LiteralExprNode {
+                    bits,
+                    metadata: HashMap::new(),
+                }),
+                inputs,
+            )?;
+            let error = converter
+                .proto_to_physical_expr(&proto, &Schema::empty(), &ctx)
+                .err()
+                .ok_or_else(|| plan_datafusion_err!("invalid payload was accepted"))?;
+            assert!(error.to_string().contains(message), "{error}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn float16_literal_nested_in_projection_round_trip() -> Result<()> {
+        let converter = RemotePhysicalProtoConverter::default();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let task_ctx = TaskContext::default();
+        let ctx = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+        let value = <Float16Type as ArrowPrimitiveType>::Native::from_bits(0x3c00);
+        let literal: Arc<dyn PhysicalExpr> =
+            Arc::new(Literal::new(ScalarValue::Float16(Some(value))));
+        let expression: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(Arc::clone(&literal), Operator::Eq, literal));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![(expression, "equal".to_string())],
+            Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+        )?);
+        let proto = converter.execution_plan_to_proto(&plan, &codec)?;
+        let proto = PhysicalPlanNode::decode(proto.encode_to_vec().as_slice())
+            .map_err(|e| plan_datafusion_err!("{e}"))?;
+        let decoded = converter.proto_to_execution_plan(&proto, &ctx)?;
+        let projection = decoded
+            .downcast_ref::<ProjectionExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected projection"))?;
+        let expression = &projection.expr()[0].expr;
+        let binary = expression
+            .downcast_ref::<BinaryExpr>()
+            .ok_or_else(|| plan_datafusion_err!("expected binary expression"))?;
+        for child in [binary.left(), binary.right()] {
+            assert_eq!(
+                child
+                    .downcast_ref::<Literal>()
+                    .ok_or_else(|| plan_datafusion_err!("expected literal"))?
+                    .value(),
+                &ScalarValue::Float16(Some(value))
+            );
+        }
+        assert_eq!(decoded.schema(), plan.schema());
+        Ok(())
+    }
 }

@@ -1,5 +1,5 @@
 {
-  "sparkVersion": "4.0.4",
+  "sparkVersion": "4.0.5",
   "comment": "This is a generated file. Do not edit it directly.",
   "entries": [
     {
@@ -96,7 +96,7 @@
     },
     {
       "key": "spark.connect.grpc.interceptor.classes",
-      "doc": "Comma separated list of class names that must implement the io.grpc.ServerInterceptor interface.",
+      "doc": "Comma separated list of class names that must implement the io.grpc.ServerInterceptor interface. When authentication is enabled these interceptors run after it, so they only see calls that have already been authenticated and cannot supply the Authorization header themselves.",
       "isStatic": true
     },
     {

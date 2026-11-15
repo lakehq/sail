@@ -1000,10 +1000,6 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                                         values.len()
                                     )));
                                 }
-                                let values = values
-                                    .into_iter()
-                                    .map(expr_with_default_column_values)
-                                    .collect();
                                 spec::MergeNotMatchedByTargetAction::InsertColumns {
                                     columns,
                                     values,
@@ -2477,6 +2473,7 @@ fn from_ast_column_alteration_list(
             Ok(spec::ColumnChange::Add {
                 path: from_ast_object_name(name)?.into(),
                 data_type: from_ast_data_type(data_type)?,
+                metadata: Default::default(),
                 nullable: !options.not_null,
                 comment: options.comment.map(from_ast_string).transpose()?,
                 default: options.default.map(|expr| expr.text().trim().to_string()),
@@ -2512,10 +2509,7 @@ fn from_ast_merge_assignment_list(
         .into_items()
         .map(|assignment| {
             let Assignment { target, value, .. } = assignment;
-            Ok((
-                from_ast_object_name(target)?,
-                expr_with_default_column_values(from_ast_expression(value)?),
-            ))
+            Ok((from_ast_object_name(target)?, from_ast_expression(value)?))
         })
         .collect()
 }

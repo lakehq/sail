@@ -72,7 +72,6 @@ use datafusion_proto::physical_plan::{
 };
 use datafusion_proto::protobuf::{JoinType as ProtoJoinType, PhysicalSortExprNode};
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
-use datafusion_spark::function::array::shuffle::SparkShuffle;
 use datafusion_spark::function::bitmap::bitmap_count::BitmapCount;
 use datafusion_spark::function::bitwise::bit_count::SparkBitCount;
 use datafusion_spark::function::bitwise::bit_get::SparkBitGet;
@@ -97,6 +96,7 @@ use datafusion_spark::function::url::url_decode::UrlDecode;
 use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
+use sail_common::spec::SparkIntervalMetadata;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
 use sail_common_datafusion::catalog::{
     CatalogPartitionField, LakehouseExecutionContext, PartitionTransform,
@@ -171,6 +171,8 @@ use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
+use sail_function::scalar::array::spark_shuffle::SparkShuffle;
+use sail_function::scalar::collection::element::CollectionElement;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
@@ -206,7 +208,7 @@ use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
-use sail_function::scalar::explode::{Explode, explode_name_to_kind};
+use sail_function::scalar::explode::{Explode, MapExplodeEntry, explode_name_to_kind};
 use sail_function::scalar::geo::st_asbinary::StAsBinary;
 use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
 use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
@@ -217,6 +219,7 @@ use sail_function::scalar::json::{
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
+use sail_function::scalar::math::partition_random::PartitionSeed;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
@@ -243,6 +246,7 @@ use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
+use sail_function::scalar::misc::spark_uuid::SparkUuid;
 use sail_function::scalar::misc::theta_sketch::{
     ThetaDifferenceFunction, ThetaIntersectionFunction, ThetaSketchEstimateFunction,
     ThetaUnionFunction,
@@ -298,6 +302,7 @@ use sail_function::scalar::vector::l2_distance::VectorL2Distance;
 use sail_function::scalar::vector::norm::VectorNorm;
 use sail_function::scalar::vector::normalize::VectorNormalize;
 use sail_function::scalar::xml::from_xml::SparkFromXml;
+use sail_function::scalar::xml::schema_of_xml::SparkSchemaOfXml;
 use sail_function::scalar::xml::to_xml::SparkToXml;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{XpathTyped, xpath_typed_name_to_kind};
@@ -326,6 +331,7 @@ use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
 };
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
+use sail_physical_plan::seeded_random::{SeededRandomExec, SeededRandomExprColumn};
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
@@ -1489,6 +1495,43 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col,
                 source_present_col,
             )?)),
+            NodeKind::IdentityGenerate(r#gen::IdentityGenerateExecNode {
+                input,
+                columns,
+                allocation_partitions,
+            }) => {
+                let columns = columns
+                    .into_iter()
+                    .map(|column| {
+                        Ok(
+                            sail_physical_plan::identity_generate::IdentityGenerateColumn {
+                                output: column.output,
+                                column_name: column.column_name,
+                                mask: column.mask_index.map(usize::try_from).transpose().map_err(
+                                    |_| plan_datafusion_err!("identity mask index too large"),
+                                )?,
+                                start: column.start,
+                                step: column.step,
+                                high_water_mark: column.high_water_mark,
+                            },
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Arc::new(
+                    sail_physical_plan::identity_generate::IdentityGenerateExec::try_new(
+                        try_decode_physical_plan_with_converter(
+                            ctx,
+                            self,
+                            proto_converter,
+                            &input,
+                        )?,
+                        columns,
+                        Some(usize::try_from(allocation_partitions).map_err(|_| {
+                            plan_datafusion_err!("identity partition count too large")
+                        })?),
+                    )?,
+                ))
+            }
             NodeKind::MonotonicId(r#gen::MonotonicIdExecNode {
                 input,
                 column_name,
@@ -1510,6 +1553,38 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(SparkPartitionIdExec::try_new(
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
                     column_name,
+                    Arc::new(schema),
+                )?))
+            }
+            NodeKind::SeededRandom(r#gen::SeededRandomExecNode {
+                input,
+                columns,
+                schema,
+            }) => {
+                let schema = try_decode_schema(&schema)?;
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let input_schema = input.schema();
+                let columns = columns
+                    .into_iter()
+                    .map(|column| {
+                        let r#gen::SeededRandomColumn { name, expr, seed } = column;
+                        Ok(SeededRandomExprColumn {
+                            name,
+                            expr: try_decode_physical_expr_with_converter(
+                                ctx,
+                                self,
+                                proto_converter,
+                                &expr,
+                                &input_schema,
+                            )?,
+                            seed: self.try_decode_partition_seed(seed)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Arc::new(SeededRandomExec::try_new(
+                    input,
+                    columns,
                     Arc::new(schema),
                 )?))
             }
@@ -1660,6 +1735,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url,
                 lakehouse_table_json,
+                table_replacement_json,
                 validate_read_snapshot,
                 expected_snapshot_id,
                 snapshot_update_kind,
@@ -1681,7 +1757,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             validate_read_snapshot.then_some(expected_snapshot_id),
                         )
                         .with_dynamic_partition_overwrite(dynamic_partition_overwrite)
-                        .with_removed_data_file_paths(removed_data_file_paths);
+                        .with_removed_data_file_paths(removed_data_file_paths)
+                        .with_table_replacement(
+                            table_replacement_json
+                                .map(|json| {
+                                    serde_json::from_str(&json).map_err(|error| {
+                                        plan_datafusion_err!("invalid Iceberg replacement: {error}")
+                                    })
+                                })
+                                .transpose()?,
+                        );
                 use r#gen::iceberg_commit_exec_node::Output;
                 let commit = match output {
                     Some(Output::CommandOutput(output)) => {
@@ -3022,6 +3107,29 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col: cardinality_check.target_present_col().to_string(),
                 source_present_col: cardinality_check.source_present_col().to_string(),
             })
+        } else if let Some(generator) =
+            node.downcast_ref::<sail_physical_plan::identity_generate::IdentityGenerateExec>()
+        {
+            NodeKind::IdentityGenerate(r#gen::IdentityGenerateExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    generator.input().clone(),
+                )?,
+                allocation_partitions: generator.allocation_partitions() as u64,
+                columns: generator
+                    .columns()
+                    .iter()
+                    .map(|column| r#gen::IdentityGenerateColumn {
+                        output: column.output.clone(),
+                        column_name: column.column_name.clone(),
+                        mask_index: column.mask.map(|index| index as u64),
+                        start: column.start,
+                        step: column.step,
+                        high_water_mark: column.high_water_mark,
+                    })
+                    .collect(),
+            })
         } else if let Some(monotonic_id) = node.downcast_ref::<MonotonicIdExec>() {
             let input = try_encode_physical_plan_with_converter(
                 self,
@@ -3032,6 +3140,33 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::MonotonicId(r#gen::MonotonicIdExecNode {
                 input,
                 column_name: monotonic_id.column_name().to_string(),
+                schema,
+            })
+        } else if let Some(seeded_random) = node.downcast_ref::<SeededRandomExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                seeded_random.input().clone(),
+            )?;
+            let columns = seeded_random
+                .columns()
+                .iter()
+                .map(|column| {
+                    Ok(r#gen::SeededRandomColumn {
+                        name: column.name.clone(),
+                        expr: try_encode_physical_expr_with_converter(
+                            self,
+                            proto_converter,
+                            &column.expr,
+                        )?,
+                        seed: self.try_encode_partition_seed(column.seed)?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let schema = try_encode_schema(seeded_random.schema().as_ref())?;
+            NodeKind::SeededRandom(r#gen::SeededRandomExecNode {
+                input,
+                columns,
                 schema,
             })
         } else if let Some(spark_partition_id) = node.downcast_ref::<SparkPartitionIdExec>() {
@@ -3147,6 +3282,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 ),
                 dynamic_partition_overwrite: iceberg_commit_exec.dynamic_partition_overwrite(),
                 removed_data_file_paths: iceberg_commit_exec.removed_data_file_paths().to_vec(),
+                table_replacement_json: iceberg_commit_exec.table_replacement().map(serde_json::to_string)
+                    .transpose().map_err(|error| plan_datafusion_err!("failed to encode Iceberg replacement: {error}"))?,
                 output: Some(match iceberg_commit_exec.output() {
                     sail_iceberg::physical_plan::commit::commit_exec::CommitOutput::Command(output) =>
                         r#gen::iceberg_commit_exec_node::Output::CommandOutput(Self::encode_command_output(*output)),
@@ -3645,6 +3782,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkToXml::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkSchemaOfXml(r#gen::SparkSchemaOfXmlUdf {
+                case_sensitive,
+                timestamp_ntz,
+            }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkSchemaOfXml::new(
+                    case_sensitive,
+                    timestamp_ntz,
+                ))));
+            }
             UdfKind::SparkFromXml(r#gen::SparkFromXmlUdf { session_timezone }) => {
                 let udf = SparkFromXml::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -3662,6 +3808,26 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }) => {
                 let udf = SparkSequence::new(Arc::from(session_timezone), ansi_mode);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkInterval(r#gen::SparkIntervalUdf { qualifier, safe }) => {
+                let qualifier = qualifier
+                    .as_deref()
+                    .map(SparkIntervalMetadata::from_json)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
+                let udf = match name {
+                    "spark_year_month_interval" => {
+                        ScalarUDF::from(SparkYearMonthInterval::new(qualifier, safe))
+                    }
+                    "spark_day_time_interval" => {
+                        ScalarUDF::from(SparkDayTimeInterval::new(qualifier, safe))
+                    }
+                    "spark_calendar_interval" => {
+                        ScalarUDF::from(SparkCalendarInterval::new(qualifier, safe))
+                    }
+                    _ => return plan_err!("unknown interval conversion function: {name}"),
+                };
+                return Ok(Arc::new(udf));
             }
             UdfKind::SparkToString(r#gen::SparkToStringUdf { timezone }) => {
                 let timezone = timezone.map(Arc::from);
@@ -3811,6 +3977,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkParseJson(r#gen::SparkParseJsonUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkParseJson::new(safe))));
             }
+            UdfKind::UuidCast(r#gen::UuidCastUdf { target, safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(
+                    sail_common_datafusion::uuid::UuidCast::new(
+                        try_decode_field_ref(&target)?,
+                        safe,
+                    ),
+                )));
+            }
             UdfKind::SparkStructRename(r#gen::SparkStructRenameUdf { target_type }) => {
                 let target_type = self.try_decode_data_type(&target_type)?;
                 return Ok(Arc::new(ScalarUDF::from(SparkStructRename::new(
@@ -3820,6 +3994,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         };
         match name {
             "array_element" => Ok(Arc::new(ScalarUDF::from(ArrayElement::new()))),
+            "spark_array_element" => Ok(Arc::new(ScalarUDF::from(CollectionElement::array()))),
+            "spark_map_element" => Ok(Arc::new(ScalarUDF::from(CollectionElement::map()))),
+            "map_explode_entry" => Ok(Arc::new(ScalarUDF::from(MapExplodeEntry::default()))),
             "map_extract" => Ok(Arc::new(ScalarUDF::from(MapExtract::new()))),
             "array_item_with_position" => {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
@@ -3889,6 +4066,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "schema_of_variant" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfVariantUdf::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
             "randstr" => Ok(Arc::new(ScalarUDF::from(Randstr::new()))),
+            "uuid" => Ok(Arc::new(ScalarUDF::from(SparkUuid::new()))),
             "format_number" => Ok(Arc::new(ScalarUDF::from(FormatNumber::new()))),
             "soundex" => Ok(Arc::new(ScalarUDF::from(Soundex::new()))),
             "quote" => Ok(Arc::new(ScalarUDF::from(SparkQuote::new()))),
@@ -4007,9 +4185,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_elt" | "elt" => Ok(Arc::new(ScalarUDF::from(SparkElt::new()))),
             "spark_decode" | "decode" => Ok(Arc::new(ScalarUDF::from(SparkDecode::new()))),
             "spark_year_month_interval" => {
-                Ok(Arc::new(ScalarUDF::from(SparkYearMonthInterval::new())))
+                Ok(Arc::new(ScalarUDF::from(SparkYearMonthInterval::default())))
             }
-            "spark_day_time_interval" => Ok(Arc::new(ScalarUDF::from(SparkDayTimeInterval::new()))),
+            "spark_day_time_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkDayTimeInterval::default())))
+            }
             "year_month_interval_months" => {
                 Ok(Arc::new(ScalarUDF::from(YearMonthIntervalMonths::new())))
             }
@@ -4017,7 +4197,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 SparkDayTimeIntervalToCalendarInterval::new(),
             ))),
             "spark_calendar_interval" => {
-                Ok(Arc::new(ScalarUDF::from(SparkCalendarInterval::new())))
+                Ok(Arc::new(ScalarUDF::from(SparkCalendarInterval::default())))
             }
             "spark_date_format" | "date_format" => {
                 // Use UTC as default timezone when creating from name only
@@ -4064,6 +4244,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let udf_kind: UdfKind = if (node.as_async().is_some()
             && sail_function::scalar::jev::JevKind::from_name(node.name()).is_some())
             || node_inner.is::<ArrayElement>()
+            || node_inner.is::<CollectionElement>()
+            || node_inner.is::<MapExplodeEntry>()
             || node_inner.is::<DeltaDecodePath>()
             || node_inner.is::<MapExtract>()
             || node_inner.is::<ArrayItemWithPosition>()
@@ -4096,6 +4278,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<FormatNumber>()
             || node_inner.is::<Levenshtein>()
             || node_inner.is::<Randstr>()
+            || node_inner.is::<SparkUuid>()
             || node_inner.is::<Soundex>()
             || node_inner.is::<SparkQuote>()
             || node_inner.is::<StAsBinary>()
@@ -4128,14 +4311,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkBitGet>()
             || node_inner.is::<SparkBitwiseNot>()
             || node_inner.is::<SparkBRound>()
-            || node_inner.is::<SparkCalendarInterval>()
             || node_inner.is::<SparkConcat>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
             || node_inner.is::<SparkDatePart>()
             || node_inner.is::<SparkIntegerDatePart>()
             || node_inner.is::<SparkDateTrunc>()
-            || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDayTimeIntervalToCalendarInterval>()
             || node_inner.is::<SparkDecode>()
             || node_inner.is::<SparkElt>()
@@ -4198,7 +4379,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkVersion>()
             || node_inner.is::<SparkWidthBucket>()
             || node_inner.is::<SparkXxhash64>()
-            || node_inner.is::<SparkYearMonthInterval>()
             || node_inner.is::<YearMonthIntervalMonths>()
             || node_inner.is::<SparkToJson>()
             || node_inner.is::<TryUrlDecode>()
@@ -4278,6 +4458,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkToXml>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkToXml(r#gen::SparkToXmlUdf { session_timezone })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkSchemaOfXml>() {
+            UdfKind::SparkSchemaOfXml(r#gen::SparkSchemaOfXmlUdf {
+                case_sensitive: func.case_sensitive(),
+                timestamp_ntz: func.timestamp_ntz(),
+            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkFromXml>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromXml(r#gen::SparkFromXmlUdf { session_timezone })
@@ -4287,6 +4472,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkUnixTimestamp(r#gen::SparkUnixTimestampUdf {
                 session_timezone,
                 ansi_mode,
+            })
+        } else if let Some((qualifier, safe)) = node_inner
+            .downcast_ref::<SparkYearMonthInterval>()
+            .map(|func| (func.qualifier(), func.safe()))
+            .or_else(|| {
+                node_inner
+                    .downcast_ref::<SparkDayTimeInterval>()
+                    .map(|func| (func.qualifier(), func.safe()))
+            })
+            .or_else(|| {
+                node_inner
+                    .downcast_ref::<SparkCalendarInterval>()
+                    .map(|func| (func.qualifier(), func.safe()))
+            })
+        {
+            UdfKind::SparkInterval(r#gen::SparkIntervalUdf {
+                qualifier: qualifier
+                    .map(SparkIntervalMetadata::to_json)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("{e}"))?,
+                safe,
             })
         } else if let Some(timezone) = node_inner
             .downcast_ref::<SparkToUtf8>()
@@ -4411,6 +4617,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 null_short_circuit,
                 mode,
                 output_timezone: func.output_timezone().map(|timezone| timezone.to_string()),
+            })
+        } else if let Some(func) = node
+            .inner()
+            .downcast_ref::<sail_common_datafusion::uuid::UuidCast>()
+        {
+            UdfKind::UuidCast(r#gen::UuidCastUdf {
+                target: try_encode_field_ref(func.target())?,
+                safe: func.safe(),
             })
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
@@ -5299,7 +5513,17 @@ impl RemoteExecutionCodec {
             .as_ref()
             .map(|context| self.try_decode_delta_snapshot_context(context))
             .transpose()?;
-        Ok(DeltaCommitContext { base_snapshot })
+        Ok(DeltaCommitContext {
+            base_snapshot,
+            identity_columns_to_track: context.identity_columns_to_track.clone(),
+            identity_writer_partitions: context
+                .identity_writer_partitions
+                .map(usize::try_from)
+                .transpose()
+                .map_err(|_| {
+                    plan_datafusion_err!("identity writer partition count is too large")
+                })?,
+        })
     }
 
     fn try_encode_delta_commit_context(
@@ -5311,7 +5535,13 @@ impl RemoteExecutionCodec {
             .as_ref()
             .map(|context| self.try_encode_delta_snapshot_context(context))
             .transpose()?;
-        Ok(r#gen::DeltaCommitContext { base_snapshot })
+        Ok(r#gen::DeltaCommitContext {
+            base_snapshot,
+            identity_columns_to_track: context.identity_columns_to_track.clone(),
+            identity_writer_partitions: context
+                .identity_writer_partitions
+                .map(|count| count as u64),
+        })
     }
 
     fn try_decode_delta_write_context(
@@ -6178,6 +6408,24 @@ impl RemoteExecutionCodec {
         Ok(kind as i32)
     }
 
+    fn try_decode_partition_seed(&self, seed: i32) -> Result<PartitionSeed> {
+        let seed = r#gen::PartitionSeed::try_from(seed)
+            .map_err(|e| plan_datafusion_err!("failed to decode partition seed: {e}"))?;
+        let seed = match seed {
+            r#gen::PartitionSeed::Offset => PartitionSeed::Offset,
+            r#gen::PartitionSeed::JavaRandom => PartitionSeed::JavaRandom,
+        };
+        Ok(seed)
+    }
+
+    fn try_encode_partition_seed(&self, seed: PartitionSeed) -> Result<i32> {
+        let seed = match seed {
+            PartitionSeed::Offset => r#gen::PartitionSeed::Offset,
+            PartitionSeed::JavaRandom => r#gen::PartitionSeed::JavaRandom,
+        };
+        Ok(seed as i32)
+    }
+
     fn try_decode_pyspark_udtf_kind(&self, kind: i32) -> Result<PySparkUdtfKind> {
         let kind = r#gen::PySparkUdtfKind::try_from(kind)
             .map_err(|e| plan_datafusion_err!("failed to decode pyspark UDTF kind: {e}"))?;
@@ -6344,6 +6592,7 @@ mod tests {
     use datafusion::physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode;
     use datafusion::physical_expr_common::physical_expr::proto_encode::PhysicalExprEncode;
     use datafusion_proto::protobuf::PhysicalExprNode;
+    use sail_common_datafusion::uuid::UuidCast;
 
     use super::*;
 
@@ -6379,6 +6628,149 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udaf(&udaf, &mut buf)?;
         codec.try_decode_udaf(&name, &buf)
+    }
+
+    #[test]
+    fn test_identity_generator_round_trip_and_invalid_codec() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_physical_plan::identity_generate::{IdentityGenerateColumn, IdentityGenerateExec};
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "mask",
+            DataType::Boolean,
+            true,
+        )]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
+        let codec = RemoteExecutionCodec;
+        let context = TaskContext::default();
+        let columns = vec![
+            IdentityGenerateColumn {
+                output: "positive".into(),
+                column_name: "IncreasingId".into(),
+                mask: Some(0),
+                start: 7,
+                step: 3,
+                high_water_mark: Some(100),
+            },
+            IdentityGenerateColumn {
+                output: "negative".into(),
+                column_name: "DecreasingId".into(),
+                mask: None,
+                start: -7,
+                step: -3,
+                high_water_mark: None,
+            },
+        ];
+        for partitions in [1, 3, 19] {
+            let plan = Arc::new(IdentityGenerateExec::try_new(
+                input.clone(),
+                columns.clone(),
+                Some(partitions),
+            )?);
+            let expected_schema = plan.schema();
+            let bytes = try_encode_physical_plan(&codec, plan)?;
+            let decoded = try_decode_physical_plan(&context, &codec, &bytes)?;
+            #[expect(deprecated)]
+            let decoded = decoded.with_new_children(vec![input.clone()])?;
+            let generator = decoded
+                .downcast_ref::<IdentityGenerateExec>()
+                .ok_or_else(|| plan_datafusion_err!("expected generator"))?;
+            assert_eq!(generator.columns(), columns);
+            assert_eq!(generator.allocation_partitions(), partitions);
+            assert_eq!(generator.schema(), expected_schema);
+        }
+        let input = try_encode_physical_plan(&codec, input)?;
+        let converter = crate::proto::converter::RemotePhysicalProtoConverter::default();
+        let valid = r#gen::IdentityGenerateColumn {
+            output: "id".into(),
+            column_name: "CustomerId".into(),
+            mask_index: Some(0),
+            start: 7,
+            step: 3,
+            high_water_mark: None,
+        };
+        for (columns, allocation_partitions) in [
+            (vec![valid.clone()], 0),
+            (vec![], 1),
+            (vec![valid.clone(), valid.clone()], 1),
+            (
+                vec![r#gen::IdentityGenerateColumn {
+                    mask_index: Some(u64::MAX),
+                    ..valid.clone()
+                }],
+                1,
+            ),
+            (
+                vec![r#gen::IdentityGenerateColumn {
+                    step: 0,
+                    ..valid.clone()
+                }],
+                1,
+            ),
+            (
+                vec![r#gen::IdentityGenerateColumn {
+                    output: "mask".into(),
+                    ..valid
+                }],
+                1,
+            ),
+        ] {
+            let node = ExtendedPhysicalPlanNode {
+                node_kind: Some(NodeKind::IdentityGenerate(
+                    r#gen::IdentityGenerateExecNode {
+                        input: input.clone(),
+                        columns,
+                        allocation_partitions,
+                    },
+                )),
+            };
+            assert!(
+                codec
+                    .try_decode(&node.encode_to_vec(), &[], &context, &converter)
+                    .is_err()
+            );
+        }
+        let commit = DeltaCommitContext {
+            identity_columns_to_track: vec!["positive".into()],
+            identity_writer_partitions: Some(19),
+            ..Default::default()
+        };
+        let decoded = codec
+            .try_decode_delta_commit_context(&codec.try_encode_delta_commit_context(&commit)?)?;
+        assert_eq!(
+            decoded.identity_columns_to_track,
+            commit.identity_columns_to_track
+        );
+        assert_eq!(decoded.identity_writer_partitions, Some(19));
+        Ok(())
+    }
+
+    #[test]
+    fn uuid_codec_preserves_nested_metadata_and_error_mode() -> Result<()> {
+        let uuid = Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata(
+            [
+                (
+                    sail_common_datafusion::uuid::UUID_METADATA_KEY.to_string(),
+                    sail_common_datafusion::uuid::UUID_EXTENSION_NAME.to_string(),
+                ),
+                ("PARQUET:field_id".to_string(), "17".to_string()),
+            ]
+            .into(),
+        );
+        let target = Arc::new(Field::new(
+            "s",
+            DataType::Struct(vec![Arc::new(uuid)].into()),
+            true,
+        ));
+        for safe in [false, true] {
+            let decoded = round_trip_udf(ScalarUDF::from(UuidCast::new(target.clone(), safe)))?;
+            let decoded = decoded
+                .inner()
+                .downcast_ref::<UuidCast>()
+                .ok_or_else(|| plan_datafusion_err!("expected UuidCast"))?;
+            assert_eq!(decoded.target(), &target);
+            assert_eq!(decoded.safe(), safe);
+        }
+        Ok(())
     }
 
     #[test]
@@ -7252,6 +7644,82 @@ mod tests {
     }
 
     #[test]
+    fn replacement_round_trip_preserves_catalog_base_and_history() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_common_datafusion::catalog::{
+            CatalogPartitionField, PartitionTransform, TableReplacement,
+        };
+        use sail_common_datafusion::uuid::{UUID_EXTENSION_NAME, UUID_METADATA_KEY};
+        use sail_iceberg::operations::replacement::IcebergTableReplacement;
+        let replacement: IcebergTableReplacement = serde_json::from_value(serde_json::json!({
+            "catalog": TableReplacement {
+                catalog_table: vec!["catalog".into(), "namespace".into(), "table".into()],
+                catalog_generation: 11, database_generation: 22, table_generation: 33,
+                require_existing: true, existing: true,
+                columns: vec![("id".into(), DataType::FixedSizeBinary(16), false,
+                    std::collections::BTreeMap::from([
+                        (UUID_METADATA_KEY.into(), UUID_EXTENSION_NAME.into()),
+                        ("custom".into(), "retained".into()),
+                    ]))],
+                location: "file:///tmp/replacement-codec/".into(),
+                partition_by: vec![CatalogPartitionField { column: "id".into(), transform: Some(PartitionTransform::Identity) }],
+                sort_by: vec![], properties: vec![("owner".into(), "test".into())],
+                property_updates: vec![("owner".into(), "requested".into())], is_external: true,
+            },
+            "base_metadata_file": "tmp/replacement-codec/metadata/v7.metadata.json",
+            // The captured base codec differs from the candidate properties.
+            "base_codec": "Gzip",
+            "metadata": serde_json::json!({
+                "format-version":2, "table-uuid":"12345678-1234-1234-1234-123456789abc",
+                "location":"file:///tmp/replacement-codec/", "last-sequence-number":8,
+                "last-updated-ms":100, "last-column-id":5,"current-schema-id":2,
+                "schemas":[{"type":"struct","schema-id":1,"fields":[{"id":1,"name":"old","required":false,"type":"int"}]},{"type":"struct","schema-id":2,"fields":[{"id":5,"name":"id","required":true,"type":"uuid"}]}],
+                "partition-specs":[{"spec-id":3,"fields":[{"source-id":5,"field-id":1001,"name":"id","transform":"identity"}]}],
+                "default-spec-id":3,"last-partition-id":1001,"current-snapshot-id":null,
+                "snapshots":[{"snapshot-id":42,"sequence-number":8,"timestamp-ms":100,"manifest-list":"file:///tmp/old.avro","summary":{"operation":"append"},"schema-id":1}],
+                "snapshot-log":[{"timestamp-ms":100,"snapshot-id":42}],
+                "metadata-log":[{"timestamp-ms":90,"metadata-file":"file:///tmp/replacement-codec/metadata/v6.metadata.json"}],
+                "refs":{"audit":{"snapshot-id":42,"type":"tag"}}
+            }),
+        })).map_err(|e| plan_datafusion_err!("{e}"))?;
+        let expected =
+            serde_json::to_value(&replacement).map_err(|e| plan_datafusion_err!("{e}"))?;
+        assert_ne!(
+            replacement.catalog.properties,
+            replacement.catalog.property_updates
+        );
+        let serde_round_trip: IcebergTableReplacement =
+            serde_json::from_value(expected.clone()).map_err(|e| plan_datafusion_err!("{e}"))?;
+        assert_eq!(serde_round_trip.catalog, replacement.catalog);
+        let plan = IcebergCommitExec::new(
+            Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+            Url::parse("file:///tmp/replacement-codec/")
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
+            None,
+            SnapshotUpdateKind::Truncate,
+        )
+        .with_table_replacement(Some(replacement));
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(plan))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let commit = decoded
+            .downcast_ref::<IcebergCommitExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not an IcebergCommitExec"))?;
+        assert_eq!(
+            serde_json::to_value(commit.table_replacement().ok_or_else(|| {
+                plan_datafusion_err!("decoded commit is missing table replacement")
+            })?)
+            .map_err(|e| plan_datafusion_err!("{e}"))?,
+            expected
+        );
+        assert_eq!(
+            commit.properties().output_partitioning().partition_count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_iceberg_commit_preserves_rewrite_intent() -> Result<()> {
         use datafusion::physical_plan::empty::EmptyExec;
 
@@ -7986,6 +8454,20 @@ mod tests {
 
         let coalesce = round_trip_udf(ScalarUDF::from(CoalesceFunc::new()))?;
         downcast_udf::<CoalesceFunc>(&coalesce, "CoalesceFunc")?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_collection_element_and_map_entry_udfs() -> Result<()> {
+        for function in [CollectionElement::array(), CollectionElement::map()] {
+            let name = function.name().to_string();
+            let decoded = round_trip_udf(ScalarUDF::from(function))?;
+            downcast_udf::<CollectionElement>(&decoded, "CollectionElement")?;
+            assert_eq!(decoded.name(), name);
+        }
+        let decoded = round_trip_udf(ScalarUDF::from(MapExplodeEntry::default()))?;
+        downcast_udf::<MapExplodeEntry>(&decoded, "MapExplodeEntry")?;
+        assert_eq!(decoded.name(), "map_explode_entry");
         Ok(())
     }
 
@@ -9615,6 +10097,80 @@ mod tests {
         let decoded = downcast_udf::<SparkToUtf8>(&decoded, "SparkToUtf8")?;
         assert_eq!(decoded.timezone(), None);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_qualified_interval_parsing() -> Result<()> {
+        use datafusion::arrow::array::StringArray;
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::col;
+        use datafusion::physical_expr::create_physical_expr;
+        use datafusion::physical_expr::execution_props::ExecutionProps;
+        use sail_common::spec::{
+            DayTimeIntervalField, SparkIntervalMetadata, YearMonthIntervalField,
+        };
+
+        let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+        let dfschema = DFSchema::try_from(schema.as_ref().clone())?;
+        for safe in [false, true] {
+            for (udf, valid) in [
+                (
+                    ScalarUDF::from(SparkDayTimeInterval::new(
+                        Some(SparkIntervalMetadata::DayTime {
+                            start_field: DayTimeIntervalField::Hour,
+                            end_field: DayTimeIntervalField::Hour,
+                        }),
+                        safe,
+                    )),
+                    "1",
+                ),
+                (
+                    ScalarUDF::from(SparkYearMonthInterval::new(
+                        Some(SparkIntervalMetadata::YearMonth {
+                            start_field: YearMonthIntervalField::Year,
+                            end_field: YearMonthIntervalField::Year,
+                        }),
+                        safe,
+                    )),
+                    "1",
+                ),
+                (
+                    ScalarUDF::from(SparkDayTimeInterval::new(None, safe)),
+                    "INTERVAL '1' HOUR",
+                ),
+                (
+                    ScalarUDF::from(SparkYearMonthInterval::new(None, safe)),
+                    "INTERVAL '1' YEAR",
+                ),
+                (
+                    ScalarUDF::from(SparkCalendarInterval::new(None, safe)),
+                    "1 month 2 days",
+                ),
+            ] {
+                let decoded_udf = round_trip_udf(udf.clone())?;
+                assert_eq!(&udf, decoded_udf.as_ref());
+                let expression = udf.call(vec![col("value")]);
+                let physical = create_physical_expr(
+                    &expression,
+                    &dfschema,
+                    &ExecutionProps::new(),
+                    &PhysicalPlanningContext::default(),
+                )?;
+                let decoded = round_trip_expr(&physical, &schema)?;
+                let values = if safe {
+                    vec![Some(valid), Some("invalid"), None]
+                } else {
+                    vec![Some(valid), Some(valid), None]
+                };
+                assert_same_result(
+                    &physical,
+                    &decoded,
+                    Arc::clone(&schema),
+                    vec![Arc::new(StringArray::from(values))],
+                )?;
+            }
+        }
         Ok(())
     }
 

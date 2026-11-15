@@ -4518,6 +4518,596 @@
       }
     },
     {
+      "input": "CREATE TABLE t (c TIME DEFAULT TIME '12:34:56') USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "t"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "c",
+                  "dataType": {
+                    "time64": {
+                      "timeUnit": "microsecond"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": "TIME '12:34:56'",
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "mode": "create",
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIME(0)) USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "t"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "c",
+                  "dataType": {
+                    "time32": {
+                      "timeUnit": "second"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "mode": "create",
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIME(3)) USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "t"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "c",
+                  "dataType": {
+                    "time32": {
+                      "timeUnit": "millisecond"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "mode": "create",
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIME(6)) USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "t"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "c",
+                  "dataType": {
+                    "time64": {
+                      "timeUnit": "microsecond"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "mode": "create",
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIME) USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "t"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "c",
+                  "dataType": {
+                    "time64": {
+                      "timeUnit": "microsecond"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "mode": "create",
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIMESTAMP(7) WITH LOCAL TIME ZONE) USING parquet",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIMESTAMP(7) WITHOUT TIME ZONE) USING parquet",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIMESTAMP(8) WITH LOCAL TIME ZONE) USING parquet",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIMESTAMP(8) WITHOUT TIME ZONE) USING parquet",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIMESTAMP(9) WITH LOCAL TIME ZONE) USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "t"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "c",
+                  "dataType": {
+                    "timestamp": {
+                      "timeUnit": "nanosecond",
+                      "timestampType": "withLocalTimeZone"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "mode": "create",
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIMESTAMP(9) WITHOUT TIME ZONE) USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "t"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "c",
+                  "dataType": {
+                    "timestamp": {
+                      "timeUnit": "nanosecond",
+                      "timestampType": "withoutTimeZone"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "mode": "create",
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIMESTAMP_LTZ(7)) USING parquet",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIMESTAMP_LTZ(8)) USING parquet",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIMESTAMP_LTZ(9)) USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "t"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "c",
+                  "dataType": {
+                    "timestamp": {
+                      "timeUnit": "nanosecond",
+                      "timestampType": "withLocalTimeZone"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "mode": "create",
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIMESTAMP_NTZ(7)) USING parquet",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIMESTAMP_NTZ(8)) USING parquet",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIMESTAMP_NTZ(9) DEFAULT TIMESTAMP_NTZ '2020-01-01 00:00:00.123456789') USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "t"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "c",
+                  "dataType": {
+                    "timestamp": {
+                      "timeUnit": "nanosecond",
+                      "timestampType": "withoutTimeZone"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": "TIMESTAMP_NTZ '2020-01-01 00:00:00.123456789'",
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "mode": "create",
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c TIMESTAMP_NTZ(9)) USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "t"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "c",
+                  "dataType": {
+                    "timestamp": {
+                      "timeUnit": "nanosecond",
+                      "timestampType": "withoutTimeZone"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "mode": "create",
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE t (id INT, c TIME) USING parquet PARTITIONED BY (c)",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "t"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                },
+                {
+                  "name": "c",
+                  "dataType": {
+                    "time64": {
+                      "timeUnit": "microsecond"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [
+                {
+                  "variant": "expression",
+                  "unresolvedAttribute": {
+                    "name": [
+                      "c"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "mode": "create",
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "CREATE TABLE t DEFAULT COLLATION XD",
       "exception": "[COLLATION_INVALID_NAME] The value XD does not represent a correct collation name. Suggested valid collation names: [id, xh, af]. SQLSTATE: 42704",
       "output": {

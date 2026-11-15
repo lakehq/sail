@@ -42,7 +42,7 @@ use url::Url;
 use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
 use crate::catalog_managed::{catalog_managed_delta_table, enable_catalog_managed_create_actions};
 use crate::delta_log::{LogStoreRef, StorageConfig, get_object_store_from_context};
-use crate::physical_plan::action_schema::ExecCommitMeta;
+use crate::physical_plan::action_schema::{ExecCommitMeta, IdentityHighWaterMarks};
 use crate::physical_plan::{COL_ACTION, DeltaCommitContext, decode_actions_and_meta_from_batch};
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_metadata,
@@ -50,7 +50,7 @@ use crate::schema::{
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     ColumnMetadataKey, CommitAction, DeltaError, DeltaOperation, Metadata, MetadataValue, SaveMode,
-    StatValue, Stats, StructField, StructType, TableFeature, commit_path,
+    StructField, StructType, TableFeature, commit_path,
 };
 use crate::table::{
     create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
@@ -106,7 +106,6 @@ fn commit_output_batch(
 #[derive(Debug, Clone)]
 struct IdentityColumnCommitInfo {
     name: String,
-    stats_name: String,
     start: i64,
     step: i64,
     high_water_mark: Option<i64>,
@@ -141,9 +140,35 @@ impl DeltaCommitExec {
         sink_schema: SchemaRef,
         sink_mode: PhysicalSinkMode,
         user_metadata: Option<String>,
-        commit_context: DeltaCommitContext,
+        mut commit_context: DeltaCommitContext,
         lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Self {
+        fn writer_partitions(plan: &Arc<dyn ExecutionPlan>, counts: &mut Vec<usize>) {
+            if let Some(writer) = plan.downcast_ref::<crate::physical_plan::DeltaWriterExec>() {
+                if !writer.options().change_data
+                    && !writer
+                        .write_context()
+                        .commit_context
+                        .identity_columns_to_track
+                        .is_empty()
+                {
+                    counts.push(writer.properties().output_partitioning().partition_count());
+                }
+                return;
+            }
+            for child in plan.children() {
+                writer_partitions(child, counts);
+            }
+        }
+        let mut counts = Vec::new();
+        writer_partitions(&input, &mut counts);
+        if !commit_context.identity_columns_to_track.is_empty() {
+            match counts.as_slice() {
+                [count] => commit_context.identity_writer_partitions = Some(*count),
+                [] => {} // A serialized driver stage has only its action-stream input.
+                _ => commit_context.identity_writer_partitions = Some(0), // Reject multiple domains.
+            }
+        }
         let output = CommandOutput::Count;
         let cache = Self::compute_properties(output.schema());
         Self {
@@ -645,6 +670,7 @@ impl ExecutionPlan for DeltaCommitExec {
             let mut initial_actions: Vec<CommitAction> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
             let mut operation_metrics = OperationMetrics::default();
+            let mut identity_evidence = Vec::new();
             let mut unknown_touched_rows = false;
             let mut data = input_stream;
 
@@ -676,6 +702,7 @@ impl ExecutionPlan for DeltaCommitExec {
                         row_count,
                         operation: op,
                         operation_metrics: metrics,
+                        identity_high_water_marks,
                     } in decoded_meta
                     {
                         total_rows = total_rows.checked_add(row_count).ok_or_else(|| {
@@ -687,6 +714,7 @@ impl ExecutionPlan for DeltaCommitExec {
                             operation = op;
                         }
                         operation_metrics.merge(metrics);
+                        identity_evidence.extend(identity_high_water_marks);
                     }
                     has_data = has_data || batch.num_rows() > 0;
                 } else {
@@ -710,7 +738,12 @@ impl ExecutionPlan for DeltaCommitExec {
             let mut final_actions = initial_actions;
             final_actions.extend(actions);
             if !table_exists {
-                final_actions = apply_identity_high_water_marks(final_actions, None)?;
+                final_actions = apply_identity_high_water_marks(
+                    final_actions,
+                    None,
+                    &commit_context,
+                    &identity_evidence,
+                )?;
             }
             let kinds: Vec<&'static str> = final_actions
                 .iter()
@@ -956,6 +989,8 @@ impl ExecutionPlan for DeltaCommitExec {
                 final_actions = apply_identity_high_water_marks(
                     final_actions,
                     reference.as_deref().map(|snapshot| snapshot.metadata()),
+                    &commit_context,
+                    &identity_evidence,
                 )?;
             }
 
@@ -1181,7 +1216,12 @@ impl ExecutionPlan for DeltaCommitExec {
 fn apply_identity_high_water_marks(
     mut actions: Vec<CommitAction>,
     reference_metadata: Option<&Metadata>,
+    context: &DeltaCommitContext,
+    evidence: &[IdentityHighWaterMarks],
 ) -> Result<Vec<CommitAction>> {
+    if context.identity_columns_to_track.is_empty() {
+        return Ok(actions);
+    }
     let metadata_index = actions
         .iter()
         .rposition(|action| matches!(action, CommitAction::Metadata(_)));
@@ -1192,7 +1232,7 @@ fn apply_identity_high_water_marks(
         })
         .or_else(|| reference_metadata.cloned())
     else {
-        return Ok(actions);
+        return internal_err!("tracked identity commit is missing table metadata");
     };
 
     let schema = base_metadata
@@ -1200,10 +1240,10 @@ fn apply_identity_high_water_marks(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let identity_columns = collect_identity_columns_for_commit(&schema)?;
     if identity_columns.is_empty() {
-        return Ok(actions);
+        return internal_err!("tracked identity commit has no identity definitions");
     }
 
-    let candidates = collect_identity_high_water_mark_candidates(&actions, &identity_columns)?;
+    let candidates = collect_identity_writer_candidates(context, evidence, &identity_columns)?;
     if candidates.is_empty() {
         return Ok(actions);
     }
@@ -1256,8 +1296,6 @@ fn collect_identity_columns_for_commit(
             let _allow_explicit =
                 metadata_bool(field, &ColumnMetadataKey::IdentityAllowExplicitInsert)?;
             let high_water_mark = metadata_i64(field, &ColumnMetadataKey::IdentityHighWaterMark);
-            let stats_name = metadata_string(field, &ColumnMetadataKey::ColumnMappingPhysicalName)
-                .unwrap_or_else(|| field.name.clone());
             Some(if step == 0 {
                 Err(DataFusionError::Plan(format!(
                     "identity column `{}` has invalid step 0",
@@ -1266,7 +1304,6 @@ fn collect_identity_columns_for_commit(
             } else {
                 Ok(IdentityColumnCommitInfo {
                     name: field.name.clone(),
-                    stats_name,
                     start,
                     step,
                     high_water_mark,
@@ -1276,41 +1313,55 @@ fn collect_identity_columns_for_commit(
         .collect()
 }
 
-fn collect_identity_high_water_mark_candidates(
-    actions: &[CommitAction],
-    identity_columns: &[IdentityColumnCommitInfo],
+fn collect_identity_writer_candidates(
+    context: &DeltaCommitContext,
+    evidence: &[IdentityHighWaterMarks],
+    identities: &[IdentityColumnCommitInfo],
 ) -> Result<HashMap<String, i64>> {
-    let mut candidates: HashMap<String, i64> = HashMap::new();
-    for action in actions {
-        let CommitAction::Add(add) = action else {
-            continue;
-        };
-        let Some(stats_json) = add.stats.as_deref() else {
-            continue;
-        };
-        let stats = Stats::from_json_str(stats_json).map_err(|e| {
-            DataFusionError::Plan(format!("failed to parse Delta AddFile stats: {e}"))
-        })?;
-        for identity in identity_columns {
-            let stat = if identity.step > 0 {
-                stats.max_value(&identity.stats_name)
-            } else {
-                stats.min_value(&identity.stats_name)
-            };
-            let Some(value) = stat.and_then(stat_value_i64) else {
-                continue;
-            };
-            candidates
-                .entry(identity.name.clone())
-                .and_modify(|current| {
-                    if identity.step > 0 {
-                        *current = (*current).max(value);
-                    } else {
-                        *current = (*current).min(value);
-                    }
-                })
-                .or_insert(value);
+    let expected = context.identity_writer_partitions.ok_or_else(|| {
+        DataFusionError::Execution("missing identity writer partition count".into())
+    })?;
+    if expected == 0 {
+        return internal_err!("identity writes require exactly one reporting writer domain");
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut candidates = HashMap::<String, i64>::new();
+    for partition in evidence {
+        if partition.partition >= expected || !seen.insert(partition.partition) {
+            return internal_err!("invalid or duplicate identity writer completion");
         }
+        if partition.candidates.len() != context.identity_columns_to_track.len() {
+            return internal_err!("incomplete identity writer evidence");
+        }
+        for name in &context.identity_columns_to_track {
+            let value = partition.candidates.get(name).ok_or_else(|| {
+                DataFusionError::Execution(format!("missing identity evidence for `{name}`"))
+            })?;
+            let identity = identities
+                .iter()
+                .find(|identity| &identity.name == name)
+                .ok_or_else(|| {
+                    DataFusionError::Execution(format!("unknown tracked identity `{name}`"))
+                })?;
+            if let Some(value) = value {
+                candidates
+                    .entry(name.clone())
+                    .and_modify(|current| {
+                        *current = if identity.step > 0 {
+                            (*current).max(*value)
+                        } else {
+                            (*current).min(*value)
+                        };
+                    })
+                    .or_insert(*value);
+            }
+        }
+    }
+    if seen.len() != expected {
+        return internal_err!(
+            "missing identity writer completion: expected {expected}, got {}",
+            seen.len()
+        );
     }
     Ok(candidates)
 }
@@ -1390,10 +1441,12 @@ fn round_identity_high_water_mark(start: i64, step: i64, value: i64) -> Result<i
             "identity high water mark `{value}` cannot be compared with start `{start}` without overflowing BIGINT"
         ))
     })?;
-    if value_offset % step == 0 {
+    let overflow =
+        || DataFusionError::Plan("identity high water mark rounding overflowed BIGINT".to_string());
+    if value_offset.checked_rem(step).ok_or_else(overflow)? == 0 {
         return Ok(value);
     }
-    let quotient = value_offset / step;
+    let quotient = value_offset.checked_div(step).ok_or_else(overflow)?;
     let same_direction = (value_offset > 0 && step > 0) || (value_offset < 0 && step < 0);
     let step_multiple = if same_direction {
         quotient.checked_add(1).ok_or_else(|| {
@@ -1426,18 +1479,97 @@ fn metadata_bool(field: &StructField, key: &ColumnMetadataKey) -> Option<bool> {
     }
 }
 
-fn metadata_string(field: &StructField, key: &ColumnMetadataKey) -> Option<String> {
-    match field.metadata.get(key.as_ref())? {
-        MetadataValue::String(value) => Some(value.clone()),
-        _ => None,
-    }
-}
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
 
-fn stat_value_i64(value: &StatValue) -> Option<i64> {
-    match value {
-        StatValue::Number(value) => value.as_i64(),
-        StatValue::String(value) => value.parse().ok(),
-        _ => None,
+    fn identity(step: i64) -> IdentityColumnCommitInfo {
+        IdentityColumnCommitInfo {
+            name: "id".to_string(),
+            start: 0,
+            step,
+            high_water_mark: None,
+        }
+    }
+
+    fn evidence(partition: usize, value: Option<i64>) -> IdentityHighWaterMarks {
+        IdentityHighWaterMarks {
+            partition,
+            candidates: HashMap::from([("id".into(), value)]),
+        }
+    }
+
+    #[test]
+    fn writer_evidence_is_directional_exact_and_complete() -> Result<()> {
+        let context = DeltaCommitContext {
+            identity_columns_to_track: vec!["id".into()],
+            identity_writer_partitions: Some(3),
+            ..Default::default()
+        };
+        for (step, expected) in [(3, i64::MAX), (-3, i64::MIN)] {
+            let evidence = [
+                evidence(0, Some(i64::MIN)),
+                evidence(1, None),
+                evidence(2, Some(i64::MAX)),
+            ];
+            assert_eq!(
+                collect_identity_writer_candidates(&context, &evidence, &[identity(step)])?["id"],
+                expected
+            );
+        }
+        assert!(
+            collect_identity_writer_candidates(
+                &context,
+                &[evidence(0, None), evidence(1, None), evidence(2, None)],
+                &[identity(1)]
+            )?
+            .is_empty()
+        );
+        for incomplete in [
+            vec![],
+            vec![evidence(0, None)],
+            vec![evidence(0, None), evidence(0, None), evidence(2, None)],
+            vec![evidence(0, None), evidence(1, None), evidence(3, None)],
+        ] {
+            assert!(
+                collect_identity_writer_candidates(&context, &incomplete, &[identity(1)]).is_err()
+            );
+        }
+        let mut missing_column = evidence(0, None);
+        missing_column.candidates.clear();
+        assert!(
+            collect_identity_writer_candidates(
+                &context,
+                &[missing_column, evidence(1, None), evidence(2, None)],
+                &[identity(1)]
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn watermark_rounding_is_directional_and_checked() {
+        for (start, step, value, expected) in [
+            (10, 3, 42, 43),
+            (0, -3, -4, -6),
+            (0, -3, 4, 3),
+            (i64::MAX, 1, i64::MAX, i64::MAX),
+            (i64::MIN, -1, i64::MIN, i64::MIN),
+        ] {
+            assert_eq!(
+                round_identity_high_water_mark(start, step, value).ok(),
+                Some(expected)
+            );
+        }
+        for (start, step, value) in [
+            (0, -1, i64::MIN),
+            (0, 0, 1),
+            (i64::MIN, 1, i64::MAX),
+            (0, 2, i64::MAX),
+        ] {
+            assert!(round_identity_high_water_mark(start, step, value).is_err());
+        }
     }
 }
 

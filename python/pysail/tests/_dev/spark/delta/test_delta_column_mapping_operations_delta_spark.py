@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+from packaging.version import Version
 
 from pysail.tests._dev.spark.delta.test_delta_column_mapping_operations import (
     _QUERIES,
@@ -163,7 +164,7 @@ def test_sail_coalesces_struct_from_delta_spark_table(
     tmp_path: Path,
     partitioned: bool,  # noqa: FBT001
 ) -> None:
-    if partitioned:
+    if partitioned and Version(delta_jvm_spark.version) >= Version("4.1"):
         request.applymarker(
             pytest.mark.xfail(
                 reason="a struct built by an expression lacks the column mapping metadata of the planned struct type",

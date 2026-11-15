@@ -552,6 +552,50 @@
     },
     {
       "input": {
+        "query": "SELECT hex(hmac('key', 'message'));",
+        "result": [
+          "6E9EF29B75FFFC5B7ABAE527D58FDADB2FE42E7219011976917343065F58ED4A"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(hmac(key, message, SHA-256))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: hmac"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hex(hmac('key', 'message', 'SHA-512'));",
+        "result": [
+          "E477384D7CA229DD1426E64B63EBF2D36EBD6D7E669A6735424E72EA6C01D3F8B56EB39C36D8232F5427999B8D1A3F9CD1128FC69F4D75B434216810FA367E98"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(hmac(key, message, SHA-512))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: hmac"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT input_file_block_length();",
         "result": [
           "-1"

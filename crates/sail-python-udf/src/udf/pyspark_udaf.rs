@@ -31,7 +31,7 @@ pub enum PySparkAggregateMode {
     Window,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PySparkGroupAggregateUDF {
     signature: Signature,
     kind: PySparkGroupAggKind,
@@ -84,6 +84,15 @@ impl PySparkGroupAggregateUDF {
             config,
             actual_arg_count,
             udf: LazyPyObject::new(),
+        }
+    }
+
+    /// Returns the same UDF, whose calls are equal to the calls of all other equal shared UDFs.
+    /// It is only used to compare plans, so that calls are never merged into one evaluation.
+    pub fn to_shared(&self) -> Self {
+        Self {
+            udf: LazyPyObject::shared(),
+            ..self.clone()
         }
     }
 

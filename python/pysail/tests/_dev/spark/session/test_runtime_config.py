@@ -36,6 +36,20 @@ def test_sql_set_preserves_config_value(spark, value):
     assert spark.conf.get(key, None) is None
 
 
+@pytest.mark.spark(version=">=4.3", cross_version=True, reason="Uses a Spark 4.3 configuration default")
+def test_spark_4_3_configuration_default_and_reset(spark):
+    key = "spark.sql.experimental.optimizer.pyTranspilers"
+    original = spark.conf.get(key)
+    try:
+        assert original == "catalyst"
+        spark.conf.set(key, "custom")
+        assert spark.conf.get(key) == "custom"
+        spark.conf.unset(key)
+        assert spark.conf.get(key) == "catalyst"
+    finally:
+        spark.conf.set(key, original)
+
+
 @pytest.mark.spark(cross_version=True)
 def test_sql_set_controls_arrow_udtf(spark):
     class TestUDTF:

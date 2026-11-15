@@ -91,50 +91,58 @@ pub(crate) async fn manifest_entries(
 ) -> Result<Vec<ManifestEntry>> {
     let manifest = load_manifest(store, &descriptor.manifest_path).await?;
     let (entries, metadata) = manifest.into_parts();
-    let mut next_row_id = descriptor.first_row_id;
-    entries
+    let mut entries = entries
         .into_iter()
-        .map(|entry| {
-            let mut entry = Arc::unwrap_or_clone(entry);
+        .map(Arc::unwrap_or_clone)
+        .collect::<Vec<_>>();
+    inherit_manifest_entries(descriptor, metadata.format_version, &mut entries)?;
+    Ok(entries)
+}
+
+/// Apply inheritance in manifest order, before filtering any statuses.
+pub(crate) fn inherit_manifest_entries(
+    descriptor: &ManifestFile,
+    version: FormatVersion,
+    entries: &mut [ManifestEntry],
+) -> Result<()> {
+    let mut next_row_id = descriptor.first_row_id;
+    for entry in entries {
+        entry
+            .snapshot_id
+            .get_or_insert(descriptor.added_snapshot_id);
+        if version == FormatVersion::V1 {
+            entry.sequence_number.get_or_insert(0);
+            entry.file_sequence_number.get_or_insert(0);
+        } else if entry.status == ManifestStatus::Added {
             entry
-                .snapshot_id
-                .get_or_insert(descriptor.added_snapshot_id);
-            if metadata.format_version == FormatVersion::V1 {
-                entry.sequence_number.get_or_insert(0);
-                entry.file_sequence_number.get_or_insert(0);
-            } else if entry.status == ManifestStatus::Added {
-                entry
-                    .sequence_number
-                    .get_or_insert(descriptor.sequence_number);
-                entry
-                    .file_sequence_number
-                    .get_or_insert(descriptor.sequence_number);
-            } else if entry.sequence_number.is_none() || entry.file_sequence_number.is_none() {
-                return exec_err!(
-                    "Iceberg existing/deleted manifest entries require sequence numbers"
-                );
-            }
-            let file = &mut entry.data_file;
-            file.partition_spec_id = descriptor.partition_spec_id;
-            if file.content == DataContentType::Data
-                && entry.status != ManifestStatus::Deleted
-                && file.first_row_id.is_none()
-                && let Some(first_row_id) = next_row_id
-            {
-                file.first_row_id = Some(first_row_id);
-                next_row_id = Some(
-                    i64::try_from(file.record_count)
-                        .ok()
-                        .and_then(|count| first_row_id.checked_add(count))
-                        .filter(|id| *id >= 0)
-                        .ok_or_else(|| {
-                            datafusion::common::exec_datafusion_err!("Iceberg row ID overflow")
-                        })?,
-                );
-            }
-            Ok(entry)
-        })
-        .collect()
+                .sequence_number
+                .get_or_insert(descriptor.sequence_number);
+            entry
+                .file_sequence_number
+                .get_or_insert(descriptor.sequence_number);
+        } else if entry.sequence_number.is_none() || entry.file_sequence_number.is_none() {
+            return exec_err!("Iceberg existing/deleted manifest entries require sequence numbers");
+        }
+        let file = &mut entry.data_file;
+        file.partition_spec_id = descriptor.partition_spec_id;
+        if file.content == DataContentType::Data
+            && entry.status != ManifestStatus::Deleted
+            && file.first_row_id.is_none()
+            && let Some(first_row_id) = next_row_id
+        {
+            file.first_row_id = Some(first_row_id);
+            next_row_id = Some(
+                i64::try_from(file.record_count)
+                    .ok()
+                    .and_then(|count| first_row_id.checked_add(count))
+                    .filter(|id| *id >= 0)
+                    .ok_or_else(|| {
+                        datafusion::common::exec_datafusion_err!("Iceberg row ID overflow")
+                    })?,
+            );
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn collect_live_files<T: Send>(

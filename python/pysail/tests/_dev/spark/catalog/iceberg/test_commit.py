@@ -385,11 +385,13 @@ def test_insert_advances_rest_catalog_metadata_location(
     assert [(row["id"], row["name"]) for row in rows] == [(1, "a"), (2, "b"), (3, "c")]
 
 
+@pytest.mark.parametrize("read_api", ["table", "load"])
 def test_metadata_tables_follow_rest_catalog_pointer(
     spark: SparkSession,
     iceberg_rest_endpoint: str,
+    read_api: str,
 ) -> None:
-    table_name = "metadata_tables_t"
+    table_name = f"metadata_tables_{read_api}_t"
     table_fqn = f"sail.{NAMESPACE}.{table_name}"
     spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
     spark.sql(
@@ -406,17 +408,18 @@ def test_metadata_tables_follow_rest_catalog_pointer(
 
     table = _load_table(iceberg_rest_endpoint, table_name)
     metadata = table["metadata"]
+    read = spark.table if read_api == "table" else spark.read.format("iceberg").load
+    assert [tuple(row) for row in read(table_fqn).orderBy("id").collect()] == [(1, "a"), (2, "b")]
     expected_snapshots = sorted(
         metadata["snapshots"],
         key=lambda snapshot: (snapshot["timestamp-ms"], snapshot["snapshot-id"]),
     )
-    snapshots = spark.sql(
-        f"""
-        SELECT snapshot_id, parent_id, operation
-        FROM {table_fqn}.snapshots
-        ORDER BY committed_at, snapshot_id
-        """  # noqa: S608
-    ).collect()
+    snapshots = (
+        read(f"{table_fqn}.snapshots")
+        .orderBy("committed_at", "snapshot_id")
+        .select("snapshot_id", "parent_id", "operation")
+        .collect()
+    )
     assert [(row.snapshot_id, row.parent_id, row.operation) for row in snapshots] == [
         (
             snapshot["snapshot-id"],
@@ -426,20 +429,13 @@ def test_metadata_tables_follow_rest_catalog_pointer(
         for snapshot in expected_snapshots
     ]
 
-    references = spark.sql(
-        f"SELECT name, type, snapshot_id FROM {table_fqn}.refs"  # noqa: S608
-    ).collect()
+    references = read(f"{table_fqn}.refs").select("name", "type", "snapshot_id").collect()
     main_reference = metadata["refs"]["main"]
     assert [(row.name, row.type, row.snapshot_id) for row in references] == [
         ("main", main_reference["type"].upper(), main_reference["snapshot-id"])
     ]
 
-    metadata_log = spark.sql(
-        f"""
-        SELECT file, latest_snapshot_id
-        FROM {table_fqn}.metadata_log_entries
-        """  # noqa: S608
-    ).collect()
+    metadata_log = read(f"{table_fqn}.metadata_log_entries").select("file", "latest_snapshot_id").collect()
     expected_metadata_files = {entry["metadata-file"] for entry in metadata["metadata-log"]} | {
         table["metadata-location"]
     }

@@ -100,6 +100,11 @@ SKIPPED_IBIS_TESTS = [
         keywords=["test_table_describe_large[pyspark]"],
         reason="Complex SQL statements causing timeout",
     ),
+    # Ibis marks this `notyet` for Spark (AnalysisException); Sail also fails, with a different error, but may support it later.
+    TestMarker(
+        keywords=["test_group_concat_over_window[pyspark]"],
+        reason="Scalar function over a window (`array_join(collect_list(...)) OVER (...)`) is not supported yet",
+    ),
 ]
 
 # Tests that need spark.sql.ansi.enabled=false because they expect non-ANSI behavior.

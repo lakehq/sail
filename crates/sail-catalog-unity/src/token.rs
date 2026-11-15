@@ -18,19 +18,31 @@
 
 // [CREDIT]: https://github.com/delta-io/delta-rs/blob/d7dea29162451fd00b9579e3d7fb546d95fb5e4a/crates/catalog-unity/src/client/token.rs
 
+use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::time::Instant;
 
 use tokio::sync::Mutex;
 
 /// A temporary authentication token with an associated expiry
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TemporaryToken<T> {
     /// The temporary credential
     pub token: T,
     /// The instant at which this credential is no longer valid
     /// None means the credential does not expire
     pub expiry: Option<Instant>,
+}
+
+// The token is usable exactly as it is printed, so it is kept out of the debug output of the
+// cache and of the credential providers that hold it.
+impl<T> Debug for TemporaryToken<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TemporaryToken")
+            .field("token", &"[REDACTED]")
+            .field("expiry", &self.expiry)
+            .finish()
+    }
 }
 
 /// Provides [`TokenCache::get_or_insert_with`] which can be used to cache a

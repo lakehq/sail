@@ -58,12 +58,55 @@ pub mod r#gen {
 
 impl ResolveOptions for r#gen::IcebergReadOptions {
     fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+        validate_snapshot_selectors(&options)?;
         let mut partial = r#gen::IcebergReadPartialOptions::initialize();
         for layer in options {
             partial.merge(layer.build_partial_options()?);
         }
         partial.finalize()
     }
+}
+
+// Validate before merging so that contradictory aliases cannot overwrite one another.
+fn validate_snapshot_selectors(options: &[OptionLayer]) -> DataSourceResult<()> {
+    let mut selected: Option<(&str, &str)> = None;
+    for layer in options {
+        let OptionLayer::OptionList { items } = layer else {
+            continue;
+        };
+        for (key, value) in items {
+            let selector = match key.to_ascii_lowercase().as_str() {
+                "versionasof" | "version_as_of" => "versionAsOf",
+                "snapshotid" | "snapshot_id" | "snapshot-id" => "snapshotId",
+                "timestampasof" | "timestamp_as_of" => "timestampAsOf",
+                "ref" | "use_ref" | "iceberg.ref" => "ref",
+                "branch" => "branch",
+                "tag" => "tag",
+                _ => continue,
+            };
+            if value.trim().is_empty() {
+                return Err(DataSourceError::InvalidOption {
+                    key: key.clone(),
+                    value: value.clone(),
+                    cause: Some("Iceberg snapshot selector must not be empty".to_string()),
+                });
+            }
+            if let Some((previous, previous_value)) = selected
+                && (previous != selector || previous_value != value)
+            {
+                return Err(DataSourceError::InvalidOption {
+                    key: key.clone(),
+                    value: value.clone(),
+                    cause: Some(format!(
+                        "Conflicting Iceberg snapshot selectors: {previous} and {key}. \
+                         Specify only one selector, with identical values for aliases"
+                    )),
+                });
+            }
+            selected = Some((selector, value));
+        }
+    }
+    Ok(())
 }
 
 impl ResolveOptions for r#gen::IcebergWriteOptions {

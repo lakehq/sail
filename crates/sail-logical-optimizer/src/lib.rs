@@ -1,13 +1,18 @@
 use std::sync::Arc;
 
+use datafusion::optimizer::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
+use datafusion::optimizer::optimize_projections::OptimizeProjections;
 use datafusion::optimizer::push_down_limit::PushDownLimit as DataFusionPushDownLimit;
 use datafusion::optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
 mod correlated_limit;
 mod deduplicate;
+mod eliminate_sorts;
 mod input_file_metadata;
 mod lateral_join;
+mod partition_sensitive_subquery;
+mod prune_seeded_random;
 mod resolve_lambda_variables;
 mod rewrite_binary_grouping;
 mod scalar_iterator_udf;
@@ -18,8 +23,13 @@ mod simplify_expressions;
 mod subquery_aliases;
 pub mod type_coercion;
 
+pub use correlated_limit::exists_by_count;
+use eliminate_sorts::EliminateSorts;
+pub use eliminate_sorts::{is_order_irrelevant_aggregate, push_down_left_semi_anti_join};
 use input_file_metadata::PushDownLimit;
 use lateral_join::DecorrelateLateralProjection;
+pub use partition_sensitive_subquery::pull_up_correlated_filters_in_predicate_subquery;
+use prune_seeded_random::PruneSeededRandomColumns;
 use resolve_lambda_variables::ResolveLambdaVariables;
 use rewrite_binary_grouping::RewriteBinaryGrouping;
 use scalar_iterator_udf::ExtractScalarIteratorUDF;
@@ -71,11 +81,23 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
             custom.push(Arc::new(deduplicate::SimplifyDeduplicate::default()));
             continue;
         }
-        if rule.name() == ScalarSubqueryToJoin::new().name() {
+        if rule.name() == DecorrelatePredicateSubquery::new().name() {
+            // Partition-sensitive operators prevent the decorrelation of the subqueries.
+            custom.push(Arc::new(
+                partition_sensitive_subquery::PullUpCorrelatedFiltersAbovePartitionSensitiveNodes,
+            ));
+            // The top-level sort of a correlated subquery prevents its decorrelation.
+            custom.push(Arc::new(EliminateSorts));
             // SimplifyExpressions must first fold LIMIT/OFFSET casts into
             // literals. Decorrelate before limit pushdown can turn the sort
-            // into a global top-k or scalar-subquery conversion consumes it.
+            // into a global top-k, and before predicate or scalar subqueries
+            // are converted to joins.
+            custom.push(Arc::new(correlated_limit::RemoveExistsLimit));
             custom.push(Arc::new(correlated_limit::DecorrelateLimit));
+            custom.push(rule);
+            continue;
+        }
+        if rule.name() == ScalarSubqueryToJoin::new().name() {
             custom.push(Arc::new(
                 scalar_subquery_domain::NormalizeScalarSubqueryDomain,
             ));
@@ -83,7 +105,15 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
             custom.push(rule);
             continue;
         }
+        if rule.name() == OptimizeProjections::new().name() {
+            custom.push(rule);
+            custom.push(Arc::new(PruneSeededRandomColumns));
+            continue;
+        }
         if rule.name() == DataFusionPushDownLimit::new().name() {
+            // The sorts below the joins of decorrelated subqueries are removed before limit
+            // pushdown would turn them into top-k sorts, which select rows and are kept.
+            custom.push(Arc::new(EliminateSorts));
             custom.push(Arc::new(PushDownLimit));
             continue;
         }
@@ -101,6 +131,42 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_optimizer_rules_eliminate_sorts_before_decorrelation_and_limit_pushdown() {
+        let names = default_optimizer_rules()
+            .iter()
+            .map(|rule| rule.name().to_string())
+            .collect::<Vec<_>>();
+        let positions = names
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| *name == "eliminate_sorts")
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>();
+        let position = |name: &str| names.iter().position(|n| n == name);
+        assert_eq!(positions.len(), 2, "{names:?}");
+        assert!(position(DecorrelatePredicateSubquery::new().name()) > Some(positions[0]));
+        assert!(position("decorrelate_limit") > Some(positions[0]));
+        assert!(position(ScalarSubqueryToJoin::new().name()) > Some(positions[0]));
+        assert!(position(ScalarSubqueryToJoin::new().name()) < Some(positions[1]));
+        assert_eq!(position(PushDownLimit.name()), Some(positions[1] + 1));
+    }
+
+    #[test]
+    fn default_optimizer_rules_decorrelate_limits_before_subqueries() {
+        let names = default_optimizer_rules()
+            .iter()
+            .map(|rule| rule.name().to_string())
+            .collect::<Vec<_>>();
+        let position = |name: &str| names.iter().position(|n| n == name);
+        assert!(position("remove_exists_limit").is_some());
+        assert!(position("remove_exists_limit") < position("decorrelate_limit"));
+        assert!(
+            position("decorrelate_limit") < position(DecorrelatePredicateSubquery::new().name())
+        );
+        assert!(position("decorrelate_limit") < position(ScalarSubqueryToJoin::new().name()));
+    }
 
     #[test]
     fn default_analyzer_rules_skip_datafusion_type_coercion() {

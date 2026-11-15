@@ -12,6 +12,7 @@ use datafusion::logical_expr::{Expr, Operator};
 use datafusion::physical_expr::expressions::{BinaryExpr, Column, InListExpr, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::internal_err;
+use sail_function::scalar::collection::element::CollectionElement;
 use sail_system_store::predicate::{
     MapValueFilter, Predicate, Predicates, TimestampMicros, ValueDomain, ValueFilter,
 };
@@ -171,6 +172,14 @@ fn map_value_expression(
 
 fn physical_map_value_key(expression: &Arc<dyn PhysicalExpr>, column: &str) -> Option<String> {
     let function = expression.downcast_ref::<ScalarFunctionExpr>()?;
+    if function
+        .fun()
+        .inner()
+        .downcast_ref::<CollectionElement>()
+        .is_some_and(CollectionElement::is_map)
+    {
+        return physical_map_key(function, column);
+    }
     match function.name() {
         "array_element" => {
             let [map_extract, index] = function.args() else {
@@ -205,6 +214,10 @@ fn physical_map_extract_key(expression: &Arc<dyn PhysicalExpr>, column: &str) ->
     if !matches!(function.name(), "map_extract" | "get_field") {
         return None;
     }
+    physical_map_key(function, column)
+}
+
+fn physical_map_key(function: &ScalarFunctionExpr, column: &str) -> Option<String> {
     let [map, key] = function.args() else {
         return None;
     };
@@ -370,6 +383,14 @@ fn logical_map_value_key(expression: &Expr, column: &str) -> Option<String> {
     let Expr::ScalarFunction(function) = expression else {
         return None;
     };
+    if function
+        .func
+        .inner()
+        .downcast_ref::<CollectionElement>()
+        .is_some_and(CollectionElement::is_map)
+    {
+        return logical_map_key(function, column);
+    }
     match function.name() {
         "array_element" => {
             let [map_extract, index] = function.args.as_slice() else {
@@ -392,6 +413,13 @@ fn logical_map_extract_key(expression: &Expr, column: &str) -> Option<String> {
     if !matches!(function.name(), "map_extract" | "get_field") {
         return None;
     }
+    logical_map_key(function, column)
+}
+
+fn logical_map_key(
+    function: &datafusion::logical_expr::expr::ScalarFunction,
+    column: &str,
+) -> Option<String> {
     let [map, key] = function.args.as_slice() else {
         return None;
     };
@@ -575,6 +603,130 @@ mod tests {
     use sail_system_store::predicate::{TimestampMicros, ValueRange};
 
     use super::{ArrowPredicateEvaluator, PredicateExtractor};
+
+    #[expect(clippy::panic)]
+    fn physical_expression(expr: &datafusion::logical_expr::Expr) -> Arc<dyn PhysicalExpr> {
+        use datafusion::logical_expr::Expr;
+        use datafusion::physical_expr::ScalarFunctionExpr;
+
+        match expr {
+            Expr::Column(column) => Arc::new(Column::new(&column.name, 0)),
+            Expr::Literal(value, _) => Arc::new(Literal::new(value.clone())),
+            Expr::ScalarFunction(function) => Arc::new(ScalarFunctionExpr::new(
+                function.name(),
+                Arc::clone(&function.func),
+                function.args.iter().map(physical_expression).collect(),
+                Arc::new(Field::new("value", DataType::Utf8, true)),
+                Arc::default(),
+            )),
+            Expr::BinaryExpr(binary) => Arc::new(BinaryExpr::new(
+                physical_expression(&binary.left),
+                binary.op,
+                physical_expression(&binary.right),
+            )),
+            _ => panic!("unsupported test expression: {expr}"),
+        }
+    }
+
+    #[test]
+    fn test_collection_map_predicate_recognition() {
+        use datafusion::logical_expr::{ScalarUDF, col, lit};
+        use sail_function::scalar::collection::element::{CollectionElement, map_element};
+
+        let key = lit("execution.job.id");
+        let column = col("attributes");
+        let valid = map_element(column.clone(), key.clone());
+        let map = ScalarUDF::from(CollectionElement::map());
+        let array = ScalarUDF::from(CollectionElement::array());
+        for (value, expected) in [
+            (valid.clone(), true),
+            (
+                map_element(
+                    column.clone(),
+                    lit(ScalarValue::LargeUtf8(Some("execution.job.id".into()))),
+                ),
+                true,
+            ),
+            (
+                map_element(
+                    column.clone(),
+                    lit(ScalarValue::Utf8View(Some("execution.job.id".into()))),
+                ),
+                true,
+            ),
+            (map_element(col("other"), key.clone()), false),
+            (map_element(column.clone(), col("dynamic_key")), false),
+            (
+                map_element(column.clone(), lit(ScalarValue::Utf8(None))),
+                false,
+            ),
+            (map_element(column.clone(), lit(1_i64)), false),
+            (array.call(vec![column.clone(), key.clone()]), false),
+            (map.call(vec![column.clone()]), false),
+            (
+                map.call(vec![column.clone(), key.clone(), lit(1_i64)]),
+                false,
+            ),
+        ] {
+            let predicate = value.eq(lit("job-1"));
+            assert_eq!(
+                super::is_map_value_logical_predicate(&predicate, "attributes").unwrap(),
+                expected,
+                "{predicate}"
+            );
+            let mut extractor = PredicateExtractor::new(vec![physical_expression(&predicate)]);
+            let filters = extractor
+                .extract_map_values::<String>("attributes")
+                .unwrap();
+            assert_eq!(filters.len(), usize::from(expected), "{predicate}");
+            if expected {
+                assert_eq!(filters[0].key, "execution.job.id");
+                assert_eq!(filters[0].domain.points(), Some(vec!["job-1".to_string()]));
+                assert!((filters[0].predicate)(&"job-1".to_string()).unwrap());
+                assert!(!(filters[0].predicate)(&"job-2".to_string()).unwrap());
+                extractor.finalize().unwrap();
+            } else {
+                assert!(extractor.finalize().is_err());
+            }
+        }
+        let different_keys = valid.eq(map_element(column, lit("other.key")));
+        assert!(!super::is_map_value_logical_predicate(&different_keys, "attributes").unwrap());
+        let mut extractor = PredicateExtractor::new(vec![physical_expression(&different_keys)]);
+        assert!(
+            extractor
+                .extract_map_values::<String>("attributes")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(extractor.finalize().is_err());
+    }
+
+    #[test]
+    fn test_legacy_map_predicate_recognition() {
+        use datafusion::functions_nested::expr_fn::{array_element, map_extract};
+        use datafusion::logical_expr::{col, lit};
+
+        let extracted = map_extract(col("attributes"), lit("execution.job.id"));
+        for (value, expected) in [
+            (array_element(extracted.clone(), lit(1_i64)), true),
+            (array_element(extracted.clone(), lit(2_i64)), false),
+            (extracted, false),
+        ] {
+            let predicate = value.eq(lit("job-1"));
+            assert_eq!(
+                super::is_map_value_logical_predicate(&predicate, "attributes").unwrap(),
+                expected
+            );
+            let mut extractor = PredicateExtractor::new(vec![physical_expression(&predicate)]);
+            assert_eq!(
+                extractor
+                    .extract_map_values::<String>("attributes")
+                    .unwrap()
+                    .len(),
+                usize::from(expected)
+            );
+        }
+    }
 
     #[test]
     fn test_string_predicate_evaluator() {

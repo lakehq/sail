@@ -185,6 +185,8 @@ pub struct RowLevelEffectPlans {
     touched_files: Option<Arc<LogicalPlan>>,
     row_index_deletes: Option<Arc<LogicalPlan>>,
     change_data: Option<Arc<LogicalPlan>>,
+    /// Packed preimages on the write stream, consumed by a single data/CDC writer.
+    change_data_preimage: Option<String>,
 }
 
 impl RowLevelEffectPlans {
@@ -199,7 +201,17 @@ impl RowLevelEffectPlans {
             touched_files,
             row_index_deletes,
             change_data,
+            change_data_preimage: None,
         }
+    }
+
+    pub fn with_change_data_preimage(mut self, column: Option<String>) -> Self {
+        self.change_data_preimage = column;
+        self
+    }
+
+    pub fn change_data_preimage(&self) -> Option<&str> {
+        self.change_data_preimage.as_deref()
     }
 
     pub fn write_rows(&self) -> Option<&Arc<LogicalPlan>> {
@@ -264,6 +276,7 @@ impl RowLevelEffectPlans {
             touched_files: replace(self.touched_files.is_some())?,
             row_index_deletes: replace(self.row_index_deletes.is_some())?,
             change_data: replace(self.change_data.is_some())?,
+            change_data_preimage: self.change_data_preimage.clone(),
         })
     }
 }

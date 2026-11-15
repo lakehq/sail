@@ -6,8 +6,6 @@ from pyspark.sql import Row, Window
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import ArrayType, IntegerType
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
 
 @pytest.fixture(params=["approx_percentile", "percentile_approx"])
 def function(request):
@@ -91,7 +89,7 @@ def test_approx_percentile_filter(spark, function):
     assert result.collect() == [Row(filtered_value=2)]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail does not support DISTINCT for approximate percentiles")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail does not support DISTINCT for approximate percentiles")
 def test_approx_percentile_rejects_distinct(spark, function):
     with pytest.raises(PySparkException, match="does not support DISTINCT"):
         spark.sql(f"SELECT {function}(DISTINCT value, 0.75) FROM VALUES (1), (1), (1), (2), (3) AS t(value)").collect()  # noqa: S608
@@ -128,7 +126,7 @@ def test_approx_percentile_maximum_accuracy(spark, function):
     assert result.collect() == [Row(value=[0, 1, 3])]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail preserves observations that Spark rounds through double")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail preserves observations that Spark rounds through double")
 @pytest.mark.parametrize(
     ("data_type", "values"),
     [

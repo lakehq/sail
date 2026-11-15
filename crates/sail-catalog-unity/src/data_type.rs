@@ -18,8 +18,8 @@ use arrow::datatypes::{
 };
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_common::spec::{
-    SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
-    SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY,
+    self, SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME,
+    SAIL_MAP_VALUE_FIELD_NAME, SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY,
 };
 
 use crate::r#gen;
@@ -593,29 +593,32 @@ pub(crate) fn parse_from_text_or_json(
     }
 }
 
-pub(crate) fn parse_simple_type_from_string(type_str: &str) -> CatalogResult<DataType> {
-    match type_str.trim().to_uppercase().as_str() {
-        "BOOLEAN" | "BOOL" => Ok(DataType::Boolean),
-        "BYTE" | "TINYINT" | "INT8" => Ok(DataType::Int8),
-        "SHORT" | "SMALLINT" | "INT16" => Ok(DataType::Int16),
-        "INT" | "INTEGER" | "INT32" => Ok(DataType::Int32),
-        "LONG" | "BIGINT" | "INT64" => Ok(DataType::Int64),
-        "FLOAT" | "REAL" | "FLOAT32" => Ok(DataType::Float32),
-        "DOUBLE" | "FLOAT64" => Ok(DataType::Float64),
-        "DATE" | "DATE32" => Ok(DataType::Date32),
-        "TIMESTAMP" | "TIMESTAMP_LTZ" => Ok(DataType::Timestamp(
-            TimeUnit::Microsecond,
-            Some(Arc::from("UTC".to_string())),
-        )),
-        "TIMESTAMP_NTZ" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-        "STRING" | "CHAR" | "CHARACTER" | "VARCHAR" => Ok(DataType::Utf8),
-        "TEXT" => Ok(DataType::LargeUtf8),
-        "BINARY" | "BYTEA" => Ok(DataType::Binary),
-        "NULL" | "VOID" => Ok(DataType::Null),
-        _ => Err(CatalogError::InvalidArgument(format!(
-            "Unable to parse simple type from string: {type_str}"
-        ))),
+pub(crate) fn parse_simple_type_from_string(raw: &str) -> CatalogResult<DataType> {
+    // Catalogs may omit the length of character types.
+    let raw = match raw.trim().to_ascii_lowercase().as_str() {
+        "char" | "character" | "varchar" => "string",
+        _ => raw,
+    };
+    let data_type = sail_sql_analyzer::data_type::parse_data_type(raw)
+        .map_err(|e| CatalogError::InvalidArgument(e.to_string()))?;
+
+    // Complex types must use the JSON schema to preserve nullability and metadata.
+    if matches!(
+        &data_type,
+        spec::DataType::Struct { .. } | spec::DataType::List { .. } | spec::DataType::Map { .. }
+    ) {
+        return Err(CatalogError::InvalidArgument(format!(
+            "Complex type requires type_json: {raw}"
+        )));
     }
+
+    sail_common_datafusion::data_type::DataTypeResolver {
+        session_timezone: Arc::from("UTC"),
+        default_timestamp_ltz: true,
+        use_large_var_types: false,
+    }
+    .resolve_data_type(&data_type)
+    .map_err(|e| CatalogError::InvalidArgument(e.to_string()))
 }
 
 pub(crate) fn parse_unity_type_json(json_str: &str) -> CatalogResult<DataType> {
@@ -880,5 +883,97 @@ fn get_field_metadata(
             .collect()
     } else {
         HashMap::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn complex_type_text_preserves_json_nullability_and_metadata() -> CatalogResult<()> {
+        let cases = [
+            (
+                "struct<x:int>",
+                json!({
+                    "type": "struct",
+                    "fields": [{
+                        "name": "x",
+                        "type": "integer",
+                        "nullable": false,
+                        "metadata": {"comment": "nested field"}
+                    }]
+                }),
+                DataType::Struct(Fields::from(vec![
+                    Field::new("x", DataType::Int32, false).with_metadata(HashMap::from([(
+                        "comment".to_string(),
+                        "nested field".to_string(),
+                    )])),
+                ])),
+            ),
+            (
+                "array<int>",
+                json!({"type": "array", "elementType": "integer", "containsNull": false}),
+                DataType::List(Arc::new(Field::new(
+                    SAIL_LIST_FIELD_NAME,
+                    DataType::Int32,
+                    false,
+                ))),
+            ),
+            (
+                "map<string,int>",
+                json!({
+                    "type": "map",
+                    "keyType": "string",
+                    "valueType": "integer",
+                    "valueContainsNull": false
+                }),
+                DataType::Map(
+                    Arc::new(Field::new(
+                        SAIL_MAP_FIELD_NAME,
+                        DataType::Struct(Fields::from(vec![
+                            Field::new(SAIL_MAP_KEY_FIELD_NAME, DataType::Utf8, false),
+                            Field::new(SAIL_MAP_VALUE_FIELD_NAME, DataType::Int32, false),
+                        ])),
+                        false,
+                    )),
+                    false,
+                ),
+            ),
+        ];
+
+        for (type_text, type_json, expected) in cases {
+            assert_eq!(
+                unity_type_to_data_type(
+                    None,
+                    Some(type_json.to_string()),
+                    Some(type_text.to_string()),
+                    None,
+                    None,
+                    None,
+                )?,
+                expected,
+                "{type_text}"
+            );
+            assert!(parse_from_text_or_json(Some(type_text.to_string()), None).is_err());
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn simple_type_text_still_takes_precedence() -> CatalogResult<()> {
+        assert_eq!(
+            parse_from_text_or_json(Some("INT".to_string()), Some(r#""string""#.to_string()))?,
+            DataType::Int32
+        );
+        assert_eq!(parse_simple_type_from_string(" VARCHAR ")?, DataType::Utf8);
+        assert_eq!(
+            parse_simple_type_from_string("DECIMAL(10,2)")?,
+            DataType::Decimal128(10, 2)
+        );
+        Ok(())
     }
 }

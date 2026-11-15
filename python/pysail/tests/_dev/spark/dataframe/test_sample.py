@@ -6,11 +6,6 @@ import pytest
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.common import is_jvm_spark
 
-jvm_spark_only = pytest.mark.skipif(
-    not is_jvm_spark(),
-    reason="Seeded sampling RNG semantics differ from Spark",
-)
-
 
 def _sample_with_bounds(spark, lower_bound, upper_bound, *, with_replacement=True):
     sampled = spark.range(10, numPartitions=1).sample(with_replacement, 0.0, 1)
@@ -33,13 +28,11 @@ def single_partition_spark(spark):
         yield sessions.create()
 
 
-@jvm_spark_only
 def test_dataframe_sample_with_replacement_matches_spark_seed(spark):
     sampled = spark.range(10, numPartitions=1).sample(True, 0.5, 1)
     assert [row.id for row in sampled.collect()] == [0, 2, 3, 4, 7, 9]
 
 
-@jvm_spark_only
 @pytest.mark.parametrize(
     ("with_replacement", "expected"),
     [
@@ -58,6 +51,34 @@ def test_seeded_sample_matches_spark_partition_seeds(
     for row in rows:
         actual[row.partition].append(row.id)
     assert actual == expected
+
+
+@pytest.mark.parametrize(
+    ("num_partitions", "fraction", "seed", "expected"),
+    [
+        (1, 0.5, 3, [5, 6]),
+        (2, 0.5, 3, [8, 9]),
+        (4, 0.5, 3, [8]),
+        (10, 0.5, 1, [0, 2, 2, 7, 8, 8, 9]),
+        (1, 2.5, 7, [0, 0, 1, 1, 2, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 8, 8, 8, 9, 9, 9]),
+    ],
+)
+def test_seeded_sample_with_replacement_matches_spark_poisson_sampler(
+    spark,
+    num_partitions,
+    fraction,
+    seed,
+    expected,
+):
+    sampled = spark.range(0, 10, 1, num_partitions).sample(True, fraction, seed)
+    assert sorted(row.id for row in sampled.collect()) == expected
+
+
+def test_seeded_sample_with_replacement_matches_spark_for_large_fraction(spark):
+    # A fraction of at least 40 uses a different algorithm in Spark's Poisson sampler.
+    sampled = spark.range(0, 10, 1, 1).sample(True, 45.5, 7)
+    counts = Counter(row.id for row in sampled.collect())
+    assert [counts[i] for i in range(10)] == [50, 49, 45, 42, 55, 41, 39, 51, 45, 52]
 
 
 def test_dataframe_sample_with_replacement_zero_fraction(spark):
@@ -134,7 +155,6 @@ def test_dataframe_sample_rejects_individual_bounds(spark):
         _sample_with_bounds(spark, 1.000002, 1.000002, with_replacement=False).collect()
 
 
-@jvm_spark_only
 @pytest.mark.parametrize("with_replacement", [False, True])
 def test_seeded_sample_pattern_differs_across_batches(
     single_partition_spark,

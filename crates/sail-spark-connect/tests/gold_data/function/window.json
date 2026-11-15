@@ -332,6 +332,100 @@
       "output": {
         "success": "ok"
       }
+    },
+    {
+      "input": {
+        "query": "SELECT m, t, c, counter_diff(c) OVER (PARTITION BY m ORDER BY t) AS diff FROM VALUES ('http_requests', TIMESTAMP_NTZ '2026-01-01 00:00:00', 100), ('http_requests', TIMESTAMP_NTZ '2026-01-01 00:01:00', 200), ('http_requests', TIMESTAMP_NTZ '2026-01-01 00:02:00', 400), ('http_requests', TIMESTAMP_NTZ '2026-01-01 00:03:00', 50), ('http_requests', TIMESTAMP_NTZ '2026-01-01 00:04:00', 100) AS tab(m, t, c) ORDER BY t;",
+        "result": [
+          "http_requests\t2026-01-01 00:00:00\t100\tNULL",
+          "http_requests\t2026-01-01 00:01:00\t200\t100",
+          "http_requests\t2026-01-01 00:02:00\t400\t200",
+          "http_requests\t2026-01-01 00:03:00\t50\tNULL",
+          "http_requests\t2026-01-01 00:04:00\t100\t50"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "m",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "t",
+              "nullable": false,
+              "type": "timestamp_ntz",
+              "metadata": {}
+            },
+            {
+              "name": "c",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "diff",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown window function: counter_diff"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT m, t, s, c, counter_diff(c, s) OVER (PARTITION BY m ORDER BY t) AS diff FROM VALUES ('http_requests', TIMESTAMP_NTZ '2026-01-01 00:00:00', 100, TIMESTAMP_NTZ '2026-01-01 00:00:00'), ('http_requests', TIMESTAMP_NTZ '2026-01-01 00:01:00', 200, TIMESTAMP_NTZ '2026-01-01 00:00:00'), ('http_requests', TIMESTAMP_NTZ '2026-01-01 00:02:00', 400, TIMESTAMP_NTZ '2026-01-01 00:00:00'), ('http_requests', TIMESTAMP_NTZ '2026-01-01 00:03:00', 500, TIMESTAMP_NTZ '2026-01-01 00:02:15'), ('http_requests', TIMESTAMP_NTZ '2026-01-01 00:04:00', 600, TIMESTAMP_NTZ '2026-01-01 00:02:15') AS tab(m, t, c, s) ORDER BY t;",
+        "result": [
+          "http_requests\t2026-01-01 00:00:00\t2026-01-01 00:00:00\t100\tNULL",
+          "http_requests\t2026-01-01 00:01:00\t2026-01-01 00:00:00\t200\t100",
+          "http_requests\t2026-01-01 00:02:00\t2026-01-01 00:00:00\t400\t200",
+          "http_requests\t2026-01-01 00:03:00\t2026-01-01 00:02:15\t500\tNULL",
+          "http_requests\t2026-01-01 00:04:00\t2026-01-01 00:02:15\t600\t100"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "m",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "t",
+              "nullable": false,
+              "type": "timestamp_ntz",
+              "metadata": {}
+            },
+            {
+              "name": "s",
+              "nullable": false,
+              "type": "timestamp_ntz",
+              "metadata": {}
+            },
+            {
+              "name": "c",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            },
+            {
+              "name": "diff",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown window function: counter_diff"
+      }
     }
   ]
 }

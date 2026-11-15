@@ -19,6 +19,7 @@ from testcontainers.core.network import Network
 from testcontainers.core.wait_strategies import HttpWaitStrategy
 
 from pysail.testing._dev.spark.utils.jvm import classic_spark_mode, delta_spark_maven_coordinate
+from pysail.testing.resources import resource
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 
 if TYPE_CHECKING:
@@ -186,6 +187,7 @@ def hms_s3_network() -> Generator[Network, None, None]:
 
 
 @pytest.fixture(scope="session")
+@resource(name="hms-spark", weight=10)
 def hms_s3_silo_container(
     hms_s3_network: Network,
 ) -> Generator[DockerContainer, None, None]:
@@ -344,10 +346,6 @@ _SPARK_VERSION = _pyspark.__version__
 _SPARK_MAJOR, _SPARK_MINOR_PART = _SPARK_VERSION.split(".")[:2]
 _SCALA_BINARY = "2.12" if _SPARK_MAJOR == "3" else "2.13"
 _SPARK_MINOR = f"{_SPARK_MAJOR}.{_SPARK_MINOR_PART}"
-try:
-    _DELTA_SPARK_PACKAGE = delta_spark_maven_coordinate(_SPARK_VERSION)
-except RuntimeError as error:
-    pytest.skip(reason=str(error))
 # Avro is a built-in but *external* datasource in Spark 2.4+: the runtime jar must
 # be on the classpath for `USING AVRO`.
 _AVRO_SPARK_PACKAGE = f"org.apache.spark:spark-avro_{_SCALA_BINARY}:{_SPARK_VERSION}"
@@ -396,7 +394,7 @@ def jvm_spark(
         "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
     ]
     spark_packages = [
-        _DELTA_SPARK_PACKAGE,
+        delta_spark_maven_coordinate(_SPARK_VERSION),
         _hadoop_aws_package(),
         # Avro is a built-in but *external* datasource in Spark 2.4+: the runtime jar
         # must be on the classpath for `USING AVRO`.

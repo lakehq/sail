@@ -1,7 +1,12 @@
 [package]
 name = "sail-execution"
 version = { workspace = true }
+authors = { workspace = true }
 edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+repository = { workspace = true }
 rust-version = { workspace = true }
 
 [lints]
@@ -44,6 +49,7 @@ datafusion-proto = { workspace = true }
 datafusion-spark = { workspace = true }
 object_store = { workspace = true }
 arrow-flight = { workspace = true }
+arrow-select = { workspace = true }
 log = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }

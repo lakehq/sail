@@ -956,6 +956,32 @@
     },
     {
       "input": {
+        "query": "SELECT collect_union(col) FROM VALUES (array(1, 2)), (array(2, 3)), (array(1)) AS tab(col);",
+        "result": [
+          "[1,2,3]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "collect_union(col)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "integer",
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: collect_union"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT corr(c1, c2) FROM VALUES (3, 2), (3, 3), (6, 4) as tab(c1, c2);",
         "result": [
           "0.8660254037844387"
@@ -4180,6 +4206,28 @@
     },
     {
       "input": {
+        "query": "SELECT theta_sketch_estimate(theta_intersection_agg(sketch)) FROM VALUES (CAST(NULL AS BINARY)) tab(sketch);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "theta_sketch_estimate(theta_intersection_agg(sketch))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Execution error: theta_intersection_agg cannot produce a result without any non-null input sketches"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT theta_sketch_estimate(theta_sketch_agg(col, 12)) FROM VALUES (1), (1), (2), (2), (3) tab(col);",
         "result": [
           "3"
@@ -4400,6 +4448,28 @@
     },
     {
       "input": {
+        "query": "SELECT tuple_sketch_estimate_double(tuple_intersection_agg_double(sketch)) FROM VALUES (CAST(NULL AS BINARY)) tab(sketch);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "tuple_sketch_estimate_double(tuple_intersection_agg_double(sketch, sum))",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: tuple_intersection_agg_double"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT tuple_sketch_estimate_double(tuple_sketch_agg_double(key, summary, 12, 'sum')) FROM VALUES (1, 5.0D), (1, 1.0D), (2, 2.0D), (2, 3.0D), (3, 2.2D) tab(key, summary);",
         "result": [
           "3.0"
@@ -4462,6 +4532,28 @@
       },
       "output": {
         "failure": "not implemented: function: tuple_sketch_agg_integer"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT tuple_sketch_estimate_integer(tuple_intersection_agg_integer(sketch)) FROM VALUES (CAST(NULL AS BINARY)) tab(sketch);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "tuple_sketch_estimate_integer(tuple_intersection_agg_integer(sketch, sum))",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: tuple_intersection_agg_integer"
       }
     },
     {

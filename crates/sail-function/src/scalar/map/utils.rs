@@ -6,10 +6,42 @@ use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BooleanBuilder, Int32Array, MapArray, StructArray,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
-use datafusion::arrow::compute::{filter, take};
-use datafusion::arrow::datatypes::{DataType, Field, Fields};
+use datafusion::arrow::compute::{cast, filter, take};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use sail_common::spec::{SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
+use sail_common_datafusion::metadata::coerced_type_field;
+
+pub fn get_element_field(data_type: &DataType) -> Result<FieldRef> {
+    match data_type {
+        DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _) => {
+            Ok(field.clone())
+        }
+        _ => Ok(Arc::new(Field::new_list_field(
+            get_element_type(data_type)?.clone(),
+            true,
+        ))),
+    }
+}
+
+pub fn map_type_from_key_value_fields(key: &Field, value: &Field) -> Result<DataType> {
+    let key = coerced_type_field(
+        &Field::new(SAIL_MAP_KEY_FIELD_NAME, key.data_type().clone(), false),
+        &[key],
+    )?;
+    let value = coerced_type_field(
+        &Field::new(SAIL_MAP_VALUE_FIELD_NAME, value.data_type().clone(), true),
+        &[value],
+    )?;
+    Ok(DataType::Map(
+        Arc::new(Field::new(
+            SAIL_MAP_FIELD_NAME,
+            DataType::Struct(vec![key, value].into()),
+            false,
+        )),
+        false,
+    ))
+}
 
 /// Helper function to get element [`DataType`]
 /// from [`List`](DataType::List)/[`LargeList`](DataType::LargeList)/[`FixedSizeList`](DataType::FixedSizeList)<br>
@@ -104,6 +136,7 @@ pub fn map_from_keys_values_offsets_nulls(
     keys_nulls: Option<&NullBuffer>,
     values_nulls: Option<&NullBuffer>,
     last_value_wins: bool,
+    map_type: &DataType,
 ) -> Result<ArrayRef> {
     let (keys, values, offsets) = map_deduplicate_keys(
         flat_keys,
@@ -116,26 +149,24 @@ pub fn map_from_keys_values_offsets_nulls(
     )?;
     let nulls = NullBuffer::union(keys_nulls, values_nulls);
 
-    let fields = Fields::from(vec![
-        Field::new(
-            SAIL_MAP_KEY_FIELD_NAME,
-            flat_keys.data_type().clone(),
-            false,
-        ),
-        Field::new(
-            SAIL_MAP_VALUE_FIELD_NAME,
-            flat_values.data_type().clone(),
-            true,
-        ),
-    ]);
+    let DataType::Map(field, sorted) = map_type else {
+        return internal_err!("expected a map return type");
+    };
+    let DataType::Struct(fields) = field.data_type() else {
+        return internal_err!("expected map entry fields");
+    };
+    let [key_field, value_field] = fields.as_ref() else {
+        return internal_err!("expected two map entry fields");
+    };
+    let keys = cast(&keys, key_field.data_type())?;
+    let values = cast(&values, value_field.data_type())?;
     let entries = StructArray::try_new(fields.clone(), vec![keys, values], None)?;
-    let field = Arc::new(Field::new(
-        SAIL_MAP_FIELD_NAME,
-        DataType::Struct(fields),
-        false,
-    ));
     Ok(Arc::new(MapArray::try_new(
-        field, offsets, entries, nulls, false,
+        field.clone(),
+        offsets,
+        entries,
+        nulls,
+        *sorted,
     )?))
 }
 

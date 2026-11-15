@@ -27,9 +27,19 @@ impl CatalogCredentials for EmptyCatalogCredentials {
     }
 }
 
-#[derive(Debug)]
+/// Credentials holding a bearer or OAuth token as the catalog options supply it.
 pub struct StaticCatalogCredentials {
     credential: String,
+}
+
+// The token is usable exactly as it is printed, so it is kept out of the debug
+// output that the trait requires.
+impl Debug for StaticCatalogCredentials {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaticCatalogCredentials")
+            .field("credential", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl StaticCatalogCredentials {
@@ -145,6 +155,16 @@ mod tests {
             Some("dXNlcjpwYXNz".to_string())
         );
         assert_eq!(credentials.scheme(), "Basic");
+    }
+
+    #[test]
+    fn debug_output_hides_the_static_credential() {
+        let credentials = StaticCatalogCredentials::new("s3cr3t-token".to_string());
+        let output = format!("{credentials:?}");
+        assert!(
+            !output.contains("s3cr3t-token"),
+            "unexpected debug output: {output}"
+        );
     }
 
     #[test]

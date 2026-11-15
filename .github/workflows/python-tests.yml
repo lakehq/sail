@@ -12,7 +12,7 @@ on:
         type: string
         required: true
       seed:
-        description: Seed shared by all runners for deterministic test group assignment
+        description: Seed shared by all runners for deterministic PySpark version preferences per affinity
         type: string
         required: true
       suite_choices:
@@ -42,6 +42,12 @@ jobs:
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-python-${{ inputs.spark_version }}-%p-%m.profraw
     steps:
       - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        if: ${{ contains(format('|{0}', join(fromJSON(inputs.suite_choices), '|')), '|integration-') }}
+        with:
+          distribution: "corretto"
+          java-version: "17"
 
       - uses: actions/setup-python@v6
         with:
