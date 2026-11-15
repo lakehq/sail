@@ -19,6 +19,7 @@ use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
+use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ntz_to_ltz;
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
@@ -26,7 +27,6 @@ use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
 use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
 use sail_function::scalar::map::utils::map_type_from_key_value_types;
-use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
 use sail_logical_optimizer::type_coercion::TypeCoercionRewriter;
 
 use crate::config::MapKeyDedupPolicy;

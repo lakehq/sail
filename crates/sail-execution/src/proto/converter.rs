@@ -448,15 +448,13 @@ fn extend_lambda_schema(base: &Schema, params: &[String], fields: &[FieldRef]) -
 
 #[cfg(test)]
 mod tests {
-    use datafusion::physical_expr::expressions::Column;
     use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion::execution::TaskContext;
-    use datafusion::logical_expr::Operator;
     use datafusion::logical_expr::{
         ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
-        HigherOrderUDFImpl, Volatility,
+        HigherOrderUDFImpl, Operator, Volatility,
     };
-    use datafusion::physical_expr::expressions::BinaryExpr;
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column};
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::projection::ProjectionExec;
     use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
