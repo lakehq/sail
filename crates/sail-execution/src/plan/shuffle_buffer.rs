@@ -83,7 +83,8 @@ fn distinct_bytes(shared: &mut HashSet<usize>, buffer: &Buffer) -> usize {
 ///
 /// Rows are held until their memory reaches the budget or there is a batch of them for
 /// every channel. All channels are then written at once, each as batches that own their
-/// memory, so that what is held does not depend on the number of channels.
+/// memory, so that what is held does not depend on the number of channels. A budget of
+/// zero is no limit on the memory.
 pub(super) struct ShuffleBuffer {
     channels: usize,
     batch_size: usize,
@@ -140,7 +141,10 @@ impl ShuffleBuffer {
         Ok(Self {
             channels,
             batch_size,
-            budget,
+            budget: match budget {
+                0 => usize::MAX,
+                budget => budget,
+            },
             whole,
             held: vec![],
             pieces: vec![],
@@ -873,6 +877,39 @@ mod tests {
         for (column, input) in written[1].1.columns().iter().zip(large.columns()) {
             assert!(Arc::ptr_eq(column, input));
         }
+        Ok(())
+    }
+
+    /// Pushes batches of one megabyte for one of many channels until they are written,
+    /// and returns how many were pushed.
+    fn megabytes_held(budget: usize) -> Result<usize> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let mut buffer = ShuffleBuffer::try_new(&schema, 4000, 8192, budget, false)?;
+        let mut rows = vec![vec![]; 4000];
+        for pushed in 1.. {
+            let k = Int64Array::from_iter_values(0..131072);
+            let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k)])?;
+            rows[0].extend(0..131072);
+            if !buffer.push_rows(batch, &mut rows, false)?.is_empty() {
+                return Ok(pushed);
+            }
+        }
+        unreachable!()
+    }
+
+    /// Rows are written when their memory reaches the budget.
+    #[test]
+    fn rows_are_held_up_to_the_budget() -> Result<()> {
+        assert_eq!(megabytes_held(4 * 1024 * 1024)?, 4);
+        assert_eq!(megabytes_held(32 * 1024 * 1024)?, 32);
+        Ok(())
+    }
+
+    /// Without a budget, rows are written when there is a batch of them for every channel.
+    #[test]
+    fn rows_are_held_up_to_a_batch_for_every_channel_without_a_budget() -> Result<()> {
+        // 4000 channels with batches of 8192 rows, in batches of 131072 rows.
+        assert_eq!(megabytes_held(0)?, 250);
         Ok(())
     }
 }

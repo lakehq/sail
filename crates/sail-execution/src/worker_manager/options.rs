@@ -15,6 +15,7 @@ pub struct WorkerLaunchOptions {
     pub driver_external_port: u16,
     pub worker_heartbeat_interval: Duration,
     pub task_stream_buffer: usize,
+    pub shuffle_write_buffer_size: usize,
     pub task_stream_creation_timeout: Duration,
     pub rpc_retry_strategy: RetryStrategy,
     pub shuffle_backend: ShuffleBackendKind,

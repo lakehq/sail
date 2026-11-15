@@ -21,6 +21,10 @@ use datafusion::physical_plan::{
     PlanProperties, ReplaceChildrenOptions, apply_expression_roots,
 };
 use futures::StreamExt;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::shuffle::{
+    DEFAULT_SHUFFLE_WRITE_BUFFER_SIZE, ShuffleWriteConfig,
+};
 
 use crate::plan::shuffle_buffer::{Round, ShuffleBuffer};
 use crate::stream::writer::{TaskStreamSink, TaskStreamWriteState, TaskStreamWriter};
@@ -85,11 +89,6 @@ impl Display for ShufflePartitioning {
             Self::RoundRobinRow(partitions) => write!(f, "RoundRobinRow({partitions})"),
         }
     }
-}
-
-/// Returns the bytes of rows that a shuffle write holds before it writes every channel.
-fn flush_budget(_channels: usize) -> usize {
-    8 * 1024 * 1024
 }
 
 // [CREDIT]: https://github.com/apache/datafusion/blob/cce6374e6256b3b8892ec60674578cf32bc3a32c/datafusion/physical-plan/src/repartition/mod.rs#L940-L1010
@@ -437,6 +436,10 @@ impl ExecutionPlan for ShuffleWriteExec {
     ) -> Result<SendableRecordBatchStream> {
         let writer = self.writer.clone();
         let batch_size = context.session_config().batch_size();
+        let buffer_size = context
+            .extension::<ShuffleWriteConfig>()
+            .map(|config| config.buffer_size())
+            .unwrap_or(DEFAULT_SHUFFLE_WRITE_BUFFER_SIZE);
         let stream = self.plan.execute(partition, context)?;
         let num_input_partitions = self
             .plan
@@ -450,7 +453,7 @@ impl ExecutionPlan for ShuffleWriteExec {
             &stream.schema(),
             channels,
             batch_size,
-            flush_budget(channels),
+            buffer_size,
             matches!(router, Router::Batch { .. }),
         )?;
         // The rows of unbounded input are written as they arrive.
@@ -1934,7 +1937,8 @@ mod tests {
     /// of the write, which does not make each batch fill the budget.
     #[tokio::test]
     async fn hash_shuffle_holds_input_batches_that_share_a_large_buffer() -> Result<()> {
-        const BATCHES: usize = 16;
+        // Twice the megabytes of the budget.
+        const BATCHES: usize = 2 * DEFAULT_SHUFFLE_WRITE_BUFFER_SIZE / (BATCH_ROWS * LEN);
         const BATCH_ROWS: usize = 1024;
         const LEN: usize = 1024;
         let text: String = (0..BATCHES * BATCH_ROWS)
@@ -1968,6 +1972,36 @@ mod tests {
         Ok(())
     }
 
+    /// The rows are held up to the buffer size of the session.
+    #[tokio::test]
+    async fn hash_shuffle_holds_rows_up_to_the_buffer_size_of_the_session() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let input = (0..8)
+            .map(|i| {
+                let a = Int64Array::from_iter_values(i * 1000..(i + 1) * 1000);
+                Ok(RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // The rows of each input batch take 8000 bytes.
+        for (buffer_size, writes) in [(None, 1), (Some(0), 1), (Some(16000), 4), (Some(1), 8)] {
+            let capture = Arc::new(Mutex::new(Capture::default()));
+            let writer = Arc::new(CaptureWriter {
+                capture: Arc::clone(&capture),
+                state: TaskStreamWriteState::Active,
+            });
+            let partitioning = hash(&schema, "a", CHANNELS)?;
+            let exec = ShuffleWriteExec::new(stream(&input, false)?, writer, partitioning);
+            let mut config = SessionConfig::new();
+            if let Some(buffer_size) = buffer_size {
+                config = config.with_extension(Arc::new(ShuffleWriteConfig::new(buffer_size)));
+            }
+            let context = TaskContext::default().with_session_config(config);
+            collect(exec.execute(0, Arc::new(context))?).await?;
+            assert_eq!(capture.lock().await.writes, writes, "{buffer_size:?}");
+        }
+        Ok(())
+    }
+
     /// An input batch larger than the budget of the write is written apart from the rows
     /// held before it. The string offsets of an output batch then overflow only if those
     /// of an input batch do.
@@ -1985,8 +2019,9 @@ mod tests {
                 vec![Arc::new(k), Arc::new(s)],
             )?)
         };
-        // 1 MiB, 12 MiB, and 1 MiB of strings, all for one channel.
-        let input = vec![batch(1000, 1024)?, batch(3000, 4096)?, batch(1000, 1024)?];
+        // 1 MiB of strings, more of them than the budget, and 1 MiB, all for one channel.
+        let len = DEFAULT_SHUFFLE_WRITE_BUFFER_SIZE / 3000 + 1024;
+        let input = vec![batch(1000, 1024)?, batch(3000, len)?, batch(1000, 1024)?];
         let capture = assert_shuffle_compact(stream(&input, false)?, &input, "k", 2, true).await?;
         let rows: Vec<usize> = capture
             .channels
