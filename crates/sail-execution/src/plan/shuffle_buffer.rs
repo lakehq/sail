@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{
     Array, ArrayData, ArrayRef, ArrowPrimitiveType, AsArray, BooleanBufferBuilder, ByteView,
-    GenericByteViewArray, PrimitiveArray, UInt32Array, downcast_primitive,
+    GenericByteViewArray, MAX_INLINE_VIEW_LEN, PrimitiveArray, UInt32Array, downcast_primitive,
 };
 use datafusion::arrow::buffer::{Buffer, NullBuffer};
 use datafusion::arrow::compute::{concat, take_arrays};
@@ -15,7 +15,7 @@ use datafusion::arrow::datatypes::{
     BinaryViewType, ByteViewType, DataType, Schema, SchemaRef, StringViewType,
 };
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion::common::Result;
+use datafusion::common::{HashMap, Result};
 
 use crate::plan::shuffle_compact::{
     contains_dictionary, contains_list_view, copy, dictionary_capacities, dictionary_sizes,
@@ -27,9 +27,6 @@ macro_rules! primitive_runs {
         copy_primitives::<$t>($held, $column, $runs, $rows)
     };
 }
-
-/// Views of strings at most this long hold them inline rather than in a data buffer.
-const MAX_INLINE_VIEW_LEN: u32 = 12;
 
 /// The batches of one write to the sink, each with its channel.
 pub(super) type Round = Vec<(usize, RecordBatch)>;
@@ -103,7 +100,7 @@ pub(super) struct ShuffleBuffer {
     views: Vec<Option<ViewBytes>>,
     /// The buffers that the held batches share with each other or with their input.
     shared: HashSet<usize>,
-    /// One counter per channel, for grouping rows and pieces by channel.
+    /// One counter per channel, for grouping the pieces by channel.
     counts: Vec<u32>,
     /// The columns with dictionaries or list views, whose pieces keep the values of
     /// the whole batch.
@@ -224,7 +221,10 @@ impl ShuffleBuffer {
         flush: bool,
     ) -> Result<Vec<Round>> {
         let before = self.held_bytes();
-        self.count(&columns);
+        // A large batch is written at once, whatever it holds.
+        if !large {
+            self.count(&columns);
+        }
         let first = self.held.len();
         self.held.push(Held {
             schema,
@@ -349,8 +349,8 @@ impl ShuffleBuffer {
             start = held.pieces_end;
         }
         // Strings that several views point at would be copied once for each view, so
-        // the strings of a view column are copied directly only if no more bytes are
-        // referenced than the buffers have.
+        // the strings of a view column are copied without looking for them among those
+        // already copied only if no more bytes are referenced than the buffers have.
         let direct: Vec<bool> = self
             .views
             .iter()
@@ -496,8 +496,14 @@ impl ShuffleBuffer {
                     DataType::Utf8View if direct[column] => {
                         copy_views::<StringViewType>(held, column, runs, rows)
                     }
+                    DataType::Utf8View => {
+                        copy_shared_views::<StringViewType>(held, column, runs, rows)
+                    }
                     DataType::BinaryView if direct[column] => {
                         copy_views::<BinaryViewType>(held, column, runs, rows)
+                    }
+                    DataType::BinaryView => {
+                        copy_shared_views::<BinaryViewType>(held, column, runs, rows)
                     }
                     _ => {
                         let compacted = self.compacted.iter().position(|&c| c == column);
@@ -715,6 +721,66 @@ fn copy_views<T: ByteViewType>(
         }
     }
     let nulls = copy_nulls(held, column, runs, rows);
+    Ok(view_array::<T>(views, data, nulls))
+}
+
+/// Copies the views of the runs, and each of the strings they point at once, into one
+/// new buffer.
+fn copy_shared_views<T: ByteViewType>(
+    held: &[Held],
+    column: usize,
+    runs: &[Run],
+    rows: usize,
+) -> Result<ArrayRef> {
+    let mut views: Vec<u128> = Vec::with_capacity(rows);
+    // Where each string goes in the new buffer, by its address and length.
+    let mut offsets: HashMap<(usize, u32), usize> = HashMap::new();
+    let mut strings: Vec<&[u8]> = vec![];
+    let mut bytes = 0;
+    for run in runs {
+        let array = run_column(held, column, run).as_byte_view::<T>();
+        let buffers = array.data_buffers();
+        for (i, &view) in array.views()[run.range()].iter().enumerate() {
+            if view as u32 <= MAX_INLINE_VIEW_LEN {
+                views.push(view);
+            } else if array.is_null(run.start as usize + i) {
+                views.push(0);
+            } else {
+                let mut view = ByteView::from(view);
+                let start = view.offset as usize;
+                let end = start + view.length as usize;
+                let string = &buffers[view.buffer_index as usize][start..end];
+                let offset = *offsets
+                    .entry((string.as_ptr() as usize, view.length))
+                    .or_insert_with(|| {
+                        strings.push(string);
+                        bytes += string.len();
+                        bytes - string.len()
+                    });
+                view.buffer_index = 0;
+                view.offset = offset as u32;
+                views.push(view.as_u128());
+            }
+        }
+    }
+    if bytes > i32::MAX as usize {
+        // The strings do not fit in one buffer.
+        return concat_runs(held, column, runs, None);
+    }
+    let mut data: Vec<u8> = Vec::with_capacity(bytes);
+    for string in strings {
+        data.extend_from_slice(string);
+    }
+    let nulls = copy_nulls(held, column, runs, rows);
+    Ok(view_array::<T>(views, data, nulls))
+}
+
+/// Makes a view array of views that point at the strings in `data`.
+fn view_array<T: ByteViewType>(
+    views: Vec<u128>,
+    data: Vec<u8>,
+    nulls: Option<NullBuffer>,
+) -> ArrayRef {
     let buffers = if data.is_empty() {
         vec![]
     } else {
@@ -723,8 +789,7 @@ fn copy_views<T: ByteViewType>(
     // SAFETY: Each view is an inline view of a valid array, the view of a null row, or
     // the view of a whole string of a valid array, with its length and prefix, at the
     // offset that the string was copied to.
-    let array = unsafe { GenericByteViewArray::<T>::new_unchecked(views.into(), buffers, nulls) };
-    Ok(Arc::new(array))
+    Arc::new(unsafe { GenericByteViewArray::<T>::new_unchecked(views.into(), buffers, nulls) })
 }
 
 /// Copies the rows of the runs of a column of any type into one array, from the pieces
@@ -750,7 +815,7 @@ fn concat_runs(
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::Int64Array;
+    use datafusion::arrow::array::{Int64Array, StringViewArray};
     use datafusion::arrow::datatypes::Field;
 
     use super::*;
@@ -776,6 +841,38 @@ mod tests {
         let rounds = buffer.flush()?;
         assert_eq!(rounds.len(), 1);
         assert_eq!(rounds[0].len(), 400);
+        Ok(())
+    }
+
+    /// A whole batch of more than half the batch size is written as it is, after the
+    /// batches held before it.
+    #[test]
+    fn large_whole_batch_is_passed_on_as_it_is() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, false),
+            Field::new("s", DataType::Utf8View, false),
+        ]));
+        let batch = |rows: usize| {
+            let k = Int64Array::from_iter_values(0..rows as i64);
+            let s = StringViewArray::from_iter_values(
+                (0..rows).map(|row| format!("a string too long to inline {row}")),
+            );
+            // The strings are in a buffer of their size.
+            let s = s.gc();
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k), Arc::new(s)])
+        };
+        let mut buffer = ShuffleBuffer::try_new(&schema, 2, 8, usize::MAX, true)?;
+        assert!(buffer.push_batch(0, batch(2)?, false)?.is_empty());
+        let large = batch(8)?;
+        let rounds = buffer.push_batch(1, large.clone(), false)?;
+        assert_eq!(buffer.held_bytes(), 0);
+        let written: Vec<_> = rounds.into_iter().flatten().collect();
+        assert_eq!(written.len(), 2);
+        assert_eq!((written[0].0, written[0].1.num_rows()), (0, 2));
+        assert_eq!(written[1].0, 1);
+        for (column, input) in written[1].1.columns().iter().zip(large.columns()) {
+            assert!(Arc::ptr_eq(column, input));
+        }
         Ok(())
     }
 }
