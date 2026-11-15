@@ -44,10 +44,8 @@ mod mixed_numeric;
 mod offset;
 mod partition_sensitive;
 mod projection_pushdown;
-mod requirements;
 mod scan_partitions;
 mod select_semi_join_build_side;
-mod tail;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
@@ -60,7 +58,6 @@ pub fn get_physical_optimizers(
 ) -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
     let mut rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![];
 
-    rules.push(Arc::new(tail::PreserveTailInputOrder));
     rules.push(Arc::new(OutputRequirements::new_add_mode()));
     // FIXME: DataFusion's CAST statistics can retain invalid exact bounds/null
     // counts. Fix their propagation for non-order-preserving and fallible casts.

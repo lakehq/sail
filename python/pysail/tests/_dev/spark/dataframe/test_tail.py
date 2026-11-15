@@ -5,6 +5,7 @@ import random
 
 import pytest
 from pyspark.errors import PySparkException
+from pyspark.sql import functions as sf
 
 
 @pytest.mark.parametrize(
@@ -32,6 +33,13 @@ def test_negative_tail(spark):
 def test_tail_of_empty_input(spark):
     assert spark.range(0).tail(3) == []
     assert spark.range(0, 10, 1, 3).where("id < 0").tail(3) == []
+
+
+def test_zero_tail_does_not_evaluate_subqueries(spark):
+    df = spark.sql("SELECT id, (SELECT id FROM range(2)) AS x FROM range(3)")
+    assert df.tail(0) == []
+    with pytest.raises(PySparkException, match="more than one row"):
+        df.tail(1)
 
 
 def test_tail_of_sorted_input(spark):
@@ -95,6 +103,23 @@ def test_tail_preserves_hidden_sort_over_multiple_batches(spark, partitions):
     )
     for count in [17, 9000]:
         assert [row.payload for row in df.tail(count)] == [f"row-{i}" for i in range(count - 1, -1, -1)]
+
+
+@pytest.mark.parametrize("partitions", [1, 4])
+def test_tail_preserves_hidden_sort_expression_and_limit(spark, partitions):
+    df = spark.range(0, 20000, 1, partitions)
+    by_expression = df.orderBy((df.id % 1000).desc(), df.id.asc()).selectExpr("cast(id as string) AS payload")
+    assert [row.payload for row in by_expression.tail(3)] == ["17000", "18000", "19000"]
+    limited = df.orderBy(df.id.desc()).limit(15000).selectExpr("cast(id as string) AS payload")
+    assert [row.payload for row in limited.tail(3)] == ["5002", "5001", "5000"]
+
+
+@pytest.mark.parametrize("partitions", [1, 4])
+def test_tail_preserves_hidden_random_sort(spark, partitions):
+    ordered = spark.range(0, 20000, 1, partitions).orderBy(sf.rand(7))
+    expected = [str(row.id) for row in ordered.collect()][-17:]
+    df = ordered.selectExpr("cast(id as string) AS payload")
+    assert [row.payload for row in df.tail(17)] == expected
 
 
 def test_tail_evaluates_projected_rows_outside_the_suffix(spark):

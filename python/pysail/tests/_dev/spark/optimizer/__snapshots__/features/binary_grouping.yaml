@@ -295,15 +295,6 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Binary]
 
 
-    physical_plan after PreserveTailInputOrder:
-    ProjectionExec: expr=[CAST(CAST(#2@0 ||  AS BinaryView) AS Binary) as #2]
-      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
-        AggregateExec: mode=Partial, gby=[CAST(#2@0 AS LargeBinary) as #2], aggr=[]
-          ProjectionExec: expr=[#1@0 as #2]
-            ProjectionExec: expr=[column1@0 as #1]
-              DataSourceExec: partitions=1, partition_sizes=[1]
-
-
     physical_plan after OutputRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[CAST(CAST(#2@0 ||  AS BinaryView) AS Binary) as #2]
