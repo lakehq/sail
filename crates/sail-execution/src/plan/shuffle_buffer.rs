@@ -9,8 +9,8 @@ use datafusion::arrow::array::{
     Array, ArrayData, ArrayRef, ArrowPrimitiveType, AsArray, BooleanBufferBuilder, ByteView,
     GenericByteViewArray, MAX_INLINE_VIEW_LEN, PrimitiveArray, UInt32Array, downcast_primitive,
 };
-use datafusion::arrow::buffer::{Buffer, NullBuffer};
-use datafusion::arrow::compute::{concat, take_arrays};
+use datafusion::arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
+use datafusion::arrow::compute::{concat, take};
 use datafusion::arrow::datatypes::{
     BinaryViewType, ByteViewType, DataType, Schema, SchemaRef, StringViewType,
 };
@@ -219,9 +219,11 @@ impl ShuffleBuffer {
             }
         }
         let pieces = &self.pieces[first..];
-        let (columns, own) = take_arrays(batch.columns(), &UInt32Array::from(order), None)?
-            .into_iter()
-            .map(|column| detach(column, pieces))
+        let order = UInt32Array::from(order);
+        let (columns, own) = batch
+            .columns()
+            .iter()
+            .map(|column| reorder(column, &order, pieces))
             .collect::<Result<_>>()?;
         self.push(batch.schema(), columns, own, batch.num_rows(), false, flush)
     }
@@ -575,13 +577,169 @@ fn detach(column: ArrayRef, pieces: &[Piece]) -> Result<(ArrayRef, u32)> {
     if column.data_type().is_primitive() || !sparse(&data) {
         return Ok((column, 0));
     }
-    // The strings of a piece have to fit in one buffer.
-    let fits = |data: &ArrayData| referenced_bytes(data) <= i32::MAX as usize;
     match column.data_type() {
         DataType::Utf8View if fits(&data) => Ok(split_views::<StringViewType>(&column, pieces)),
         DataType::BinaryView if fits(&data) => Ok(split_views::<BinaryViewType>(&column, pieces)),
         _ => Ok((trim(column, false)?, 0)),
     }
+}
+
+/// Returns whether the strings that the views of an array point at fit in one buffer,
+/// as the strings of a piece have to.
+fn fits(data: &ArrayData) -> bool {
+    referenced_bytes(data) <= i32::MAX as usize
+}
+
+/// Returns the rows of a column of an input batch in the given order, in which the rows
+/// of each of the `pieces` follow each other, compacted like `detach` compacts a held
+/// column. Also returns how many of the first data buffers of the column have the
+/// strings of one piece each.
+fn reorder(column: &ArrayRef, order: &UInt32Array, pieces: &[Piece]) -> Result<(ArrayRef, u32)> {
+    let views = matches!(
+        column.data_type(),
+        DataType::Utf8View | DataType::BinaryView
+    );
+    if views && order.len() == column.len() {
+        // The rows of a column of views use the same strings in any order.
+        let data = column.to_data();
+        if !sparse(&data) {
+            return Ok((take(column, order, None)?, 0));
+        }
+        let placed = match column.data_type() {
+            _ if !fits(&data) => None,
+            DataType::Utf8View => place_views::<StringViewType>(column, order, pieces),
+            _ => place_views::<BinaryViewType>(column, order, pieces),
+        };
+        if let Some(placed) = placed {
+            return Ok(placed);
+        }
+    }
+    detach(take(column, order, None)?, pieces)
+}
+
+/// Where the next string of a piece goes: to the end of the buffer of the piece, or to
+/// an offset in the buffer that the pieces with few strings share.
+#[derive(Clone, Copy)]
+enum Cursor {
+    Own(u32),
+    Shared(u32),
+}
+
+/// Where a row of an input batch goes: the piece it is in, and its place in the order.
+#[derive(Clone, Copy)]
+struct Place {
+    piece: u32,
+    row: u32,
+}
+
+/// Does what `take` and then `split_views` do, for a column whose rows in each piece point
+/// at strings that follow each other in the buffers without overlapping, so that none of
+/// them is shared. Returns `None` for any other column, or if `order` does not have
+/// every row of the column once.
+///
+/// The strings are copied in the order of the rows of the input rather than piece by
+/// piece. That is the order in which they are in the buffers of a column whose rows have
+/// only been filtered or sliced, and reading a large buffer in order is several times
+/// faster than visiting it once for each piece.
+fn place_views<T: ByteViewType>(
+    column: &ArrayRef,
+    order: &UInt32Array,
+    pieces: &[Piece],
+) -> Option<(ArrayRef, u32)> {
+    const NONE: Place = Place {
+        piece: u32::MAX,
+        row: 0,
+    };
+    let order = order.values();
+    let array = column.as_byte_view::<T>();
+    let buffers = array.data_buffers();
+    let source = array.views();
+    let nulls = array.nulls().filter(|nulls| nulls.null_count() > 0);
+    let mut places = vec![NONE; array.len()];
+    let mut cursors: Vec<Cursor> = Vec::with_capacity(pieces.len());
+    let mut own: Vec<Vec<u8>> = vec![];
+    // The bytes of the strings of the pieces that have no buffer of their own.
+    let mut rest = 0;
+    for (i, piece) in pieces.iter().enumerate() {
+        let start = piece.start as usize;
+        let end = pieces
+            .get(i + 1)
+            .map_or(order.len(), |next| next.start as usize);
+        let mut bytes = 0;
+        // The buffer and offset after the last string of the piece so far.
+        let mut last = 0;
+        for (row, &source_row) in order[start..end].iter().enumerate() {
+            let place = places.get_mut(source_row as usize)?;
+            // Each row of the input is placed once.
+            let mut ordered = place.piece == u32::MAX;
+            *place = Place {
+                piece: i as u32,
+                row: (start + row) as u32,
+            };
+            let view = source[source_row as usize];
+            let len = view as u32;
+            if len > MAX_INLINE_VIEW_LEN && nulls.is_none_or(|n| n.is_valid(source_row as usize)) {
+                let view = ByteView::from(view);
+                let at = (view.buffer_index as u64) << 32 | view.offset as u64;
+                ordered &= at >= last;
+                last = at + len as u64;
+                bytes += len as usize;
+            }
+            if !ordered {
+                return None;
+            }
+        }
+        if bytes >= OWN_BUFFER_BYTES {
+            cursors.push(Cursor::Own(own.len() as u32));
+            own.push(Vec::with_capacity(bytes));
+        } else {
+            cursors.push(Cursor::Shared(rest as u32));
+            rest += bytes;
+        }
+    }
+    let owned = own.len() as u32;
+    let mut shared = vec![0u8; rest];
+    let mut views = vec![0u128; order.len()];
+    for (row, (&view, place)) in source.iter().zip(&places).enumerate() {
+        if view as u32 <= MAX_INLINE_VIEW_LEN {
+            views[place.row as usize] = view;
+        } else if nulls.is_none_or(|nulls| nulls.is_valid(row)) {
+            let mut view = ByteView::from(view);
+            let from = view.offset as usize;
+            let len = view.length as usize;
+            let string = &buffers[view.buffer_index as usize][from..from + len];
+            match &mut cursors[place.piece as usize] {
+                Cursor::Own(buffer) => {
+                    let data = &mut own[*buffer as usize];
+                    view.buffer_index = *buffer;
+                    view.offset = data.len() as u32;
+                    data.extend_from_slice(string);
+                }
+                Cursor::Shared(offset) => {
+                    let to = *offset as usize;
+                    shared[to..to + len].copy_from_slice(string);
+                    view.buffer_index = owned;
+                    view.offset = *offset;
+                    *offset += len as u32;
+                }
+            }
+            views[place.row as usize] = view.as_u128();
+        }
+    }
+    let nulls = nulls.map(|nulls| {
+        NullBuffer::new(BooleanBuffer::collect_bool(order.len(), |row| {
+            nulls.is_valid(order[row] as usize)
+        }))
+    });
+    let mut own: Vec<Buffer> = own.into_iter().map(Buffer::from_vec).collect();
+    if !shared.is_empty() {
+        own.push(Buffer::from_vec(shared));
+    }
+    // SAFETY: Each view is an inline view of a valid array, the view of a null row, or
+    // the view of a whole string of a valid array, with its length and prefix, in the
+    // buffer and at the offset that the string was copied to.
+    let array = unsafe { GenericByteViewArray::<T>::new_unchecked(views.into(), own, nulls) };
+    Some((Arc::new(array), owned))
 }
 
 /// Copies the views of a column, and each of the strings that the views of a piece point
@@ -831,6 +989,15 @@ fn copy_views<T: ByteViewType>(
         let own = own_buffers(held, column, run);
         // The strings of a run that have a buffer of its own are all in the same one.
         let mut kept_index = None;
+        // Strings that follow each other are copied at once, to here.
+        let range = match own {
+            0 => adjacent_strings(array, run),
+            _ => None,
+        };
+        let moved = data.len();
+        if let Some((buffer, range)) = &range {
+            data.extend_from_slice(&buffers[*buffer as usize][range.clone()]);
+        }
         for (i, &view) in array.views()[run.range()].iter().enumerate() {
             if view as u32 <= MAX_INLINE_VIEW_LEN {
                 views.push(view);
@@ -843,6 +1010,9 @@ fn copy_views<T: ByteViewType>(
                         kept.push(buffers[view.buffer_index as usize].clone());
                         first_kept + kept.len() as u32 - 1
                     });
+                } else if let Some((_, range)) = &range {
+                    view.buffer_index = 0;
+                    view.offset = (moved + view.offset as usize - range.start) as u32;
                 } else {
                     let start = view.offset as usize;
                     let end = start + view.length as usize;
@@ -857,6 +1027,29 @@ fn copy_views<T: ByteViewType>(
     }
     let nulls = copy_nulls(held, column, runs, rows);
     Ok(view_array::<T>(views, data, kept, nulls))
+}
+
+/// Returns the buffer and the range of the strings of a run if each of them starts where
+/// the one before it ends, as the strings that were copied when their batch arrived do.
+fn adjacent_strings<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    run: &Run,
+) -> Option<(u32, Range<usize>)> {
+    let nulls = array.nulls().filter(|nulls| nulls.null_count() > 0);
+    let mut strings: Option<(u32, Range<usize>)> = None;
+    for (i, &view) in array.views()[run.range()].iter().enumerate() {
+        let valid = nulls.is_none_or(|nulls| nulls.is_valid(run.start as usize + i));
+        if view as u32 > MAX_INLINE_VIEW_LEN && valid {
+            let view = ByteView::from(view);
+            let start = view.offset as usize;
+            let (buffer, range) = strings.get_or_insert((view.buffer_index, start..start));
+            if view.buffer_index != *buffer || start != range.end {
+                return None;
+            }
+            range.end += view.length as usize;
+        }
+    }
+    strings
 }
 
 /// Copies the views of the runs, and each of the strings they point at once, into one
@@ -956,6 +1149,7 @@ mod tests {
     use datafusion::arrow::datatypes::Field;
     use datafusion::arrow::ipc::reader::StreamReader;
     use datafusion::arrow::ipc::writer::StreamWriter;
+    use datafusion::common::DataFusionError;
 
     use super::*;
 
@@ -1146,6 +1340,167 @@ mod tests {
             let expected = dealt_strings(&shared, 3 * 256, channel, string);
             assert_eq!(channel_strings(&rounds, channel), expected);
         }
+        Ok(())
+    }
+
+    /// Strings that do not follow each other in the buffer are copied once as well.
+    #[test]
+    fn sparse_view_strings_in_any_order_are_copied_once() -> Result<()> {
+        let string = |row: usize| 5000 - row;
+        let (held, shared, rounds) = deal_shared_views(3, 256, 8192, string)?;
+        assert_eq!(held, 3 * 256 * (16 + STRING_BYTES));
+        for buffers in owned_strings(&shared, &rounds) {
+            let bytes: Vec<usize> = buffers.iter().map(Buffer::len).collect();
+            assert_eq!(bytes, vec![128 * STRING_BYTES; 3]);
+        }
+        for channel in 0..2 {
+            let expected = dealt_strings(&shared, 3 * 256, channel, string);
+            assert_eq!(channel_strings(&rounds, channel), expected);
+        }
+        Ok(())
+    }
+
+    /// Returns a column of views with nulls, short strings, and long strings that are few
+    /// in two large buffers and follow each other there.
+    fn mixed_views(rows: usize) -> Result<ArrayRef> {
+        let buffers = vec![shared_buffer(), shared_buffer()];
+        let views: Vec<u128> = (0..rows)
+            .map(|row| {
+                let buffer = usize::from(row >= rows / 2);
+                let offset = STRING_BYTES * row;
+                let len = if row % 5 == 1 {
+                    7
+                } else {
+                    STRING_BYTES - row % 3
+                };
+                let string = &buffers[buffer][offset..offset + len];
+                make_view(string, buffer as u32, offset as u32)
+            })
+            .collect();
+        let nulls = NullBuffer::from((0..rows).map(|row| row % 5 != 0).collect::<Vec<_>>());
+        let array = StringViewArray::try_new(views.into(), buffers, Some(nulls))?;
+        Ok(Arc::new(array))
+    }
+
+    /// Returns the channel of a row of `mixed_views`: two channels with many strings, one
+    /// with few, and one with short strings only.
+    fn mixed_channel(row: usize) -> usize {
+        match row % 50 {
+            2 => 2,
+            1 => 3,
+            _ => row % 2,
+        }
+    }
+
+    /// Returns the rows of each of four channels, the order that has them one channel
+    /// after the other, and the pieces of the order.
+    fn mixed_order(rows: usize) -> (Vec<Vec<u32>>, UInt32Array, Vec<Piece>) {
+        let mut channels = vec![vec![]; 4];
+        for row in 0..rows {
+            channels[mixed_channel(row)].push(row as u32);
+        }
+        let mut order = vec![];
+        let mut pieces = vec![];
+        for (channel, rows) in channels.iter().enumerate() {
+            pieces.push(Piece {
+                channel: channel as u32,
+                start: order.len() as u32,
+            });
+            order.extend_from_slice(rows);
+        }
+        (channels, UInt32Array::from(order), pieces)
+    }
+
+    fn placed_views<T: ByteViewType>(
+        column: &ArrayRef,
+        order: &UInt32Array,
+        pieces: &[Piece],
+    ) -> Result<(ArrayRef, u32)> {
+        place_views::<T>(column, order, pieces)
+            .ok_or_else(|| DataFusionError::Internal("the strings were not placed".to_string()))
+    }
+
+    /// Placing the strings of a column in the order of its rows gives what taking the
+    /// rows in the order of the pieces and then copying the strings of each piece does.
+    #[test]
+    fn views_are_placed_as_they_are_taken_and_split() -> Result<()> {
+        let column = mixed_views(600)?;
+        let (_, order, pieces) = mixed_order(600);
+        let (placed, own) = placed_views::<StringViewType>(&column, &order, &pieces)?;
+        let taken = take(&column, &order, None)?;
+        let (split, split_own) = split_views::<StringViewType>(&taken, &pieces);
+        // The two channels with many strings have a buffer each.
+        assert_eq!((own, split_own), (2, 2));
+        assert_eq!(placed.to_data(), split.to_data());
+        let placed = placed.as_string_view();
+        let split = split.as_string_view();
+        assert_eq!(placed.views(), split.views());
+        assert_eq!(placed.data_buffers(), split.data_buffers());
+        assert_eq!(placed.data_buffers().len(), 3);
+        let binary = column.as_string_view().clone().to_binary_view();
+        let column: ArrayRef = Arc::new(binary);
+        let (placed, own) = placed_views::<BinaryViewType>(&column, &order, &pieces)?;
+        assert_eq!(own, 2);
+        assert_eq!(placed.as_binary_view().views(), split.views());
+        assert_eq!(placed.as_binary_view().data_buffers(), split.data_buffers());
+        Ok(())
+    }
+
+    /// Strings are not placed in the order of the rows if rows of a piece share a string
+    /// or have their strings in another order, nor if a row is not in the order once.
+    #[test]
+    fn views_are_not_placed_unless_each_string_is_copied_once() -> Result<()> {
+        let shared = shared_buffer();
+        let piece = [Piece {
+            channel: 0,
+            start: 0,
+        }];
+        let place = |string: fn(usize) -> usize, order: Vec<u32>| -> Result<bool> {
+            let batch = shared_views(&shared, 4, string)?;
+            let order = UInt32Array::from(order);
+            Ok(place_views::<StringViewType>(batch.column(0), &order, &piece).is_some())
+        };
+        assert!(place(|row| row, vec![0, 1, 2, 3])?);
+        assert!(place(|row| 2 * row, vec![0, 1, 2, 3])?);
+        // A shared string, and strings in another order than the rows.
+        assert!(!place(|row| row / 2, vec![0, 1, 2, 3])?);
+        assert!(!place(|row| 3 - row, vec![0, 1, 2, 3])?);
+        assert!(!place(|row| row, vec![0, 2, 1, 3])?);
+        // A row twice, and a row that the column does not have.
+        assert!(!place(|row| row, vec![0, 1, 1, 3])?);
+        assert!(!place(|row| row, vec![0, 1, 2, 4])?);
+        Ok(())
+    }
+
+    /// Nulls, short strings and strings of several buffers are written to their channels,
+    /// in batches that hold no more than their strings.
+    #[test]
+    fn sparse_view_strings_with_nulls_and_short_strings_are_written() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8View, true)]));
+        // The three pieces of each of the first two channels have more rows than a batch.
+        let mut buffer = ShuffleBuffer::try_new(&schema, 4, 500, usize::MAX, false)?;
+        let mut expected: Vec<Vec<Option<String>>> = vec![vec![]; 4];
+        for _ in 0..3 {
+            let column = mixed_views(600)?;
+            let (mut channels, _, _) = mixed_order(600);
+            for (row, value) in column.as_string_view().iter().enumerate() {
+                expected[mixed_channel(row)].push(value.map(str::to_string));
+            }
+            let batch = RecordBatch::try_new(Arc::clone(&schema), vec![column])?;
+            assert!(buffer.push_rows(batch, &mut channels, false)?.is_empty());
+        }
+        let rounds = buffer.flush()?;
+        assert_eq!(rounds.len(), 2);
+        let mut written: Vec<Vec<Option<String>>> = vec![vec![]; 4];
+        for (channel, batch) in rounds.iter().flatten() {
+            let strings = batch.column(0).as_string_view();
+            written[*channel].extend(strings.iter().map(|value| value.map(str::to_string)));
+            let long = strings.iter().flatten().filter(|value| value.len() > 12);
+            let bytes: usize = long.map(str::len).sum();
+            let held: usize = strings.data_buffers().iter().map(Buffer::capacity).sum();
+            assert_eq!(held, bytes);
+        }
+        assert_eq!(written, expected);
         Ok(())
     }
 
