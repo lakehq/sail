@@ -340,3 +340,43 @@ def celeborn_push_endpoint_resolver(
         }
         | {(name, 12002): (worker.host, worker.fetch_port) for name, worker in celeborn_workers.items()}
     )
+
+
+@pytest.fixture
+def celeborn_fetch_proxies(
+    celeborn_workers: dict[str, WorkerService],
+    celeborn_frame_codec: CelebornCodec,
+) -> Generator[dict[str, EndpointProxy], None, None]:
+    """Forward worker fetch traffic through general purpose endpoint proxies."""
+    proxies = {
+        name: EndpointProxy(
+            name=f"{name}:fetch",
+            target_host=worker.host,
+            target_port=worker.fetch_port,
+            codec=celeborn_frame_codec,
+        )
+        for name, worker in celeborn_workers.items()
+    }
+    for proxy in proxies.values():
+        proxy.start()
+    try:
+        yield proxies
+    finally:
+        for proxy in proxies.values():
+            proxy.close()
+
+
+@pytest.fixture
+def celeborn_fetch_endpoint_resolver(
+    celeborn_workers: dict[str, WorkerService],
+    celeborn_fetch_proxies: dict[str, EndpointProxy],
+) -> object:
+    """Resolve worker fetch endpoints through the general purpose fetch proxies."""
+    return _celeborn_endpoint_resolver(
+        {
+            (name, port): (worker.host, mapped_port)
+            for name, worker in celeborn_workers.items()
+            for port, mapped_port in [(12000, worker.rpc_port), (12001, worker.push_port)]
+        }
+        | {(name, 12002): (proxy.host, proxy.port) for name, proxy in celeborn_fetch_proxies.items()}
+    )

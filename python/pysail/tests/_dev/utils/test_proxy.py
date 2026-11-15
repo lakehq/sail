@@ -24,6 +24,7 @@ from pysail.testing._dev.utils.proxy import (
     ProxyCodec,
     ProxyEventStore,
     Replace,
+    ReplaceMany,
     RuleApplied,
 )
 
@@ -153,16 +154,18 @@ def test_event_store_does_not_match_missing_attributes() -> None:
     assert events.count(ConnectionOpened, missing=None) == 0
 
 
-def test_endpoint_proxy_records_frames_and_replaces_a_response() -> None:
+@pytest.mark.parametrize("payloads", [(b"mutated",), (b"first", b"second", b"third")], ids=["replace", "replace-many"])
+def test_endpoint_proxy_records_frames_and_replaces_responses(payloads: tuple[bytes, ...]) -> None:
     codec = _TestCodec()
     upstream = _EchoServer()
     proxy = EndpointProxy("echo", upstream.host, upstream.port, codec=codec)
-    response = _TestFrame(b"mutated")
+    responses = tuple(_TestFrame(payload) for payload in payloads)
+    replacement = Replace(responses[0]) if len(responses) == 1 else ReplaceMany(responses)
     proxy.rules.add(
         FrameRule(
             _TestFrame,
             condition=lambda event: event.direction == "server_to_client",
-            action=lambda _: Replace(response),
+            action=lambda _: replacement,
         )
     )
     upstream.start()
@@ -172,7 +175,8 @@ def test_endpoint_proxy_records_frames_and_replaces_a_response() -> None:
     try:
         with socket.create_connection((proxy.host, proxy.port), timeout=1) as client:
             client.sendall(codec.encode(request))
-            assert _recv_exact(client, len(codec.encode(response))) == codec.encode(response)
+            expected = b"".join(codec.encode(response) for response in responses)
+            assert _recv_exact(client, len(expected)) == expected
 
         _wait_until(lambda: proxy.events.count(FrameReceived) == _FRAME_COUNT)
         assert proxy.events.count(ConnectionAccepted) == 1

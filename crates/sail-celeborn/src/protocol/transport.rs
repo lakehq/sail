@@ -450,14 +450,15 @@ impl Drop for Transaction<'_> {
 }
 
 /// Returns the header of a batch of pushed data, which the shuffle service reads when it
-/// sorts a shuffle file by map index. The fields are in little-endian byte order, as
-/// the shuffle service reads them in the native byte order of its platform.
+/// sorts a shuffle file by map index. The fields use native byte order to match
+/// `Platform.putInt` and `Platform.getInt` in Celeborn. Clients and workers must have
+/// the same endianness.
 pub(crate) fn batch_header(map_id: i32, attempt_id: i32, batch_id: i32, length: i32) -> Vec<u8> {
     let mut header = Vec::with_capacity(16);
-    header.extend_from_slice(&map_id.to_le_bytes());
-    header.extend_from_slice(&attempt_id.to_le_bytes());
-    header.extend_from_slice(&batch_id.to_le_bytes());
-    header.extend_from_slice(&length.to_le_bytes());
+    header.extend_from_slice(&map_id.to_ne_bytes());
+    header.extend_from_slice(&attempt_id.to_ne_bytes());
+    header.extend_from_slice(&batch_id.to_ne_bytes());
+    header.extend_from_slice(&length.to_ne_bytes());
     header
 }
 
@@ -757,94 +758,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_late_reply_to_an_earlier_request_is_skipped() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            // The first request is answered twice, as a worker can do when it fails.
-            TransportFrame::read(&mut socket).await.unwrap();
-            for frame in [
-                response(0, TransportFrameType::RpcFailure, b"failed"),
-                response(0, TransportFrameType::RpcFailure, b"failed again"),
-            ] {
-                frame.write(&mut socket).await.unwrap();
-            }
-            TransportFrame::read(&mut socket).await.unwrap();
-            response(1, TransportFrameType::RpcResponse, b"ok")
-                .write(&mut socket)
-                .await
-                .unwrap();
-        });
-        let connection = TransportConnection::new("127.0.0.1", port, Duration::from_secs(5));
-        assert!(connection.send_rpc(vec![1]).await.is_err());
-        assert_eq!(connection.send_rpc(vec![2]).await.unwrap(), b"ok");
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn a_late_reply_to_an_earlier_request_is_skipped_by_a_push() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            TransportFrame::read(&mut socket).await.unwrap();
-            for frame in [
-                response(0, TransportFrameType::RpcFailure, b"failed"),
-                response(0, TransportFrameType::RpcFailure, b"failed again"),
-            ] {
-                frame.write(&mut socket).await.unwrap();
-            }
-            TransportFrame::read(&mut socket).await.unwrap();
-            response(1, TransportFrameType::RpcResponse, b"")
-                .write(&mut socket)
-                .await
-                .unwrap();
-        });
-        let connection = TransportConnection::new("127.0.0.1", port, Duration::from_secs(5));
-        assert!(connection.send_rpc(vec![1]).await.is_err());
-        connection
-            .push_data("shuffle", "location", 0, 0, 0, b"data")
-            .await
-            .unwrap();
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn a_late_reply_to_a_later_request_is_skipped() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            // The request with ID 1 is sent first and answered twice, and then the request
-            // with ID 0 is answered.
-            TransportFrame::read(&mut socket).await.unwrap();
-            for frame in [
-                response(1, TransportFrameType::RpcResponse, b"one"),
-                response(1, TransportFrameType::RpcFailure, b"failed"),
-            ] {
-                frame.write(&mut socket).await.unwrap();
-            }
-            TransportFrame::read(&mut socket).await.unwrap();
-            response(0, TransportFrameType::RpcResponse, b"zero")
-                .write(&mut socket)
-                .await
-                .unwrap();
-        });
-        let connection = TransportConnection::new("127.0.0.1", port, Duration::from_secs(5));
-        // The request with ID 0 is sent after the request with ID 1.
-        assert_eq!(
-            connection.send_rpc_with_id(1, vec![2]).await.unwrap(),
-            b"one"
-        );
-        assert_eq!(
-            connection.send_rpc_with_id(0, vec![1]).await.unwrap(),
-            b"zero"
-        );
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
     async fn a_request_that_is_dropped_after_it_is_sent_does_not_leave_its_reply() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -895,44 +808,6 @@ mod tests {
         drop(fetch);
         dropped_tx.send(()).unwrap();
         assert_eq!(connection.send_rpc(vec![1]).await.unwrap(), b"ok");
-        server.abort();
-    }
-
-    #[tokio::test]
-    async fn a_late_reply_to_an_earlier_request_is_skipped_by_a_chunk_fetch() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            // The OpenStream RPC is answered twice.
-            TransportFrame::read(&mut socket).await.unwrap();
-            for frame in [
-                response(0, TransportFrameType::RpcResponse, b"handle"),
-                response(0, TransportFrameType::RpcFailure, b"failed again"),
-            ] {
-                frame.write(&mut socket).await.unwrap();
-            }
-            let request = TransportFrame::read(&mut socket).await.unwrap();
-            TransportFrame::new(
-                TransportFrameType::ChunkFetchSuccess,
-                request.header.to_vec(),
-                b"chunk".to_vec(),
-            )
-            .write(&mut socket)
-            .await
-            .unwrap();
-            TransportFrame::read(&mut socket).await.unwrap();
-            response(1, TransportFrameType::RpcResponse, b"ok")
-                .write(&mut socket)
-                .await
-                .unwrap();
-        });
-        let connection = TransportConnection::new("127.0.0.1", port, Duration::from_secs(5));
-        assert_eq!(connection.send_rpc(vec![1]).await.unwrap(), b"handle");
-        let fetched = connection.fetch_chunk(1, 0, 0, 5).await;
-        let next = connection.send_rpc(vec![2]).await;
-        assert_eq!(fetched.unwrap(), b"chunk");
-        assert_eq!(next.unwrap(), b"ok");
         server.abort();
     }
 }

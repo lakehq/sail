@@ -121,6 +121,14 @@ class Replace(Generic[FrameT]):
 
 
 @dataclass(frozen=True)
+class ReplaceMany(Generic[FrameT]):
+    """Forward a sequence of replacement frames, optionally after a delay."""
+
+    frames: tuple[FrameT, ...]
+    delay_seconds: float = 0
+
+
+@dataclass(frozen=True)
 class Discard:
     """Do not forward the current frame."""
 
@@ -132,7 +140,7 @@ class Close:
     reason: str
 
 
-Decision = Forward | Replace[Any] | Discard | Close
+Decision = Forward | Replace[Any] | ReplaceMany[Any] | Discard | Close
 
 
 class ProxyRule(ABC):
@@ -322,7 +330,7 @@ class EndpointProxy:
                     )
                 )
                 continue
-            if isinstance(decision, Replace):
+            if isinstance(decision, (Replace, ReplaceMany)):
                 client.close()
                 self.record(
                     ConnectionClosed(
@@ -495,10 +503,13 @@ class EndpointProxyConnection:
                         return
                     if isinstance(decision, Discard):
                         continue
-                    outbound_frame = decision.frame if isinstance(decision, Replace) else frame
+                    if isinstance(decision, ReplaceMany):
+                        outbound_frames = decision.frames
+                    else:
+                        outbound_frames = (decision.frame if isinstance(decision, Replace) else frame,)
                     if decision.delay_seconds:
                         time.sleep(decision.delay_seconds)
-                    destination.sendall(self.proxy.codec.encode(outbound_frame))
+                    destination.sendall(b"".join(self.proxy.codec.encode(frame) for frame in outbound_frames))
         except (OSError, ValueError) as exc:
             if not self._closed.is_set():
                 self.close(f"relay failed: {exc}")
