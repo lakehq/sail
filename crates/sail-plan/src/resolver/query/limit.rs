@@ -69,6 +69,9 @@ impl PlanResolver<'_> {
                  The tail expression must be equal to or greater than 0, but got {limit_num}."
             )));
         };
+        // The tail depends on the order of the input rows, which must be kept
+        // even if a projection hides the sort expressions.
+        let (input, _, _) = Self::require_input_sort_inner(input)?;
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(TailNode::new(Arc::new(input), fetch)),
         }))

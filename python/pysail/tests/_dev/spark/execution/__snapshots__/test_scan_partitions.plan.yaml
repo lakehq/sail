@@ -414,6 +414,16 @@ data:
             DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ProjectionExec: expr=[#1@0 as #5]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
+        ProjectionExec: expr=[#0@0 as #1]
+          RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
+        ProjectionExec: expr=[id@0 as #4]
+          FilterExec: id@0 % 2 = 0
+            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+
+
     physical_plan after OutputRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -953,6 +963,16 @@ data:
         ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
           FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
             DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
+
+
+    physical_plan after PreserveTailInputOrder:
+    ProjectionExec: expr=[#1@0 as #5]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
+        ProjectionExec: expr=[#0@0 as #1]
+          RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
+        ProjectionExec: expr=[id@0 as #4]
+          FilterExec: id@0 % 2 = 0
+            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     physical_plan after OutputRequirements:
@@ -1497,6 +1517,16 @@ data:
             DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ProjectionExec: expr=[#1@0 as #5]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
+        ProjectionExec: expr=[#0@0 as #1]
+          RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
+        ProjectionExec: expr=[id@0 as #4]
+          FilterExec: id@0 % 2 = 0
+            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+
+
     physical_plan after OutputRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -2039,6 +2069,16 @@ data:
             DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ProjectionExec: expr=[#1@0 as #5]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
+        ProjectionExec: expr=[#0@0 as #1]
+          RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
+        ProjectionExec: expr=[id@0 as #4]
+          FilterExec: id@0 % 2 = 0
+            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+
+
     physical_plan after OutputRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -2578,6 +2618,16 @@ data:
         ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
           FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
             DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
+
+
+    physical_plan after PreserveTailInputOrder:
+    ProjectionExec: expr=[#1@0 as #5]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
+        ProjectionExec: expr=[#0@0 as #1]
+          RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
+        ProjectionExec: expr=[id@0 as #4]
+          FilterExec: id@0 % 2 = 0
+            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     physical_plan after OutputRequirements:
@@ -3122,6 +3172,16 @@ data:
             DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ProjectionExec: expr=[#1@0 as #5]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
+        ProjectionExec: expr=[#0@0 as #1]
+          RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
+        ProjectionExec: expr=[id@0 as #4]
+          FilterExec: id@0 % 2 = 0
+            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+
+
     physical_plan after OutputRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -3662,6 +3722,16 @@ data:
         ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
           FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
             DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
+
+
+    physical_plan after PreserveTailInputOrder:
+    ProjectionExec: expr=[#1@0 as #5]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
+        ProjectionExec: expr=[#0@0 as #1]
+          RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
+        ProjectionExec: expr=[id@0 as #4]
+          FilterExec: id@0 % 2 = 0
+            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     physical_plan after OutputRequirements:
@@ -4205,6 +4275,16 @@ data:
             DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ProjectionExec: expr=[#1@0 as #5]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
+        ProjectionExec: expr=[#0@0 as #1]
+          RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
+        ProjectionExec: expr=[id@0 as #4]
+          FilterExec: id@0 % 2 = 0
+            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+
+
     physical_plan after OutputRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -4745,6 +4825,16 @@ data:
         ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
           FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
             DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
+
+
+    physical_plan after PreserveTailInputOrder:
+    ProjectionExec: expr=[#1@0 as #5]
+      HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
+        ProjectionExec: expr=[#0@0 as #1]
+          RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
+        ProjectionExec: expr=[id@0 as #4]
+          FilterExec: id@0 % 2 = 0
+            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     physical_plan after OutputRequirements:

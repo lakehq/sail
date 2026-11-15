@@ -524,6 +524,19 @@ data:
                   DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Int32]
 
 
+    physical_plan after PreserveTailInputOrder:
+    SortExec: expr=[#9@0 ASC], preserve_partitioning=[false]
+      ProjectionExec: expr=[#2@0 as #9, #3@1 as #10]
+        HashJoinExec: mode=Auto, join_type=LeftSemi, on=[(#2@0, #6@1), (#3@1, #8@0)]
+          ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+          ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
+            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
+                  DataSourceExec: partitions=1, partition_sizes=[1]
+
+
     physical_plan after OutputRequirements:
     OutputRequirementExec: order_by=[(#9@0, asc)], dist_by=SinglePartition
       SortExec: expr=[#9@0 ASC], preserve_partitioning=[false]
@@ -1114,6 +1127,19 @@ data:
               AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7)[value]:Int32;N]
                 ProjectionExec: expr=[column1@0 as #6, column2@1 as #7], schema=[#6:Int32, #7:Int32]
                   DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Int32]
+
+
+    physical_plan after PreserveTailInputOrder:
+    SortExec: expr=[#9@0 ASC, #10@1 ASC], preserve_partitioning=[false]
+      ProjectionExec: expr=[#2@0 as #9, #3@1 as #10, #8@2 as #11]
+        HashJoinExec: mode=Auto, join_type=Left, on=[(#2@0, #6@1)]
+          ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+          ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
+            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
+                  DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     physical_plan after OutputRequirements:
@@ -1719,6 +1745,19 @@ data:
               AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7)[value]:Int32;N]
                 ProjectionExec: expr=[column1@0 as #6, column2@1 as #7], schema=[#6:Int32, #7:Int32]
                   DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Int32]
+
+
+    physical_plan after PreserveTailInputOrder:
+    SortExec: expr=[#9@0 ASC], preserve_partitioning=[false]
+      ProjectionExec: expr=[#2@0 as #9, #3@1 as #10, #8@2 as #11]
+        HashJoinExec: mode=Auto, join_type=Left, on=[(#2@0, #6@1)]
+          ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+          ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
+            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
+                  DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     physical_plan after OutputRequirements:
@@ -2576,6 +2615,25 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      SortExec: expr=[#12@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#2@0 as #12, #3@1 as #13]
+          HashJoinExec: mode=Auto, join_type=LeftSemi, on=[(#2@0, #6@1), (#3@1, #11@0)]
+            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+            ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                  ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
+                    DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(u.#9)@0 as #10]
+        AggregateExec: mode=Final, gby=[], aggr=[min(u.#9)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(u.#9)]
+            ProjectionExec: expr=[column1@0 as #9]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
     physical_plan after OutputRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#12@0, asc)], dist_by=SinglePartition
@@ -3297,6 +3355,25 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      SortExec: expr=[#12@0 ASC, #13@1 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#2@0 as #12, #3@1 as #13, #11@2 as #14]
+          HashJoinExec: mode=Auto, join_type=Left, on=[(#2@0, #6@1)]
+            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+            ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                  ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
+                    DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(u.#9)@0 as #10]
+        AggregateExec: mode=Final, gby=[], aggr=[min(u.#9)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(u.#9)]
+            ProjectionExec: expr=[column1@0 as #9]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
     physical_plan after OutputRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#12@0, asc), (#13@1, asc)], dist_by=SinglePartition
@@ -3910,6 +3987,17 @@ data:
           RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0], schema=[id:Int64]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
+          ProjectionExec: expr=[id@0 as #0]
+            RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
+      ProjectionExec: expr=[#1@0 as #2]
+        ProjectionExec: expr=[id@0 as #1]
+          RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
+
+
     physical_plan after OutputRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#3@0, asc)], dist_by=SinglePartition
@@ -4407,6 +4495,18 @@ data:
         ProjectionExec: expr=[column1@0 as #3], schema=[#3:Int32]
           FilterExec: column1@0 > 100, schema=[column1:Int32]
             DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
+
+
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6]
+          ProjectionExec: expr=[column1@0 as #1]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4]
+        ProjectionExec: expr=[column1@0 as #3]
+          FilterExec: column1@0 > 100
+            DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     physical_plan after OutputRequirements:
@@ -4954,6 +5054,25 @@ data:
           AggregateExec: mode=Partial, gby=[], aggr=[max(u.#6)], schema=[max(u.#6)[value]:Int64;N]
             ProjectionExec: expr=[column1@0 as #6], schema=[#6:Int32]
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
+
+
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=2
+      ProjectionExec: expr=[sum(t.#1 + #4 + #7)@0 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(t.#1 + #4 + #7)]
+          AggregateExec: mode=Partial, gby=[], aggr=[sum(t.#1 + #4 + #7)]
+            ProjectionExec: expr=[column1@0 as #1]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(s.#3)@0 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[min(s.#3)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(s.#3)]
+            ProjectionExec: expr=[column1@0 as #3]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[max(u.#6)@0 as #7]
+        AggregateExec: mode=Final, gby=[], aggr=[max(u.#6)]
+          AggregateExec: mode=Partial, gby=[], aggr=[max(u.#6)]
+            ProjectionExec: expr=[column1@0 as #6]
+              DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     physical_plan after OutputRequirements:
@@ -5539,6 +5658,25 @@ data:
                 DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      SortExec: expr=[#8@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#1@0 as #8, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #9]
+          ProjectionExec: expr=[column1@0 as #1]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+      ScalarSubqueryExec: subqueries=1
+        ProjectionExec: expr=[CAST(min(s.#3)@0 + scalar_subquery(<pending>) AS Int64) as #7]
+          AggregateExec: mode=Final, gby=[], aggr=[min(s.#3)]
+            AggregateExec: mode=Partial, gby=[], aggr=[min(s.#3)]
+              ProjectionExec: expr=[column1@0 as #3]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+        ProjectionExec: expr=[min(u.#5)@0 as #6]
+          AggregateExec: mode=Final, gby=[], aggr=[min(u.#5)]
+            AggregateExec: mode=Partial, gby=[], aggr=[min(u.#5)]
+              ProjectionExec: expr=[column1@0 as #5]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+
+
     physical_plan after OutputRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#8@0, asc)], dist_by=SinglePartition
@@ -6093,6 +6231,19 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32;N]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6]
+          ProjectionExec: expr=[column1@0 as #1]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(s.#3)@0 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[min(s.#3)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(s.#3)]
+            ProjectionExec: expr=[column1@0 as #3]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
     physical_plan after OutputRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#5@0, asc)], dist_by=SinglePartition
@@ -6592,6 +6743,20 @@ data:
           AggregateExec: mode=Partial, gby=[], aggr=[min(s.#5)], schema=[min(s.#5)[value]:Int32;N]
             ProjectionExec: expr=[column1@0 as #5], schema=[#5:Int32]
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
+
+
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      ProjectionExec: expr=[#2@0 as #7, count(Int64(1)) FILTER (WHERE t.#3 > (<subquery>))@1 as #8]
+        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1)) FILTER (WHERE t.#3 > (<subquery>))]
+          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1)) FILTER (WHERE t.#3 > (<subquery>))]
+            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(s.#5)@0 as #6]
+        AggregateExec: mode=Final, gby=[], aggr=[min(s.#5)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(s.#5)]
+            ProjectionExec: expr=[column1@0 as #5]
+              DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     physical_plan after OutputRequirements:
@@ -7165,6 +7330,21 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 END as #7]
+        ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
+          AggregateExec: mode=Final, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]
+            AggregateExec: mode=Partial, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]
+              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(s.#5)@0 as #6]
+        AggregateExec: mode=Final, gby=[], aggr=[min(s.#5)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(s.#5)]
+            ProjectionExec: expr=[column1@0 as #5]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
     physical_plan after OutputRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -7719,6 +7899,21 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      ProjectionExec: expr=[#2@0 as #7, sum(t.#3)@1 as #8]
+        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
+          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
+            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+              FilterExec: column2@1 > scalar_subquery(<pending>)
+                DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[max(s.#5)@0 as #6]
+        AggregateExec: mode=Final, gby=[], aggr=[max(s.#5)]
+          AggregateExec: mode=Partial, gby=[], aggr=[max(s.#5)]
+            ProjectionExec: expr=[column1@0 as #5]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
     physical_plan after OutputRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -8266,6 +8461,20 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      ProjectionExec: expr=[g@0 as #5, count(Int64(1))@1 as #6]
+        AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(Int64(1))]
+          AggregateExec: mode=Partial, gby=[CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as g], aggr=[count(Int64(1))]
+            ProjectionExec: expr=[column1@0 as #1]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(s.#3)@0 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[min(s.#3)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(s.#3)]
+            ProjectionExec: expr=[column1@0 as #3]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
     physical_plan after OutputRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -8791,6 +9000,20 @@ data:
           AggregateExec: mode=Partial, gby=[], aggr=[min(s.#5)], schema=[min(s.#5)[value]:Int64;N]
             ProjectionExec: expr=[column1@0 as #5], schema=[#5:Int32]
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
+
+
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      ProjectionExec: expr=[#2@0 as #7, sum(t.#3 + #6)@1 as #8]
+        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3 + #6)]
+          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3 + #6)]
+            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(s.#5)@0 as #6]
+        AggregateExec: mode=Final, gby=[], aggr=[min(s.#5)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(s.#5)]
+            ProjectionExec: expr=[column1@0 as #5]
+              DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     physical_plan after OutputRequirements:
@@ -9339,6 +9562,21 @@ data:
           AggregateExec: mode=Partial, gby=[], aggr=[min(s.#5)], schema=[min(s.#5)[value]:Int32;N]
             ProjectionExec: expr=[column1@0 as #5], schema=[#5:Int32]
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
+
+
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      ProjectionExec: expr=[#2@0 as #7, sum(t.#3)@1 as #8]
+        FilterExec: sum(t.#3)@1 > scalar_subquery(<pending>)
+          AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
+            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
+              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[CAST(min(s.#5)@0 AS Int64) as #6]
+        AggregateExec: mode=Final, gby=[], aggr=[min(s.#5)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(s.#5)]
+            ProjectionExec: expr=[column1@0 as #5]
+              DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     physical_plan after OutputRequirements:
@@ -9918,6 +10156,25 @@ data:
           AggregateExec: mode=Partial, gby=[], aggr=[min(s.#5)], schema=[min(s.#5)[value]:Int64;N]
             ProjectionExec: expr=[column1@0 as #5], schema=[#5:Int32]
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
+
+
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      SortExec: expr=[#7@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#1@0 as #7, #3@1 as #8]
+          ProjectionExec: expr=[#1@0 as #1, #3@2 as #3]
+            HashJoinExec: mode=Auto, join_type=Inner, on=[(l.#1 + #6@1, CAST(r.#3 AS Int64)@1)]
+              ProjectionExec: expr=[#1@0 as #1, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as l.#1 + #6]
+                ProjectionExec: expr=[column1@0 as #1]
+                  DataSourceExec: partitions=1, partition_sizes=[1]
+              ProjectionExec: expr=[#3@0 as #3, CAST(#3@0 AS Int64) as CAST(r.#3 AS Int64)]
+                ProjectionExec: expr=[column1@0 as #3]
+                  DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(s.#5)@0 as #6]
+        AggregateExec: mode=Final, gby=[], aggr=[min(s.#5)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(s.#5)]
+            ProjectionExec: expr=[column1@0 as #5]
+              DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     physical_plan after OutputRequirements:
@@ -10529,6 +10786,23 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      SortExec: expr=[#7@0 ASC, #8@1 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#1@0 as #7, #3@1 as #8]
+          FilterExec: CAST(#1@0 AS Int64) + scalar_subquery(<pending>) < CAST(#3@1 AS Int64)
+            CrossJoinExec
+              ProjectionExec: expr=[column1@0 as #1]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+              ProjectionExec: expr=[column1@0 as #3]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(s.#5)@0 as #6]
+        AggregateExec: mode=Final, gby=[], aggr=[min(s.#5)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(s.#5)]
+            ProjectionExec: expr=[column1@0 as #5]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
     physical_plan after OutputRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#7@0, asc), (#8@1, asc)], dist_by=SinglePartition
@@ -11071,6 +11345,21 @@ data:
           AggregateExec: mode=Partial, gby=[], aggr=[min(s.#5)], schema=[min(s.#5)[value]:Int64;N]
             ProjectionExec: expr=[column1@0 as #5], schema=[#5:Int32]
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
+
+
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      ProjectionExec: expr=[#7@0 as #9, sum(p.#8)@1 as #10]
+        AggregateExec: mode=FinalPartitioned, gby=[#7@0 as #7], aggr=[sum(p.#8)]
+          AggregateExec: mode=Partial, gby=[#7@0 as #7], aggr=[sum(p.#8)]
+            ProjectionExec: expr=[#2@0 as #7, CAST(#3@1 AS Int64) + scalar_subquery(<pending>) as #8]
+              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(s.#5)@0 as #6]
+        AggregateExec: mode=Final, gby=[], aggr=[min(s.#5)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(s.#5)]
+            ProjectionExec: expr=[column1@0 as #5]
+              DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     physical_plan after OutputRequirements:
@@ -11624,6 +11913,19 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 2 THEN #2@0 ELSE negative(#2@0) END DESC NULLS LAST], preserve_partitioning=[false]
+        ProjectionExec: expr=[#1@0 as #2]
+          ProjectionExec: expr=[column1@0 as #1]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(s.#4)@0 as #5]
+        AggregateExec: mode=Final, gby=[], aggr=[min(s.#4)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(s.#4)]
+            ProjectionExec: expr=[column1@0 as #4]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
     physical_plan after OutputRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(CASE WHEN scalar_subquery(<pending>) = 2 THEN #2@0 ELSE negative(#2@0) END, desc)], dist_by=SinglePartition
@@ -12125,6 +12427,20 @@ data:
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
 
 
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      ProjectionExec: expr=[sum(t.#1 + #4)@0 as #5]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(t.#1 + #4)]
+          AggregateExec: mode=Partial, gby=[], aggr=[sum(t.#1 + #4)]
+            ProjectionExec: expr=[column1@0 as #1]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(s.#3)@0 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[min(s.#3)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(s.#3)]
+            ProjectionExec: expr=[column1@0 as #3]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
     physical_plan after OutputRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -12623,6 +12939,20 @@ data:
           AggregateExec: mode=Partial, gby=[], aggr=[min(s.#3)], schema=[min(s.#3)[value]:Int64;N]
             ProjectionExec: expr=[column1@0 as #3], schema=[#3:Int32]
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
+
+
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      SortExec: expr=[#6@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#1@0 as #6, sum(t.#1 + #4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
+          WindowAggExec: wdw=[sum(t.#1 + #4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(t.#1 + #4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+            ProjectionExec: expr=[column1@0 as #1]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(s.#3)@0 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[min(s.#3)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(s.#3)]
+            ProjectionExec: expr=[column1@0 as #3]
+              DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     physical_plan after OutputRequirements:
@@ -13153,6 +13483,20 @@ data:
           AggregateExec: mode=Partial, gby=[], aggr=[min(s.#3)], schema=[min(s.#3)[value]:Int32;N]
             ProjectionExec: expr=[column1@0 as #3], schema=[#3:Int32]
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
+
+
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      SortExec: expr=[#7@1 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
+          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+            ProjectionExec: expr=[column1@0 as #1]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(s.#3)@0 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[min(s.#3)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(s.#3)]
+            ProjectionExec: expr=[column1@0 as #3]
+              DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     physical_plan after OutputRequirements:
@@ -13696,6 +14040,20 @@ data:
           AggregateExec: mode=Partial, gby=[], aggr=[min(s.#3)], schema=[min(s.#3)[value]:Int32;N]
             ProjectionExec: expr=[column1@0 as #3], schema=[#3:Int32]
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
+
+
+    physical_plan after PreserveTailInputOrder:
+    ScalarSubqueryExec: subqueries=1
+      SortExec: expr=[#6@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
+          WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+            ProjectionExec: expr=[column1@0 as #1]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[min(s.#3)@0 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[min(s.#3)]
+          AggregateExec: mode=Partial, gby=[], aggr=[min(s.#3)]
+            ProjectionExec: expr=[column1@0 as #3]
+              DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     physical_plan after OutputRequirements:
