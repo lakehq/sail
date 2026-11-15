@@ -69,39 +69,16 @@ impl Run {
 struct ViewBytes {
     /// The bytes of the data buffers, each counted once.
     distinct: usize,
-    /// Those of the buffers that the batches of the previous flush did not have.
-    fresh: usize,
     /// The bytes of the strings too long to inline, counted for every view.
     referenced: usize,
 }
 
-/// The buffers that held batches share with each other or with their input.
-#[derive(Default)]
-struct SharedBuffers {
-    held: HashSet<usize>,
-    /// The buffers of the batches that the previous flush wrote.
-    written: HashSet<usize>,
-}
-
-impl SharedBuffers {
-    /// Returns whether no held batch has the buffer yet, and whether the batches of the
-    /// previous flush did not have it either.
-    fn add(&mut self, buffer: &Buffer) -> (bool, bool) {
-        let pointer = buffer.data_ptr().as_ptr() as usize;
-        let distinct = self.held.insert(pointer);
-        (distinct, distinct && !self.written.contains(&pointer))
-    }
-
-    /// Returns the bytes that a buffer adds to the held batches.
-    ///
-    /// A buffer that the batches of the previous flush had as well belongs to the input
-    /// rather than to what is held. Counting it would write every batch on its own once
-    /// such a buffer is as large as the budget.
-    fn bytes(&mut self, buffer: &Buffer) -> usize {
-        match self.add(buffer) {
-            (_, true) => buffer.capacity(),
-            _ => 0,
-        }
+/// Returns the bytes of a buffer unless it is one of `shared` already, and adds it to them.
+fn distinct_bytes(shared: &mut HashSet<usize>, buffer: &Buffer) -> usize {
+    if shared.insert(buffer.data_ptr().as_ptr() as usize) {
+        buffer.capacity()
+    } else {
+        0
     }
 }
 
@@ -120,11 +97,12 @@ pub(super) struct ShuffleBuffer {
     held: Vec<Held>,
     pieces: Vec<Piece>,
     rows: usize,
-    /// The bytes of the held buffers, other than the data buffers of view columns.
+    /// The bytes of the buffers of the held batches, each counted once.
     bytes: usize,
     /// What each view column holds, and `None` for the columns of other types.
     views: Vec<Option<ViewBytes>>,
-    shared: SharedBuffers,
+    /// The buffers that the held batches share with each other or with their input.
+    shared: HashSet<usize>,
     /// One counter per channel, for grouping rows and pieces by channel.
     counts: Vec<u32>,
     /// The columns with dictionaries or list views, whose pieces keep the values of
@@ -172,7 +150,7 @@ impl ShuffleBuffer {
             rows: 0,
             bytes: 0,
             views,
-            shared: SharedBuffers::default(),
+            shared: HashSet::new(),
             counts: vec![],
             compacted,
             compacted_schema,
@@ -303,22 +281,12 @@ impl ShuffleBuffer {
         for views in self.views.iter_mut().flatten() {
             *views = ViewBytes::default();
         }
-        std::mem::swap(&mut self.shared.held, &mut self.shared.written);
-        self.shared.held.clear();
+        self.shared.clear();
     }
 
-    /// Returns the bytes that the held batches keep alive, or that writing them copies
-    /// if that is more.
+    /// Returns the bytes that the held batches keep alive.
     fn held_bytes(&self) -> usize {
-        // Views into buffers that are not counted, or that are counted once for many
-        // views, are counted by the strings that a flush copies for them.
-        let views: usize = self
-            .views
-            .iter()
-            .flatten()
-            .map(|views| views.fresh.max(views.referenced.min(views.distinct)))
-            .sum();
-        self.bytes + views + self.pieces.len() * size_of::<Piece>()
+        self.bytes + self.pieces.len() * size_of::<Piece>()
     }
 
     /// Adds the memory of the columns of a batch to what is held.
@@ -330,8 +298,7 @@ impl ShuffleBuffer {
                 self.bytes += if self.whole || column.data_type().is_primitive() {
                     column.get_buffer_memory_size()
                 } else {
-                    let shared = &mut self.shared;
-                    array_bytes(&column.to_data(), false, &mut |buffer| shared.bytes(buffer))
+                    array_bytes(&column.to_data(), false, &mut self.shared)
                 };
                 continue;
             };
@@ -339,17 +306,13 @@ impl ShuffleBuffer {
             let nulls = data.nulls().map_or(0, |nulls| nulls.buffer().capacity());
             self.bytes += data.buffers()[0].capacity() + nulls;
             for buffer in &data.buffers()[1..] {
-                let (distinct, fresh) = if self.whole {
-                    (true, true)
+                let distinct = if self.whole {
+                    buffer.capacity()
                 } else {
-                    self.shared.add(buffer)
+                    distinct_bytes(&mut self.shared, buffer)
                 };
-                if distinct {
-                    views.distinct += buffer.capacity();
-                }
-                if fresh {
-                    views.fresh += buffer.capacity();
-                }
+                self.bytes += distinct;
+                views.distinct += distinct;
             }
             views.referenced += referenced_bytes(&data);
         }
@@ -638,30 +601,30 @@ fn referenced_bytes(data: &ArrayData) -> usize {
 }
 
 /// Returns the bytes of the buffers of an array whose rows have been taken from an input
-/// batch, with `count` giving the bytes of each buffer that it shares with its input.
+/// batch, counting once the buffers that it shares with other held batches.
 ///
 /// `take` leaves the strings of views and the values of dictionaries and list views in
-/// the buffers of its input. `shared` is set for an array inside such values.
-fn array_bytes(data: &ArrayData, shared: bool, count: &mut dyn FnMut(&Buffer) -> usize) -> usize {
+/// the buffers of its input. `inside` is set for an array inside such values.
+fn array_bytes(data: &ArrayData, inside: bool, shared: &mut HashSet<usize>) -> usize {
     let views = matches!(data.data_type(), DataType::Utf8View | DataType::BinaryView);
     let mut bytes = 0;
     let nulls = data.nulls().map(|nulls| nulls.buffer());
     for (i, buffer) in data.buffers().iter().chain(nulls).enumerate() {
         // The nulls come after the buffers, and a view array has them of its own.
         let strings = views && (1..data.buffers().len()).contains(&i);
-        bytes += if shared || strings {
-            count(buffer)
+        bytes += if inside || strings {
+            distinct_bytes(shared, buffer)
         } else {
             buffer.capacity()
         };
     }
-    let shared = shared
+    let inside = inside
         || matches!(
             data.data_type(),
             DataType::Dictionary(_, _) | DataType::ListView(_) | DataType::LargeListView(_)
         );
     for child in data.child_data() {
-        bytes += array_bytes(child, shared, count);
+        bytes += array_bytes(child, inside, shared);
     }
     bytes
 }
