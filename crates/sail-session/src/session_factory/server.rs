@@ -165,6 +165,8 @@ impl ServerSessionFactory {
             .with_physical_optimizer_rules(get_physical_optimizers(PhysicalOptimizerOptions {
                 enable_join_reorder: self.config.optimizer.enable_join_reorder,
                 enable_semi_join_reduction: self.config.optimizer.enable_semi_join_reduction,
+                speculative_semi_join_reduction: !matches!(self.config.mode, ExecutionMode::Local)
+                    && self.config.cluster.enable_adaptive_join_selection,
                 ..Default::default()
             }))
             .with_query_planner(new_query_planner());

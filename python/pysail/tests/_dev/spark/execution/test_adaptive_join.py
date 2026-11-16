@@ -91,3 +91,81 @@ def test_nested_joins(big, small):
     totals = big.groupBy("k").agg(F.sum("v").alias("total"))
     df = big.join(small, big.k == small.sk).join(totals, "k").where(F.col("v") <= F.col("total"))
     assert df.orderBy("k").select("k", "total").collect() == [Row(k=k, total=k * 2) for k in KEYS]
+
+
+# Large enough that the filtered dimension is estimated above the broadcast row limit,
+# so the semijoin reduction is planned speculatively and decided at runtime.
+FACT_ROWS = 4_000_000
+DIMENSION_KEYS = 800_000
+SELECTED = 10
+NULL_EVERY = 1000
+
+
+@pytest.fixture
+def q17_tables(spark, tmp_path):
+    # Every fact key repeats, some fact keys are NULL, and the dimension has a NULL key
+    # and a duplicate of key 0.
+    facts = spark.range(0, FACT_ROWS, 1, 4).select(
+        F.when(F.col("id") % NULL_EVERY == NULL_EVERY - 1, F.lit(None))
+        .otherwise(F.col("id") % DIMENSION_KEYS)
+        .alias("k"),
+        (F.col("id") % 7).alias("v"),
+    )
+    dimension = spark.range(0, DIMENSION_KEYS, 1, 4).select(
+        F.col("id").alias("k"),
+        F.when(F.col("id") % (DIMENSION_KEYS // SELECTED) == 0, "selected").otherwise("other").alias("label"),
+    )
+    extra = spark.createDataFrame([(None, "selected"), (0, "selected")], "k long, label string")
+    facts.write.parquet(str(tmp_path / "facts"))
+    dimension.unionByName(extra).write.parquet(str(tmp_path / "dimension"))
+    spark.read.parquet(str(tmp_path / "facts")).createOrReplaceTempView("facts")
+    spark.read.parquet(str(tmp_path / "dimension")).createOrReplaceTempView("dimension")
+    yield
+    spark.catalog.dropTempView("facts")
+    spark.catalog.dropTempView("dimension")
+
+
+def q17(labels):
+    return f"""
+        SELECT COUNT(*) AS n, SUM(f.v) AS total
+        FROM facts f
+        JOIN dimension d ON f.k = d.k
+        JOIN (SELECT k, AVG(v) AS a FROM facts GROUP BY k) g ON d.k = g.k
+        WHERE d.label IN ({labels}) AND f.v < g.a
+    """  # noqa: S608
+
+
+def expected_q17(selected):
+    values = {}
+    for i in range(FACT_ROWS):
+        if i % NULL_EVERY != NULL_EVERY - 1:
+            values.setdefault(i % DIMENSION_KEYS, []).append(i % 7)
+    n = total = 0
+    for key in selected:
+        key_values = values.get(key, [])
+        if not key_values:
+            continue
+        average = sum(key_values) / len(key_values)
+        matches = [v for v in key_values if v < average]
+        copies = 2 if key == 0 else 1
+        n += len(matches) * copies
+        total += sum(matches) * copies
+    return {"n": n, "total": total}
+
+
+@pytest.mark.timeout(300)
+def test_selective_reduction_is_kept(spark, q17_tables):  # noqa: ARG001
+    query = q17("'selected'")
+    plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
+    assert "__early_join_key_0" in plan
+    row = spark.sql(query).collect()[0]
+    assert row.asDict() == expected_q17(range(0, DIMENSION_KEYS, DIMENSION_KEYS // SELECTED))
+
+
+@pytest.mark.timeout(300)
+def test_unselective_reduction_is_removed(spark, q17_tables):  # noqa: ARG001
+    query = q17("'selected', 'other'")
+    plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
+    assert "__early_join_key_0" in plan
+    row = spark.sql(query).collect()[0]
+    assert row.asDict() == expected_q17(range(DIMENSION_KEYS))
