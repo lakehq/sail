@@ -1,6 +1,6 @@
 """Unity Catalog object names that need quoting in SQL.
 
-This module changes the current database, so it uses its own module-scoped Spark session.
+Since this module changes the current database it uses its own module-scoped Spark session.
 """
 
 from __future__ import annotations
