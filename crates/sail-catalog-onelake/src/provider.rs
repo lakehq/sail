@@ -87,7 +87,6 @@ impl OneLakeCatalogProvider {
                         default_catalog: catalog_name,
                         uri,
                         credentials,
-                        quote_object_name: false,
                     },
                 )?)
             }
