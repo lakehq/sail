@@ -360,10 +360,10 @@ async fn shuffle_output_of_many_rows_per_channel_has_few_batches() -> Result<()>
         for (channel, output) in probe.channels.iter().enumerate() {
             let rows: usize = output.iter().map(|batch| batch.num_rows()).sum();
             // Twice the fewest batches that can hold the rows, and one for each time that
-            // the write can write every channel: when it holds a batch of rows for each
-            // of them, or as many bytes as it may.
+            // the write can write every channel: when it holds nearly a batch of rows for
+            // each of them, or as many bytes as it may.
             let limit = 2 * rows.div_ceil(BATCH_SIZE)
-                + task_rows.div_ceil(channels * BATCH_SIZE)
+                + task_rows.div_ceil(channels * (BATCH_SIZE - BATCH_SIZE / 32))
                 + task_bytes.div_ceil(BUDGET)
                 + 1;
             assert!(

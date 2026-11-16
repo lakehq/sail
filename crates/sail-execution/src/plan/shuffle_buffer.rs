@@ -169,10 +169,10 @@ fn distinct_bytes(shared: &mut HashSet<usize>, buffer: &Buffer) -> usize {
 
 /// The rows of a shuffle write that have not been written yet.
 ///
-/// Rows are held until their memory reaches the budget or there is a batch of them for
-/// every channel. All channels are then written at once, each as batches that own their
-/// memory, so that what is held does not depend on the number of channels. A budget of
-/// zero is no limit on the memory.
+/// Rows are held until their memory reaches the budget or there is nearly a batch of them
+/// for every channel. All channels are then written at once, each as batches that own
+/// their memory, so that what is held does not depend on the number of channels. A budget
+/// of zero is no limit on the memory.
 pub(super) struct ShuffleBuffer {
     channels: usize,
     batch_size: usize,
@@ -353,8 +353,14 @@ impl ShuffleBuffer {
         self.held.push(held);
         self.rows += rows;
         let bytes = self.held_bytes();
+        // Channels that receive the same share of the rows do not hold exactly as many. At
+        // a full batch for each, half of them would hold a few rows more than a batch and
+        // be written as two batches of half the size. So the rows are written a little
+        // earlier: a 32nd of a batch is about three standard deviations of the rows of an
+        // evenly hashed channel at the default batch size.
+        let rows_per_channel = self.batch_size - self.batch_size / 32;
         let full =
-            bytes >= self.budget || self.rows >= self.channels.saturating_mul(self.batch_size);
+            bytes >= self.budget || self.rows >= self.channels.saturating_mul(rows_per_channel);
         if !(flush || large || full) {
             return Ok(vec![]);
         }
@@ -1801,11 +1807,13 @@ mod tests {
         Ok(())
     }
 
-    /// Without a budget, rows are written when there is a batch of them for every channel.
+    /// Without a budget, rows are written when there is nearly a batch of them for every
+    /// channel.
     #[test]
     fn rows_are_held_up_to_a_batch_for_every_channel_without_a_budget() -> Result<()> {
-        // 4000 channels with batches of 8192 rows, in batches of 131072 rows.
-        assert_eq!(megabytes_held(0)?, 250);
+        // 4000 channels with batches of 8192 rows, written at 7936 rows for each, in
+        // batches of 131072 rows.
+        assert_eq!(megabytes_held(0)?, 243);
         Ok(())
     }
     /// Returns the batch as it is read from an IPC message that it has been written to.
