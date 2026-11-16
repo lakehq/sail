@@ -691,8 +691,8 @@ impl TryFrom<StatsScalar> for StatValue {
                     .into_iter()
                     .flat_map(std::ascii::escape_default)
                     .collect::<Vec<u8>>();
-                // escape_default always produces valid ASCII so we can use from_utf8_lossy here
-                let escaped_string = String::from_utf8_lossy(escaped_bytes.as_slice()).into_owned();
+                // escape_default always produces valid ASCII.
+                let escaped_string = String::from_utf8_lossy_owned(escaped_bytes);
                 Self::String(escaped_string)
             }
             StatsScalar::Uuid(v) => Self::String(v.hyphenated().to_string()),
