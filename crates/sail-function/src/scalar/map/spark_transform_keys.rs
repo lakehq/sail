@@ -43,6 +43,7 @@ fn entry_fields(name: &str, entries: &FieldRef) -> Result<(FieldRef, FieldRef)> 
 pub struct SparkTransformKeys {
     signature: HigherOrderSignature,
     last_value_wins: bool,
+    preserve_duplicates: bool,
 }
 
 impl Default for SparkTransformKeys {
@@ -53,12 +54,22 @@ impl Default for SparkTransformKeys {
 
 impl SparkTransformKeys {
     pub fn new(last_value_wins: bool) -> Self {
+        Self::with_duplicate_policy(last_value_wins, false)
+    }
+
+    /// Preserves converted-key collisions for the downstream `map_zip_with` union.
+    pub fn new_preserving_duplicates() -> Self {
+        Self::with_duplicate_policy(false, true)
+    }
+
+    fn with_duplicate_policy(last_value_wins: bool, preserve_duplicates: bool) -> Self {
         Self {
             signature: HigherOrderSignature::exact(
                 vec![ValueOrLambda::Value(()), ValueOrLambda::Lambda(())],
                 Volatility::Immutable,
             ),
             last_value_wins,
+            preserve_duplicates,
         }
     }
 
@@ -66,6 +77,10 @@ impl SparkTransformKeys {
     /// the serialization codec to reconstruct the correct variant.
     pub fn is_last_value_wins(&self) -> bool {
         self.last_value_wins
+    }
+
+    pub fn preserves_duplicates(&self) -> bool {
+        self.preserve_duplicates
     }
 }
 
@@ -205,15 +220,19 @@ impl HigherOrderUDFImpl for SparkTransformKeys {
 
         // Rewritten keys can collide even though the input keys were distinct.
         let nulls = map.nulls();
-        let (keys, entry_values, offsets) = map_deduplicate_keys(
-            &keys,
-            &entry_values,
-            &offsets,
-            &offsets,
-            nulls,
-            nulls,
-            self.last_value_wins,
-        )?;
+        let (keys, entry_values, offsets) = if self.preserve_duplicates {
+            (keys, entry_values, offsets)
+        } else {
+            map_deduplicate_keys(
+                &keys,
+                &entry_values,
+                &offsets,
+                &offsets,
+                nulls,
+                nulls,
+                self.last_value_wins,
+            )?
+        };
         let entry_values = StructArray::try_new(entry_fields, vec![keys, entry_values], None)?;
         Ok(ColumnarValue::Array(Arc::new(MapArray::try_new(
             Arc::clone(entries),
