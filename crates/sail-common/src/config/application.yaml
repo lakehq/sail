@@ -1040,6 +1040,17 @@
     Whether to enable cost-based join reorder in the query optimizer.
   experimental: true
 
+- key: optimizer.enable_semi_join_reduction
+  type: boolean
+  default: "false"
+  description: |
+    Whether to copy the keys of a selectively filtered table below aggregates and semi joins
+    on the other side of a join, so that rows without a match are removed early.
+    Always enabled with `optimizer.enable_join_reorder`. In cluster mode with
+    `cluster.enable_adaptive_join_selection`, reductions are also planned whatever their
+    estimated size and kept only when their keys turn out small enough to broadcast.
+  experimental: true
+
 - key: optimizer.enable_join_swap
   type: boolean
   default: "true"

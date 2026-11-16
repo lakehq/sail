@@ -428,6 +428,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after SemiJoinReduction:
+    SAME TEXT AS ABOVE
+
     physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
@@ -970,6 +973,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SemiJoinReduction:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -1517,6 +1523,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after SemiJoinReduction:
+    SAME TEXT AS ABOVE
+
     physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
@@ -2062,6 +2071,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after SemiJoinReduction:
+    SAME TEXT AS ABOVE
+
     physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
@@ -2604,6 +2616,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SemiJoinReduction:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -3151,6 +3166,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after SemiJoinReduction:
+    SAME TEXT AS ABOVE
+
     physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
@@ -3694,6 +3712,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SemiJoinReduction:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:
@@ -4240,6 +4261,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after SemiJoinReduction:
+    SAME TEXT AS ABOVE
+
     physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
@@ -4783,6 +4807,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SemiJoinReduction:
     SAME TEXT AS ABOVE
 
     physical_plan after JoinReorder:

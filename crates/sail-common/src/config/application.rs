@@ -853,6 +853,7 @@ mod system_catalog {
 #[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
+    pub enable_semi_join_reduction: bool,
     pub enable_join_swap: bool,
     pub prefer_hash_join: bool,
     pub enable_window_topn: bool,

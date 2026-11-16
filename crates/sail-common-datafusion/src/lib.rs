@@ -37,3 +37,5 @@ pub mod uuid;
 pub mod variant;
 
 pub const OPTIMIZER_CORRELATION_KEY_PREFIX: &str = "__sail_correlation_key";
+/// Prefix of the key columns of a semijoin reduction's build side.
+pub const OPTIMIZER_SEMI_JOIN_REDUCTION_KEY_PREFIX: &str = "__early_join_key_";

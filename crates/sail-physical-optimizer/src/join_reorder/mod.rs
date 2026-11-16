@@ -26,8 +26,6 @@ mod builder;
 mod cardinality_estimator;
 mod cost_model;
 mod dp_plan;
-mod early_filter;
-pub use early_filter::SharedCteRestrictions;
 mod enumerator;
 mod graph;
 mod join_set;
@@ -138,18 +136,13 @@ impl PhysicalOptimizerRule for JoinReorder {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         trace!("JoinReorder: Entering optimization rule.");
         trace!(
             "JoinReorder: Input plan:\n{}",
             displayable(plan.as_ref()).indent(true)
         );
-
-        // Copy selective dimension keys below aggregates and semi joins whose filter side is
-        // more than a scan, which join enumeration never reorders across. This runs first so
-        // that enumeration sees the statistics of the reduced inputs.
-        let plan = early_filter::propagate(plan, config, &self.options)?;
 
         // Search and optimize reorderable regions. We traverse bottom-up so nested reorderable
         // regions inside "leaf" plans (as seen by a higher-level region) are also visited.
