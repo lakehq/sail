@@ -37,6 +37,7 @@ pub struct DriverOptions {
     pub task_stream_creation_timeout: Duration,
     pub task_max_attempts: usize,
     pub shuffle_backend: ShuffleBackendKind,
+    pub enable_adaptive_join_selection: bool,
     pub rpc_retry_strategy: RetryStrategy,
     pub runtime: RuntimeHandle,
 }
@@ -92,6 +93,7 @@ impl DriverOptions {
             ),
             task_max_attempts: config.cluster.task_max_attempts,
             shuffle_backend: (&config.cluster.shuffle_backend).into(),
+            enable_adaptive_join_selection: config.cluster.enable_adaptive_join_selection,
             runtime,
         })
     }

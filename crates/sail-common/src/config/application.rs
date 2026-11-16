@@ -231,6 +231,7 @@ pub struct ClusterConfig {
     pub task_stream_stall_timeout_secs: u64,
     pub task_stream_creation_timeout_secs: u64,
     pub task_max_attempts: usize,
+    pub enable_adaptive_join_selection: bool,
     pub rpc_retry_strategy: RetryStrategy,
     pub shuffle_backend: ShuffleBackend,
 }

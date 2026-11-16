@@ -13,6 +13,7 @@ use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::oneshot;
 
+use crate::adaptive::{AdaptiveJoinOptions, select_joins};
 use crate::driver::{DriverActor, DriverComponents, DriverHandle, DriverMessage, DriverOptions};
 use crate::job_graph::{JobGraph, JobGraphOptions};
 use crate::shuffle::ShuffleBackendKind;
@@ -91,6 +92,7 @@ impl JobRunner for LocalJobRunner {
 pub struct ClusterJobRunner {
     driver: DriverHandle,
     shuffle_backend: ShuffleBackendKind,
+    enable_adaptive_join_selection: bool,
 }
 
 impl ClusterJobRunner {
@@ -100,26 +102,20 @@ impl ClusterJobRunner {
         components: DriverComponents,
     ) -> Self {
         let shuffle_backend = options.shuffle_backend.clone();
+        let enable_adaptive_join_selection = options.enable_adaptive_join_selection;
         let driver = DriverHandle::new(system.spawn::<DriverActor>((options, components)));
         Self {
             driver,
             shuffle_backend,
+            enable_adaptive_join_selection,
         }
     }
 
     pub fn driver(&self) -> DriverHandle {
         self.driver.clone()
     }
-}
 
-#[tonic::async_trait]
-impl JobRunner for ClusterJobRunner {
-    fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
-        explain_job_graph(plan, self.shuffle_backend.clone())
-    }
-
-    /// Executes a plan on the cluster. This is where the cool stuff happens.
-    async fn execute(
+    async fn run_job(
         &self,
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
@@ -136,6 +132,28 @@ impl JobRunner for ClusterJobRunner {
         rx.await
             .map_err(|e| internal_datafusion_err!("failed to create job stream: {e}"))?
             .map_err(|e| internal_datafusion_err!("{e}"))
+    }
+}
+
+#[tonic::async_trait]
+impl JobRunner for ClusterJobRunner {
+    fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
+        explain_job_graph(plan, self.shuffle_backend.clone())
+    }
+
+    /// Executes a plan on the cluster. This is where the cool stuff happens.
+    async fn execute(
+        &self,
+        ctx: &SessionContext,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<SendableRecordBatchStream> {
+        let plan = if self.enable_adaptive_join_selection {
+            let options = AdaptiveJoinOptions::new(ctx.copied_config().options().clone());
+            select_joins(plan, &options, |plan| self.run_job(ctx, plan)).await?
+        } else {
+            plan
+        };
+        self.run_job(ctx, plan).await
     }
 
     async fn stop(&self) {

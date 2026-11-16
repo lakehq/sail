@@ -306,6 +306,17 @@
   default: "3"
   description: The maximum number of attempts for a task.
 
+- key: cluster.enable_adaptive_join_selection
+  type: boolean
+  default: "false"
+  description: |
+    Whether to choose between broadcast and partitioned hash joins from the actual size of
+    the build side. When enabled, the build side of each partitioned hash join whose size
+    is only estimated runs first as a separate job, and the join is broadcast if the result
+    is below the hash join single partition threshold. Build sides that exceed the threshold
+    are abandoned once the threshold is reached and recomputed in the main job.
+  experimental: true
+
 - key: cluster.rpc_retry_strategy.type
   type: string
   default: "fixed"
