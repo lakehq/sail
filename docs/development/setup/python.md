@@ -18,7 +18,7 @@ to use this environment (`.venvs/default`) for Python development.
    For custom package indexes or mirrors, configure `uv` using `UV_INDEX_URL` or its
    [configuration files](https://docs.astral.sh/uv/configuration/files/).
    `uv` does not read pip-specific settings such as `PIP_INDEX_URL` or `pip.conf`.
-   The environments also include `pip` for manual package installation and IDE support. 
+   The environments also include `pip` for manual package installation and IDE support.
 2. Hatch will download prebuilt Python interpreters when the specified Python version for an environment
    is not installed on your host. Note that the prebuilt Python interpreters only track the **minor version** of Python.
    If downloading prebuilt Python interpreters fails (e.g. due to network issues), or if you want precise control
