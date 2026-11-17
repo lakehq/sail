@@ -172,7 +172,7 @@ def test_shuffle_finishes_when_region_is_retried_after_stage_cleanup(spark, tmp_
     # The streams of the broadcast side are cleaned up when the union has finished.
     # The only task of the final stage then fails once, all tasks run again, and the
     # broadcast side is written again to replicas that nobody reads or removes anymore,
-    # unless its streams are cleaned up once more.
+    # so its tasks must finish without waiting for readers.
     marker = tmp_path / "failed"
 
     def fail_once(batches):

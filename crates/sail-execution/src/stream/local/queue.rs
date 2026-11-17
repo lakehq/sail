@@ -1172,10 +1172,7 @@ mod tests {
             item.1
         }
 
-        let rounds = std::env::var("SAIL_TEST_QUEUE_STRESS_ROUNDS")
-            .ok()
-            .and_then(|x| x.parse().ok())
-            .unwrap_or(300);
+        let rounds = 300;
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(6)
             .enable_all()
