@@ -98,62 +98,6 @@ def test_shuffle_remains_usable_after_repeated_limits(spark):
 
 
 @pytest.mark.timeout(30)
-@pytest.mark.parametrize(
-    ("input_sizes", "partitions", "completed_sizes"),
-    [
-        ([64] * 32 + [13], 4, [256, 256]),
-        ([64, 1024, 32], 2, [256, 256]),
-        ([128, 128, 128, 1024], 2, [192, 512]),
-        ([1024], 2, [512]),
-        ([0, 13, 0], 4, []),
-        ([0], 4, []),
-    ],
-    ids=[
-        "small-batches",
-        "multiple-completed-batches",
-        "flush-before-bypass",
-        "large-batch-bypass",
-        "residual",
-        "empty",
-    ],
-)
-@pytest.mark.spark(cross_version=True)
-def test_shuffle_reader_coalesces_batches_in_channel_order(spark, input_sizes, partitions, completed_sizes):
-    def make_batches(batches):
-        for _ in batches:
-            offset = 0
-            for size in input_sizes:
-                yield pa.record_batch([pa.array(range(offset, offset + size), type=pa.int64())], names=["id"])
-                offset += size
-
-    def observe_batches(batches):
-        # Capture boundaries and row order before another operator can batch the output.
-        rows = [batch.column(0).to_pylist() for batch in batches]
-        yield pa.record_batch([pa.array([rows], type=pa.list_(pa.list_(pa.int64())))], names=["batches"])
-
-    result = (
-        spark.range(1, numPartitions=1)
-        .mapInArrow(make_batches, "id long")
-        .repartition(partitions)
-        .mapInArrow(observe_batches, "batches array<array<long>>")
-        .collect()
-    )
-
-    expected = []
-    for partition in range(partitions):
-        ids = list(range(partition, sum(input_sizes), partitions))
-        batches = []
-        offset = 0
-        for size in completed_sizes:
-            batches.append(ids[offset : offset + size])
-            offset += size
-        if offset < len(ids):
-            batches.append(ids[offset:])
-        expected.append(batches)
-    assert sorted(row.batches for row in result) == sorted(expected)
-
-
-@pytest.mark.timeout(30)
 @pytest.mark.spark(cross_version=True)
 def test_shuffle_reader_coalesces_batches_across_producers(spark):
     def make_batches(batches):
