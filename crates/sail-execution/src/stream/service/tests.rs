@@ -29,6 +29,7 @@ use crate::rpc::{ClientOptions, server_options};
 use crate::shuffle::ShuffleCompression;
 use crate::stream::r#gen::TaskStreamTicket;
 use crate::stream::local::memory::MemoryStream;
+use crate::stream::local::queue::StreamMemory;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::service::client::decode_task_stream;
 use crate::stream::service::server::encode_task_stream;
@@ -239,8 +240,9 @@ async fn batches_of_tasks_with_different_nullability_are_encoded_in_one_stream()
             partition,
             attempt: 0,
         };
+        let memory = Arc::new(StreamMemory::new(usize::MAX));
         let (mut sink, mut streams) =
-            MemoryStream::create(&key, vec![vec![]], 1, None, Arc::default(), schema.clone());
+            MemoryStream::create(&key, vec![vec![]], 1, None, memory, schema.clone());
         sink.write(vec![Some(batch)]).await?;
         sink.commit().await?;
         let stream = streams.first_mut().ok_or("missing stream")?;

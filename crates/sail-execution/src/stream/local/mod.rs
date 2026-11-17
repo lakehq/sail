@@ -2,7 +2,7 @@ mod core;
 pub(crate) mod memory;
 mod options;
 mod process_memory;
-mod queue;
+pub(crate) mod queue;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -14,11 +14,9 @@ use crate::id::{JobId, TaskStreamKey};
 
 pub struct LocalStreamManager {
     options: LocalStreamManagerOptions,
-    /// The memory of the task streams of the process.
+    /// The memory of the task streams of the process, along with the number of bytes
+    /// that they can hold before tasks wait for the readers of their output.
     memory: Arc<queue::StreamMemory>,
-    /// The number of bytes that the task streams of the process can hold before
-    /// tasks wait for the readers of their output.
-    ceiling: usize,
     streams: HashMap<TaskStreamKey, LocalStreamState>,
     /// The stages whose streams have been removed.
     cleaned: HashSet<(JobId, usize)>,

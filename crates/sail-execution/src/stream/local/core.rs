@@ -1,6 +1,6 @@
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, OnceLock};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -21,19 +21,18 @@ use crate::stream::writer::TaskStreamSink;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
 /// The share of the memory available to the process that its task streams can hold
-/// by default before tasks wait for the readers of their output, as a numerator and
-/// a denominator. The rest is for everything that is not counted: the operators of
-/// the tasks, data in transit, the memory that the allocator holds beyond the data
-/// of the streams, and other processes in the same container.
-const DEFAULT_CEILING_FRACTION: (u64, u64) = (1, 3);
+/// by default before tasks wait for the readers of their output, as the number that
+/// the memory is divided by. The rest is for everything that is not counted: the
+/// operators of the tasks, data in transit, the memory that the allocator holds
+/// beyond the data of the streams, and other processes in the same container.
+const DEFAULT_CEILING_DIVISOR: u64 = 3;
 
 /// Returns the default number of bytes that the task streams of a process can hold
 /// before tasks wait for the readers of their output, given the memory available to
 /// the process. The task streams are not limited if the memory is not known.
 fn default_ceiling(available: Option<u64>) -> usize {
-    let (numerator, denominator) = DEFAULT_CEILING_FRACTION;
     available.map_or(usize::MAX, |available| {
-        usize::try_from((available / denominator).saturating_mul(numerator)).unwrap_or(usize::MAX)
+        usize::try_from(available / DEFAULT_CEILING_DIVISOR).unwrap_or(usize::MAX)
     })
 }
 
@@ -46,11 +45,10 @@ fn process_ceiling(limit: usize) -> usize {
         0 => *DEFAULT.get_or_init(|| {
             let available = available_memory();
             let ceiling = default_ceiling(available);
-            let (numerator, denominator) = DEFAULT_CEILING_FRACTION;
             match available {
                 Some(available) => info!(
                     "task streams can hold {ceiling} bytes before tasks wait for their readers: \
-                    {numerator}/{denominator} of the {available} bytes of memory of the process"
+                    1/{DEFAULT_CEILING_DIVISOR} of the {available} bytes of memory of the process"
                 ),
                 None => info!("task streams are not limited: the memory of the process is unknown"),
             }
@@ -60,19 +58,24 @@ fn process_ceiling(limit: usize) -> usize {
     }
 }
 
-/// Returns the memory of the task streams of this process. Memory belongs to
-/// a process, so the driver and the workers that run in the same process count
-/// their streams together.
-fn process_stream_memory() -> Arc<StreamMemory> {
-    static MEMORY: OnceLock<Arc<StreamMemory>> = OnceLock::new();
-    MEMORY.get_or_init(Arc::default).clone()
+/// Returns the memory of the task streams of this process that wait at the given
+/// ceiling. Memory belongs to a process, so the driver and the workers that run in
+/// the same process count their streams together. Only stream managers that are
+/// configured with different limits count their streams apart, so that all writers
+/// of a memory wait at its ceiling.
+fn process_stream_memory(ceiling: usize) -> Arc<StreamMemory> {
+    static MEMORY: Mutex<BTreeMap<usize, Arc<StreamMemory>>> = Mutex::new(BTreeMap::new());
+    let mut memory = MEMORY.lock().unwrap_or_else(PoisonError::into_inner);
+    let memory = memory
+        .entry(ceiling)
+        .or_insert_with(|| Arc::new(StreamMemory::new(ceiling)));
+    memory.clone()
 }
 
 impl LocalStreamManager {
     pub fn new(options: LocalStreamManagerOptions) -> Self {
         Self {
-            memory: process_stream_memory(),
-            ceiling: process_ceiling(options.task_stream_memory_limit),
+            memory: process_stream_memory(process_ceiling(options.task_stream_memory_limit)),
             options,
             streams: HashMap::new(),
             cleaned: HashSet::new(),
@@ -130,7 +133,6 @@ impl LocalStreamManager {
         let stall_timeout = stall_timeout.max(Duration::from_secs(1));
         let limit = bounded.then(|| QueueLimit {
             bytes: self.options.shuffle_write_buffer_size,
-            ceiling: self.ceiling,
             stall_timeout,
         });
         let memory = self.memory.clone();
@@ -316,10 +318,14 @@ mod tests {
         config.cluster.shuffle_write_buffer_size = 1;
         config.cluster.task_stream_memory_limit = limit;
         let options = WorkerOptions::new(&config, runtime, SessionContext::new());
-        let mut manager = LocalStreamManager::new((&options).into());
-        // The tests do not count their streams together.
-        manager.memory = Arc::default();
-        Ok(manager)
+        Ok(separate_memory(LocalStreamManager::new((&options).into())))
+    }
+
+    /// Gives the manager a memory of its own with the ceiling that it is configured
+    /// with, since the tests do not count their streams together.
+    fn separate_memory(mut manager: LocalStreamManager) -> LocalStreamManager {
+        manager.memory = Arc::new(StreamMemory::new(manager.memory.ceiling()));
+        manager
     }
 
     /// Creates a manager whose sinks wait when their streams have one byte.
@@ -446,8 +452,7 @@ mod tests {
         config.cluster.task_stream_memory_limit = 1;
         config.cluster.task_stream_stall_timeout_secs = 2;
         let options = WorkerOptions::new(&config, runtime, SessionContext::new());
-        let mut manager = LocalStreamManager::new((&options).into());
-        manager.memory = Arc::default();
+        let mut manager = separate_memory(LocalStreamManager::new((&options).into()));
         let key = task_key(0);
         let mut sink = manager.create_stream(&key, 2, 1, true, Arc::new(Schema::empty()))?;
         let mut readers = vec![];
@@ -473,22 +478,30 @@ mod tests {
 
     #[test]
     fn default_memory_limit_is_a_share_of_the_memory_of_the_process() -> TestResult {
-        let (numerator, denominator) = DEFAULT_CEILING_FRACTION;
         let available = 64 << 30;
         let ceiling = u64::try_from(default_ceiling(Some(available)))?;
-        assert!(0 < ceiling && ceiling <= available);
-        assert_eq!(ceiling, available / denominator * numerator);
+        assert!(0 < ceiling && ceiling < available);
+        assert_eq!(ceiling, available / DEFAULT_CEILING_DIVISOR);
         assert_eq!(default_ceiling(None), usize::MAX);
         Ok(())
     }
 
+    #[test]
+    fn memory_is_shared_by_the_managers_with_the_same_limit() {
+        let memory = process_stream_memory(12345);
+        assert_eq!(memory.ceiling(), 12345);
+        assert!(Arc::ptr_eq(&memory, &process_stream_memory(12345)));
+        assert!(!Arc::ptr_eq(&memory, &process_stream_memory(12346)));
+    }
+
     #[tokio::test]
     async fn memory_limit_is_the_configured_number_or_the_default() -> TestResult {
-        assert_eq!(manager_with_memory_limit(1)?.ceiling, 1);
-        assert_eq!(manager_with_memory_limit(1 << 20)?.ceiling, 1 << 20);
+        for limit in [1, 1 << 20] {
+            assert_eq!(manager_with_memory_limit(limit)?.memory.ceiling(), limit);
+        }
         // The memory of the process is known on these systems.
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        assert!(manager_with_memory_limit(0)?.ceiling < usize::MAX);
+        assert!(manager_with_memory_limit(0)?.memory.ceiling() < usize::MAX);
         Ok(())
     }
 

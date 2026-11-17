@@ -32,8 +32,8 @@ impl MemoryStream {
     /// and one replica for each reader that is already waiting for the channel.
     ///
     /// With a limit, the sink waits for the readers while the streams in the given
-    /// memory of the process have reached the ceiling of the limit, and the replicas
-    /// of all channels together have at least the bytes of the limit. The sink does
+    /// memory of the process have reached its ceiling, and the replicas of all
+    /// channels together have at least the bytes of the limit. The sink does
     /// not continue because a reader waits for data, so each replica needs a reader
     /// that takes the data as it comes. A batch counts for the memory until it is
     /// taken from all replicas of its channel. Its size is the memory that its
@@ -224,10 +224,10 @@ mod tests {
     ) -> (Box<dyn TaskStreamSink>, Vec<MemoryStream>) {
         let limit = bytes.map(|bytes| QueueLimit {
             bytes,
-            ceiling: 1,
             stall_timeout: STALL_TIMEOUT,
         });
-        create_with_memory(waiters, replicas, limit, Arc::default(), schema())
+        let memory = Arc::new(StreamMemory::new(1));
+        create_with_memory(waiters, replicas, limit, memory, schema())
     }
 
     fn create_with_memory(
@@ -415,10 +415,9 @@ mod tests {
         let rows = |value| rows(value, 65536);
         let size = rows(0)?.get_array_memory_size();
         assert!(size >= 65536 * 4);
-        let memory = Arc::new(StreamMemory::default());
+        let memory = Arc::new(StreamMemory::new(3 * size + size / 2));
         let limit = QueueLimit {
             bytes: size,
-            ceiling: 3 * size + size / 2,
             stall_timeout: STALL_TIMEOUT,
         };
         let (mut sink, mut streams) =
@@ -461,11 +460,10 @@ mod tests {
         assert!(batch_size(&wide) >= 2 * limit);
         let limit = Some(QueueLimit {
             bytes: limit,
-            ceiling: 1,
             stall_timeout: STALL_TIMEOUT,
         });
-        let (mut sink, _streams) =
-            create_with_memory(vec![vec![]], 1, limit, Arc::default(), schema);
+        let memory = Arc::new(StreamMemory::new(1));
+        let (mut sink, _streams) = create_with_memory(vec![vec![]], 1, limit, memory, schema);
         write_now(&mut sink, vec![Some(wide.clone())]);
         let write = sink.write(vec![Some(wide)]);
         assert!(write.now_or_never().is_none());
