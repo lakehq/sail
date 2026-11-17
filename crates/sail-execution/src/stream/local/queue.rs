@@ -1113,6 +1113,73 @@ mod tests {
         }
     }
 
+    /// Several writers of one process start to wait at the ceiling while the reader
+    /// of another task takes the items that fill the memory, on other threads. The
+    /// readers of the writers take nothing, so a writer continues only if it either
+    /// sees the memory that the other task has released, or is notified of it.
+    /// A writer that misses both shows as a timeout.
+    #[test]
+    fn writers_at_the_ceiling_continue_when_another_task_releases_memory() -> TestResult {
+        const CEILING: usize = 100;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(6)
+            .enable_all()
+            .build()?;
+        for seed in 0..1000 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let memory = Arc::new(StreamMemory::default());
+            // The memory falls below the ceiling when the last of these items is taken,
+            // and stays there whatever the writers add.
+            let (mut other, mut others) = task_queues(&[1], None, memory.clone(), value, value);
+            let items = rng.random_range(1..=4usize);
+            for _ in 0..items {
+                write_now(&mut other, vec![Some(CEILING)]);
+            }
+            let mut writers = vec![];
+            let mut unread = vec![];
+            for _ in 0..rng.random_range(4..=8usize) {
+                let limit = limit(1, CEILING);
+                let (mut writer, readers) = task_queues(&[1], limit, memory.clone(), one, one);
+                write_now(&mut writer, vec![Some(0)]);
+                writers.push((writer, rng.random_range(0..3usize)));
+                unread.push(readers);
+            }
+            let pause = rng.random_range(0..3usize);
+            let outcome = runtime.block_on(async move {
+                let mut tasks = tokio::task::JoinSet::new();
+                for (mut writer, pause) in writers {
+                    tasks.spawn(async move {
+                        for _ in 0..pause {
+                            tokio::task::yield_now().await;
+                        }
+                        writer.write(vec![Some(1)]).await == QueueWrite::Queued
+                    });
+                }
+                tasks.spawn(async move {
+                    for _ in 0..items {
+                        for _ in 0..pause {
+                            tokio::task::yield_now().await;
+                        }
+                        if others[0].next().await.is_none() {
+                            return false;
+                        }
+                    }
+                    true
+                });
+                tokio::time::timeout(Duration::from_secs(5), tasks.join_all()).await
+            });
+            match outcome {
+                Ok(outcomes) if outcomes.iter().all(|x| *x) => {}
+                Ok(_) => return Err(format!("seed {seed}: a write was not queued").into()),
+                Err(_) => return Err(format!("seed {seed}: a writer was not notified").into()),
+            }
+            drop(unread);
+            drop(other);
+            assert_eq!(memory.used(), 0, "seed {seed}");
+        }
+        Ok(())
+    }
+
     /// One writer adds items to its queues, while the readers run on other threads
     /// and take their items, pause, stop waiting for an item, leave early, or leave
     /// without having taken anything. Every reader takes the items as they come,
