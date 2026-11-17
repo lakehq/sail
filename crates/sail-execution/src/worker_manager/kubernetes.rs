@@ -563,9 +563,9 @@ mod tests {
                 driver_external_port: 1234,
                 worker_heartbeat_interval: Duration::from_secs(1),
                 task_stream_buffer: 1,
-                task_stream_memory_limit: 0,
+                task_stream_memory_limit: 1 << 30,
                 shuffle_write_buffer_size: 4096,
-                task_stream_stall_timeout: Duration::from_secs(300),
+                task_stream_stall_timeout: Duration::from_secs(120),
                 task_stream_creation_timeout: Duration::from_secs(1),
                 rpc_retry_strategy: RetryStrategy::Fixed {
                     max_count: 1,
@@ -589,11 +589,14 @@ mod tests {
             assert_eq!(owners.len(), 1);
             assert_eq!(owners[0].uid, "driver-uid");
             let env = pod.spec.unwrap().containers[0].env.clone().unwrap();
-            let buffer_size = env
-                .iter()
-                .find(|var| var.name == ClusterConfigEnv::SHUFFLE_WRITE_BUFFER_SIZE)
-                .unwrap();
-            assert_eq!(buffer_size.value.as_deref(), Some("4096"));
+            for (name, value) in [
+                (ClusterConfigEnv::SHUFFLE_WRITE_BUFFER_SIZE, "4096"),
+                (ClusterConfigEnv::TASK_STREAM_MEMORY_LIMIT, "1073741824"),
+                (ClusterConfigEnv::TASK_STREAM_STALL_TIMEOUT_SECS, "120"),
+            ] {
+                let var = env.iter().find(|var| var.name == name).unwrap();
+                assert_eq!(var.value.as_deref(), Some(value));
+            }
         }
     }
 

@@ -323,30 +323,6 @@ mod tests {
         assert!(matches!(state, Some(Ok(TaskStreamWriteState::Active))));
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn write_stops_waiting_when_the_readers_make_no_progress() -> TestResult {
-        let (mut sink, mut streams) = create(vec![vec![], vec![]], 1, Some(1));
-        let first = streams[0].subscribe()?;
-        let mut second = streams[1].subscribe()?;
-        // One reader waits for data, while the other one does not take its data.
-        assert!(futures::poll!(second.next()).is_pending());
-        write_now(&mut sink, vec![Some(batch(0)?), None]);
-        let start = tokio::time::Instant::now();
-        let state = sink.write(vec![Some(batch(1)?), None]).await?;
-        assert_eq!(state, TaskStreamWriteState::Active);
-        assert!(start.elapsed() >= STALL_TIMEOUT);
-
-        // The sink never waits again, so that the reader gets its data eventually.
-        for i in 2..10 {
-            write_now(&mut sink, vec![Some(batch(i)?), None]);
-        }
-        write_now(&mut sink, vec![None, Some(batch(0)?)]);
-        assert_eq!(read(&mut second).await?, Some(0));
-        sink.commit().await?;
-        assert_eq!(read_all(first).await?, (0..10).collect::<Vec<_>>());
-        Ok(())
-    }
-
     #[tokio::test]
     async fn commit_and_abort_do_not_wait_for_readers() -> TestResult {
         for commit in [true, false] {

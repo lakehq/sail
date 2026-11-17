@@ -443,14 +443,15 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn sink_stops_waiting_after_the_configured_stall_timeout() -> TestResult {
+    /// Returns how long a sink waits for a reader that takes nothing while another
+    /// reader waits for data, with the given stall timeout in the configuration.
+    async fn stall_time(configured: u64) -> Result<Duration, Box<dyn std::error::Error>> {
         let handle = tokio::runtime::Handle::current();
         let runtime = RuntimeHandle::new(handle.clone(), handle);
         let mut config = AppConfig::load()?;
         config.cluster.shuffle_write_buffer_size = 1;
         config.cluster.task_stream_memory_limit = 1;
-        config.cluster.task_stream_stall_timeout_secs = 2;
+        config.cluster.task_stream_stall_timeout_secs = configured;
         let options = WorkerOptions::new(&config, runtime, SessionContext::new());
         let mut manager = separate_memory(LocalStreamManager::new((&options).into()));
         let key = task_key(0);
@@ -471,8 +472,20 @@ mod tests {
         let start = tokio::time::Instant::now();
         let state = sink.write(vec![Some(batch()?), None]).await?;
         assert_eq!(state, TaskStreamWriteState::Active);
-        let elapsed = start.elapsed();
+        Ok(start.elapsed())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sink_stops_waiting_after_the_configured_stall_timeout() -> TestResult {
+        let elapsed = stall_time(2).await?;
         assert!(Duration::from_secs(2) <= elapsed && elapsed < Duration::from_secs(3));
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sink_stops_waiting_after_one_second_when_the_stall_timeout_is_zero() -> TestResult {
+        let elapsed = stall_time(0).await?;
+        assert!(Duration::from_secs(1) <= elapsed && elapsed < Duration::from_secs(2));
         Ok(())
     }
 
