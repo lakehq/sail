@@ -8,13 +8,14 @@
 use std::collections::VecDeque;
 use std::future::poll_fn;
 use std::ops::Range;
-use std::pin::Pin;
+use std::pin::{Pin, pin};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use futures::Stream;
+use tokio::sync::Notify;
 
 /// How long a writer waits for its readers while none of them takes anything,
 /// before it checks whether one of them waits for the writer in turn.
@@ -25,6 +26,11 @@ pub(crate) const STALL_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) struct StreamMemory {
     /// The size in bytes of the items in the queues.
     used: AtomicUsize,
+    /// The ceiling that a writer has waited at, or zero if no writer has waited.
+    /// The writers of a process have the same ceiling.
+    ceiling: AtomicUsize,
+    /// Notifies the writers that wait at the ceiling when the size falls below it.
+    released: Notify,
 }
 
 impl StreamMemory {
@@ -54,7 +60,15 @@ impl Charge {
 
 impl Drop for Charge {
     fn drop(&mut self) {
-        self.memory.used.fetch_sub(self.bytes, Ordering::Relaxed);
+        // A writer that waits at the ceiling has stored the ceiling before it looked
+        // at the size. So either the writer sees the size without these bytes, or
+        // the ceiling is seen here and the writer is notified.
+        let memory = &self.memory;
+        let used = memory.used.fetch_sub(self.bytes, Ordering::SeqCst);
+        let ceiling = memory.ceiling.load(Ordering::SeqCst);
+        if used >= ceiling && used - self.bytes < ceiling {
+            memory.released.notify_waiters();
+        }
     }
 }
 
@@ -193,7 +207,7 @@ impl<T> State<T> {
         };
         self.rows > 0
             && self.rows >= limit.rows
-            && memory.used.load(Ordering::Relaxed) >= limit.ceiling
+            && memory.used.load(Ordering::SeqCst) >= limit.ceiling
     }
 
     fn is_consistent(&self) -> bool {
@@ -263,9 +277,20 @@ impl<T: Clone> QueueWriter<T> {
                 Admission::Closed => return QueueWrite::Closed,
                 Admission::Full { taken } => taken,
             };
-            let admission = poll_fn(|cx| match self.admit(&items, Some(cx.waker())) {
-                Admission::Full { .. } => Poll::Pending,
-                admission => Poll::Ready(admission),
+            // The write is tried again when the readers of this task take items, and
+            // when the memory of the process falls below the ceiling since the readers
+            // of other tasks take items. The writer registers for the latter before
+            // it finds that it has to wait.
+            let memory = self.shared.memory.clone();
+            let mut released = pin!(memory.released.notified());
+            let admission = poll_fn(|cx| {
+                while released.as_mut().poll(cx).is_ready() {
+                    released.set(memory.released.notified());
+                }
+                match self.admit(&items, Some(cx.waker())) {
+                    Admission::Full { .. } => Poll::Pending,
+                    admission => Poll::Ready(admission),
+                }
             });
             let admission = tokio::time::timeout(STALL_TIMEOUT, admission).await;
             match admission {
@@ -301,6 +326,9 @@ impl<T: Clone> QueueWriter<T> {
             .zip(items.iter())
             .filter_map(|(queues, item)| Some(open(queues) * (self.rows)(item.as_ref()?)))
             .sum::<usize>();
+        if let (Some(_), Some(limit)) = (waker, state.limit) {
+            memory.ceiling.store(limit.ceiling, Ordering::SeqCst);
+        }
         if rows > 0 && state.is_full(memory) {
             if let Some(waker) = waker
                 && !state.writer.as_ref().is_some_and(|x| x.will_wake(waker))
@@ -348,8 +376,7 @@ impl<T: Clone> QueueWriter<T> {
 
     /// Lifts the limit if no reader has taken anything since the given number of
     /// items was taken, while a reader waits for an item. The limit stays if the
-    /// writer no longer has to wait, which it is not told when the queues of other
-    /// tasks have released the memory of the process.
+    /// writer no longer has to wait.
     fn lift_limit_if_stalled(&self, taken: u64) -> bool {
         let mut state = self.shared.lock();
         let stalled =
@@ -816,10 +843,10 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn stalled_writer_keeps_its_limit_when_the_process_has_memory_again() -> TestResult {
+    async fn writer_continues_when_another_task_releases_the_memory_of_the_process() -> TestResult {
         let memory = Arc::new(StreamMemory::default());
         // The queue of another writer takes all the memory.
-        let (mut other, others) = task_queues(&[1], None, memory.clone(), value, value);
+        let (mut other, mut others) = task_queues(&[1], None, memory.clone(), value, value);
         write_now(&mut other, vec![Some(100)]);
         let limit = limit(1, 100);
         let (mut writer, mut readers) = task_queues(&[1, 1], limit, memory.clone(), one, one);
@@ -833,14 +860,13 @@ mod tests {
         });
         tokio::task::yield_now().await;
         assert!(!write.is_finished());
-        // The writer is not notified when the other queue is gone. It finds out
-        // when it looks at its readers, and continues as usual.
-        drop(others);
+        // The writer is notified when the reader of the other task takes its item,
+        // and continues although its own readers have not taken anything.
+        assert_eq!(others[0].next().await, Some(100));
         assert_eq!(memory.used(), 1);
         let (mut writer, outcome) = write.await?;
         assert_eq!(outcome, QueueWrite::Queued);
-        assert!(start.elapsed() >= STALL_TIMEOUT);
-        assert!(start.elapsed() < STALL_TIMEOUT + Duration::from_secs(1));
+        assert!(start.elapsed() < STALL_TIMEOUT);
 
         // The writer waits again when the process is short of memory.
         let (mut other, _others) = task_queues(&[1], None, memory.clone(), value, value);
@@ -945,12 +971,10 @@ mod tests {
         assert!(write.as_mut().poll(&mut cx).is_pending());
         assert_eq!(readers[0].next().await, Some(1));
         assert_eq!(wakes.count(), 1);
-        // The writer is not notified when the other queue is taken, but when its
-        // own reader takes the next item after that, whatever its queue holds then.
+        // The writer is notified when the other queue is taken, whatever its own
+        // queue holds then.
         assert_eq!(others[0].next().await, Some(100));
         assert_eq!(memory.used(), 8);
-        assert_eq!(wakes.count(), 1);
-        assert_eq!(readers[0].next().await, Some(2));
         assert_eq!(wakes.count(), 2);
         assert_eq!(soon(write).await?, QueueWrite::Queued);
         Ok(())
