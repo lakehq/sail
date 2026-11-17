@@ -33,7 +33,7 @@ impl MemoryStream {
     ///
     /// With a limit, the sink waits for the readers while the streams in the given
     /// memory of the process have reached the ceiling of the limit, and the replicas
-    /// of all channels together have at least the rows of the limit. The sink does
+    /// of all channels together have at least the bytes of the limit. The sink does
     /// not continue because a reader waits for data, so each replica needs a reader
     /// that takes the data as it comes. A batch counts for the memory until it is
     /// taken from all replicas of its channel. Its size is the memory that its
@@ -56,13 +56,7 @@ impl MemoryStream {
             .iter()
             .map(|waiters| replicas.max(waiters.len()))
             .collect::<Vec<_>>();
-        let (writer, receivers) = task_queues(
-            &replicas,
-            limit,
-            memory,
-            RecordBatch::num_rows,
-            RecordBatch::get_array_memory_size,
-        );
+        let (writer, receivers) = task_queues(&replicas, limit, memory, batch_size);
         let mut receivers = receivers.into_iter();
         let mut streams = Vec::with_capacity(waiters.len());
         for (waiters, replicas) in waiters.into_iter().zip(&replicas) {
@@ -114,6 +108,16 @@ pub(crate) type MemoryStreamWaiter = oneshot::Sender<TaskStreamResult<QueueReade
 
 fn source(receiver: QueueReader<RecordBatch>) -> TaskStreamSource {
     Box::pin(receiver.map(TaskStreamResult::Ok))
+}
+
+/// Returns the size in bytes that a batch counts for. A batch without rows does not
+/// count, and a batch with rows counts as one byte at least, so that the sink of
+/// streams that have rows can wait for the readers even if the rows have no columns.
+fn batch_size(batch: &RecordBatch) -> usize {
+    match batch.num_rows() {
+        0 => 0,
+        _ => batch.get_array_memory_size().max(1),
+    }
 }
 
 /// Returns the batch with the schema of the stream that it is written to.
@@ -197,7 +201,7 @@ impl TaskStreamSink for MemoryStreamSink {
 mod tests {
     use std::time::Duration;
 
-    use datafusion::arrow::array::{AsArray, Int32Array};
+    use datafusion::arrow::array::{AsArray, BinaryArray, Int32Array, RecordBatchOptions};
     use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use futures::TryStreamExt;
     use tokio::task::JoinHandle;
@@ -210,14 +214,14 @@ mod tests {
 
     /// Creates the streams of a task in a process that has no memory left for
     /// them, so that the sink waits whenever the streams have the given number
-    /// of rows.
+    /// of bytes.
     fn create(
         waiters: Vec<Vec<MemoryStreamWaiter>>,
         replicas: usize,
-        rows: Option<usize>,
+        bytes: Option<usize>,
     ) -> (Box<dyn TaskStreamSink>, Vec<MemoryStream>) {
-        let limit = rows.map(|rows| QueueLimit { rows, ceiling: 1 });
-        create_with_memory(waiters, replicas, limit, Arc::default())
+        let limit = bytes.map(|bytes| QueueLimit { bytes, ceiling: 1 });
+        create_with_memory(waiters, replicas, limit, Arc::default(), schema())
     }
 
     fn create_with_memory(
@@ -225,6 +229,7 @@ mod tests {
         replicas: usize,
         limit: Option<QueueLimit>,
         memory: Arc<StreamMemory>,
+        schema: SchemaRef,
     ) -> (Box<dyn TaskStreamSink>, Vec<MemoryStream>) {
         let key = TaskKey {
             job_id: JobId::from(1),
@@ -232,7 +237,7 @@ mod tests {
             partition: 0,
             attempt: 0,
         };
-        MemoryStream::create(&key, waiters, replicas, limit, memory, schema())
+        MemoryStream::create(&key, waiters, replicas, limit, memory, schema)
     }
 
     fn schema() -> SchemaRef {
@@ -406,11 +411,11 @@ mod tests {
         assert!(size >= 65536 * 4);
         let memory = Arc::new(StreamMemory::default());
         let limit = QueueLimit {
-            rows: 65536,
+            bytes: size,
             ceiling: 3 * size + size / 2,
         };
         let (mut sink, mut streams) =
-            create_with_memory(vec![vec![]], 1, Some(limit), memory.clone());
+            create_with_memory(vec![vec![]], 1, Some(limit), memory.clone(), schema());
         let mut reader = streams[0].subscribe()?;
         for i in 0..4 {
             write_now(&mut sink, vec![Some(rows(i)?)]);
@@ -423,6 +428,50 @@ mod tests {
         sink.commit().await?;
         assert_eq!(read_all(reader).await?, vec![1, 2, 3, 4]);
         assert_eq!(memory.used(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_waits_for_the_bytes_of_the_streams_whatever_their_rows() -> TestResult {
+        // The sink waits when its streams have as many bytes as 32 batches of narrow rows.
+        let narrow = rows(0, 8192)?;
+        let limit = 32 * batch_size(&narrow);
+        let (mut sink, _streams) = create(vec![vec![]], 1, Some(limit));
+        for _ in 0..32 {
+            write_now(&mut sink, vec![Some(narrow.clone())]);
+        }
+        let write = sink.write(vec![Some(narrow)]);
+        assert!(write.now_or_never().is_none());
+
+        // Two wide rows have more bytes than the 262144 narrow rows.
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Binary,
+            false,
+        )]));
+        let values = BinaryArray::from_iter_values([vec![0u8; limit], vec![0u8; limit]]);
+        let wide = RecordBatch::try_new(schema.clone(), vec![Arc::new(values)])?;
+        assert!(batch_size(&wide) >= 2 * limit);
+        let limit = Some(QueueLimit {
+            bytes: limit,
+            ceiling: 1,
+        });
+        let (mut sink, _streams) =
+            create_with_memory(vec![vec![]], 1, limit, Arc::default(), schema);
+        write_now(&mut sink, vec![Some(wide.clone())]);
+        let write = sink.write(vec![Some(wide)]);
+        assert!(write.now_or_never().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn batch_counts_for_its_arrays_if_it_has_rows() -> TestResult {
+        assert_eq!(batch_size(&rows(0, 0)?), 0);
+        assert!(batch_size(&rows(0, 100)?) >= 400);
+        let options = RecordBatchOptions::new().with_row_count(Some(100));
+        let schema = Arc::new(Schema::empty());
+        let batch = RecordBatch::try_new_with_options(schema, vec![], &options)?;
+        assert_eq!(batch_size(&batch), 1);
         Ok(())
     }
 
@@ -474,7 +523,7 @@ mod tests {
 
     #[tokio::test]
     async fn does_not_wait_for_readers_that_left_before_the_creation() -> TestResult {
-        // The rows for a reader that is gone do not count, so the sink only
+        // The bytes for a reader that is gone do not count, so the sink only
         // waits for the reader that is there.
         let (waiter, mut reader) = MemoryStream::pending();
         let (gone, _) = MemoryStream::pending();

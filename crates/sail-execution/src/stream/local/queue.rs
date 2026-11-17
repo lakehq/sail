@@ -75,11 +75,11 @@ impl Drop for Charge {
 /// When the writer of the queues of a task waits for the readers.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct QueueLimit {
-    /// The number of rows that the writer can always add to its queues.
-    pub rows: usize,
+    /// The number of bytes that the queues of the writer can always grow to.
+    pub bytes: usize,
     /// The number of bytes that the queues of all tasks of the process can hold
     /// before the writers wait. With one byte, a writer waits as soon as its own
-    /// queues hold the rows above. A ceiling of [`usize::MAX`] is never reached.
+    /// queues hold the bytes above. A ceiling of [`usize::MAX`] is never reached.
     pub ceiling: usize,
 }
 
@@ -88,11 +88,11 @@ pub(crate) struct QueueLimit {
 /// written to the channel. The readers are returned in the order of the channels.
 ///
 /// With a limit, the writer waits for the readers while both of the following hold.
-/// Its queues together have at least the rows of the limit, and the queues in the
+/// Its queues together have at least the bytes of the limit, and the queues in the
 /// given memory of the process have reached the ceiling of the limit. A write into
-/// empty queues never waits, whatever its size, and neither does a write without
-/// rows. Without a limit the writer never waits. The items count for the memory in
-/// either case.
+/// empty queues never waits, whatever its size, and neither does a write of items
+/// without bytes. Without a limit the writer never waits. The items count for the
+/// memory in either case.
 ///
 /// The writer does not continue because a reader waits for an item. If a reader
 /// only takes its next item once the writer has added more items for the other
@@ -101,12 +101,11 @@ pub(crate) struct QueueLimit {
 /// reader has taken anything for some time while one of them waits for an item
 /// and the write still has to wait.
 ///
-/// `rows` returns the number of rows of an item, and `size` its size in bytes.
+/// `size` returns the size of an item in bytes.
 pub(crate) fn task_queues<T>(
     channels: &[usize],
     limit: Option<QueueLimit>,
     memory: Arc<StreamMemory>,
-    rows: fn(&T) -> usize,
     size: fn(&T) -> usize,
 ) -> (QueueWriter<T>, Vec<QueueReader<T>>) {
     let mut queues = 0;
@@ -126,7 +125,7 @@ pub(crate) fn task_queues<T>(
                 closed: false,
             })
             .collect(),
-        rows: 0,
+        bytes: 0,
         live_readers: queues,
         waiting_readers: 0,
         taken: 0,
@@ -147,7 +146,6 @@ pub(crate) fn task_queues<T>(
     let writer = QueueWriter {
         shared,
         channels,
-        rows,
         size,
         wakers: vec![],
     };
@@ -168,8 +166,8 @@ impl<T> Shared<T> {
 
 struct State<T> {
     queues: Vec<Queue<T>>,
-    /// The rows of the items in all queues.
-    rows: usize,
+    /// The bytes of the items in all queues.
+    bytes: usize,
     /// The number of readers that have not been dropped.
     live_readers: usize,
     /// The number of readers that wait for an item.
@@ -193,20 +191,25 @@ struct Queue<T> {
 
 struct Item<T> {
     value: T,
-    rows: usize,
-    /// The bytes of the item, if it has rows.
+    /// The bytes of the item, if it has any.
     charge: Option<Arc<Charge>>,
 }
 
+impl<T> Item<T> {
+    fn bytes(&self) -> usize {
+        self.charge.as_ref().map_or(0, |charge| charge.bytes)
+    }
+}
+
 impl<T> State<T> {
-    /// Whether a write with rows has to wait. This is the only place that decides it,
+    /// Whether a write with bytes has to wait. This is the only place that decides it,
     /// for the writer and for the readers that look for a writer to wake up.
     fn is_full(&self, memory: &StreamMemory) -> bool {
         let Some(limit) = self.limit else {
             return false;
         };
-        self.rows > 0
-            && self.rows >= limit.rows
+        self.bytes > 0
+            && self.bytes >= limit.bytes
             && memory.used.load(Ordering::SeqCst) >= limit.ceiling
     }
 
@@ -218,8 +221,7 @@ impl<T> State<T> {
             .iter()
             .filter(|queue| queue.reader.is_some())
             .count();
-        items().map(|item| item.rows).sum::<usize>() == self.rows
-            && items().all(|item| item.charge.is_some() == (item.rows > 0))
+        items().map(Item::bytes).sum::<usize>() == self.bytes
             && live == self.live_readers
             && waiting == self.waiting_readers
             && self
@@ -258,7 +260,6 @@ pub(crate) struct QueueWriter<T> {
     shared: Arc<Shared<T>>,
     /// The queues of each channel.
     channels: Vec<Range<usize>>,
-    rows: fn(&T) -> usize,
     size: fn(&T) -> usize,
     /// The readers to wake up after a write, kept here to reuse the allocation.
     wakers: Vec<Waker>,
@@ -320,16 +321,16 @@ impl<T: Clone> QueueWriter<T> {
             let queues = &state.queues[queues.clone()];
             queues.iter().filter(|queue| !queue.closed).count()
         };
-        let rows = self
+        let bytes = self
             .channels
             .iter()
             .zip(items.iter())
-            .filter_map(|(queues, item)| Some(open(queues) * (self.rows)(item.as_ref()?)))
+            .filter_map(|(queues, item)| Some(open(queues) * (self.size)(item.as_ref()?)))
             .sum::<usize>();
         if let (Some(_), Some(limit)) = (waker, state.limit) {
             memory.ceiling.store(limit.ceiling, Ordering::SeqCst);
         }
-        if rows > 0 && state.is_full(memory) {
+        if bytes > 0 && state.is_full(memory) {
             if let Some(waker) = waker
                 && !state.writer.as_ref().is_some_and(|x| x.will_wake(waker))
             {
@@ -347,16 +348,11 @@ impl<T: Clone> QueueWriter<T> {
             if queues.peek().is_none() {
                 continue;
             }
-            // An item with rows counts as one byte at least, so that the memory is
-            // not empty while a writer has rows in its queues. This is how a ceiling
-            // of one byte makes the writer wait whenever its queues have the rows
-            // of the limit.
-            let rows = (self.rows)(value);
-            let charge = (rows > 0).then(|| Charge::new(memory, (self.size)(value).max(1)));
+            let size = (self.size)(value);
+            let charge = (size > 0).then(|| Charge::new(memory, size));
             for queue in queues {
                 queue.items.push_back(Item {
                     value: value.clone(),
-                    rows,
                     charge: charge.clone(),
                 });
                 if let Some(reader) = queue.reader.take() {
@@ -365,7 +361,7 @@ impl<T: Clone> QueueWriter<T> {
                 }
             }
         }
-        state.rows += rows;
+        state.bytes += bytes;
         debug_assert!(state.is_consistent());
         drop(guard);
         for waker in self.wakers.drain(..) {
@@ -428,7 +424,7 @@ impl<T> Stream for QueueReader<T> {
         let state = &mut *guard;
         let queue = &mut state.queues[self.index];
         if let Some(item) = queue.items.pop_front() {
-            state.rows -= item.rows;
+            state.bytes -= item.bytes();
             state.taken = state.taken.wrapping_add(1);
             // The bytes of the item may no longer count, which the writer has to see.
             drop(item.charge);
@@ -471,7 +467,7 @@ impl<T> Drop for QueueReader<T> {
         if queue.reader.take().is_some() {
             state.waiting_readers -= 1;
         }
-        state.rows -= items.iter().map(|item| item.rows).sum::<usize>();
+        state.bytes -= items.iter().map(Item::bytes).sum::<usize>();
         state.live_readers -= 1;
         // The writer may not have to wait anymore, or may find that all readers are gone.
         let writer = state.writer.take();
@@ -506,20 +502,20 @@ mod tests {
         1
     }
 
-    fn limit(rows: usize, ceiling: usize) -> Option<QueueLimit> {
-        Some(QueueLimit { rows, ceiling })
+    fn limit(bytes: usize, ceiling: usize) -> Option<QueueLimit> {
+        Some(QueueLimit { bytes, ceiling })
     }
 
     /// Creates one queue for each of the given number of channels, in a process
     /// that has no memory left for them, so that the writer waits whenever its
-    /// queues have the given number of rows.
+    /// queues have the given number of bytes.
     fn strict_queues<T>(
         channels: usize,
-        rows: Option<usize>,
-        count: fn(&T) -> usize,
+        bytes: Option<usize>,
+        size: fn(&T) -> usize,
     ) -> (QueueWriter<T>, Vec<QueueReader<T>>) {
-        let limit = rows.and_then(|rows| limit(rows, 1));
-        task_queues(&vec![1; channels], limit, Arc::default(), count, one)
+        let limit = bytes.and_then(|bytes| limit(bytes, 1));
+        task_queues(&vec![1; channels], limit, Arc::default(), size)
     }
 
     /// Completes a future that no longer has to wait.
@@ -563,7 +559,7 @@ mod tests {
             assert_eq!(readers[1].next().await, Some(1));
             assert_eq!(soon(write).await?, QueueWrite::Queued);
         }
-        // The queues have four rows again.
+        // The queues have four bytes again.
         {
             let mut write = pin!(writer.write(vec![None, Some(2)]));
             assert!(poll!(&mut write).is_pending());
@@ -594,7 +590,7 @@ mod tests {
             assert_eq!(readers[0].next().await, Some(1));
             assert!(poll!(&mut write).is_pending());
             assert_eq!(readers[1].next().await, Some(1));
-            // A write into empty queues never waits, whatever its rows.
+            // A write into empty queues never waits, whatever its size.
             assert_eq!(soon(write).await?, QueueWrite::Queued);
         }
         assert_eq!(readers[0].next().await, Some(5));
@@ -672,7 +668,7 @@ mod tests {
         let items = vec![Some(item), Some(Arc::new(1))];
         assert_eq!(writer.write(items).await, QueueWrite::Queued);
         {
-            // The rows of the reader that is gone do not count anymore.
+            // The bytes of the reader that is gone do not count anymore.
             let mut write = pin!(writer.write(vec![Some(Arc::new(1)), Some(Arc::new(1))]));
             assert!(poll!(&mut write).is_pending());
             drop(readers.remove(0));
@@ -846,10 +842,10 @@ mod tests {
     async fn writer_continues_when_another_task_releases_the_memory_of_the_process() -> TestResult {
         let memory = Arc::new(StreamMemory::default());
         // The queue of another writer takes all the memory.
-        let (mut other, mut others) = task_queues(&[1], None, memory.clone(), value, value);
+        let (mut other, mut others) = task_queues(&[1], None, memory.clone(), value);
         write_now(&mut other, vec![Some(100)]);
         let limit = limit(1, 100);
-        let (mut writer, mut readers) = task_queues(&[1, 1], limit, memory.clone(), one, one);
+        let (mut writer, mut readers) = task_queues(&[1, 1], limit, memory.clone(), one);
         write_now(&mut writer, vec![Some(0), None]);
         // The second reader waits for an item while the first reader takes nothing.
         assert!(poll!(readers[1].next()).is_pending());
@@ -869,7 +865,7 @@ mod tests {
         assert!(start.elapsed() < STALL_TIMEOUT);
 
         // The writer waits again when the process is short of memory.
-        let (mut other, _others) = task_queues(&[1], None, memory.clone(), value, value);
+        let (mut other, _others) = task_queues(&[1], None, memory.clone(), value);
         write_now(&mut other, vec![Some(100)]);
         assert!(writer.write(vec![Some(2), None]).now_or_never().is_none());
         Ok(())
@@ -906,8 +902,8 @@ mod tests {
     async fn write_never_waits_while_the_process_has_memory() {
         let memory = Arc::new(StreamMemory::default());
         let limit = limit(1, usize::MAX);
-        let (mut writer, readers) = task_queues(&[1, 1], limit, memory.clone(), value, value);
-        // The queues have far more rows than the writer can always add.
+        let (mut writer, readers) = task_queues(&[1, 1], limit, memory.clone(), value);
+        // The queues have far more bytes than the writer can always add.
         for _ in 0..1000 {
             write_now(&mut writer, vec![Some(3), Some(4)]);
         }
@@ -918,9 +914,7 @@ mod tests {
 
     #[tokio::test]
     async fn write_waits_only_for_the_bytes_above_the_ceiling() -> TestResult {
-        // Each row takes one byte.
-        let (mut writer, mut readers) =
-            task_queues(&[1], limit(2, 100), Arc::default(), value, value);
+        let (mut writer, mut readers) = task_queues(&[1], limit(2, 100), Arc::default(), value);
         for _ in 0..10 {
             write_now(&mut writer, vec![Some(10)]);
         }
@@ -928,7 +922,7 @@ mod tests {
             let mut write = pin!(writer.write(vec![Some(10)]));
             assert!(poll!(&mut write).is_pending());
             // The queue is below the ceiling again, though far above the two
-            // rows that the writer can always add.
+            // bytes that the writer can always add.
             assert_eq!(readers[0].next().await, Some(10));
             assert_eq!(soon(write).await?, QueueWrite::Queued);
         }
@@ -939,12 +933,12 @@ mod tests {
     async fn write_waits_at_the_ceiling_only_above_its_limit() -> TestResult {
         let memory = Arc::new(StreamMemory::default());
         // The queue of another writer takes all the memory.
-        let (mut other, mut others) = task_queues(&[1], None, memory.clone(), value, value);
+        let (mut other, mut others) = task_queues(&[1], None, memory.clone(), value);
         write_now(&mut other, vec![Some(100)]);
         assert_eq!(memory.used(), 100);
 
         let limit = limit(3, 100);
-        let (mut writer, mut readers) = task_queues(&[1], limit, memory.clone(), one, one);
+        let (mut writer, mut readers) = task_queues(&[1], limit, memory.clone(), one);
         for i in 0..3 {
             write_now(&mut writer, vec![Some(i)]);
         }
@@ -982,32 +976,18 @@ mod tests {
 
     #[tokio::test]
     async fn item_counts_for_the_memory_until_it_is_gone() {
-        fn rows(item: &(usize, usize)) -> usize {
-            item.0
-        }
-
-        fn size(item: &(usize, usize)) -> usize {
-            item.1
-        }
-
-        // The first number of an item is its rows, and the second one its bytes.
         // The items count whether or not the writer ever waits.
         let memory = Arc::new(StreamMemory::default());
-        let (mut writer, mut readers) = task_queues(&[1, 1, 1], None, memory.clone(), rows, size);
-        write_now(
-            &mut writer,
-            vec![Some((1, 2)), Some((1, 30)), Some((1, 500))],
-        );
-        write_now(&mut writer, vec![Some((1, 7)), None, Some((1, 9000))]);
+        let (mut writer, mut readers) = task_queues(&[1, 1, 1], None, memory.clone(), value);
+        write_now(&mut writer, vec![Some(2), Some(30), Some(500)]);
+        write_now(&mut writer, vec![Some(7), None, Some(9000)]);
         assert_eq!(memory.used(), 9539);
         // Each item counts on its own, whichever write it came with.
-        assert_eq!(readers[0].next().await, Some((1, 2)));
+        assert_eq!(readers[0].next().await, Some(2));
         assert_eq!(memory.used(), 9537);
-        assert_eq!(readers[2].next().await, Some((1, 500)));
+        assert_eq!(readers[2].next().await, Some(500));
         assert_eq!(memory.used(), 9037);
-        // An item without rows does not count, and an item with rows counts as
-        // one byte at least.
-        write_now(&mut writer, vec![Some((0, 99)), Some((1, 0)), None]);
+        write_now(&mut writer, vec![Some(0), Some(1), None]);
         assert_eq!(memory.used(), 9038);
         drop(writer);
         assert_eq!(memory.used(), 9038);
@@ -1020,7 +1000,7 @@ mod tests {
     #[tokio::test]
     async fn item_counts_once_for_all_queues_of_its_channel() {
         let memory = Arc::new(StreamMemory::default());
-        let (mut writer, mut readers) = task_queues(&[3, 1], None, memory.clone(), one, value);
+        let (mut writer, mut readers) = task_queues(&[3, 1], None, memory.clone(), value);
         write_now(&mut writer, vec![Some(100), Some(1)]);
         write_now(&mut writer, vec![Some(20), None]);
         assert_eq!(memory.used(), 121);
@@ -1047,8 +1027,7 @@ mod tests {
     #[tokio::test]
     async fn dropped_write_counts_for_nothing() {
         let memory = Arc::new(StreamMemory::default());
-        let (mut writer, mut readers) =
-            task_queues(&[1], limit(1, 1), memory.clone(), value, value);
+        let (mut writer, mut readers) = task_queues(&[1], limit(1, 1), memory.clone(), value);
         write_now(&mut writer, vec![Some(5)]);
         {
             let mut write = pin!(writer.write(vec![Some(5)]));
@@ -1074,10 +1053,10 @@ mod tests {
                     .map(|_| rng.random_range(1..=2usize))
                     .collect::<Vec<_>>();
                 let limit = (rng.random_range(0..4) != 0).then(|| QueueLimit {
-                    rows: rng.random_range(0..=600),
+                    bytes: rng.random_range(0..=600),
                     ceiling: [1, 1000, usize::MAX][rng.random_range(0..3)],
                 });
-                let (writer, queues) = task_queues(&channels, limit, memory.clone(), value, value);
+                let (writer, queues) = task_queues(&channels, limit, memory.clone(), value);
                 writers.push((writer, channels.len()));
                 readers.extend(queues);
             }
@@ -1130,7 +1109,7 @@ mod tests {
             let memory = Arc::new(StreamMemory::default());
             // The memory falls below the ceiling when the last of these items is taken,
             // and stays there whatever the writers add.
-            let (mut other, mut others) = task_queues(&[1], None, memory.clone(), value, value);
+            let (mut other, mut others) = task_queues(&[1], None, memory.clone(), value);
             let items = rng.random_range(1..=4usize);
             for _ in 0..items {
                 write_now(&mut other, vec![Some(CEILING)]);
@@ -1139,7 +1118,7 @@ mod tests {
             let mut unread = vec![];
             for _ in 0..rng.random_range(4..=8usize) {
                 let limit = limit(1, CEILING);
-                let (mut writer, readers) = task_queues(&[1], limit, memory.clone(), one, one);
+                let (mut writer, readers) = task_queues(&[1], limit, memory.clone(), one);
                 write_now(&mut writer, vec![Some(0)]);
                 writers.push((writer, rng.random_range(0..3usize)));
                 unread.push(readers);
@@ -1188,7 +1167,7 @@ mod tests {
     /// the memory of the process in the end.
     #[test]
     fn stress() -> TestResult {
-        // The second number of an item is its rows, and its bytes as well.
+        // The second number of an item is its bytes.
         fn weight(item: &(usize, usize)) -> usize {
             item.1
         }
@@ -1213,11 +1192,10 @@ mod tests {
             let (mut writer, readers) = task_queues(
                 &channels,
                 Some(QueueLimit {
-                    rows: limit,
+                    bytes: limit,
                     ceiling,
                 }),
                 memory.clone(),
-                weight,
                 weight,
             );
             let outcome = runtime.block_on(async move {

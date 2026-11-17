@@ -239,10 +239,8 @@
   type: number
   default: "16"
   description: |
-    The number of batches of `execution.batch_size` rows that a task can always queue
-    in memory for the tasks that read its output, counted over all its readers. Beyond
-    that, the task waits for its readers when the task streams are at
-    `cluster.task_stream_memory_limit`.
+    The number of batches that a round-robin repartition buffers for each of its
+    output partitions.
   experimental: true
 
 - key: cluster.task_stream_memory_limit
@@ -251,8 +249,9 @@
   description: |
     The amount of memory in bytes that the task streams of a process (a worker, or
     the whole process in local-cluster mode) can hold before tasks wait for the
-    readers of their output. A task can always queue `cluster.task_stream_buffer`
-    batches. Outputs that every reader collects in full (the build side of a broadcast
+    readers of their output. A task can always queue output until it has
+    `cluster.shuffle_write_buffer_size` bytes in its streams, counted over all its
+    readers. Outputs that every reader collects in full (the build side of a broadcast
     join), outputs whose reader chooses by the data which input it reads next (an
     ordered merge, a sort-merge join), and the result of a job are not limited. They
     count as well, so a large unread result or broadcast side can make other tasks
@@ -274,7 +273,9 @@
     The size in bytes of the rows that a task holds for a shuffle write before it
     writes them to all output channels. Set to `0` for no limit on the size; a task
     then holds up to `execution.batch_size` rows for each output channel. Most users
-    should not disable the limit.
+    should not disable the limit. This is also the size of the output that a task can
+    always have in its task streams at `cluster.task_stream_memory_limit`; with `0`,
+    the task waits at that limit until all its output has been read.
   experimental: true
 
 - key: cluster.task_stream_creation_timeout_secs

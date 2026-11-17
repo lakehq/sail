@@ -124,9 +124,8 @@ impl LocalStreamManager {
         // when the streams are created after the streams of the stage have been
         // removed, since nobody may ever read or remove them.
         let bounded = bounded && !self.cleaned.contains(&(key.job_id, key.stage));
-        let buffer = self.options.task_stream_buffer;
         let limit = bounded.then(|| QueueLimit {
-            rows: buffer.saturating_mul(self.options.batch_size),
+            bytes: self.options.shuffle_write_buffer_size,
             ceiling: self.ceiling,
         });
         let memory = self.memory.clone();
@@ -301,16 +300,15 @@ mod tests {
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-    /// Creates a manager whose sinks can always queue one batch of one row, and
-    /// wait beyond that when the task streams hold the given number of bytes.
+    /// Creates a manager whose sinks can always queue one byte, and wait beyond
+    /// that when the task streams hold the given number of bytes.
     fn manager_with_memory_limit(
         limit: usize,
     ) -> Result<LocalStreamManager, Box<dyn std::error::Error>> {
         let handle = tokio::runtime::Handle::current();
         let runtime = RuntimeHandle::new(handle.clone(), handle);
         let mut config = AppConfig::load()?;
-        config.execution.batch_size = 1;
-        config.cluster.task_stream_buffer = 1;
+        config.cluster.shuffle_write_buffer_size = 1;
         config.cluster.task_stream_memory_limit = limit;
         let options = WorkerOptions::new(&config, runtime, SessionContext::new());
         let mut manager = LocalStreamManager::new((&options).into());
@@ -319,7 +317,7 @@ mod tests {
         Ok(manager)
     }
 
-    /// Creates a manager whose sinks wait when their streams have one row.
+    /// Creates a manager whose sinks wait when their streams have one byte.
     fn manager() -> Result<LocalStreamManager, Box<dyn std::error::Error>> {
         manager_with_memory_limit(1)
     }
