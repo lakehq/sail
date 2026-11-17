@@ -273,9 +273,14 @@ impl<T: Clone> QueueWriter<T> {
     /// completes. An item is not added to the queues whose reader is gone.
     pub(crate) async fn write(&mut self, items: Vec<Option<T>>) -> QueueWrite {
         let stall_timeout = self.stall_timeout;
+        // The items are sized once, before the lock of the task is taken.
+        let sizes: Vec<_> = items
+            .iter()
+            .map(|x| x.as_ref().map_or(0, self.size))
+            .collect();
         let mut stalled = false;
         loop {
-            let taken = match self.admit(&items, None) {
+            let taken = match self.admit(&items, &sizes, None) {
                 Admission::Queued => break,
                 Admission::Closed => return QueueWrite::Closed,
                 Admission::Full { taken } => taken,
@@ -290,7 +295,7 @@ impl<T: Clone> QueueWriter<T> {
                 while released.as_mut().poll(cx).is_ready() {
                     released.set(memory.released.notified());
                 }
-                match self.admit(&items, Some(cx.waker())) {
+                match self.admit(&items, &sizes, Some(cx.waker())) {
                     Admission::Full { .. } => Poll::Pending,
                     admission => Poll::Ready(admission),
                 }
@@ -311,7 +316,7 @@ impl<T: Clone> QueueWriter<T> {
 
     /// Adds the items to the queues unless the write has to wait.
     /// In that case the waker is notified when the write should be tried again.
-    fn admit(&mut self, items: &[Option<T>], waker: Option<&Waker>) -> Admission {
+    fn admit(&mut self, items: &[Option<T>], sizes: &[usize], waker: Option<&Waker>) -> Admission {
         let memory = &self.shared.memory;
         let mut guard = self.shared.lock();
         let state = &mut *guard;
@@ -326,8 +331,8 @@ impl<T: Clone> QueueWriter<T> {
         let bytes = self
             .channels
             .iter()
-            .zip(items.iter())
-            .filter_map(|(queues, item)| Some(open(queues) * (self.size)(item.as_ref()?)))
+            .zip(sizes)
+            .map(|(queues, size)| open(queues) * size)
             .sum::<usize>();
         if let (Some(_), Some(limit)) = (waker, state.limit) {
             memory.ceiling.store(limit.ceiling, Ordering::SeqCst);
@@ -341,7 +346,7 @@ impl<T: Clone> QueueWriter<T> {
             return Admission::Full { taken: state.taken };
         }
         state.writer = None;
-        for (queues, item) in self.channels.iter().zip(items) {
+        for ((queues, item), &size) in self.channels.iter().zip(items).zip(sizes) {
             let Some(value) = item else {
                 continue;
             };
@@ -350,7 +355,6 @@ impl<T: Clone> QueueWriter<T> {
             if queues.peek().is_none() {
                 continue;
             }
-            let size = (self.size)(value);
             let charge = (size > 0).then(|| Charge::new(memory, size));
             for queue in queues {
                 queue.items.push_back(Item {
