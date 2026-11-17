@@ -213,6 +213,28 @@ mod tests {
     };
 
     #[test]
+    fn test_flight_initial_connection_window_size() -> Result<(), Box<dyn std::error::Error>> {
+        let mut config = sail_common::config::AppConfig::load()?;
+        let backend = ShuffleBackendKind::from(&config.cluster.shuffle_backend);
+        assert_eq!(
+            backend.flight_initial_connection_window_size(),
+            Some(2147483647)
+        );
+        let sail_common::config::ShuffleBackend::Flight(flight) =
+            &mut config.cluster.shuffle_backend
+        else {
+            return Err("the default shuffle backend must be Flight".into());
+        };
+        flight.initial_connection_window_size = Some(64 * 1024 * 1024);
+        let backend = ShuffleBackendKind::from(&config.cluster.shuffle_backend);
+        assert_eq!(
+            backend.flight_initial_connection_window_size(),
+            Some(64 * 1024 * 1024)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_celeborn_endpoint_overrides_string() {
         let backend = ShuffleBackendKind::Celeborn {
             master_endpoints: vec!["master:12097".to_string()],

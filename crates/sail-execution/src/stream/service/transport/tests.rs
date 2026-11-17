@@ -235,8 +235,7 @@ async fn custom_window_sizes_are_advertised_for_streams_and_connection()
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
         let stream_window_size: u32 = 4 * 1024 * 1024;
-        // The configured connection window size has no effect.
-        let connection_window_size: u32 = MAX_WINDOW_SIZE;
+        let connection_window_size: u32 = 16 * 1024 * 1024;
         // Inspect the HTTP/2 preface directly so this verifies both flow-control levels.
         let server = AbortOnDropHandle::new(tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await?;
@@ -279,7 +278,7 @@ async fn custom_window_sizes_are_advertised_for_streams_and_connection()
             port: address.port(),
             flight_connection_count: NonZeroUsize::MIN,
             flight_initial_stream_window_size: Some(stream_window_size),
-            flight_initial_connection_window_size: Some(16 * 1024 * 1024),
+            flight_initial_connection_window_size: Some(connection_window_size),
         };
         let _transport = FlightTransport::connect(&options).await?;
         server.await??;
@@ -396,8 +395,8 @@ async fn unread_streams_do_not_stall_other_streams_on_connection() -> Result<(),
         let (mut options, connections, sent, _server) = data_server().await?;
         let window: usize = 2 * 1024 * 1024;
         options.flight_initial_stream_window_size = Some(window as u32);
-        // A small configured connection window has no effect.
-        options.flight_initial_connection_window_size = Some(window as u32);
+        // The connection window has its default size, which is the largest.
+        options.flight_initial_connection_window_size = Some(crate::rpc::MAX_WINDOW_SIZE);
         let transport = FlightTransport::connect(&options).await?;
         // Each of these responses has more data than its stream window and is not read,
         // so the server sends as much of it as the stream window allows.

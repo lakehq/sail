@@ -18,7 +18,7 @@ use tonic::codegen::http::{Request, Response, Uri};
 use tower::{Service, ServiceBuilder, ServiceExt};
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::rpc::{CLIENT_MAX_HEADER_LIST_SIZE, ClientBuilder, ClientOptions, MAX_WINDOW_SIZE};
+use crate::rpc::{CLIENT_MAX_HEADER_LIST_SIZE, ClientBuilder, ClientOptions};
 
 #[cfg(test)]
 mod tests;
@@ -46,11 +46,6 @@ impl ClientBuilder for FlightClient {
 /// Internal Flight connections allow early termination of many shuffle streams (e.g. LIMIT).
 /// Tonic's Channel does not expose Hyper's client reset budget, so we use Hyper directly.
 /// All clones share a pool of connections and dispatch requests in round-robin order.
-///
-/// A shuffle stream that is open but not being read holds up to one stream window of
-/// the window that all streams on its connection share. Each connection therefore
-/// always has the largest window, so that such streams do not stall the other streams
-/// on the connection.
 #[derive(Clone)]
 pub(super) struct FlightTransport {
     inner: Arc<TransportInner>,
@@ -62,6 +57,7 @@ struct TransportInner {
     senders: Vec<Mutex<Option<SendRequest<Body>>>>,
     next_connection: AtomicUsize,
     initial_stream_window_size: Option<u32>,
+    initial_connection_window_size: Option<u32>,
 }
 
 enum Connector {
@@ -75,7 +71,7 @@ impl FlightTransport {
             ("stream", options.flight_initial_stream_window_size),
             ("connection", options.flight_initial_connection_window_size),
         ] {
-            if size.is_some_and(|size| size > MAX_WINDOW_SIZE) {
+            if size.is_some_and(|size| size > i32::MAX as u32) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     format!("Flight initial {name} window size must not exceed 2147483647 bytes"),
@@ -112,6 +108,7 @@ impl FlightTransport {
                     .collect(),
                 next_connection: AtomicUsize::new(0),
                 initial_stream_window_size: options.flight_initial_stream_window_size,
+                initial_connection_window_size: options.flight_initial_connection_window_size,
             }),
         };
         transport.sender(0).await?;
@@ -146,8 +143,7 @@ impl FlightTransport {
         let (new_sender, connection) = Builder::new(TokioExecutor::new())
             .timer(TokioTimer::new())
             .initial_stream_window_size(self.inner.initial_stream_window_size)
-            // The configured connection window size is not used.
-            .initial_connection_window_size(Some(MAX_WINDOW_SIZE))
+            .initial_connection_window_size(self.inner.initial_connection_window_size)
             .max_header_list_size(CLIENT_MAX_HEADER_LIST_SIZE)
             // Trusted internal shuffle traffic can legitimately cancel many streams. Late frames
             // may count as internal resets; the lifetime budget must not kill unrelated streams.

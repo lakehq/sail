@@ -396,12 +396,13 @@
 
 - key: cluster.shuffle_backend.flight.initial_connection_window_size
   type: number
-  default: "0"
+  default: "2147483647"
   description: |
-    This option is kept for compatibility and has no effect. The Flight shuffle client
-    always uses the largest HTTP/2 receive window (`2147483647` bytes) for each
-    connection, so that streams that are not being read do not stall the other streams
-    on the connection.
+    The initial HTTP/2 receive window size in bytes shared by all streams on each
+    connection in the Flight shuffle client. The default is the largest value that
+    HTTP/2 allows. Most users should not change it: with a smaller window, streams that
+    are open but not being read can use up the window and stall the other streams on the
+    same connection. Set to `0` to use the transport default.
   experimental: true
 
 - key: cluster.shuffle_backend.storage.path

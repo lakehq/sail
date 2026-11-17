@@ -14,14 +14,17 @@ pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail local-cluster mode
 @pytest.fixture(
     scope="module",
     params=[
-        (None, None, None, None),
-        ("none", 1, 65535, None),
-        ("lz4", 3, None, 1048576),
-        ("zstd", 4, 4194304, 16777216),
+        (None, None, None),
+        ("none", 1, 65535),
+        ("lz4", 3, None),
+        ("zstd", 4, 4194304),
     ],
     ids=["default", "none-one-connection", "lz4-three-connections", "zstd-four-connections"],
 )
 def remote(request):
+    # The connection window keeps its default size, which is the largest. With a smaller
+    # window, the streams that these tests leave open and unread stall the other streams
+    # on their connection.
     envs = {
         "SAIL_MODE": "local-cluster",
         "SAIL_CLUSTER__TASK_STREAM_BUFFER": "1",
@@ -29,15 +32,13 @@ def remote(request):
         "SAIL_CLUSTER__TASK_STREAM_MEMORY_LIMIT": "1",
         "SAIL_EXECUTION__BATCH_SIZE": "256",
     }
-    compression, connection_count, stream_window_size, connection_window_size = request.param
+    compression, connection_count, stream_window_size = request.param
     if compression is not None:
         envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__COMPRESSION"] = compression
     if connection_count is not None:
         envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT"] = str(connection_count)
     if stream_window_size is not None:
         envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__INITIAL_STREAM_WINDOW_SIZE"] = str(stream_window_size)
-    if connection_window_size is not None:
-        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__INITIAL_CONNECTION_WINDOW_SIZE"] = str(connection_window_size)
     with spark_connect_server(envs=envs) as server:
         yield server.remote
 
