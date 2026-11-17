@@ -230,8 +230,9 @@ impl PythonDataSourceStream {
                             if let Err(e) =
                                 super::arrow_utils::validate_schema(&schema, batch.schema_ref())
                             {
-                                let _ =
-                                    tx.blocking_send(Err(with_partition_context(partition_id, e)));
+                                let _ = py.detach(|| {
+                                    tx.blocking_send(Err(with_partition_context(partition_id, e)))
+                                });
                                 break;
                             }
 
@@ -241,7 +242,7 @@ impl PythonDataSourceStream {
                                 .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
                             metrics.batches_processed.fetch_add(1, Ordering::Relaxed);
 
-                            if tx.blocking_send(Ok(batch)).is_err() {
+                            if py.detach(|| tx.blocking_send(Ok(batch))).is_err() {
                                 break;
                             }
                         } else {
@@ -263,7 +264,7 @@ impl PythonDataSourceStream {
                                     .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
                                 metrics.batches_processed.fetch_add(1, Ordering::Relaxed);
 
-                                if tx.blocking_send(Ok(batch)).is_err() {
+                                if py.detach(|| tx.blocking_send(Ok(batch))).is_err() {
                                     break;
                                 }
                             }
@@ -278,13 +279,13 @@ impl PythonDataSourceStream {
                                     .rows_processed
                                     .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
                                 metrics.batches_processed.fetch_add(1, Ordering::Relaxed);
-                                let _ = tx.blocking_send(Ok(batch));
+                                let _ = py.detach(|| tx.blocking_send(Ok(batch)));
                             }
                             break;
                         }
                         // Other error - wrap with partition context
-                        let _ =
-                            tx.blocking_send(Err(with_partition_context(partition_id, py_err(e))));
+                        let e = with_partition_context(partition_id, py_err(e));
+                        let _ = py.detach(|| tx.blocking_send(Err(e)));
                         break;
                     }
                 }

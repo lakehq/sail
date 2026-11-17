@@ -14,11 +14,11 @@ to use this environment (`.venvs/default`) for Python development.
 
 ::: info
 
-1. For the Sail project, all Hatch environments are configured to use `pip` as the package installer for local development,
-   so pip environment variables such as `PIP_INDEX_URL` still work.
-   However, it is recommended to also set `uv` environment variables such as `UV_INDEX_URL`, since Hatch
-   uses `uv` as the package installer for internal environments (e.g. when doing static analysis
-   via `hatch fmt`.)
+1. Sail's Hatch environments use `uv` as the package installer for both local development and CI.
+   For custom package indexes or mirrors, configure `uv` using `UV_INDEX_URL` or its
+   [configuration files](https://docs.astral.sh/uv/configuration/files/).
+   `uv` does not read pip-specific settings such as `PIP_INDEX_URL` or `pip.conf`.
+   The environments also include `pip` for manual package installation and IDE support.
 2. Hatch will download prebuilt Python interpreters when the specified Python version for an environment
    is not installed on your host. Note that the prebuilt Python interpreters only track the **minor version** of Python.
    If downloading prebuilt Python interpreters fails (e.g. due to network issues), or if you want precise control

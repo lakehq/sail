@@ -17,6 +17,8 @@ from testcontainers.core.image import DockerImage
 from testcontainers.core.network import Network
 from testcontainers.core.waiting_utils import wait_for_logs
 
+from pysail.testing.resources import resource
+
 if TYPE_CHECKING:
     from collections.abc import Generator
 
@@ -202,6 +204,7 @@ def _core_site_config(rpc_protection: str) -> str:
 
 
 @pytest.fixture(scope="session", params=["buffered", "framed"])
+@resource(name="hms-native", weight=10)
 def hms_service(request: pytest.FixtureRequest) -> Generator[HmsService, None, None]:
     """Exercise the native provider against both server transport modes."""
     transport = str(request.param)
@@ -221,6 +224,7 @@ def hms_service(request: pytest.FixtureRequest) -> Generator[HmsService, None, N
 
 
 @pytest.fixture(scope="session")
+@resource(name="hms-kerberos", weight=10)
 def kerberos_kdc_image() -> Generator[str, None, None]:
     """Build once and remove only this run's tag, preserving concurrent users."""
     image_tag = f"pysail-kerberos-kdc:test-{os.getpid()}-{uuid.uuid4().hex[:8]}"

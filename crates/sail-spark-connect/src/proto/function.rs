@@ -15,13 +15,13 @@ mod tests {
     use sail_common::tests::test_gold_set;
     use sail_common_datafusion::extension::SessionExtensionAccessor;
     use sail_common_datafusion::session::job::JobService;
+    use sail_common_spark::data_type::JsonDataType;
     use sail_plan::resolve_and_execute_plan;
     use sail_telemetry::telemetry::init_telemetry;
     use sail_telemetry::{ResourceKind, ResourceOptions};
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};
-    use crate::proto::data_type_json::JsonDataType;
     use crate::session::SparkSession;
     use crate::session_manager::create_spark_session_manager;
     use crate::spark::connect::relation::RelType;

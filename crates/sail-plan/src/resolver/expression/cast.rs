@@ -2,7 +2,7 @@ use std::ops::{Div, Mul};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{DFSchemaRef, ScalarValue};
+use datafusion_common::DFSchemaRef;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast};
 use sail_common::spec;
 use sail_common::utils::datetime::time_unit_to_multiplier;
@@ -348,14 +348,6 @@ impl PlanResolver<'_> {
                 SparkToUtf8View::new().with_timezone(Some(session_timezone)),
             )
             .call(spark_string_cast_arguments(expr, schema)?),
-            (DataType::Date32 | DataType::Date64, to, _)
-                if to.is_numeric() || matches!(to, DataType::Boolean) =>
-            {
-                if !is_try && self.config.ansi_mode {
-                    return Err(PlanError::invalid(format!("cannot cast date to {to}")));
-                }
-                lit(ScalarValue::try_from(&to)?)
-            }
             (from, to, _)
                 if needs_struct_field_rename(&from, &to)
                     || unique_struct_field_names(&to) != to =>

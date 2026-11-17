@@ -19,6 +19,7 @@ from testcontainers.core.network import Network
 from testcontainers.core.wait_strategies import HttpWaitStrategy
 
 from pysail.testing._dev.spark.utils.jvm import classic_spark_mode, delta_spark_maven_coordinate
+from pysail.testing.resources import resource
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 
 if TYPE_CHECKING:
@@ -186,6 +187,7 @@ def hms_s3_network() -> Generator[Network, None, None]:
 
 
 @pytest.fixture(scope="session")
+@resource(name="hms-spark", weight=10)
 def hms_s3_silo_container(
     hms_s3_network: Network,
 ) -> Generator[DockerContainer, None, None]:

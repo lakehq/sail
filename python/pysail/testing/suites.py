@@ -1,4 +1,4 @@
-"""Infer suites before pytest applies its standard marker and keyword filters."""
+"""Select tests by suite and assign PySpark versions by affinity."""
 
 import json
 import os
@@ -12,6 +12,7 @@ import pytest
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
+from pysail.testing.resources import resource_affinity
 from pysail.testing.spark.markers import resolve_spark_markers
 from pysail.testing.spark.utils.common import pyspark_version
 
@@ -88,7 +89,8 @@ def matrix_versions() -> tuple[str | None, list[str]]:
     return seed, versions
 
 
-def assigned_versions(item: pytest.Item, suite: str, seed: str, versions: list[str]) -> list[str]:
+def assigned_versions(item: pytest.Item, affinity: tuple[str, str], seed: str, versions: list[str]) -> list[str]:
+    """Assign compatible versions using the affinity and cross-version markers."""
     try:
         supports = resolve_spark_markers(item.iter_markers("spark"))
     except (TypeError, ValueError) as error:
@@ -99,11 +101,10 @@ def assigned_versions(item: pytest.Item, suite: str, seed: str, versions: list[s
     eligible = sorted((version for version in versions if Version(version) in requirements), key=Version)
     if not eligible or any(support.cross_version for support in supports):
         return eligible
-    # Hash each group independently: collection can differ between client versions,
-    # or when users apply -m, -k, or path filters. Neither changes group assignment.
-    key = json.dumps([seed, suite, str(requirements)])
-    index = int.from_bytes(sha256(key.encode()).digest(), "big") % len(eligible)
-    return [eligible[index]]
+    # Each affinity has one version preference order. Narrowing requirements only
+    # changes assignment if the preferred version becomes ineligible. Collection
+    # order and -m/-k/path filters do not affect the preference order.
+    return [max(eligible, key=lambda version: sha256(json.dumps([seed, affinity, version]).encode()).digest())]
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -111,7 +112,7 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "integration(group): tests requiring external services")
 
 
-def relative_test_path(path: Path) -> Path:
+def relative_test_path(path: Path, *, strip_dev: bool = True) -> Path:
     # Installed sanity tests and externally supplied development tests have different roots.
     dev = sys.modules.get("pysail.tests._dev")
     roots = [Path(__file__).resolve().parents[1] / "tests"]
@@ -120,8 +121,29 @@ def relative_test_path(path: Path) -> Path:
     for root in roots:
         if path.is_relative_to(root):
             relative = path.relative_to(root)
-            return relative.relative_to("_dev") if relative.parts[0] == "_dev" else relative
+            if dev is not None and root == Path(dev.__file__).resolve().parent:
+                relative = Path("_dev") / relative
+            return relative.relative_to("_dev") if strip_dev and relative.parts[0] == "_dev" else relative
     return path
+
+
+def scenario_feature_path(item: pytest.Item) -> Path | None:
+    scenario = getattr(getattr(item, "function", None), "__scenario__", None)
+    filename = getattr(getattr(scenario, "feature", None), "filename", None)
+    return Path(filename).resolve() if filename else None
+
+
+def item_affinity(item: pytest.Item) -> tuple[str, str]:
+    """Return the (kind, identifier) used to share a version preference order.
+
+    Prefer a resource with weight above 1, otherwise a BDD feature file or module.
+    """
+    affinity = resource_affinity(item)
+    if affinity is not None:
+        return affinity
+    feature = scenario_feature_path(item)
+    kind, path = ("feature", feature) if feature is not None else ("module", item.path.resolve())
+    return kind, relative_test_path(path, strip_dev=False).as_posix()
 
 
 def path_group(path: Path, groups: dict[str, tuple[str, ...]], default: str) -> str:
@@ -175,15 +197,15 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             validate_suite_name(name)
             item.add_marker(pytest.mark.suite(name=name))
 
-        scenario = getattr(getattr(item, "function", None), "__scenario__", None)
-        filename = getattr(getattr(scenario, "feature", None), "filename", None)
-        if filename:
-            item.extra_keyword_matches.add(relative_test_path(Path(filename).resolve()).as_posix())
+        feature = scenario_feature_path(item)
+        if feature is not None:
+            item.extra_keyword_matches.add(relative_test_path(feature).as_posix())
 
     yield
 
     # Other collection hooks attach Spark metadata to doctests and UDFs. Resolve
     # it only after those hooks and the standard pytest -m/-k filters have run.
+    affinities = {item: item_affinity(item) for item in items}
     seed, versions = matrix_versions()
     raw_choices = os.environ.get("PYSAIL_TEST_SUITE_CHOICES")
     choices = None
@@ -214,7 +236,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         name = item.get_closest_marker("suite").kwargs["name"]
         selected = choices is None or name in choices
         if selected and seed is not None:
-            selected = any(Version(version) == current for version in assigned_versions(item, name, seed, versions))
+            selected = any(
+                Version(version) == current for version in assigned_versions(item, affinities[item], seed, versions)
+            )
         (remaining if selected else deselected).append(item)
     if deselected:
         config.hook.pytest_deselected(items=deselected)
