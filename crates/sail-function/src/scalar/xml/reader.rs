@@ -156,6 +156,10 @@ pub(super) fn parse(xot: &mut Xot, xml: &str, xpath: bool) -> XmlResult<ParsedDo
             }
             Event::Text(text) => {
                 let text = text.xml10_content()?;
+                if text.contains("]]>") {
+                    return Err("Forbidden ]]> in XML text".into());
+                }
+
                 if parent == document {
                     if !text.trim_matches([' ', '\t', '\n', '\r']).is_empty() {
                         return Err("Text outside XML root element".into());

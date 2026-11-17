@@ -2,11 +2,11 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use chumsky::prelude::*;
-use quick_xml::events::{BytesStart, BytesText, Event};
+use quick_xml::events::{BytesRef, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 
 use super::parser::{Extra, literal, name, space, whitespace};
-use super::reader::XmlResult;
+use super::reader::{XmlResult, reference_value};
 
 /// The Java DOM parser expands internal general entities but disables external
 /// entities. quick-xml deliberately leaves DTD handling to the application.
@@ -27,9 +27,8 @@ pub(super) fn expand(xml: &str) -> XmlResult<Cow<'_, str>> {
                     .into_result()
                     .map_err(|errors| format!("Invalid XML document type: {errors:?}"))?
                 {
-                    entities
-                        .entry(name.to_string())
-                        .or_insert_with(|| value.to_string());
+                    let value = declaration_value(value)?;
+                    entities.entry(name.to_string()).or_insert(value);
                 }
             }
             Event::Start(_) | Event::Empty(_) | Event::Eof => break,
@@ -39,90 +38,128 @@ pub(super) fn expand(xml: &str) -> XmlResult<Cow<'_, str>> {
     if entities.is_empty() {
         return Ok(Cow::Borrowed(xml));
     }
-    let mut reader = Reader::from_str(xml);
-    let mut writer = Writer::new(Vec::new());
-    let mut expansions = 0;
-    loop {
-        match reader.read_event()? {
-            Event::GeneralRef(reference) => {
-                let name = reference.decode()?;
-                if let Some(value) = entities.get(name.as_ref()) {
-                    let value = substitute(value, &entities, &mut Vec::new(), &mut expansions)?;
-                    writer.write_event(Event::Text(BytesText::from_escaped(value)))?;
-                } else {
-                    writer.write_event(Event::GeneralRef(reference))?;
-                }
-            }
-            Event::Start(element) => {
-                writer.write_event(Event::Start(attributes(
-                    element,
-                    &entities,
-                    &mut expansions,
-                )?))?;
-            }
-            Event::Empty(element) => {
-                writer.write_event(Event::Empty(attributes(
-                    element,
-                    &entities,
-                    &mut expansions,
-                )?))?;
-            }
-            Event::Eof => break,
-            event => writer.write_event(event)?,
-        }
-    }
-    Ok(Cow::Owned(String::from_utf8(writer.into_inner())?))
+    let mut expansion = Expansion {
+        entities: &entities,
+        active: Vec::new(),
+        count: 0,
+        bytes: 0,
+    };
+    Ok(Cow::Owned(expansion.content(xml)?))
 }
 
-fn attributes(
-    element: BytesStart<'_>,
-    entities: &HashMap<String, String>,
-    expansions: &mut usize,
-) -> XmlResult<BytesStart<'static>> {
-    let name = element.name();
-    let mut result = BytesStart::new(std::str::from_utf8(name.as_ref())?.to_string());
-    for attribute in element.attributes() {
-        let attribute = attribute?;
-        let value = std::str::from_utf8(&attribute.value)?;
-        let value =
-            substitute(value, entities, &mut Vec::new(), expansions)?.replace('"', "&quot;");
-        result.push_attribute((attribute.key.as_ref(), value.as_bytes()));
-    }
-    Ok(result)
-}
-
-fn substitute(
-    value: &str,
-    entities: &HashMap<String, String>,
-    active: &mut Vec<String>,
-    expansions: &mut usize,
-) -> XmlResult<String> {
+// Character references are decoded when declarations are read. General entity
+// references remain literal until the replacement text is parsed in its context.
+fn declaration_value(value: &str) -> XmlResult<String> {
     let mut result = String::new();
-    let parts = references()
-        .parse(value)
-        .into_result()
-        .map_err(|errors| format!("Invalid XML entity value: {errors:?}"))?;
-    for part in parts {
+    for part in entity_parts(value)? {
         match part {
-            EntityPart::Reference { name, .. } if entities.contains_key(name) => {
-                let value = &entities[name];
-                *expansions += 1;
-                // Bound recursive expansion, as the Java parser does with its entity
-                // expansion limit. Also bound depth and bytes to avoid stack exhaustion.
-                if *expansions > 64_000 || active.len() >= 100 || active.iter().any(|n| n == name) {
-                    return Err("XML entity expansion limit or recursive entity".into());
-                }
-                active.push(name.to_string());
-                result.push_str(&substitute(value, entities, active, expansions)?);
-                active.pop();
+            EntityPart::Reference { name, .. } if name.starts_with('#') => {
+                result.push_str(&reference_value(&BytesRef::new(name))?);
             }
             EntityPart::Reference { raw, .. } | EntityPart::Text(raw) => result.push_str(raw),
         }
-        if result.len() > 10_000_000 {
-            return Err("XML entity size limit".into());
-        }
     }
     Ok(result)
+}
+
+struct Expansion<'a> {
+    entities: &'a HashMap<String, String>,
+    active: Vec<String>,
+    count: usize,
+    bytes: usize,
+}
+
+impl Expansion<'_> {
+    fn entity(&mut self, name: &str, attribute: bool) -> XmlResult<String> {
+        let value = self.entities.get(name).ok_or("Unknown XML entity")?;
+        self.count += 1;
+        if self.count > 64_000
+            || self.active.len() >= 100
+            || self.active.iter().any(|active| active == name)
+        {
+            return Err("XML entity expansion limit or recursive entity".into());
+        }
+
+        // Charge every reference, including top-level and attribute references,
+        // before allocating its expansion. Summing replacement bytes across the
+        // document bounds both repeated plain entities and nested expansions.
+        self.bytes = self
+            .bytes
+            .checked_add(value.len())
+            .filter(|bytes| *bytes <= 10_000_000)
+            .ok_or("XML entity size limit")?;
+        self.active.push(name.to_string());
+        let result = if attribute {
+            self.attribute(value)
+        } else {
+            self.content(value)
+        };
+        self.active.pop();
+        result
+    }
+
+    fn content(&mut self, xml: &str) -> XmlResult<String> {
+        let mut reader = Reader::from_str(xml);
+        let mut writer = Writer::new(Vec::new());
+        loop {
+            match reader.read_event()? {
+                Event::GeneralRef(reference) => {
+                    let name = reference.decode()?;
+                    if self.entities.contains_key(name.as_ref()) {
+                        let value = self.entity(&name, false)?;
+                        writer.write_event(Event::Text(BytesText::from_escaped(value)))?;
+                    } else {
+                        writer.write_event(Event::GeneralRef(reference))?;
+                    }
+                }
+                Event::Start(element) => {
+                    writer.write_event(Event::Start(self.attributes(element)?))?;
+                }
+                Event::Empty(element) => {
+                    writer.write_event(Event::Empty(self.attributes(element)?))?;
+                }
+                Event::Eof => break,
+                // Parse replacement text as XML so references inside comments,
+                // CDATA, and processing instructions are never substituted.
+                event => writer.write_event(event)?,
+            }
+        }
+        Ok(String::from_utf8(writer.into_inner())?)
+    }
+
+    fn attributes(&mut self, element: BytesStart<'_>) -> XmlResult<BytesStart<'static>> {
+        let name = element.name();
+        let mut result = BytesStart::new(std::str::from_utf8(name.as_ref())?.to_string());
+        for attribute in element.attributes() {
+            let attribute = attribute?;
+            let value = std::str::from_utf8(&attribute.value)?;
+            let value = self.attribute(value)?.replace('"', "&quot;");
+            result.push_attribute((attribute.key.as_ref(), value.as_bytes()));
+        }
+        Ok(result)
+    }
+
+    fn attribute(&mut self, value: &str) -> XmlResult<String> {
+        let mut result = String::new();
+        for part in entity_parts(value)? {
+            match part {
+                EntityPart::Reference { name, .. } if self.entities.contains_key(name) => {
+                    result.push_str(&self.entity(name, true)?);
+                }
+                EntityPart::Reference { raw, .. } | EntityPart::Text(raw) => {
+                    result.push_str(raw);
+                }
+            }
+        }
+        Ok(result)
+    }
+}
+
+fn entity_parts(value: &str) -> XmlResult<Vec<EntityPart<'_>>> {
+    references()
+        .parse(value)
+        .into_result()
+        .map_err(|errors| format!("Invalid XML entity value: {errors:?}").into())
 }
 
 /// Parse the document type payload supplied by quick-xml. Consume quoted values

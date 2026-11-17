@@ -447,3 +447,126 @@ Feature: XML functions follow Spark lexical names and XPath semantics
         SELECT xpath_string(concat('<!DOCTYPE r [<!ENTITY % unused "<!ENTITY fake ', chr(39), 'bad', chr(39), '>">]><r>&fake;</r>'), 'r')
         """
       Then query error (?s).*(entity|Entity).*
+
+  Rule: Entity expansion preserves XML context and enforces document limits
+
+    Scenario Outline: XML compatibility: Entity references stay literal inside <context>
+      When query
+        """
+        SELECT xpath_string('<xml>', '<path>') AS result
+        """
+      Then query result
+        | result |
+        | &x;    |
+
+      Examples:
+        | context                 | xml                                                                     | path                       |
+        | CDATA                   | <!DOCTYPE r [<!ENTITY x "hi"><!ENTITY e "<![CDATA[&x;]]>">]><r>&e;</r>    | r                          |
+        | comments                | <!DOCTYPE r [<!ENTITY x "hi"><!ENTITY e "<!--&x;-->">]><r>&e;</r>         | r/comment()                |
+        | processing instructions | <!DOCTYPE r [<!ENTITY x "hi"><!ENTITY e "<?target &x;?>">]><r>&e;</r>     | r/processing-instruction() |
+
+    Scenario: XML compatibility: Character references in declarations can produce markup
+      When query
+        """
+        SELECT xpath_string('<!DOCTYPE r [<!ENTITY e "&#60;a>hi&#x3c;/a>">]><r>&e;</r>', 'r/a') AS result
+        """
+      Then query result
+        | result |
+        | hi     |
+
+    Scenario: XML compatibility: Predefined entity references in declarations remain escaped text
+      When query
+        """
+        SELECT xpath_string('<!DOCTYPE r [<!ENTITY e "&lt;a>hi&lt;/a>">]><r>&e;</r>', 'r') AS result
+        """
+      Then query result
+        | result    |
+        | <a>hi</a> |
+
+    Scenario Outline: XML compatibility: Top-level entity expansion limits include <context>
+      When query
+        """
+        SELECT xpath_string(concat('<!DOCTYPE r [<!ENTITY e "x">]><prefix>', repeat('&e;', 64001), '<suffix>'), 'r')
+        """
+      Then query error (?s).*(entity|Entity).*
+
+      Examples:
+        | context    | prefix | suffix |
+        | text       | <r>    | </r>   |
+        | attributes | <r a=" | "/>    |
+
+    Scenario: XML compatibility: Entity expansion permits the count limit
+      When query
+        """
+        SELECT length(xpath_string(concat('<!DOCTYPE r [<!ENTITY e "x">]><r>', repeat('&e;', 64000), '</r>'), 'r')) AS result
+        """
+      Then query result
+        | result |
+        | 64000  |
+
+    @sail-only
+    Scenario Outline: XML compatibility: Cumulative entity bytes are bounded in <context>
+      When query
+        """
+        SELECT xpath_string(concat('<!DOCTYPE r [<!ENTITY e "', repeat('x', 10000), '">]><prefix>', repeat('&e;', 1001), '<suffix>'), 'r')
+        """
+      Then query error (?s).*XML entity size limit.*
+
+      Examples:
+        | context    | prefix | suffix |
+        | text       | <r>    | </r>   |
+        | attributes | <r a=" | "/>    |
+
+  Rule: Ordinary text cannot contain a CDATA terminator
+
+    Scenario: XML compatibility: Struct readers return null fields for literal CDATA terminators
+      When query
+        """
+        SELECT from_xml('<r><a>abc]]>def</a></r>', 'a STRING').a AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: XML compatibility: Struct readers reject literal CDATA terminators in fail-fast mode
+      When query
+        """
+        SELECT from_xml('<r><a>abc]]>def</a></r>', 'a STRING', map('mode', 'FAILFAST'))
+        """
+      Then query error (?s).*(XML|xml|MALFORMED).*
+
+    Scenario Outline: XML compatibility: <function> rejects literal CDATA terminators
+      When query
+        """
+        SELECT <function>('<r>abc]]>def</r>', 'r')
+        """
+      Then query error (?s).*(XML|xml|character data).*
+
+      Examples:
+        | function     |
+        | xpath        |
+        | xpath_string |
+
+    Scenario: XML compatibility: Escaped CDATA terminators remain valid text
+      When query
+        """
+        SELECT from_xml('<r><a>abc]]&gt;def</a></r>', 'a STRING').a AS value,
+          xpath_string('<r>abc]]&gt;def</r>', 'r') AS xpath_value
+        """
+      Then query result
+        | value      | xpath_value |
+        | abc]]>def  | abc]]>def   |
+
+    Scenario: XML compatibility: CDATA terminators formed across entity boundaries are invalid
+      When query
+        """
+        SELECT xpath_string('<!DOCTYPE r [<!ENTITY e "]]">]><r>&e;></r>', 'r')
+        """
+      Then query error (?s).*(XML|xml|character data).*
+
+    Scenario: XML compatibility: Literal CDATA terminators inside entities are invalid
+      When query
+        """
+        SELECT xpath_string('<!DOCTYPE r [<!ENTITY e "]]>">]><r>&e;</r>', 'r')
+        """
+      Then query error (?s).*(XML|xml|character data).*
