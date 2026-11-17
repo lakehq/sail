@@ -24,6 +24,7 @@ pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail local-cluster mode
 def remote(request):
     envs = {
         "SAIL_MODE": "local-cluster",
+        "SAIL_CLUSTER__TASK_STREAM_BUFFER": "1",
         "SAIL_CLUSTER__SHUFFLE_WRITE_BUFFER_SIZE": "1",
         "SAIL_CLUSTER__TASK_STREAM_MEMORY_LIMIT": "1",
         "SAIL_EXECUTION__BATCH_SIZE": "256",

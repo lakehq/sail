@@ -22,7 +22,6 @@ pub struct WorkerOptions {
     pub worker_external_host: String,
     pub worker_external_port: u16,
     pub worker_heartbeat_interval: Duration,
-    pub batch_size: usize,
     pub shuffle_write_buffer_size: usize,
     pub task_stream_memory_limit: usize,
     pub task_stream_creation_timeout: Duration,
@@ -52,7 +51,6 @@ impl WorkerOptions {
             worker_heartbeat_interval: Duration::from_secs(
                 config.cluster.worker_heartbeat_interval_secs,
             ),
-            batch_size: config.execution.batch_size,
             shuffle_write_buffer_size: config.cluster.shuffle_write_buffer_size,
             task_stream_memory_limit: config.cluster.task_stream_memory_limit,
             task_stream_creation_timeout: Duration::from_secs(
@@ -83,7 +81,6 @@ impl WorkerOptions {
             worker_external_host: "127.0.0.1".to_string(),
             worker_external_port: 0,
             worker_heartbeat_interval: options.worker_heartbeat_interval,
-            batch_size: options.batch_size,
             shuffle_write_buffer_size: options.shuffle_write_buffer_size,
             task_stream_memory_limit: options.task_stream_memory_limit,
             task_stream_creation_timeout: options.task_stream_creation_timeout,
