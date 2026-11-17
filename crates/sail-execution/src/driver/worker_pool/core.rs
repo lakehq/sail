@@ -432,6 +432,14 @@ impl WorkerPool {
                 )));
             }
         };
+        if keys.release {
+            // A reader that releases the streams does not read the source that it
+            // gets, so the request is sent here and not when the source is read.
+            ctx.spawn(async move {
+                let _ = client.fetch_task_streams(keys, schema).await;
+            });
+            return Ok(Box::pin(futures::stream::empty()));
+        }
         let stream = futures::stream::once(async move {
             client
                 .fetch_task_streams(keys, schema.clone())
