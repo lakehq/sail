@@ -7297,7 +7297,6 @@ dependencies = [
  "log",
  "object_store",
  "opentelemetry-proto",
- "parking_lot",
  "prost",
  "prost-build",
  "rand 0.10.3",
