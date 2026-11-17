@@ -15,6 +15,9 @@ def remote():
         "SAIL_CLUSTER__WORKER_MAX_COUNT": "1",
         "SAIL_CLUSTER__WORKER_TASK_SLOTS": "7",
         "SAIL_CLUSTER__TASK_LAUNCH_TIMEOUT_SECS": "5",
+        # Tasks that wait for the readers of their output wait from the first row on.
+        "SAIL_CLUSTER__SHUFFLE_WRITE_BUFFER_SIZE": "1",
+        "SAIL_CLUSTER__TASK_STREAM_MEMORY_LIMIT": "1",
         "SAIL_EXECUTION__DEFAULT_PARALLELISM": "4",
     }
     with spark_connect_server(envs=envs) as server:
