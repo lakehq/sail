@@ -66,11 +66,6 @@ def test_task_batch_failure_leaves_session_usable(spark, worker_task_slots):
         .repartition(4, "id")
         .selectExpr("IF(id = 0, raise_error('task batch failure'), id) AS value")
     )
-    # A concurrent partition can publish output before the driver observes the
-    # failure. In that case the existing retry guard reports the region failure.
-    with pytest.raises(
-        PySparkException,
-        match=r"task batch failure|a different attempt has already produced job output",
-    ):
+    with pytest.raises(PySparkException, match="task batch failure"):
         query.collect()
     assert sorted(row.id for row in spark.range(64, numPartitions=4).collect()) == list(range(64))

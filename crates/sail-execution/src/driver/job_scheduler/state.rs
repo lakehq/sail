@@ -5,7 +5,7 @@ use datafusion::physical_plan::ExecutionPlanProperties;
 use sail_common_datafusion::error::CommonErrorCause;
 
 use crate::driver::job_scheduler::topology::JobTopology;
-use crate::driver::output::{JobOutputManager, JobOutputOutcome};
+use crate::driver::output::{JobOutputManager, JobOutputOutcome, RegionOutput};
 use crate::error::ExecutionResult;
 use crate::job_graph::JobGraph;
 
@@ -70,9 +70,12 @@ impl JobDescriptor {
             stages.push(descriptor);
         }
         let topology = JobTopology::try_new(&graph)?;
-        let regions = (0..topology.regions.len())
+        let regions = topology
+            .regions
+            .iter()
             .map(|_| TaskRegionDescriptor {
                 state: TaskRegionState::Running,
+                output: RegionOutput::default(),
             })
             .collect();
         Ok(Self {
@@ -115,6 +118,8 @@ impl StageState {
 #[derive(Debug)]
 pub struct TaskRegionDescriptor {
     pub state: TaskRegionState,
+    /// Shared with the job output streams of the tasks in the region.
+    pub output: RegionOutput,
 }
 
 #[derive(Debug, Clone, Copy)]

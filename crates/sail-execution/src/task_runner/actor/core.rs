@@ -118,6 +118,9 @@ impl Actor for TaskRunnerActor {
     }
 
     async fn stop(self, _ctx: &mut ActorContext<Self>) {
+        // Close the local streams before waiting for anything else, so that
+        // the readers that are still attached to them can end.
+        drop(self.extensions.local_streams);
         if let Some(streams) = self.extensions.celeborn_streams {
             streams.stop().await;
         }

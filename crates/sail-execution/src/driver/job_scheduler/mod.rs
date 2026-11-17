@@ -15,7 +15,7 @@ use sail_telemetry::events::SystemEventReporter;
 pub use state::{JobState, TaskState};
 
 use crate::driver::job_scheduler::state::JobDescriptor;
-use crate::driver::output::JobOutputHandle;
+use crate::driver::output::{JobOutputHandle, RegionOutput};
 use crate::id::{IdGenerator, JobId, TaskKey, TaskStreamKey};
 use crate::proto::RemoteExecutionCodec;
 use crate::task::scheduling::TaskRegion;
@@ -52,6 +52,7 @@ pub enum JobAction {
         handle: JobOutputHandle,
         key: TaskStreamKey,
         schema: SchemaRef,
+        region: RegionOutput,
     },
     FailJobOutput {
         handle: JobOutputHandle,
