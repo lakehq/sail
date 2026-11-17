@@ -16,11 +16,15 @@ use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use sail_physical_plan::barrier::BarrierExec;
 
+use crate::id::JobId;
 use crate::shuffle::ShuffleBackendKind;
 
 #[derive(Debug, Clone)]
 pub struct JobGraphOptions {
     pub shuffle_backend: ShuffleBackendKind,
+    /// When set, the final stage is written for a later job instead of the job output
+    /// alone: with this distribution, and with a hand-off replica.
+    pub handoff: Option<OutputDistribution>,
 }
 
 /// A job graph represents a distributed execution plan for a job.
@@ -69,6 +73,10 @@ impl JobGraph {
                     })
             })
             .sum::<usize>();
+        if self.is_handoff_stage(stage) {
+            // The job output and the later job.
+            return 2;
+        }
         // ensure one replica for final stages for the job output
         replicas.max(1)
     }
@@ -99,6 +107,34 @@ impl JobGraph {
             },
             _ => false,
         }
+    }
+
+    /// Whether the stage's output is handed to a later job.
+    pub fn is_handoff_stage(&self, stage: usize) -> bool {
+        self.options.handoff.is_some() && stage + 1 == self.stages.len()
+    }
+
+    /// The final stage of a hand-off job, as a later job reads it.
+    pub fn handoff_input(&self, job_id: JobId) -> Option<ExternalStageInput> {
+        let distribution = self.options.handoff.as_ref()?;
+        let stage = self.stages.len().checked_sub(1)?;
+        let partitions = self.stages[stage]
+            .plan
+            .output_partitioning()
+            .partition_count();
+        let channels = distribution.channels();
+        let mode = if channels == 1 {
+            InputMode::Forward
+        } else {
+            InputMode::Shuffle
+        };
+        Some(ExternalStageInput {
+            job_id,
+            stage,
+            partitions,
+            channels,
+            mode,
+        })
     }
 }
 
@@ -162,6 +198,9 @@ impl fmt::Display for JobGraph {
 #[derive(Debug)]
 pub struct Stage {
     pub inputs: Vec<StageInput>,
+    /// Inputs from other jobs, numbered after `inputs` in the stage plan.
+    /// They are not part of this job's topology.
+    pub external_inputs: Vec<ExternalStageInput>,
     pub plan: Arc<dyn ExecutionPlan>,
     /// The name of the "slot sharing group" for the stage.
     pub group: String,
@@ -198,12 +237,34 @@ impl fmt::Display for StageInput {
     }
 }
 
+/// The final stage of another job that is still running and was written for this job
+/// (see [`JobGraphOptions::handoff`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalStageInput {
+    pub job_id: JobId,
+    pub stage: usize,
+    pub partitions: usize,
+    pub channels: usize,
+    /// `Shuffle` reads one channel of every partition, `Forward` one partition.
+    pub mode: InputMode,
+}
+
+impl fmt::Display for ExternalStageInput {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "ExternalStageInput(job={}, stage={}, mode={})",
+            self.job_id, self.stage, self.mode
+        )
+    }
+}
+
 /// Usually, when partition `p` is executed for the stage, all the child physical plan nodes
 /// are executed recursively with the same partition `p`, but this is not always the case.
 /// So we introduce input mode to describe the expectation how stage inputs (which are
 /// leaf nodes of the physical plan) are executed and which partitions and channels are read
 /// from the dependent stages.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
     /// For each partition in the current stage, execute the same partition to fetch the input
     /// which reads all channels from the corresponding partition in the input stage.

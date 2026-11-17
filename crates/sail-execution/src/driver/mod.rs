@@ -20,10 +20,11 @@ pub(crate) mod r#gen {
         tonic::include_file_descriptor_set!("sail_driver_descriptor");
 }
 
-pub(crate) use actor::{DriverActor, DriverMessage, TaskStatus};
+pub(crate) use actor::{DriverActor, DriverMessage, SubmittedJob, TaskStatus};
 pub use actor::{DriverComponents, DriverOptions};
 pub(crate) use client::{CelebornLifecycleManagerClient, DriverClientSet};
 pub use gateway::{DriverGateway, DriverGatewayOptions};
 pub(crate) use r#gen::celeborn_lifecycle_manager_service_client::CelebornLifecycleManagerServiceClient;
 pub(crate) use r#gen::driver_service_client::DriverServiceClient;
 pub use registry::{DriverHandle, DriverRegistry, DriverRegistryAccessor};
+pub(crate) use task_assigner::HANDOFF_SLOTS_ERROR;

@@ -48,10 +48,10 @@ use sail_physical_plan::shared_cte::{SharedCte, SharedCteExec, SharedCteScanExec
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
-    InputMode, JobGraph, JobGraphOptions, OutputDistribution, OutputMode, Stage, StageInput,
-    TaskPlacement,
+    ExternalStageInput, InputMode, JobGraph, JobGraphOptions, OutputDistribution, OutputMode,
+    Stage, StageInput, TaskPlacement,
 };
-use crate::plan::{ShuffleConsumption, StageInputExec};
+use crate::plan::{HandoffExec, ShuffleConsumption, StageInputExec};
 use crate::shuffle::ShuffleBackendKind;
 
 impl JobGraph {
@@ -69,13 +69,19 @@ impl JobGraph {
             options,
         };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?.plan;
-        let (last, inputs) = rewrite_inputs(last)?;
+        let (last, inputs, external_inputs) = rewrite_inputs(last)?;
+        let distribution = graph
+            .options
+            .handoff
+            .clone()
+            .unwrap_or(OutputDistribution::RoundRobinBatch { channels: 1 });
         graph.stages.push(Stage {
             inputs,
+            external_inputs,
             plan: last,
             group: String::new(),
             mode: OutputMode::Pipelined,
-            distribution: OutputDistribution::RoundRobinBatch { channels: 1 },
+            distribution,
             placement: TaskPlacement::Worker,
         });
         Ok(graph)
@@ -497,6 +503,13 @@ fn plan_job_graph_stages(
 
     if let Some(barrier) = plan.downcast_ref::<BarrierExec>() {
         return build_barrier_job_graph(barrier, usage, graph, scalar_context);
+    }
+
+    if let Some(handoff) = plan.downcast_ref::<HandoffExec>() {
+        let input = StageInputExec::new(handoff.source().clone(), handoff.properties().clone());
+        return Ok(PlannedSubtree::without_pending_scalar_subquery_expr(
+            Arc::new(input),
+        ));
     }
 
     // Recursively build the job graph for the children first
@@ -1255,21 +1268,43 @@ fn create_shuffle_input(
     Ok(stage_input_exec(stage, InputMode::Forward, properties))
 }
 
-fn rewrite_inputs(
-    plan: Arc<dyn ExecutionPlan>,
-) -> ExecutionResult<(Arc<dyn ExecutionPlan>, Vec<StageInput>)> {
+/// A stage plan with numbered input placeholders, and the inputs they refer to.
+type RewrittenInputs = (
+    Arc<dyn ExecutionPlan>,
+    Vec<StageInput>,
+    Vec<ExternalStageInput>,
+);
+
+/// Numbers the stage's input placeholders: inputs from this job first, then inputs
+/// from other jobs.
+fn rewrite_inputs(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<RewrittenInputs> {
     let mut inputs = vec![];
-    let result = plan.transform(|node| {
-        if let Some(placeholder) = node.downcast_ref::<StageInputExec<StageInput>>() {
-            let index = inputs.len();
-            inputs.push(placeholder.input().clone());
-            let placeholder = StageInputExec::new(index, placeholder.properties().clone());
-            Ok(Transformed::yes(Arc::new(placeholder)))
-        } else {
-            Ok(Transformed::no(node))
-        }
-    });
-    Ok((result.data()?, inputs))
+    let plan = plan
+        .transform(|node| {
+            if let Some(placeholder) = node.downcast_ref::<StageInputExec<StageInput>>() {
+                let index = inputs.len();
+                inputs.push(placeholder.input().clone());
+                let placeholder = StageInputExec::new(index, placeholder.properties().clone());
+                Ok(Transformed::yes(Arc::new(placeholder)))
+            } else {
+                Ok(Transformed::no(node))
+            }
+        })?
+        .data;
+    let mut external_inputs = vec![];
+    let plan = plan
+        .transform(|node| {
+            if let Some(placeholder) = node.downcast_ref::<StageInputExec<ExternalStageInput>>() {
+                let index = inputs.len() + external_inputs.len();
+                external_inputs.push(placeholder.input().clone());
+                let placeholder = StageInputExec::new(index, placeholder.properties().clone());
+                Ok(Transformed::yes(Arc::new(placeholder)))
+            } else {
+                Ok(Transformed::no(node))
+            }
+        })?
+        .data;
+    Ok((plan, inputs, external_inputs))
 }
 
 fn push_stage(
@@ -1279,9 +1314,10 @@ fn push_stage(
     placement: TaskPlacement,
     mode: OutputMode,
 ) -> ExecutionResult<usize> {
-    let (plan, inputs) = rewrite_inputs(plan)?;
+    let (plan, inputs, external_inputs) = rewrite_inputs(plan)?;
     let stage = Stage {
         inputs,
+        external_inputs,
         plan,
         group: String::new(),
         mode,
@@ -1393,6 +1429,7 @@ mod tests {
 
     fn flight_shuffle_options() -> JobGraphOptions {
         JobGraphOptions {
+            handoff: None,
             shuffle_backend: ShuffleBackendKind::Flight {
                 compression: ShuffleCompression::None,
                 connection_count: std::num::NonZeroUsize::MIN,
@@ -1404,6 +1441,7 @@ mod tests {
 
     fn blocking_shuffle_options() -> JobGraphOptions {
         JobGraphOptions {
+            handoff: None,
             shuffle_backend: ShuffleBackendKind::Storage {
                 path: None,
                 max_file_size: 1,
@@ -1414,6 +1452,7 @@ mod tests {
 
     fn celeborn_shuffle_options() -> JobGraphOptions {
         JobGraphOptions {
+            handoff: None,
             shuffle_backend: ShuffleBackendKind::Celeborn {
                 master_endpoints: vec!["localhost:1".to_string()],
                 compression: sail_celeborn::common::CompressionCodec::Lz4,
@@ -3427,6 +3466,7 @@ mod tests {
                 .into_iter()
                 .map(|(stage, mode)| StageInput { stage, mode })
                 .collect(),
+            external_inputs: vec![],
             plan: empty_plan(),
             group: String::new(),
             mode: OutputMode::Pipelined,

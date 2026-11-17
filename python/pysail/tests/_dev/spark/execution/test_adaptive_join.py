@@ -169,3 +169,19 @@ def test_unselective_reduction_is_removed(spark, q17_tables):  # noqa: ARG001
     assert "__early_join_key_0" in plan
     row = spark.sql(query).collect()[0]
     assert row.asDict() == expected_q17(range(DIMENSION_KEYS))
+
+
+@pytest.mark.timeout(120)
+def test_join_of_two_large_sides(spark, big):
+    # Both sides pass the broadcast threshold, so the join reads both from their sub-jobs.
+    other = spark.range(0, ROWS, 1, 4).select(F.col("id").alias("ok"), (F.col("id") * 3).alias("ov"))
+    row = big.join(other, big.k == other.ok, "inner").agg(F.count("*").alias("rows"), F.sum("ov").alias("ov"))
+    assert row.collect()[0].asDict() == {"rows": ROWS, "ov": 3 * ROWS * (ROWS - 1) // 2}
+
+
+@pytest.mark.timeout(120)
+def test_join_with_large_aggregate_side(big):
+    # The aggregate side is partitioned without a repartition on top of it.
+    counts = big.where(F.col("k").isNotNull()).groupBy("k").agg(F.count("*").alias("n"))
+    row = big.join(counts, "k").agg(F.count("*").alias("rows"), F.sum("n").alias("n"), F.sum("v").alias("v"))
+    assert row.collect()[0].asDict() == {"rows": ROWS, "n": ROWS, "v": ROWS * (ROWS - 1)}

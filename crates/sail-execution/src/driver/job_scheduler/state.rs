@@ -9,6 +9,7 @@ use sail_common_datafusion::error::CommonErrorCause;
 use crate::driver::job_scheduler::topology::JobTopology;
 use crate::driver::output::{JobOutputManager, JobOutputOutcome};
 use crate::error::ExecutionResult;
+use crate::id::WorkerId;
 use crate::job_graph::JobGraph;
 
 /// Tracks graph/topology and runtime state for a single job.
@@ -19,6 +20,9 @@ pub struct JobDescriptor {
     pub stages: Vec<StageDescriptor>,
     pub regions: Vec<TaskRegionDescriptor>,
     pub state: JobState,
+    /// The final stage is read by a later job, so the job is cleaned up when that job
+    /// releases it, not when its own output is dropped.
+    pub handed_off: bool,
 }
 
 pub enum JobState {
@@ -84,6 +88,7 @@ impl JobDescriptor {
             stages,
             regions,
             state,
+            handed_off: false,
         })
     }
 }
@@ -140,6 +145,9 @@ pub struct TaskAttemptDescriptor {
     /// This will always be false if the task does not belong to
     /// the final stages of the job.
     pub job_output_fetched: bool,
+    /// The worker the attempt was assigned to, kept after the task is unassigned so that
+    /// a later job can locate its output (`None` for the driver or before assignment).
+    pub worker: Option<WorkerId>,
 }
 
 #[derive(Debug, Clone, Copy)]

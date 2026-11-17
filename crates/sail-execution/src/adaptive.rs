@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
-use std::future::Future;
 use std::pin::pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use datafusion::arrow::array::{
     Array, MutableArrayData, RecordBatch, RecordBatchOptions, make_array,
 };
 use datafusion::arrow::compute::concat_batches;
 use datafusion::common::stats::Precision;
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{JoinType, Result, Statistics};
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -34,6 +34,10 @@ use futures::future::{Either, select};
 use log::{info, warn};
 use sail_common_datafusion::OPTIMIZER_SEMI_JOIN_REDUCTION_KEY_PREFIX;
 
+use crate::id::JobId;
+use crate::job_graph::{ExternalStageInput, OutputDistribution};
+use crate::plan::HandoffExec;
+
 pub(crate) struct AdaptiveJoinOptions {
     /// Build sides below this many bytes are broadcast, as in DataFusion's `JoinSelection`.
     pub broadcast_threshold: usize,
@@ -51,28 +55,112 @@ impl AdaptiveJoinOptions {
     }
 }
 
+/// Runs join inputs as jobs of their own for adaptive join selection.
+#[tonic::async_trait]
+pub(crate) trait SideRunner: Send + Sync {
+    /// Runs `plan` as its own job. With `handoff`, the job's final stage is written in that
+    /// distribution so that a later job can read it through the returned input, once the
+    /// job is handed off.
+    async fn run(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        handoff: Option<OutputDistribution>,
+    ) -> Result<(SendableRecordBatchStream, Option<ExternalStageInput>)>;
+
+    /// Keeps a job running after its stream is dropped, for a later job to read.
+    async fn hand_off(&self, job_id: JobId) -> bool;
+
+    /// Cleans up a handed-off job.
+    fn release(&self, job_id: JobId);
+}
+
+/// The handed-off jobs of a query. A hand-off output has one reader, so each is read
+/// by at most one job.
+#[derive(Default)]
+pub(crate) struct Handoffs {
+    state: Mutex<HandoffState>,
+}
+
+#[derive(Default)]
+struct HandoffState {
+    jobs: Vec<JobId>,
+    used: HashSet<JobId>,
+}
+
+impl Handoffs {
+    fn state(&self) -> MutexGuard<'_, HandoffState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn add(&self, job_id: JobId) {
+        self.state().jobs.push(job_id);
+    }
+
+    /// Releases the job of a hand-off that the plan does not use.
+    fn discard(&self, materialized: &Materialized, runner: &dyn SideRunner) {
+        if let Materialized::Large {
+            handoff: Some((job_id, _)),
+            ..
+        } = materialized
+        {
+            self.state().jobs.retain(|x| x != job_id);
+            runner.release(*job_id);
+        }
+    }
+
+    /// Takes the jobs to release once the query is done with them.
+    pub fn take(&self) -> Vec<JobId> {
+        std::mem::take(&mut self.state().jobs)
+    }
+
+    /// Lets the job running `plan` read each hand-off in it, unless another job has read
+    /// it already; the subtree the hand-off replaced is then computed again.
+    pub fn resolve(&self, plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut state = self.state();
+        Ok(plan
+            .transform_down(|node| match node.downcast_ref::<HandoffExec>() {
+                Some(handoff) if !state.used.insert(handoff.source().job_id) => {
+                    Ok(Transformed::yes(Arc::clone(handoff.original())))
+                }
+                _ => Ok(Transformed::no(node)),
+            })?
+            .data)
+    }
+}
+
+/// Replaces every hand-off with the subtree it replaced.
+pub(crate) fn without_handoffs(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    Ok(plan
+        .transform_down(|node| match node.downcast_ref::<HandoffExec>() {
+            Some(handoff) => Ok(Transformed::yes(Arc::clone(handoff.original()))),
+            None => Ok(Transformed::no(node)),
+        })?
+        .data)
+}
+
 /// Chooses between broadcast and partitioned hash joins from the actual size of build sides.
 ///
 /// The deepest candidate join whose build size is only estimated has its build side run
-/// first through `run`:
+/// first through `runner`:
 /// - For a partitioned join, a result below the broadcast threshold replaces the build side,
-///   and the join becomes a broadcast join without the probe-side shuffle. A build side that
-///   reaches the threshold is abandoned at that point, and the join stays partitioned.
+///   and the join becomes a broadcast join without the probe-side shuffle.
 /// - A speculative semijoin reduction is already a broadcast join. A result below the
 ///   threshold replaces its build side.
 /// - A semijoin reduction whose keys reach the threshold is removed.
 /// - A partitioned join whose build side is too large can broadcast its probe side
 ///   instead, with the sides swapped. Both sides run at the same time, so that a large
 ///   build side does not delay the probe side.
-pub(crate) async fn select_joins<F, Fut>(
+///
+/// A side that reaches the threshold is not run again: its job is handed off, and a join
+/// that stays partitioned reads the rest of its output. Broadcast joins compute their
+/// probe side again instead, in the task of the join, where the join's dynamic filter
+/// prunes it.
+pub(crate) async fn select_joins(
     mut plan: Arc<dyn ExecutionPlan>,
     options: &AdaptiveJoinOptions,
-    run: F,
-) -> Result<Arc<dyn ExecutionPlan>>
-where
-    F: Fn(Arc<dyn ExecutionPlan>) -> Fut,
-    Fut: Future<Output = Result<SendableRecordBatchStream>>,
-{
+    runner: &dyn SideRunner,
+    handoffs: &Handoffs,
+) -> Result<Arc<dyn ExecutionPlan>> {
     // Joins that stay partitioned are kept as the same node, so their address identifies them.
     let mut settled = HashSet::new();
     while let Some((node, candidate)) = find_candidate(&plan, &settled)? {
@@ -83,11 +171,15 @@ where
         let description = displayable(join).one_line().to_string();
         let description = description.trim_end();
         let estimate = statistics(join.left().as_ref())?;
+        // Hand-offs the replacement reads, released if the replacement is not used.
+        let mut used = vec![];
         let (replacement, decision) = match candidate {
             Candidate::Partitioned { build, probe } => {
-                let (build, probe) = materialize_sides(join, build, probe, options, &run).await?;
+                let (build, probe) =
+                    materialize_sides(join, build, probe, options, runner, handoffs).await?;
                 match (build, probe) {
-                    (Materialized::Small(build), _) => {
+                    (Materialized::Small(build), probe) => {
+                        handoffs.discard(&probe, runner);
                         let actual = statistics(build.as_ref())?;
                         let decision = format!(
                             "broadcast, build side rows {:?}, bytes {:?}",
@@ -96,11 +188,17 @@ where
                         (broadcast_join(join, build)?, decision)
                     }
                     // A partitioned reduction would shuffle its input to save nothing.
-                    (build, _) if is_reduction(join) => (
-                        remove_reduction(join)?,
-                        format!("removed partitioned reduction, keys {build}"),
-                    ),
+                    (build, probe) if is_reduction(join) => {
+                        handoffs.discard(&build, runner);
+                        used.extend(probe.handoff_job());
+                        let input = probe.handoff().unwrap_or_else(|| Arc::clone(join.right()));
+                        (
+                            remove_reduction(join, input)?,
+                            format!("removed partitioned reduction, keys {build}"),
+                        )
+                    }
                     (build, Materialized::Small(probe)) => {
+                        handoffs.discard(&build, runner);
                         let actual = statistics(probe.as_ref())?;
                         let decision = format!(
                             "broadcast with sides swapped ({build}), probe side rows {:?}, bytes {:?}",
@@ -109,32 +207,52 @@ where
                         (swapped_broadcast_join(join, probe)?, decision)
                     }
                     (build, probe) => {
-                        info!(
-                            "adaptive join selection: partitioned ({build}; probe side {probe}) (estimated build rows {:?}, bytes {:?}): {description}",
-                            estimate.num_rows, estimate.total_byte_size,
-                        );
-                        continue;
+                        if build.handoff().is_none() && probe.handoff().is_none() {
+                            info!(
+                                "adaptive join selection: partitioned ({build}; probe side {probe}) (estimated build rows {:?}, bytes {:?}): {description}",
+                                estimate.num_rows, estimate.total_byte_size,
+                            );
+                            continue;
+                        }
+                        used.extend(build.handoff_job());
+                        used.extend(probe.handoff_job());
+                        let children = vec![
+                            build.handoff().unwrap_or_else(|| Arc::clone(join.left())),
+                            probe.handoff().unwrap_or_else(|| Arc::clone(join.right())),
+                        ];
+                        let replacement =
+                            join.builder().with_new_children(children)?.build_exec()?;
+                        settled.insert(address(&replacement));
+                        (
+                            replacement,
+                            format!("partitioned, handed off ({build}; probe side {probe})"),
+                        )
                     }
                 }
             }
-            Candidate::Reduction => match materialize(join.left(), options, &run).await? {
-                Materialized::Small(build) => {
-                    let actual = statistics(build.as_ref())?;
-                    let decision = format!(
-                        "kept reduction, keys rows {:?}, bytes {:?}",
-                        actual.num_rows, actual.total_byte_size
-                    );
-                    let join = join
-                        .builder()
-                        .with_new_children(vec![build, Arc::clone(join.right())])?
-                        .build_exec()?;
-                    (join, decision)
+            Candidate::Reduction => {
+                match materialize(join.left(), options, runner, handoffs).await? {
+                    Materialized::Small(build) => {
+                        let actual = statistics(build.as_ref())?;
+                        let decision = format!(
+                            "kept reduction, keys rows {:?}, bytes {:?}",
+                            actual.num_rows, actual.total_byte_size
+                        );
+                        let join = join
+                            .builder()
+                            .with_new_children(vec![build, Arc::clone(join.right())])?
+                            .build_exec()?;
+                        (join, decision)
+                    }
+                    materialized => {
+                        handoffs.discard(&materialized, runner);
+                        (
+                            remove_reduction(join, Arc::clone(join.right()))?,
+                            format!("removed reduction, keys {materialized}"),
+                        )
+                    }
                 }
-                materialized => (
-                    remove_reduction(join)?,
-                    format!("removed reduction, keys {materialized}"),
-                ),
-            },
+            }
         };
         let candidate = replace_node(&plan, &node, &replacement, options)?.unwrap_or(replacement);
         if let Err(error) = SanityCheckPlan::new().optimize(Arc::clone(&candidate), &options.config)
@@ -142,6 +260,16 @@ where
             warn!(
                 "adaptive join selection: keeping the join unchanged instead of {decision}: {error}"
             );
+            for job_id in used {
+                handoffs.discard(
+                    &Materialized::Large {
+                        rows: 0,
+                        bytes: 0,
+                        handoff: Some((job_id, Arc::clone(&node))),
+                    },
+                    runner,
+                );
+            }
             continue;
         }
         info!(
@@ -242,8 +370,11 @@ fn broadcastable(join_type: JoinType) -> bool {
 }
 
 /// The probe side of a reduction, which holds every row the reduction can return.
-fn remove_reduction(join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
-    let probe = Arc::clone(join.right());
+/// `probe` is the join's probe side or a plan that produces the same rows.
+fn remove_reduction(
+    join: &HashJoinExec,
+    probe: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
     let Some(projection) = join.projection.as_ref() else {
         return Ok(probe);
     };
@@ -262,17 +393,52 @@ fn remove_reduction(join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
 
 enum Materialized {
     Small(Arc<dyn ExecutionPlan>),
-    Large { rows: usize, bytes: usize },
+    /// Reached the threshold. A handed-off side carries its job and the plan that reads it.
+    Large {
+        rows: usize,
+        bytes: usize,
+        handoff: Option<(JobId, Arc<dyn ExecutionPlan>)>,
+    },
     Failed,
     Skipped,
+}
+
+impl Materialized {
+    fn handoff(&self) -> Option<Arc<dyn ExecutionPlan>> {
+        match self {
+            Materialized::Large {
+                handoff: Some((_, plan)),
+                ..
+            } => Some(Arc::clone(plan)),
+            _ => None,
+        }
+    }
+
+    fn handoff_job(&self) -> Option<JobId> {
+        match self {
+            Materialized::Large {
+                handoff: Some((job_id, _)),
+                ..
+            } => Some(*job_id),
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for Materialized {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Materialized::Small(_) => write!(f, "small"),
-            Materialized::Large { rows, bytes } => {
-                write!(f, "reached {bytes} bytes after {rows} rows")
+            Materialized::Large {
+                rows,
+                bytes,
+                handoff,
+            } => {
+                write!(f, "reached {bytes} bytes after {rows} rows")?;
+                if let Some((job_id, _)) = handoff {
+                    write!(f, ", handed off as job {job_id}")?;
+                }
+                Ok(())
             }
             Materialized::Failed => write!(f, "failed to run"),
             Materialized::Skipped => write!(f, "not tried"),
@@ -282,21 +448,18 @@ impl std::fmt::Display for Materialized {
 
 /// Runs the requested sides of `join` at the same time. A small build side is used as
 /// is, so the probe side is then abandoned; otherwise both run to a decision.
-async fn materialize_sides<F, Fut>(
+async fn materialize_sides(
     join: &HashJoinExec,
     build: bool,
     probe: bool,
     options: &AdaptiveJoinOptions,
-    run: &F,
-) -> Result<(Materialized, Materialized)>
-where
-    F: Fn(Arc<dyn ExecutionPlan>) -> Fut,
-    Fut: Future<Output = Result<SendableRecordBatchStream>>,
-{
+    runner: &dyn SideRunner,
+    handoffs: &Handoffs,
+) -> Result<(Materialized, Materialized)> {
     match (build, probe) {
         (true, true) => {
-            let build = pin!(materialize(join.left(), options, run));
-            let probe = pin!(materialize(join.right(), options, run));
+            let build = pin!(materialize(join.left(), options, runner, handoffs));
+            let probe = pin!(materialize(join.right(), options, runner, handoffs));
             match select(build, probe).await {
                 Either::Left((build, probe)) => {
                     let build = build?;
@@ -310,39 +473,57 @@ where
             }
         }
         (true, false) => Ok((
-            materialize(join.left(), options, run).await?,
+            materialize(join.left(), options, runner, handoffs).await?,
             Materialized::Skipped,
         )),
         (false, true) => Ok((
             Materialized::Skipped,
-            materialize(join.right(), options, run).await?,
+            materialize(join.right(), options, runner, handoffs).await?,
         )),
         (false, false) => Ok((Materialized::Skipped, Materialized::Skipped)),
     }
 }
 
-/// Runs `side` without the exchanges above it, keeping its result if it is small enough
-/// to broadcast.
-async fn materialize<F, Fut>(
-    side: &Arc<dyn ExecutionPlan>,
-    options: &AdaptiveJoinOptions,
-    run: &F,
-) -> Result<Materialized>
-where
-    F: Fn(Arc<dyn ExecutionPlan>) -> Fut,
-    Fut: Future<Output = Result<SendableRecordBatchStream>>,
-{
+/// Splits a join side into the plan its job runs and the distribution the job writes,
+/// which is the side's own partitioning: the hash partitioning of a repartition on top,
+/// or else the partitions of the side as they are.
+fn split_side(side: &Arc<dyn ExecutionPlan>) -> (Arc<dyn ExecutionPlan>, OutputDistribution) {
     let mut input = Arc::clone(side);
+    let mut distribution = OutputDistribution::RoundRobinBatch { channels: 1 };
+    let mut top = true;
     while let Some(repartition) = input.downcast_ref::<RepartitionExec>() {
+        if top {
+            match repartition.partitioning() {
+                Partitioning::Hash(keys, channels) => {
+                    distribution = OutputDistribution::Hash {
+                        keys: keys.clone(),
+                        channels: *channels,
+                    };
+                }
+                // The side's partitioning is not reproduced by writing the input as it is.
+                _ => return (Arc::clone(side), distribution),
+            }
+        }
+        top = false;
         input = Arc::clone(repartition.input());
     }
-    if input.output_partitioning().partition_count() > 1 {
-        input = Arc::new(CoalescePartitionsExec::new(input));
-    }
+    (input, distribution)
+}
+
+/// Runs `side` without the exchanges above it, keeping its result if it is small enough
+/// to broadcast, and handing its job off if not.
+async fn materialize(
+    side: &Arc<dyn ExecutionPlan>,
+    options: &AdaptiveJoinOptions,
+    runner: &dyn SideRunner,
+    handoffs: &Handoffs,
+) -> Result<Materialized> {
+    let (input, distribution) = split_side(side);
+    let input = handoffs.resolve(input)?;
     let schema = input.schema();
     // A failure here would recur in the main job, which reports it with the full plan.
-    let mut stream = match run(input).await {
-        Ok(stream) => stream,
+    let (mut stream, handoff) = match runner.run(input, Some(distribution)).await {
+        Ok(x) => x,
         Err(error) => {
             warn!("adaptive join selection: failed to run a join input: {error}");
             return Ok(Materialized::Failed);
@@ -362,8 +543,27 @@ where
         // Received batches can share buffers, so only the sliced bytes are counted here.
         bytes += sliced_size(&batch)?;
         if bytes >= options.broadcast_threshold {
-            // Dropping the stream cancels the job.
-            return Ok(Materialized::Large { rows, bytes });
+            let handoff = match handoff {
+                Some(source) => {
+                    let job_id = source.job_id;
+                    // Recorded first, so that the job is released even if this future is dropped.
+                    handoffs.add(job_id);
+                    if runner.hand_off(job_id).await {
+                        let exec: Arc<dyn ExecutionPlan> =
+                            Arc::new(HandoffExec::new(source, Arc::clone(side)));
+                        Some((job_id, exec))
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            };
+            // Dropping the stream cancels the job, unless it has been handed off.
+            return Ok(Materialized::Large {
+                rows,
+                bytes,
+                handoff,
+            });
         }
         batches.push(batch);
     }
@@ -373,7 +573,11 @@ where
         Precision::Exact(bytes) if bytes < options.broadcast_threshold => {
             Ok(Materialized::Small(build))
         }
-        _ => Ok(Materialized::Large { rows, bytes }),
+        _ => Ok(Materialized::Large {
+            rows,
+            bytes,
+            handoff: None,
+        }),
     }
 }
 
@@ -638,18 +842,181 @@ mod tests {
         AdaptiveJoinOptions::new(Arc::new(config))
     }
 
+    /// Runs sides locally. With `handoff`, every job can be handed off, and the plans
+    /// reading a hand-off fall back to the subtree it replaced when they are run.
+    #[derive(Default)]
+    struct LocalRunner {
+        handoff: bool,
+        jobs: AtomicUsize,
+        released: Mutex<Vec<JobId>>,
+    }
+
+    #[tonic::async_trait]
+    impl SideRunner for LocalRunner {
+        async fn run(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            handoff: Option<OutputDistribution>,
+        ) -> Result<(SendableRecordBatchStream, Option<ExternalStageInput>)> {
+            let job = self.jobs.fetch_add(1, Ordering::Relaxed);
+            let source = match handoff {
+                Some(distribution) if self.handoff => Some(ExternalStageInput {
+                    job_id: JobId::from(job as u64),
+                    stage: 0,
+                    partitions: plan.output_partitioning().partition_count(),
+                    channels: distribution.channels(),
+                    mode: crate::job_graph::InputMode::Shuffle,
+                }),
+                _ => None,
+            };
+            let plan = without_handoffs(plan)?;
+            Ok((
+                execute_stream(plan, Arc::new(TaskContext::default()))?,
+                source,
+            ))
+        }
+
+        async fn hand_off(&self, _job_id: JobId) -> bool {
+            self.handoff
+        }
+
+        fn release(&self, job_id: JobId) {
+            self.released.lock().unwrap().push(job_id);
+        }
+    }
+
+    async fn select_with(
+        plan: &Arc<dyn ExecutionPlan>,
+        options: &AdaptiveJoinOptions,
+        runner: &LocalRunner,
+    ) -> Arc<dyn ExecutionPlan> {
+        let handoffs = Handoffs::default();
+        let plan = select_joins(Arc::clone(plan), options, runner, &handoffs)
+            .await
+            .unwrap();
+        handoffs.resolve(plan).unwrap()
+    }
+
     async fn select(
         plan: &Arc<dyn ExecutionPlan>,
         options: &AdaptiveJoinOptions,
     ) -> (Arc<dyn ExecutionPlan>, usize) {
-        let jobs = AtomicUsize::new(0);
-        let plan = select_joins(Arc::clone(plan), options, |plan| {
-            jobs.fetch_add(1, Ordering::Relaxed);
-            async move { execute_stream(plan, Arc::new(TaskContext::default())) }
-        })
-        .await
-        .unwrap();
-        (plan, jobs.load(Ordering::Relaxed))
+        let runner = LocalRunner::default();
+        let plan = select_with(plan, options, &runner).await;
+        (plan, runner.jobs.load(Ordering::Relaxed))
+    }
+
+    fn handoff_jobs(plan: &Arc<dyn ExecutionPlan>) -> Vec<u64> {
+        let mut jobs = vec![];
+        if let Some(handoff) = plan.downcast_ref::<HandoffExec>() {
+            jobs.push(u64::from(handoff.source().job_id));
+        }
+        for child in plan.children() {
+            jobs.extend(handoff_jobs(child));
+        }
+        jobs
+    }
+
+    #[tokio::test]
+    async fn large_sides_are_handed_off_to_a_partitioned_join() {
+        let plan = || {
+            partitioned_join(
+                filtered(source("b", &keys(0..1000)), 0),
+                0,
+                filtered(source("p", &keys(0..1000)), 0),
+                0,
+                JoinType::Inner,
+            )
+        };
+        let runner = LocalRunner {
+            handoff: true,
+            ..Default::default()
+        };
+        let adapted = select_with(&plan(), &options(1024), &runner).await;
+        assert_eq!(runner.jobs.load(Ordering::Relaxed), 2);
+        assert_eq!(joins(&adapted), vec![PartitionMode::Partitioned]);
+        let mut jobs = handoff_jobs(&adapted);
+        jobs.sort();
+        assert_eq!(jobs, vec![0, 1]);
+        assert!(runner.released.lock().unwrap().is_empty());
+        SanityCheckPlan::new()
+            .optimize(Arc::clone(&adapted), &ConfigOptions::default())
+            .unwrap();
+        assert_eq!(
+            sorted_output(without_handoffs(adapted).unwrap()).await,
+            sorted_output(plan()).await
+        );
+    }
+
+    #[tokio::test]
+    async fn a_broadcast_join_releases_the_probe_side_hand_off() {
+        // The probe side reaches the threshold first, then the build side is small.
+        let plan = partitioned_join(
+            filtered(source("b", &keys(0..1000)), 995),
+            0,
+            filtered(source("p", &keys(0..100_000)), 0),
+            0,
+            JoinType::Inner,
+        );
+        let runner = LocalRunner {
+            handoff: true,
+            ..Default::default()
+        };
+        let adapted = select_with(&plan, &options(1024), &runner).await;
+        assert_eq!(joins(&adapted), vec![PartitionMode::CollectLeft]);
+        assert!(handoff_jobs(&adapted).is_empty());
+        assert_eq!(sorted_output(adapted).await, sorted_output(plan).await);
+    }
+
+    #[tokio::test]
+    async fn a_hand_off_is_read_once() {
+        let runner = LocalRunner {
+            handoff: true,
+            ..Default::default()
+        };
+        let source = ExternalStageInput {
+            job_id: JobId::from(7),
+            stage: 0,
+            partitions: PARTITIONS,
+            channels: PARTITIONS,
+            mode: crate::job_graph::InputMode::Shuffle,
+        };
+        let original = hash(source_plan(), 0);
+        let handoff: Arc<dyn ExecutionPlan> =
+            Arc::new(HandoffExec::new(source, Arc::clone(&original)));
+        let plan = partitioned_join_of(Arc::clone(&handoff), Arc::clone(&handoff));
+        let handoffs = Handoffs::default();
+        let resolved = handoffs.resolve(plan).unwrap();
+        assert_eq!(handoff_jobs(&resolved), vec![7]);
+        drop(runner);
+    }
+
+    fn source_plan() -> Arc<dyn ExecutionPlan> {
+        source("s", &keys(0..10))
+    }
+
+    fn partitioned_join_of(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
+        let on = vec![(
+            Arc::new(Column::new(left.schema().field(0).name(), 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new(right.schema().field(0).name(), 0)) as Arc<dyn PhysicalExpr>,
+        )];
+        Arc::new(
+            HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::Partitioned,
+                NullEquality::NullEqualsNothing,
+                false,
+            )
+            .unwrap(),
+        )
     }
 
     async fn sorted_output(plan: Arc<dyn ExecutionPlan>) -> Vec<String> {

@@ -27,6 +27,14 @@ pub struct TaskInput {
     /// Whether each consumer task reads its own replica of the input streams,
     /// as for merge and broadcast inputs, rather than one consumer partition per stream.
     pub replicated: bool,
+    /// The job that produces the input, if not the task's own job.
+    pub job_id: Option<JobId>,
+}
+
+impl TaskInput {
+    pub fn producer_job_id(&self, consumer: JobId) -> JobId {
+        self.job_id.unwrap_or(consumer)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -145,11 +153,13 @@ impl From<TaskInput> for r#gen::TaskInput {
             stage,
             locator,
             replicated,
+            job_id,
         } = value;
         r#gen::TaskInput {
             stage: stage as u64,
             locator: Some(locator.as_ref().clone().into()),
             replicated,
+            job_id: job_id.map(u64::from),
         }
     }
 }
@@ -170,6 +180,7 @@ impl TryFrom<r#gen::TaskInput> for TaskInput {
             stage: value.stage as usize,
             locator: Arc::new(locator),
             replicated: value.replicated,
+            job_id: value.job_id.map(JobId::from),
         })
     }
 }

@@ -9,6 +9,10 @@ use std::collections::VecDeque;
 use indexmap::IndexMap;
 pub use options::TaskAssignerOptions;
 
+/// Starts the error of a job that cannot be scheduled beside the handed-off jobs it reads,
+/// which a caller can retry without reading them.
+pub(crate) const HANDOFF_SLOTS_ERROR: &str = "not enough worker task slots beside handed-off jobs";
+
 use crate::driver::task_assigner::state::{DriverResource, WorkerResource};
 use crate::id::{TaskKey, WorkerId};
 use crate::task::scheduling::{TaskAssignment, TaskRegion};

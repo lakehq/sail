@@ -25,9 +25,10 @@ use crate::driver::job_scheduler::topology::TaskRegionTopology;
 use crate::driver::job_scheduler::{JobAction, JobScheduler, JobState};
 use crate::driver::output::{JobOutputOutcome, build_job_output};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
+use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
 use crate::job_graph::{
-    InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
+    ExternalStageInput, InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput,
+    TaskPlacement,
 };
 use crate::proto::{
     encode_remote_partitioning, encode_remote_physical_expr, encode_remote_physical_plan,
@@ -46,25 +47,53 @@ impl JobScheduler {
         self.job_id_generator.generate()
     }
 
+    /// Accepts a job. With `handoff`, the job's final stage is also written for a later
+    /// job, which reads it through the returned input.
     pub fn accept_job(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
-    ) -> ExecutionResult<(JobId, SendableRecordBatchStream)> {
+        handoff: Option<OutputDistribution>,
+    ) -> ExecutionResult<(JobId, Option<ExternalStageInput>, SendableRecordBatchStream)> {
         let job_id = self.next_job_id()?;
 
         debug!(
             "job {job_id} execution plan\n{}",
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
+        // Only pipelined worker outputs can be read by a later job.
+        let handoff = handoff.filter(|_| {
+            matches!(
+                self.options.shuffle_backend,
+                ShuffleBackendKind::Flight { .. }
+            )
+        });
         let graph = JobGraph::try_new(
             plan,
             crate::job_graph::JobGraphOptions {
                 shuffle_backend: self.options.shuffle_backend.clone(),
+                handoff,
             },
         )?;
         debug!("job {job_id} job graph \n{graph}");
+        for source in graph
+            .stages()
+            .iter()
+            .flat_map(|stage| &stage.external_inputs)
+        {
+            if !self
+                .jobs
+                .get(&source.job_id)
+                .is_some_and(|job| job.handed_off)
+            {
+                return Err(ExecutionError::InvalidArgument(format!(
+                    "job {job_id} reads job {} which has not been handed off",
+                    source.job_id
+                )));
+            }
+        }
+        let handoff = graph.handoff_input(job_id);
 
         let (output, stream) = build_job_output(ctx, job_id, graph.schema().clone());
         let descriptor = JobDescriptor::try_new(graph, JobState::Running { output }, context)?;
@@ -103,7 +132,67 @@ impl JobScheduler {
             }
         }
 
-        Ok((job_id, stream))
+        Ok((job_id, handoff, stream))
+    }
+
+    /// Keeps the job running after its own output is dropped, for a later job to read its
+    /// final stage. Returns whether the job can still be read.
+    pub fn hand_off_job(&mut self, job_id: JobId) -> bool {
+        let Some(job) = self.jobs.get_mut(&job_id) else {
+            return false;
+        };
+        if job.graph.handoff_input(job_id).is_none()
+            || !matches!(job.state, JobState::Running { .. } | JobState::Draining)
+        {
+            return false;
+        }
+        job.handed_off = true;
+        true
+    }
+
+    /// Cleans up a handed-off job once nothing reads it any more.
+    pub fn release_job(&mut self, job_id: JobId) -> Vec<JobAction> {
+        let Some(job) = self.jobs.get_mut(&job_id) else {
+            return vec![];
+        };
+        if !job.handed_off {
+            return vec![];
+        }
+        job.handed_off = false;
+        let outcome = if matches!(job.state, JobState::Draining) {
+            JobOutputOutcome::Completed
+        } else {
+            JobOutputOutcome::Canceled
+        };
+        self.clean_up_job(job_id, outcome)
+    }
+
+    /// The jobs whose output the job reads.
+    pub fn handoff_sources(&self, job_id: JobId) -> IndexSet<JobId> {
+        self.jobs
+            .get(&job_id)
+            .map(|job| {
+                job.graph
+                    .stages()
+                    .iter()
+                    .flat_map(|stage| &stage.external_inputs)
+                    .map(|input| input.job_id)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Records where a task attempt runs, so that later jobs can find its output.
+    pub fn record_task_worker(&mut self, key: &TaskKey, worker: Option<WorkerId>) {
+        if let Some(attempt) = self
+            .jobs
+            .get_mut(&key.job_id)
+            .and_then(|job| job.stages.get_mut(key.stage))
+            .and_then(|stage| stage.tasks.get_mut(key.partition))
+            .and_then(|task| task.attempts.get_mut(key.attempt))
+        {
+            attempt.worker = worker;
+        }
     }
 
     pub fn update_task(
@@ -426,6 +515,7 @@ impl JobScheduler {
                     messages: vec![],
                     cause: None,
                     job_output_fetched: false,
+                    worker: None,
                 });
                 event_reporter.report(SystemEvent::TaskCreated {
                     session_id: session_id.to_string(),
@@ -632,6 +722,10 @@ impl JobScheduler {
             warn!("job {job_id} not found");
             return vec![];
         };
+        if job.handed_off {
+            // A later job reads the final stage; `release_job` cleans up.
+            return vec![];
+        }
         let mut actions = vec![];
         for (s, stage) in job.stages.iter().enumerate() {
             for (t, task) in stage.tasks.iter().enumerate() {
@@ -711,11 +805,14 @@ impl JobScheduler {
         };
 
         let plan = encode_remote_physical_plan(self.codec.as_ref(), stage.plan.clone())?;
-        let inputs = stage
+        let mut inputs = stage
             .inputs
             .iter()
             .map(|input| TaskInputBuilder::try_new(job, key, input, assignments)?.build())
             .collect::<ExecutionResult<Vec<_>>>()?;
+        for input in &stage.external_inputs {
+            inputs.push(self.build_external_task_input(input)?);
+        }
         let output = TaskOutputBuilder::new(job, key, stage, self.codec.as_ref()).build()?;
         let definition = TaskDefinition {
             plan: Arc::from(plan),
@@ -723,6 +820,66 @@ impl JobScheduler {
             output,
         };
         Ok((definition, job.context.clone()))
+    }
+
+    /// Locates the final stage of a handed-off job, from the latest attempt of each task
+    /// and the worker it was assigned to.
+    fn build_external_task_input(&self, input: &ExternalStageInput) -> ExecutionResult<TaskInput> {
+        let Some(job) = self.jobs.get(&input.job_id).filter(|job| job.handed_off) else {
+            return Err(ExecutionError::InvalidArgument(format!(
+                "input job {} is not handed off",
+                input.job_id
+            )));
+        };
+        let producers = (0..input.partitions)
+            .map(|partition| {
+                let attempts = job
+                    .stages
+                    .get(input.stage)
+                    .and_then(|stage| stage.tasks.get(partition))
+                    .map(|task| task.attempts.as_slice())
+                    .unwrap_or_default();
+                attempts
+                    .split_last()
+                    .and_then(|(last, head)| Some((last.worker?, head.len())))
+                    .ok_or_else(|| {
+                        ExecutionError::InvalidArgument(format!(
+                            "job {} stage {} partition {partition} has no assigned attempt",
+                            input.job_id, input.stage
+                        ))
+                    })
+            })
+            .collect::<ExecutionResult<Vec<_>>>()?;
+        let key = |partition: usize, channel: usize| {
+            let (worker, attempt) = producers[partition];
+            (
+                worker,
+                TaskInputKey {
+                    partition,
+                    attempt,
+                    channel,
+                },
+            )
+        };
+        let keys = match input.mode {
+            InputMode::Shuffle => (0..input.channels)
+                .map(|channel| (0..input.partitions).map(|p| key(p, channel)).collect())
+                .collect(),
+            InputMode::Forward => (0..input.partitions)
+                .map(|p| (0..input.channels).map(|channel| key(p, channel)).collect())
+                .collect(),
+            mode => {
+                return Err(ExecutionError::InvalidArgument(format!(
+                    "unsupported input mode for another job's output: {mode}"
+                )));
+            }
+        };
+        Ok(TaskInput {
+            stage: input.stage,
+            locator: Arc::new(TaskInputLocator::Worker { keys }),
+            replicated: false,
+            job_id: Some(input.job_id),
+        })
     }
 
     pub fn stop(&mut self) {
@@ -844,6 +1001,7 @@ impl<'a> TaskInputBuilder<'a> {
             stage: self.input.stage,
             locator: Arc::new(locator),
             replicated: matches!(self.input.mode, InputMode::Merge | InputMode::Broadcast),
+            job_id: None,
         })
     }
 
@@ -1103,7 +1261,8 @@ impl<'a> TaskOutputBuilder<'a> {
         let locator = match self.stage.mode {
             OutputMode::Pipelined => TaskOutputLocator::Pipelined {
                 replicas: self.job.graph.replicas(self.key.stage),
-                bounded: self.job.graph.bounded_output(self.key.stage),
+                bounded: self.job.graph.bounded_output(self.key.stage)
+                    || self.job.graph.is_handoff_stage(self.key.stage),
             },
             OutputMode::Blocking => TaskOutputLocator::Blocking,
         };
@@ -1270,8 +1429,8 @@ pub(super) mod tests {
             None,
             SnapshotUpdateKind::FastAppend,
         ));
-        let (job_id, _output) =
-            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        let (job_id, _, _output) =
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()), None)?;
         scheduler.refresh_job(job_id);
         let original = TaskKey {
             job_id,
@@ -1299,7 +1458,7 @@ pub(super) mod tests {
         );
         for action in scheduler.refresh_job(job_id) {
             if let JobAction::ScheduleTaskRegion { region } = action {
-                assigner.enqueue_tasks(&region)?;
+                assigner.enqueue_tasks(&region, 0)?;
             }
         }
         assert!(matches!(
@@ -1401,8 +1560,8 @@ pub(super) mod tests {
             input,
             Partitioning::RoundRobinBatch(2),
         )?);
-        let (job_id, _output) =
-            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        let (job_id, _, _output) =
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()), None)?;
         scheduler.refresh_job(job_id);
         let key = |stage, partition, attempt| TaskKey {
             job_id,
@@ -1484,6 +1643,7 @@ pub(super) mod tests {
         let graph = JobGraph::try_new(
             MemorySourceConfig::try_new_exec(&[vec![], vec![]], Arc::new(Schema::empty()), None)?,
             JobGraphOptions {
+                handoff: None,
                 shuffle_backend: ShuffleBackendKind::Flight {
                     compression: ShuffleCompression::None,
                     connection_count: std::num::NonZeroUsize::MIN,
@@ -1499,6 +1659,7 @@ pub(super) mod tests {
             messages: vec![],
             cause,
             job_output_fetched: false,
+            worker: None,
         };
         for _ in 0..2 {
             job.stages[0].tasks[0].attempts.push(attempt(
@@ -1573,6 +1734,7 @@ pub(super) mod tests {
                     initial_stream_window_size: None,
                     initial_connection_window_size: None,
                 },
+                handoff: None,
             },
         )?;
         let job =
@@ -1631,6 +1793,7 @@ pub(super) mod tests {
                 Partitioning::RoundRobinBatch(4),
             )?),
             JobGraphOptions {
+                handoff: None,
                 shuffle_backend: ShuffleBackendKind::Flight {
                     compression: ShuffleCompression::None,
                     connection_count: std::num::NonZeroUsize::MIN,
@@ -1646,6 +1809,7 @@ pub(super) mod tests {
             messages: vec![],
             cause: None,
             job_output_fetched: false,
+            worker: None,
         };
         for stage in &mut job.stages {
             for task in &mut stage.tasks {
@@ -1851,8 +2015,8 @@ pub(super) mod tests {
             .ok_or("missing ordering")?;
         let sort = SortExec::new(ordering.clone(), input).with_preserve_partitioning(true);
         let plan = Arc::new(SortPreservingMergeExec::new(ordering, Arc::new(sort)));
-        let (job_id, _output) =
-            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        let (job_id, _, _output) =
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()), None)?;
         scheduler.refresh_job(job_id);
         let key = TaskKey {
             job_id,

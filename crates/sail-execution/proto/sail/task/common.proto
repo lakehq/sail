@@ -15,6 +15,8 @@ message TaskInput {
   TaskInputLocator locator = 2;
   // Whether each consumer task reads its own replica of the input streams.
   bool replicated = 3;
+  // The job that produces the input, if not the task's own job.
+  optional uint64 job_id = 4;
 }
 
 message TaskInputLocator {

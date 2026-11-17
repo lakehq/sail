@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
 use log::{debug, error, info, warn};
@@ -19,12 +19,13 @@ use crate::driver::actor::DriverActor;
 use crate::driver::job_scheduler::{JobAction, TaskState};
 use crate::driver::output::{JobOutputItem, JobOutputOutcome};
 use crate::driver::worker_scaler::{WorkerLaunchRequest, WorkerRetryRequest};
-use crate::driver::{DriverMessage, TaskStatus};
+use crate::driver::{DriverMessage, SubmittedJob, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{
     JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay,
     TaskStreamKeySet, WorkerId,
 };
+use crate::job_graph::OutputDistribution;
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
@@ -214,15 +215,29 @@ impl DriverActor {
         ctx: &mut ActorContext<Self>,
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
-        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+        handoff: Option<OutputDistribution>,
+        result: oneshot::Sender<ExecutionResult<SubmittedJob>>,
     ) -> ActorAction {
-        let out = self.job_scheduler.accept_job(ctx, plan, context);
-        if let Ok((job_id, _)) = &out {
+        let out = self.job_scheduler.accept_job(ctx, plan, context, handoff);
+        if let Ok((job_id, _, _)) = &out {
             self.refresh_job(ctx, *job_id);
             self.run_tasks(ctx);
             self.reconcile_worker_demands(ctx);
         }
-        let _ = result.send(out.map(|(_, stream)| stream));
+        let _ = result.send(out.map(|(_, handoff, stream)| SubmittedJob { handoff, stream }));
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_release_job(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+    ) -> ActorAction {
+        for action in self.job_scheduler.release_job(job_id) {
+            self.run_job_action(ctx, action);
+        }
+        self.run_tasks(ctx);
+        self.reconcile_worker_demands(ctx);
         ActorAction::Continue
     }
 
@@ -412,7 +427,19 @@ impl DriverActor {
         debug!("job action: {action:?}");
         match action {
             JobAction::ScheduleTaskRegion { region } => {
-                if let Err(e) = self.task_assigner.enqueue_tasks(&region) {
+                // Tasks of handed-off jobs wait for this region to read them, so their
+                // slots cannot be counted on.
+                let reserved = region
+                    .tasks
+                    .iter()
+                    .flat_map(|(_, set)| set.tasks())
+                    .next()
+                    .map(|key| {
+                        self.task_assigner
+                            .occupied_worker_slots(&self.job_scheduler.handoff_sources(key.job_id))
+                    })
+                    .unwrap_or(0);
+                if let Err(e) = self.task_assigner.enqueue_tasks(&region, reserved) {
                     // Failing one task fails the entire region. Report this as a
                     // separate message so that the current job actions finish first.
                     if let Some(key) = region.tasks.iter().flat_map(|(_, set)| set.tasks()).next() {
@@ -639,6 +666,9 @@ impl DriverActor {
         }
         let mut definitions = std::collections::HashMap::new();
         for ((job_id, _, stage, worker_id), keys) in batches {
+            for key in &keys {
+                self.job_scheduler.record_task_worker(key, worker_id);
+            }
             let Some(first) = keys.first() else { continue };
             let definition = definitions.entry((job_id, stage)).or_insert_with(|| {
                 let started = Instant::now();

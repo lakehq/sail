@@ -251,6 +251,7 @@ mod tests {
         let graph = JobGraph::try_new(
             UnionExec::try_new(vec![repartitioned_input(), repartitioned_input()]).unwrap(),
             JobGraphOptions {
+                handoff: None,
                 shuffle_backend: ShuffleBackendKind::Storage {
                     path: None,
                     max_file_size: 1,
@@ -336,6 +337,7 @@ mod tests {
                         initial_stream_window_size: None,
                         initial_connection_window_size: None,
                     },
+                    handoff: None,
                 },
             )
             .unwrap();
