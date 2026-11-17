@@ -97,19 +97,17 @@ impl Drop for ShuffleReadOpen {
         if self.opened || !self.reader.close_unopened() {
             return;
         }
-        let (reader, partition) = (self.reader.clone(), self.partition);
-        let open = self.open.take();
         // This is best-effort. If the input cannot be released here, its data is
         // released when the streams of the stage are cleaned up.
         // The spawned task is not cancelled along with the task that owned the input,
         // but it takes no longer than the open call of a normal read.
+        let Some(open) = self.open.take() else {
+            spawn_release(self.reader.clone(), self.partition);
+            return;
+        };
         if let Ok(handle) = Handle::try_current() {
             handle.spawn(async move {
-                if let Some(open) = open {
-                    let _ = open.await;
-                } else {
-                    let _ = reader.release(partition).await;
-                }
+                let _ = open.await;
             });
         }
     }
