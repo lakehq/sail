@@ -112,7 +112,7 @@ impl LocalStreamManager {
         let waiters = keys
             .iter()
             .map(|key| match self.streams.remove(key) {
-                Some(LocalStreamState::Pending { waiters }) => waiters,
+                Some(LocalStreamState::Pending { waiters, .. }) => waiters,
                 _ => vec![],
             })
             .collect();
@@ -146,12 +146,16 @@ impl LocalStreamManager {
         match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => match entry.get_mut() {
                 LocalStreamState::Created { stream } => stream.subscribe(),
-                LocalStreamState::Pending { waiters } => {
-                    // There is no need to probe the pending stream again, unless the
-                    // earlier probe has left the stream alone since all readers had left.
+                LocalStreamState::Pending { waiters, probes } => {
+                    // There is no need to probe the pending stream again, unless all
+                    // earlier readers have left. The earlier probes are then ignored.
                     if waiters.iter().all(|waiter| waiter.is_closed()) {
+                        *probes += 1;
                         ctx.send_with_delay(
-                            TaskRunnerMessage::ProbePendingLocalStream { key: key.clone() },
+                            TaskRunnerMessage::ProbePendingLocalStream {
+                                key: key.clone(),
+                                probe: *probes,
+                            },
                             self.options.task_stream_creation_timeout,
                         );
                     }
@@ -169,9 +173,13 @@ impl LocalStreamManager {
                 let (waiter, source) = MemoryStream::pending();
                 entry.insert(LocalStreamState::Pending {
                     waiters: vec![waiter],
+                    probes: 1,
                 });
                 ctx.send_with_delay(
-                    TaskRunnerMessage::ProbePendingLocalStream { key: key.clone() },
+                    TaskRunnerMessage::ProbePendingLocalStream {
+                        key: key.clone(),
+                        probe: 1,
+                    },
                     self.options.task_stream_creation_timeout,
                 );
                 Ok(source)
@@ -225,12 +233,13 @@ impl LocalStreamManager {
                 LocalStreamState::Created { stream } => {
                     let _ = stream.subscribe();
                 }
-                LocalStreamState::Pending { waiters } => waiters.push(waiter),
+                LocalStreamState::Pending { waiters, .. } => waiters.push(waiter),
                 LocalStreamState::Failed { .. } => {}
             },
             Entry::Vacant(entry) => {
                 entry.insert(LocalStreamState::Pending {
                     waiters: vec![waiter],
+                    probes: 0,
                 });
             }
         }
@@ -252,14 +261,16 @@ impl LocalStreamManager {
         }
     }
 
-    pub fn fail_stream_if_pending(&mut self, key: &TaskStreamKey) {
+    /// Fails a stream that is not created yet, for the given probe of the stream.
+    pub fn fail_stream_if_pending(&mut self, key: &TaskStreamKey, probe: usize) {
         let Some(value) = self.streams.get_mut(key) else {
             return;
         };
-        if let LocalStreamState::Pending { waiters } = value {
+        if let LocalStreamState::Pending { waiters, probes } = value {
             // Readers that have left do not need the stream. Their replicas are closed
             // when the stream is created, which can happen at any later time.
-            if waiters.iter().all(|waiter| waiter.is_closed()) {
+            // A probe that was scheduled for them does not count for later readers.
+            if *probes != probe || waiters.iter().all(|waiter| waiter.is_closed()) {
                 return;
             }
             let message = "local stream is not created within the expected time".to_string();
@@ -346,6 +357,7 @@ mod tests {
             key,
             LocalStreamState::Pending {
                 waiters: vec![waiter],
+                probes: 1,
             },
         );
         source
@@ -488,7 +500,7 @@ mod tests {
         // created later, and the replica for that reader is closed.
         let key = task_key(0);
         drop(fetch_pending(&mut manager, key.task_stream_key(0)));
-        manager.fail_stream_if_pending(&key.task_stream_key(0));
+        manager.fail_stream_if_pending(&key.task_stream_key(0), 1);
         let mut sink = manager.create_stream(&key, 1, 1, true, schema.clone())?;
         let state = sink.write(vec![Some(batch()?)]).await?;
         assert_eq!(state, TaskStreamWriteState::Closed);
@@ -496,7 +508,7 @@ mod tests {
         // A reader that is still waiting gets the error, and the stream cannot be created.
         let key = task_key(1);
         let mut reader = fetch_pending(&mut manager, key.task_stream_key(0));
-        manager.fail_stream_if_pending(&key.task_stream_key(0));
+        manager.fail_stream_if_pending(&key.task_stream_key(0), 1);
         assert!(matches!(reader.next().await, Some(Err(_))));
         assert!(reader.next().await.is_none());
         assert!(manager.create_stream(&key, 1, 1, true, schema).is_err());

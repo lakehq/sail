@@ -166,8 +166,14 @@ impl TaskRunnerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_probe_pending_local_stream(&mut self, key: TaskStreamKey) -> ActorAction {
-        self.extensions.local_streams.fail_stream_if_pending(&key);
+    pub(super) fn handle_probe_pending_local_stream(
+        &mut self,
+        key: TaskStreamKey,
+        probe: usize,
+    ) -> ActorAction {
+        self.extensions
+            .local_streams
+            .fail_stream_if_pending(&key, probe);
         ActorAction::Continue
     }
 

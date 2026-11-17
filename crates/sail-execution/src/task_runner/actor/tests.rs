@@ -332,6 +332,18 @@ async fn reader_that_joins_a_released_stream_gets_a_creation_timeout_of_its_own(
         let message = "local stream is not created within the expected time";
         assert!(error.to_string().contains(message));
         assert!(start.elapsed() >= Duration::from_millis(900));
+
+        // The same holds for a reader that requests a stream before the creation
+        // timeout of an earlier reader, which has left, has passed.
+        drop(fetch(&runner, keys(&[2], &[0])).await??);
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let start = tokio::time::Instant::now();
+        let mut source = fetch(&runner, keys(&[2], &[0])).await??;
+        let Some(Err(error)) = source.next().await else {
+            return Err("the reader of a stream that is never created must fail".into());
+        };
+        assert!(error.to_string().contains(message));
+        assert!(start.elapsed() >= Duration::from_millis(900));
         Ok(())
     })
     .await

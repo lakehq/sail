@@ -52,8 +52,8 @@ impl Actor for TaskRunnerActor {
                 message,
                 cause,
             } => self.handle_report_task_status(ctx, key, status, message, cause),
-            TaskRunnerMessage::ProbePendingLocalStream { key } => {
-                self.handle_probe_pending_local_stream(key)
+            TaskRunnerMessage::ProbePendingLocalStream { key, probe } => {
+                self.handle_probe_pending_local_stream(key, probe)
             }
             TaskRunnerMessage::CreateLocalStream {
                 key,

@@ -27,6 +27,11 @@ pub struct LocalStreamManager {
 pub enum LocalStreamState {
     Pending {
         waiters: Vec<memory::MemoryStreamWaiter>,
+        /// The number of probes that have been scheduled for the stream. Only the
+        /// last one fails the stream if it is not created in time, so that the
+        /// readers that arrive after all earlier readers have left wait for the
+        /// whole creation timeout.
+        probes: usize,
     },
     Created {
         stream: memory::MemoryStream,

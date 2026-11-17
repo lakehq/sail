@@ -36,6 +36,8 @@ pub enum TaskRunnerMessage {
     },
     ProbePendingLocalStream {
         key: TaskStreamKey,
+        /// The number of the probe among the probes of the stream.
+        probe: usize,
     },
     CreateLocalStream {
         key: TaskKey,
@@ -182,7 +184,7 @@ impl SpanAssociation for TaskRunnerMessage {
                     ));
                 }
             }
-            Self::ProbePendingLocalStream { key } | Self::CreateStorageStream { key, .. } => {
+            Self::ProbePendingLocalStream { key, .. } | Self::CreateStorageStream { key, .. } => {
                 let TaskStreamKey {
                     job_id,
                     stage,
