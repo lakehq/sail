@@ -270,12 +270,16 @@
   type: number
   default: "33554432"
   description: |
-    The size in bytes of the rows that a task holds for a shuffle write before it
-    writes them to all output channels. Set to `0` for no limit on the size; a task
-    then holds up to `execution.batch_size` rows for each output channel. Most users
-    should not disable the limit. This is also the size of the output that a task can
-    always have in its task streams at `cluster.task_stream_memory_limit`; with `0`,
-    the task waits at that limit until all its output has been read.
+    The size in bytes of the rows that a task collects before it writes them to all
+    its output channels in one step. The same size is the amount of output that a task
+    can always queue for its readers without waiting, even when the task streams of
+    the process have reached `cluster.task_stream_memory_limit`. A task that has this
+    many bytes queued at that point waits until its readers take some of them. Set to
+    `0` for no limit on the size of a write. A task then collects up to
+    `execution.batch_size` rows for each output channel before it writes, and once the
+    process has reached `cluster.task_stream_memory_limit` it waits until its readers
+    have taken all of its queued output before it queues more. Most users should not
+    set `0`.
   experimental: true
 
 - key: cluster.task_stream_stall_timeout_secs
