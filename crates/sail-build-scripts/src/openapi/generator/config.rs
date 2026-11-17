@@ -13,6 +13,11 @@ pub struct OpenApiConfig {
     /// This is useful for endpoints that are not needed by the target crate or that use currently
     /// unsupported OpenAPI features.
     pub excluded_operations: BTreeSet<String>,
+    /// Path parameter names inserted into the URL verbatim, without percent-encoding.
+    ///
+    /// Use this for parameters whose values are already-encoded path fragments supplied by the
+    /// server, such as the Iceberg REST `prefix` returned by `/v1/config`.
+    pub raw_path_parameters: BTreeSet<String>,
 }
 
 impl OpenApiConfig {
