@@ -112,7 +112,8 @@ type BoxedFlightStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send 
 
 /// Encodes a task stream as Flight data. The stream can have the data of several
 /// tasks in arbitrary order, since the encoder keeps no state from one batch to the
-/// next other than the schema, which is the same for all tasks of a stage.
+/// next other than the schema of the first batch, and the sink of a task gives the
+/// batches of all tasks of a stage the schema of the stage.
 pub(super) fn encode_task_stream(
     stream: TaskStreamSource,
     compression: ShuffleCompression,

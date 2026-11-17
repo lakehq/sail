@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use futures::{FutureExt, StreamExt};
 use log::warn;
+use sail_common_datafusion::array::record_batch::cast_record_batch_positionally;
 use tokio::sync::oneshot;
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -39,12 +41,16 @@ impl MemoryStream {
     /// other data, which holds for the batches of a shuffle up to a factor of two:
     /// a batch that is passed on whole may keep up to twice the memory that its
     /// rows need.
+    ///
+    /// The sink gives the batches the schema of the streams, as described in
+    /// [`with_stream_schema`].
     pub(crate) fn create(
         key: &TaskKey,
         waiters: Vec<Vec<MemoryStreamWaiter>>,
         replicas: usize,
         limit: Option<QueueLimit>,
         memory: Arc<StreamMemory>,
+        schema: SchemaRef,
     ) -> (Box<dyn TaskStreamSink>, Vec<Self>) {
         let replicas = waiters
             .iter()
@@ -75,6 +81,7 @@ impl MemoryStream {
             key: key.clone(),
             writer,
             channels: replicas.len(),
+            schema,
         };
         (Box::new(sink), streams)
     }
@@ -109,6 +116,25 @@ fn source(receiver: QueueReader<RecordBatch>) -> TaskStreamSource {
     Box::pin(receiver.map(TaskStreamResult::Ok))
 }
 
+/// Returns the batch with the schema of the stream that it is written to.
+///
+/// The batches of a task can differ from the schema of its stage in the names and
+/// the nullability of the columns, since some operators pass on the batches of their
+/// inputs as they are. In particular, the tasks of a union can run different inputs.
+/// The readers need one schema for all the tasks of a stage, since the batches of
+/// several tasks are encoded together for a reader on another worker, with the
+/// schema of the first batch. The columns are taken by position, as a reader on
+/// another worker does for the batches that it receives.
+///
+/// A batch that does not fit the schema of the stream is passed on as it is, so that
+/// it reaches a reader on the same worker like any other batch.
+fn with_stream_schema(batch: RecordBatch, schema: &SchemaRef) -> RecordBatch {
+    if batch.schema_ref() == schema {
+        return batch;
+    }
+    cast_record_batch_positionally(batch.clone(), schema.clone()).unwrap_or(batch)
+}
+
 /// A sink for all channels of a task. The data stays in memory until it is read,
 /// and each reader sees the end of the stream after the data that remains for it,
 /// once the sink is committed or dropped, whichever way the task has ended.
@@ -117,6 +143,8 @@ struct MemoryStreamSink {
     key: TaskKey,
     writer: QueueWriter<RecordBatch>,
     channels: usize,
+    /// The schema of the streams.
+    schema: SchemaRef,
 }
 
 #[tonic::async_trait]
@@ -133,6 +161,10 @@ impl TaskStreamSink for MemoryStreamSink {
         // needs more data (e.g., after a LIMIT operator has received enough rows).
         // The writer can stop when the readers of all channels are gone, including
         // the channels that it has not written to since their readers left.
+        let batches = batches
+            .into_iter()
+            .map(|batch| batch.map(|batch| with_stream_schema(batch, &self.schema)))
+            .collect();
         match self.writer.write(batches).await {
             QueueWrite::Queued => Ok(TaskStreamWriteState::Active),
             QueueWrite::QueuedAfterStall => {
@@ -200,21 +232,41 @@ mod tests {
             partition: 0,
             attempt: 0,
         };
-        MemoryStream::create(&key, waiters, replicas, limit, memory)
+        MemoryStream::create(&key, waiters, replicas, limit, memory, schema())
+    }
+
+    fn schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]))
     }
 
     /// Creates a batch with the given number of rows that all have the given value.
     fn rows(value: i32, rows: usize) -> Result<RecordBatch> {
-        let schema = Schema::new(vec![Field::new("value", DataType::Int32, false)]);
         let values = Int32Array::from(vec![value; rows]);
-        Ok(RecordBatch::try_new(
-            Arc::new(schema),
-            vec![Arc::new(values)],
-        )?)
+        Ok(RecordBatch::try_new(schema(), vec![Arc::new(values)])?)
     }
 
     fn batch(value: i32) -> Result<RecordBatch> {
         rows(value, 1)
+    }
+
+    #[test]
+    fn batch_takes_the_schema_of_the_stream_if_it_fits() -> TestResult {
+        let batch = |name: &str, values: Vec<Option<i32>>| {
+            let schema = Schema::new(vec![Field::new(name, DataType::Int32, true)]);
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(Int32Array::from(values))])
+        };
+        // A column with another name and without nulls fits a schema without nulls.
+        let output = with_stream_schema(batch("other", vec![Some(1)])?, &schema());
+        assert_eq!(output.schema(), schema());
+        assert_eq!(output.column(0).as_primitive::<Int32Type>().value(0), 1);
+        // A column with nulls does not, and the batch stays as it is.
+        let nulls = batch("value", vec![None])?;
+        assert_eq!(with_stream_schema(nulls.clone(), &schema()), nulls);
+        Ok(())
     }
 
     async fn read(source: &mut TaskStreamSource) -> TaskStreamResult<Option<i32>> {

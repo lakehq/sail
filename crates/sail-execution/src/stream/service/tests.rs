@@ -6,12 +6,12 @@ use std::time::Duration;
 
 use arrow_flight::flight_service_server::FlightServiceServer;
 use datafusion::arrow::array::{
-    Array, ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringArray,
+    Array, ArrayRef, DictionaryArray, Int32Array, Int64Array, RecordBatch, StringArray,
 };
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
-use futures::TryStreamExt;
 use futures::future::BoxFuture;
+use futures::{StreamExt, TryStreamExt};
 use prost::Message;
 use sail_common::server::ServerBuilder;
 use tokio::net::TcpListener;
@@ -24,10 +24,11 @@ use tonic::server::NamedService;
 use tower::Service;
 
 use crate::error::ExecutionResult;
-use crate::id::{JobId, TaskStreamKey, TaskStreamKeySet};
+use crate::id::{JobId, TaskKey, TaskStreamKey, TaskStreamKeySet};
 use crate::rpc::{ClientOptions, server_options};
 use crate::shuffle::ShuffleCompression;
 use crate::stream::r#gen::TaskStreamTicket;
+use crate::stream::local::memory::MemoryStream;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::service::client::decode_task_stream;
 use crate::stream::service::server::encode_task_stream;
@@ -211,6 +212,53 @@ async fn batches_of_several_tasks_are_encoded_in_one_stream() -> Result<(), Test
         actual.sort();
         assert_eq!(actual, expected);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn batches_of_tasks_with_different_nullability_are_encoded_in_one_stream()
+-> Result<(), TestError> {
+    // The tasks of a stage can run different inputs of a union, which passes on the
+    // batches of its inputs as they are. So the batches of one task can declare a
+    // column as non-nullable, while the batches of another task have nulls in it.
+    // The schema of the stage, which the streams are created with, has a nullable column.
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, true)]));
+    let strict = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+    let batches = [
+        RecordBatch::try_new(strict, vec![Arc::new(Int64Array::from(vec![1, 2]))])?,
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![None::<i64>]))],
+        )?,
+    ];
+    let mut sources = vec![];
+    for (partition, batch) in batches.into_iter().enumerate() {
+        let key = TaskKey {
+            job_id: JobId::from(1),
+            stage: 0,
+            partition,
+            attempt: 0,
+        };
+        let (mut sink, mut streams) =
+            MemoryStream::create(&key, vec![vec![]], 1, None, Arc::default(), schema.clone());
+        sink.write(vec![Some(batch)]).await?;
+        sink.commit().await?;
+        let stream = streams.first_mut().ok_or("missing stream")?;
+        sources.push(stream.subscribe()?);
+    }
+    // The batch of the task without nulls is the first one that is encoded.
+    let source = Box::pin(futures::stream::iter(sources).flatten()) as TaskStreamSource;
+    let data = encode_task_stream(source, ShuffleCompression::None).map_err(|e| e.to_string())?;
+    let batches: Vec<RecordBatch> = decode_task_stream(data, schema.clone())
+        .try_collect()
+        .await?;
+    let rows = batches
+        .iter()
+        .map(RecordBatch::num_rows)
+        .collect::<Vec<_>>();
+    assert_eq!(rows, [2, 1]);
+    assert!(batches.iter().all(|batch| batch.schema() == schema));
+    assert_eq!(batches[1].column(0).null_count(), 1);
     Ok(())
 }
 

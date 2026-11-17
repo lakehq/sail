@@ -1,5 +1,5 @@
 mod core;
-mod memory;
+pub(crate) mod memory;
 mod options;
 mod process_memory;
 mod queue;

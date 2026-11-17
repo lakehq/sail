@@ -86,7 +86,7 @@ impl LocalStreamManager {
         channels: usize,
         replicas: usize,
         bounded: bool,
-        _schema: SchemaRef,
+        schema: SchemaRef,
     ) -> ExecutionResult<Box<dyn TaskStreamSink>> {
         let keys = (0..channels)
             .map(|channel| key.task_stream_key(channel))
@@ -130,7 +130,7 @@ impl LocalStreamManager {
             ceiling: self.ceiling,
         });
         let memory = self.memory.clone();
-        let (sink, streams) = MemoryStream::create(key, waiters, replicas, limit, memory);
+        let (sink, streams) = MemoryStream::create(key, waiters, replicas, limit, memory, schema);
         for (key, stream) in keys.into_iter().zip(streams) {
             self.streams
                 .insert(key, LocalStreamState::Created { stream });
