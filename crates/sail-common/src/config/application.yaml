@@ -406,7 +406,8 @@
     connection in the Flight shuffle client. The default is the largest value that
     HTTP/2 allows. Most users should not change it: with a smaller window, streams that
     are open but not being read can use up the window and stall the other streams on the
-    same connection. Set to `0` to use the transport default.
+    same connection. Set to `0` to use the transport default. The maximum value is
+    `2147483647`. A larger value is rejected when the client connects.
   experimental: true
 
 - key: cluster.shuffle_backend.storage.path
