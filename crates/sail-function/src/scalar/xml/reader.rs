@@ -59,7 +59,20 @@ pub(super) struct ParsedDocument {
     pub text_values: HashMap<Node, String>,
 }
 
-pub(super) fn parse(xot: &mut Xot, xml: &str, xpath: bool) -> XmlResult<ParsedDocument> {
+pub(super) enum ParseMode {
+    Struct,
+    XPathValue,
+    XPathNodes,
+}
+
+#[derive(Default)]
+struct TextFragments {
+    values: HashMap<Node, String>,
+    frozen: HashSet<Node>,
+}
+
+pub(super) fn parse(xot: &mut Xot, xml: &str, mode: ParseMode) -> XmlResult<ParsedDocument> {
+    let xpath = !matches!(mode, ParseMode::Struct);
     if !xml.chars().all(valid_character) {
         return Err("Invalid XML character".into());
     }
@@ -74,8 +87,9 @@ pub(super) fn parse(xot: &mut Xot, xml: &str, xpath: bool) -> XmlResult<ParsedDo
     let document = xot.new_document();
     let mut parent = document;
     let mut root_seen = false;
-    let mut text_values = HashMap::new();
-    let mut frozen_text = HashSet::new();
+    let mut declaration_allowed = true;
+    let mut doctype_seen = false;
+    let mut fragments = matches!(mode, ParseMode::XPathNodes).then(TextFragments::default);
     loop {
         match reader.read_event()? {
             Event::Start(element) => {
@@ -165,25 +179,11 @@ pub(super) fn parse(xot: &mut Xot, xml: &str, xpath: bool) -> XmlResult<ParsedDo
                         return Err("Text outside XML root element".into());
                     }
                 } else {
-                    append_text(
-                        xot,
-                        parent,
-                        &text,
-                        false,
-                        &mut text_values,
-                        &mut frozen_text,
-                    )?;
+                    append_text(xot, parent, &text, false, &mut fragments)?;
                 }
             }
             Event::CData(text) if parent != document => {
-                append_text(
-                    xot,
-                    parent,
-                    &text.xml10_content()?,
-                    true,
-                    &mut text_values,
-                    &mut frozen_text,
-                )?;
+                append_text(xot, parent, &text.xml10_content()?, true, &mut fragments)?;
             }
             Event::GeneralRef(reference) if parent != document => {
                 append_text(
@@ -191,8 +191,7 @@ pub(super) fn parse(xot: &mut Xot, xml: &str, xpath: bool) -> XmlResult<ParsedDo
                     parent,
                     &reference_value(&reference)?,
                     false,
-                    &mut text_values,
-                    &mut frozen_text,
+                    &mut fragments,
                 )?;
             }
             Event::Comment(comment) => {
@@ -206,15 +205,20 @@ pub(super) fn parse(xot: &mut Xot, xml: &str, xpath: bool) -> XmlResult<ParsedDo
                     .replace('\r', "\n");
                 xot.append_processing_instruction(parent, target, Some(&content))?;
             }
-            Event::Decl(_) | Event::DocType(_) if parent == document && !root_seen => {}
+            Event::Decl(_) if declaration_allowed => {}
+            Event::DocType(_) if parent == document && !root_seen && !doctype_seen => {
+                doctype_seen = true;
+            }
             Event::Eof if parent == document && root_seen => {
                 return Ok(ParsedDocument {
                     node: document,
-                    text_values,
+                    text_values: fragments.map(|f| f.values).unwrap_or_default(),
                 });
             }
             _ => return Err("Unexpected XML event or incomplete document".into()),
         }
+
+        declaration_allowed = false;
     }
 }
 
@@ -225,13 +229,17 @@ fn append_text(
     parent: Node,
     text: &str,
     cdata: bool,
-    values: &mut HashMap<Node, String>,
-    frozen: &mut HashSet<Node>,
+    fragments: &mut Option<TextFragments>,
 ) -> XmlResult<()> {
     if text.is_empty() {
         return Ok(());
     }
+
     xot.append_text(parent, text)?;
+    let Some(TextFragments { values, frozen }) = fragments else {
+        return Ok(());
+    };
+
     let node = xot.last_child(parent).ok_or("Missing XML text node")?;
     match values.entry(node) {
         std::collections::hash_map::Entry::Vacant(entry) => {

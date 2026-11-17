@@ -121,7 +121,7 @@ fn evaluate_xpath(xml: &str, path: &str) -> Result<Option<Vec<Option<String>>>> 
     }
 
     let mut documents = Documents::new();
-    let document = reader::parse(documents.xot_mut(), xml, true)
+    let document = reader::parse(documents.xot_mut(), xml, reader::ParseMode::XPathNodes)
         .map_err(|error| DataFusionError::Execution(format!("Invalid XML document: {error}")))?;
     let query = Queries::default()
         .sequence(&xpath_query::expression(path)?)

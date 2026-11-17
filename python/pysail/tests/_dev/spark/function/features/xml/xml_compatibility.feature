@@ -570,3 +570,99 @@ Feature: XML functions follow Spark lexical names and XPath semantics
         SELECT xpath_string('<!DOCTYPE r [<!ENTITY e "]]>">]><r>&e;</r>', 'r')
         """
       Then query error (?s).*(XML|xml|character data).*
+
+  Rule: String field serialization does not depend on the thread stack size
+
+    # The JVM StAX parser limits element depth to 1000.
+    @sail-only
+    Scenario: XML compatibility: String fields retain deeply nested markup
+      When query
+        """
+        SELECT from_xml(concat('<r><a>', repeat('<b>', 10000), 'value', repeat('</b>', 10000), '</a></r>'),
+          'a STRING', map('mode', 'FAILFAST')).a = concat(repeat('<b>', 10000), 'value', repeat('</b>', 10000)) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+  Rule: Entity replacement text follows JVM line ending normalization
+
+    Scenario: XML compatibility: Entity carriage returns normalize in text and attributes
+      When query
+        """
+        SELECT xpath_string('<!DOCTYPE r [<!ENTITY e "&#xD;"><!ENTITY nested "&e;">]><r>&nested;</r>', 'r') = chr(10) AS text_value,
+          xpath_string('<!DOCTYPE r [<!ENTITY e "&#xD;">]><r a="&e;"/>', 'r/@a') = ' ' AS attribute_value,
+          xpath_string('<r>&#xD;</r>', 'r') = chr(13) AS direct_reference
+        """
+      Then query result
+        | text_value | attribute_value | direct_reference |
+        | true       | true            | true             |
+
+  Rule: XML declarations and document types occur only once in their proper positions
+
+    Scenario Outline: XML compatibility: Struct readers return null for malformed prologs: <case>
+      When query
+        """
+        SELECT from_xml(concat(<prolog>, '<r><a>1</a></r>'), 'a INT').a AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | case                      | prolog                                       |
+        | repeated declaration      | '<?xml version="1.0"?><?xml version="1.0"?>' |
+        | repeated document type    | '<!DOCTYPE r><!DOCTYPE r>'                   |
+        | declaration after DTD     | '<!DOCTYPE r><?xml version="1.0"?>'          |
+        | declaration after comment | '<!--comment--><?xml version="1.0"?>'        |
+        | declaration after PI      | '<?target data?><?xml version="1.0"?>'       |
+        | declaration after space   | ' <?xml version="1.0"?>'                     |
+
+    Scenario Outline: XML compatibility: Struct readers reject malformed prologs in fail-fast mode: <case>
+      When query
+        """
+        SELECT from_xml(<xml>, 'a INT', map('mode', 'FAILFAST'))
+        """
+      Then query error (?s).*(XML|xml|MALFORMED).*
+
+      Examples:
+        | case                      | xml                                                         |
+        | repeated declaration      | '<?xml version="1.0"?><?xml version="1.0"?><r><a>1</a></r>' |
+        | repeated document type    | '<!DOCTYPE r><!DOCTYPE r><r><a>1</a></r>'                   |
+        | declaration after DTD     | '<!DOCTYPE r><?xml version="1.0"?><r><a>1</a></r>'          |
+        | declaration after comment | '<!--comment--><?xml version="1.0"?><r><a>1</a></r>'        |
+        | declaration after PI      | '<?target data?><?xml version="1.0"?><r><a>1</a></r>'       |
+        | declaration after space   | ' <?xml version="1.0"?><r><a>1</a></r>'                     |
+
+    Scenario Outline: XML compatibility: XPath rejects malformed prologs: <case>
+      When query
+        """
+        SELECT xpath_string(<xml>, 'r/a')
+        """
+      Then query error (?s).*(XML|xml|Error loading expression).*
+
+      Examples:
+        | case                       | xml                                                           |
+        | repeated declaration       | '<?xml version="1.0"?><?xml version="1.0"?><r><a>1</a></r>'   |
+        | repeated document type     | '<!DOCTYPE r><!DOCTYPE r><r><a>1</a></r>'                     |
+        | declaration after DTD      | '<!DOCTYPE r><?xml version="1.0"?><r><a>1</a></r>'            |
+        | declaration after comment  | '<!--comment--><?xml version="1.0"?><r><a>1</a></r>'          |
+        | declaration after PI       | '<?target data?><?xml version="1.0"?><r><a>1</a></r>'         |
+        | declaration after space    | ' <?xml version="1.0"?><r><a>1</a></r>'                       |
+        | repeated DTD with entities | '<!DOCTYPE r [<!ENTITY e "1">]><!DOCTYPE r><r><a>&e;</a></r>' |
+
+    Scenario Outline: XML compatibility: Readers accept valid prologs: <case>
+      When query
+        """
+        SELECT from_xml(<xml>, 'a INT').a AS value,
+          xpath_string(<xml>, 'r/a') AS xpath_value
+        """
+      Then query result
+        | value | xpath_value |
+        | 1     | 1           |
+
+      Examples:
+        | case                | xml                                                                                        |
+        | declaration and DTD | '<?xml version="1.0"?><!DOCTYPE r><r><a>1</a></r>'                                         |
+        | comments and PI     | '<?xml version="1.0"?><!--before--><?target data?><!DOCTYPE r><!--after--><r><a>1</a></r>' |
+        | no declaration      | ' <!--comment--><!DOCTYPE r><r><a>1</a></r>'                                               |

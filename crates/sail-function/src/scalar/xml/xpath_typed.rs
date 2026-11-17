@@ -167,7 +167,7 @@ fn evaluate_xpath_boolean(xml: &str, path: &str) -> Result<Option<bool>> {
     }
     let wrapped = format!("boolean({path})");
     let mut documents = Documents::new();
-    let document = reader::parse(documents.xot_mut(), xml, true)
+    let document = reader::parse(documents.xot_mut(), xml, reader::ParseMode::XPathValue)
         .map_err(|e| DataFusionError::Execution(format!("Invalid XML document: {e}")))?;
     let query = Queries::default()
         .one(&xpath_query::expression(&wrapped)?, |_, item| {
@@ -186,7 +186,7 @@ fn evaluate_xpath_number(xml: &str, path: &str) -> Result<Option<f64>> {
     }
     let wrapped = format!("number({path})");
     let mut documents = Documents::new();
-    let document = reader::parse(documents.xot_mut(), xml, true)
+    let document = reader::parse(documents.xot_mut(), xml, reader::ParseMode::XPathValue)
         .map_err(|e| DataFusionError::Execution(format!("Invalid XML document: {e}")))?;
     let query = Queries::default()
         .one(&xpath_query::expression(&wrapped)?, |_, item| {
@@ -205,7 +205,7 @@ fn evaluate_xpath_string(xml: &str, path: &str) -> Result<Option<String>> {
     }
     let wrapped = format!("string({path})");
     let mut documents = Documents::new();
-    let document = reader::parse(documents.xot_mut(), xml, true)
+    let document = reader::parse(documents.xot_mut(), xml, reader::ParseMode::XPathValue)
         .map_err(|e| DataFusionError::Execution(format!("Invalid XML document: {e}")))?;
     let query = Queries::default()
         .one(&xpath_query::expression(&wrapped)?, |_, item| {

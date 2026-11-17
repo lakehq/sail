@@ -553,7 +553,7 @@ fn parse_xml_into_builder(
     session_timezone: &str,
 ) -> Result<()> {
     let mut arena = xot::Xot::new();
-    let doc_node = reader::parse(&mut arena, xml, false)
+    let doc_node = reader::parse(&mut arena, xml, reader::ParseMode::Struct)
         .map_err(|e| DataFusionError::Execution(format!("Invalid XML: {e}")))?;
     let xot = &arena;
     let root = xot
@@ -885,6 +885,9 @@ fn element_content(
     node: xot::Node,
     builder: &XmlFieldBuilder,
 ) -> Result<Option<String>> {
+    use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+    use xot::NodeEdge;
+
     if !matches!(builder, XmlFieldBuilder::String(_)) {
         let text = xot.children(node).find_map(|child| match xot.value(child) {
             xot::Value::Text(text)
@@ -896,35 +899,29 @@ fn element_content(
         });
         return Ok(Some(text.unwrap_or_default()));
     }
-    fn write(
-        xot: &xot::Xot,
-        node: xot::Node,
-        writer: &mut quick_xml::Writer<Vec<u8>>,
-    ) -> Result<()> {
-        use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
-        for child in xot.children(node) {
-            match xot.value(child) {
-                xot::Value::Element(element) => {
-                    let name = xot.local_name_str(element.name());
-                    let mut start = BytesStart::new(name);
-                    for (key, value) in xot.attributes(child).iter() {
-                        start
-                            .push_attribute((xot.local_name_str(key).as_bytes(), value.as_bytes()));
-                    }
-                    writer.write_event(Event::Start(start))?;
-                    write(xot, child, writer)?;
-                    writer.write_event(Event::End(BytesEnd::new(name)))?;
-                }
-                xot::Value::Text(text) => {
-                    writer.write_event(Event::Text(BytesText::from_escaped(text.get())))?
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
+
     let mut writer = quick_xml::Writer::new(Vec::new());
-    write(xot, node, &mut writer)?;
+    for edge in xot.traverse(node).filter(|edge| edge.node() != node) {
+        match (edge, xot.value(edge.node())) {
+            (NodeEdge::Start(child), xot::Value::Element(element)) => {
+                let name = xot.local_name_str(element.name());
+                let mut start = BytesStart::new(name);
+                for (key, value) in xot.attributes(child).iter() {
+                    start.push_attribute((xot.local_name_str(key).as_bytes(), value.as_bytes()));
+                }
+                writer.write_event(Event::Start(start))?;
+            }
+            (NodeEdge::End(_), xot::Value::Element(element)) => {
+                let name = xot.local_name_str(element.name());
+                writer.write_event(Event::End(BytesEnd::new(name)))?;
+            }
+            (NodeEdge::Start(_), xot::Value::Text(text)) => {
+                writer.write_event(Event::Text(BytesText::from_escaped(text.get())))?;
+            }
+            _ => {}
+        }
+    }
+
     Ok(Some(
         String::from_utf8(writer.into_inner())
             .map_err(|e| DataFusionError::Execution(e.to_string()))?,
