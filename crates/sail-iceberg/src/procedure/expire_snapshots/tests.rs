@@ -287,6 +287,180 @@ async fn refreshed_gc_property_controls_cleanup_before_any_inventory_reads() {
 }
 
 #[tokio::test]
+async fn cleanup_failures_retry_independently_with_bounded_concurrency_and_exact_counts() {
+    use std::sync::atomic::Ordering;
+
+    use crate::io::test_store::TestStore;
+
+    for concurrency in [1, 2, 8] {
+        let (store, url, mut metadata) = fixture().await;
+        store
+            .base
+            .put(&Path::from("table/data/1.parquet"), "live data".into())
+            .await
+            .expect("data");
+        let mut injected = TestStore::new(store.base.clone());
+        injected.yield_deletes = true;
+        let mut op = operation();
+        op.concurrency = concurrency;
+        let mut prepared = op.prepare(&store, &url, &metadata).await.expect("prepare");
+        let mut expected_attempts = HashMap::from([(Path::from("table/metadata/list.avro"), 1)]);
+        let mut survivors = vec![];
+        let mut removed = vec![Path::from("table/metadata/list.avro")];
+        let mut missing = HashSet::new();
+        // Each kind has immediate success, two retry boundaries, exhaustion,
+        // and NotFound both immediately and after a transient failure.
+        for kind in 0..6 {
+            for (case, failures, absent) in [
+                (0, 0, false),
+                (1, 1, false),
+                (2, 2, false),
+                (3, 4, false),
+                (4, 0, true),
+                (5, 1, true),
+            ] {
+                let path = Path::from(format!("table/candidate-{kind}-{case}"));
+                if absent {
+                    missing.insert(path.clone());
+                } else {
+                    injected
+                        .inner
+                        .put(&path, "candidate bytes".into())
+                        .await
+                        .expect("candidate");
+                }
+                injected
+                    .delete_failures
+                    .lock()
+                    .expect("faults")
+                    .insert(path.clone(), failures);
+                expected_attempts.insert(path.clone(), (failures + 1).min(3));
+                if case == 3 {
+                    survivors.push(path.clone());
+                } else {
+                    removed.push(path.clone());
+                }
+                prepared.expiration.candidates.paths.insert(
+                    path,
+                    InventoryEntry {
+                        kind,
+                        selected: true,
+                    },
+                );
+            }
+        }
+        injected.delete_not_found = Arc::new(missing);
+        let injected = Arc::new(injected);
+        let store = StoreContext::new(injected.clone(), &url).expect("injected store");
+        metadata
+            .snapshots
+            .retain(|snapshot| snapshot.snapshot_id == 20);
+        let mut live = vec![];
+        for raw in [
+            "table/data/1.parquet",
+            "table/metadata/input-0.avro",
+            "table/metadata/new-list.avro",
+        ] {
+            let path = Path::from(raw);
+            let bytes = injected
+                .inner
+                .get(&path)
+                .await
+                .expect("live file")
+                .bytes()
+                .await
+                .expect("bytes");
+            live.push((path, bytes));
+        }
+        let batch = prepared
+            .expiration
+            .finish(
+                &store,
+                &url,
+                Ok(metadata),
+                IcebergProcedureType::ExpireSnapshots
+                    .descriptor()
+                    .expect("descriptor")
+                    .schema(),
+            )
+            .await
+            .expect("best effort cleanup");
+        assert_eq!(batch.num_rows(), 1);
+        let counts: Vec<_> = batch
+            .columns()
+            .iter()
+            .map(|column| {
+                column
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .expect("count")
+                    .value(0)
+            })
+            .collect();
+        assert_eq!(counts, [5, 5, 5, 5, 6, 5]);
+        // Compare multisets, not HashMap scheduling order.
+        let mut attempts = HashMap::new();
+        for path in injected.deletes.lock().expect("attempts").iter() {
+            *attempts.entry(path.clone()).or_insert(0) += 1;
+        }
+        assert_eq!(attempts, expected_attempts, "concurrency={concurrency}");
+        assert_eq!(injected.active_deletes.load(Ordering::SeqCst), 0);
+        let maximum = injected.max_active_deletes.load(Ordering::SeqCst);
+        assert!(
+            maximum > 0 && maximum <= concurrency,
+            "maximum={maximum}, limit={concurrency}"
+        );
+        if concurrency > 1 {
+            assert!(maximum > 1, "deletes must actually overlap");
+        }
+        for path in survivors {
+            assert_eq!(
+                injected
+                    .inner
+                    .get(&path)
+                    .await
+                    .expect("failed delete preserves file")
+                    .bytes()
+                    .await
+                    .expect("bytes")
+                    .as_ref(),
+                b"candidate bytes"
+            );
+            assert_eq!(
+                injected.delete_failures.lock().expect("remaining failures")[&path],
+                1
+            );
+        }
+        for path in removed {
+            assert!(
+                matches!(
+                    injected.inner.get(&path).await,
+                    Err(object_store::Error::NotFound { .. })
+                ),
+                "{path}"
+            );
+        }
+        for (path, bytes) in live {
+            assert!(
+                !attempts.contains_key(&path),
+                "reader-reachable file attempted: {path}"
+            );
+            assert_eq!(
+                injected
+                    .inner
+                    .get(&path)
+                    .await
+                    .expect("live file preserved")
+                    .bytes()
+                    .await
+                    .expect("bytes"),
+                bytes
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn selected_inventory_preserves_file_kinds_and_shared_statistics() {
     let mut position = entry(2, FormatVersion::V3);
     position.data_file.content = DataContentType::PositionDeletes;
@@ -981,6 +1155,108 @@ async fn failed_refresh_preserves_all_candidates() {
             .await
             .is_ok()
     );
+}
+
+#[tokio::test]
+async fn cleanup_failure_keeps_confirmed_publication_without_replay() {
+    use std::sync::atomic::Ordering;
+
+    use crate::io::test_store::TestStore;
+    use crate::procedure::snapshot::commit_snapshot_operation;
+
+    let (store, url, mut metadata) = fixture().await;
+    metadata.ensure_required_format_fields();
+    store
+        .prefixed
+        .put(
+            &Path::from("metadata/v1.metadata.json"),
+            metadata.to_json().expect("json").into(),
+        )
+        .await
+        .expect("metadata");
+    let candidate = Path::from("table/metadata/list.avro");
+    let before = store
+        .base
+        .get(&candidate)
+        .await
+        .expect("candidate")
+        .bytes()
+        .await
+        .expect("bytes");
+    let mut injected = TestStore::new(store.base);
+    injected.reject_delete = Some(candidate.to_string());
+    let injected = Arc::new(injected);
+    let ctx = datafusion::execution::TaskContext::default();
+    ctx.runtime_env()
+        .register_object_store(&url, injected.clone());
+    let batch = commit_snapshot_operation(
+        &ctx,
+        &url,
+        &[],
+        None,
+        operation(),
+        IcebergProcedureType::ExpireSnapshots
+            .descriptor()
+            .expect("descriptor")
+            .schema(),
+    )
+    .await
+    .expect("cleanup failure must not fail committed operation");
+    let counts: Vec<_> = batch
+        .columns()
+        .iter()
+        .map(|column| {
+            column
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("count")
+                .value(0)
+        })
+        .collect();
+    assert_eq!(counts, [0; 6]);
+    assert_eq!(
+        *injected.deletes.lock().expect("attempts"),
+        vec![candidate.clone(); 3]
+    );
+    assert_eq!(
+        injected
+            .inner
+            .get(&candidate)
+            .await
+            .expect("preserved")
+            .bytes()
+            .await
+            .expect("bytes"),
+        before
+    );
+    let bytes = injected
+        .inner
+        .get(&Path::from("table/metadata/v2.metadata.json"))
+        .await
+        .expect("confirmed publication")
+        .bytes()
+        .await
+        .expect("metadata bytes");
+    let committed = TableMetadata::from_json(&bytes).expect("committed metadata");
+    assert_eq!(
+        committed
+            .snapshots
+            .iter()
+            .map(|s| s.snapshot_id)
+            .collect::<Vec<_>>(),
+        vec![20]
+    );
+    assert_eq!(committed.current_snapshot_id, Some(20));
+    assert_eq!(committed.table_uuid, metadata.table_uuid);
+    // One metadata publication plus the version hint; no metadata commit replay.
+    assert_eq!(injected.puts.load(Ordering::SeqCst), 2);
+    assert!(matches!(
+        injected
+            .inner
+            .get(&Path::from("table/metadata/v3.metadata.json"))
+            .await,
+        Err(object_store::Error::NotFound { .. })
+    ));
 }
 
 #[tokio::test]
