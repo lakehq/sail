@@ -7,7 +7,7 @@ use datafusion_common::{DataFusionError, Result, internal_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use xee_xpath::{Documents, Item, Queries, Query};
+use xee_xpath::{Documents, Item, Query};
 
 use super::{reader, xpath_query};
 use crate::functions_utils::make_scalar_function;
@@ -123,9 +123,7 @@ fn evaluate_xpath(xml: &str, path: &str) -> Result<Option<Vec<Option<String>>>> 
     let mut documents = Documents::new();
     let document = reader::parse(documents.xot_mut(), xml, reader::ParseMode::XPathNodes)
         .map_err(|error| DataFusionError::Execution(format!("Invalid XML document: {error}")))?;
-    let query = Queries::default()
-        .sequence(&xpath_query::expression(path)?)
-        .map_err(|error| DataFusionError::Execution(format!("Invalid XPath '{path}': {error}")))?;
+    let query = xpath_query::compile(path)?;
     let value = query
         .execute(&mut documents, document.node)
         .map_err(|error| {

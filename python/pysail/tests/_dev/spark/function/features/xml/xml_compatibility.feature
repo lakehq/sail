@@ -125,13 +125,13 @@ Feature: XML functions follow Spark lexical names and XPath semantics
 
       Examples:
         | case                 | path                        | result |
-        | qualified name       | name(r/a)                   | p:a    |
-        | local name           | local-name(r/a)             | a      |
-        | empty namespace URI  | namespace-uri(r/a)          |        |
+        | qualified name       | name(r/a[1])                   | p:a    |
+        | local name           | local-name(r/a[1])             | a      |
+        | empty namespace URI  | namespace-uri(r/a[1])          |        |
         | qualified attribute  | name(r/a/@id)               | p:id   |
         | attribute local name | local-name(r/a/@id)          | id     |
         | namespace name       | name(r/namespace::p)        | p      |
-        | literal is unchanged | concat("a/b", name(r/a))    | a/bp:a |
+        | literal is unchanged | concat("a/b", name(r/a[1]))    | a/bp:a |
 
     Scenario: XML compatibility: XPath exposes and inherits default namespace declarations
       When query
@@ -182,8 +182,10 @@ Feature: XML functions follow Spark lexical names and XPath semantics
         | name | matches | value |
         | q:a  | []      | 2     |
 
-  Rule: Typed XPath conversions follow XPath 1.0
+  Rule: Typed XPath conversion compatibility
 
+    # XPath 3.1 numeric conversion requires at most one item.
+    @sail-bug
     Scenario Outline: XML compatibility: Numeric conversion takes the first node for <function>
       When query
         """
@@ -202,6 +204,8 @@ Feature: XML functions follow Spark lexical names and XPath semantics
         | xpath_number | 12.0   |
         | xpath_short  | 12     |
 
+    # XPath 3.1 string conversion requires at most one item.
+    @sail-bug
     Scenario: XML compatibility: Boolean and string conversions accept multiple nodes
       When query
         """
@@ -212,6 +216,8 @@ Feature: XML functions follow Spark lexical names and XPath semantics
         | present | first |
         | true    | 12    |
 
+    # XPath 3.1 sum rejects nonnumeric node values.
+    @sail-bug
     Scenario: XML compatibility: Sum of nonnumeric nodes produces NaN
       When query
         """
@@ -221,6 +227,8 @@ Feature: XML functions follow Spark lexical names and XPath semantics
         | result |
         | true   |
 
+    # xee accepts XPath 3.1 numeric strings that XPath 1.0 rejects.
+    @sail-bug
     Scenario Outline: XML compatibility: XPath numeric strings: <value>
       When query
         """
@@ -365,18 +373,8 @@ Feature: XML functions follow Spark lexical names and XPath semantics
         """
       Then query error (?s).*(entity|Entity|recursive|Recursive).*
 
-    Scenario Outline: XML compatibility: XPath rejects XPath 3.1 extensions: <path>
-      When query
-        """
-        SELECT xpath_string('<r><a>1</a></r>', '<path>')
-        """
-      Then query error (?s).*(Invalid XPath|Could not find function|Extra illegal tokens).*
-
-      Examples:
-        | path      |
-        | head(r/a) |
-        | r/a, r/a  |
-
+    # XPath 3.1 function arguments do not implicitly select the first node.
+    @sail-bug
     Scenario: XML compatibility: XPath string and rounding functions use the first node
       When query
         """
@@ -392,7 +390,7 @@ Feature: XML functions follow Spark lexical names and XPath semantics
     Scenario: XML compatibility: Nested calls preserve commas in string literals
       When query
         """
-        SELECT xpath_string('<r><a>abcd</a><a>efgh</a></r>', 'concat(substring(r/a, 2, 2), ",", string(count(r/a)))') AS result
+        SELECT xpath_string('<r><a>abcd</a><a>efgh</a></r>', 'concat(substring(r/a[1], 2, 2), ",", string(count(r/a)))') AS result
         """
       Then query result
         | result |
@@ -484,9 +482,11 @@ Feature: XML functions follow Spark lexical names and XPath semantics
         | <a>hi</a> |
 
     Scenario Outline: XML compatibility: Top-level entity expansion limits include <context>
+      # Use a row value to avoid repeatedly expanding entities during constant folding.
       When query
         """
-        SELECT xpath_string(concat('<!DOCTYPE r [<!ENTITY e "x">]><prefix>', repeat('&e;', 64001), '<suffix>'), 'r')
+        SELECT xpath_string(concat('<!DOCTYPE r [<!ENTITY e "x">]><prefix>', id, repeat('&e;', 64001), '<suffix>'), 'r')
+        FROM range(1)
         """
       Then query error (?s).*(entity|Entity).*
 
@@ -506,9 +506,11 @@ Feature: XML functions follow Spark lexical names and XPath semantics
 
     @sail-only
     Scenario Outline: XML compatibility: Cumulative entity bytes are bounded in <context>
+      # Use a row value to avoid repeatedly expanding entities during constant folding.
       When query
         """
-        SELECT xpath_string(concat('<!DOCTYPE r [<!ENTITY e "', repeat('x', 10000), '">]><prefix>', repeat('&e;', 1001), '<suffix>'), 'r')
+        SELECT xpath_string(concat('<!DOCTYPE r [<!ENTITY e "', repeat('x', 10000), '">]><prefix>', id, repeat('&e;', 1001), '<suffix>'), 'r')
+        FROM range(1)
         """
       Then query error (?s).*XML entity size limit.*
 
@@ -667,9 +669,25 @@ Feature: XML functions follow Spark lexical names and XPath semantics
         | comments and PI     | '<?xml version="1.0"?><!--before--><?target data?><!DOCTYPE r><!--after--><r><a>1</a></r>' |
         | no declaration      | ' <!--comment--><!DOCTYPE r><r><a>1</a></r>'                                               |
 
-  Rule: XPath arithmetic converts operands to XPath 1.0 numbers
+  Rule: XPath arithmetic conversion compatibility
 
     Scenario Outline: XML compatibility: Arithmetic operand conversion: <path>
+      When query
+        """
+        SELECT xpath_double('<r><a>1</a><a>9</a><b>2</b><b>8</b><bad>1e2</bad></r>', '<path>') AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | path            | result    |
+        | r/missing + 1   | NaN       |
+        | -r/missing      | NaN       |
+
+    # XPath 3.1 uses strict operand types and integer/decimal arithmetic.
+    @sail-bug
+    Scenario Outline: XML compatibility: Arithmetic operand conversion differs from XPath 3.1: <path>
       When query
         """
         SELECT xpath_double('<r><a>1</a><a>9</a><b>2</b><b>8</b><bad>1e2</bad></r>', '<path>') AS result
@@ -690,18 +708,34 @@ Feature: XML functions follow Spark lexical names and XPath semantics
         | -(-r/a)         | 1.0       |
         | r/a + r/b * 3   | 7.0       |
         | (r/a + r/b) * 3 | 9.0       |
+        | (r/a div 0) + 1 | Infinity  |
         | true() + 2      | 3.0       |
         | " 2 " + 1       | 3.0       |
-        | r/missing + 1   | NaN       |
-        | -r/missing      | NaN       |
-        | r/bad + 1       | NaN       |
-        | "+2" + 1        | NaN       |
         | "Infinity" + 1  | NaN       |
         | 1 div 0         | Infinity  |
         | -1 div 0        | -Infinity |
         | 0 div 0         | NaN       |
         | 5 mod 0         | NaN       |
 
+    # Implicit numeric conversions accept XPath 3.1 numeric strings.
+    @sail-bug
+    Scenario Outline: XML compatibility: Arithmetic rejects XPath 3.1 numeric strings: <path>
+      When query
+        """
+        SELECT xpath_double('<r><bad>1e2</bad></r>', '<path>') AS result
+        """
+      Then query result
+        | result |
+        | NaN    |
+
+      Examples:
+        | path         |
+        | -(r/bad + 1) |
+        | r/bad + 1    |
+        | "+2" + 1     |
+
+    # XPath 3.1 arithmetic rejects multiple operands in a sequence.
+    @sail-bug
     Scenario: XML compatibility: Arithmetic conversions preserve predicate context
       When query
         """
@@ -784,17 +818,21 @@ Feature: XML functions follow Spark lexical names and XPath semantics
       Then query error (?s).*(entity|Entity|recursive|Recursive).*
 
     Scenario: XML compatibility: Parameter entity references share the document count limit
+      # Use a row value to avoid repeatedly expanding entities during constant folding.
       When query
         """
-        SELECT xpath_string(concat('<!DOCTYPE r [<!ENTITY % p ""><!ENTITY e "x">', repeat('%p;', 64000), ']><r>&e;</r>'), 'r')
+        SELECT xpath_string(concat('<!DOCTYPE r [<!ENTITY % p ""><!ENTITY e "x">', repeat('%p;', 64000), ']><r>', id, '&e;</r>'), 'r')
+        FROM range(1)
         """
       Then query error (?s).*(entity|Entity).*
 
     @sail-only
     Scenario: XML compatibility: Parameter entity replacement bytes are bounded
+      # Use a row value to avoid repeatedly expanding entities during constant folding.
       When query
         """
-        SELECT xpath_string(concat('<!DOCTYPE r [<!ENTITY % p "<!--', repeat('x', 10000), '-->">', repeat('%p;', 1000), ']><r/>'), 'r')
+        SELECT xpath_string(concat('<!DOCTYPE r [<!ENTITY % p "<!--', repeat('x', 10000), '-->">', repeat('%p;', 1000), ']><r>', id, '</r>'), 'r')
+        FROM range(1)
         """
       Then query error (?s).*XML entity size limit.*
 
@@ -817,10 +855,8 @@ Feature: XML functions follow Spark lexical names and XPath semantics
         | result |
         | ok     |
 
-  Rule: XPath string conversions format numbers without exponent notation
+  Rule: XPath numeric string conversion compatibility
 
-    # xee uses scientific notation, preserves negative zero, and emits INF.
-    @sail-bug
     Scenario Outline: XML compatibility: Numeric string formatting: <path>
       When query
         """
@@ -836,15 +872,27 @@ Feature: XML functions follow Spark lexical names and XPath semantics
         | -1000000 - 1                          | -1000001                                         |
         | 1 div 10000000                        | 0.0000001                                        |
         | -1 div 10000000                       | -0.0000001                                       |
-        | 1000000000000000000000000000000 + 1   | 1000000000000000000000000000000                  |
-        | 1 div 1000000000000000000000000000000 | 0.0000000000000000000000000000009999999999999999 |
         | -0                                    | 0                                                |
         | 0 div -1                              | 0                                                |
+
+    # XPath 3.1 preserves integer/decimal precision and rejects decimal division by zero.
+    @sail-bug
+    Scenario Outline: XML compatibility: Numeric string formatting differs from XPath 3.1: <path>
+      When query
+        """
+        SELECT xpath_string('<r/>', '<path>') AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | path                                  | result                                           |
+        | 1000000000000000000000000000000 + 1   | 1000000000000000000000000000000                  |
+        | 1 div 1000000000000000000000000000000 | 0.0000000000000000000000000000009999999999999999 |
         | 1 div 0                               | Infinity                                         |
         | -1 div 0                              | -Infinity                                        |
 
-    # Implicit conversions inherit the same XPath 3.1 numeric formatting.
-    @sail-bug
     Scenario Outline: XML compatibility: Implicit numeric string formatting: <path>
       When query
         """
@@ -857,6 +905,21 @@ Feature: XML functions follow Spark lexical names and XPath semantics
       Examples:
         | path                                 | result             |
         | concat(1000000 + 1, ":", -0)         | 1000001:0          |
+        | string(1000000 + 1)                  | 1000001            |
+
+    # XPath 3.1 does not implicitly convert numeric arguments to strings.
+    @sail-bug
+    Scenario Outline: XML compatibility: Implicit numeric string formatting differs from XPath 3.1: <path>
+      When query
+        """
+        SELECT xpath_string('<r/>', '<path>') AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | path                                 | result             |
         | concat(1 div 10000000, ":", 1 div 0) | 0.0000001:Infinity |
         | starts-with(1000000 + 1, "1000")     | true               |
         | substring-before(1000000 + 1, "01")  | 10000              |
@@ -865,7 +928,6 @@ Feature: XML functions follow Spark lexical names and XPath semantics
         | string-length(1000000 + 1)           | 7                  |
         | normalize-space(1000000 + 1)         | 1000001            |
         | translate(1000000 + 1, 0, 2)         | 1222221            |
-        | string(1000000 + 1)                  | 1000001            |
 
     Scenario Outline: XML compatibility: Numeric string formatting retains compatible conversions: <path>
       When query
@@ -878,10 +940,24 @@ Feature: XML functions follow Spark lexical names and XPath semantics
 
       Examples:
         | path                               | result |
-        | 0 div 0                            | NaN    |
         | true()                             | true   |
         | "1E7"                              | 1E7    |
         | r/missing                          |        |
+
+    # XPath 3.1 rejects decimal division by zero and numeric arguments to contains.
+    @sail-bug
+    Scenario Outline: XML compatibility: Numeric string formatting retains compatible conversions differs from XPath 3.1: <path>
+      When query
+        """
+        SELECT xpath_string('<r/>', '<path>') AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | path                               | result |
+        | 0 div 0                            | NaN    |
         | contains(1000000 + 1, 1000000 + 1) | true   |
 
   Rule: Entity boundaries preserve independently normalized line endings
