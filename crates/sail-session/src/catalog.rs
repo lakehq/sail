@@ -145,7 +145,6 @@ pub fn create_catalog_manager(
                                     default_catalog,
                                     uri: config.uri,
                                     credentials,
-                                    quote_object_name: true,
                                 },
                             )
                         },
