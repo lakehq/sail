@@ -138,6 +138,7 @@ impl KubernetesWorkerService {
             task_stream_buffer,
             task_stream_memory_limit,
             shuffle_write_buffer_size,
+            task_stream_stall_timeout,
             task_stream_creation_timeout,
             rpc_retry_strategy,
             shuffle_backend,
@@ -245,6 +246,11 @@ impl KubernetesWorkerService {
             EnvVar {
                 name: ClusterConfigEnv::SHUFFLE_WRITE_BUFFER_SIZE.to_string(),
                 value: Some(shuffle_write_buffer_size.to_string()),
+                value_from: None,
+            },
+            EnvVar {
+                name: ClusterConfigEnv::TASK_STREAM_STALL_TIMEOUT_SECS.to_string(),
+                value: Some(task_stream_stall_timeout.as_secs().to_string()),
                 value_from: None,
             },
             EnvVar {
@@ -559,6 +565,7 @@ mod tests {
                 task_stream_buffer: 1,
                 task_stream_memory_limit: 0,
                 shuffle_write_buffer_size: 4096,
+                task_stream_stall_timeout: Duration::from_secs(300),
                 task_stream_creation_timeout: Duration::from_secs(1),
                 rpc_retry_strategy: RetryStrategy::Fixed {
                     max_count: 1,

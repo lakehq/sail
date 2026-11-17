@@ -12,7 +12,7 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::stream::error::TaskStreamResult;
 use crate::stream::local::queue::{
-    QueueLimit, QueueReader, QueueWrite, QueueWriter, STALL_TIMEOUT, StreamMemory, task_queues,
+    QueueLimit, QueueReader, QueueWrite, QueueWriter, StreamMemory, task_queues,
 };
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamSink, TaskStreamWriteState};
@@ -175,7 +175,7 @@ impl TaskStreamSink for MemoryStreamSink {
                 warn!(
                     "task stream of {} stopped waiting for its readers after {} seconds without progress",
                     TaskKeyDisplay(&self.key),
-                    STALL_TIMEOUT.as_secs()
+                    self.writer.stall_timeout().as_secs()
                 );
                 Ok(TaskStreamWriteState::Active)
             }
@@ -212,6 +212,8 @@ mod tests {
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
+    const STALL_TIMEOUT: Duration = Duration::from_secs(300);
+
     /// Creates the streams of a task in a process that has no memory left for
     /// them, so that the sink waits whenever the streams have the given number
     /// of bytes.
@@ -220,7 +222,11 @@ mod tests {
         replicas: usize,
         bytes: Option<usize>,
     ) -> (Box<dyn TaskStreamSink>, Vec<MemoryStream>) {
-        let limit = bytes.map(|bytes| QueueLimit { bytes, ceiling: 1 });
+        let limit = bytes.map(|bytes| QueueLimit {
+            bytes,
+            ceiling: 1,
+            stall_timeout: STALL_TIMEOUT,
+        });
         create_with_memory(waiters, replicas, limit, Arc::default(), schema())
     }
 
@@ -413,6 +419,7 @@ mod tests {
         let limit = QueueLimit {
             bytes: size,
             ceiling: 3 * size + size / 2,
+            stall_timeout: STALL_TIMEOUT,
         };
         let (mut sink, mut streams) =
             create_with_memory(vec![vec![]], 1, Some(limit), memory.clone(), schema());
@@ -455,6 +462,7 @@ mod tests {
         let limit = Some(QueueLimit {
             bytes: limit,
             ceiling: 1,
+            stall_timeout: STALL_TIMEOUT,
         });
         let (mut sink, _streams) =
             create_with_memory(vec![vec![]], 1, limit, Arc::default(), schema);

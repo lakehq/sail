@@ -23,6 +23,7 @@ pub struct WorkerOptions {
     pub worker_external_port: u16,
     pub worker_heartbeat_interval: Duration,
     pub shuffle_write_buffer_size: usize,
+    pub task_stream_stall_timeout: Duration,
     pub task_stream_memory_limit: usize,
     pub task_stream_creation_timeout: Duration,
     pub rpc_retry_strategy: RetryStrategy,
@@ -52,6 +53,9 @@ impl WorkerOptions {
                 config.cluster.worker_heartbeat_interval_secs,
             ),
             shuffle_write_buffer_size: config.cluster.shuffle_write_buffer_size,
+            task_stream_stall_timeout: Duration::from_secs(
+                config.cluster.task_stream_stall_timeout_secs,
+            ),
             task_stream_memory_limit: config.cluster.task_stream_memory_limit,
             task_stream_creation_timeout: Duration::from_secs(
                 config.cluster.task_stream_creation_timeout_secs,
@@ -82,6 +86,7 @@ impl WorkerOptions {
             worker_external_port: 0,
             worker_heartbeat_interval: options.worker_heartbeat_interval,
             shuffle_write_buffer_size: options.shuffle_write_buffer_size,
+            task_stream_stall_timeout: options.task_stream_stall_timeout,
             task_stream_memory_limit: options.task_stream_memory_limit,
             task_stream_creation_timeout: options.task_stream_creation_timeout,
             rpc_retry_strategy: options.rpc_retry_strategy,

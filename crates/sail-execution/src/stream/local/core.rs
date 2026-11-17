@@ -1,6 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use log::info;
@@ -124,9 +125,13 @@ impl LocalStreamManager {
         // when the streams are created after the streams of the stage have been
         // removed, since nobody may ever read or remove them.
         let bounded = bounded && !self.cleaned.contains(&(key.job_id, key.stage));
+        // A writer that waits would check its readers all the time without a delay.
+        let stall_timeout = self.options.task_stream_stall_timeout;
+        let stall_timeout = stall_timeout.max(Duration::from_secs(1));
         let limit = bounded.then(|| QueueLimit {
             bytes: self.options.shuffle_write_buffer_size,
             ceiling: self.ceiling,
+            stall_timeout,
         });
         let memory = self.memory.clone();
         let (sink, streams) = MemoryStream::create(key, waiters, replicas, limit, memory, schema);
@@ -429,6 +434,40 @@ mod tests {
         let mut manager = manager_with_memory_limit(9)?;
         let mut sink = manager.create_stream(&task_key(0), 1, 1, true, schema)?;
         assert!(!write_without_waiting(&mut sink)?);
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sink_stops_waiting_after_the_configured_stall_timeout() -> TestResult {
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let mut config = AppConfig::load()?;
+        config.cluster.shuffle_write_buffer_size = 1;
+        config.cluster.task_stream_memory_limit = 1;
+        config.cluster.task_stream_stall_timeout_secs = 2;
+        let options = WorkerOptions::new(&config, runtime, SessionContext::new());
+        let mut manager = LocalStreamManager::new((&options).into());
+        manager.memory = Arc::default();
+        let key = task_key(0);
+        let mut sink = manager.create_stream(&key, 2, 1, true, Arc::new(Schema::empty()))?;
+        let mut readers = vec![];
+        for channel in 0..2 {
+            let Some(LocalStreamState::Created { stream }) =
+                manager.streams.get_mut(&key.task_stream_key(channel))
+            else {
+                return Err("the stream is not created".into());
+            };
+            readers.push(stream.subscribe()?);
+        }
+        // One reader waits for data, while the other one does not take its data.
+        assert!(futures::poll!(readers[1].next()).is_pending());
+        let state = sink.write(vec![Some(batch()?), None]).now_or_never();
+        assert!(matches!(state, Some(Ok(TaskStreamWriteState::Active))));
+        let start = tokio::time::Instant::now();
+        let state = sink.write(vec![Some(batch()?), None]).await?;
+        assert_eq!(state, TaskStreamWriteState::Active);
+        let elapsed = start.elapsed();
+        assert!(Duration::from_secs(2) <= elapsed && elapsed < Duration::from_secs(3));
         Ok(())
     }
 

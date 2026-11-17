@@ -278,6 +278,17 @@
     the task waits at that limit until all its output has been read.
   experimental: true
 
+- key: cluster.task_stream_stall_timeout_secs
+  type: number
+  default: "300"
+  description: |
+    The time in seconds that a task waits at the memory limit of task streams without
+    any of its readers taking data, while one of its readers has no data, before the
+    task stops waiting for the rest of its run. After that the task keeps its unread
+    output in memory without a limit and a warning is logged. The minimum is one
+    second, which is also used when the value is `0`.
+  experimental: true
+
 - key: cluster.task_stream_creation_timeout_secs
   type: number
   default: "60"

@@ -17,10 +17,6 @@ use std::time::Duration;
 use futures::Stream;
 use tokio::sync::Notify;
 
-/// How long a writer waits for its readers while none of them takes anything,
-/// before it checks whether one of them waits for the writer in turn.
-pub(crate) const STALL_TIMEOUT: Duration = Duration::from_secs(300);
-
 /// The memory that the queues of all tasks of a process hold together.
 #[derive(Default)]
 pub(crate) struct StreamMemory {
@@ -81,6 +77,9 @@ pub(crate) struct QueueLimit {
     /// before the writers wait. With one byte, a writer waits as soon as its own
     /// queues hold the bytes above. A ceiling of [`usize::MAX`] is never reached.
     pub ceiling: usize,
+    /// How long the writer waits for its readers while none of them takes anything,
+    /// before it checks whether one of them waits for the writer in turn.
+    pub stall_timeout: Duration,
 }
 
 /// Creates the queues for one writer, and one reader for each queue. Each channel
@@ -144,6 +143,7 @@ pub(crate) fn task_queues<T>(
         })
         .collect();
     let writer = QueueWriter {
+        stall_timeout: limit.map_or(Duration::MAX, |limit| limit.stall_timeout),
         shared,
         channels,
         size,
@@ -261,6 +261,7 @@ pub(crate) struct QueueWriter<T> {
     /// The queues of each channel.
     channels: Vec<Range<usize>>,
     size: fn(&T) -> usize,
+    stall_timeout: Duration,
     /// The readers to wake up after a write, kept here to reuse the allocation.
     wakers: Vec<Waker>,
 }
@@ -271,6 +272,7 @@ impl<T: Clone> QueueWriter<T> {
     /// of them, so nothing is added if the returned future is dropped before it
     /// completes. An item is not added to the queues whose reader is gone.
     pub(crate) async fn write(&mut self, items: Vec<Option<T>>) -> QueueWrite {
+        let stall_timeout = self.stall_timeout;
         let mut stalled = false;
         loop {
             let taken = match self.admit(&items, None) {
@@ -293,7 +295,7 @@ impl<T: Clone> QueueWriter<T> {
                     admission => Poll::Ready(admission),
                 }
             });
-            let admission = tokio::time::timeout(STALL_TIMEOUT, admission).await;
+            let admission = tokio::time::timeout(stall_timeout, admission).await;
             match admission {
                 Ok(Admission::Closed) => return QueueWrite::Closed,
                 Ok(_) => break,
@@ -381,6 +383,12 @@ impl<T: Clone> QueueWriter<T> {
             state.limit = None;
         }
         stalled
+    }
+
+    /// Returns how long the writer waits for its readers while none of them takes
+    /// anything, before it checks whether one of them waits for the writer in turn.
+    pub(crate) fn stall_timeout(&self) -> Duration {
+        self.stall_timeout
     }
 
     /// Ends the queues, which is the same as dropping the writer.
@@ -502,8 +510,14 @@ mod tests {
         1
     }
 
+    const STALL_TIMEOUT: Duration = Duration::from_secs(300);
+
     fn limit(bytes: usize, ceiling: usize) -> Option<QueueLimit> {
-        Some(QueueLimit { bytes, ceiling })
+        Some(QueueLimit {
+            bytes,
+            ceiling,
+            stall_timeout: STALL_TIMEOUT,
+        })
     }
 
     /// Creates one queue for each of the given number of channels, in a process
@@ -1055,6 +1069,7 @@ mod tests {
                 let limit = (rng.random_range(0..4) != 0).then(|| QueueLimit {
                     bytes: rng.random_range(0..=600),
                     ceiling: [1, 1000, usize::MAX][rng.random_range(0..3)],
+                    stall_timeout: STALL_TIMEOUT,
                 });
                 let (writer, queues) = task_queues(&channels, limit, memory.clone(), value);
                 writers.push((writer, channels.len()));
@@ -1191,6 +1206,7 @@ mod tests {
                 Some(QueueLimit {
                     bytes: limit,
                     ceiling,
+                    stall_timeout: STALL_TIMEOUT,
                 }),
                 memory.clone(),
                 weight,
