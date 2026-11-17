@@ -339,6 +339,21 @@ impl TaskStreamReader for MultiChannelTaskStreamReader {
         };
         Ok(merged_stream(self.schema.clone(), streams))
     }
+
+    async fn release(&self, partition: usize) -> Result<()> {
+        match self.input.locator.as_ref() {
+            // Opening takes this consumer's replica of each stream, and dropping it
+            // closes the replica for the writer. Tasks on the driver fetch worker
+            // streams lazily, so this does not reach those producers; driver stages
+            // (commits, catalog commands, coordinators) read all of their input.
+            TaskInputLocator::Driver { .. } | TaskInputLocator::Worker { .. } => {
+                drop(self.open(partition).await?);
+            }
+            // Blocking outputs are complete before they are read, so nothing waits on them.
+            TaskInputLocator::Storage { .. } | TaskInputLocator::ShuffleService { .. } => {}
+        }
+        Ok(())
+    }
 }
 
 pub(crate) struct MultiChannelTaskStreamWriter {
