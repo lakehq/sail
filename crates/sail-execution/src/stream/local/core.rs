@@ -118,12 +118,12 @@ impl LocalStreamManager {
             .collect();
         // The sink can wait for the readers only if the driver has found that each stream
         // has a single reader that takes the data as it comes. This is not the case for
-        // the result of a job, which is read at the pace of the client, or when the
-        // reader decides which of its inputs it reads next. Besides, the sink never
-        // waits when the streams have several replicas, some of which may never be
-        // read, or when the streams are created after the streams of the stage have
-        // been removed, since nobody may ever read or remove them.
-        let bounded = bounded && replicas == 1 && !self.cleaned.contains(&(key.job_id, key.stage));
+        // the result of a job, which is read at the pace of the client, when the reader
+        // decides which of its inputs it reads next, or when the streams have several
+        // replicas, some of which may never be read. Besides, the sink never waits
+        // when the streams are created after the streams of the stage have been
+        // removed, since nobody may ever read or remove them.
+        let bounded = bounded && !self.cleaned.contains(&(key.job_id, key.stage));
         let buffer = self.options.task_stream_buffer;
         let limit = bounded.then(|| QueueLimit {
             rows: buffer.saturating_mul(self.options.batch_size),
@@ -408,16 +408,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn streams_wait_only_when_bounded_and_not_replicated() -> TestResult {
+    async fn streams_wait_only_when_bounded() -> TestResult {
         let mut manager = manager()?;
         let schema = Arc::new(Schema::empty());
         let mut sink = manager.create_stream(&task_key(0), 1, 1, false, schema.clone())?;
         assert!(write_without_waiting(&mut sink)?);
-        let mut sink = manager.create_stream(&task_key(1), 1, 1, true, schema.clone())?;
+        let mut sink = manager.create_stream(&task_key(1), 1, 1, true, schema)?;
         assert!(!write_without_waiting(&mut sink)?);
-        // Some replicas may never be read, so the sink does not wait for any of them.
-        let mut sink = manager.create_stream(&task_key(2), 1, 2, true, schema)?;
-        assert!(write_without_waiting(&mut sink)?);
         Ok(())
     }
 
