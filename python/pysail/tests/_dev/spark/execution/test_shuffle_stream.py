@@ -47,8 +47,9 @@ def remote(request):
 @pytest.mark.parametrize("join_type", ["left_semi", "left_anti"])
 def test_shuffle_finishes_when_join_leaves_probe_partitions_unread(spark, partitions, join_type):
     # Only one build partition contains a row. The other join partitions finish
-    # without opening their probe inputs. Multiple range batches overflow the
-    # one-batch shuffle buffers, including those belonging to unread channels.
+    # without opening their probe inputs. The shuffle writer flushes after every
+    # input batch, and at the memory limit every write waits until the queues of
+    # the task are empty, including those belonging to unread channels.
     build = spark.range(1, numPartitions=1).repartition(partitions, "id")
     probe = spark.range(10_000, numPartitions=1).repartition(partitions, "id")
 
@@ -220,7 +221,8 @@ def test_ordered_merge_finishes_when_partitions_are_read_one_after_another(spark
 def test_shuffle_finishes_when_union_leaves_merge_replicas_unread(spark):
     # The sorted branch is a single partition read through a merge input, which
     # keeps a replica for every union partition although only one of them reads it.
-    # Multiple range batches overflow the one-batch shuffle buffers.
+    # The shuffle writer flushes after every input batch, and at the memory limit
+    # every write waits until the queues of the task are empty.
     rows, limit = 10_000, 5_000
     top = spark.range(rows, numPartitions=4).orderBy("id").limit(limit)
     even = spark.range(rows, numPartitions=4).filter("id % 2 = 0")
