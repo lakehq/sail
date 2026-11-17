@@ -4,12 +4,14 @@ use datafusion::common::Result;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::config::ConfigOptions;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::unnest::UnnestExec;
 use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanProperties, Partitioning, replace_children_if_necessary,
@@ -18,6 +20,7 @@ use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::seeded_random::SeededRandomExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
+use sail_physical_plan::tail::TailExec;
 
 /// Keeps the input partitions of the operators whose output depends on the partition of each
 /// row and on the order of the rows in the partition (monotonically increasing IDs, partition
@@ -32,6 +35,11 @@ use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 /// operator instead, so that the operators above keep their parallelism, unless it would lose
 /// the order of the rows that the operators above rely on. It is merged into a round-robin
 /// repartition that directly follows it.
+///
+/// The tail selects the last rows in the order of its input, so the round-robin repartitions
+/// below the partition coalescing or merge of its input are removed in the same way. The merge
+/// may only sort by the sort expressions that remain after a projection, which reorders the rows
+/// that tie on them, so the coalescing or merge is removed if a single partition remains.
 #[derive(Debug, Default)]
 pub struct KeepPartitionSensitiveInputs;
 
@@ -42,6 +50,36 @@ impl PhysicalOptimizerRule for KeepPartitionSensitiveInputs {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|plan| {
+            if let Some(tail) = plan.downcast_ref::<TailExec>() {
+                let input = Arc::clone(tail.input());
+                let merge = if let Some(coalesce) = input.downcast_ref::<CoalescePartitionsExec>() {
+                    Some((coalesce.input(), coalesce.fetch()))
+                } else {
+                    input
+                        .downcast_ref::<SortPreservingMergeExec>()
+                        .map(|merge| (merge.input(), merge.fetch()))
+                };
+                let input = match merge {
+                    Some((child, fetch)) => {
+                        remove_round_robin(Arc::clone(child))?.map_data(|child| {
+                            if child.output_partitioning().partition_count() == 1 && fetch.is_none()
+                            {
+                                Ok(child)
+                            } else {
+                                replace_children_if_necessary(Arc::clone(&input), vec![child])
+                            }
+                        })?
+                    }
+                    None => remove_round_robin(input)?,
+                };
+                if !input.transformed {
+                    return Ok(Transformed::no(plan));
+                }
+                return Ok(Transformed::yes(replace_children_if_necessary(
+                    plan,
+                    vec![input.data],
+                )?));
+            }
             if let Some(input) = round_robin_input(&plan)
                 && let Some(inner) = round_robin_input(input)
                 && is_partition_sensitive(inner)
@@ -166,7 +204,6 @@ mod tests {
     use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
     use datafusion::physical_plan::displayable;
     use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
-    use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use datafusion::physical_plan::union::UnionExec;
 
     use super::*;
@@ -251,6 +288,42 @@ mod tests {
         assert!(lines[2].starts_with("FilterExec"), "{plan}");
         assert!(lines[3].starts_with("UnionExec"), "{plan}");
         assert_eq!(plan.matches("RepartitionExec").count(), 1, "{plan}");
+        Ok(())
+    }
+
+    #[test]
+    fn round_robin_repartitions_below_tail_are_removed() -> Result<()> {
+        for (partitions, sorted) in [(1, false), (3, false), (1, true), (3, true)] {
+            let input = filter(round_robin(source(partitions)?, 10)?)?;
+            let (input, merge): (Arc<dyn ExecutionPlan>, _) = if sorted {
+                let order = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
+                    "a",
+                    &input.schema(),
+                )?)])
+                .ok_or_else(|| internal_datafusion_err!("empty ordering"))?;
+                let input =
+                    Arc::new(SortExec::new(order.clone(), input).with_preserve_partitioning(true));
+                (
+                    Arc::new(SortPreservingMergeExec::new(order, input)),
+                    "SortPreservingMergeExec",
+                )
+            } else {
+                (
+                    Arc::new(CoalescePartitionsExec::new(input)),
+                    "CoalescePartitionsExec",
+                )
+            };
+            let plan = optimize(Arc::new(TailExec::new(input, 1)))?;
+            let lines = plan.lines().map(str::trim_start).collect::<Vec<_>>();
+            let merged = usize::from(partitions > 1);
+            assert!(lines[0].starts_with("TailExec"), "{plan}");
+            if partitions > 1 {
+                assert!(lines[1].starts_with(merge), "{plan}");
+            }
+            let below = if sorted { "SortExec" } else { "FilterExec" };
+            assert!(lines[1 + merged].starts_with(below), "{plan}");
+            assert!(!plan.contains("RepartitionExec"), "{plan}");
+        }
         Ok(())
     }
 

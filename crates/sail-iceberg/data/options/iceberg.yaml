@@ -1289,8 +1289,11 @@
       parser: crate::options::parsers::parse_string
 
 - key: gc_enabled
-  description: Iceberg table property controlling garbage collection behavior.
-  supported: false
+  description: Controls garbage collection; expire_snapshots rejects tables with GC disabled.
+  default:
+    value: "true"
+    parser: crate::options::parsers::parse_bool
+  supported: true
   rust_type: bool
   scopes: [write]
   origins:
@@ -1299,17 +1302,45 @@
       case_sensitive: true
       parser: crate::options::parsers::parse_bool
 
-- key: history_expire_properties
-  description: Iceberg table properties controlling snapshot and ref retention.
-  supported: false
+- key: history_expire_max_snapshot_age_ms
+  description: Default snapshot age for expire_snapshots (five days).
+  default:
+    value: "432000000"
+    parser: crate::options::parsers::parse_string
+  supported: true
   rust_type: String
   scopes: [write]
   origins:
     - type: table_property
-      keys:
-        - history.expire.max-snapshot-age-ms
-        - history.expire.min-snapshots-to-keep
-        - history.expire.max-ref-age-ms
+      keys: [history.expire.max-snapshot-age-ms]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: history_expire_min_snapshots_to_keep
+  description: Default minimum snapshots per branch for expire_snapshots.
+  default:
+    value: "1"
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [history.expire.min-snapshots-to-keep]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_string
+
+- key: history_expire_max_ref_age_ms
+  description: Default maximum reference age for expire_snapshots (unlimited); main never expires.
+  default:
+    value: "9223372036854775807"
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [history.expire.max-ref-age-ms]
       case_sensitive: true
       parser: crate::options::parsers::parse_string
 

@@ -88,6 +88,7 @@ impl WorkerPool {
             worker_heartbeat_interval: self.options.worker_heartbeat_interval,
             task_stream_buffer: self.options.task_stream_buffer,
             task_stream_memory_limit: self.options.task_stream_memory_limit,
+            shuffle_write_buffer_size: self.options.shuffle_write_buffer_size,
             task_stream_creation_timeout: self.options.task_stream_creation_timeout,
             rpc_retry_strategy: self.options.rpc_retry_strategy.clone(),
             shuffle_backend: self.options.shuffle_backend.clone(),

@@ -834,6 +834,7 @@ impl<'a> TaskInputBuilder<'a> {
         Ok(TaskInput {
             stage: self.input.stage,
             locator: Arc::new(locator),
+            replicated: matches!(self.input.mode, InputMode::Merge | InputMode::Broadcast),
         })
     }
 

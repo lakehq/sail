@@ -1,6 +1,7 @@
 use std::fmt::Formatter;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, ready};
 
 use datafusion::common::tree_node::TreeNodeRecursion;
@@ -12,6 +13,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
+use log::{debug, warn};
 use tokio::runtime::Handle;
 
 use crate::stream::reader::{TaskStreamReader, TaskStreamSource};
@@ -20,11 +22,39 @@ use crate::stream::reader::{TaskStreamReader, TaskStreamSource};
 pub struct ShuffleReadExec {
     properties: Arc<PlanProperties>,
     reader: Arc<dyn TaskStreamReader>,
+    replicated: bool,
+    executed: Arc<[AtomicBool]>,
 }
 
 impl ShuffleReadExec {
-    pub fn new(reader: Arc<dyn TaskStreamReader>, properties: Arc<PlanProperties>) -> Self {
-        Self { properties, reader }
+    pub fn new(
+        reader: Arc<dyn TaskStreamReader>,
+        properties: Arc<PlanProperties>,
+        replicated: bool,
+    ) -> Self {
+        let partitions = properties.output_partitioning().partition_count();
+        Self {
+            properties,
+            reader,
+            replicated,
+            executed: (0..partitions).map(|_| AtomicBool::new(false)).collect(),
+        }
+    }
+
+    /// Releases the partitions of a replicated input that this task never executed,
+    /// for example the inputs of the other branches under a union.
+    pub fn release_unexecuted(&self) {
+        // Producers keep a replica for every consumer task, so one that is never
+        // taken holds their output until stage cleanup. Other inputs have one
+        // reader per partition, which may belong to another task.
+        if !self.replicated {
+            return;
+        }
+        for (partition, executed) in self.executed.iter().enumerate() {
+            if !executed.swap(true, Ordering::Relaxed) {
+                spawn_release(self.reader.clone(), partition);
+            }
+        }
     }
 }
 
@@ -139,6 +169,9 @@ impl ExecutionPlan for ShuffleReadExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if let Some(executed) = self.executed.get(partition) {
+            executed.store(true, Ordering::Relaxed);
+        }
         let output = futures::stream::once(ShuffleReadOpen {
             reader: self.reader.clone(),
             partition,
@@ -193,6 +226,18 @@ impl ExecutionPlan for ShuffleReadExec {
     }
 }
 
+fn spawn_release(reader: Arc<dyn TaskStreamReader>, partition: usize) {
+    let Ok(handle) = Handle::try_current() else {
+        warn!("cannot release shuffle read partition {partition} outside a Tokio runtime");
+        return;
+    };
+    handle.spawn(async move {
+        if let Err(error) = reader.release(partition).await {
+            debug!("failed to release shuffle read partition {partition}: {error}");
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -202,9 +247,10 @@ mod tests {
     use datafusion::arrow::datatypes::Schema;
     use datafusion::physical_expr::EquivalenceProperties;
     use datafusion::physical_plan::Partitioning;
+    use datafusion::physical_plan::common::collect;
     use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
     use futures::Stream;
-    use tokio::sync::Semaphore;
+    use tokio::sync::{Semaphore, mpsc};
 
     use super::*;
     use crate::stream::error::TaskStreamResult;
@@ -294,7 +340,7 @@ mod tests {
             EmissionType::Incremental,
             Boundedness::Bounded,
         );
-        ShuffleReadExec::new(reader.clone(), Arc::new(properties))
+        ShuffleReadExec::new(reader.clone(), Arc::new(properties), false)
             .execute(0, Arc::new(TaskContext::default()))
     }
 
@@ -355,6 +401,95 @@ mod tests {
         // The open call that had started is the one that completes.
         assert_eq!(reader.counts(), (1, 1, 1));
         assert_eq!(reader.released.load(Ordering::SeqCst), 0);
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    enum Event {
+        Open(usize),
+        Release(usize),
+    }
+
+    #[derive(Debug)]
+    struct EventReader(mpsc::UnboundedSender<Event>);
+
+    #[tonic::async_trait]
+    impl TaskStreamReader for EventReader {
+        async fn open(&self, partition: usize) -> Result<TaskStreamSource> {
+            let _ = self.0.send(Event::Open(partition));
+            Ok(Box::pin(futures::stream::empty()))
+        }
+
+        fn close_unopened(&self) -> bool {
+            true
+        }
+
+        async fn release(&self, partition: usize) -> Result<()> {
+            let _ = self.0.send(Event::Release(partition));
+            Ok(())
+        }
+    }
+
+    fn exec() -> (ShuffleReadExec, mpsc::UnboundedReceiver<Event>) {
+        exec_with(false)
+    }
+
+    fn exec_with(replicated: bool) -> (ShuffleReadExec, mpsc::UnboundedReceiver<Event>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let properties = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(Arc::new(Schema::empty())),
+            Partitioning::UnknownPartitioning(2),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ));
+        (
+            ShuffleReadExec::new(Arc::new(EventReader(tx)), properties, replicated),
+            rx,
+        )
+    }
+
+    async fn next_event(rx: &mut mpsc::UnboundedReceiver<Event>) -> Option<Event> {
+        tokio::time::timeout(Duration::from_millis(200), rx.recv())
+            .await
+            .ok()
+            .flatten()
+    }
+
+    #[tokio::test]
+    async fn releases_partition_dropped_before_reading() -> Result<()> {
+        let (exec, mut rx) = exec();
+        drop(exec.execute(1, Arc::new(TaskContext::default()))?);
+        assert!(matches!(next_event(&mut rx).await, Some(Event::Release(1))));
+        assert!(next_event(&mut rx).await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn does_not_release_partition_that_was_read() -> Result<()> {
+        let (exec, mut rx) = exec();
+        collect(exec.execute(1, Arc::new(TaskContext::default()))?).await?;
+        assert!(matches!(next_event(&mut rx).await, Some(Event::Open(1))));
+        assert!(next_event(&mut rx).await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn releases_unexecuted_partitions_of_replicated_input() -> Result<()> {
+        let (exec, mut rx) = exec_with(true);
+        collect(exec.execute(1, Arc::new(TaskContext::default()))?).await?;
+        assert!(matches!(next_event(&mut rx).await, Some(Event::Open(1))));
+        exec.release_unexecuted();
+        assert!(matches!(next_event(&mut rx).await, Some(Event::Release(0))));
+        exec.release_unexecuted();
+        assert!(next_event(&mut rx).await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn does_not_release_unexecuted_partitions_of_other_inputs() -> Result<()> {
+        let (exec, mut rx) = exec_with(false);
+        exec.release_unexecuted();
+        assert!(next_event(&mut rx).await.is_none());
         Ok(())
     }
 }

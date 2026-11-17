@@ -137,6 +137,7 @@ impl KubernetesWorkerService {
             worker_heartbeat_interval,
             task_stream_buffer,
             task_stream_memory_limit,
+            shuffle_write_buffer_size,
             task_stream_creation_timeout,
             rpc_retry_strategy,
             shuffle_backend,
@@ -239,6 +240,11 @@ impl KubernetesWorkerService {
             EnvVar {
                 name: ClusterConfigEnv::TASK_STREAM_MEMORY_LIMIT.to_string(),
                 value: Some(task_stream_memory_limit.to_string()),
+                value_from: None,
+            },
+            EnvVar {
+                name: ClusterConfigEnv::SHUFFLE_WRITE_BUFFER_SIZE.to_string(),
+                value: Some(shuffle_write_buffer_size.to_string()),
                 value_from: None,
             },
             EnvVar {
@@ -552,6 +558,7 @@ mod tests {
                 worker_heartbeat_interval: Duration::from_secs(1),
                 task_stream_buffer: 1,
                 task_stream_memory_limit: 0,
+                shuffle_write_buffer_size: 4096,
                 task_stream_creation_timeout: Duration::from_secs(1),
                 rpc_retry_strategy: RetryStrategy::Fixed {
                     max_count: 1,
@@ -574,6 +581,12 @@ mod tests {
             let owners = pod.metadata.owner_references.unwrap();
             assert_eq!(owners.len(), 1);
             assert_eq!(owners[0].uid, "driver-uid");
+            let env = pod.spec.unwrap().containers[0].env.clone().unwrap();
+            let buffer_size = env
+                .iter()
+                .find(|var| var.name == ClusterConfigEnv::SHUFFLE_WRITE_BUFFER_SIZE)
+                .unwrap();
+            assert_eq!(buffer_size.value.as_deref(), Some("4096"));
         }
     }
 

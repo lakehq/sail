@@ -267,6 +267,16 @@
     the memory of the machine.
   experimental: true
 
+- key: cluster.shuffle_write_buffer_size
+  type: number
+  default: "33554432"
+  description: |
+    The size in bytes of the rows that a task holds for a shuffle write before it
+    writes them to all output channels. Set to `0` for no limit on the size; a task
+    then holds up to `execution.batch_size` rows for each output channel. Most users
+    should not disable the limit.
+  experimental: true
+
 - key: cluster.task_stream_creation_timeout_secs
   type: number
   default: "60"

@@ -30,6 +30,7 @@ pub struct DriverOptions {
     pub task_launch_timeout: Duration,
     pub task_stream_buffer: usize,
     pub task_stream_memory_limit: usize,
+    pub shuffle_write_buffer_size: usize,
     pub task_stream_creation_timeout: Duration,
     pub task_max_attempts: usize,
     pub shuffle_backend: ShuffleBackendKind,
@@ -79,6 +80,7 @@ impl DriverOptions {
             task_launch_timeout: Duration::from_secs(config.cluster.task_launch_timeout_secs),
             task_stream_buffer: config.cluster.task_stream_buffer,
             task_stream_memory_limit: config.cluster.task_stream_memory_limit,
+            shuffle_write_buffer_size: config.cluster.shuffle_write_buffer_size,
             task_stream_creation_timeout: Duration::from_secs(
                 config.cluster.task_stream_creation_timeout_secs,
             ),
