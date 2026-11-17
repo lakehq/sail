@@ -240,6 +240,7 @@ fn spawn_release(reader: Arc<dyn TaskStreamReader>, partition: usize) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -247,10 +248,9 @@ mod tests {
     use datafusion::arrow::datatypes::Schema;
     use datafusion::physical_expr::EquivalenceProperties;
     use datafusion::physical_plan::Partitioning;
-    use datafusion::physical_plan::common::collect;
     use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
     use futures::Stream;
-    use tokio::sync::{Semaphore, mpsc};
+    use tokio::sync::Semaphore;
 
     use super::*;
     use crate::stream::error::TaskStreamResult;
@@ -263,7 +263,8 @@ mod tests {
         started: AtomicUsize,
         opened: AtomicUsize,
         closed: Arc<AtomicUsize>,
-        released: AtomicUsize,
+        /// The partitions that have been released.
+        released: Mutex<Vec<usize>>,
     }
 
     impl TestReader {
@@ -274,7 +275,7 @@ mod tests {
                 started: AtomicUsize::new(0),
                 opened: AtomicUsize::new(0),
                 closed: Arc::new(AtomicUsize::new(0)),
-                released: AtomicUsize::new(0),
+                released: Mutex::new(vec![]),
             })
         }
 
@@ -284,6 +285,13 @@ mod tests {
                 self.opened.load(Ordering::SeqCst),
                 self.closed.load(Ordering::SeqCst),
             )
+        }
+
+        fn released(&self) -> Vec<usize> {
+            self.released
+                .lock()
+                .map(|released| released.clone())
+                .unwrap_or_default()
         }
     }
 
@@ -308,8 +316,10 @@ mod tests {
             self.close_unopened
         }
 
-        async fn release(&self, _partition: usize) -> Result<()> {
-            self.released.fetch_add(1, Ordering::SeqCst);
+        async fn release(&self, partition: usize) -> Result<()> {
+            if let Ok(mut released) = self.released.lock() {
+                released.push(partition);
+            }
             Ok(())
         }
     }
@@ -333,20 +343,23 @@ mod tests {
         }
     }
 
-    fn execute(reader: &Arc<TestReader>) -> Result<SendableRecordBatchStream> {
+    fn exec(reader: &Arc<TestReader>, partitions: usize, replicated: bool) -> ShuffleReadExec {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(Arc::new(Schema::empty())),
-            Partitioning::UnknownPartitioning(1),
+            Partitioning::UnknownPartitioning(partitions),
             EmissionType::Incremental,
             Boundedness::Bounded,
         );
-        ShuffleReadExec::new(reader.clone(), Arc::new(properties), false)
-            .execute(0, Arc::new(TaskContext::default()))
+        ShuffleReadExec::new(reader.clone(), Arc::new(properties), replicated)
     }
 
-    async fn wait_until_positive(count: &AtomicUsize) -> Result<()> {
+    fn execute(reader: &Arc<TestReader>) -> Result<SendableRecordBatchStream> {
+        exec(reader, 1, false).execute(0, Arc::new(TaskContext::default()))
+    }
+
+    async fn wait_until(condition: impl Fn() -> bool) -> Result<()> {
         tokio::time::timeout(Duration::from_secs(5), async {
-            while count.load(Ordering::SeqCst) == 0 {
+            while !condition() {
                 tokio::task::yield_now().await;
             }
         })
@@ -374,14 +387,14 @@ mod tests {
         // An input that has not been opened is released without being opened.
         let unopened = TestReader::new(true, None);
         drop(execute(&unopened)?);
-        wait_until_positive(&unopened.released).await?;
+        wait_until(|| !unopened.released().is_empty()).await?;
 
         assert_eq!(unopened.counts(), (0, 0, 0));
         assert_eq!(read.counts(), (1, 1, 1));
         assert_eq!(unaffected.counts(), (0, 0, 0));
         assert_eq!(outside.counts(), (0, 0, 0));
         for (reader, released) in [(&unopened, 1), (&read, 0), (&unaffected, 0), (&outside, 0)] {
-            assert_eq!(reader.released.load(Ordering::SeqCst), released);
+            assert_eq!(reader.released().len(), released);
         }
         Ok(())
     }
@@ -397,99 +410,37 @@ mod tests {
         if let Some(permits) = &reader.permits {
             permits.add_permits(1);
         }
-        wait_until_positive(&reader.closed).await?;
+        wait_until(|| reader.closed.load(Ordering::SeqCst) > 0).await?;
         // The open call that had started is the one that completes.
         assert_eq!(reader.counts(), (1, 1, 1));
-        assert_eq!(reader.released.load(Ordering::SeqCst), 0);
+        assert!(reader.released().is_empty());
         Ok(())
     }
 
-    #[derive(Debug)]
-    enum Event {
-        Open(usize),
-        Release(usize),
-    }
-
-    #[derive(Debug)]
-    struct EventReader(mpsc::UnboundedSender<Event>);
-
-    #[tonic::async_trait]
-    impl TaskStreamReader for EventReader {
-        async fn open(&self, partition: usize) -> Result<TaskStreamSource> {
-            let _ = self.0.send(Event::Open(partition));
-            Ok(Box::pin(futures::stream::empty()))
+    #[tokio::test]
+    async fn releases_unexecuted_partitions_of_replicated_input_only() -> Result<()> {
+        // The task reads one of the two partitions of each input.
+        let replicated = TestReader::new(true, None);
+        let other = TestReader::new(true, None);
+        let inputs = [exec(&replicated, 2, true), exec(&other, 2, false)];
+        for input in &inputs {
+            let mut stream = input.execute(1, Arc::new(TaskContext::default()))?;
+            assert!(stream.try_next().await?.is_none());
         }
 
-        fn close_unopened(&self) -> bool {
-            true
+        // The partition that the task has not executed is released once, if each
+        // task has its own replica of the input. It belongs to another task otherwise.
+        for _ in 0..2 {
+            for input in &inputs {
+                input.release_unexecuted();
+            }
+            wait_until(|| !replicated.released().is_empty()).await?;
+            tokio::task::yield_now().await;
         }
-
-        async fn release(&self, partition: usize) -> Result<()> {
-            let _ = self.0.send(Event::Release(partition));
-            Ok(())
-        }
-    }
-
-    fn exec() -> (ShuffleReadExec, mpsc::UnboundedReceiver<Event>) {
-        exec_with(false)
-    }
-
-    fn exec_with(replicated: bool) -> (ShuffleReadExec, mpsc::UnboundedReceiver<Event>) {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(Arc::new(Schema::empty())),
-            Partitioning::UnknownPartitioning(2),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        ));
-        (
-            ShuffleReadExec::new(Arc::new(EventReader(tx)), properties, replicated),
-            rx,
-        )
-    }
-
-    async fn next_event(rx: &mut mpsc::UnboundedReceiver<Event>) -> Option<Event> {
-        tokio::time::timeout(Duration::from_millis(200), rx.recv())
-            .await
-            .ok()
-            .flatten()
-    }
-
-    #[tokio::test]
-    async fn releases_partition_dropped_before_reading() -> Result<()> {
-        let (exec, mut rx) = exec();
-        drop(exec.execute(1, Arc::new(TaskContext::default()))?);
-        assert!(matches!(next_event(&mut rx).await, Some(Event::Release(1))));
-        assert!(next_event(&mut rx).await.is_none());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn does_not_release_partition_that_was_read() -> Result<()> {
-        let (exec, mut rx) = exec();
-        collect(exec.execute(1, Arc::new(TaskContext::default()))?).await?;
-        assert!(matches!(next_event(&mut rx).await, Some(Event::Open(1))));
-        assert!(next_event(&mut rx).await.is_none());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn releases_unexecuted_partitions_of_replicated_input() -> Result<()> {
-        let (exec, mut rx) = exec_with(true);
-        collect(exec.execute(1, Arc::new(TaskContext::default()))?).await?;
-        assert!(matches!(next_event(&mut rx).await, Some(Event::Open(1))));
-        exec.release_unexecuted();
-        assert!(matches!(next_event(&mut rx).await, Some(Event::Release(0))));
-        exec.release_unexecuted();
-        assert!(next_event(&mut rx).await.is_none());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn does_not_release_unexecuted_partitions_of_other_inputs() -> Result<()> {
-        let (exec, mut rx) = exec_with(false);
-        exec.release_unexecuted();
-        assert!(next_event(&mut rx).await.is_none());
+        assert_eq!(replicated.released(), vec![0]);
+        assert!(other.released().is_empty());
+        assert_eq!(replicated.counts(), (1, 1, 1));
+        assert_eq!(other.counts(), (1, 1, 1));
         Ok(())
     }
 }
