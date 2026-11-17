@@ -126,3 +126,76 @@ def test_union_finishes_when_its_branches_are_shuffled_afterwards(spark):
     """).collect()  # noqa: S608
 
     assert rows == [Row(v=v, n=values.count(v)) for v in range(11)]
+
+
+@pytest.mark.timeout(60)
+@pytest.mark.parametrize("consumer", ["sum", "sort", "projection-and-sort"])
+def test_union_finishes_when_only_one_of_its_tasks_reads_a_sorted_branch(spark, consumer):
+    # The first branch is sorted and limited, so its rows reach the stage of the union
+    # through a merge that only one task of that stage reads, while the other tasks
+    # scan the second branch. A consumer that merges the sorted tasks of the union
+    # stops reading the others whenever it waits for a row of that one task.
+    count, limit = 40_000, 20_000
+    values = list(range(limit)) + list(range(0, count, 2))
+    union = f"""
+        SELECT * FROM (SELECT id AS k FROM range(0, {count}) ORDER BY id LIMIT {limit})
+        UNION ALL
+        SELECT id AS k FROM range(0, {count}) WHERE id % 2 = 0
+    """  # noqa: S608
+    if consumer == "sum":
+        rows = spark.sql(f"SELECT count(*) AS n, sum(k) AS total FROM ({union}) AS u").collect()  # noqa: S608
+        assert rows == [Row(n=len(values), total=sum(values))]
+    elif consumer == "sort":
+        rows = spark.sql(f"SELECT k FROM ({union}) AS u ORDER BY k").collect()  # noqa: S608
+        assert [row.k for row in rows] == sorted(values)
+    else:
+        rows = spark.sql(f"""
+            SELECT j FROM (SELECT {count} - k AS j FROM ({union}) AS u) AS p ORDER BY j
+        """).collect()  # noqa: S608
+        assert [row.j for row in rows] == sorted(count - k for k in values)
+
+
+@pytest.mark.timeout(60)
+def test_ordered_merge_finishes_over_union_whose_tasks_read_different_inputs(spark):
+    # The tasks of one branch read a broadcast build side, which is written once for
+    # every task of the stage that contains the union, and a single task of the other
+    # branch reads the merge of a sorted and limited subquery. The final merge reads
+    # the tasks of the union in the order of their rows.
+    count, limit, build = 40_000, 20_000, 4000
+    values = [i for i in range(count) if i % 6000 < build] + list(range(limit))
+    rows = spark.sql(f"""
+        SELECT k FROM (
+            SELECT a.id AS k FROM range(0, {count}) AS a
+            JOIN (SELECT id AS b FROM range(0, {build}) GROUP BY id) AS s ON a.id % 6000 = s.b
+            UNION ALL
+            SELECT * FROM (SELECT id AS k FROM range(0, {count}) ORDER BY id LIMIT {limit})
+        ) AS u ORDER BY k
+    """).collect()  # noqa: S608
+
+    assert [row.k for row in rows] == sorted(values)
+
+
+@pytest.mark.timeout(60)
+@pytest.mark.parametrize("shift", [-1, 1], ids=["second-branch-first", "second-branch-last"])
+def test_ordered_merge_finishes_over_union_of_sorted_rows_that_are_distributed_to_tasks(spark, shift):
+    # In each branch the sorted rows of one task are distributed batch by batch to the
+    # tasks of a filter, which keep the order and one of which keeps no row. All rows of
+    # one branch come before all rows of the other, so the final merge leaves the tasks
+    # of one branch unread until it has seen the end of every task of the other.
+    count, limit = 400_000, 200_000
+    first = [x for x in range(limit) if (x // BATCH_SIZE) % PARTITIONS != 0]
+    values = sorted(first + [x + shift * count for x in first])
+    offset = len(values) - 10
+    branch = f"""
+        SELECT k FROM (SELECT id AS k FROM range(0, {count}) ORDER BY id LIMIT {limit}) AS t
+        WHERE (k div {BATCH_SIZE}) % {PARTITIONS} <> 0
+    """  # noqa: S608
+    rows = spark.sql(f"""
+        SELECT x FROM (
+            SELECT k AS x FROM ({branch}) AS a
+            UNION ALL
+            SELECT k + {shift * count} AS x FROM ({branch}) AS b
+        ) AS u ORDER BY x LIMIT 5 OFFSET {offset}
+    """).collect()  # noqa: S608
+
+    assert [row.x for row in rows] == values[offset : offset + 5]
