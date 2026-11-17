@@ -115,7 +115,9 @@ impl ShuffleBackendKind {
                 initial_connection_window_size,
                 ..
             } => *initial_connection_window_size,
-            Self::Storage { .. } | Self::Celeborn { .. } => None,
+            // The task streams of these backends that are read over Flight have no
+            // setting of their own, so they get the default of the Flight backend.
+            Self::Storage { .. } | Self::Celeborn { .. } => Some(crate::rpc::MAX_WINDOW_SIZE),
         }
     }
 
@@ -209,7 +211,8 @@ impl std::fmt::Display for ShuffleCompression {
 #[cfg(test)]
 mod tests {
     use super::{
-        CompressionCodec, PartitionSplitMode, ShuffleBackendKind, ShuffleEndpointOverride,
+        CompressionCodec, PartitionSplitMode, ShuffleBackendKind, ShuffleCompression,
+        ShuffleEndpointOverride,
     };
 
     #[test]
@@ -232,6 +235,29 @@ mod tests {
             Some(64 * 1024 * 1024)
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_flight_initial_connection_window_size_of_other_backends() {
+        let storage = ShuffleBackendKind::Storage {
+            path: None,
+            max_file_size: 1024,
+            compression: ShuffleCompression::None,
+        };
+        let celeborn = ShuffleBackendKind::Celeborn {
+            master_endpoints: vec!["master:12097".to_string()],
+            compression: CompressionCodec::Lz4,
+            heartbeat_interval_secs: 10,
+            endpoint_overrides: vec![],
+            partition_split_threshold: 1_i64 << 30,
+            partition_split_mode: PartitionSplitMode::Soft,
+        };
+        for backend in [storage, celeborn] {
+            assert_eq!(
+                backend.flight_initial_connection_window_size(),
+                Some(2147483647)
+            );
+        }
     }
 
     #[test]
