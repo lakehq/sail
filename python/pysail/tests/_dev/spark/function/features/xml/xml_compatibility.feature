@@ -666,3 +666,153 @@ Feature: XML functions follow Spark lexical names and XPath semantics
         | declaration and DTD | '<?xml version="1.0"?><!DOCTYPE r><r><a>1</a></r>'                                         |
         | comments and PI     | '<?xml version="1.0"?><!--before--><?target data?><!DOCTYPE r><!--after--><r><a>1</a></r>' |
         | no declaration      | ' <!--comment--><!DOCTYPE r><r><a>1</a></r>'                                               |
+
+  Rule: XPath arithmetic converts operands to XPath 1.0 numbers
+
+    Scenario Outline: XML compatibility: Arithmetic operand conversion: <path>
+      When query
+        """
+        SELECT xpath_double('<r><a>1</a><a>9</a><b>2</b><b>8</b><bad>1e2</bad></r>', '<path>') AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | path            | result    |
+        | r/a + 2         | 3.0       |
+        | 2 + r/a         | 3.0       |
+        | r/b - r/a       | 1.0       |
+        | r/a * r/b       | 2.0       |
+        | r/a div r/b     | 0.5       |
+        | r/b mod r/a     | 0.0       |
+        | -r/a            | -1.0      |
+        | -(-r/a)         | 1.0       |
+        | r/a + r/b * 3   | 7.0       |
+        | (r/a + r/b) * 3 | 9.0       |
+        | true() + 2      | 3.0       |
+        | " 2 " + 1       | 3.0       |
+        | r/missing + 1   | NaN       |
+        | -r/missing      | NaN       |
+        | r/bad + 1       | NaN       |
+        | "+2" + 1        | NaN       |
+        | "Infinity" + 1  | NaN       |
+        | 1 div 0         | Infinity  |
+        | -1 div 0        | -Infinity |
+        | 0 div 0         | NaN       |
+        | 5 mod 0         | NaN       |
+
+    Scenario: XML compatibility: Arithmetic conversions preserve predicate context
+      When query
+        """
+        SELECT xpath('<r><a>1</a><a>9</a></r>', 'r/a[position() = ../a + 1]/text()') AS result
+        """
+      Then query result
+        | result |
+        | [9]    |
+
+  Rule: XML declarations require version as the first attribute
+
+    Scenario Outline: XML compatibility: Struct readers return null for missing or misplaced declaration versions: <declaration>
+      When query
+        """
+        SELECT from_xml('<declaration><r><a>1</a></r>', 'a INT').a AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | declaration                            |
+        | <?xml?>                                |
+        | <?xml encoding="UTF-8"?>               |
+        | <?xml encoding="UTF-8" version="1.0"?> |
+
+    Scenario Outline: XML compatibility: Struct readers reject missing or misplaced declaration versions in fail-fast mode: <declaration>
+      When query
+        """
+        SELECT from_xml('<declaration><r><a>1</a></r>', 'a INT', map('mode', 'FAILFAST'))
+        """
+      Then query error (?s).*(XML|xml|MALFORMED).*
+
+      Examples:
+        | declaration                            |
+        | <?xml?>                                |
+        | <?xml encoding="UTF-8"?>               |
+        | <?xml encoding="UTF-8" version="1.0"?> |
+
+    Scenario Outline: XML compatibility: XPath rejects missing or misplaced declaration versions: <declaration>
+      When query
+        """
+        SELECT xpath_string('<declaration><r><a>1</a></r>', 'r/a')
+        """
+      Then query error (?s).*(XML|xml|Error loading expression).*
+
+      Examples:
+        | declaration                            |
+        | <?xml?>                                |
+        | <?xml encoding="UTF-8"?>               |
+        | <?xml encoding="UTF-8" version="1.0"?> |
+
+  Rule: Referenced internal parameter entities contribute declarations
+
+    Scenario Outline: XML compatibility: Parameter entity declarations: <case>
+      When query
+        """
+        SELECT xpath_string(<xml>, 'r') AS result
+        """
+      Then query result
+        | result |
+        | hello  |
+
+      Examples:
+        | case                         | xml                                                                                                                           |
+        | internal declaration         | concat('<!DOCTYPE r [<!ENTITY % defs ', chr(39), '<!ENTITY e "hello">', chr(39), '>%defs;]><r>&e;</r>')                       |
+        | nested parameter references  | "<!DOCTYPE r [<!ENTITY % a '&#37;b;'><!ENTITY % b '<!ENTITY e &#34;hello&#34;>'>%a;]><r>&e;</r>"                              |
+        | first declaration wins       | "<!DOCTYPE r [<!ENTITY e 'hello'><!ENTITY % defs '<!ENTITY e &#34;other&#34;>'>%defs;]><r>&e;</r>"                            |
+        | first parameter wins         | "<!DOCTYPE r [<!ENTITY % defs '<!ENTITY e &#34;hello&#34;>'><!ENTITY % defs '<!ENTITY e &#34;other&#34;>'>%defs;]><r>&e;</r>" |
+        | separate parameter names     | "<!DOCTYPE r [<!ENTITY defs 'hello'><!ENTITY % defs '<!ENTITY e &#34;&defs;&#34;>'>%defs;]><r>&e;</r>"                        |
+        | external parameter ignored   | "<!DOCTYPE r [<!ENTITY % ext SYSTEM 'file:///nonexistent-sail-xml-test'>%ext;]><r>hello</r>"                                  |
+        | undeclared parameter ignored | "<!DOCTYPE r [%missing;]><r>hello</r>"                                                                                        |
+        | references inside comments   | "<!DOCTYPE r [<!ENTITY % defs '<!--&#37;missing;--><!ENTITY e &#34;hello&#34;>'>%defs;]><r>&e;</r>"                               |
+
+    Scenario: XML compatibility: Recursive parameter entities are rejected
+      When query
+        """
+        SELECT xpath_string('<!DOCTYPE r [<!ENTITY % loop "&#37;loop;">%loop;]><r/>', 'r')
+        """
+      Then query error (?s).*(entity|Entity|recursive|Recursive).*
+
+    Scenario: XML compatibility: Parameter entity references share the document count limit
+      When query
+        """
+        SELECT xpath_string(concat('<!DOCTYPE r [<!ENTITY % p ""><!ENTITY e "x">', repeat('%p;', 64000), ']><r>&e;</r>'), 'r')
+        """
+      Then query error (?s).*(entity|Entity).*
+
+    @sail-only
+    Scenario: XML compatibility: Parameter entity replacement bytes are bounded
+      When query
+        """
+        SELECT xpath_string(concat('<!DOCTYPE r [<!ENTITY % p "<!--', repeat('x', 10000), '-->">', repeat('%p;', 1000), ']><r/>'), 'r')
+        """
+      Then query error (?s).*XML entity size limit.*
+
+    @sail-only
+    Scenario: XML compatibility: Parameter entity nesting is bounded
+      When query
+        """
+        SELECT xpath_string(concat('<!DOCTYPE r [',
+          concat_ws('', transform(sequence(0, 100), i -> concat('<!ENTITY % p', i, ' "&#37;p', i + 1, ';">'))),
+          '%p0;]><r/>'), 'r')
+        """
+      Then query error (?s).*XML entity expansion limit.*
+
+    Scenario: XML compatibility: Parameter entity expansion permits the count limit
+      When query
+        """
+        SELECT xpath_string(concat('<!DOCTYPE r [<!ENTITY % p "">', repeat('%p;', 64000), ']><r>ok</r>'), 'r') AS result
+        """
+      Then query result
+        | result |
+        | ok     |

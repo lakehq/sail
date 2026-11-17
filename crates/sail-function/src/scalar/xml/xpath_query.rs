@@ -312,7 +312,15 @@ fn render(expression: &Expression<'_>) -> Result<String> {
             }
             Ok(result)
         }
-        Expression::Negate(value) => Ok(format!("-({})", render(value)?)),
+        Expression::Negate(value) => Ok(format!(
+            "-({})",
+            number(&format!("({})[1]", render(value)?))
+        )),
+        Expression::Binary(left, operator @ ("+" | "-" | "*" | "div" | "mod"), right) => {
+            let left = number(&format!("({})[1]", render(left)?));
+            let right = number(&format!("({})[1]", render(right)?));
+            Ok(format!("({left} {operator} {right})"))
+        }
         Expression::Binary(left, operator, right) => {
             Ok(format!("({} {operator} {})", render(left)?, render(right)?))
         }

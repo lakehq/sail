@@ -205,7 +205,9 @@ pub(super) fn parse(xot: &mut Xot, xml: &str, mode: ParseMode) -> XmlResult<Pars
                     .replace('\r', "\n");
                 xot.append_processing_instruction(parent, target, Some(&content))?;
             }
-            Event::Decl(_) if declaration_allowed => {}
+            Event::Decl(declaration) if declaration_allowed => {
+                declaration.version()?;
+            }
             Event::DocType(_) if parent == document && !root_seen && !doctype_seen => {
                 doctype_seen = true;
             }

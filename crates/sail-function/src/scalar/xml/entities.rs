@@ -16,33 +16,29 @@ pub(super) fn expand(xml: &str) -> XmlResult<Cow<'_, str>> {
         return Ok(Cow::Borrowed(xml));
     }
     let mut reader = Reader::from_str(xml);
-    let mut entities = HashMap::new();
+    let mut collector = DeclarationCollector::default();
     loop {
         match reader.read_event()? {
             Event::DocType(doctype) => {
                 let dtd = doctype.decode()?;
 
-                for (name, value) in declarations()
-                    .parse(dtd.as_ref())
-                    .into_result()
-                    .map_err(|errors| format!("Invalid XML document type: {errors:?}"))?
-                {
-                    let value = declaration_value(value)?;
-                    entities.entry(name.to_string()).or_insert(value);
-                }
+                collector.collect(
+                    declarations()
+                        .parse(dtd.as_ref())
+                        .into_result()
+                        .map_err(|errors| format!("Invalid XML document type: {errors:?}"))?,
+                )?;
             }
             Event::Start(_) | Event::Empty(_) | Event::Eof => break,
             _ => {}
         }
     }
-    if entities.is_empty() {
+    if collector.entities.is_empty() {
         return Ok(Cow::Borrowed(xml));
     }
     let mut expansion = Expansion {
-        entities: &entities,
-        active: Vec::new(),
-        count: 0,
-        bytes: 0,
+        entities: &collector.entities,
+        limits: collector.limits,
     };
     Ok(Cow::Owned(expansion.content(xml)?))
 }
@@ -62,16 +58,62 @@ fn declaration_value(value: &str) -> XmlResult<String> {
     Ok(result)
 }
 
-struct Expansion<'a> {
-    entities: &'a HashMap<String, String>,
+#[derive(Default)]
+struct DeclarationCollector {
+    entities: HashMap<String, String>,
+    parameters: HashMap<String, String>,
+    limits: ExpansionLimits,
+}
+
+impl DeclarationCollector {
+    fn collect(&mut self, declarations: Vec<Declaration<'_>>) -> XmlResult<()> {
+        for declaration in declarations {
+            match declaration {
+                Declaration::Entity {
+                    parameter,
+                    name,
+                    value,
+                } => {
+                    let value = declaration_value(value)?;
+                    let entities = if parameter {
+                        &mut self.parameters
+                    } else {
+                        &mut self.entities
+                    };
+                    entities.entry(name.to_string()).or_insert(value);
+                }
+                Declaration::Parameter(name) => {
+                    // The nonvalidating Java parser ignores undeclared parameter
+                    // entities. External declarations have empty replacement text.
+                    let Some(value) = self.parameters.get(name) else {
+                        continue;
+                    };
+
+                    self.limits.enter(name, value.len())?;
+                    let value = value.clone();
+                    let declarations = declaration_subset()
+                        .parse(&value)
+                        .into_result()
+                        .map_err(|errors| format!("Invalid XML parameter entity: {errors:?}"))?;
+                    self.collect(declarations)?;
+                    self.limits.active.pop();
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct ExpansionLimits {
     active: Vec<String>,
     count: usize,
     bytes: usize,
 }
 
-impl Expansion<'_> {
-    fn entity(&mut self, name: &str, attribute: bool) -> XmlResult<String> {
-        let value = self.entities.get(name).ok_or("Unknown XML entity")?;
+impl ExpansionLimits {
+    fn enter(&mut self, name: &str, bytes: usize) -> XmlResult<()> {
         self.count += 1;
         if self.count > 64_000
             || self.active.len() >= 100
@@ -80,21 +122,33 @@ impl Expansion<'_> {
             return Err("XML entity expansion limit or recursive entity".into());
         }
 
-        // Charge every reference, including top-level and attribute references,
-        // before allocating its expansion. Summing replacement bytes across the
-        // document bounds both repeated plain entities and nested expansions.
+        // Charge every reference before allocating its expansion. Parameter and
+        // general entities share the document count and replacement byte limits.
         self.bytes = self
             .bytes
-            .checked_add(value.len())
+            .checked_add(bytes)
             .filter(|bytes| *bytes <= 10_000_000)
             .ok_or("XML entity size limit")?;
         self.active.push(name.to_string());
+        Ok(())
+    }
+}
+
+struct Expansion<'a> {
+    entities: &'a HashMap<String, String>,
+    limits: ExpansionLimits,
+}
+
+impl Expansion<'_> {
+    fn entity(&mut self, name: &str, attribute: bool) -> XmlResult<String> {
+        let value = self.entities.get(name).ok_or("Unknown XML entity")?;
+        self.limits.enter(name, value.len())?;
         let result = if attribute {
             self.attribute(value)
         } else {
             self.content(value)
         };
-        self.active.pop();
+        self.limits.active.pop();
         result
     }
 
@@ -162,11 +216,35 @@ fn entity_parts(value: &str) -> XmlResult<Vec<EntityPart<'_>>> {
         .map_err(|errors| format!("Invalid XML entity value: {errors:?}").into())
 }
 
+#[derive(Clone, Debug)]
+enum Declaration<'a> {
+    Entity {
+        parameter: bool,
+        name: &'a str,
+        value: &'a str,
+    },
+    Parameter(&'a str),
+}
+
 /// Parse the document type payload supplied by quick-xml. Consume quoted values
 /// and comments as complete units so text resembling an entity declaration inside
 /// them cannot be interpreted as a declaration.
-fn declarations<'a>() -> impl Parser<'a, &'a str, Vec<(&'a str, &'a str)>, Extra<'a>> {
-    let external = choice((
+fn declarations<'a>() -> impl Parser<'a, &'a str, Vec<Declaration<'a>>, Extra<'a>> {
+    name(true)
+        .then_ignore(external_id().padded_by(whitespace()).or_not())
+        .ignore_then(
+            declaration_subset()
+                .delimited_by(just('['), just(']'))
+                .padded_by(whitespace())
+                .or_not(),
+        )
+        .then_ignore(whitespace())
+        .map(Option::unwrap_or_default)
+        .padded_by(whitespace())
+}
+
+fn external_id<'a>() -> impl Parser<'a, &'a str, (), Extra<'a>> + Clone {
+    choice((
         just("SYSTEM")
             .then_ignore(space())
             .then(literal())
@@ -177,9 +255,11 @@ fn declarations<'a>() -> impl Parser<'a, &'a str, Vec<(&'a str, &'a str)>, Extra
             .then_ignore(space())
             .then(literal())
             .ignored(),
-    ));
-    let entity_value = literal().or(external
-        .clone()
+    ))
+}
+
+fn declaration_subset<'a>() -> impl Parser<'a, &'a str, Vec<Declaration<'a>>, Extra<'a>> {
+    let entity_value = literal().or(external_id()
         .then(just("NDATA").padded_by(space()).then(name(true)).or_not())
         .to(""));
     let entity = just("<!ENTITY")
@@ -188,7 +268,13 @@ fn declarations<'a>() -> impl Parser<'a, &'a str, Vec<(&'a str, &'a str)>, Extra
         .then(name(true).then_ignore(space()).then(entity_value))
         .then_ignore(whitespace())
         .then_ignore(just('>'))
-        .map(|(parameter, entity)| parameter.is_none().then_some(entity));
+        .map(|(parameter, (name, value))| {
+            Some(Declaration::Entity {
+                parameter: parameter.is_some(),
+                name,
+                value,
+            })
+        });
     let comment = just("<!--")
         .ignore_then(any().and_is(just("-->").not()).repeated())
         .then_ignore(just("-->"));
@@ -200,25 +286,22 @@ fn declarations<'a>() -> impl Parser<'a, &'a str, Vec<(&'a str, &'a str)>, Extra
         .then_ignore(space())
         .then_ignore(literal().ignored().or(none_of("\"'>").ignored()).repeated())
         .then_ignore(just('>'));
-    let parameter = just('%').then(name(true)).then_ignore(just(';'));
-    let subset = choice((
+    let parameter = just('%')
+        .ignore_then(name(true))
+        .then_ignore(just(';'))
+        .map(|name| Some(Declaration::Parameter(name)));
+    choice((
         entity,
         comment.to(None),
         instruction.to(None),
         other_declaration.to(None),
-        parameter.to(None),
+        parameter,
     ))
     .padded_by(whitespace())
     .repeated()
     .collect::<Vec<_>>()
     .then_ignore(whitespace())
-    .delimited_by(just('['), just(']'));
-    name(true)
-        .then_ignore(external.padded_by(whitespace()).or_not())
-        .ignore_then(subset.padded_by(whitespace()).or_not())
-        .then_ignore(whitespace())
-        .map(|entities| entities.unwrap_or_default().into_iter().flatten().collect())
-        .padded_by(whitespace())
+    .map(|declarations| declarations.into_iter().flatten().collect())
 }
 
 #[derive(Debug)]
