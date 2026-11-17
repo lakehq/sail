@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use chumsky::Parser;
 use quick_xml::Reader;
 use quick_xml::escape::{resolve_predefined_entity, unescape};
 use quick_xml::events::attributes::Attribute;
@@ -206,7 +207,10 @@ pub(super) fn parse(xot: &mut Xot, xml: &str, mode: ParseMode) -> XmlResult<Pars
                 xot.append_processing_instruction(parent, target, Some(&content))?;
             }
             Event::Decl(declaration) if declaration_allowed => {
-                declaration.version()?;
+                super::parser::declaration(xpath)
+                    .parse(std::str::from_utf8(&declaration)?)
+                    .into_result()
+                    .map_err(|errors| format!("Invalid XML declaration: {errors:?}"))?;
             }
             Event::DocType(_) if parent == document && !root_seen && !doctype_seen => {
                 doctype_seen = true;

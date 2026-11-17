@@ -816,3 +816,207 @@ Feature: XML functions follow Spark lexical names and XPath semantics
       Then query result
         | result |
         | ok     |
+
+  Rule: XPath string conversions format numbers without exponent notation
+
+    # xee uses scientific notation, preserves negative zero, and emits INF.
+    @sail-bug
+    Scenario Outline: XML compatibility: Numeric string formatting: <path>
+      When query
+        """
+        SELECT xpath_string('<r/>', '<path>') AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | path                                  | result                                           |
+        | 1000000 + 1                           | 1000001                                          |
+        | -1000000 - 1                          | -1000001                                         |
+        | 1 div 10000000                        | 0.0000001                                        |
+        | -1 div 10000000                       | -0.0000001                                       |
+        | 1000000000000000000000000000000 + 1   | 1000000000000000000000000000000                  |
+        | 1 div 1000000000000000000000000000000 | 0.0000000000000000000000000000009999999999999999 |
+        | -0                                    | 0                                                |
+        | 0 div -1                              | 0                                                |
+        | 1 div 0                               | Infinity                                         |
+        | -1 div 0                              | -Infinity                                        |
+
+    # Implicit conversions inherit the same XPath 3.1 numeric formatting.
+    @sail-bug
+    Scenario Outline: XML compatibility: Implicit numeric string formatting: <path>
+      When query
+        """
+        SELECT xpath_string('<r/>', '<path>') AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | path                                 | result             |
+        | concat(1000000 + 1, ":", -0)         | 1000001:0          |
+        | concat(1 div 10000000, ":", 1 div 0) | 0.0000001:Infinity |
+        | starts-with(1000000 + 1, "1000")     | true               |
+        | substring-before(1000000 + 1, "01")  | 10000              |
+        | substring-after(1000000 + 1, "100")  | 0001               |
+        | substring(1000000 + 1, 2, 3)         | 000                |
+        | string-length(1000000 + 1)           | 7                  |
+        | normalize-space(1000000 + 1)         | 1000001            |
+        | translate(1000000 + 1, 0, 2)         | 1222221            |
+        | string(1000000 + 1)                  | 1000001            |
+
+    Scenario Outline: XML compatibility: Numeric string formatting retains compatible conversions: <path>
+      When query
+        """
+        SELECT xpath_string('<r/>', '<path>') AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | path                               | result |
+        | 0 div 0                            | NaN    |
+        | true()                             | true   |
+        | "1E7"                              | 1E7    |
+        | r/missing                          |        |
+        | contains(1000000 + 1, 1000000 + 1) | true   |
+
+  Rule: Entity boundaries preserve independently normalized line endings
+
+    Scenario Outline: XML compatibility: Content line endings at entity boundaries: <case>
+      When query
+        """
+        SELECT xpath_string(<xml>, 'r') = concat(chr(10), chr(10)) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+      Examples:
+        | case                     | xml                                                                                             |
+        | entity before literal LF | concat('<!DOCTYPE r [<!ENTITY e "&#xD;">]><r>&e;', chr(10), '</r>')                             |
+        | literal CR before entity | concat('<!DOCTYPE r [<!ENTITY e "&#xA;">]><r>', chr(13), '&e;</r>')                             |
+        | adjacent entities        | '<!DOCTYPE r [<!ENTITY cr "&#xD;"><!ENTITY lf "&#xA;">]><r>&cr;&lf;</r>'                        |
+        | nested entity boundary   | '<!DOCTYPE r [<!ENTITY cr "&#xD;"><!ENTITY lf "&#xA;"><!ENTITY both "&cr;&lf;">]><r>&both;</r>' |
+        | declaration literal CR   | concat('<!DOCTYPE r [<!ENTITY e "', chr(13), '&#xA;">]><r>&e;</r>')                             |
+
+    Scenario: XML compatibility: Direct character references retain carriage returns beside entities
+      When query
+        """
+        SELECT xpath_string('<!DOCTYPE r [<!ENTITY e "&#xA;">]><r>&#xD;&e;</r>', 'r') = concat(chr(13), chr(10)) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: XML compatibility: Attribute line endings at entity boundaries remain separate spaces
+      When query
+        """
+        SELECT xpath_string(concat('<!DOCTYPE r [<!ENTITY e "&#xD;">]><r a="&e;', chr(10), '"/>'), 'r/@a') = '  ' AS result,
+          xpath_string('<!DOCTYPE r [<!ENTITY e "&#xD;">]><r a="&e;&#xA;"/>', 'r/@a') = concat(' ', chr(10)) AS reference
+        """
+      Then query result
+        | result | reference |
+        | true   | true      |
+
+  Rule: XML declarations validate versions and all pseudo-attributes
+
+    Scenario Outline: XML compatibility: Invalid declaration contents return null fields: <declaration>
+      When query
+        """
+        SELECT from_xml('<declaration><r><a>1</a></r>', 'a INT').a AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | declaration                                             |
+        | <?xml version="1.0" encoding=""?>                       |
+        | <?xml version="2.0"?>                                   |
+        | <?xml version="1.2"?>                                   |
+        | <?xml version=""?>                                      |
+        | <?xml version="1.0" bogus="x"?>                         |
+        | <?xml version="1.0" standalone="true"?>                 |
+        | <?xml version="1.0" standalone="YES"?>                  |
+        | <?xml version="1.0" standalone="yes" encoding="UTF-8"?> |
+        | <?xml version="1.0" version="1.0"?>                     |
+        | <?xml version="1.0" encoding="UTF-8" encoding="UTF-8"?> |
+        | <?xml version="1.0" standalone="yes" standalone="yes"?> |
+        | <?xml version="1.0"encoding="UTF-8"?>                   |
+        | <?xml version=1.0?>                                     |
+
+    Scenario Outline: XML compatibility: Invalid declaration contents fail in fail-fast mode: <declaration>
+      When query
+        """
+        SELECT from_xml('<declaration><r><a>1</a></r>', 'a INT', map('mode', 'FAILFAST'))
+        """
+      Then query error (?s).*(XML|xml|MALFORMED).*
+
+      Examples:
+        | declaration                                             |
+        | <?xml version="1.0" encoding=""?>                       |
+        | <?xml version="2.0"?>                                   |
+        | <?xml version="1.2"?>                                   |
+        | <?xml version=""?>                                      |
+        | <?xml version="1.0" bogus="x"?>                         |
+        | <?xml version="1.0" standalone="true"?>                 |
+        | <?xml version="1.0" standalone="YES"?>                  |
+        | <?xml version="1.0" standalone="yes" encoding="UTF-8"?> |
+        | <?xml version="1.0" version="1.0"?>                     |
+        | <?xml version="1.0" encoding="UTF-8" encoding="UTF-8"?> |
+        | <?xml version="1.0" standalone="yes" standalone="yes"?> |
+        | <?xml version="1.0"encoding="UTF-8"?>                   |
+        | <?xml version=1.0?>                                     |
+
+    Scenario Outline: XML compatibility: XPath rejects invalid declaration contents: <declaration>
+      When query
+        """
+        SELECT xpath_string('<declaration><r><a>1</a></r>', 'r/a')
+        """
+      Then query error (?s).*(XML|xml|Error loading expression).*
+
+      Examples:
+        | declaration                                             |
+        | <?xml version="2.0"?>                                   |
+        | <?xml version="1.2"?>                                   |
+        | <?xml version=""?>                                      |
+        | <?xml version="1.0" bogus="x"?>                         |
+        | <?xml version="1.0" standalone="true"?>                 |
+        | <?xml version="1.0" standalone="YES"?>                  |
+        | <?xml version="1.0" standalone="yes" encoding="UTF-8"?> |
+        | <?xml version="1.0" version="1.0"?>                     |
+        | <?xml version="1.0" encoding="UTF-8" encoding="UTF-8"?> |
+        | <?xml version="1.0" standalone="yes" standalone="yes"?> |
+        | <?xml version="1.0"encoding="UTF-8"?>                   |
+        | <?xml version=1.0?>                                     |
+
+    Scenario Outline: XML compatibility: Valid declaration contents remain accepted: <declaration>
+      When query
+        """
+        SELECT from_xml('<declaration><r><a>1</a></r>', 'a INT', map('mode', 'FAILFAST')).a AS value,
+          xpath_string('<declaration><r><a>1</a></r>', 'r/a') AS xpath_value
+        """
+      Then query result
+        | value | xpath_value |
+        | 1     | 1           |
+
+      Examples:
+        | declaration                                                    |
+        | <?xml version="1.1"?>                                          |
+        | <?xml version = "1.0" encoding = "UTF-8" standalone = "yes" ?> |
+        | <?xml version="1.0" standalone="no"?>                          |
+        | <?xml version="1.0" encoding="made-up"?>                       |
+        | <?xml version="1.0" encoding="1bad"?>                          |
+
+    Scenario: XML compatibility: Valid declaration contents allow empty encoding for XPath
+      When query
+        """
+        SELECT xpath_string('<?xml version="1.0" encoding=""?><r><a>1</a></r>', 'r/a') AS result
+        """
+      Then query result
+        | result |
+        | 1      |

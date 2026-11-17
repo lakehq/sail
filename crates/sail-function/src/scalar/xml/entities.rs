@@ -20,7 +20,7 @@ pub(super) fn expand(xml: &str) -> XmlResult<Cow<'_, str>> {
     loop {
         match reader.read_event()? {
             Event::DocType(doctype) => {
-                let dtd = doctype.decode()?;
+                let dtd = doctype.xml10_content()?;
 
                 collector.collect(
                     declarations()
@@ -153,7 +153,10 @@ impl Expansion<'_> {
     }
 
     fn content(&mut self, xml: &str) -> XmlResult<String> {
-        let mut reader = Reader::from_str(xml);
+        // Normalize each source before joining replacements. A trailing CR in
+        // one entity and a leading LF in the next source are two line breaks.
+        let xml = xml.replace("\r\n", "\n").replace('\r', "\n");
+        let mut reader = Reader::from_str(&xml);
         let mut writer = Writer::new(Vec::new());
         loop {
             match reader.read_event()? {
@@ -194,8 +197,11 @@ impl Expansion<'_> {
     }
 
     fn attribute(&mut self, value: &str) -> XmlResult<String> {
+        // Normalize literal whitespace within each replacement independently.
+        // Character-reference spellings remain intact for attribute_value.
+        let value = value.replace("\r\n", " ").replace(['\r', '\n', '\t'], " ");
         let mut result = String::new();
-        for part in entity_parts(value)? {
+        for part in entity_parts(&value)? {
             match part {
                 EntityPart::Reference { name, .. } if self.entities.contains_key(name) => {
                     result.push_str(&self.entity(name, true)?);

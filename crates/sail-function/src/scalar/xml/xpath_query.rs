@@ -437,6 +437,10 @@ fn function(name: &str, mut args: Vec<String>) -> Result<String> {
                     "replace(replace(fn:local-name({first}), '^\\{{namespace\\}}', ''), '^[^:]*:', '')"
                 ),
                 "number" => number(&first),
+                "string" => string(&first),
+                "string-length" | "normalize-space" => {
+                    format!("fn:{name}({})", string(&first))
+                }
                 _ => format!("fn:{name}({first})"),
             }
         }
@@ -445,7 +449,7 @@ fn function(name: &str, mut args: Vec<String>) -> Result<String> {
         | "translate" => {
             let args = args
                 .iter()
-                .map(|arg| format!("fn:string(({arg})[1])"))
+                .map(|arg| string(&format!("({arg})[1]")))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("fn:{name}({args})")
@@ -454,7 +458,7 @@ fn function(name: &str, mut args: Vec<String>) -> Result<String> {
             format!("fn:{name}({})", number(&format!("({})[1]", args[0])))
         }
         "substring" if matches!(args.len(), 2 | 3) => {
-            let text = format!("fn:string(({})[1])", args[0]);
+            let text = string(&format!("({})[1]", args[0]));
             let numbers = args[1..]
                 .iter()
                 .map(|arg| number(&format!("({arg})[1]")))
@@ -471,4 +475,11 @@ fn number(arg: &str) -> String {
     format!(
         "(let $v := ({arg}) return if ($v instance of xs:boolean or $v instance of xs:numeric) then fn:number($v) else if (matches(normalize-space(fn:string($v)), '^-?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)$')) then fn:number($v) else xs:double('NaN'))"
     )
+}
+
+// TODO: Match Spark numeric-to-string formatting with a native conversion:
+// plain decimal notation, "0" for negative zero, and "Infinity"/"-Infinity".
+// Expanding this logic into XPath makes per-row compilation costly.
+fn string(arg: &str) -> String {
+    format!("fn:string({arg})")
 }
