@@ -691,6 +691,88 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_limited_cte_references_limit_a_shared_volatile_body()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use datafusion::physical_plan::collect;
+        use sail_common_datafusion::session::shared_cte::SharedCteConfig;
+        use sail_physical_plan::shared_cte::SharedCteExec;
+        use sail_plan::shared_cte::{optimize_and_plan_shared_ctes, session_state_for_restart};
+
+        let session = create_session()?;
+        session
+            .state_ref()
+            .write()
+            .config_mut()
+            .set_extension(Arc::new(SharedCteConfig::new(true)));
+        let cte = "WITH c AS (SELECT a.id AS k, rand() AS r FROM range(0, 100000, 1, 2) a \
+                   JOIN range(0, 10) b ON a.id % 10 = b.id)";
+        // The rows that the query returns, and the rows that the shared body returns.
+        for (query, expected) in [
+            // Each reference reads a limited number of rows, so the body returns the
+            // largest number of rows that a reference reads.
+            (
+                "SELECT k, r FROM c UNION ALL SELECT k, r FROM c LIMIT 10",
+                (10, 10),
+            ),
+            (
+                "(SELECT k, r FROM c LIMIT 3) UNION ALL (SELECT k, r FROM c LIMIT 5)",
+                (8, 5),
+            ),
+            (
+                "(SELECT k FROM c LIMIT 3 OFFSET 4) UNION ALL (SELECT r FROM c LIMIT 5)",
+                (8, 7),
+            ),
+            // A reference reads all the rows.
+            (
+                "(SELECT count(r) FROM c) UNION ALL (SELECT k FROM c LIMIT 5)",
+                (6, 100000),
+            ),
+            // A reference reads a limited number of the rows that pass its filter.
+            (
+                "(SELECT k FROM c WHERE r < 0 LIMIT 5) UNION ALL (SELECT k FROM c LIMIT 5)",
+                (5, 100000),
+            ),
+        ] {
+            let query = format!("{cte} {query}");
+            let resolver =
+                PlanResolver::new(&session, Arc::new(PlanConfig::default())).with_shared_ctes();
+            let plan = from_ast_statement(parse_one_statement(&query)?)?;
+            let plan = resolver.resolve_named_plan(plan).await?.plan;
+            let state = session.state();
+            let state = &state;
+            let mut restart = false;
+            let plan = optimize_and_plan_shared_ctes(
+                plan,
+                &mut |plan, query| {
+                    if query && std::mem::replace(&mut restart, true) {
+                        session_state_for_restart(state).optimize(&plan)
+                    } else {
+                        state.optimize(&plan)
+                    }
+                },
+                move |plan| async move {
+                    state
+                        .query_planner()
+                        .create_physical_plan(&plan, state)
+                        .await
+                },
+            )
+            .await?;
+            let batches = collect(Arc::clone(&plan), session.task_ctx()).await?;
+            let rows = batches.iter().map(|x| x.num_rows()).sum::<usize>();
+            let Some(shared) = plan.downcast_ref::<SharedCteExec>() else {
+                return Err(format!("the CTE is not shared: {query}").into());
+            };
+            let [(_, body)] = shared.ctes() else {
+                return Err(format!("the query does not share one CTE: {query}").into());
+            };
+            let produced = body.metrics().and_then(|x| x.output_rows());
+            assert_eq!((rows, produced), (expected.0, Some(expected.1)), "{query}");
+        }
+        Ok(())
+    }
+
     #[test]
     fn test_cte_references_share_or_inline() -> Result<(), String> {
         // The plan resolver futures need more than the default test thread stack in debug builds.

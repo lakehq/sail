@@ -697,6 +697,9 @@ struct Member {
     /// The rows that a reference to a volatile definition reads, or `None` if they are
     /// not known.
     filters: Option<Demand>,
+    /// The number of rows that the reference reads at most, if it reads a limited
+    /// number of all the rows.
+    fetch: Option<usize>,
     /// Whether the consumer of the reference ignores duplicate rows.
     distinct: bool,
     projection: Option<Vec<usize>>,
@@ -1150,6 +1153,7 @@ fn collect_members(plan: &LogicalPlan, context: Context, members: &mut Members) 
                     .volatile
                     .then(|| Demand::filtered(&scan.filters))
                     .flatten(),
+                fetch: scan.fetch.filter(|_| scan.filters.is_empty()),
                 distinct: context.distinct && !definition.volatile,
                 projection: scan.projection.clone(),
             });
@@ -1368,8 +1372,22 @@ fn share_references(
                 &|site| inlined.contains(&site),
             )?)?;
             let body = if definition.volatile {
-                Demand::any(group.iter().map(|member| member.filters.as_ref()))
-                    .apply(body, columns.as_deref())?
+                let body = Demand::any(group.iter().map(|member| member.filters.as_ref()))
+                    .apply(body, columns.as_deref())?;
+                // The references to a volatile definition share one body even if they read
+                // a limited number of rows. The body is limited to the largest number of
+                // rows that a reference reads, as the definition is in the place of a
+                // reference, so that it does not compute rows that no reference reads.
+                let fetch = group.iter().map(|member| member.fetch);
+                match fetch
+                    .collect::<Option<Vec<_>>>()
+                    .and_then(|x| x.into_iter().max())
+                {
+                    Some(fetch) => LogicalPlanBuilder::from(body)
+                        .limit(0, Some(fetch))?
+                        .build()?,
+                    None => body,
+                }
             } else {
                 demand.apply(body, columns.as_deref())?
             };
