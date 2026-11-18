@@ -61,10 +61,8 @@ use datafusion_expr::type_coercion::functions::{
 };
 use datafusion_expr::type_coercion::{is_datetime, is_interval, is_signed_numeric, is_timestamp};
 use datafusion_expr::utils::merge_schema;
-// DataFusion's MERGE statement is coerced as in DataFusion, though Sail does not create it.
-#[expect(clippy::disallowed_types)]
 use datafusion_expr::{
-    Cast, DmlStatement, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
+    Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
     ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, WriteOp, is_false,
     is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
@@ -336,7 +334,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     }
 
     #[expect(clippy::disallowed_types)]
-    fn coerce_dml(&self, mut dml: DmlStatement) -> Result<LogicalPlan> {
+    fn coerce_dml(&self, mut dml: datafusion_expr::DmlStatement) -> Result<LogicalPlan> {
         let WriteOp::MergeInto(merge_op) = &dml.op else {
             return Ok(LogicalPlan::Dml(dml));
         };
@@ -1949,7 +1947,7 @@ fn merge_into_schema(plan: &LogicalPlan) -> Result<Option<DFSchema>> {
 // TODO: Remove after DataFusion 56
 /// Build the target-plus-source schema used by MERGE expressions.
 #[expect(clippy::disallowed_types)]
-pub fn merge_dml_schema(dml: &DmlStatement) -> Result<DFSchema> {
+pub fn merge_dml_schema(dml: &datafusion_expr::DmlStatement) -> Result<DFSchema> {
     let WriteOp::MergeInto(_) = &dml.op else {
         return internal_err!("DmlStatement::merge_schema requires a MERGE operation");
     };
@@ -3570,12 +3568,17 @@ mod test {
 
     #[test]
     fn test_case_result_type_preserves_duplicate_field_metadata() {
-        use sail_common_datafusion::uuid::UUID_METADATA_KEY;
+        use sail_common_datafusion::uuid::{UUID_EXTENSION_NAME, UUID_METADATA_KEY};
 
         use crate::type_coercion::case_result_type;
 
-        let uuid = Field::new("x", DataType::FixedSizeBinary(16), true)
-            .with_metadata([(UUID_METADATA_KEY.to_string(), "uuid".to_string())].into());
+        let uuid = Field::new("x", DataType::FixedSizeBinary(16), true).with_metadata(
+            [(
+                UUID_METADATA_KEY.to_string(),
+                UUID_EXTENSION_NAME.to_string(),
+            )]
+            .into(),
+        );
         let string = Field::new("x", DataType::Utf8, true);
         for fields in [vec![uuid.clone(), string.clone()], vec![string, uuid]] {
             let data_type = DataType::Struct(fields.into());

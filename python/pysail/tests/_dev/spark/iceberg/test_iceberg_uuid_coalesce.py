@@ -44,11 +44,13 @@ def _assert_output(spark, frame, table, location, entry, types, expected):
     # identity is checked below in the persisted Iceberg and Parquet schemas.
     for field in frame.schema:
         assert field.dataType.simpleString() == "binary"
-        assert "iceberg.type" not in field.metadata
+        assert "ARROW:extension:name" not in field.metadata
+        assert "ARROW:extension:metadata" not in field.metadata
     if hasattr(type(frame), "toArrow"):
         for field in result.schema:
             assert field.type == pa.binary()
-            assert b"iceberg.type" not in (field.metadata or {})
+            assert b"ARROW:extension:name" not in (field.metadata or {})
+            assert b"ARROW:extension:metadata" not in (field.metadata or {})
     try:
         if entry == "sql":
             frame.createOrReplaceTempView("uuid_coalesce_result")
@@ -71,6 +73,9 @@ def _assert_output(spark, frame, table, location, entry, types, expected):
                 assert column.physical_type == "FIXED_LEN_BYTE_ARRAY"
                 assert column.length == FIXED_LENGTH
                 assert column.logical_type.type == ("UUID" if data_type == "uuid" else "NONE")
+                assert parquet.schema_arrow.field(name).type == (
+                    pa.uuid() if data_type == "uuid" else pa.binary(FIXED_LENGTH)
+                )
             rows.extend(_rows(parquet.read()))
         assert sorted(rows, key=repr) == sorted(expected, key=repr)
         assert _rows(_to_arrow(spark.table(table))) == sorted(expected, key=repr)

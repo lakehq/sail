@@ -338,7 +338,7 @@ fn array_array<O: OffsetSizeTrait>(args: &[ArrayRef], field: FieldRef) -> Result
 
 #[cfg(test)]
 mod tests {
-    use sail_common_datafusion::uuid::{UUID_METADATA_KEY, contains_uuid};
+    use sail_common_datafusion::uuid::{UUID_EXTENSION_NAME, UUID_METADATA_KEY, contains_uuid};
 
     use super::*;
 
@@ -348,7 +348,10 @@ mod tests {
         let uuid = Arc::new(
             Field::new("source", DataType::FixedSizeBinary(16), true).with_metadata(
                 std::collections::HashMap::from([
-                    (UUID_METADATA_KEY.to_string(), "uuid".to_string()),
+                    (
+                        UUID_METADATA_KEY.to_string(),
+                        UUID_EXTENSION_NAME.to_string(),
+                    ),
                     ("PARQUET:field_id".to_string(), "17".to_string()),
                 ]),
             ),

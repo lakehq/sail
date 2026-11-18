@@ -385,7 +385,6 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
         | Asia/Kolkata |
 
     # `intervalValue` takes an optional sign before the number.
-    @sail-bug
     Scenario: SET TIME ZONE accepts an interval with a plus sign
       Given config spark.sql.session.timeZone = UTC
       Given statement

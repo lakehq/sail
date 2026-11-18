@@ -325,7 +325,7 @@ def test_unsupported_column_types(
     glue_catalog: _native._catalog._glue.GlueCatalogProvider, glue_database: list[str]
 ) -> None:
     union_type = 'Union(Sparse, 0: ("int_field": Int32), 1: ("str_field": Utf8))'
-    with pytest.raises(RuntimeError, match="Union types are not supported by Glue"):
+    with pytest.raises(RuntimeError, match=r"Data type Union\(.* is not supported"):
         glue_catalog.create_table(
             glue_database,
             "unsupported_types",

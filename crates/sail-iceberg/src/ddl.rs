@@ -1021,7 +1021,7 @@ fn update_nested_field(
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::DataType;
-    use sail_common_datafusion::uuid::UUID_METADATA_KEY;
+    use sail_common_datafusion::uuid::{UUID_EXTENSION_NAME, UUID_METADATA_KEY};
 
     use super::*;
 
@@ -1049,7 +1049,7 @@ mod tests {
                     column_path: vec!["u".into()],
                     data_type: DataType::FixedSizeBinary(16),
                     metadata: if target_uuid {
-                        vec![(UUID_METADATA_KEY.into(), "uuid".into())]
+                        vec![(UUID_METADATA_KEY.into(), UUID_EXTENSION_NAME.into())]
                     } else {
                         vec![]
                     },

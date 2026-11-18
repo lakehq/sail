@@ -6,6 +6,9 @@ including both Arrow RecordBatch and tuple-based paths.
 """
 
 import json
+import os
+import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -485,6 +488,58 @@ def test_python_session_isolation(remote: str):
             spark_b.read.format("session_isolation_test").load().collect()
 
 
+@pytest.mark.spark(skip_if_jvm=True, reason="Starts a Sail server in a subprocess")
+def test_python_datasource_backpressure_with_python_udf():
+    """Test that a reader with a full output channel does not block a downstream Python UDF."""
+    # The query runs in a subprocess since a reader that holds the GIL while waiting
+    # for the channel would block all Python threads, including the pytest timeout.
+    code = """
+import runpy
+import sys
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+checks = runpy.run_path(sys.argv[1])
+with spark_connect_server() as server, spark_session_factory(server.remote) as sessions:
+    checks["_check_backpressure_with_python_udf"](sessions.create())
+"""
+    env = {**os.environ}
+    env.pop("SPARK_REMOTE", None)
+    result = subprocess.run(
+        [sys.executable, "-c", code, __file__],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _check_backpressure_with_python_udf(spark):
+    from pyspark.sql.datasource import DataSource, DataSourceReader
+
+    num_batches = 1000
+
+    class BackpressureDataSource(DataSource):
+        @classmethod
+        def name(cls):
+            return "backpressure_test"
+
+        def schema(self):
+            return "id long"
+
+        def reader(self, schema):  # noqa: ARG002
+            return BackpressureReader()
+
+    class BackpressureReader(DataSourceReader):
+        def read(self, partition):  # noqa: ARG002
+            for i in range(num_batches):
+                yield pa.RecordBatch.from_pydict({"id": [i]})
+
+    spark.dataSource.register(BackpressureDataSource)
+    df = spark.read.format("backpressure_test").load()
+    assert len(df.mapInArrow(lambda batches: batches, "id long").collect()) == num_batches
+
+
 # ============================================================================
 # Filter pushdown tests
 # ============================================================================
@@ -698,6 +753,136 @@ def test_python_ddl_schema_fallback(spark):
     # Sort by ID to ensure deterministic check
     rows.sort(key=lambda r: r.id)
     assert rows[0].id == 0
+
+
+@pytest.mark.parametrize("struct_schema", [False, True])
+def test_python_ddl_schema_complex_types(spark, struct_schema):
+    from pyspark.sql import Row
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
+    ddl = "payload STRUCT<values: ARRAY<INT> NOT NULL, labels: MAP<STRING, STRING>> NOT NULL"
+    if struct_schema:
+        ddl = f"STRUCT<{ddl}>"
+    schema = pa.schema(
+        [
+            pa.field(
+                "payload",
+                pa.struct(
+                    [
+                        pa.field("values", pa.list_(pa.int32()), nullable=False),
+                        pa.field("labels", pa.map_(pa.string(), pa.string())),
+                    ]
+                ),
+                nullable=False,
+            )
+        ]
+    )
+
+    class ComplexDDLDataSource(DataSource):
+        @classmethod
+        def name(cls):
+            return "complex_ddl_test"
+
+        def schema(self):
+            return ddl
+
+        def reader(self, schema):  # noqa: ARG002
+            return ComplexDDLReader()
+
+    class ComplexDDLReader(DataSourceReader):
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            yield pa.RecordBatch.from_pydict(
+                {"payload": [{"values": [1, None], "labels": {"a": "b", "c": None}}]}, schema=schema
+            )
+
+    spark.dataSource.register(ComplexDDLDataSource)
+    df = spark.read.format("complex_ddl_test").load()
+    assert df.schema.simpleString() == "struct<payload:struct<values:array<int>,labels:map<string,string>>>"
+    assert not df.schema["payload"].nullable
+    assert not df.schema["payload"].dataType["values"].nullable
+    assert df.collect() == [Row(payload=Row(values=[1, None], labels={"a": "b", "c": None}))]
+
+
+@pytest.mark.parametrize(
+    "row_format",
+    [
+        "datetime",
+        pytest.param(
+            "microseconds",
+            marks=pytest.mark.spark(skip_if_jvm=True, reason="Sail accepts epoch microseconds in timestamp tuples"),
+        ),
+    ],
+)
+def test_python_ddl_schema_timestamp_types(spark, row_format):
+    from datetime import datetime, timedelta, timezone
+
+    from pyspark.sql import Row
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+    from pyspark.sql.types import StructField, StructType, TimestampNTZType, TimestampType
+
+    wall_time = datetime(2024, 1, 2, 3, 4, 5, 123456)  # noqa: DTZ001
+    before_epoch = datetime(1969, 12, 31, 23, 59, 59, 999999)  # noqa: DTZ001
+    expected = [
+        Row(default_time=None, local_time=None, wall_time=None),
+        Row(default_time=-1, local_time=-1, wall_time=before_epoch),
+        Row(default_time=1704144845123456, local_time=1704144845123456, wall_time=wall_time),
+    ]
+    if row_format == "microseconds":
+        epoch = datetime(1970, 1, 1)  # noqa: DTZ001
+        rows = [
+            (
+                row.default_time,
+                row.local_time,
+                (row.wall_time - epoch) // timedelta(microseconds=1) if row.wall_time else None,
+            )
+            for row in expected
+        ]
+    else:
+        offset_time = wall_time.replace(tzinfo=timezone(timedelta(hours=5, minutes=30)))
+        before_epoch_utc = before_epoch.replace(tzinfo=timezone.utc)
+        rows = [
+            (None, None, None),
+            (before_epoch_utc, before_epoch_utc, before_epoch),
+            (offset_time, offset_time, wall_time),
+        ]
+
+    class TimestampDDLDataSource(DataSource):
+        @classmethod
+        def name(cls):
+            return "timestamp_ddl_test"
+
+        def schema(self):
+            return "default_time TIMESTAMP, local_time TIMESTAMP_LTZ, wall_time TIMESTAMP_NTZ"
+
+        def reader(self, schema):  # noqa: ARG002
+            return TimestampDDLReader()
+
+    class TimestampDDLReader(DataSourceReader):
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            yield from rows
+
+    spark.dataSource.register(TimestampDDLDataSource)
+    df = spark.read.format("timestamp_ddl_test").load()
+    assert df.schema == StructType(
+        [
+            StructField("default_time", TimestampType()),
+            StructField("local_time", TimestampType()),
+            StructField("wall_time", TimestampNTZType()),
+        ]
+    )
+    # Compare instants independently of the client machine timezone used by collect().
+    assert (
+        df.selectExpr("unix_micros(default_time) AS default_time", "unix_micros(local_time) AS local_time", "wall_time")
+        .orderBy("wall_time")
+        .collect()
+        == expected
+    )
 
 
 def test_python_datasource_options_are_case_insensitive(spark):

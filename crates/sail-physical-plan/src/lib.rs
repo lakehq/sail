@@ -15,3 +15,4 @@ pub mod seeded_random;
 pub mod show_string;
 pub mod spark_partition_id;
 pub mod streaming;
+pub mod tail;

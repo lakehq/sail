@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{Result, plan_err};
 use datafusion_expr::LogicalPlan;
@@ -10,6 +11,7 @@ use crate::catalog::{
 };
 use crate::column_features::{ColumnFeatureKey, ColumnFeaturesBuilder};
 use crate::session::plan::PlanFormatter;
+use crate::uuid::UUID_EXTENSION_NAME;
 
 /// Metadata key used by Spark Connect's column protocol for generation
 /// expressions. This is an input/output boundary value translated to the
@@ -381,7 +383,18 @@ pub fn alter_column_type(
     };
     if nested_path.is_empty() {
         column.data_type = data_type;
-        column.metadata.remove(crate::uuid::UUID_METADATA_KEY);
+        if column
+            .metadata
+            .get(EXTENSION_TYPE_NAME_KEY)
+            .map(String::as_str)
+            == Some(UUID_EXTENSION_NAME)
+            || metadata
+                .iter()
+                .any(|(key, value)| key == EXTENSION_TYPE_NAME_KEY && value == UUID_EXTENSION_NAME)
+        {
+            column.metadata.remove(EXTENSION_TYPE_NAME_KEY);
+            column.metadata.remove(EXTENSION_TYPE_METADATA_KEY);
+        }
         column.metadata.extend(metadata);
     } else {
         column.data_type =
@@ -415,7 +428,14 @@ fn alter_type_field(
     let mut field = field.clone().with_data_type(data_type);
     if path.is_empty() {
         // Type markers come from the target, not the old storage-compatible type.
-        field.metadata_mut().remove(crate::uuid::UUID_METADATA_KEY);
+        if field.extension_type_name() == Some(UUID_EXTENSION_NAME)
+            || metadata
+                .iter()
+                .any(|(key, value)| key == EXTENSION_TYPE_NAME_KEY && value == UUID_EXTENSION_NAME)
+        {
+            field.metadata_mut().remove(EXTENSION_TYPE_NAME_KEY);
+            field.metadata_mut().remove(EXTENSION_TYPE_METADATA_KEY);
+        }
         field.metadata_mut().extend(metadata.iter().cloned());
     }
     Ok(field)
@@ -577,7 +597,10 @@ mod tests {
     fn alter_type_replaces_uuid_marker_and_preserves_column_metadata() -> Result<()> {
         let field = Field::new("u", DataType::FixedSizeBinary(16), false).with_metadata(
             [
-                (crate::uuid::UUID_METADATA_KEY.into(), "uuid".into()),
+                (
+                    crate::uuid::UUID_METADATA_KEY.into(),
+                    UUID_EXTENSION_NAME.into(),
+                ),
                 ("custom".into(), "retained".into()),
                 ("PARQUET:field_id".into(), "7".into()),
                 ("comment".into(), "retained doc".into()),
@@ -599,7 +622,10 @@ mod tests {
         let mut fixed = field.clone();
         fixed.metadata_mut().remove(crate::uuid::UUID_METADATA_KEY);
         assert_eq!(columns[0].field(), fixed);
-        let marker = vec![(crate::uuid::UUID_METADATA_KEY.into(), "uuid".into())];
+        let marker = vec![(
+            crate::uuid::UUID_METADATA_KEY.into(),
+            UUID_EXTENSION_NAME.into(),
+        )];
         alter_column_type(
             &mut columns,
             &["u".into()],
@@ -654,6 +680,76 @@ mod tests {
     }
 
     #[test]
+    fn alter_type_only_removes_uuid_extension_metadata() -> Result<()> {
+        for name in [UUID_EXTENSION_NAME, "parquet.variant", "other.extension"] {
+            let metadata = [
+                (EXTENSION_TYPE_NAME_KEY.into(), name.into()),
+                (EXTENSION_TYPE_METADATA_KEY.into(), String::new()),
+                ("custom".into(), "retained".into()),
+            ]
+            .into();
+            let field =
+                Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata(metadata);
+            let mut expected = field.clone();
+            if name == UUID_EXTENSION_NAME {
+                expected.metadata_mut().remove(EXTENSION_TYPE_NAME_KEY);
+                expected.metadata_mut().remove(EXTENSION_TYPE_METADATA_KEY);
+            }
+            let mut columns = vec![];
+            replace_columns(&mut columns, &Schema::new(vec![field.clone()]));
+            alter_column_type(
+                &mut columns,
+                &["u".into()],
+                DataType::FixedSizeBinary(16),
+                vec![],
+            )?;
+            assert_eq!(columns[0].field(), expected);
+            assert_eq!(
+                alter_type_field(&field, &[], DataType::FixedSizeBinary(16), &[])?,
+                expected
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn alter_type_to_uuid_clears_former_extension_parameters() -> Result<()> {
+        let source = Field::new("u", DataType::Binary, true).with_metadata(
+            [
+                (EXTENSION_TYPE_NAME_KEY.into(), "geoarrow.wkb".into()),
+                (
+                    EXTENSION_TYPE_METADATA_KEY.into(),
+                    r#"{"crs":"EPSG:4326"}"#.into(),
+                ),
+                ("custom".into(), "retained".into()),
+            ]
+            .into(),
+        );
+        let expected = Field::new("u", DataType::FixedSizeBinary(16), true)
+            .with_metadata([("custom".into(), "retained".into())].into())
+            .with_extension_type(arrow_schema::extension::Uuid);
+        let marker = vec![(EXTENSION_TYPE_NAME_KEY.into(), UUID_EXTENSION_NAME.into())];
+        let mut columns = vec![];
+        replace_columns(&mut columns, &Schema::new(vec![source.clone()]));
+        alter_column_type(
+            &mut columns,
+            &["u".into()],
+            DataType::FixedSizeBinary(16),
+            marker.clone(),
+        )?;
+        assert_eq!(columns[0].field(), expected);
+        let nested = DataType::Struct(vec![Arc::new(source)].into());
+        let result = alter_nested_data_type(
+            &nested,
+            &["u".into()],
+            DataType::FixedSizeBinary(16),
+            &marker,
+        )?;
+        assert_eq!(result, DataType::Struct(vec![Arc::new(expected)].into()));
+        Ok(())
+    }
+
+    #[test]
     fn dropped_default_is_not_restored_by_column_changes() -> Result<()> {
         let typed_default = encode_field_default(&ScalarValue::Int32(None))?;
         let field = Field::new("x", DataType::Int32, true).with_metadata(
@@ -668,7 +764,7 @@ mod tests {
             .into(),
         );
         let uuid = Field::new("u", DataType::FixedSizeBinary(16), true)
-            .with_metadata([("iceberg.type".into(), "uuid".into())].into());
+            .with_extension_type(arrow_schema::extension::Uuid);
         let mut columns = vec![];
         replace_columns(&mut columns, &Schema::new(vec![field, uuid.clone()]));
         let changes = [ColumnChange::Comment {

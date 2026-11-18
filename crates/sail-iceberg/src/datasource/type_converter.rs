@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_schema::extension::ExtensionType;
+use arrow_schema::extension::{ExtensionType, Uuid};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Decimal128Type as ArrowDecimal128Type, Field as ArrowField,
     Schema as ArrowSchema, TimeUnit, validate_decimal_precision_and_scale,
@@ -36,7 +36,6 @@ use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructT
 pub const ICEBERG_ARROW_FIELD_DOC_KEY: &str = "doc";
 pub const ICEBERG_FIELD_INITIAL_DEFAULT: &str = "iceberg.field.initial-default";
 pub const ICEBERG_FIELD_WRITE_DEFAULT: &str = "iceberg.field.write-default";
-const ICEBERG_ARROW_TYPE_KEY: &str = sail_common_datafusion::uuid::UUID_METADATA_KEY;
 
 pub(crate) fn is_uuid_arrow_field(field: &ArrowField) -> bool {
     sail_common_datafusion::uuid::is_uuid_field(field)
@@ -151,13 +150,6 @@ pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
             VariantType::NAME.to_string(),
         );
     }
-    if matches!(
-        field.field_type.as_ref(),
-        Type::Primitive(PrimitiveType::Uuid)
-    ) {
-        metadata.insert(ICEBERG_ARROW_TYPE_KEY.to_string(), "uuid".to_string());
-    }
-
     if let Some(doc) = &field.doc {
         metadata.insert(ICEBERG_ARROW_FIELD_DOC_KEY.to_string(), doc.clone());
     }
@@ -201,7 +193,15 @@ pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
         );
     }
 
-    Ok(ArrowField::new(&field.name, arrow_type, nullable).with_metadata(metadata))
+    let mut arrow_field =
+        ArrowField::new(&field.name, arrow_type, nullable).with_metadata(metadata);
+    if matches!(
+        field.field_type.as_ref(),
+        Type::Primitive(PrimitiveType::Uuid)
+    ) {
+        arrow_field.try_with_extension_type(Uuid)?;
+    }
+    Ok(arrow_field)
 }
 
 /// Convert Arrow field to Iceberg field
@@ -635,6 +635,57 @@ mod tests {
                 .expect("Failed to convert arrow type to iceberg");
             assert_eq!(result, expected_iceberg_type);
         }
+    }
+
+    #[test]
+    fn uuid_schema_uses_canonical_extension_and_preserves_fixed_identity() -> Result<()> {
+        let uuid = Arc::new(
+            NestedField::optional(1, "u", Type::Primitive(PrimitiveType::Uuid))
+                .with_doc("UUID leaf"),
+        );
+        let fixed = Arc::new(NestedField::optional(
+            2,
+            "f",
+            Type::Primitive(PrimitiveType::Fixed(16)),
+        ));
+        let fields = vec![uuid.clone(), fixed.clone()];
+        for iceberg_type in [
+            Type::Primitive(PrimitiveType::Uuid),
+            Type::Struct(StructType::new(fields)),
+            Type::List(ListType::new(Arc::new(NestedField::optional(
+                3,
+                "element",
+                Type::Primitive(PrimitiveType::Uuid),
+            )))),
+            Type::Map(MapType::new(
+                Arc::new(NestedField::required(
+                    4,
+                    "key",
+                    Type::Primitive(PrimitiveType::Uuid),
+                )),
+                Arc::new(NestedField::optional(
+                    5,
+                    "value",
+                    Type::Primitive(PrimitiveType::Fixed(16)),
+                )),
+            )),
+        ] {
+            let field = NestedField::optional(6, "nested", iceberg_type);
+            let arrow = iceberg_field_to_arrow(&field)?;
+            assert!(sail_common_datafusion::uuid::contains_uuid(&arrow));
+            assert_eq!(arrow_field_to_iceberg(&arrow)?, field);
+        }
+        let arrow = iceberg_field_to_arrow(&uuid)?;
+        assert_eq!(arrow.data_type(), &ArrowDataType::FixedSizeBinary(16));
+        assert_eq!(arrow.extension_type_name(), Some("arrow.uuid"));
+        assert_eq!(arrow.extension_type_metadata(), None);
+        assert_eq!(arrow.try_extension_type::<Uuid>()?, Uuid);
+        assert!(!arrow.metadata().contains_key("iceberg.type"));
+        let fixed_arrow = iceberg_field_to_arrow(&fixed)?;
+        assert_eq!(fixed_arrow.data_type(), arrow.data_type());
+        assert_eq!(fixed_arrow.extension_type_name(), None);
+        assert_eq!(arrow_field_to_iceberg(&fixed_arrow)?, *fixed);
+        Ok(())
     }
 
     #[test]

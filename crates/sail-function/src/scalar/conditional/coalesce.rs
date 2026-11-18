@@ -6,6 +6,7 @@ use arrow::array::{BooleanArray, new_null_array};
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::binary::try_type_union_resolution;
@@ -22,7 +23,7 @@ use sail_common_datafusion::metadata::{
     coerced_fields_metadata, type_metadata, widest_interval_metadata,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_common_datafusion::uuid::{UUID_METADATA_KEY, is_uuid_field};
+use sail_common_datafusion::uuid::{UUID_EXTENSION_NAME, UUID_METADATA_KEY, is_uuid_field};
 
 use crate::scalar::conditional::coalesce_lazy::CoalesceLazy;
 
@@ -78,15 +79,17 @@ impl ScalarUDFImpl for CoalesceFunc {
         // range of the result is the widest range of the arguments, not that of the first one.
         let mut metadata = type_metadata(&metadata).inner().clone();
         // Untyped NULL is neutral, but typed fixed[16] (even NULL) must agree
-        // on UUID identity. Do not apply this consensus rule to extension types.
-        if return_type != DataType::FixedSizeBinary(16)
-            || !args
-                .arg_fields
-                .iter()
-                .filter(|field| !field.data_type().is_null())
-                .all(|field| is_uuid_field(field))
+        // on UUID identity. Other extension types retain their merge semantics.
+        if metadata.get(UUID_METADATA_KEY).map(String::as_str) == Some(UUID_EXTENSION_NAME)
+            && (return_type != DataType::FixedSizeBinary(16)
+                || !args
+                    .arg_fields
+                    .iter()
+                    .filter(|field| !field.data_type().is_null())
+                    .all(|field| is_uuid_field(field)))
         {
             metadata.remove(UUID_METADATA_KEY);
+            metadata.remove(EXTENSION_TYPE_METADATA_KEY);
         }
         let fields = args
             .arg_fields
@@ -301,7 +304,7 @@ mod tests {
             HigherOrderReturnFieldArgs, HigherOrderUDFImpl, ReturnFieldArgs, ScalarUDFImpl,
             ValueOrLambda,
         };
-        use sail_common_datafusion::uuid::{UUID_METADATA_KEY, is_uuid_field};
+        use sail_common_datafusion::uuid::{UUID_EXTENSION_NAME, UUID_METADATA_KEY, is_uuid_field};
 
         use crate::scalar::conditional::coalesce_lazy::CoalesceLazy;
 
@@ -309,7 +312,7 @@ mod tests {
             Field::new("u", DataType::FixedSizeBinary(16), true).with_metadata(
                 std::collections::HashMap::from([(
                     UUID_METADATA_KEY.to_string(),
-                    "uuid".to_string(),
+                    UUID_EXTENSION_NAME.to_string(),
                 )]),
             ),
         );
@@ -356,6 +359,42 @@ mod tests {
             scalar_arguments: &[None],
         })?;
         assert!(!field.metadata().contains_key(UUID_METADATA_KEY));
+        Ok(())
+    }
+
+    #[test]
+    fn coalesce_only_removes_uuid_extension_parameters() -> Result<()> {
+        use arrow::datatypes::Field;
+        use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
+        use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+        use sail_common_datafusion::uuid::UUID_EXTENSION_NAME;
+
+        for name in [UUID_EXTENSION_NAME, "other.extension", "parquet.variant"] {
+            let typed = Arc::new(
+                Field::new("typed", DataType::FixedSizeBinary(16), true).with_metadata(
+                    [
+                        (EXTENSION_TYPE_NAME_KEY.into(), name.into()),
+                        (EXTENSION_TYPE_METADATA_KEY.into(), String::new()),
+                    ]
+                    .into(),
+                ),
+            );
+            let fixed = Arc::new(Field::new("fixed", DataType::FixedSizeBinary(16), true));
+            for fields in [
+                [typed.clone(), fixed.clone()],
+                [fixed.clone(), typed.clone()],
+            ] {
+                let result = CoalesceFunc::new().return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &fields,
+                    scalar_arguments: &[None, None],
+                })?;
+                if name == UUID_EXTENSION_NAME {
+                    assert!(result.metadata().is_empty());
+                } else {
+                    assert_eq!(result.metadata(), typed.metadata());
+                }
+            }
+        }
         Ok(())
     }
 

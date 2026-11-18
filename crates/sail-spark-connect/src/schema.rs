@@ -83,8 +83,12 @@ fn format_type_name(f: &mut fmt::Formatter, data_type: Option<&sc::DataType>) ->
             (Some(start), Some(end)) => {
                 write!(f, "interval ")?;
                 format_year_month_interval_field(f, start)?;
-                write!(f, " to ")?;
-                format_year_month_interval_field(f, end)
+                if start != end {
+                    write!(f, " to ")?;
+                    format_year_month_interval_field(f, end)?;
+                }
+
+                Ok(())
             }
             (Some(start), None) => {
                 write!(f, "interval ")?;
@@ -100,8 +104,12 @@ fn format_type_name(f: &mut fmt::Formatter, data_type: Option<&sc::DataType>) ->
             (Some(start), Some(end)) => {
                 write!(f, "interval ")?;
                 format_day_time_interval_field(f, start)?;
-                write!(f, " to ")?;
-                format_day_time_interval_field(f, end)
+                if start != end {
+                    write!(f, " to ")?;
+                    format_day_time_interval_field(f, end)?;
+                }
+
+                Ok(())
             }
             (Some(start), None) => {
                 write!(f, "interval ")?;

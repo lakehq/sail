@@ -99,7 +99,6 @@ pub fn type_metadata(metadata: &FieldMetadata) -> FieldMetadata {
                         | EXTENSION_TYPE_METADATA_KEY
                         | SAIL_SPARK_UDT_METADATA_KEY
                         | SAIL_SPARK_INTERVAL_METADATA_KEY
-                        | crate::uuid::UUID_METADATA_KEY
                 )
             })
             .map(|(key, value)| (key.clone(), value.clone()))
@@ -111,7 +110,7 @@ pub fn type_metadata(metadata: &FieldMetadata) -> FieldMetadata {
 /// Untyped NULL is neutral, but a typed fixed[16] without the UUID marker is not UUID.
 /// Names and nullability come from the resolved target, not from a source column.
 pub fn coerced_type_field(target: &Field, sources: &[&Field]) -> Result<Field, DataFusionError> {
-    use crate::uuid::{UUID_METADATA_KEY, is_uuid_field};
+    use crate::uuid::{UUID_EXTENSION_NAME, is_uuid_field};
 
     let sources = sources
         .iter()
@@ -133,11 +132,13 @@ pub fn coerced_type_field(target: &Field, sources: &[&Field]) -> Result<Field, D
             metadata.insert(SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), interval);
         }
     }
-    if target.data_type() != &DataType::FixedSizeBinary(16)
-        || sources.is_empty()
-        || !sources.iter().all(|field| is_uuid_field(field))
+    if metadata.get(EXTENSION_TYPE_NAME_KEY).map(String::as_str) == Some(UUID_EXTENSION_NAME)
+        && (target.data_type() != &DataType::FixedSizeBinary(16)
+            || sources.is_empty()
+            || !sources.iter().all(|field| is_uuid_field(field)))
     {
-        metadata.remove(UUID_METADATA_KEY);
+        metadata.remove(EXTENSION_TYPE_NAME_KEY);
+        metadata.remove(EXTENSION_TYPE_METADATA_KEY);
     }
     let child = |field: &Field| {
         let children = sources
@@ -275,7 +276,7 @@ mod tests {
             std::collections::HashMap::from([
                 (
                     crate::uuid::UUID_METADATA_KEY.to_string(),
-                    "uuid".to_string(),
+                    crate::uuid::UUID_EXTENSION_NAME.to_string(),
                 ),
                 ("PARQUET:field_id".to_string(), id.to_string()),
                 ("doc".to_string(), "source documentation".to_string()),
@@ -356,6 +357,27 @@ mod tests {
                 assert_eq!(field.is_nullable(), target.is_nullable());
                 assert_eq!(field.metadata().len(), usize::from(expected_uuid));
             }
+        }
+    }
+
+    #[test]
+    fn uuid_consensus_removes_extension_parameters_together() {
+        let mut uuid = uuid_field("1");
+        uuid.metadata_mut()
+            .insert(EXTENSION_TYPE_METADATA_KEY.into(), String::new());
+        let fixed = Field::new("fixed", DataType::FixedSizeBinary(16), true);
+        for sources in [[&uuid, &fixed], [&fixed, &uuid]] {
+            // A missing extension name is not a conflicting extension type.
+            let merged = coerced_fields_metadata(sources).unwrap();
+            assert_eq!(
+                merged
+                    .inner()
+                    .get(EXTENSION_TYPE_NAME_KEY)
+                    .map(String::as_str),
+                Some(crate::uuid::UUID_EXTENSION_NAME)
+            );
+            let result = coerced_type_field(&fixed, &sources).unwrap();
+            assert!(result.metadata().is_empty());
         }
     }
 
@@ -513,18 +535,32 @@ mod tests {
             ),
             ("PARQUET:field_id".to_string(), "1".to_string()),
         ]);
-        let source = Field::new("geography", DataType::Binary, true).with_metadata(metadata);
-        let target = Field::new_list_field(DataType::Binary, true);
-        let result = coerced_type_field(&target, &[&source]).unwrap();
-        assert_eq!(
-            result.metadata().get(EXTENSION_TYPE_NAME_KEY),
-            source.metadata().get(EXTENSION_TYPE_NAME_KEY)
-        );
-        assert_eq!(
-            result.metadata().get(EXTENSION_TYPE_METADATA_KEY),
-            source.metadata().get(EXTENSION_TYPE_METADATA_KEY)
-        );
-        assert!(!result.metadata().contains_key("PARQUET:field_id"));
+        for (data_type, name) in [
+            (DataType::Binary, "geoarrow.wkb"),
+            (DataType::FixedSizeBinary(16), "other.extension"),
+            (
+                DataType::Struct(
+                    vec![
+                        Field::new("metadata", DataType::Binary, false),
+                        Field::new("value", DataType::Binary, false),
+                    ]
+                    .into(),
+                ),
+                "parquet.variant",
+            ),
+        ] {
+            let mut metadata = metadata.clone();
+            metadata.insert(EXTENSION_TYPE_NAME_KEY.into(), name.into());
+            let source = Field::new("source", data_type.clone(), true).with_metadata(metadata);
+            let target = Field::new_list_field(data_type, true);
+            let result = coerced_type_field(&target, &[&source]).unwrap();
+            assert_eq!(result.extension_type_name(), Some(name));
+            assert_eq!(
+                result.extension_type_metadata(),
+                source.extension_type_metadata()
+            );
+            assert!(!result.metadata().contains_key("PARQUET:field_id"));
+        }
     }
 
     #[test]

@@ -16,6 +16,7 @@ from testcontainers.core.network import Network
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 from pysail.testing._dev.utils.proxy import EndpointProxy, FrameDecoder, ProxyCodec
+from pysail.testing.resources import resource
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -170,6 +171,7 @@ def celeborn_network() -> Generator[Network, None, None]:
 
 
 @pytest.fixture(scope="session")
+@resource(name="celeborn", weight=10)
 def celeborn_master(celeborn_network: Network) -> Generator[MasterService, None, None]:
     master = (
         DockerContainer(_IMAGE)

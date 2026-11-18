@@ -283,6 +283,7 @@ async fn plan_metadata_delete(
         skip_empty_commit,
         requirements: write_context.requirements,
         table_properties: writer_options.table_properties.clone(),
+        snapshot_properties: writer_options.snapshot_properties.clone(),
         lakehouse_table: writer_options.lakehouse_table.clone(),
         ..Default::default()
     })?;

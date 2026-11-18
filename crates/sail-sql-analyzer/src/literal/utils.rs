@@ -53,6 +53,7 @@ where
     T: Neg<Output = T> + FromStr,
 {
     match expr {
+        Expr::UnaryOperator(UnaryOperator::Plus(_), expr) => parse_signed_value(*expr),
         Expr::UnaryOperator(UnaryOperator::Minus(_), expr) => {
             let value: T = parse_signed_value(*expr)?;
             Ok(-value)

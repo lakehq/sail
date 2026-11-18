@@ -143,7 +143,8 @@ impl<'a> LogSegmentResolver<'a> {
 
         let last_cp_hint_version = read_last_checkpoint_version_from_store(store.clone())
             .await
-            .map(|v| v.min(version).saturating_sub(1))
+            .filter(|v| *v >= 0 && *v <= version)
+            .map(|v| v.saturating_sub(1).max(0))
             .unwrap_or(0);
         let list_offset = lower_bound.min(last_cp_hint_version);
 
@@ -227,6 +228,12 @@ impl<'a> LogSegmentResolver<'a> {
                     merge_catalog_managed_commits(commit_files, catalog_commit_files);
                 let (commit_files, compaction_files) =
                     resolve_compactions(commit_files, compaction_files);
+                validate_commit_contiguity_with_compactions(
+                    &commit_files,
+                    &compaction_files,
+                    start_version,
+                    version,
+                )?;
                 return Ok(ResolvedLogSegment::FullReplay {
                     checkpoint: checkpoint_candidate,
                     commit_files,
@@ -297,7 +304,8 @@ impl<'a> LogSegmentResolver<'a> {
 
         let last_cp_hint_version = read_last_checkpoint_version_from_store(store.clone())
             .await
-            .map(|v| v.min(version).saturating_sub(1))
+            .filter(|v| *v >= 0 && *v <= version)
+            .map(|v| v.saturating_sub(1).max(0))
             .unwrap_or(0);
 
         let (_, checkpoint, all_commits, all_compactions) =
@@ -404,12 +412,7 @@ pub(crate) async fn list_log_files(
     let last_checkpoint_hint = read_last_checkpoint_hint_from_store(store.clone()).await;
     let entries = list_delta_log_entries_from(store.clone(), list_offset_version).await?;
     let files = classify_log_files(entries, max_version, last_checkpoint_hint.as_ref())?;
-    if files.1.is_none()
-        && list_offset_version > 0
-        && last_checkpoint_hint
-            .as_ref()
-            .is_some_and(|hint| hint.version <= max_version)
-    {
+    if files.1.is_none() && list_offset_version > 0 {
         let entries = list_delta_log_entries_from(store, 0).await?;
         return classify_log_files(entries, max_version, last_checkpoint_hint.as_ref());
     }
@@ -492,8 +495,8 @@ fn select_checkpoint_candidate(
     Ok(complete_checkpoints.pop())
 }
 
-fn validate_commit_contiguity(
-    commit_files: &[(i64, ObjectMeta)],
+fn validate_commit_contiguity<T>(
+    commit_files: &[(i64, T)],
     start_version: i64,
     end_version: i64,
 ) -> DeltaResult<()> {
@@ -607,9 +610,9 @@ fn resolve_compactions(
 
 /// Validate that commit files and compaction files together cover [start_version, end_version]
 /// contiguously with no gaps.
-fn validate_commit_contiguity_with_compactions(
-    commit_files: &[(i64, ObjectMeta)],
-    compaction_files: &[((i64, i64), ObjectMeta)],
+pub(crate) fn validate_commit_contiguity_with_compactions<T>(
+    commit_files: &[(i64, T)],
+    compaction_files: &[((i64, i64), T)],
     start_version: i64,
     end_version: i64,
 ) -> DeltaResult<()> {

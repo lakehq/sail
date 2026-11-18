@@ -213,7 +213,7 @@ fn map_from_entries_inner(
 mod tests {
     use datafusion::arrow::array::new_null_array;
     use datafusion::arrow::datatypes::Field;
-    use sail_common_datafusion::uuid::UUID_METADATA_KEY;
+    use sail_common_datafusion::uuid::{UUID_EXTENSION_NAME, UUID_METADATA_KEY};
 
     use super::*;
 
@@ -224,7 +224,10 @@ mod tests {
             DataType::List(Arc::new(
                 Field::new("source", DataType::FixedSizeBinary(16), true).with_metadata(
                     std::collections::HashMap::from([
-                        (UUID_METADATA_KEY.to_string(), "uuid".to_string()),
+                        (
+                            UUID_METADATA_KEY.to_string(),
+                            UUID_EXTENSION_NAME.to_string(),
+                        ),
                         ("PARQUET:field_id".to_string(), id.to_string()),
                     ]),
                 ),

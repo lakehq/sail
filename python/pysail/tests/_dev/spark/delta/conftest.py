@@ -8,6 +8,7 @@ import pytest
 from pyspark.sql import SparkSession
 
 from pysail.testing._dev.spark.utils.jvm import classic_spark_mode, delta_spark_maven_coordinate
+from pysail.testing.resources import resource
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -26,6 +27,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 
 @pytest.fixture(scope="session")
+@resource(name="delta-jvm", weight=10)
 def delta_jvm_spark(tmp_path_factory: pytest.TempPathFactory) -> Generator[SparkSession, None, None]:
     warehouse_dir = tmp_path_factory.mktemp("delta-jvm-warehouse")
     delta_package = delta_spark_maven_coordinate(pyspark.__version__)

@@ -13,6 +13,7 @@ import uuid
 
 import pyarrow.parquet as pq
 import pytest
+from pyspark.sql import functions as F  # noqa: N812
 
 from pysail.testing.spark.session import spark_session_factory
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
@@ -141,21 +142,26 @@ def test_merge_nullable_clause_conditions_do_not_generate(spark, identity_table,
 
 
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
+@pytest.mark.parametrize("evolution", [False, True], ids=["plain", "evolved-unreachable"])
 @pytest.mark.parametrize(
     ("clause", "error"),
     [
         ("WHEN MATCHED THEN UPDATE SET id=t.id", "UPDATE cannot assign Delta identity"),
+        ("WHEN MATCHED THEN UPDATE SET id=DEFAULT", "UPDATE cannot assign Delta identity"),
         ("WHEN MATCHED THEN UPDATE SET *", "UPDATE cannot assign Delta identity"),
         ("WHEN NOT MATCHED BY SOURCE THEN UPDATE SET id=t.id", "UPDATE cannot assign Delta identity"),
         ("WHEN NOT MATCHED THEN INSERT (id,k,v) VALUES (DEFAULT,s.k,s.v)", "DEFAULT for an identity"),
     ],
 )
-def test_merge_identity_assignments_rejected(spark, identity_table, mode, clause, error):
+def test_merge_identity_assignments_rejected(spark, identity_table, mode, clause, error, evolution):
     name, path = identity_table(mode=mode)
     spark.sql(f"INSERT INTO {name} (k,v) VALUES (1,10)").collect()  # noqa: S608
     before = _state(spark, name, path)
+    if evolution:
+        clause = clause.replace(" THEN", " AND false THEN")
     with pytest.raises(Exception, match=error):
-        spark.sql(f"MERGE INTO {name} t USING (SELECT 1 AS k,10 AS v,100L AS id) s ON t.k=s.k {clause}").collect()
+        spark.sql(f"""MERGE {"WITH SCHEMA EVOLUTION" if evolution else ""} INTO {name} t
+            USING (SELECT 1 AS k,10 AS v,100L AS id,20 AS extra) s ON t.k=s.k {clause}""").collect()
     assert _state(spark, name, path) == before
 
 
@@ -171,16 +177,206 @@ def test_merge_always_rejects_supply_even_in_unreachable_clause(spark, identity_
     assert _state(spark, name, path) == before
 
 
-@pytest.mark.parametrize("evolution", [False, True])
-def test_merge_identity_star_omission_and_evolution_fail_closed(spark, identity_table, evolution):
-    name, path = identity_table(mode="BY DEFAULT")
+@pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
+def test_merge_identity_star_omission_requires_evolution(spark, identity_table, mode):
+    name, path = identity_table(mode=mode)
     before = _state(spark, name, path)
-    with pytest.raises(Exception, match=r"schema evolution with identity|INSERT \* omitting identity"):
+    with pytest.raises(Exception, match=r"INSERT \* omitting identity"):
         spark.sql(f"""
-            MERGE {"WITH SCHEMA EVOLUTION" if evolution else ""} INTO {name} t
-            USING (SELECT 1 AS k,10 AS v) s ON t.k=s.k WHEN NOT MATCHED THEN INSERT *
+            MERGE INTO {name} t USING (SELECT 1 AS k,10 AS v) s ON t.k=s.k
+            WHEN NOT MATCHED THEN INSERT *
         """).collect()
     assert _state(spark, name, path) == before
+
+
+# [CREDIT]: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/test/scala/org/apache/spark/sql/delta/IdentityColumnDMLSuite.scala#L130-L205
+@pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
+@pytest.mark.parametrize(
+    ("api", "update_action"),
+    [
+        pytest.param("sql", None, id="sql-fast-append"),
+        pytest.param("sql", "v=s.v", id="sql-named-update"),
+        pytest.param("sql", "*", id="sql-star-update"),
+        pytest.param("dataframe", "*", id="dataframe", marks=pytest.mark.spark(version=">=4")),
+    ],
+)
+def test_merge_identity_star_evolution_lifecycle(spark, identity_table, mode, api, update_action):
+    name, path = identity_table(
+        schema=f"""id BIGINT GENERATED {mode} AS IDENTITY (START WITH 10 INCREMENT BY 3),
+        k INT, v INT, payload STRUCT<a: INT>"""
+    )
+    spark.sql(f"INSERT INTO {name} (k,v,payload) VALUES (1,10,named_struct('a',1))").collect()  # noqa: S608
+    before = _watermark(path)
+    source = """SELECT 1 AS k,11 AS v,named_struct('a',11,'b','updated') AS payload,100 AS extra
+        UNION ALL SELECT 2,22,named_struct('a',22,'b','inserted'),200"""
+    if api == "sql":
+        update = f"WHEN MATCHED THEN UPDATE SET {update_action}" if update_action else ""
+        spark.sql(f"""MERGE WITH SCHEMA EVOLUTION INTO {name} t USING ({source}) s ON t.k=s.k
+            {update} WHEN NOT MATCHED THEN INSERT *""").collect()
+    else:
+        (
+            spark.sql(source)
+            .alias("s")
+            .mergeInto(name, F.col(f"{name}.k") == F.col("s.k"))
+            .withSchemaEvolution()
+            .whenMatched()
+            .updateAll()
+            .whenNotMatched()
+            .insertAll()
+            .merge()
+        )
+    reopened = spark.read.format("delta").load(str(path))
+    rows = reopened.orderBy("k").collect()
+    assert reopened.columns == ["id", "k", "v", "payload", "extra"]
+    assert reopened.schema["payload"].dataType.fieldNames() == ["a", "b"]
+    assert rows[0] == (
+        10,
+        1,
+        11 if update_action else 10,
+        (11, "updated") if update_action == "*" else (1, None),
+        100 if update_action == "*" else None,
+    )
+    generated = rows[1].id
+    assert generated > before
+    assert (generated - 10) % 3 == 0
+    assert tuple(rows[1][1:]) == (2, 22, (22, "inserted"), 200)
+    assert _watermark(path) == generated
+    actions = [json.loads(line) for line in list(_log(path).values())[-1].splitlines()]
+    metadata = [action["metaData"] for action in actions if "metaData" in action]
+    assert len(metadata) == 1
+    fields = {field["name"]: field for field in json.loads(metadata[0]["schemaString"])["fields"]}
+    assert fields["id"]["metadata"]["delta.identity.highWaterMark"] == generated
+    assert fields["id"]["metadata"]["delta.identity.allowExplicitInsert"] == (mode == "BY DEFAULT")
+    assert fields["extra"]["type"] == "integer"
+    assert [field["name"] for field in fields["payload"]["type"]["fields"]] == ["a", "b"]
+    assert any("add" in action for action in actions)
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (3,33)").collect()  # noqa: S608
+    appended = spark.read.format("delta").load(str(path)).orderBy("k").collect()
+    assert appended[:2] == rows
+    assert tuple(appended[2][1:]) == (3, 33, None, None)
+    assert appended[2].id > generated
+    assert _watermark(path) == appended[2].id
+
+
+@pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
+def test_merge_identity_evolution_update_only_preserves_watermark(spark, identity_table, mode):
+    name, path = identity_table(mode=mode)
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (1,10)").collect()  # noqa: S608
+    before = _watermark(path)
+    spark.sql(f"""MERGE WITH SCHEMA EVOLUTION INTO {name} t
+        USING (SELECT 1 AS k,22 AS v,200 AS extra) s ON t.k=s.k
+        WHEN MATCHED THEN UPDATE SET *""").collect()
+    assert spark.read.format("delta").load(str(path)).collect() == [(10, 1, 22, 200)]
+    assert _watermark(path) == before
+
+
+# [CREDIT]: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/test/scala/org/apache/spark/sql/delta/MergeIntoSchemaEvolutionSuite.scala#L387-L499
+@pytest.mark.parametrize("matched", [False, True], ids=["fast-append", "copy-on-write"])
+def test_merge_identity_evolution_mixed_insert_first_match(spark, identity_table, matched):
+    name, path = identity_table(mode="BY DEFAULT")
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (0,0)").collect()  # noqa: S608
+    initial_watermark = _watermark(path)
+    update = "WHEN MATCHED THEN UPDATE SET v=s.v" if matched else ""
+    spark.sql(f"""
+        MERGE WITH SCHEMA EVOLUTION INTO {name} t
+        USING (SELECT 0 AS k,1 AS v,0 AS extra UNION ALL SELECT 1,10,10
+            UNION ALL SELECT 2,20,20 UNION ALL SELECT 3,30,30 UNION ALL SELECT 4,40,40) s ON t.k=s.k
+        {update}
+        WHEN NOT MATCHED AND s.k<=1 THEN INSERT (id,k,v) VALUES (1000000L,s.k,s.v)
+        WHEN NOT MATCHED AND s.k<=2 THEN INSERT (id,k,v) VALUES (NULL,s.k,s.v)
+        WHEN NOT MATCHED AND s.k<=3 THEN INSERT (k,v) VALUES (s.k,s.v)
+        WHEN NOT MATCHED THEN INSERT *
+    """).collect()  # noqa: S608
+    rows = spark.read.format("delta").load(str(path)).orderBy("k").collect()
+    assert rows[:3] == [(10, 0, 1 if matched else 0, None), (1000000, 1, 10, None), (None, 2, 20, None)]
+    assert tuple(rows[3][1:]) == (3, 30, None)
+    assert tuple(rows[4][1:]) == (4, 40, 40)
+    generated = [row.id for row in rows[3:]]
+    assert len(set(generated)) == len(generated)
+    assert all(value > initial_watermark and (value - initial_watermark) % 3 == 0 for value in generated)
+    # Omission tracks the whole statement, including explicit values in earlier clauses.
+    assert _watermark(path) == max(1000000, *generated)
+    before = _watermark(path)
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (5,50)").collect()  # noqa: S608
+    assert spark.table(name).where("k=5").first().id > before
+
+
+@pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
+@pytest.mark.parametrize("value", ["100L", "CAST(NULL AS BIGINT)"])
+def test_merge_identity_evolution_star_supplied_value(spark, identity_table, mode, value):
+    name, path = identity_table(mode=mode)
+    before = _state(spark, name, path)
+    query = f"""MERGE WITH SCHEMA EVOLUTION INTO {name} t
+        USING (SELECT {value} AS id,1 AS k,10 AS v,20 AS extra) s ON t.k=s.k
+        WHEN NOT MATCHED THEN INSERT *"""
+    if mode == "ALWAYS":
+        with pytest.raises(Exception, match="GENERATED ALWAYS AS IDENTITY"):
+            spark.sql(query).collect()
+        assert _state(spark, name, path) == before
+    else:
+        spark.sql(query).collect()
+        assert spark.read.format("delta").load(str(path)).collect() == [(100 if value == "100L" else None, 1, 10, 20)]
+        assert _watermark(path) is None
+
+
+# [CREDIT]: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/main/scala/org/apache/spark/sql/delta/ColumnWithDefaultExprUtils.scala#L172-L180
+# Spark 4.2 / Delta 4.4: explicit DEFAULT becomes NULL, not an omitted identity.
+@pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
+@pytest.mark.parametrize("values", ["(DEFAULT,2,22)", "(DEFAULT,2,22),(99,3,33)", "(NULL,2,22)"])
+def test_insert_identity_default_is_explicit(spark, identity_table, mode, values):
+    name, path = identity_table(mode=mode)
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (1,11)").collect()  # noqa: S608
+    before = _state(spark, name, path)
+    watermark = _watermark(path)
+    query = f"INSERT INTO {name} (id,k,v) VALUES {values}"  # noqa: S608
+    if mode == "ALWAYS":
+        with pytest.raises(Exception, match="GENERATED ALWAYS AS IDENTITY"):
+            spark.sql(query).collect()
+        assert _state(spark, name, path) == before
+    else:
+        spark.sql(query).collect()
+        expected = [(10, 1, 11), (None, 2, 22)] + ([(99, 3, 33)] if "99" in values else [])
+        assert spark.read.format("delta").load(str(path)).orderBy("k").collect() == expected
+        assert _watermark(path) == watermark
+        spark.sql(f"INSERT INTO {name} (k,v) VALUES (4,44)").collect()  # noqa: S608
+        assert spark.table(name).where("k=4").first().id == watermark + 3
+
+
+@pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
+@pytest.mark.parametrize("operation", ["insert", "merge"])
+def test_identity_nested_default_rejected(spark, identity_table, mode, operation):
+    name, path = identity_table(mode=mode)
+    before = _state(spark, name, path)
+    if operation == "insert":
+        query = f"INSERT INTO {name} (id,k,v) VALUES (DEFAULT+1,1,10)"  # noqa: S608
+    else:
+        query = f"""MERGE WITH SCHEMA EVOLUTION INTO {name} t USING (SELECT 1 AS k,10 AS v,20 AS extra) s
+            ON t.k=s.k WHEN NOT MATCHED THEN INSERT (id,k,v) VALUES (DEFAULT+1,s.k,s.v)"""  # noqa: S608
+    with pytest.raises(Exception, match=r"DEFAULT|GENERATED ALWAYS AS IDENTITY"):
+        spark.sql(query).collect()
+    assert _state(spark, name, path) == before
+
+
+@pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
+@pytest.mark.parametrize("operation", ["insert-select", "merge-qualified", "merge-unqualified"])
+def test_identity_real_default_column_is_explicit(spark, identity_table, mode, operation):
+    name, path = identity_table(mode=mode)
+    before = _state(spark, name, path)
+    source = "SELECT 99L AS `default`,1 AS k,10 AS v"
+    if operation == "insert-select":
+        query = f"INSERT INTO {name} (id,k,v) SELECT `default`,k,v FROM ({source}) s"  # noqa: S608
+    else:
+        value = "s.`default`" if operation == "merge-qualified" else "`default`"
+        query = f"""MERGE INTO {name} t USING ({source}) s ON t.k=s.k
+            WHEN NOT MATCHED THEN INSERT (id,k,v) VALUES ({value},s.k,s.v)"""  # noqa: S608
+    if mode == "ALWAYS":
+        with pytest.raises(Exception, match="GENERATED ALWAYS AS IDENTITY"):
+            spark.sql(query).collect()
+        assert _state(spark, name, path) == before
+    else:
+        spark.sql(query).collect()
+        assert spark.read.format("delta").load(str(path)).collect() == [(99, 1, 10)]
+        assert _watermark(path) is None
 
 
 @pytest.mark.parametrize("matched", [False, True], ids=["fast-append", "copy-on-write"])
@@ -254,8 +450,10 @@ def test_merge_without_generated_rows_allows_boundary_start(spark, identity_tabl
 
 
 @pytest.mark.parametrize("deletion_vectors", [False, True], ids=["cow", "mor"])
-@pytest.mark.parametrize(("start", "step"), [(10, 3), (-10, -3)])
-def test_identity_cdf_evaluates_once_and_tracks_delete_preimages(spark, identity_table, deletion_vectors, start, step):
+@pytest.mark.parametrize(("start", "step", "evolution"), [(10, 3, False), (-10, -3, False), (10, 3, True)])
+def test_identity_cdf_evaluates_once_and_tracks_delete_preimages(
+    spark, identity_table, deletion_vectors, start, step, evolution
+):
     direction = 1 if step > 0 else -1
     high = 100000 * direction
     updated_id = 20 * direction
@@ -270,14 +468,25 @@ def test_identity_cdf_evaluates_once_and_tracks_delete_preimages(spark, identity
     )
     spark.sql(f"INSERT INTO {name} (id,k,v) VALUES ({high},0,1),({updated_id},1,3)").collect()  # noqa: S608
     assert _watermark(path) is None
+    insert = "*" if evolution else "(k,v) VALUES (s.k,22)"
     result = spark.sql(f"""
-        MERGE INTO {name} t USING (SELECT 0 AS k UNION ALL SELECT 1 UNION ALL SELECT 2) s ON t.k=s.k
+        MERGE {"WITH SCHEMA EVOLUTION" if evolution else ""} INTO {name} t
+        USING (SELECT 0 AS k,22 AS v,100 AS extra UNION ALL SELECT 1,22,100 UNION ALL SELECT 2,22,100) s ON t.k=s.k
         WHEN MATCHED AND s.k=0 THEN DELETE
         WHEN MATCHED THEN UPDATE SET v=31
-        WHEN NOT MATCHED THEN INSERT (k,v) VALUES (s.k,22)
-    """).collect()  # noqa: S608
+        WHEN NOT MATCHED THEN INSERT {insert}
+    """).collect()
     assert result == [(3, 1, 1, 1)]
-    rows = spark.table(name).orderBy("k").collect()
+    rows = spark.table(name).select("id", "k", "v").orderBy("k").collect()
+    if evolution:
+        assert spark.table(name).select("k", "extra").orderBy("k").collect() == [(1, None), (2, 100)]
+        changes = _feed(spark, path, 2, 2).select("k", "extra", "_change_type").collect()
+        assert sorted(tuple(row) for row in changes) == [
+            (0, None, "delete"),
+            (1, None, "update_postimage"),
+            (1, None, "update_preimage"),
+            (2, 100, "insert"),
+        ]
     assert rows[0] == (updated_id, 1, 31)
     generated = rows[1].id
     assert tuple(rows[1][1:]) == (2, 22)
@@ -294,12 +503,18 @@ def test_identity_cdf_evaluates_once_and_tracks_delete_preimages(spark, identity
         ]
     )
     assert _watermark(path) == high
+    if evolution:
+        actions = [json.loads(line) for line in list(_log(path).values())[-1].splitlines()]
+        metadata = next(action["metaData"] for action in actions if "metaData" in action)
+        fields = {field["name"]: field for field in json.loads(metadata["schemaString"])["fields"]}
+        assert fields["id"]["metadata"]["delta.identity.highWaterMark"] == high
+        assert "extra" in fields
     metrics = _assert_cdc_metrics(path, 2, "MERGE")
     assert int(metrics["numTargetRowsInserted"]) == 1
     assert int(metrics["numTargetRowsUpdated"]) == 1
     assert int(metrics["numTargetRowsDeleted"]) == 1
     spark.sql(f"INSERT INTO {name} (k,v) VALUES (3,33)").collect()  # noqa: S608
-    reopened = spark.read.format("delta").load(str(path)).orderBy("k").collect()
+    reopened = spark.read.format("delta").load(str(path)).select("id", "k", "v").orderBy("k").collect()
     assert reopened[:2] == rows
     assert (reopened[2].id - high) * step > 0
     assert _watermark(path) == reopened[2].id
@@ -585,18 +800,23 @@ def test_merge_all_null_and_empty_inputs_do_not_require_identity_bounds(spark, i
 
 
 @pytest.mark.parametrize("matched", [False, True], ids=["fast-append", "copy-on-write"])
-@pytest.mark.parametrize(("start", "step"), [(9223372036854775806, 1), (-9223372036854775807, -1)])
-def test_merge_generation_failure_does_not_commit(spark, identity_table, matched, start, step):
+@pytest.mark.parametrize(
+    ("start", "step", "evolution"),
+    [(9223372036854775806, 1, False), (-9223372036854775807, -1, False), (9223372036854775806, 1, True)],
+)
+def test_merge_generation_failure_does_not_commit(spark, identity_table, matched, start, step, evolution):
     name, path = identity_table(start=start, step=step)
     spark.sql(f"INSERT INTO {name} (k,v) VALUES (0,0)").collect()  # noqa: S608
     before = _state(spark, name, path)
     update = "WHEN MATCHED THEN UPDATE SET v=s.v" if matched else ""
+    insert = "*" if evolution else "(k,v) VALUES (s.k,s.v)"
     with pytest.raises(Exception, match="DELTA_IDENTITY_COLUMN_VALUE_OVERFLOW"):
         spark.sql(f"""
-            MERGE INTO {name} t USING (SELECT 0 AS k,100 AS v UNION ALL SELECT 1,10 UNION ALL SELECT 2,20) s
+            MERGE {"WITH SCHEMA EVOLUTION" if evolution else ""} INTO {name} t
+            USING (SELECT 0 AS k,100 AS v,0 AS extra UNION ALL SELECT 1,10,1 UNION ALL SELECT 2,20,2) s
             ON t.k=s.k {update}
-            WHEN NOT MATCHED THEN INSERT (k,v) VALUES (s.k,s.v)
-        """).collect()  # noqa: S608
+            WHEN NOT MATCHED THEN INSERT {insert}
+        """).collect()
     assert _state(spark, name, path) == before
 
 

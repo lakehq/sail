@@ -181,12 +181,12 @@ impl Actor for DriverActor {
             DriverMessage::FetchDriverStream { key, result } => {
                 self.handle_fetch_driver_stream(ctx, key, result)
             }
-            DriverMessage::FetchWorkerStream {
+            DriverMessage::FetchWorkerStreams {
                 worker_id,
-                key,
+                keys,
                 schema,
                 result,
-            } => self.handle_fetch_worker_stream(ctx, worker_id, key, schema, result),
+            } => self.handle_fetch_worker_streams(ctx, worker_id, keys, schema, result),
             DriverMessage::CelebornGetLifecycleManager { result } => {
                 self.handle_celeborn_get_lifecycle_manager(result)
             }

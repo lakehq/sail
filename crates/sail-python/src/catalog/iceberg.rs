@@ -49,13 +49,14 @@ impl PyIcebergRestCatalogProvider {
 
         let catalog = RuntimeAwareCatalogProvider::try_new(
             || {
-                Ok(IcebergRestCatalogProvider::new(
+                IcebergRestCatalogProvider::new(
                     name,
                     IcebergRestCatalogOptions {
                         credentials: Arc::new(EmptyCatalogCredentials),
                         properties,
+                        sigv4: None,
                     },
-                ))
+                )
             },
             runtime.io().clone(),
         )

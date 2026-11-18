@@ -54,10 +54,7 @@ impl PySparkUdtfPayload {
                 read_udtf.call1((serializer, infile, eval_type))?
             }
         };
-        tuple
-            .get_item(0)?
-            .into_pyobject(py)
-            .map_err(|e| PyUdfError::PythonError(e.into()))
+        Ok(tuple.get_item(0)?)
     }
 
     /// Calls the Python UDTF's `analyze` static method to determine the return type dynamically.

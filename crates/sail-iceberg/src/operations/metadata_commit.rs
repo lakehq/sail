@@ -275,6 +275,57 @@ pub(crate) fn apply_snapshot_updates(
             TableUpdate::RemoveSnapshotRef { ref_name } => {
                 metadata.refs.remove(ref_name);
             }
+            TableUpdate::RemoveSnapshots { snapshot_ids } => {
+                let ids: std::collections::HashSet<_> = snapshot_ids.iter().copied().collect();
+                if metadata
+                    .current_snapshot_id
+                    .is_some_and(|id| ids.contains(&id))
+                    || metadata
+                        .refs
+                        .values()
+                        .any(|reference| ids.contains(&reference.snapshot_id))
+                {
+                    return internal_err!("Cannot remove a referenced Iceberg snapshot");
+                }
+                metadata
+                    .snapshots
+                    .retain(|snapshot| !ids.contains(&snapshot.snapshot_id));
+                metadata
+                    .statistics
+                    .retain(|file| !ids.contains(&file.snapshot_id));
+                metadata
+                    .partition_statistics
+                    .retain(|file| !ids.contains(&file.snapshot_id));
+                if let Some(last) = metadata
+                    .snapshot_log
+                    .iter()
+                    .rposition(|entry| ids.contains(&entry.snapshot_id))
+                {
+                    metadata.snapshot_log.drain(..=last);
+                }
+            }
+            TableUpdate::RemoveSchemas { schema_ids } => {
+                if schema_ids.contains(&metadata.current_schema_id) {
+                    return internal_err!("Cannot remove the current Iceberg schema");
+                }
+                metadata
+                    .schemas
+                    .retain(|schema| !schema_ids.contains(&schema.schema_id()));
+            }
+            TableUpdate::RemovePartitionSpecs { spec_ids } => {
+                if spec_ids.contains(&metadata.default_spec_id) {
+                    return internal_err!("Cannot remove the default Iceberg partition spec");
+                }
+                metadata
+                    .partition_specs
+                    .retain(|spec| !spec_ids.contains(&spec.spec_id()));
+            }
+            TableUpdate::RemoveStatistics { snapshot_id } => metadata
+                .statistics
+                .retain(|file| file.snapshot_id != *snapshot_id),
+            TableUpdate::RemovePartitionStatistics { snapshot_id } => metadata
+                .partition_statistics
+                .retain(|file| file.snapshot_id != *snapshot_id),
             _ => return internal_err!("Unsupported Iceberg snapshot metadata update"),
         }
     }

@@ -13,7 +13,9 @@
 use std::collections::BTreeMap;
 
 use datafusion::catalog::Session;
+use datafusion::prelude::SessionConfig;
 use sail_common_datafusion::datasource::OptionLayer;
+use sail_common_datafusion::session::config::SessionConfigService;
 pub(crate) use sail_data_source::options::{
     BuildPartialOptions, PartialOptions, ResolveOptions, parsers,
 };
@@ -22,6 +24,8 @@ use crate::error::{DataSourceError, DataSourceResult};
 use crate::spec::snapshots::summary::validate_snapshot_properties;
 
 const SNAPSHOT_PROPERTY_PREFIX: &str = "snapshot-property.";
+/// Iceberg's Spark runtime reads this prefix as `SparkSQLProperties.SNAPSHOT_PROPERTY_PREFIX`.
+const SESSION_SNAPSHOT_PROPERTY_PREFIX: &str = "spark.sql.iceberg.snapshot-property.";
 
 fn is_snapshot_property_option(key: &str) -> bool {
     key.get(..SNAPSHOT_PROPERTY_PREFIX.len())
@@ -46,6 +50,29 @@ pub(crate) fn snapshot_properties_from_options(
     }
     validate_snapshot_properties(&properties).map_err(|cause| DataSourceError::InvalidOption {
         key: SNAPSHOT_PROPERTY_PREFIX.to_string(),
+        value: String::new(),
+        cause: Some(cause),
+    })?;
+    Ok(properties)
+}
+
+/// Snapshot properties set for the session, with the keys lowercased like the write options.
+fn session_snapshot_properties(
+    config: &SessionConfig,
+) -> DataSourceResult<BTreeMap<String, String>> {
+    let options = match config.get_extension::<SessionConfigService>() {
+        Some(service) => service.get_options_with_prefix(SESSION_SNAPSHOT_PROPERTY_PREFIX)?,
+        None => BTreeMap::new(),
+    };
+    let properties = options
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let suffix = key.strip_prefix(SESSION_SNAPSHOT_PROPERTY_PREFIX)?;
+            Some((suffix.to_lowercase(), value))
+        })
+        .collect();
+    validate_snapshot_properties(&properties).map_err(|cause| DataSourceError::InvalidOption {
+        key: SESSION_SNAPSHOT_PROPERTY_PREFIX.to_string(),
         value: String::new(),
         cause: Some(cause),
     })?;
@@ -110,9 +137,12 @@ fn validate_snapshot_selectors(options: &[OptionLayer]) -> DataSourceResult<()> 
 }
 
 impl ResolveOptions for r#gen::IcebergWriteOptions {
-    fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+    fn resolve(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
         let mut partial = r#gen::IcebergWritePartialOptions::initialize();
-        partial.snapshot_properties = Some(snapshot_properties_from_options(&options)?);
+        // A write option takes precedence over the session property with the same key.
+        let mut snapshot_properties = session_snapshot_properties(ctx.config())?;
+        snapshot_properties.extend(snapshot_properties_from_options(&options)?);
+        partial.snapshot_properties = Some(snapshot_properties);
         for layer in options {
             if let OptionLayer::OptionList { items } = &layer
                 && let Some((key, value)) = items.iter().find(|(key, _)| {
@@ -133,10 +163,98 @@ impl ResolveOptions for r#gen::IcebergWriteOptions {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use datafusion::execution::context::SessionContext;
+    use datafusion::execution::{SessionState, SessionStateBuilder};
+    use datafusion_common::DataFusionError;
+    use sail_common_datafusion::session::config::SessionConfigProvider;
 
     use super::*;
     use crate::spec::snapshots::summary::RESERVED_SNAPSHOT_PROPERTIES;
+
+    struct Provider {
+        options: BTreeMap<String, String>,
+        fail: bool,
+    }
+
+    impl SessionConfigProvider for Provider {
+        fn get_options(&self, keys: &[&str]) -> datafusion_common::Result<Vec<Option<String>>> {
+            Ok(vec![None; keys.len()])
+        }
+
+        fn get_options_with_prefix(
+            &self,
+            prefix: &str,
+        ) -> datafusion_common::Result<BTreeMap<String, String>> {
+            assert_eq!(prefix, SESSION_SNAPSHOT_PROPERTY_PREFIX);
+            if self.fail {
+                return Err(DataFusionError::Plan("provider failed".to_string()));
+            }
+            Ok(self.options.clone())
+        }
+    }
+
+    fn state(properties: &[(&str, &str)], fail: bool) -> SessionState {
+        let options = properties
+            .iter()
+            .map(|(key, value)| {
+                (
+                    format!("{SESSION_SNAPSHOT_PROPERTY_PREFIX}{key}"),
+                    value.to_string(),
+                )
+            })
+            .collect();
+        let service = SessionConfigService::new(Arc::new(Provider { options, fail }));
+        SessionStateBuilder::new()
+            .with_config(SessionConfig::new().with_extension(Arc::new(service)))
+            .build()
+    }
+
+    #[test]
+    fn session_snapshot_properties_are_the_lowest_option_layer() -> DataSourceResult<()> {
+        let state = state(&[("Run-ID", "session"), ("job", "session-job")], false);
+        let resolve = |items: Vec<(String, String)>| {
+            r#gen::IcebergWriteOptions::resolve(&state, vec![OptionLayer::OptionList { items }])
+                .map(|options| options.snapshot_properties)
+        };
+        assert_eq!(
+            resolve(vec![])?,
+            BTreeMap::from([
+                ("run-id".into(), "session".into()),
+                ("job".into(), "session-job".into()),
+            ])
+        );
+        assert_eq!(
+            resolve(vec![("snapshot-property.RUN-ID".into(), "write".into())])?,
+            BTreeMap::from([
+                ("run-id".into(), "write".into()),
+                ("job".into(), "session-job".into()),
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn session_snapshot_properties_reject_engine_keys_and_provider_errors() {
+        for suffix in ["Operation", ""] {
+            let result =
+                r#gen::IcebergWriteOptions::resolve(&state(&[(suffix, "x")], false), vec![]);
+            assert!(
+                matches!(
+                    &result,
+                    Err(DataSourceError::InvalidOption { key, .. })
+                        if key == SESSION_SNAPSHOT_PROPERTY_PREFIX
+                ),
+                "{suffix}"
+            );
+        }
+        let result = r#gen::IcebergWriteOptions::resolve(&state(&[], true), vec![]);
+        assert!(matches!(
+            result.map_err(DataFusionError::from),
+            Err(DataFusionError::Plan(message)) if message == "provider failed"
+        ));
+    }
 
     #[test]
     fn snapshot_properties_are_case_insensitive_operation_options_only() -> DataSourceResult<()> {
