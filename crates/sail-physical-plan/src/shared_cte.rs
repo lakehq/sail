@@ -565,6 +565,8 @@ impl SharedCteScanExec {
 
     /// Returns the plan that takes the place of the reference when each reference
     /// evaluates the CTE itself (see [`share_ctes`]), if the plan of the CTE is known.
+    /// This is the plan that the CTE was first planned with, also after its plan is
+    /// replaced by one that is restricted to the keys of its references.
     pub fn inlined(&self) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         self.cte
             .plan
