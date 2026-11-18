@@ -25,9 +25,20 @@ pub struct LakeSourceMetadata {
     pub partition_by: Option<Vec<CatalogPartitionField>>,
 }
 
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CloneMetrics {
+    pub source_table_size: i64,
+    pub source_num_of_files: i64,
+    pub num_removed_files: i64,
+    pub num_copied_files: i64,
+    pub removed_files_size: i64,
+    pub copied_files_size: i64,
+}
+
 /// A validated zero-copy snapshot and its deferred storage publication.
 /// Preparation must not mutate storage. Publication must never delete shared data.
 pub struct LakeSourceClone {
+    pub metrics: Option<CloneMetrics>,
     pub metadata: LakeSourceMetadata,
     pub publish: futures::future::BoxFuture<'static, Result<()>>,
 }

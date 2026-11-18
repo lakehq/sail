@@ -9,6 +9,7 @@ from urllib.parse import unquote, urlparse
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from pyspark.errors import AnalysisException, PySparkException
 
 from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
 
@@ -87,7 +88,7 @@ def test_shallow_clone_snapshot_lifecycle(spark, tmp_path, named, empty):
 
         _append(spark, source_path, [(3, "source/new")])
         before = _logs(destination_path)
-        spark.sql(f"CREATE TABLE IF NOT EXISTS {destination} SHALLOW CLONE {source}{location}")
+        assert spark.sql(f"CREATE TABLE IF NOT EXISTS {destination} SHALLOW CLONE {source}{location}").collect() == []
         assert _logs(destination_path) == before
         assert _rows(spark, destination) == initial
 
@@ -157,7 +158,7 @@ def test_shallow_clone_rejections_preserve_destination(spark, tmp_path):
         f"CREATE TABLE {_identifier(tmp_path / 'deep')} DEEP CLONE {source}",
         f"CREATE TABLE {_identifier(tmp_path / 'historical')} SHALLOW CLONE {source} VERSION AS OF 0",
     ]:
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(PySparkException):
             spark.sql(sql).collect()
         assert _logs(destination_path) == before
         assert _logs(source_path) == source_before
@@ -221,3 +222,112 @@ def test_shallow_clone_delta_spark_interoperability(spark, delta_jvm_spark, tmp_
     delta_jvm_spark.sql(f"CREATE TABLE {reference_clone} SHALLOW CLONE {destination}")
     assert _rows(spark, reference_clone) == expected
     assert _rows(spark, source) == [(1, "a/b"), (2, "x% y#")]
+
+
+def test_clone_refresh_keeps_file_actions_disjoint(spark, tmp_path):
+    source, destination = tmp_path / "source", tmp_path / "destination"
+    spark.range(1).write.format("delta").save(str(source))
+    for _ in range(2):
+        spark.sql(f"CREATE OR REPLACE TABLE {_identifier(destination)} SHALLOW CLONE {_identifier(source)}").collect()
+
+    def refresh_actions():
+        latest = sorted((destination / "_delta_log").glob("*.json"))[-1]
+        return [json.loads(line) for line in latest.read_text().splitlines()]
+
+    assert all("add" not in action and "remove" not in action for action in refresh_actions())
+
+    # A metadata-only update for a retained file is a single Add with the new metadata.
+    add = _latest(source, "add")
+    add["tags"] = {"owner": "finance"}
+    add["dataChange"] = False
+    (source / "_delta_log" / "00000000000000000001.json").write_text(json.dumps({"add": add}) + "\n")
+    spark.sql(f"REPLACE TABLE {_identifier(destination)} SHALLOW CLONE {_identifier(source)}").collect()
+    actions = refresh_actions()
+    assert all("remove" not in action for action in actions)
+    updates = [action["add"] for action in actions if "add" in action]
+    assert [(update["tags"], update["dataChange"]) for update in updates] == [(add["tags"], False)]
+
+
+def test_clone_reusing_renamed_table_name_preserves_archived_rows(spark, tmp_path):
+    database = f"clone_{uuid.uuid4().hex}"
+    warehouse = escape_sql_string_literal(str(tmp_path / "warehouse"))
+    spark.sql(f"CREATE DATABASE {database} LOCATION '{warehouse}'")
+    original, archived = f"{database}.original", f"{database}.archived"
+    try:
+        for name, value in (("first", 1), ("second", 2)):
+            spark.range(value, value + 1).write.format("delta").save(str(tmp_path / name))
+        spark.sql(f"CREATE TABLE {original} SHALLOW CLONE {_identifier(tmp_path / 'first')}")
+        spark.sql(f"ALTER TABLE {original} RENAME TO {archived}")
+        with pytest.raises(AnalysisException, match="destination already exists"):
+            spark.sql(f"CREATE OR REPLACE TABLE {original} SHALLOW CLONE {_identifier(tmp_path / 'second')}").collect()
+        assert [row.id for row in spark.table(archived).collect()] == [1]
+    finally:
+        spark.sql(f"DROP DATABASE {database} CASCADE")
+
+
+def test_named_clone_with_metadata_prefixed_property(spark, tmp_path):
+    source = tmp_path / "source"
+    _create_delta_table(spark, source, "id BIGINT", "TBLPROPERTIES ('metadata.owner'='finance')")
+    target = f"clone_{uuid.uuid4().hex}"
+    try:
+        spark.sql(f"CREATE TABLE {target} SHALLOW CLONE {_identifier(source)}")
+        properties = {row.key: row.value for row in spark.sql(f"SHOW TBLPROPERTIES {target}").collect()}
+        assert properties["metadata.owner"] == "finance"
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {target}")
+
+
+def test_clone_returns_file_metrics(spark, tmp_path):
+    source = tmp_path / "source"
+    spark.range(1).write.format("delta").save(str(source))
+    adds = [action["add"] for action in _actions(source) if "add" in action]
+    result = spark.sql(f"CREATE TABLE {_identifier(tmp_path / 'destination')} SHALLOW CLONE {_identifier(source)}")
+    assert all(field.nullable and field.dataType.simpleString() == "bigint" for field in result.schema)
+    assert [row.asDict() for row in result.collect()] == [
+        {
+            "source_table_size": sum(add["size"] for add in adds),
+            "source_num_of_files": len(adds),
+            "num_removed_files": 0,
+            "num_copied_files": 0,
+            "removed_files_size": 0,
+            "copied_files_size": 0,
+        }
+    ]
+    destination = tmp_path / "destination"
+    spark.range(3).write.format("delta").mode("append").save(str(destination))
+    local_files = [a["add"] for a in _actions(destination) if "add" in a and not urlparse(a["add"]["path"]).scheme]
+    refresh = spark.sql(f"REPLACE TABLE {_identifier(destination)} SHALLOW CLONE {_identifier(source)}").first()
+    assert refresh.num_removed_files == len(local_files)
+    assert refresh.removed_files_size == sum(add["size"] for add in local_files)
+    history = _latest(destination, "commitInfo")["operationMetrics"]
+    assert int(history["sourceTableSize"]) == refresh.source_table_size
+    assert int(history["numRemovedFiles"]) == refresh.num_removed_files
+    assert int(history["removedFilesSize"]) == refresh.removed_files_size
+
+
+def test_clone_preserves_source_format_options(spark, tmp_path):
+    source, destination = tmp_path / "source", tmp_path / "destination"
+    _create_delta_table(spark, source, "id BIGINT")
+    metadata = _latest(source, "metaData")
+    metadata["format"]["options"]["compression"] = "snappy"
+    (source / "_delta_log" / "00000000000000000001.json").write_text(json.dumps({"metaData": metadata}) + "\n")
+    spark.sql(f"CREATE TABLE {_identifier(destination)} SHALLOW CLONE {_identifier(source)}")
+    assert _latest(destination, "metaData")["format"] == metadata["format"]
+
+
+def test_clone_catalog_target_in_delta_namespace(spark, tmp_path):
+    source = tmp_path / "source"
+    spark.range(1).write.format("delta").save(str(source))
+    spark.sql("CREATE DATABASE delta")
+    target = f"delta.clone_{uuid.uuid4().hex}"
+    location = escape_sql_string_literal(str(tmp_path / "target"))
+    try:
+        qualified = f"{spark.catalog.currentCatalog()}.{target}"
+        spark.sql(f"CREATE TABLE {qualified} (id BIGINT) USING DELTA LOCATION '{location}'")
+        spark.sql(f"REPLACE TABLE {target} SHALLOW CLONE {_identifier(source)} LOCATION '{location}'")
+        assert [row.id for row in spark.table(qualified).collect()] == [0]
+        second = _identifier(tmp_path / "second")
+        spark.sql(f"CREATE TABLE {second} SHALLOW CLONE {target}")
+        assert [row.id for row in spark.table(second).collect()] == [0]
+    finally:
+        spark.sql("DROP DATABASE delta CASCADE")

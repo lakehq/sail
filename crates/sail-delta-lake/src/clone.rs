@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use datafusion::execution::TaskContext;
 use datafusion_common::{DataFusionError, Result, not_impl_err, plan_err};
 use futures::TryStreamExt;
@@ -5,15 +7,14 @@ use object_store::path::Path;
 use sail_common::spec::CreateTableMode;
 use sail_common_datafusion::catalog::delta::is_delta_coordinated_property;
 use sail_common_datafusion::catalog::identity_partition_fields;
-use sail_common_datafusion::lakesource::{LakeSourceClone, LakeSourceMetadata};
+use sail_common_datafusion::lakesource::{CloneMetrics, LakeSourceClone, LakeSourceMetadata};
 use sail_data_source::resolve_table_url;
 use url::Url;
 
 use crate::DeltaTableError;
-use crate::datasource::actions::adds_to_remove_actions;
 use crate::snapshot::{DeltaSnapshot, DeltaSnapshotConfig};
 use crate::spec::utils::{decode_path, encode_path};
-use crate::spec::{CommitAction, DeltaOperation, Metadata};
+use crate::spec::{CommitAction, DeltaOperation};
 use crate::table::{
     create_logstore_with_object_store, open_table_with_object_store_and_table_config,
 };
@@ -171,6 +172,7 @@ pub(crate) async fn prepare(
     if let Some(old) = &old {
         if mode.ignore_if_exists() {
             return Ok(LakeSourceClone {
+                metrics: None,
                 metadata: LakeSourceMetadata {
                     schema: old.logical_arrow_schema()?,
                     properties: old
@@ -203,20 +205,9 @@ pub(crate) async fn prepare(
             return plan_err!("SHALLOW CLONE destination is not empty and is not a Delta table");
         }
     }
-    let source_metadata = source.metadata();
-    let mut metadata = Metadata::try_new(
-        None,
-        old.as_ref()
-            .and_then(|s| s.metadata().description())
-            .map(str::to_string),
-        source_metadata.parse_schema()?,
-        source_metadata.partition_columns().clone(),
-        chrono::Utc::now().timestamp_millis(),
-        source_metadata.configuration().clone(),
-    )?;
-    if let Some(old) = &old {
-        metadata = metadata.with_table_id(old.metadata().id().to_string());
-    }
+    let metadata = source
+        .metadata()
+        .for_clone(old.as_deref().map(DeltaSnapshot::metadata));
     let protocol = old
         .as_ref()
         .map(|old| old.protocol().merge_upgrade_requirements(source.protocol()))
@@ -234,13 +225,19 @@ pub(crate) async fn prepare(
         CommitAction::Protocol(protocol),
         CommitAction::Metadata(metadata),
     ];
-    if let Some(old) = &old {
-        actions.extend(
-            adds_to_remove_actions(old.adds().to_vec())
-                .into_iter()
-                .map(CommitAction::Remove),
-        );
+    // Match physical files across equivalent URI spellings, retaining the destination's
+    // log path for metadata updates. Delta reconciles actions by the stored path and DV.
+    let mut remaining = HashMap::new();
+    for add in old.iter().flat_map(|s| s.adds()) {
+        let url = data_file_url(&destination_url, &add.path)?;
+        if remaining.insert(url, add).is_some() {
+            return plan_err!(
+                "SHALLOW CLONE destination has multiple entries for the same data file"
+            );
+        }
     }
+    let mut metrics = CloneMetrics::default();
+    let mut seen = HashSet::new();
     for add in source.adds() {
         let mut add = add.clone();
         let absolute = data_file_url(&source_url, &add.path)?;
@@ -248,9 +245,33 @@ pub(crate) async fn prepare(
         if Path::from_url_path(absolute.path())?.prefix_matches(&destination_root) {
             return plan_err!("SHALLOW CLONE cannot reference files inside its destination");
         }
-        add.path = decode_path(absolute.as_str()).map_err(external)?;
-        add.data_change = true;
+        if !seen.insert(absolute.clone()) {
+            return plan_err!("SHALLOW CLONE source has multiple entries for the same data file");
+        }
+        metrics.source_num_of_files += 1;
+        metrics.source_table_size += add.size;
+        if let Some(previous) = remaining.remove(&absolute) {
+            add.path.clone_from(&previous.path);
+            add.commit_version = previous.commit_version;
+            add.commit_timestamp = previous.commit_timestamp;
+            add.data_change = previous.data_change;
+            if &add == previous {
+                continue;
+            }
+            add.data_change = add.partition_values != previous.partition_values;
+        } else {
+            add.path = decode_path(absolute.as_str()).map_err(external)?;
+            add.data_change = true;
+        }
         actions.push(CommitAction::Add(add));
+    }
+    let removed_at = chrono::Utc::now().timestamp_millis();
+    for removed in remaining.into_values() {
+        metrics.num_removed_files += 1;
+        metrics.removed_files_size += removed.size;
+        actions.push(CommitAction::Remove(
+            removed.clone().into_remove(removed_at),
+        ));
     }
     let operation = DeltaOperation::Clone {
         source: source_url.to_string(),
@@ -258,12 +279,32 @@ pub(crate) async fn prepare(
         is_shallow: true,
     };
     let log_store = create_logstore_with_object_store(store, destination_url, Default::default())?;
-    let commit = CommitBuilder::from(CommitProperties::from_session_config(ctx.session_config())?)
-        .with_actions(actions)
-        .build(old, log_store, operation);
+    let history_metrics: HashMap<_, _> = [
+        ("sourceTableSize", metrics.source_table_size),
+        ("sourceNumOfFiles", metrics.source_num_of_files),
+        ("numRemovedFiles", metrics.num_removed_files),
+        ("numCopiedFiles", metrics.num_copied_files),
+        ("removedFilesSize", metrics.removed_files_size),
+        ("copiedFilesSize", metrics.copied_files_size),
+    ]
+    .into_iter()
+    .map(|(key, value)| {
+        (
+            key.to_string(),
+            serde_json::Value::String(value.to_string()),
+        )
+    })
+    .collect();
+    let commit = CommitBuilder::from(
+        CommitProperties::from_session_config(ctx.session_config())?
+            .with_operation_metrics(history_metrics),
+    )
+    .with_actions(actions)
+    .build(old, log_store, operation);
     // Protocol/append-only validation is still preparation, before catalog publication.
     let prepared = commit.into_prepared_commit_future().await?;
     Ok(LakeSourceClone {
+        metrics: Some(metrics),
         metadata: result_metadata,
         publish: Box::pin(async move {
             prepared.await?.await?;

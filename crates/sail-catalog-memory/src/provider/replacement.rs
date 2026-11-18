@@ -72,16 +72,21 @@ impl MemoryCatalogProvider {
             }
         }
         // Validate the original bookkeeping too: a request must not hide a managed marker.
-        if properties
-            .iter()
-            .chain(options.properties.iter())
-            .any(|(key, value)| {
-                sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker(
-                    key.trim(),
-                    value.trim(),
-                ) || key.trim().starts_with("metadata.")
-            })
-        {
+        let mut markers = properties.iter().chain(&options.properties);
+        if is_delta {
+            if markers.any(|(key, _)| {
+                sail_common_datafusion::catalog::delta::is_delta_coordinated_property(key)
+            }) {
+                return Err(CatalogError::UnsupportedCapability(
+                    "replacement of a catalog-coordinated Delta table".into(),
+                ));
+            }
+        } else if markers.any(|(key, value)| {
+            sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker(
+                key.trim(),
+                value.trim(),
+            ) || key.trim().starts_with("metadata.")
+        }) {
             return Err(CatalogError::UnsupportedCapability(
                 "replacement requires path-managed Iceberg publication authority".into(),
             ));

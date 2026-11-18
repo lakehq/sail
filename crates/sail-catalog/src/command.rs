@@ -1,12 +1,13 @@
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::execution::TaskContext;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation, TableKind};
 use sail_common_datafusion::datasource::{DataSourceRegistry, is_lakehouse_format};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::{
-    LakeSourceCreateTableColumn, LakeSourceCreateTableInfo, LakeSourceCreateTableResult,
+    CloneMetrics, LakeSourceCreateTableColumn, LakeSourceCreateTableInfo,
+    LakeSourceCreateTableResult,
 };
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,17 @@ use crate::provider::{
     DropViewOptions,
 };
 use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
+
+fn clone_result_schema() -> CatalogResult<SchemaRef> {
+    // Declare every metric nullable even when all six values are populated.
+    let metrics = ArrowSerializer::default().schema::<CloneMetrics>()?;
+    let fields = metrics
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone().with_nullable(true))
+        .collect::<Vec<_>>();
+    Ok(Schema::new(fields).into())
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum CatalogCommand {
@@ -264,12 +276,12 @@ impl CatalogCommand {
             CatalogCommand::DescribeDatabase { .. } => {
                 ArrowSerializer::default().schema::<DescribeDatabaseRow>()?
             }
+            CatalogCommand::CloneTable { .. } => clone_result_schema()?,
             CatalogCommand::DatabaseExists { .. }
             | CatalogCommand::TableExists { .. }
             | CatalogCommand::FunctionExists { .. }
             | CatalogCommand::CreateDatabase { .. }
             | CatalogCommand::CreateTable { .. }
-            | CatalogCommand::CloneTable { .. }
             | CatalogCommand::CreateTemporaryView { .. }
             | CatalogCommand::CreateView { .. }
             | CatalogCommand::DropDatabase { .. }
@@ -386,7 +398,7 @@ impl CatalogCommand {
                 mode,
                 is_external,
             } => {
-                super::clone::clone_table(
+                let metrics = super::clone::clone_table(
                     ctx,
                     manager,
                     table,
@@ -397,7 +409,10 @@ impl CatalogCommand {
                     is_external,
                 )
                 .await?;
-                display.bools().to_record_batch(vec![true])?
+                ArrowSerializer::build_record_batch_with_schema(
+                    metrics.as_slice(),
+                    clone_result_schema()?,
+                )?
             }
             CatalogCommand::TableExists { table } => {
                 let value = match manager.get_table_or_view(&table).await {
