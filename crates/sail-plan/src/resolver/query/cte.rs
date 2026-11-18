@@ -504,7 +504,9 @@ fn shareable_definition(plan: &Arc<LogicalPlan>, nested: bool) -> PlanResult<Opt
 /// the input is sorted as a whole, the sort decides which rows the definition returns, so
 /// each evaluation of the definition has to sort, and the references that do not depend
 /// on the order of the rows can share one evaluation. A reference that depends on the
-/// order evaluates the definition itself (see `PlanResolver::require_input_sort_inner`).
+/// order evaluates the definition itself (see `PlanResolver::require_input_sort_inner`),
+/// and so does a reference whose rows the query returns in their order (see
+/// `optimize_shared_ctes`).
 /// The query planner still lets each reference evaluate a definition whose plan does not
 /// end in the sort, as when the limit skips rows (see `SharedCteBody::inline`).
 fn returns_first_rows(plan: &LogicalPlan) -> bool {

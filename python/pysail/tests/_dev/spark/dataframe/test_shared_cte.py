@@ -5,6 +5,8 @@ the references that read the same rows of it, and inlines it for the other refer
 These tests check the results on every engine, and on Sail they also check the plans.
 """
 
+import os
+
 import pytest
 from pyspark.errors import PySparkException
 
@@ -313,6 +315,25 @@ def test_sorted_cte_with_limit_is_inlined_for_a_reference_that_depends_on_its_or
     assert rows(query) == [(95,), (95,), (99,), (99,)]
     query = f"WITH {cte} SELECT collect_list(id) FROM c UNION ALL SELECT array(max(id)) FROM c"  # noqa: S608
     assert rows(query) == [([99],), ([99, 98, 97, 96, 95],)]
+
+
+def test_sorted_cte_with_limit_is_inlined_for_a_reference_that_the_query_returns(spark):
+    """The query returns the rows of the CTE in the order of its sort, as it does when
+    the CTE is in the place of the reference. The CTE has more rows than a batch."""
+    rows = 20000
+    query = f"""
+        WITH c AS (SELECT id, id % 7 AS k FROM range(0, 1000000, 1, 8) ORDER BY id DESC LIMIT {rows})
+        SELECT c.id, c.k + 1 AS k1, (SELECT max(id) FROM c) AS m FROM c
+    """  # noqa: S608
+    if not is_jvm_spark():
+        assert "SharedCteExec" not in plan(spark, query)
+    result = [tuple(row) for row in spark.sql(query).collect()]
+    expected = [(i, i % 7 + 1, 999999) for i in range(999999, 999999 - rows, -1)]
+    if os.environ.get("SAIL_MODE") in ("local-cluster", "kubernetes-cluster"):
+        # The tasks of a cluster return their rows in any order.
+        assert sorted(result, reverse=True) == expected
+    else:
+        assert result == expected
 
 
 @pytest.mark.parametrize("order", ["i.score DESC NULLS LAST, i.item_id DESC", "i.score % 3 DESC"])

@@ -8,7 +8,7 @@ use datafusion::optimizer::eliminate_join::EliminateJoin;
 use datafusion::optimizer::{OptimizerContext, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, TableReference};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference};
 use datafusion_expr::utils::{conjunction, disjunction};
 use datafusion_expr::{
     Distinct, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, SubqueryAlias,
@@ -21,6 +21,7 @@ use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::seeded_random::SeededRandomNode;
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 
+use crate::resolver::PlanResolver;
 use crate::scalar_subquery_key::is_volatile_call;
 
 /// A CTE definition whose references can share one evaluation of its body.
@@ -1098,17 +1099,34 @@ struct Context {
     /// Whether the consumer ignores duplicate rows of the plan, as the filter side of
     /// a semi or anti join, or the input of a duplicate elimination.
     distinct: bool,
+    /// Whether the query returns the rows of the plan in their order: the plan is the
+    /// query, or the input of operators that return their rows in the order of their input.
+    ordered: bool,
 }
 
 /// Returns the demand by which the reference shares a body, or `None` if the reference
 /// cannot share a body. All the references to a volatile definition share one body,
 /// whatever they read, since each evaluation of the definition can return different rows.
-fn reference_demand(scan: &TableScan, context: Context) -> Option<Demand> {
-    match CteReference::try_from_scan(scan) {
+///
+/// A reference to a sorted definition whose rows the query returns in their order
+/// evaluates the definition itself: the reference to a shared body does not report the
+/// order of its rows, and the operators that the physical optimizer adds above it for
+/// parallelism would return the rows in another order than they do above the sort.
+fn reference_demand(scan: &TableScan, context: Context) -> Result<Option<Demand>> {
+    Ok(match CteReference::try_from_scan(scan) {
         Some(reference) if reference.definition.volatile => Some(Demand::default()),
         _ if context.partial => None,
+        Some(reference) if context.ordered && is_sorted(&reference.definition)? => None,
         _ => Demand::try_new(scan),
-    }
+    })
+}
+
+/// Returns whether the definition returns its rows in the order of a sort.
+fn is_sorted(definition: &CteDefinition) -> Result<bool> {
+    let (_, sorted, _) =
+        PlanResolver::require_input_sort_inner(definition.resolved.as_ref().clone())
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+    Ok(sorted)
 }
 
 /// Collects the references in the plan with what they read.
@@ -1127,7 +1145,7 @@ fn collect_members(plan: &LogicalPlan, context: Context, members: &mut Members) 
             .1
             .push(Member {
                 site: site(scan),
-                demand: reference_demand(scan, context),
+                demand: reference_demand(scan, context)?,
                 filters: definition
                     .volatile
                     .then(|| Demand::filtered(&scan.filters))
@@ -1203,9 +1221,30 @@ fn collect_members(plan: &LogicalPlan, context: Context, members: &mut Members) 
         },
         _ => vec![],
     };
+    // The other operators with one input, such as a write, return or read their rows in
+    // the order of their input.
+    let ordered = context.ordered
+        && !matches!(
+            plan,
+            LogicalPlan::Join(_)
+                | LogicalPlan::Union(_)
+                | LogicalPlan::Aggregate(_)
+                | LogicalPlan::Sort(_)
+                | LogicalPlan::Distinct(_)
+                | LogicalPlan::Window(_)
+                | LogicalPlan::Repartition(_)
+        );
     for (i, input) in plan.inputs().into_iter().enumerate() {
         let distinct = distinct.get(i).copied().unwrap_or(false);
-        collect_members(input, Context { partial, distinct }, members)?;
+        collect_members(
+            input,
+            Context {
+                partial,
+                distinct,
+                ordered,
+            },
+            members,
+        )?;
     }
     Ok(())
 }
@@ -1273,7 +1312,11 @@ fn share_references(
     optimize: &mut dyn FnMut(LogicalPlan, bool) -> Result<LogicalPlan>,
 ) -> Result<Sharing> {
     let mut members = Members::new();
-    collect_members(&plan, Context::default(), &mut members)?;
+    let query = Context {
+        ordered: true,
+        ..Default::default()
+    };
+    collect_members(&plan, query, &mut members)?;
     let mut bodies = vec![];
     let mut narrowed = false;
     // The references to a definition are in the plan and in the bodies of later
@@ -1430,7 +1473,7 @@ fn bind_references(
         let Some(reference) = CteReference::try_from_scan(&scan) else {
             return Ok(Transformed::no(LogicalPlan::TableScan(scan)));
         };
-        let source = reference_demand(&scan, Context::default())
+        let source = reference_demand(&scan, Context::default())?
             .and_then(|demand| sources.get(&(reference.definition.index, demand)));
         match source {
             Some(source) => scan.source = Arc::clone(source),

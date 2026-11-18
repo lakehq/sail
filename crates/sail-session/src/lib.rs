@@ -898,6 +898,13 @@ mod tests {
                 "(SELECT a FROM top LIMIT 1) UNION ALL (SELECT b FROM top LIMIT 1)",
                 (0, 0),
             ),
+            // A reference whose rows the query returns in their order evaluates the CTE
+            // itself.
+            ("SELECT a, b + 1, (SELECT max(a) FROM top) FROM top", (0, 0)),
+            (
+                "SELECT a, (SELECT max(a) FROM top), (SELECT min(b) FROM top) FROM top WHERE b > 0",
+                (2, 1),
+            ),
             // The limit is applied above the sort that holds the rows when it skips rows,
             // so each reference evaluates the CTE itself.
             (
