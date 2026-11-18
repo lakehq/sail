@@ -35,7 +35,7 @@ use log::{info, warn};
 use sail_common_datafusion::OPTIMIZER_SEMI_JOIN_REDUCTION_KEY_PREFIX;
 
 use crate::id::JobId;
-use crate::job_graph::{ExternalStageInput, OutputDistribution};
+use crate::job_graph::{ExternalStageInput, HandoffOutput, OutputDistribution};
 use crate::plan::HandoffExec;
 
 pub(crate) struct AdaptiveJoinOptions {
@@ -64,7 +64,7 @@ pub(crate) trait SideRunner: Send + Sync {
     async fn run(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        handoff: Option<OutputDistribution>,
+        handoff: Option<HandoffOutput>,
     ) -> Result<(SendableRecordBatchStream, Option<ExternalStageInput>)>;
 
     /// Keeps a job running after its stream is dropped, for a later job to read.
@@ -126,16 +126,6 @@ impl Handoffs {
             })?
             .data)
     }
-}
-
-/// Replaces every hand-off with the subtree it replaced.
-pub(crate) fn without_handoffs(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-    Ok(plan
-        .transform_down(|node| match node.downcast_ref::<HandoffExec>() {
-            Some(handoff) => Ok(Transformed::yes(Arc::clone(handoff.original()))),
-            None => Ok(Transformed::no(node)),
-        })?
-        .data)
 }
 
 /// Chooses between broadcast and partitioned hash joins from the actual size of build sides.
@@ -522,7 +512,8 @@ async fn materialize(
     let input = handoffs.resolve(input)?;
     let schema = input.schema();
     // A failure here would recur in the main job, which reports it with the full plan.
-    let (mut stream, handoff) = match runner.run(input, Some(distribution)).await {
+    let handoff = HandoffOutput { distribution };
+    let (mut stream, handoff) = match runner.run(input, Some(handoff)).await {
         Ok(x) => x,
         Err(error) => {
             warn!("adaptive join selection: failed to run a join input: {error}");
@@ -842,6 +833,16 @@ mod tests {
         AdaptiveJoinOptions::new(Arc::new(config))
     }
 
+    /// Replaces every hand-off with the subtree it replaced.
+    fn without_handoffs(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(plan
+            .transform_down(|node| match node.downcast_ref::<HandoffExec>() {
+                Some(handoff) => Ok(Transformed::yes(Arc::clone(handoff.original()))),
+                None => Ok(Transformed::no(node)),
+            })?
+            .data)
+    }
+
     /// Runs sides locally. With `handoff`, every job can be handed off, and the plans
     /// reading a hand-off fall back to the subtree it replaced when they are run.
     #[derive(Default)]
@@ -856,17 +857,19 @@ mod tests {
         async fn run(
             &self,
             plan: Arc<dyn ExecutionPlan>,
-            handoff: Option<OutputDistribution>,
+            handoff: Option<HandoffOutput>,
         ) -> Result<(SendableRecordBatchStream, Option<ExternalStageInput>)> {
             let job = self.jobs.fetch_add(1, Ordering::Relaxed);
             let source = match handoff {
-                Some(distribution) if self.handoff => Some(ExternalStageInput {
-                    job_id: JobId::from(job as u64),
-                    stage: 0,
-                    partitions: plan.output_partitioning().partition_count(),
-                    channels: distribution.channels(),
-                    mode: crate::job_graph::InputMode::Shuffle,
-                }),
+                Some(HandoffOutput { distribution, .. }) if self.handoff => {
+                    Some(ExternalStageInput {
+                        job_id: JobId::from(job as u64),
+                        stage: 0,
+                        partitions: plan.output_partitioning().partition_count(),
+                        channels: distribution.channels(),
+                        mode: crate::job_graph::InputMode::Shuffle,
+                    })
+                }
                 _ => None,
             };
             let plan = without_handoffs(plan)?;

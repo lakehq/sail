@@ -60,6 +60,8 @@ pub enum JobAction {
         /// retry. It is the cause that the driver infers for a job that fails, which
         /// is not necessarily the failure that led to this attempt.
         retry_cause: Option<CommonErrorCause>,
+        /// The stream belongs to a hand-off stage.
+        handoff: bool,
     },
     FailJobOutput {
         handle: JobOutputHandle,

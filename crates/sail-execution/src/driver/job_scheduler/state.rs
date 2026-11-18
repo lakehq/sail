@@ -23,6 +23,8 @@ pub struct JobDescriptor {
     /// The final stage is read by a later job, so the job is cleaned up when that job
     /// releases it, not when its own output is dropped.
     pub handed_off: bool,
+    /// The query the job belongs to, shared by the jobs adaptive execution runs for it.
+    pub group: Option<u64>,
 }
 
 pub enum JobState {
@@ -89,6 +91,7 @@ impl JobDescriptor {
             regions,
             state,
             handed_off: false,
+            group: None,
         })
     }
 }

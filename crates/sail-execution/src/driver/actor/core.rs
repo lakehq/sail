@@ -168,8 +168,9 @@ impl Actor for DriverActor {
                 plan,
                 context,
                 handoff,
+                group,
                 result,
-            } => self.handle_execute_job(ctx, plan, context, handoff, result),
+            } => self.handle_execute_job(ctx, plan, context, handoff, group, result),
             DriverMessage::CleanUpJob { job_id, outcome } => {
                 self.handle_clean_up_job(ctx, job_id, outcome)
             }

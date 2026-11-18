@@ -6,7 +6,7 @@ use indexmap::IndexSet;
 use log::{error, warn};
 
 use crate::driver::task_assigner::state::{TaskSlot, WorkerResource};
-use crate::driver::task_assigner::{HANDOFF_SLOTS_ERROR, TaskAssigner, TaskRegion};
+use crate::driver::task_assigner::{TaskAssigner, TaskRegion};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, WorkerId};
 use crate::job_graph::TaskPlacement;
@@ -92,9 +92,7 @@ impl TaskAssigner {
         }
     }
 
-    /// Queues a region. `reserved` worker slots are held by tasks that wait for the region
-    /// and are not available to it.
-    pub fn enqueue_tasks(&mut self, region: &TaskRegion, reserved: usize) -> ExecutionResult<()> {
+    pub fn enqueue_tasks(&mut self, region: &TaskRegion) -> ExecutionResult<()> {
         let required_slots = region
             .tasks
             .iter()
@@ -111,44 +109,74 @@ impl TaskAssigner {
                 self.options.worker_max_count, self.options.worker_task_slots,
             )));
         }
-        if self.options.worker_max_count != 0 && required_slots + reserved > max_slots {
-            return Err(ExecutionError::InvalidArgument(format!(
-                "{HANDOFF_SLOTS_ERROR}: the region requires {required_slots} of {max_slots} worker \
-                 task slots, and {reserved} are held by the jobs it reads",
-            )));
-        }
         self.task_queue.push_back(region.clone());
         Ok(())
     }
 
-    /// The worker slots running tasks of the given jobs.
-    pub fn occupied_worker_slots(&self, jobs: &IndexSet<JobId>) -> usize {
+    /// Occupied worker slots whose tasks all belong to the given jobs.
+    fn shared_slots(
+        &self,
+        jobs: &IndexSet<JobId>,
+        excluded: &HashSet<(WorkerId, usize)>,
+    ) -> Vec<(WorkerId, usize)> {
         if jobs.is_empty() {
-            return 0;
+            return vec![];
         }
-        self.workers
-            .values()
-            .map(|worker| match worker {
-                WorkerResource::Active { task_slots, .. } => task_slots
-                    .iter()
-                    .filter(|slot| slot.tasks().any(|key| jobs.contains(&key.job_id)))
-                    .count(),
-                _ => 0,
-            })
-            .sum()
+        let mut slots = vec![];
+        for (worker_id, worker) in &self.workers {
+            let WorkerResource::Active { task_slots, .. } = worker else {
+                continue;
+            };
+            for (index, slot) in task_slots.iter().enumerate() {
+                if !slot.is_vacant()
+                    && slot.tasks().all(|key| jobs.contains(&key.job_id))
+                    && !excluded.contains(&(*worker_id, index))
+                {
+                    slots.push((*worker_id, index));
+                }
+            }
+        }
+        slots
     }
 
     pub fn exclude_task(&mut self, key: &TaskKey) {
         self.task_queue.retain(|x| !x.contains(key));
     }
 
+    #[cfg(test)]
     pub fn assign_tasks(&mut self) -> Vec<TaskSetAssignment> {
+        self.assign_tasks_with_related(&|_| IndexSet::new())
+    }
+
+    /// Assigns queued regions. A region first uses slots held only by `related` jobs
+    /// (other jobs of the same query, such as handed-off jobs it reads), as the stages of
+    /// one job share slots.
+    pub fn assign_tasks_with_related(
+        &mut self,
+        related: &dyn Fn(JobId) -> IndexSet<JobId>,
+    ) -> Vec<TaskSetAssignment> {
         let mut assignments = vec![];
         let mut assigner = self.build_worker_task_slot_assigner();
+        let mut lent = HashSet::new();
 
         while let Some(region) = self.task_queue.pop_front() {
+            let jobs = region
+                .tasks
+                .iter()
+                .flat_map(|(_, set)| set.tasks())
+                .next()
+                .map(|key| related(key.job_id))
+                .unwrap_or_default();
+            assigner.shared = self.shared_slots(&jobs, &lent);
             match assigner.try_assign_task_region(region) {
-                Ok(x) => assignments.extend(x),
+                Ok(x) => {
+                    for assignment in &x {
+                        if let TaskAssignment::Worker { worker_id, slot } = assignment.assignment {
+                            lent.insert((worker_id, slot));
+                        }
+                    }
+                    assignments.extend(x)
+                }
                 Err(region) => {
                     // The region cannot be successfully assigned as a whole
                     // due to insufficient worker task slots.
@@ -346,11 +374,16 @@ impl TaskAssignmentGetter for TaskAssigner {
 struct TaskSlotAssigner {
     /// The available task slots on workers.
     slots: Vec<(WorkerId, Vec<usize>)>,
+    /// Occupied slots that the region being assigned may share, used first.
+    shared: Vec<(WorkerId, usize)>,
 }
 
 impl TaskSlotAssigner {
     fn new(slots: Vec<(WorkerId, Vec<usize>)>) -> Self {
-        Self { slots }
+        Self {
+            slots,
+            shared: vec![],
+        }
     }
 
     fn next(&mut self) -> Option<(WorkerId, usize)> {
@@ -377,7 +410,7 @@ impl TaskSlotAssigner {
                     });
                 }
                 TaskPlacement::Worker => {
-                    if let Some((worker_id, slot)) = self.next() {
+                    if let Some((worker_id, slot)) = self.shared.pop().or_else(|| self.next()) {
                         assignments.push(TaskSetAssignment {
                             set: set.clone(),
                             assignment: TaskAssignment::Worker { worker_id, slot },
@@ -399,6 +432,8 @@ impl TaskSlotAssigner {
 mod tests {
     use std::collections::HashSet;
 
+    use indexmap::IndexSet;
+
     use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
     use crate::id::{JobId, TaskKey, WorkerId};
     use crate::job_graph::TaskPlacement;
@@ -414,6 +449,10 @@ mod tests {
     }
 
     fn worker_region(slots: usize) -> TaskRegion {
+        job_region(JobId::from(1), slots)
+    }
+
+    fn job_region(job_id: JobId, slots: usize) -> TaskRegion {
         TaskRegion {
             tasks: (0..slots)
                 .map(|partition| {
@@ -422,7 +461,7 @@ mod tests {
                         TaskSet {
                             entries: vec![TaskSetEntry {
                                 key: TaskKey {
-                                    job_id: JobId::from(1),
+                                    job_id,
                                     stage: 0,
                                     partition,
                                     attempt: 0,
@@ -437,20 +476,29 @@ mod tests {
     }
 
     #[test]
-    fn regions_do_not_count_on_slots_held_by_handed_off_jobs() {
-        let mut assigner = task_assigner(4, 1);
-        assert!(assigner.enqueue_tasks(&worker_region(3), 1).is_ok());
-        let error = assigner.enqueue_tasks(&worker_region(3), 2).err();
-        assert!(
-            error.is_some_and(|e| e.to_string().contains(super::HANDOFF_SLOTS_ERROR)),
-            "a region beside two held slots should not fit in four"
-        );
+    fn regions_share_the_slots_of_the_jobs_they_read() {
+        // One worker with two slots, both held by job 1.
+        let mut assigner = task_assigner(2, 1);
+        assigner.activate_worker(WorkerId::from(1));
+        assert!(assigner.enqueue_tasks(&worker_region(2)).is_ok());
+        assert_eq!(assigner.assign_tasks().len(), 2);
+        let reader = job_region(JobId::from(2), 2);
+        assert!(assigner.enqueue_tasks(&reader).is_ok());
+        assert!(assigner.assign_tasks().is_empty());
+        let assignments = assigner.assign_tasks_with_related(&|job| {
+            if job == JobId::from(2) {
+                [JobId::from(1)].into_iter().collect()
+            } else {
+                IndexSet::new()
+            }
+        });
+        assert_eq!(assignments.len(), 2);
     }
 
     #[test]
     fn worker_demand_accounts_for_vacant_slots() {
         let mut assigner = task_assigner(8, 4);
-        assert!(assigner.enqueue_tasks(&worker_region(8), 0).is_ok());
+        assert!(assigner.enqueue_tasks(&worker_region(8)).is_ok());
 
         assert_eq!(assigner.count_worker_demands(), 1);
         assigner.activate_worker(WorkerId::from(1));
@@ -463,12 +511,9 @@ mod tests {
         for tasks in worker_region(4).tasks.chunks(2) {
             assert!(
                 assigner
-                    .enqueue_tasks(
-                        &TaskRegion {
-                            tasks: tasks.to_vec(),
-                        },
-                        0,
-                    )
+                    .enqueue_tasks(&TaskRegion {
+                        tasks: tasks.to_vec(),
+                    })
                     .is_ok()
             );
         }
@@ -496,12 +541,9 @@ mod tests {
         for tasks in region.tasks.chunks(2) {
             assert!(
                 assigner
-                    .enqueue_tasks(
-                        &TaskRegion {
-                            tasks: tasks.to_vec(),
-                        },
-                        0,
-                    )
+                    .enqueue_tasks(&TaskRegion {
+                        tasks: tasks.to_vec(),
+                    })
                     .is_ok()
             );
             assert_eq!(assigner.assign_tasks().len(), 2);
@@ -515,7 +557,7 @@ mod tests {
     fn assignments_prefer_workers_with_more_free_slots() {
         let mut assigner = task_assigner(8, 2);
         assigner.activate_worker(WorkerId::from(1));
-        assert!(assigner.enqueue_tasks(&worker_region(6), 0).is_ok());
+        assert!(assigner.enqueue_tasks(&worker_region(6)).is_ok());
         assert_eq!(assigner.assign_tasks().len(), 6);
 
         assigner.activate_worker(WorkerId::from(2));
@@ -525,7 +567,7 @@ mod tests {
                 entry.key.stage = 1;
             }
         }
-        assert!(assigner.enqueue_tasks(&region, 0).is_ok());
+        assert!(assigner.enqueue_tasks(&region).is_ok());
         let assignments = assigner.assign_tasks();
         let slots = assignments
             .iter()
@@ -544,7 +586,7 @@ mod tests {
     fn regions_wait_for_capacity_without_partial_assignment() {
         let mut assigner = task_assigner(2, 2);
         assigner.activate_worker(WorkerId::from(1));
-        assert!(assigner.enqueue_tasks(&worker_region(4), 0).is_ok());
+        assert!(assigner.enqueue_tasks(&worker_region(4)).is_ok());
         assert!(assigner.assign_tasks().is_empty());
         assert!(assigner.find_worker_tasks(WorkerId::from(1)).is_empty());
 
@@ -555,9 +597,9 @@ mod tests {
     #[test]
     fn impossible_regions_are_rejected_even_behind_waiting_regions() {
         let mut assigner = task_assigner(2, 2);
-        assert!(assigner.enqueue_tasks(&worker_region(4), 0).is_ok());
+        assert!(assigner.enqueue_tasks(&worker_region(4)).is_ok());
         assert!(matches!(
-            assigner.enqueue_tasks(&worker_region(5), 0),
+            assigner.enqueue_tasks(&worker_region(5)),
             Err(error) if error.to_string().contains(
                 "task region requires 5 worker task slots, but the configured maximum is 4"
             )
@@ -579,7 +621,7 @@ mod tests {
             },
             output: entry.output,
         });
-        assert!(assigner.enqueue_tasks(&region, 0).is_ok());
+        assert!(assigner.enqueue_tasks(&region).is_ok());
         assigner.activate_worker(WorkerId::from(1));
         assert_eq!(assigner.assign_tasks().len(), 2);
     }
@@ -588,12 +630,12 @@ mod tests {
     fn capacity_check_allows_unlimited_workers_and_large_limits() {
         assert!(
             task_assigner(1, 0)
-                .enqueue_tasks(&worker_region(10), 0)
+                .enqueue_tasks(&worker_region(10))
                 .is_ok()
         );
         assert!(
             task_assigner(2, usize::MAX)
-                .enqueue_tasks(&worker_region(10), 0)
+                .enqueue_tasks(&worker_region(10))
                 .is_ok()
         );
     }

@@ -22,9 +22,14 @@ use crate::shuffle::ShuffleBackendKind;
 #[derive(Debug, Clone)]
 pub struct JobGraphOptions {
     pub shuffle_backend: ShuffleBackendKind,
-    /// When set, the final stage is written for a later job instead of the job output
-    /// alone: with this distribution, and with a hand-off replica.
-    pub handoff: Option<OutputDistribution>,
+    /// When set, the final stage is also written for a later job.
+    pub handoff: Option<HandoffOutput>,
+}
+
+/// How a job's final stage is written for a later job.
+#[derive(Debug, Clone)]
+pub struct HandoffOutput {
+    pub distribution: OutputDistribution,
 }
 
 /// A job graph represents a distributed execution plan for a job.
@@ -116,7 +121,7 @@ impl JobGraph {
 
     /// The final stage of a hand-off job, as a later job reads it.
     pub fn handoff_input(&self, job_id: JobId) -> Option<ExternalStageInput> {
-        let distribution = self.options.handoff.as_ref()?;
+        let distribution = &self.options.handoff.as_ref()?.distribution;
         let stage = self.stages.len().checked_sub(1)?;
         let partitions = self.stages[stage]
             .plan

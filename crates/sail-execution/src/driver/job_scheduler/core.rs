@@ -27,8 +27,8 @@ use crate::driver::output::{JobOutputOutcome, build_job_output};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
 use crate::job_graph::{
-    ExternalStageInput, InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput,
-    TaskPlacement,
+    ExternalStageInput, HandoffOutput, InputMode, JobGraph, OutputDistribution, OutputMode, Stage,
+    StageInput, TaskPlacement,
 };
 use crate::proto::{
     encode_remote_partitioning, encode_remote_physical_expr, encode_remote_physical_plan,
@@ -54,7 +54,8 @@ impl JobScheduler {
         ctx: &mut ActorContext<DriverActor>,
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
-        handoff: Option<OutputDistribution>,
+        handoff: Option<HandoffOutput>,
+        group: Option<u64>,
     ) -> ExecutionResult<(JobId, Option<ExternalStageInput>, SendableRecordBatchStream)> {
         let job_id = self.next_job_id()?;
 
@@ -96,7 +97,8 @@ impl JobScheduler {
         let handoff = graph.handoff_input(job_id);
 
         let (output, stream) = build_job_output(ctx, job_id, graph.schema().clone());
-        let descriptor = JobDescriptor::try_new(graph, JobState::Running { output }, context)?;
+        let mut descriptor = JobDescriptor::try_new(graph, JobState::Running { output }, context)?;
+        descriptor.group = group;
         self.jobs.insert(job_id, descriptor);
 
         if let Some(job) = self.jobs.get(&job_id) {
@@ -167,19 +169,16 @@ impl JobScheduler {
         self.clean_up_job(job_id, outcome)
     }
 
-    /// The jobs whose output the job reads.
-    pub fn handoff_sources(&self, job_id: JobId) -> IndexSet<JobId> {
+    /// The other jobs of the job's query.
+    pub fn related_jobs(&self, job_id: JobId) -> IndexSet<JobId> {
+        let Some(group) = self.jobs.get(&job_id).and_then(|job| job.group) else {
+            return IndexSet::new();
+        };
         self.jobs
-            .get(&job_id)
-            .map(|job| {
-                job.graph
-                    .stages()
-                    .iter()
-                    .flat_map(|stage| &stage.external_inputs)
-                    .map(|input| input.job_id)
-                    .collect()
-            })
-            .unwrap_or_default()
+            .iter()
+            .filter(|(id, job)| **id != job_id && job.group == Some(group))
+            .map(|(id, _)| *id)
+            .collect()
     }
 
     /// Records where a task attempt runs, so that later jobs can find its output.
@@ -655,6 +654,7 @@ impl JobScheduler {
             .map(|key| JobAction::ExtendJobOutput {
                 handle: output.handle(),
                 retry_cause: retry_cause.clone().filter(|_| key.attempt > 0),
+                handoff: job.graph.is_handoff_stage(key.stage),
                 key,
                 schema: schema.clone(),
             })
@@ -1430,7 +1430,7 @@ pub(super) mod tests {
             SnapshotUpdateKind::FastAppend,
         ));
         let (job_id, _, _output) =
-            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()), None)?;
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()), None, None)?;
         scheduler.refresh_job(job_id);
         let original = TaskKey {
             job_id,
@@ -1458,7 +1458,7 @@ pub(super) mod tests {
         );
         for action in scheduler.refresh_job(job_id) {
             if let JobAction::ScheduleTaskRegion { region } = action {
-                assigner.enqueue_tasks(&region, 0)?;
+                assigner.enqueue_tasks(&region)?;
             }
         }
         assert!(matches!(
@@ -1561,7 +1561,7 @@ pub(super) mod tests {
             Partitioning::RoundRobinBatch(2),
         )?);
         let (job_id, _, _output) =
-            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()), None)?;
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()), None, None)?;
         scheduler.refresh_job(job_id);
         let key = |stage, partition, attempt| TaskKey {
             job_id,
@@ -2016,7 +2016,7 @@ pub(super) mod tests {
         let sort = SortExec::new(ordering.clone(), input).with_preserve_partitioning(true);
         let plan = Arc::new(SortPreservingMergeExec::new(ordering, Arc::new(sort)));
         let (job_id, _, _output) =
-            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()), None)?;
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()), None, None)?;
         scheduler.refresh_job(job_id);
         let key = TaskKey {
             job_id,

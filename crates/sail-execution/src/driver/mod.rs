@@ -27,4 +27,3 @@ pub use gateway::{DriverGateway, DriverGatewayOptions};
 pub(crate) use r#gen::celeborn_lifecycle_manager_service_client::CelebornLifecycleManagerServiceClient;
 pub(crate) use r#gen::driver_service_client::DriverServiceClient;
 pub use registry::{DriverHandle, DriverRegistry, DriverRegistryAccessor};
-pub(crate) use task_assigner::HANDOFF_SLOTS_ERROR;

@@ -20,7 +20,7 @@ use crate::driver::output::JobOutputOutcome;
 use crate::driver::worker_scaler::WorkerRetryRequest;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, TaskStreamKeySet, WorkerId};
-use crate::job_graph::{ExternalStageInput, OutputDistribution};
+use crate::job_graph::{ExternalStageInput, HandoffOutput};
 use crate::stream::reader::TaskStreamSource;
 
 pub struct SubmittedJob {
@@ -67,8 +67,10 @@ pub enum DriverMessage {
     ExecuteJob {
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
-        /// The distribution of the final stage when it is handed to a later job.
-        handoff: Option<OutputDistribution>,
+        /// How the final stage is written when it is handed to a later job.
+        handoff: Option<HandoffOutput>,
+        /// Jobs of one query share a group, and the worker slots of its running jobs.
+        group: Option<u64>,
         result: oneshot::Sender<ExecutionResult<SubmittedJob>>,
     },
     CleanUpJob {
@@ -223,6 +225,7 @@ impl SpanAssociation for DriverMessage {
                 plan: _,
                 context: _,
                 handoff: _,
+                group: _,
                 result: _,
             } => {}
             DriverMessage::CleanUpJob { job_id, .. }

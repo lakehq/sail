@@ -73,7 +73,8 @@ impl JobGraph {
         let distribution = graph
             .options
             .handoff
-            .clone()
+            .as_ref()
+            .map(|handoff| handoff.distribution.clone())
             .unwrap_or(OutputDistribution::RoundRobinBatch { channels: 1 });
         graph.stages.push(Stage {
             inputs,

@@ -9,20 +9,18 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::SessionContext;
 use futures::StreamExt;
-use log::warn;
 use sail_common::actor::ActorSystem;
 use sail_common_datafusion::session::job::JobRunner;
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::oneshot;
 
-use crate::adaptive::{AdaptiveJoinOptions, Handoffs, SideRunner, select_joins, without_handoffs};
+use crate::adaptive::{AdaptiveJoinOptions, Handoffs, SideRunner, select_joins};
 use crate::driver::{
-    DriverActor, DriverComponents, DriverHandle, DriverMessage, DriverOptions, HANDOFF_SLOTS_ERROR,
-    SubmittedJob,
+    DriverActor, DriverComponents, DriverHandle, DriverMessage, DriverOptions, SubmittedJob,
 };
 use crate::id::JobId;
-use crate::job_graph::{ExternalStageInput, JobGraph, JobGraphOptions, OutputDistribution};
+use crate::job_graph::{ExternalStageInput, HandoffOutput, JobGraph, JobGraphOptions};
 use crate::shuffle::ShuffleBackendKind;
 
 fn explain_job_graph(
@@ -106,6 +104,8 @@ pub struct ClusterJobRunner {
     driver: DriverHandle,
     shuffle_backend: ShuffleBackendKind,
     enable_adaptive_join_selection: bool,
+    /// Identifies the jobs of one query run with adaptive join selection.
+    next_group: AtomicU64,
 }
 
 impl ClusterJobRunner {
@@ -121,6 +121,7 @@ impl ClusterJobRunner {
             driver,
             shuffle_backend,
             enable_adaptive_join_selection,
+            next_group: AtomicU64::new(0),
         }
     }
 
@@ -132,7 +133,8 @@ impl ClusterJobRunner {
         &self,
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
-        handoff: Option<OutputDistribution>,
+        handoff: Option<HandoffOutput>,
+        group: Option<u64>,
     ) -> Result<SubmittedJob> {
         let (tx, rx) = oneshot::channel();
         self.driver
@@ -140,6 +142,7 @@ impl ClusterJobRunner {
                 plan,
                 context: ctx.task_ctx(),
                 handoff,
+                group,
                 result: tx,
             })
             .await
@@ -154,44 +157,33 @@ impl ClusterJobRunner {
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<SendableRecordBatchStream> {
-        Ok(self.submit(ctx, plan, None).await?.stream)
+        Ok(self.submit(ctx, plan, None, None).await?.stream)
     }
 
     /// Runs the plan chosen by adaptive join selection, which may read handed-off jobs.
-    /// The jobs are released when the output ends. If the plan cannot be scheduled beside
-    /// them, it runs again without them.
+    /// The jobs are released when the output is dropped.
     async fn run_with_handoffs(
         &self,
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
         handoffs: &Handoffs,
+        group: u64,
     ) -> Result<SendableRecordBatchStream> {
         let release = ReleaseHandoffs {
             driver: self.driver.clone(),
             jobs: handoffs.take(),
         };
         let plan = handoffs.resolve(plan)?;
+        let stream = self.submit(ctx, plan, None, Some(group)).await?.stream;
         if release.jobs.is_empty() {
-            return self.run_job(ctx, plan).await;
-        }
-        let mut stream = self.run_job(ctx, Arc::clone(&plan)).await?;
-        let first = stream.next().await;
-        if let Some(Err(error)) = &first
-            && error.to_string().contains(HANDOFF_SLOTS_ERROR)
-        {
-            warn!("adaptive join selection: running the plan again without hand-offs: {error}");
-            drop(stream);
-            drop(release);
-            return self.run_job(ctx, without_handoffs(plan)?).await;
+            return Ok(stream);
         }
         let schema = stream.schema();
-        let output = futures::stream::iter(first)
-            .chain(stream)
-            .map(move |batch| {
-                // The jobs are released when the output is dropped.
-                let _ = &release;
-                batch
-            });
+        let output = stream.map(move |batch| {
+            // The jobs are released when the output is dropped.
+            let _ = &release;
+            batch
+        });
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, output)))
     }
 }
@@ -222,6 +214,7 @@ impl Drop for ReleaseHandoffs {
 struct ClusterSideRunner<'a> {
     runner: &'a ClusterJobRunner,
     ctx: &'a SessionContext,
+    group: u64,
 }
 
 #[tonic::async_trait]
@@ -229,9 +222,12 @@ impl SideRunner for ClusterSideRunner<'_> {
     async fn run(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        handoff: Option<OutputDistribution>,
+        handoff: Option<HandoffOutput>,
     ) -> Result<(SendableRecordBatchStream, Option<ExternalStageInput>)> {
-        let job = self.runner.submit(self.ctx, plan, handoff).await?;
+        let job = self
+            .runner
+            .submit(self.ctx, plan, handoff, Some(self.group))
+            .await?;
         Ok((job.stream, job.handoff))
     }
 
@@ -274,10 +270,15 @@ impl JobRunner for ClusterJobRunner {
         }
         let options = AdaptiveJoinOptions::new(ctx.copied_config().options().clone());
         let handoffs = Handoffs::default();
-        let runner = ClusterSideRunner { runner: self, ctx };
+        let group = self.next_group.fetch_add(1, Ordering::Relaxed);
+        let runner = ClusterSideRunner {
+            runner: self,
+            ctx,
+            group,
+        };
         let selected = select_joins(plan, &options, &runner, &handoffs).await;
         match selected {
-            Ok(plan) => self.run_with_handoffs(ctx, plan, &handoffs).await,
+            Ok(plan) => self.run_with_handoffs(ctx, plan, &handoffs, group).await,
             Err(error) => {
                 drop(ReleaseHandoffs {
                     driver: self.driver.clone(),
