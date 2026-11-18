@@ -902,6 +902,12 @@ mod tests {
                  ORDER BY k DESC",
                 vec![99999, 99998, 99997],
             ),
+            // The sort of a window above the offset.
+            (
+                "SELECT k, row_number() OVER (ORDER BY k DESC) AS n FROM \
+                 (SELECT id AS k FROM range(0, 100, 1, 1) LIMIT 3 OFFSET 2) ORDER BY n",
+                vec![4, 3, 2],
+            ),
         ] {
             let plan = from_ast_statement(parse_one_statement(query)?)?;
             let plan = resolver.resolve_named_plan(plan).await?.plan;
