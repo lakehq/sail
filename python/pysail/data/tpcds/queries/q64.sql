@@ -1,5 +1,5 @@
 -- SPDX-FileComment: SQLBench-DS query 64 derived from TPC-DS query 64 under the terms of the TPC Fair Use Policy.
--- SPDX-FileCopyrightText: Copyright 2021 Transaction Processing Performance Council.
+-- SPDX-FileCopyrightText: Copyright 2021 Transaction Processing Performance Council
 
 -- This query was generated at scale factor 1.
 with

@@ -188,6 +188,8 @@ def test_merge_identity_star_omission_requires_evolution(spark, identity_table, 
     assert _state(spark, name, path) == before
 
 
+# SPDX-SnippetBegin
+# SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/test/scala/org/apache/spark/sql/delta/IdentityColumnDMLSuite.scala#L130-L205
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
 @pytest.mark.parametrize(
     ("api", "update_action"),
@@ -199,9 +201,6 @@ def test_merge_identity_star_omission_requires_evolution(spark, identity_table, 
     ],
 )
 def test_merge_identity_star_evolution_lifecycle(spark, identity_table, mode, api, update_action):
-    # SPDX-SnippetBegin
-    # SPDX-License-Identifier: Apache-2.0
-    # SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/test/scala/org/apache/spark/sql/delta/IdentityColumnDMLSuite.scala#L130-L205
     name, path = identity_table(
         schema=f"""id BIGINT GENERATED {mode} AS IDENTITY (START WITH 10 INCREMENT BY 3),
         k INT, v INT, payload STRUCT<a: INT>"""
@@ -257,7 +256,9 @@ def test_merge_identity_star_evolution_lifecycle(spark, identity_table, mode, ap
     assert tuple(appended[2][1:]) == (3, 33, None, None)
     assert appended[2].id > generated
     assert _watermark(path) == appended[2].id
-    # SPDX-SnippetEnd
+
+
+# SPDX-SnippetEnd
 
 
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
@@ -272,11 +273,10 @@ def test_merge_identity_evolution_update_only_preserves_watermark(spark, identit
     assert _watermark(path) == before
 
 
+# SPDX-SnippetBegin
+# SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/test/scala/org/apache/spark/sql/delta/MergeIntoSchemaEvolutionSuite.scala#L387-L499
 @pytest.mark.parametrize("matched", [False, True], ids=["fast-append", "copy-on-write"])
 def test_merge_identity_evolution_mixed_insert_first_match(spark, identity_table, matched):
-    # SPDX-SnippetBegin
-    # SPDX-License-Identifier: Apache-2.0
-    # SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/test/scala/org/apache/spark/sql/delta/MergeIntoSchemaEvolutionSuite.scala#L387-L499
     name, path = identity_table(mode="BY DEFAULT")
     spark.sql(f"INSERT INTO {name} (k,v) VALUES (0,0)").collect()  # noqa: S608
     initial_watermark = _watermark(path)
@@ -303,7 +303,9 @@ def test_merge_identity_evolution_mixed_insert_first_match(spark, identity_table
     before = _watermark(path)
     spark.sql(f"INSERT INTO {name} (k,v) VALUES (5,50)").collect()  # noqa: S608
     assert spark.table(name).where("k=5").first().id > before
-    # SPDX-SnippetEnd
+
+
+# SPDX-SnippetEnd
 
 
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
@@ -325,12 +327,11 @@ def test_merge_identity_evolution_star_supplied_value(spark, identity_table, mod
 
 
 # Spark 4.2 / Delta 4.4: explicit DEFAULT becomes NULL, not an omitted identity.
+# SPDX-SnippetBegin
+# SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/main/scala/org/apache/spark/sql/delta/ColumnWithDefaultExprUtils.scala#L172-L180
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
 @pytest.mark.parametrize("values", ["(DEFAULT,2,22)", "(DEFAULT,2,22),(99,3,33)", "(NULL,2,22)"])
 def test_insert_identity_default_is_explicit(spark, identity_table, mode, values):
-    # SPDX-SnippetBegin
-    # SPDX-License-Identifier: Apache-2.0
-    # SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/main/scala/org/apache/spark/sql/delta/ColumnWithDefaultExprUtils.scala#L172-L180
     name, path = identity_table(mode=mode)
     spark.sql(f"INSERT INTO {name} (k,v) VALUES (1,11)").collect()  # noqa: S608
     before = _state(spark, name, path)
@@ -347,7 +348,9 @@ def test_insert_identity_default_is_explicit(spark, identity_table, mode, values
         assert _watermark(path) == watermark
         spark.sql(f"INSERT INTO {name} (k,v) VALUES (4,44)").collect()  # noqa: S608
         assert spark.table(name).where("k=4").first().id == watermark + 3
-    # SPDX-SnippetEnd
+
+
+# SPDX-SnippetEnd
 
 
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
