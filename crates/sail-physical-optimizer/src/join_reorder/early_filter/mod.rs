@@ -150,7 +150,8 @@ fn restrict(
 
 /// Returns the columns of a shared CTE that every reference is restricted on, and the
 /// restriction of these columns to the keys of all the references. A reference with
-/// several restrictions reads no more than the rows of any one of them.
+/// several restrictions reads no more than the rows of any one of them, so the first
+/// columns whose keys are within the limits are taken.
 fn union(
     references: &[Vec<SharedCteRestriction>],
     config: &ConfigOptions,
@@ -163,7 +164,7 @@ fn union(
         let types = schema.fields().iter().map(|x| x.data_type().clone());
         types.collect::<Vec<_>>()
     };
-    for candidate in first {
+    'candidates: for candidate in first {
         let sources = others
             .iter()
             .map(|reference| {
@@ -179,15 +180,11 @@ fn union(
         };
         let (mut keys, mut rows, mut scan_rows) = (vec![], 0usize, 0usize);
         for source in std::iter::once(candidate).chain(sources) {
-            // References that have the keys of the same join input need them once.
-            if keys.iter().any(|x| Arc::ptr_eq(x, &source.keys)) {
-                continue;
-            }
             let (Some(source_scan_rows), Some(source_rows)) = (
                 filtered_scan_rows(&source.keys, false)?,
                 row_count(&source.keys)?,
             ) else {
-                return Ok(None);
+                continue 'candidates;
             };
             keys.push(Arc::clone(&source.keys));
             rows = rows.saturating_add(source_rows);
@@ -203,7 +200,7 @@ fn union(
         let max_rows = config.optimizer.hash_join_single_partition_threshold_rows;
         let keys = UnionExec::try_new(keys)?;
         if rows > max_rows || !can_collect(&keys, rows, config)? {
-            return Ok(None);
+            continue;
         }
         let restriction = Restriction {
             keys,
@@ -1026,14 +1023,19 @@ mod tests {
         Ok(())
     }
 
-    /// Returns a reference that is restricted on the second column of the CTE to the
-    /// first column of the rows of a file whose values in that column, which are from 0
-    /// to 999, compare in the given way with the given value.
-    fn reference(rows: usize, operator: Operator, value: i64) -> Result<Vec<SharedCteRestriction>> {
+    /// Returns the restriction of the given column of the CTE to the first column of the
+    /// rows of a file whose values in that column, which are in the given range, compare
+    /// in the given way with the given value.
+    fn compared(
+        column_of_cte: usize,
+        (rows, range): (usize, (i64, i64)),
+        operator: Operator,
+        value: i64,
+    ) -> Result<SharedCteRestriction> {
         use datafusion::common::ScalarValue;
         use datafusion::physical_expr::expressions::Literal;
 
-        let scan = file_scan(rows, (0, 999));
+        let scan = file_scan(rows, range);
         let predicate = Arc::new(BinaryExpr::new(
             column(&scan, 0),
             operator,
@@ -1047,11 +1049,18 @@ mod tests {
             }],
             filter,
         )?);
-        Ok(vec![SharedCteRestriction {
+        Ok(SharedCteRestriction {
             keys,
-            columns: vec![1],
+            columns: vec![column_of_cte],
             null_equality: NullEquality::NullEqualsNothing,
-        }])
+        })
+    }
+
+    /// Returns a reference that is restricted on the second column of the CTE to the
+    /// first column of the rows of a file whose values in that column, which are from 0
+    /// to 999, compare in the given way with the given value.
+    fn reference(rows: usize, operator: Operator, value: i64) -> Result<Vec<SharedCteRestriction>> {
+        Ok(vec![compared(1, (rows, (0, 999)), operator, value)?])
     }
 
     #[test]
@@ -1074,14 +1083,34 @@ mod tests {
     }
 
     #[test]
-    fn references_with_the_keys_of_one_join_input_read_the_keys_once() -> Result<()> {
-        let first = reference(73_049, Operator::Lt, 10)?;
-        let second = first.clone();
-        let (plan, applied) = restrict_grouped_facts(vec![first, second], false)?;
+    fn the_keys_of_all_references_together_are_limited() -> Result<()> {
+        // Every row of each source has one of ten keys, so the keys pay for a reduction,
+        // and the rows of all the sources are collected together.
+        let all = |column: usize| compared(column, (40_000, (0, 9)), Operator::Lt, 10);
+        let references = |count: usize| {
+            let references = (0..count).map(|_| Ok(vec![all(1)?]));
+            references.collect::<Result<Vec<_>>>()
+        };
+        // 120,000 rows are below the row threshold of a collected join input.
+        let (plan, applied) = restrict_grouped_facts(references(3)?, false)?;
         assert!(applied);
         assert_eq!(count::<HashJoinExec>(&plan)?, 1);
-        assert_eq!(count::<UnionExec>(&plan)?, 0);
-        assert_eq!(count::<DataSourceExec>(&plan)?, 2);
+        // 160,000 rows are not.
+        let (plan, applied) = restrict_grouped_facts(references(4)?, false)?;
+        assert!(!applied);
+        assert_eq!(count::<HashJoinExec>(&plan)?, 0);
+        // The references are restricted on the other column as well, with few keys.
+        let both = || {
+            Ok(vec![
+                all(1)?,
+                compared(0, (1000, (0, 999)), Operator::Lt, 10)?,
+            ])
+        };
+        let references = (0..4).map(|_| both()).collect::<Result<Vec<_>>>()?;
+        let (plan, applied) = restrict_grouped_facts(references, false)?;
+        assert!(applied);
+        assert_eq!(count::<HashJoinExec>(&plan)?, 1);
+        assert_eq!(count::<DataSourceExec>(&plan)?, 5);
         Ok(())
     }
 
