@@ -40,6 +40,7 @@ use crate::resolver::tree::seeded_random::{
     SeededRandomRewriter, SeededRandomScope, seeded_random_calls,
 };
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
+use crate::shared_cte::inline_deterministic_reference;
 
 /// Projections resolved by index, with typed columns for lateral dependencies.
 /// A `None` marks a projection deferred until grouping is materialized.
@@ -909,6 +910,16 @@ impl PlanResolver<'_> {
     pub(crate) fn require_input_sort_inner(
         plan: LogicalPlan,
     ) -> PlanResult<(LogicalPlan, bool, bool)> {
+        // A consumer that depends on the order of the rows of a sorted CTE definition
+        // evaluates the definition itself, as if the CTE was not shareable.
+        if let Some(definition) = inline_deterministic_reference(&plan)? {
+            let (definition, found, global) = Self::require_input_sort_inner(definition)?;
+            return Ok(if found {
+                (definition, true, global)
+            } else {
+                (plan, false, false)
+            });
+        }
         match plan {
             LogicalPlan::Sort(sort) => Ok((
                 LogicalPlan::Extension(Extension {
