@@ -28,8 +28,6 @@ from pysail.testing.spark.utils.common import is_jvm_spark
 # error with a conflict between attempts.
 # TODO: report the error of the failed task in cluster mode.
 LOCAL_CLUSTER = os.environ.get("SAIL_MODE") == "local-cluster"
-# The shuffle backends that store the output of a stage outside the workers.
-STORED_SHUFFLE = LOCAL_CLUSTER and os.environ.get("SAIL_CLUSTER__SHUFFLE_BACKEND__TYPE") in ("storage", "celeborn")
 DIVISION_BY_ZERO = "(?i)division by zero|different attempt" if LOCAL_CLUSTER else "(?i)division by zero"
 
 # Wide rows, so that one evaluation of a CTE is about 50 MB of Arrow data.
@@ -275,17 +273,12 @@ def test_cte_is_not_evaluated_when_the_other_join_side_is_empty(spark, counted, 
     assert rows(spark, query) == [(0, None)]
     if not is_jvm_spark():
         # Spark may evaluate a CTE in a stage of its own before it finds the other side empty.
-        # Sail cluster mode starts the stage below the shuffle of an aggregate body before it
-        # finds the other side empty, as it does without sharing, but evaluates the body once,
-        # or once for each reference when the shuffle output is stored, as without sharing.
-        # Sail cluster mode evaluates a volatile body once in a stage of its own before the
-        # other side is found empty, as Spark does.
-        # Measured with Flight shuffle in local-cluster mode (10 runs): the aggregate body and
-        # the volatile body each counted 1000 in every run. Without sharing, the same queries
-        # count 2000 and 0.
-        if cte == "aggregate-body" and LOCAL_CLUSTER:
-            assert counted() <= (2000 if STORED_SHUFFLE else 1000)
-        elif cte == "volatile-body" and LOCAL_CLUSTER:
+        # Sail cluster mode evaluates an aggregate body or a volatile body in a stage of its
+        # own, at most once, before it finds the other side empty, as Spark does.
+        # Measured in local-cluster mode: each of the two bodies counted 1000 in every run
+        # with Flight, storage and Celeborn shuffle. Without sharing, the same queries count
+        # 2000 and 0 with Flight shuffle.
+        if cte in ("aggregate-body", "volatile-body") and LOCAL_CLUSTER:
             assert counted() <= 1000  # noqa: PLR2004
         else:
             assert counted() == 0
