@@ -146,7 +146,7 @@ fn float_to_decimal128(value: f64, scale: i8, maximum: i128) -> Option<i128> {
     let magnitude = value.abs();
     let unscaled = round_scaled(magnitude, scale)
         .or_else(|| short_decimal(magnitude, scale))
-        .or_else(|| round_shortest(magnitude, scale))?;
+        .or_else(|| round_exact_or_shortest(magnitude, scale))?;
     if unscaled > maximum {
         return None;
     }
@@ -194,6 +194,45 @@ fn short_decimal(magnitude: f64, scale: i8) -> Option<i128> {
     #[expect(clippy::cast_possible_truncation)]
     let candidate = candidate as i128;
     candidate.checked_mul(10_i128.checked_pow(u32::try_from(scale - digits).ok()?)?)
+}
+
+/// Tries the exact rounding in integers and then the shortest string. This is kept out
+/// of line, so that the paths above stay small in the calling loop.
+#[inline(never)]
+fn round_exact_or_shortest(magnitude: f64, scale: i8) -> Option<i128> {
+    round_exact(magnitude, scale).or_else(|| round_shortest(magnitude, scale))
+}
+
+/// Rounds the exact `magnitude * 10^scale` in integers, unless the shortest string of
+/// `magnitude` may round to a different integer.
+///
+/// `magnitude` is `m / 2^k`, and its shortest string is within half an ULP of it,
+/// `1 / 2^(k + 1)`. After scaling, the string is within `10^scale / 2^(k + 1)` of the
+/// exact product, so both round to the same integer if no half lies within that
+/// distance of the product.
+fn round_exact(magnitude: f64, scale: i8) -> Option<i128> {
+    let factor = 10_u128.checked_pow(u32::try_from(scale).ok().filter(|&s| s <= 18)?)?;
+    let bits = magnitude.to_bits();
+    let exponent = i32::try_from(bits >> 52).ok()?;
+    // Subnormal values have no implicit leading bit and are rare, so they are declined.
+    if exponent == 0 {
+        return None;
+    }
+    let mantissa = u128::from((bits & ((1 << 52) - 1)) | (1 << 52));
+    let shift = u32::try_from(1075 - exponent).ok().filter(|&k| k <= 120)?;
+    let denominator = 1_u128 << shift;
+    // In units of `1 / 2^(k + 1)`, the distance is `factor` and a half is `denominator`.
+    if factor >= denominator {
+        return None;
+    }
+    // The product is below 2^53 * 10^18 < 2^113.
+    let product = mantissa * factor;
+    // The fraction of the exact product, in units of `1 / 2^(k + 1)`.
+    let fraction = 2 * (product & (denominator - 1));
+    if fraction.abs_diff(denominator) <= factor {
+        return None;
+    }
+    i128::try_from((product >> shift) + u128::from(fraction > denominator)).ok()
 }
 
 /// Rounds the shortest decimal string of `magnitude` half up at `scale`.
@@ -317,7 +356,7 @@ mod tests {
             for magnitude in [unit, price, wide, tie, near] {
                 for scale in 0..=20 {
                     let expected = round_shortest(magnitude, scale);
-                    for shortcut in [round_scaled, short_decimal] {
+                    for shortcut in [round_scaled, short_decimal, round_exact] {
                         if let Some(unscaled) = shortcut(magnitude, scale) {
                             assert_eq!(Some(unscaled), expected, "{magnitude:e} at scale {scale}");
                         }
