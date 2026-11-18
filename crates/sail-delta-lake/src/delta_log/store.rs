@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-// SPDX-FileCopyrightText: (2020) QP Hou and a number of other contributors.
-// SPDX-FileCopyrightText: (2025) LakeSail, Inc.
-// SPDX-FileContributor: LakeSail, Inc.
-// SPDX-FileComment: Modified in 2025 by LakeSail, Inc.
-// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/mod.rs
-// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/default_logstore.rs
+// SPDX-FileComment: Credit: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/mod.rs> Credit: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/default_logstore.rs> License: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt>
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors. Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025.
 
 //! Local log store abstraction backed by `object_store`.
 

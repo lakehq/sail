@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileContributor: The Apache Software Foundation (ASF)
-# SPDX-FileComment: See the NOTICE file distributed with this work for additional information regarding copyright ownership.
-# SPDX-FileComment: Credit: https://github.com/apache/iceberg/blob/533a75c8a50a4c9ade7f22e03b61f2828e91e742/open-api/rest-catalog-open-api.yaml
+# SPDX-FileComment: Credit: <https://github.com/apache/iceberg/blob/533a75c8a50a4c9ade7f22e03b61f2828e91e742/open-api/rest-catalog-open-api.yaml> Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE file distributed with this work for additional information regarding copyright ownership.
 
 ---
 openapi: 3.1.1

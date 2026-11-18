@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
-// SPDX-FileCopyrightText: 2023-2024 The Delta Kernel Rust Authors
-// SPDX-FileCopyrightText: 2025-2026 LakeSail, Inc.
-// SPDX-FileContributor: LakeSail, Inc.
-// SPDX-FileComment: Ported and modified in 2026 by LakeSail, Inc.
+// SPDX-FileComment: License: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
+// SPDX-FileCopyrightText: Copyright 2023-2024 The Delta Kernel Rust Authors. Portions Copyright 2025-2026 LakeSail, Inc.
+// SPDX-FileContributor: Ported and modified by LakeSail, Inc. in 2026.
 
 use serde::{Deserialize, Serialize};
 

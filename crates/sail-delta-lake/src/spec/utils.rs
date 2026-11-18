@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-// SPDX-FileCopyrightText: (2020) QP Hou and a number of other contributors.
-// SPDX-FileCopyrightText: 2025-2026 LakeSail, Inc.
-// SPDX-FileContributor: LakeSail, Inc.
-// SPDX-FileComment: Modified in 2026 by LakeSail, Inc.
+// SPDX-FileComment: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors. Portions Copyright 2025-2026 LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2026.
 
 use std::str::Utf8Error;
 

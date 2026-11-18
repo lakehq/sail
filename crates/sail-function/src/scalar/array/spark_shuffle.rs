@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileContributor: The Apache Software Foundation (ASF)
-// SPDX-FileComment: See the NOTICE file distributed with this work for additional information regarding copyright ownership.
-// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/500744d5c25499055e3b2ca46b022bc425989203/datafusion/spark/src/function/array/shuffle.rs
+// SPDX-FileComment: Credit: <https://github.com/apache/datafusion/blob/500744d5c25499055e3b2ca46b022bc425989203/datafusion/spark/src/function/array/shuffle.rs> Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE file distributed with this work for additional information regarding copyright ownership.
 
 use std::sync::Arc;
 
