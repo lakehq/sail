@@ -1,5 +1,5 @@
 -- SPDX-FileComment: SQLBench-H query 20 derived from TPC-H query 20 under the terms of the TPC Fair Use Policy.
--- SPDX-FileCopyrightText: Copyright 1993-2022 Transaction Processing Performance Council.
+-- SPDX-FileCopyrightText: Copyright 1993-2022 Transaction Processing Performance Council
 
 select
   s_name,

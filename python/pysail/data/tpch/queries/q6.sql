@@ -1,5 +1,5 @@
 -- SPDX-FileComment: SQLBench-H query 6 derived from TPC-H query 6 under the terms of the TPC Fair Use Policy.
--- SPDX-FileCopyrightText: Copyright 1993-2022 Transaction Processing Performance Council.
+-- SPDX-FileCopyrightText: Copyright 1993-2022 Transaction Processing Performance Council
 
 select
   sum(l_extendedprice * l_discount) as revenue
