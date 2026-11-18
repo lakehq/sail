@@ -285,6 +285,118 @@ def test_sorted_cte_is_inlined(spark):
     check(spark, query, [(4,), (0,)], shared=False, scans=2)
 
 
+def test_sorted_cte_with_limit_shares_one_evaluation(spark):
+    """The sort decides which rows the CTE returns, so each evaluation of it has to sort."""
+    cte = "c AS (SELECT id, id % 3 AS k FROM range(100) ORDER BY id DESC LIMIT 5)"
+    query = f"WITH {cte} SELECT a.id, b.k FROM c a JOIN c b ON a.id = b.id"  # noqa: S608
+    check(spark, query, [(99, 0), (98, 2), (97, 1), (96, 0), (95, 2)], shared=True, scans=1)
+    query = f"WITH {cte} SELECT sum(id), (SELECT max(k) FROM c) FROM c WHERE id IN (SELECT id FROM c)"  # noqa: S608
+    check(spark, query, [(485, 2)], shared=True, scans=1)
+
+
+def test_sorted_cte_with_limit_is_inlined_for_a_reference_that_depends_on_its_order(spark):
+    cte = "c AS (SELECT id FROM range(100) ORDER BY id DESC LIMIT 5)"
+    query = f"WITH {cte} SELECT first(id) FROM c UNION ALL SELECT last(id) FROM c"  # noqa: S608
+    check(spark, query, [(99,), (95,)], shared=False, scans=2)
+    query = f"""
+        WITH {cte}
+        SELECT first(id) FROM c UNION ALL SELECT max(id) FROM c UNION ALL SELECT min(id) FROM c
+        UNION ALL SELECT last(id) FROM c
+    """  # noqa: S608
+    check(spark, query, [(99,), (99,), (95,), (95,)], shared=True, scans=3)
+    query = f"WITH {cte} SELECT collect_list(id) FROM c UNION ALL SELECT array(max(id)) FROM c"  # noqa: S608
+    check(spark, query, [([99, 98, 97, 96, 95],), ([99],)], shared=False, scans=2)
+
+
+def test_sorted_cte_with_limit_in_exists_subqueries_of_other_ctes(spark, tmp_path):
+    """The CTE that selects the first rows of a sort is read by the query and by the
+    `EXISTS` subqueries of two other CTEs, and its table is scanned once."""
+    items, labels, owners = (str(tmp_path / f"shared_cte_{name}_data") for name in ("items", "labels", "owners"))
+    spark.sql("""
+        SELECT id AS item_id, CASE WHEN id % 2 = 0 THEN 'x' ELSE 'y' END AS kind,
+               CASE WHEN id % 5 = 0 THEN NULL ELSE concat('item ', id) END AS name,
+               id % 7 AS owner_id, CASE WHEN id % 11 = 0 THEN 1L ELSE NULL END AS removed,
+               (id * 37) % 101 AS score
+        FROM range(0, 400, 1, 4)
+    """).write.parquet(items)
+    spark.sql("""
+        SELECT id % 400 AS item_id, concat('label ', id % 9) AS label FROM range(0, 1200, 1, 4)
+    """).write.parquet(labels)
+    spark.sql("""
+        SELECT id % 7 AS owner_id, CASE WHEN id % 2 = 0 THEN 'x' ELSE 'y' END AS kind,
+               concat('owner ', id) AS name, id AS version
+        FROM range(0, 28, 1, 2)
+    """).write.parquet(owners)
+    spark.read.parquet(items).createOrReplaceTempView("shared_cte_items")
+    spark.read.parquet(labels).createOrReplaceTempView("shared_cte_labels")
+    spark.read.parquet(owners).createOrReplaceTempView("shared_cte_owners")
+    query = """
+        WITH top_items AS (
+            SELECT i.item_id, i.kind, coalesce(i.name, '') AS name, i.owner_id
+            FROM shared_cte_items i
+            WHERE i.kind = 'x' AND (i.removed IS NULL OR i.removed = 0)
+            ORDER BY i.score DESC NULLS LAST, i.item_id DESC
+            LIMIT 20
+        ),
+        item_labels AS (
+            SELECT l.item_id, collect_set(l.label) AS labels
+            FROM shared_cte_labels l
+            WHERE EXISTS (SELECT 1 FROM top_items r WHERE r.item_id = l.item_id)
+            GROUP BY l.item_id
+        ),
+        item_owners AS (
+            SELECT owner_id, kind, owner
+            FROM (
+                SELECT o.owner_id, o.kind, o.name AS owner,
+                       row_number() OVER (PARTITION BY o.owner_id, o.kind ORDER BY o.version DESC) AS position
+                FROM shared_cte_owners o
+                WHERE EXISTS (SELECT 1 FROM top_items r WHERE r.owner_id = o.owner_id AND r.kind = o.kind)
+            )
+            WHERE position = 1
+        ),
+        joined AS (
+            SELECT top_items.item_id, top_items.kind, top_items.name,
+                   coalesce(item_labels.labels, CAST(array() AS ARRAY<STRING>)) AS labels,
+                   coalesce(item_owners.owner, '') AS owner
+            FROM top_items
+                LEFT JOIN item_labels ON item_labels.item_id = top_items.item_id
+                LEFT JOIN item_owners ON item_owners.owner_id = top_items.owner_id AND item_owners.kind = top_items.kind
+        )
+        SELECT count(*) AS n, count(DISTINCT item_id) AS n_items, sum(size(labels)) AS total_labels,
+               count_if(owner <> '') AS with_owner, sum(item_id) AS items
+        FROM joined
+    """
+    try:
+        rows = [tuple(row) for row in spark.sql(query).collect()]
+        expected = [
+            tuple(row)
+            for row in spark.sql("""
+                WITH top_items AS (
+                    SELECT item_id, owner_id FROM shared_cte_items
+                    WHERE kind = 'x' AND (removed IS NULL OR removed = 0)
+                    ORDER BY score DESC NULLS LAST, item_id DESC LIMIT 20
+                )
+                SELECT count(*), count(*), 3 * count(*), count(*), sum(item_id) FROM top_items
+            """).collect()
+        ]
+        assert rows == expected
+        assert rows[0][0] == 20  # noqa: PLR2004
+        if not is_jvm_spark():
+            text = plan(spark, query)
+            scans = sum("DataSourceExec" in line and "shared_cte_items_data/" in line for line in text.splitlines())
+            if shares_deterministic_ctes():
+                assert "SharedCteExec" in text, text
+                assert text.count("SharedCteScanExec") == 3, text  # noqa: PLR2004
+                assert scans == 1, text
+            else:
+                assert "SharedCteExec" not in text, text
+                assert scans == 3, text  # noqa: PLR2004
+    finally:
+        spark.sql("DROP VIEW IF EXISTS shared_cte_items")
+        spark.sql("DROP VIEW IF EXISTS shared_cte_labels")
+        spark.sql("DROP VIEW IF EXISTS shared_cte_owners")
+
+
 def test_from_and_scalar_subquery_references_share_one_evaluation(spark):
     query = f"WITH {CTE} SELECT k, n FROM c WHERE n = (SELECT max(n) FROM c) AND k > 4"  # noqa: S608
     check(spark, query, [(5, 143)], shared=False, scans=2)
