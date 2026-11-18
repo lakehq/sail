@@ -18,6 +18,7 @@ use datafusion::physical_expr::PartitioningSatisfaction;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
+use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::joins::{HashJoinExec, HashJoinExecBuilder, PartitionMode};
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
@@ -221,17 +222,31 @@ pub(crate) async fn select_joins(
                 }
             }
             Candidate::Reduction => {
-                match materialize(join.left(), options, runner, handoffs).await? {
+                let (input, distinct) = split_distinct_keys(join.left());
+                match materialize(&input, options, runner, handoffs).await? {
                     Materialized::Small(build) => {
                         let actual = statistics(build.as_ref())?;
                         let decision = format!(
-                            "kept reduction, keys rows {:?}, bytes {:?}",
+                            "kept reduction, key input rows {:?}, bytes {:?}",
                             actual.num_rows, actual.total_byte_size
                         );
+                        let build = match distinct {
+                            Some(distinct) => {
+                                let build = if build.output_partitioning().partition_count() == 1 {
+                                    build
+                                } else {
+                                    Arc::new(CoalescePartitionsExec::new(build))
+                                };
+                                replace_children_if_necessary(distinct, vec![build])?
+                            }
+                            None => build,
+                        };
                         let join = join
                             .builder()
                             .with_new_children(vec![build, Arc::clone(join.right())])?
                             .build_exec()?;
+                        // The distinct keys have estimated statistics again.
+                        settled.insert(address(&join));
                         (join, decision)
                     }
                     materialized => {
@@ -286,6 +301,25 @@ enum Candidate {
     Partitioned { build: bool, probe: bool },
     /// A speculative semijoin reduction, broadcast whatever its estimated size.
     Reduction,
+}
+
+/// Splits the distinct keys of a reduction from their input, which is what gets sized: the
+/// aggregate emits nothing until it has read all of its input, in one task, and the keys
+/// are never more than their input.
+fn split_distinct_keys(
+    keys: &Arc<dyn ExecutionPlan>,
+) -> (Arc<dyn ExecutionPlan>, Option<Arc<dyn ExecutionPlan>>) {
+    let Some(aggregate) = keys.downcast_ref::<AggregateExec>() else {
+        return (Arc::clone(keys), None);
+    };
+    if *aggregate.mode() != AggregateMode::Single || !aggregate.aggr_expr().is_empty() {
+        return (Arc::clone(keys), None);
+    }
+    let mut input = aggregate.input();
+    while let Some(coalesce) = input.downcast_ref::<CoalescePartitionsExec>() {
+        input = coalesce.input();
+    }
+    (Arc::clone(input), Some(Arc::clone(keys)))
 }
 
 /// Whether `join` is a semijoin reduction inserted by the physical optimizer.
@@ -1253,7 +1287,7 @@ mod tests {
         assert_eq!(jobs, 3);
         let found = reductions(&adapted);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].num_rows, Precision::Exact(10));
+        assert_eq!(found[0].num_rows.get_value(), Some(&10));
         SanityCheckPlan::new()
             .optimize(Arc::clone(&adapted), &ConfigOptions::default())
             .unwrap();
@@ -1284,6 +1318,36 @@ mod tests {
         assert!(reductions(&adapted).is_empty());
         assert!(joins(&adapted).is_empty());
         assert_eq!(sorted_output(adapted).await, sorted_output(facts()).await);
+    }
+
+    #[tokio::test]
+    async fn reduction_is_sized_by_its_key_input() {
+        // 10 distinct keys, but 2000 key rows: the keys are sized before deduplication.
+        let duplicated = || {
+            filtered(
+                source(
+                    "dim",
+                    &keys(0..2000).iter().map(|k| k % 1000).collect::<Vec<_>>(),
+                ),
+                990,
+            )
+        };
+        let facts = source(
+            "fact",
+            &keys(0..5000).iter().map(|k| k % 1000).collect::<Vec<_>>(),
+        );
+        let plan = || {
+            partitioned_join(
+                duplicated(),
+                0,
+                reduction(duplicated(), facts.clone()),
+                0,
+                JoinType::Inner,
+            )
+        };
+        let (adapted, _) = select(&plan(), &options(128)).await;
+        assert!(reductions(&adapted).is_empty());
+        assert_eq!(sorted_output(adapted).await, sorted_output(plan()).await);
     }
 
     #[tokio::test]
