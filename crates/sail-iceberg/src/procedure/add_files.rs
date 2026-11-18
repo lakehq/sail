@@ -305,44 +305,8 @@ impl AddFiles {
                                     .map_err(DataFusionError::Plan)
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        let bytes = source_store.get(&object.location).await?.bytes().await?;
-                        let (file_format, record_count) = match format.as_str() {
-                            "parquet" => {
-                                let reader =
-                                    parquet::file::reader::SerializedFileReader::new(bytes)
-                                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                                use parquet::file::reader::FileReader;
-                                (
-                                    DataFileFormat::Parquet,
-                                    u64::try_from(reader.metadata().file_metadata().num_rows())
-                                        .map_err(|e| DataFusionError::External(Box::new(e)))?,
-                                )
-                            }
-                            "avro" => {
-                                let reader = datafusion::arrow_avro::reader::ReaderBuilder::new()
-                                    .build(std::io::Cursor::new(bytes))?;
-                                let mut count = 0u64;
-                                for batch in reader {
-                                    let batch = batch?;
-                                    count = count.checked_add(batch.num_rows() as u64).ok_or_else(
-                                        || {
-                                            DataFusionError::Execution(
-                                                "Avro record count overflow".into(),
-                                            )
-                                        },
-                                    )?;
-                                }
-                                (DataFileFormat::Avro, count)
-                            }
-                            _ => {
-                                let builder = orc_rust::ArrowReaderBuilder::try_new(bytes)
-                                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                                (
-                                    DataFileFormat::Orc,
-                                    builder.file_metadata().number_of_rows(),
-                                )
-                            }
-                        };
+                        let (file_format, record_count) =
+                            import_record_count(source_store, &object, &format).await?;
                         let file_path = format!(
                             "{}/{}",
                             &source_url[..url::Position::BeforePath],
@@ -417,6 +381,43 @@ impl AddFiles {
     }
 }
 
+async fn import_record_count(
+    store: Arc<dyn object_store::ObjectStore>,
+    object: &object_store::ObjectMeta,
+    format: &str,
+) -> Result<(DataFileFormat, u64)> {
+    let mut reader = object_store::buffered::BufReader::new(store, object);
+    match format {
+        "parquet" => {
+            use parquet::arrow::async_reader::AsyncFileReader;
+            let metadata = reader.get_metadata(None).await?;
+            let rows = u64::try_from(metadata.file_metadata().num_rows())
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            Ok((DataFileFormat::Parquet, rows))
+        }
+        "orc" => {
+            let metadata = orc_rust::reader::metadata::read_metadata_async(&mut reader)
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            Ok((DataFileFormat::Orc, metadata.number_of_rows()))
+        }
+        "avro" => tokio::task::spawn_blocking(move || {
+            let reader = tokio_util::io::SyncIoBridge::new(reader);
+            let rows = datafusion::arrow_avro::reader::ReaderBuilder::new()
+                .build(reader)?
+                .try_fold(0u64, |rows, batch| {
+                    rows.checked_add(batch?.num_rows() as u64).ok_or_else(|| {
+                        DataFusionError::Execution("Avro record count overflow".into())
+                    })
+                })?;
+            Ok((DataFileFormat::Avro, rows))
+        })
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?,
+        _ => plan_err!("Unsupported add_files source format: {format}"),
+    }
+}
+
 fn decode_partition(value: &str) -> Result<String> {
     let mut bytes = vec![];
     let mut input = value.as_bytes().iter().copied();
@@ -482,6 +483,22 @@ async fn prepare_append(
     };
     let mut manifests = vec![];
     let mut list = ManifestListWriter::new();
+    let mut parents = scan_manifests(
+        store,
+        metadata,
+        &ManifestScope {
+            snapshots: SnapshotScope::Current,
+            content: None,
+        },
+    )
+    .await?;
+    let imported_first_row_id = first_row_id
+        .map(|start| crate::operations::snapshot::assign_parent_row_ids(&mut parents, start))
+        .transpose()
+        .map_err(DataFusionError::Execution)?;
+    for manifest in parents {
+        list.append(manifest);
+    }
     if !files.is_empty() {
         let header = ManifestMetadata::new(
             Arc::new(schema.clone()),
@@ -506,21 +523,9 @@ async fn prepare_append(
             )
             .map_err(DataFusionError::Execution)?;
         descriptor.manifest_length = bytes.len() as i64;
-        descriptor.first_row_id = first_row_id;
+        descriptor.first_row_id = imported_first_row_id;
         list.append(descriptor);
         manifests.push((path, bytes));
-    }
-    for manifest in scan_manifests(
-        store,
-        metadata,
-        &ManifestScope {
-            snapshots: SnapshotScope::Current,
-            content: None,
-        },
-    )
-    .await?
-    {
-        list.append(manifest);
     }
     let parent = metadata.current_snapshot();
     let list_path = format!("metadata/snap-{snapshot_id}-{}.avro", uuid::Uuid::new_v4());
@@ -575,13 +580,14 @@ async fn prepare_append(
     if let Some(parent) = parent {
         snapshot = snapshot.with_parent_snapshot_id(parent.snapshot_id());
     }
-    if let Some(id) = first_row_id {
-        snapshot =
-            snapshot
-                .with_first_row_id(id)
-                .with_added_rows(i64::try_from(rows).map_err(|_| {
-                    DataFusionError::Execution("Imported row count exceeds int64".into())
-                })?);
+    if let (Some(start), Some(import_start)) = (first_row_id, imported_first_row_id) {
+        let next = i64::try_from(rows)
+            .ok()
+            .and_then(|count| import_start.checked_add(count))
+            .ok_or_else(|| DataFusionError::Execution("Imported row IDs exceed int64".into()))?;
+        snapshot = snapshot
+            .with_first_row_id(start)
+            .with_added_rows(next - start);
     }
     let retention = metadata
         .refs
@@ -658,4 +664,63 @@ fn mapped_field(field: &NestedField) -> MappedField {
         Type::Primitive(_) => vec![],
     };
     MappedField::new(Some(field.id), vec![field.name.clone()], fields)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+
+    use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray};
+    use object_store::ObjectStoreExt;
+    use object_store::buffered::DEFAULT_BUFFER_SIZE;
+    use object_store::memory::InMemory;
+
+    use super::import_record_count;
+    use crate::io::test_store::TestStore;
+
+    #[tokio::test]
+    async fn import_counts_with_bounded_object_reads() -> Result<(), Box<dyn std::error::Error>> {
+        let values: Vec<_> = (0..256)
+            .map(|i| format!("{i:04}{}", "x".repeat(16 * 1024)))
+            .collect();
+        let column: ArrayRef = Arc::new(StringArray::from(values.clone()));
+        let batch = RecordBatch::try_from_iter([("value", column)])?;
+        let mut parquet = Vec::new();
+        let mut writer = parquet::arrow::ArrowWriter::try_new(&mut parquet, batch.schema(), None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        let mut orc = Vec::new();
+        let mut writer = orc_rust::ArrowWriterBuilder::new(&mut orc, batch.schema()).try_build()?;
+        writer.write(&batch)?;
+        writer.close()?;
+        let schema = apache_avro::Schema::parse_str(
+            r#"{"type":"record","name":"row","fields":[{"name":"value","type":"string"}]}"#,
+        )?;
+        let mut writer = apache_avro::Writer::new(&schema, Vec::new())?;
+        for value in values {
+            writer.append_value(apache_avro::types::Value::Record(vec![(
+                "value".into(),
+                value.into(),
+            )]))?;
+        }
+        let avro = writer.into_inner()?;
+        for (format, bytes) in [("parquet", parquet), ("orc", orc), ("avro", avro)] {
+            let size = bytes.len();
+            assert!(size > DEFAULT_BUFFER_SIZE);
+            let inner = Arc::new(InMemory::new());
+            let path = format.into();
+            inner.put(&path, bytes.into()).await?;
+            let meta = inner.head(&path).await?;
+            let store = Arc::new(TestStore::new(inner));
+            let (_, rows) = import_record_count(store.clone(), &meta, format).await?;
+            assert_eq!(rows, batch.num_rows() as u64);
+            if format == "avro" {
+                assert!(store.largest_read.load(Ordering::Relaxed) <= DEFAULT_BUFFER_SIZE);
+            } else {
+                assert!(store.bytes_read.load(Ordering::Relaxed) < size);
+            }
+        }
+        Ok(())
+    }
 }

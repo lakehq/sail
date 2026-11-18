@@ -209,6 +209,30 @@ def test_add_files_source_formats(spark, tmp_path, file_format, partitioned):
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
+def test_add_files_mixed_formats_lazy_read_and_rewrite(spark, tmp_path):
+    path = tmp_path / "target"
+    name = "add_files_mixed_formats"
+    spark.sql(
+        f"CREATE TABLE {name} (id BIGINT, value STRING) USING iceberg LOCATION '{escape_sql_string_literal(str(path))}'"
+    )
+    try:
+        for index, file_format in enumerate(["avro", "orc", "parquet"]):
+            source = tmp_path / file_format
+            _write_source_file(source / f"data.{file_format}", file_format, [(index, file_format)])
+            assert _add(spark, name, f"{file_format}.`{source}`") == (1, None)
+        # Put all three formats in one manifest batch on the reader.
+        assert tuple(spark.sql(f"CALL system.rewrite_manifests('{name}')").first()) == (3, 1)
+        frame = spark.read.format("iceberg").option("metadataAsDataRead", "true").load(str(path))
+        assert [tuple(row) for row in frame.orderBy("id").collect()] == [(0, "avro"), (1, "orc"), (2, "parquet")]
+        assert [row.value for row in frame.where("id = 1").select("value").collect()] == ["orc"]
+        snapshot = _find_latest_metadata(path)["current-snapshot-id"]
+        with pytest.raises(Exception, match="rewrite_data_files supports only Parquet"):
+            spark.sql(f"CALL system.rewrite_data_files('{name}', options => map('rewrite-all', 'true'))").collect()
+        assert _find_latest_metadata(path)["current-snapshot-id"] == snapshot
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
 @pytest.mark.parametrize(
     ("partition_type", "partition_value", "expected"),
     [

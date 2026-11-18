@@ -1761,7 +1761,7 @@ impl IcebergScan {
     /// Metadata-as-data scan path: defers manifest scanning to the physical plan.
     /// Instead of eagerly loading file metadata on the driver, an `IcebergManifestScanExec`
     /// node produces file metadata that feeds through `IcebergDiscoveryExec` (tagging) and
-    /// into `IcebergScanByDataFilesExec` which dynamically opens Parquet files via a
+    /// into `IcebergScanByDataFilesExec` which dynamically opens data files via a
     /// streaming `try_unfold` loop.
     ///
     /// Physical plan pipeline:
@@ -1770,7 +1770,7 @@ impl IcebergScan {
     ///   ↓
     /// IcebergDiscoveryExec (annotate stream with partition_scan flag)
     ///   ↓
-    /// IcebergScanByDataFilesExec (consume file paths → dynamic Parquet scan)
+    /// IcebergScanByDataFilesExec (consume file paths → format-specific scan)
     ///   ↓
     /// Data output (actual table rows)
     /// ```

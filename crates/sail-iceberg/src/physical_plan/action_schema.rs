@@ -438,6 +438,18 @@ impl TryFrom<DataFile> for AddFileAction {
     }
 }
 
+pub(super) fn parse_data_file_format(value: &str) -> Result<DataFileFormat> {
+    match value {
+        "Avro" => Ok(DataFileFormat::Avro),
+        "Orc" => Ok(DataFileFormat::Orc),
+        "Parquet" => Ok(DataFileFormat::Parquet),
+        "Puffin" => Ok(DataFileFormat::Puffin),
+        other => Err(DataFusionError::Plan(format!(
+            "unknown DataFileFormat string '{other}'"
+        ))),
+    }
+}
+
 impl TryFrom<AddFileAction> for DataFile {
     type Error = DataFusionError;
 
@@ -452,17 +464,7 @@ impl TryFrom<AddFileAction> for DataFile {
                 )));
             }
         };
-        let file_format = match a.file_format.as_str() {
-            "Avro" => DataFileFormat::Avro,
-            "Orc" => DataFileFormat::Orc,
-            "Parquet" => DataFileFormat::Parquet,
-            "Puffin" => DataFileFormat::Puffin,
-            other => {
-                return Err(DataFusionError::Plan(format!(
-                    "unknown DataFileFormat string '{other}'"
-                )));
-            }
-        };
+        let file_format = parse_data_file_format(&a.file_format)?;
 
         let partition = a
             .partition

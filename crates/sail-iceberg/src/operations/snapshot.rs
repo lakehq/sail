@@ -31,6 +31,23 @@ use crate::spec::{
 };
 use crate::utils::join_table_uri;
 
+/// Allocate lineage for live data in manifests carried forward from before a v3 upgrade.
+pub(crate) fn assign_parent_row_ids(
+    manifests: &mut [ManifestFile],
+    mut next: i64,
+) -> Result<i64, String> {
+    for manifest in manifests {
+        if manifest.content == ManifestContentType::Data && manifest.first_row_id.is_none() {
+            manifest.first_row_id = Some(next);
+            next = next
+                .checked_add(manifest.added_rows_count.unwrap_or(0))
+                .and_then(|n| n.checked_add(manifest.existing_rows_count.unwrap_or(0)))
+                .ok_or_else(|| "Iceberg row ID overflow".to_string())?;
+        }
+    }
+    Ok(next)
+}
+
 fn active_file_count(manifest: &crate::spec::manifest_list::ManifestFile) -> Option<i64> {
     Some(i64::from(manifest.added_files_count?) + i64::from(manifest.existing_files_count?))
 }
@@ -1278,23 +1295,12 @@ impl<'a> SnapshotProducer<'a> {
             .sum();
         let mut row_lineage_next_row_id = self.row_lineage_start_row_id;
         let mut snapshot_added_rows = 0;
-
-        if let Some(next_row_id) = &mut row_lineage_next_row_id {
-            for entry in &mut parent_manifest_entries {
-                if matches!(entry.content, ManifestContentType::Data)
-                    && entry.first_row_id.is_none()
-                {
-                    entry.first_row_id = Some(*next_row_id);
-                    let assigned_rows = entry.added_rows_count.unwrap_or(0)
-                        + entry.existing_rows_count.unwrap_or(0);
-                    *next_row_id += assigned_rows;
-                    snapshot_added_rows += assigned_rows;
-                }
-            }
-        }
-
-        if self.row_lineage_start_row_id.is_some() {
-            snapshot_added_rows += new_added_rows;
+        if let Some(next) = &mut row_lineage_next_row_id {
+            let start = *next;
+            *next = assign_parent_row_ids(&mut parent_manifest_entries, start)?;
+            snapshot_added_rows = (*next - start)
+                .checked_add(new_added_rows)
+                .ok_or_else(|| "Iceberg added rows overflow".to_string())?;
         }
 
         let mut new_manifest_files = Vec::new();

@@ -5567,12 +5567,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e54c163f843c4f0fcfca65b9b73ca6f93c37c8e86736d5a1e578c6e843eed0a0"
 dependencies = [
  "arrow",
+ "async-trait",
  "bytemuck",
  "bytes",
  "chrono",
  "chrono-tz",
  "fallible-streaming-iterator",
  "flate2",
+ "futures",
+ "futures-util",
  "log",
  "lz4_flex 0.11.7",
  "lzokay-native",
@@ -5580,6 +5583,7 @@ dependencies = [
  "prost 0.13.5",
  "snafu",
  "snap",
+ "tokio",
  "zstd 0.13.3",
 ]
 
@@ -7560,6 +7564,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "tokio",
+ "tokio-util",
  "url",
  "uuid",
 ]
