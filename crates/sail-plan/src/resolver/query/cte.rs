@@ -399,9 +399,10 @@ impl PlanResolver<'_> {
 /// Each reference evaluates the definition itself if the definition refers to outer
 /// columns, or, unless the definition is volatile, if it reads the files or the
 /// partitions of its input, calls an external service, depends on the evaluation of a
-/// correlated subquery, if a source is read once for each reference, if its consumers can
-/// depend on the order of its rows, or if it only projects and filters the rows of one
-/// source, which is not worth keeping for another reference.
+/// correlated subquery, if a source is read once for each reference, if it is sorted
+/// without a limit, so that only the consumers that depend on the order of its rows need
+/// the sort, or if it only projects and filters the rows of one source, which is not
+/// worth keeping for another reference.
 fn shareable_definition(plan: &Arc<LogicalPlan>, nested: bool) -> PlanResult<Option<bool>> {
     let mut input = plan.as_ref();
     let mut subquery = false;
@@ -496,7 +497,25 @@ fn shareable_definition(plan: &Arc<LogicalPlan>, nested: bool) -> PlanResult<Opt
         return Ok(None);
     }
     let (_, sorted, _) = PlanResolver::require_input_sort_inner(plan.as_ref().clone())?;
-    Ok((!sorted).then_some(false))
+    Ok((!sorted || returns_first_rows(plan)).then_some(false))
+}
+
+/// Returns whether the definition returns a limited number of rows of its input. When
+/// the input is sorted, the sort decides which rows the definition returns, so each
+/// evaluation of the definition has to sort, and the references that do not depend on
+/// the order of the rows can share one evaluation. A reference that depends on the
+/// order evaluates the definition itself (see `PlanResolver::require_input_sort_inner`).
+fn returns_first_rows(plan: &LogicalPlan) -> bool {
+    let mut input = plan;
+    loop {
+        input = match input {
+            LogicalPlan::Projection(projection) => &projection.input,
+            LogicalPlan::Filter(filter) => &filter.input,
+            LogicalPlan::SubqueryAlias(alias) => &alias.input,
+            LogicalPlan::Limit(limit) => return limit.fetch.is_some(),
+            _ => return false,
+        };
+    }
 }
 
 /// Returns whether the volatile call returns different values for each evaluation, which
@@ -567,6 +586,28 @@ mod tests {
             ])?
             .build()?;
         assert_eq!(shareable_definition(&Arc::new(plan), true)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_sorted_definition() -> PlanResult<()> {
+        let sorted = || -> PlanResult<LogicalPlanBuilder> {
+            Ok(values("v")?.sort(vec![col("v.column1").sort(false, false)])?)
+        };
+        // Only the consumers that depend on the order of the rows need the sort.
+        let plan = sorted()?.build()?;
+        assert_eq!(shareable_definition(&Arc::new(plan), false)?, None);
+        let plan = sorted()?.limit(1, None)?.build()?;
+        assert_eq!(shareable_definition(&Arc::new(plan), false)?, None);
+        // The sort decides which rows the definition returns.
+        let plan = sorted()?.limit(0, Some(1))?.build()?;
+        assert_eq!(shareable_definition(&Arc::new(plan), false)?, Some(false));
+        let plan = sorted()?
+            .project(vec![col("v.column1")])?
+            .limit(1, Some(1))?
+            .alias("c")?
+            .build()?;
+        assert_eq!(shareable_definition(&Arc::new(plan), false)?, Some(false));
         Ok(())
     }
 }

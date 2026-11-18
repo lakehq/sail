@@ -952,24 +952,41 @@ pub fn inline_references(
     selected: &dyn Fn(Site) -> bool,
 ) -> Result<LogicalPlan> {
     plan.transform_down_with_subqueries(|plan| {
-        let inlined = match &plan {
-            LogicalPlan::SubqueryAlias(alias) => match renamed_reference(alias) {
-                Some((scan, names)) if selected(site(scan)) => Some(
-                    rename_logical_plan_reusing_projection(in_place(scan), &names)?,
-                ),
-                _ => None,
+        Ok(
+            match inline_reference(&plan, &|scan| selected(site(scan)))? {
+                Some(plan) => Transformed::yes(plan),
+                None => Transformed::no(plan),
             },
-            plan => match reference(plan) {
-                Some(scan) if selected(site(scan)) => Some(in_place(scan)),
-                _ => None,
-            },
-        };
-        Ok(match inlined {
-            Some(plan) => Transformed::yes(plan),
-            None => Transformed::no(plan),
-        })
+        )
     })
     .data()
+}
+
+/// Returns the definition in the place of the plan, if the plan is a selected reference.
+fn inline_reference(
+    plan: &LogicalPlan,
+    selected: &dyn Fn(&TableScan) -> bool,
+) -> Result<Option<LogicalPlan>> {
+    Ok(match plan {
+        LogicalPlan::SubqueryAlias(alias) => match renamed_reference(alias) {
+            Some((scan, names)) if selected(scan) => Some(rename_logical_plan_reusing_projection(
+                in_place(scan),
+                &names,
+            )?),
+            _ => None,
+        },
+        plan => match reference(plan) {
+            Some(scan) if selected(scan) => Some(in_place(scan)),
+            _ => None,
+        },
+    })
+}
+
+/// Returns the definition in the place of the plan, if the plan is a reference to a
+/// definition that is not volatile. The references to a volatile definition read one
+/// evaluation.
+pub(crate) fn inline_deterministic_reference(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
+    inline_reference(plan, &|scan| !definition(scan).volatile)
 }
 
 /// Returns the scan of a reference, which is the plan itself, or the input of the

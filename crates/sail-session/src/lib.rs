@@ -864,6 +864,59 @@ mod tests {
             assert_eq!(shared(&plan)?, (0, 0), "{query}");
         }
 
+        // The references to a CTE that returns the first rows of a sort share one
+        // evaluation of it, in the query and in the subqueries of other CTEs.
+        let top = "WITH top AS (SELECT a, b FROM VALUES (1, 10, 5), (2, 20, 7), (3, 30, 9) AS t(a, b, v) ORDER BY v DESC LIMIT 2)";
+        for (query, expected) in [
+            ("SELECT x.a FROM top x JOIN top y ON x.a = y.a", (2, 1)),
+            (
+                ", tags AS (SELECT s.a, count(*) AS n FROM VALUES (1), (3), (3) AS s(a) \
+                 WHERE EXISTS (SELECT 1 FROM top r WHERE r.a = s.a) GROUP BY s.a), \
+                 names AS (SELECT a, b, c FROM (SELECT u.a, u.b, u.c, row_number() OVER (PARTITION BY u.a, u.b ORDER BY u.c DESC) AS n \
+                 FROM VALUES (2, 20, 'x'), (3, 30, 'y'), (3, 30, 'z') AS u(a, b, c) \
+                 WHERE EXISTS (SELECT 1 FROM top r WHERE r.a = u.a AND r.b = u.b)) WHERE n = 1) \
+                 SELECT count(*), sum(tags.n), count(names.c) FROM top \
+                 LEFT JOIN tags ON tags.a = top.a \
+                 LEFT JOIN names ON names.a = top.a AND names.b = top.b",
+                (3, 1),
+            ),
+            // A reference that depends on the order of the rows evaluates the CTE itself.
+            (
+                "SELECT first(a) FROM top UNION ALL SELECT last(a) FROM top",
+                (0, 0),
+            ),
+            (
+                "SELECT first(a) FROM top UNION ALL SELECT max(a) FROM top UNION ALL SELECT min(b) FROM top",
+                (2, 1),
+            ),
+            (
+                "SELECT max(a) FROM top UNION ALL SELECT min(b) FROM top UNION ALL SELECT first(a) FROM top",
+                (2, 1),
+            ),
+            // A limit can stop reading a reference early.
+            (
+                "(SELECT a FROM top LIMIT 1) UNION ALL (SELECT b FROM top LIMIT 1)",
+                (0, 0),
+            ),
+        ] {
+            let query = format!("{top} {query}");
+            let plan = optimize(&query, true).await?;
+            assert_eq!(
+                shared(&plan)?,
+                expected,
+                "{query}\n{}",
+                plan.display_indent()
+            );
+            if expected == (0, 0) {
+                let inlined = optimize(&query, false).await?;
+                assert_eq!(
+                    plan.display_indent().to_string(),
+                    inlined.display_indent().to_string(),
+                    "{query}"
+                );
+            }
+        }
+
         // The references to a volatile CTE share one evaluation, even if they read different
         // rows, read through a limit, or the CTE is sorted or only projects one source. A
         // CTE that refers to a volatile CTE in place is volatile as well.
