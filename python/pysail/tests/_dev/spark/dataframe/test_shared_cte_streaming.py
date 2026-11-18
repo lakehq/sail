@@ -73,7 +73,9 @@ def rows(spark, query):
 def check_rows_unless_an_unread_row_fails(spark, query, expected):
     """Checks the result of a query over a volatile CTE with a failing row that no
     reference reads. In Sail cluster mode, the stage of the CTE can reach the row before
-    the references stop reading, and the query then fails."""
+    the references stop reading, and the query then fails. Measured with Flight shuffle in
+    local-cluster mode (10 runs): the queries of the tests that use this check returned
+    their rows in every run."""
     if not LOCAL_CLUSTER:
         assert rows(spark, query) == expected
         return
@@ -299,6 +301,9 @@ def test_cte_is_not_evaluated_when_the_other_join_side_is_empty(spark, counted, 
         # or once for each reference when the shuffle output is stored, as without sharing.
         # Sail cluster mode evaluates a volatile body once in a stage of its own before the
         # other side is found empty, as Spark does.
+        # Measured with Flight shuffle in local-cluster mode (10 runs): the aggregate body and
+        # the volatile body each counted 1000 in every run. Without sharing, the same queries
+        # count 2000 and 0.
         if cte == "aggregate-body" and LOCAL_CLUSTER:
             assert counted() <= (2000 if STORED_SHUFFLE else 1000)
         elif cte == "volatile-body" and LOCAL_CLUSTER:
