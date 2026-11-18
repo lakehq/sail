@@ -1,5 +1,7 @@
+use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
@@ -9,11 +11,13 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::execution::memory_pool::MemoryLimit;
+use datafusion::execution::session_state::{SessionState, SessionStateBuilder};
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{
     LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
 };
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -64,6 +68,7 @@ use sail_logical_plan::streaming::limit::StreamLimitNode;
 use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_logical_plan::tail::TailNode;
+use sail_physical_optimizer::JoinReorder;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
@@ -78,7 +83,9 @@ use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::seeded_random::{SeededRandomExec, SeededRandomExprColumn};
 use sail_physical_plan::shared_cte::blocking::{ctes_read_without_holding, holds_output};
-use sail_physical_plan::shared_cte::ctes_read_again;
+use sail_physical_plan::shared_cte::{
+    SharedCteRestriction, ctes_read_again, shared_cte_restrictions,
+};
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
@@ -120,7 +127,11 @@ impl QueryPlanner for ExtensionQueryPlanner {
             bodies.push((body, plan));
         }
         let plan = self.plan(logical_plan, session, &shared_ctes).await?;
-        decline_shared_ctes(session, &plan, &bodies);
+        // The query is planned again when a reference is to evaluate its CTE itself.
+        if !decline_shared_ctes(session, &plan, &bodies) {
+            self.restrict_shared_ctes(session, &plan, &mut bodies, &mut shared_ctes)
+                .await?;
+        }
         shared_ctes.finish(plan)
     }
 }
@@ -128,11 +139,12 @@ impl QueryPlanner for ExtensionQueryPlanner {
 /// Lets each reference evaluate a shared CTE itself (see [`SharedCteBody::inline`]) where
 /// that is better than one evaluation for the plan of the query and the plans of the
 /// bodies, which are planned by now. A CTE that must be evaluated once remains shared.
+/// Returns whether the references of a CTE are to evaluate it themselves.
 fn decline_shared_ctes(
     session: &dyn Session,
     plan: &Arc<dyn ExecutionPlan>,
     bodies: &[(Arc<SharedCteBody>, Arc<dyn ExecutionPlan>)],
-) {
+) -> bool {
     let runtime = session.runtime_env();
     let limited = matches!(runtime.memory_pool.memory_limit(), MemoryLimit::Finite(_));
     let spills = runtime.disk_manager.tmp_files_enabled();
@@ -148,11 +160,9 @@ fn decline_shared_ctes(
     // With a memory limit and temporary files, a nested loop join executes its build
     // side again to spill it, and a shared CTE that it reads keeps all its rows and
     // its evaluation for that.
+    let plans = || std::iter::once(plan).chain(bodies.iter().map(|(_, plan)| plan));
     let read_again = if limited && spills {
-        std::iter::once(plan)
-            .chain(bodies.iter().map(|(_, plan)| plan))
-            .flat_map(ctes_read_again)
-            .collect::<HashSet<_>>()
+        plans().flat_map(ctes_read_again).collect::<HashSet<_>>()
     } else {
         HashSet::new()
     };
@@ -160,22 +170,99 @@ fn decline_shared_ctes(
         .chain(bodies.iter().map(|(_, plan)| plan))
         .flat_map(ctes_read_without_holding)
         .collect::<HashSet<_>>();
+    let mut declined = false;
     for (id, (body, plan)) in bodies.iter().enumerate() {
-        if body.must_share() {
-            continue;
-        }
         // A body that returns rows before its input ends would keep up to all its rows
         // for a reference that reads it late, while each reference that evaluates the
         // body itself keeps little, unless every reference holds all the rows that it
         // reads.
-        let keeps_little = retains_within_limit && (holds_output(plan) || !streamed.contains(&id));
-        if !keeps_little || read_again.contains(&id) {
+        let covered = holds_output(plan) || !streamed.contains(&id);
+        let share =
+            body.must_share() || (retains_within_limit && covered && !read_again.contains(&id));
+        if !share {
             body.inline();
+            declined = true;
         }
     }
+    declined
 }
 
 impl ExtensionQueryPlanner {
+    /// Plans again each shared CTE whose references all read only the rows of the keys
+    /// of filtered join inputs (see [`SharedCteRestriction`]), so that it computes only
+    /// the rows of the keys of all its references. The plan of a CTE remains as it is
+    /// when the optimizer adds no such restriction to it, and when the CTE must be
+    /// evaluated once.
+    async fn restrict_shared_ctes(
+        &self,
+        session: &dyn Session,
+        plan: &Arc<dyn ExecutionPlan>,
+        bodies: &mut [(Arc<SharedCteBody>, Arc<dyn ExecutionPlan>)],
+        shared_ctes: &mut SharedCtePlanner,
+    ) -> datafusion::common::Result<()> {
+        let mut restrictions =
+            shared_cte_restrictions(std::iter::once(plan).chain(bodies.iter().map(|(_, x)| x)));
+        for (id, (body, plan)) in bodies.iter_mut().enumerate() {
+            let Some(references) = restrictions.remove(&id) else {
+                continue;
+            };
+            if body.must_share() {
+                continue;
+            }
+            if let Some(restricted) = self
+                .plan_restricted(body, references, session, shared_ctes)
+                .await?
+            {
+                shared_ctes.replace(id, Arc::clone(&restricted));
+                *plan = restricted;
+            }
+        }
+        Ok(())
+    }
+
+    /// Plans the shared CTE with the join reorder rule that restricts it to the keys of
+    /// all its references, which have the given restrictions. Returns the plan if the
+    /// rule restricted it.
+    async fn plan_restricted(
+        &self,
+        body: &SharedCteBody,
+        references: Vec<Vec<SharedCteRestriction>>,
+        session: &dyn Session,
+        shared_ctes: &SharedCtePlanner,
+    ) -> datafusion::common::Result<Option<Arc<dyn ExecutionPlan>>> {
+        let Some(state) = session.as_any().downcast_ref::<SessionState>() else {
+            return Ok(None);
+        };
+        let mut applied = None;
+        let mut references = Some(references);
+        let rules = state
+            .physical_optimizers()
+            .iter()
+            .map(|rule| {
+                let join_reorder = (rule.as_ref() as &dyn Any).downcast_ref::<JoinReorder>();
+                match (join_reorder, references.take()) {
+                    (Some(join_reorder), Some(references)) => {
+                        let (rule, flag) = join_reorder.with_shared_cte_restrictions(references);
+                        applied = Some(flag);
+                        Arc::new(rule) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+                    }
+                    (_, taken) => {
+                        references = taken;
+                        Arc::clone(rule)
+                    }
+                }
+            })
+            .collect();
+        let Some(applied) = applied else {
+            return Ok(None);
+        };
+        let state = SessionStateBuilder::new_from_existing(state.clone())
+            .with_physical_optimizer_rules(rules)
+            .build();
+        let plan = self.plan(body.plan(), &state, shared_ctes).await?;
+        Ok(applied.load(Ordering::Relaxed).then_some(plan))
+    }
+
     async fn plan(
         &self,
         logical_plan: &LogicalPlan,

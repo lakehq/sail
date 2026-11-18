@@ -82,6 +82,16 @@ impl SharedCtePlanner {
         Ok(())
     }
 
+    /// Replaces the plan of the shared CTE with the given identifier by a plan that
+    /// returns the rows that its references read, with the same schema.
+    pub(crate) fn replace(&mut self, id: usize, plan: Arc<dyn ExecutionPlan>) {
+        for planned in self.planned.values_mut().chain(self.ctes.iter_mut()) {
+            if planned.cte.id() == id {
+                planned.plan = Arc::clone(&plan);
+            }
+        }
+    }
+
     /// Returns the plan that produces the shared CTEs for their references in the plan.
     pub(crate) fn finish(self, plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
         let ctes = self.ctes.into_iter().map(|x| (x.cte, x.plan)).collect();

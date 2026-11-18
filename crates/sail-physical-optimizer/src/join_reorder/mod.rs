@@ -2,6 +2,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::config::ConfigOptions;
@@ -10,6 +11,7 @@ use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{ExecutionPlan, displayable, replace_children_if_necessary};
 use log::{trace, warn};
+use sail_physical_plan::shared_cte::SharedCteRestriction;
 
 use crate::PhysicalOptimizerRule;
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry, GraphBuilder};
@@ -62,6 +64,8 @@ impl Default for JoinReorderOptions {
 
 pub struct JoinReorder {
     options: JoinReorderOptions,
+    /// The restrictions of the references of the shared CTE whose plan the rule optimizes.
+    shared_cte_restrictions: Option<early_filter::SharedCteRestrictions>,
     /// Per-region outcome trace recorded by `try_optimize_region` for tests.
     #[cfg(test)]
     recorded_outcomes: Mutex<Vec<RegionOutcome>>,
@@ -93,9 +97,27 @@ impl JoinReorder {
     pub fn new(options: JoinReorderOptions) -> Self {
         Self {
             options,
+            shared_cte_restrictions: None,
             #[cfg(test)]
             recorded_outcomes: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Returns the rule for the plan of a shared CTE whose references all read only the
+    /// rows of the given restrictions, with the restrictions of each reference. The rule
+    /// also restricts the plan to the keys of all the references where that pays, and
+    /// sets the returned flag when it does.
+    pub fn with_shared_cte_restrictions(
+        &self,
+        references: Vec<Vec<SharedCteRestriction>>,
+    ) -> (Self, Arc<AtomicBool>) {
+        let applied = Arc::new(AtomicBool::new(false));
+        let mut rule = Self::new(self.options.clone());
+        rule.shared_cte_restrictions = Some(early_filter::SharedCteRestrictions {
+            references,
+            applied: Arc::clone(&applied),
+        });
+        (rule, applied)
     }
 
     /// Drain and return the per-region outcomes recorded since the last call. Intended for
@@ -145,7 +167,12 @@ impl PhysicalOptimizerRule for JoinReorder {
         // Copy selective dimension keys below aggregates and semi joins whose filter side is
         // more than a scan, which join enumeration never reorders across. This runs first so
         // that enumeration sees the statistics of the reduced inputs.
-        let plan = early_filter::propagate(plan, config, &self.options)?;
+        let plan = early_filter::propagate(
+            plan,
+            config,
+            &self.options,
+            self.shared_cte_restrictions.as_ref(),
+        )?;
 
         // Search and optimize reorderable regions. We traverse bottom-up so nested reorderable
         // regions inside "leaf" plans (as seen by a higher-level region) are also visited.

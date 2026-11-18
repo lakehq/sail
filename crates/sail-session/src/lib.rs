@@ -1516,4 +1516,173 @@ mod tests {
         assert_eq!(nested, (2, 1));
         Ok(())
     }
+
+    #[test]
+    fn test_shared_cte_is_restricted_to_the_keys_of_its_references() -> Result<(), String> {
+        // The plan resolver futures need more than the default test thread stack in debug builds.
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| e.to_string())?
+                    .block_on(shared_cte_is_restricted_to_the_keys_of_its_references())
+                    .map_err(|e| e.to_string())
+            })
+            .map_err(|e| e.to_string())?
+            .join()
+            .unwrap_or_else(|e| std::panic::resume_unwind(e))
+    }
+
+    async fn shared_cte_is_restricted_to_the_keys_of_its_references()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use datafusion::arrow::array::{Int64Array, RecordBatch};
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::arrow::util::pretty::pretty_format_batches;
+        use datafusion::parquet::arrow::ArrowWriter;
+        use datafusion::physical_plan::joins::HashJoinExec;
+        use datafusion::physical_plan::union::UnionExec;
+        use datafusion::physical_plan::{collect, displayable};
+        use datafusion_expr::JoinType;
+        use sail_common_datafusion::session::shared_cte::SharedCteConfig;
+        use sail_data_source::formats::parquet::ParquetDataSource;
+        use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
+        use sail_physical_plan::shared_cte::SharedCteExec;
+
+        // A file of 100 rows for each of 1000 keys, and a file of one row for each key.
+        let directory = tempfile::tempdir()?;
+        let write = |name: &str, rows: i64| -> Result<String, Box<dyn std::error::Error>> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("k", DataType::Int64, false),
+                Field::new("v", DataType::Int64, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from_iter_values((0..rows).map(|x| x % 1000))),
+                    Arc::new(Int64Array::from_iter_values(0..rows)),
+                ],
+            )?;
+            let path = directory.path().join(name);
+            let mut writer = ArrowWriter::try_new(std::fs::File::create(&path)?, schema, None)?;
+            writer.write(&batch)?;
+            writer.close()?;
+            Ok(format!("parquet.`{}`", path.display()))
+        };
+        let (facts, keys) = (
+            write("facts.parquet", 100_000)?,
+            write("keys.parquet", 1000)?,
+        );
+
+        let session = |share: bool| -> Result<SessionContext, Box<dyn std::error::Error>> {
+            let options = PhysicalOptimizerOptions {
+                enable_join_reorder: true,
+                ..Default::default()
+            };
+            let state = SessionStateBuilder::new_from_existing(create_session()?.state())
+                .with_physical_optimizer_rules(get_physical_optimizers(options))
+                .build();
+            let session = SessionContext::new_with_state(state);
+            let registry = DataSourceRegistry::new();
+            registry.register_data_source(Arc::new(ParquetDataSource::default()))?;
+            let state = session.state_ref();
+            let mut state = state.write();
+            state.config_mut().set_extension(Arc::new(registry));
+            state
+                .config_mut()
+                .set_extension(Arc::new(SharedCteConfig::new(share)));
+            drop(state);
+            Ok(session)
+        };
+        // Returns the numbers of the reductions to keys and of the unions in the plan.
+        fn reductions(plan: &Arc<dyn ExecutionPlan>) -> datafusion_common::Result<(usize, usize)> {
+            use datafusion_common::tree_node::TreeNode;
+
+            let (mut reductions, mut unions) = (0, 0);
+            plan.apply(|plan| {
+                if let Some(join) = plan.downcast_ref::<HashJoinExec>()
+                    && matches!(join.join_type(), JoinType::RightSemi | JoinType::LeftSemi)
+                    && join
+                        .on()
+                        .iter()
+                        .any(|(left, right)| format!("{left} {right}").contains("__early_join_key"))
+                {
+                    reductions += 1;
+                }
+                unions += usize::from(plan.is::<UnionExec>());
+                Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+            })?;
+            Ok((reductions, unions))
+        }
+
+        let cte =
+            format!("WITH c AS (SELECT k, v % 7 AS g, sum(v) AS s FROM {facts} GROUP BY k, v % 7)");
+        // Each reference is joined with the rows of a few keys.
+        let reference =
+            |condition: &str| format!("(SELECT c.k, c.g, c.s FROM c JOIN {keys} d ON {condition})");
+        let join = "x JOIN {} y ON x.k = y.k - 5 AND x.g = y.g";
+        // The keys of a reference that depend on the result of a scalar subquery, which
+        // the plan of the CTE cannot read. The second subquery reads the CTE itself.
+        let scalar = format!("SELECT max(v) - 984 FROM {keys}");
+        let nested = format!(
+            "SELECT count(DISTINCT c.k) + 5 FROM c JOIN {keys} d ON c.k = d.k WHERE d.v < 10"
+        );
+        // Each case has the other reference, whether the CTE is restricted, the number of
+        // reductions without shared CTEs, and the number of rows.
+        for (other, restricted, in_place, rows) in [
+            // The keys of both references are compared with the same column of the CTE.
+            (reference("c.k = d.k AND d.v BETWEEN 5 AND 14"), true, 2, 70),
+            // One reference reads all the rows of the CTE.
+            ("c".to_string(), false, 1, 70),
+            // The keys of the references are compared with different columns of the CTE.
+            (reference("c.g = d.k AND d.v < 3"), false, 1, 30),
+            (
+                reference(&format!("c.k = d.k AND d.v >= 5 AND d.v < ({scalar})")),
+                false,
+                2,
+                70,
+            ),
+            (
+                reference(&format!("c.k = d.k AND d.v >= 5 AND d.v < ({nested})")),
+                false,
+                3,
+                70,
+            ),
+        ] {
+            let query = format!(
+                "{cte} SELECT x.k, x.g, x.s, y.s FROM {} {} ORDER BY 1, 2",
+                reference("c.k = d.k AND d.v < 10"),
+                join.replace("{}", &other),
+            );
+            let shared = session(true)?;
+            let plan = plan_with_shared_ctes(&shared, &query).await?;
+            let text = displayable(plan.as_ref()).indent(false).to_string();
+            let inlined = session(false)?;
+            let expected = plan_with_shared_ctes(&inlined, &query).await?;
+            // Each reference that evaluates the CTE reduces it to its own keys.
+            assert_eq!(reductions(&expected)?, (in_place, 0), "{query}");
+            let Some(exec) = plan.downcast_ref::<SharedCteExec>() else {
+                return Err(format!("the CTE is not shared: {query}\n{text}").into());
+            };
+            let [(_, body)] = exec.ctes() else {
+                return Err(format!("the query does not share one CTE: {query}").into());
+            };
+            // The CTE is evaluated once, and it is reduced to the keys of both references
+            // when it can be.
+            let reduced = if restricted { (1, 1) } else { (0, 0) };
+            assert_eq!(reductions(body)?, reduced, "{query}\n{text}");
+            assert_eq!(reductions(exec.input())?, (0, 0), "{query}\n{text}");
+            let actual = collect(plan, shared.task_ctx()).await?;
+            let expected = collect(expected, inlined.task_ctx()).await?;
+            let actual = pretty_format_batches(&actual)?.to_string();
+            assert_eq!(
+                actual,
+                pretty_format_batches(&expected)?.to_string(),
+                "{query}"
+            );
+            assert_eq!(actual.lines().count(), rows + 4, "{query}\n{actual}");
+        }
+        Ok(())
+    }
 }

@@ -25,8 +25,7 @@ use crate::input_file_name::{
     PushDownInputFileMetadata, PushDownStreamedJoinInputFileMetadata,
     RewriteInputFileMetadataFallback, WrapInputFileMetadataSource,
 };
-use crate::join_reorder::JoinReorder;
-pub use crate::join_reorder::JoinReorderOptions;
+pub use crate::join_reorder::{JoinReorder, JoinReorderOptions};
 use crate::offset::OffsetSafeRequirements;
 use crate::partition_sensitive::KeepPartitionSensitiveInputs;
 use crate::projection_pushdown::ContextSafeProjectionPushdown;

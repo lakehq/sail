@@ -71,3 +71,38 @@ def test_early_filters_deduplicate_dimension_keys(spark, tmp_path):
     assert len(reductions) == 1, plan
     # Deduplicate copied keys while retaining the original dimension multiplicity.
     assert re.search(r"\bbuild_input_rows=1(?:,|\])", reductions[0]), reductions[0]
+
+
+def test_early_filters_restrict_a_shared_cte_to_the_keys_of_its_references(spark, tmp_path):
+    facts = str(tmp_path / "facts")
+    keys = str(tmp_path / "keys")
+    spark.range(100_000).selectExpr("id % 1000 AS k", "id AS v").write.parquet(facts)
+    spark.range(1000).selectExpr("id AS k", "id AS v").write.parquet(keys)
+    query = f"""
+        WITH c AS (
+            SELECT k, v % 7 AS g, SUM(v) AS s
+            FROM parquet.`{facts}`
+            GROUP BY k, v % 7
+        )
+        SELECT x.k, x.g, x.s AS s1, y.s AS s2
+        FROM (SELECT c.k, c.g, c.s FROM c JOIN parquet.`{keys}` d ON c.k = d.k WHERE d.v < 10) x
+        JOIN (SELECT c.k, c.g, c.s FROM c JOIN parquet.`{keys}` d ON c.k = d.k WHERE d.v BETWEEN 5 AND 14) y
+          ON x.k = y.k - 5 AND x.g = y.g
+        ORDER BY 1, 2
+    """  # noqa: S608 - paths are controlled by this test.
+    totals = {}
+    for v in range(100_000):
+        totals[(v % 1000, v % 7)] = totals.get((v % 1000, v % 7), 0) + v
+    expected = [(k, g, totals[(k, g)], totals[(k + 5, g)]) for k in range(10) for g in range(7)]
+    assert [tuple(row) for row in spark.sql(query).collect()] == expected
+
+    plan = spark.sql(f"EXPLAIN {query}").first()[0]
+    lines = plan.splitlines()
+    references = [i for i, line in enumerate(lines) if "SharedCteScanExec" in line]
+    reductions = [i for i, line in enumerate(lines) if "join_type=RightSemi" in line and "__early_join_key_0" in line]
+    # The CTE is evaluated once, and its plan, which follows the plan of the query, reads
+    # only the rows of the keys of both references.
+    assert len(references) == 2, plan
+    assert len(reductions) == 1, plan
+    assert reductions[0] > references[-1], plan
+    assert sum("UnionExec" in line for line in lines[reductions[0] :]) == 1, plan

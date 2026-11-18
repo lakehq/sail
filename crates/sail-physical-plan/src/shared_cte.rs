@@ -21,7 +21,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{Result, Statistics, internal_datafusion_err, internal_err};
+use datafusion_common::{NullEquality, Result, Statistics, internal_datafusion_err, internal_err};
 use futures::StreamExt;
 
 use crate::shared_cte::tee::{Tee, TeeReader};
@@ -213,6 +213,49 @@ pub fn ctes_read_again(plan: &Arc<dyn ExecutionPlan>) -> HashSet<usize> {
         Ok(TreeNodeRecursion::Continue)
     });
     ids
+}
+
+/// The rows of a shared CTE that a reference reads when the optimizer copies the keys of
+/// a filtered join input to the reference: the rows whose values in the columns are
+/// equal to those of a row of the keys. The join that has the keys remains above the
+/// reference, so the reference can read more rows of the CTE, but it needs no others.
+#[derive(Debug, Clone)]
+pub struct SharedCteRestriction {
+    /// The plan that returns the keys.
+    pub keys: Arc<dyn ExecutionPlan>,
+    /// The columns of the shared CTE that are compared with the columns of the keys.
+    pub columns: Vec<usize>,
+    pub null_equality: NullEquality,
+}
+
+/// Returns the restrictions of each reference of the shared CTEs whose references in the
+/// plans are all restricted (see [`SharedCteScanExec::with_restriction`]), by the
+/// identifier of the CTE. No reference of such a CTE needs all its rows, so a shared
+/// evaluation computes more rows than the references need unless the plan of the CTE
+/// is restricted to the keys of all the references.
+pub fn shared_cte_restrictions<'a>(
+    plans: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
+) -> HashMap<usize, Vec<Vec<SharedCteRestriction>>> {
+    let mut restrictions: HashMap<usize, Option<Vec<Vec<SharedCteRestriction>>>> = HashMap::new();
+    for plan in plans {
+        // The closure never fails.
+        let _ = plan.apply(|plan| {
+            if let Some(scan) = plan.downcast_ref::<SharedCteScanExec>() {
+                let references = restrictions.entry(scan.cte.id()).or_insert(Some(vec![]));
+                match references {
+                    Some(references) if !scan.restrictions.is_empty() => {
+                        references.push(scan.restrictions.clone())
+                    }
+                    _ => *references = None,
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        });
+    }
+    restrictions
+        .into_iter()
+        .filter_map(|(id, references)| Some((id, references?)))
+        .collect()
 }
 
 /// Releases the outputs of the shared CTEs of a plan when every partition of the plan
@@ -431,6 +474,9 @@ pub struct SharedCteScanExec {
     reference: usize,
     /// The columns of the shared CTE that the reference reads, or `None` for all columns.
     projection: Option<Vec<usize>>,
+    /// The restrictions of the rows that the reference reads, which the optimizer applies
+    /// only inside the plan of the CTE, when that plan is in the place of the reference.
+    restrictions: Vec<SharedCteRestriction>,
     /// The statistics of the output of all partitions.
     statistics: Arc<Statistics>,
     properties: Arc<PlanProperties>,
@@ -484,6 +530,7 @@ impl SharedCteScanExec {
             reference: 0,
             statistics: Arc::new(output),
             projection,
+            restrictions: vec![],
             properties,
         }
     }
@@ -503,6 +550,17 @@ impl SharedCteScanExec {
 
     pub fn projection(&self) -> Option<&[usize]> {
         self.projection.as_deref()
+    }
+
+    /// Returns the reference that reads only the rows of the given restriction, and of
+    /// the restrictions that it has (see [`shared_cte_restrictions`]).
+    pub fn with_restriction(&self, restriction: SharedCteRestriction) -> Self {
+        let mut restrictions = self.restrictions.clone();
+        restrictions.push(restriction);
+        Self {
+            restrictions,
+            ..self.clone()
+        }
     }
 }
 
@@ -1262,6 +1320,53 @@ mod tests {
         assert_eq!(projected.num_rows, Precision::Exact(10));
         assert_eq!(projected.total_byte_size, Precision::Exact(80));
         assert_eq!(projected.column_statistics, vec![column(-9, 0)]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_shared_cte_restrictions_of_every_reference() -> Result<()> {
+        let (schema, keys) = plan(1)?;
+        let cte = |id: usize| {
+            Arc::new(SharedCte::new(
+                id,
+                "c".to_string(),
+                Partitioning::UnknownPartitioning(1),
+            ))
+        };
+        let statistics = Statistics::new_unknown(&schema);
+        let scan = |cte: &Arc<SharedCte>, columns: &[usize]| -> Arc<dyn ExecutionPlan> {
+            let mut scan =
+                SharedCteScanExec::new(Arc::clone(cte), Arc::clone(&schema), &statistics, None);
+            for &column in columns {
+                scan = scan.with_restriction(SharedCteRestriction {
+                    keys: Arc::clone(&keys),
+                    columns: vec![column],
+                    null_equality: NullEquality::NullEqualsNothing,
+                });
+            }
+            Arc::new(scan)
+        };
+        let (a, b) = (cte(0), cte(1));
+        // Every reference of the first CTE is restricted, in both plans, and one reference
+        // of the second CTE reads all the rows.
+        let plans: Vec<Arc<dyn ExecutionPlan>> = vec![
+            UnionExec::try_new(vec![scan(&a, &[0]), scan(&b, &[0])])?,
+            UnionExec::try_new(vec![scan(&a, &[1, 0]), scan(&b, &[])])?,
+        ];
+        let restrictions = shared_cte_restrictions(&plans);
+        assert_eq!(restrictions.keys().collect::<Vec<_>>(), vec![&0]);
+        let columns = restrictions[&0]
+            .iter()
+            .map(|reference| reference.iter().map(|x| x.columns.clone()).collect())
+            .collect::<Vec<Vec<_>>>();
+        assert_eq!(columns, vec![vec![vec![0]], vec![vec![1], vec![0]]]);
+        // The numbered reference remains restricted.
+        let numbered = scan(&a, &[1]);
+        let numbered: Arc<dyn ExecutionPlan> = match numbered.downcast_ref::<SharedCteScanExec>() {
+            Some(scan) => Arc::new(scan.with_reference(1)),
+            None => numbered,
+        };
+        assert_eq!(shared_cte_restrictions([&numbered]).len(), 1);
         Ok(())
     }
 
