@@ -42,7 +42,9 @@ use crate::io::StoreContext;
 use crate::physical_plan::delete_apply_exec::IcebergDeleteApplyExec;
 use crate::physical_plan::discovery_exec::IcebergDiscoveryExec;
 use crate::physical_plan::manifest_scan_exec::{IcebergManifestScanExec, ManifestPruning};
-use crate::physical_plan::merge_metadata_exec::IcebergMergeMetadataExec;
+use crate::physical_plan::merge_metadata_exec::{
+    IcebergMergeMetadataExec, UnsupportedIcebergRowScanExec,
+};
 use crate::physical_plan::metadata_scan_exec::IcebergMetadataScanExec;
 use crate::row_level_metadata::{
     MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN, RowLevelFileMetadata,
@@ -1479,6 +1481,17 @@ impl IcebergScan {
 
         for task in planned.tasks {
             let data_file = task.data_file;
+            match data_file.file_format {
+                DataFileFormat::Avro | DataFileFormat::Orc => {
+                    return Ok(Arc::new(UnsupportedIcebergRowScanExec::new(
+                        self.projected_arrow_schema(projection)?,
+                    )));
+                }
+                DataFileFormat::Puffin => {
+                    return plan_err!("Unsupported Iceberg data file format: Puffin");
+                }
+                DataFileFormat::Parquet => {}
+            }
             let sequence_number = task.data_sequence_number;
             let matched = task.deletes;
             if matched.is_empty() {

@@ -307,6 +307,7 @@ use sail_function::scalar::xml::to_xml::SparkToXml;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{XpathTyped, xpath_typed_name_to_kind};
 use sail_function::window::{SparkFirstLastValue, SparkFirstLastValueKind, SparkNtile};
+use sail_iceberg::physical_plan::merge_metadata_exec::UnsupportedIcebergRowScanExec;
 use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec,
     IcebergEqualityDeleteWriterExec, IcebergFileTasksExec, IcebergManifestScanExec,
@@ -1969,6 +1970,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     schema, &scan,
                 )?))
             }
+            NodeKind::UnsupportedIcebergRowScanSchema(schema) => Ok(Arc::new(
+                UnsupportedIcebergRowScanExec::new(Arc::new(try_decode_schema(&schema)?)),
+            )),
             NodeKind::IcebergMetadataScan(r#gen::IcebergMetadataScanExecNode { input }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -3466,6 +3470,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 iceberg_schema_json,
                 input_file_projection,
             })
+        } else if node.is::<UnsupportedIcebergRowScanExec>() {
+            NodeKind::UnsupportedIcebergRowScanSchema(try_encode_schema(node.schema().as_ref())?)
         } else if let Some(merge_metadata) = node.downcast_ref::<IcebergMergeMetadataExec>() {
             let input = try_encode_physical_plan_with_converter(
                 self,

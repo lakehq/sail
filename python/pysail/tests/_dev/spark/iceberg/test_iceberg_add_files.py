@@ -201,6 +201,39 @@ def test_imported_file_metadata_as_data_filter(spark, tmp_path, file_format, par
 
 
 @pytest.mark.parametrize("file_format", ["avro", "orc"])
+def test_imported_file_row_level_operations(spark, tmp_path, file_format):
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    rows = [(1, "first"), (2, "second")]
+    _write_source_file(source / "p=a" / f"data.{file_format}", file_format, rows)
+    name = "imported_file_dml"
+    spark.sql(
+        f"CREATE TABLE {name} (id BIGINT, value STRING, p STRING) USING iceberg PARTITIONED BY (p) LOCATION '{target}'"
+    )
+    try:
+        assert _add(spark, name, f"{file_format}.`{source}`") == (1, None)
+        spark.sql(f"INSERT INTO {name} VALUES (3, 'third', 'b')")
+        metadata = _find_latest_metadata(target)
+        for statement in [
+            f"UPDATE {name} SET value = 'updated' WHERE id = 1",
+            f"MERGE INTO {name} t USING (SELECT 1 AS id) s ON t.id = s.id "
+            "WHEN MATCHED THEN UPDATE SET value = 'updated'",
+            f"DELETE FROM {name} WHERE id = 1",
+        ]:
+            with pytest.raises(Exception, match="Row-level operations on imported Avro/ORC files are not supported"):
+                spark.sql(statement).collect()
+            assert _find_latest_metadata(target) == metadata
+        assert [tuple(row) for row in spark.table(name).select("id", "value").orderBy("id").collect()] == [
+            *rows,
+            (3, "third"),
+        ]
+        spark.sql(f"DELETE FROM {name} WHERE p = 'a'").collect()
+        assert [tuple(row) for row in spark.table(name).collect()] == [(3, "third", "b")]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize("file_format", ["avro", "orc"])
 @pytest.mark.parametrize("partitioned", [False, True])
 def test_add_files_source_formats(spark, tmp_path, file_format, partitioned):
     source = tmp_path / "source"

@@ -83,6 +83,7 @@ message ExtendedPhysicalPlanNode {
     IdentityGenerateExecNode identity_generate = 68;
     TailExecNode tail = 69;
     IcebergImportedExecNode iceberg_imported = 70;
+    bytes unsupported_iceberg_row_scan_schema = 71;
   }
 }
 
