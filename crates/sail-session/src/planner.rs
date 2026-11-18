@@ -88,6 +88,7 @@ use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_physical_plan::tail::TailExec;
 use sail_plan::catalog::CatalogCommandNode;
 use sail_plan::procedure::LakeProcedureNode;
+use sail_plan::shared_cte::SharedCteBody;
 
 use crate::scalar_subquery::{
     ensure_scalar_subquery_nullability, share_equivalent_scalar_subqueries,
@@ -112,49 +113,60 @@ impl QueryPlanner for ExtensionQueryPlanner {
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         // A shared CTE body is planned before the plans that refer to it.
         let mut shared_ctes = SharedCtePlanner::default();
-        // Without temporary files, a shared CTE keeps its rows in memory outside the memory
-        // pool, so with a memory limit only the CTEs that must be evaluated once are shared.
-        // This is also the case in cluster mode, where the task streams keep the rows.
-        let runtime = session.runtime_env();
-        let spills_kept_rows = runtime.disk_manager.tmp_files_enabled()
-            && session
-                .extension::<SharedCteConfig>()
-                .map(|x| x.spills_kept_rows())
-                .unwrap_or(true);
-        let retains_within_limit =
-            !matches!(runtime.memory_pool.memory_limit(), MemoryLimit::Finite(_))
-                || spills_kept_rows;
         let mut bodies = vec![];
         for body in shared_cte_bodies(logical_plan)? {
             let plan = self.plan(body.plan(), session, &shared_ctes).await?;
-            // A body that returns rows before its input ends would keep up to all its rows
-            // for a reference that reads it late, while each reference that evaluates the
-            // body itself keeps little.
-            if !body.must_share() && !(retains_within_limit && holds_output(&plan)) {
-                body.inline();
-            }
             shared_ctes.add(&body, body.name().to_string(), Arc::clone(&plan))?;
             bodies.push((body, plan));
         }
         let plan = self.plan(logical_plan, session, &shared_ctes).await?;
-        // With a memory limit and temporary files, a nested loop join executes its build
-        // side again to spill it, and a shared CTE that it reads keeps all its rows and
-        // its evaluation for that. Each reference evaluates such a CTE itself, unless the
-        // CTE must be evaluated once.
-        if matches!(runtime.memory_pool.memory_limit(), MemoryLimit::Finite(_))
-            && runtime.disk_manager.tmp_files_enabled()
-        {
-            let read_again = std::iter::once(&plan)
-                .chain(bodies.iter().map(|(_, plan)| plan))
-                .flat_map(ctes_read_again)
-                .collect::<HashSet<_>>();
-            for (id, (body, _)) in bodies.iter().enumerate() {
-                if read_again.contains(&id) && !body.must_share() {
-                    body.inline();
-                }
-            }
-        }
+        decline_shared_ctes(session, &plan, &bodies);
         shared_ctes.finish(plan)
+    }
+}
+
+/// Lets each reference evaluate a shared CTE itself (see [`SharedCteBody::inline`]) where
+/// that is better than one evaluation for the plan of the query and the plans of the
+/// bodies, which are planned by now. A CTE that must be evaluated once remains shared.
+fn decline_shared_ctes(
+    session: &dyn Session,
+    plan: &Arc<dyn ExecutionPlan>,
+    bodies: &[(Arc<SharedCteBody>, Arc<dyn ExecutionPlan>)],
+) {
+    let runtime = session.runtime_env();
+    let limited = matches!(runtime.memory_pool.memory_limit(), MemoryLimit::Finite(_));
+    let spills = runtime.disk_manager.tmp_files_enabled();
+    // Without temporary files, a shared CTE keeps its rows in memory outside the memory
+    // pool, so with a memory limit only the CTEs that must be evaluated once are shared.
+    // This is also the case in cluster mode, where the task streams keep the rows.
+    let spills_kept_rows = spills
+        && session
+            .extension::<SharedCteConfig>()
+            .map(|x| x.spills_kept_rows())
+            .unwrap_or(true);
+    let retains_within_limit = !limited || spills_kept_rows;
+    // With a memory limit and temporary files, a nested loop join executes its build
+    // side again to spill it, and a shared CTE that it reads keeps all its rows and
+    // its evaluation for that.
+    let read_again = if limited && spills {
+        std::iter::once(plan)
+            .chain(bodies.iter().map(|(_, plan)| plan))
+            .flat_map(ctes_read_again)
+            .collect::<HashSet<_>>()
+    } else {
+        HashSet::new()
+    };
+    for (id, (body, plan)) in bodies.iter().enumerate() {
+        if body.must_share() {
+            continue;
+        }
+        // A body that returns rows before its input ends would keep up to all its rows
+        // for a reference that reads it late, while each reference that evaluates the
+        // body itself keeps little.
+        let keeps_little = retains_within_limit && holds_output(plan);
+        if !keeps_little || read_again.contains(&id) {
+            body.inline();
+        }
     }
 }
 
