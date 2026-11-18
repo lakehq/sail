@@ -166,8 +166,7 @@ fn decline_shared_ctes(
     } else {
         HashSet::new()
     };
-    let streamed = std::iter::once(plan)
-        .chain(bodies.iter().map(|(_, plan)| plan))
+    let streamed = plans()
         .flat_map(ctes_read_without_holding)
         .collect::<HashSet<_>>();
     let mut declined = false;
