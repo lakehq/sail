@@ -783,8 +783,25 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_limited_cte_references_of_a_sorted_volatile_body()
+    #[test]
+    fn test_limited_cte_references_of_a_sorted_volatile_body() -> Result<(), String> {
+        // The plan resolver futures need more than the default test thread stack in debug builds.
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| e.to_string())?
+                    .block_on(limited_cte_references_of_a_sorted_volatile_body())
+                    .map_err(|e| e.to_string())
+            })
+            .map_err(|e| e.to_string())?
+            .join()
+            .unwrap_or_else(|e| std::panic::resume_unwind(e))
+    }
+
+    async fn limited_cte_references_of_a_sorted_volatile_body()
     -> Result<(), Box<dyn std::error::Error>> {
         use std::collections::HashSet;
 
