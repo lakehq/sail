@@ -206,11 +206,13 @@ def test_memory_limit_shares_only_the_ctes_that_must_be_evaluated_once():
     }
     with spark_connect_server(envs=envs) as server, spark_session_factory(server.remote) as sessions:
         spark = sessions.create()
-        body = "SELECT id % 7 AS k, {} AS n FROM range(1000) GROUP BY 1"
-        query = "WITH c AS ({}) SELECT count(*) FROM c a JOIN c b ON a.k = b.k"
-        for aggregate, shared in [("count(*)", False), ("max(rand())", True)]:
-            sql = query.format(body.format(aggregate))
-            assert spark.sql(sql).collect() == [(7,)]
+        query = "WITH c AS ({}) SELECT count(*), count_if(a.n = b.n) FROM c a JOIN c b ON a.k = b.k"
+        for body, shared in [
+            ("SELECT id % 7 AS k, count(*) AS n FROM range(1000) GROUP BY 1", False),
+            ("SELECT id AS k, rand() AS n FROM range(0, 7, 1, 2)", True),
+        ]:
+            sql = query.format(body)
+            assert spark.sql(sql).collect() == [(7, 7)]
             plan = spark.sql(f"EXPLAIN {sql}").collect()[0][0]
             assert ("SharedCteExec" in plan) == shared, plan
 
