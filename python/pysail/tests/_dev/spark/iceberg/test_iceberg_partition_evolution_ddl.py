@@ -1,4 +1,4 @@
-# ruff: noqa: S608, PLR2004
+# ruff: noqa: S608
 import pytest
 
 from pysail.testing._dev.spark.ddl import exercise_iceberg_partition_evolution

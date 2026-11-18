@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, FixedSizeListArray, GenericListArray, OffsetSizeTrait, StructArray, make_array,
+    Array, ArrayRef, FixedSizeListArray, GenericListArray, GenericListViewArray, OffsetSizeTrait,
+    StructArray, make_array,
 };
 use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::cast::{as_large_list_array, as_list_array};
+use datafusion_common::cast::{
+    as_large_list_array, as_large_list_view_array, as_list_array, as_list_view_array,
+};
 use datafusion_common::{
     Result, ScalarValue, exec_datafusion_err, exec_err, internal_err, plan_datafusion_err,
 };
@@ -44,6 +47,8 @@ impl ArrayStructField {
         match data_type {
             DataType::List(field)
             | DataType::LargeList(field)
+            | DataType::ListView(field)
+            | DataType::LargeListView(field)
             | DataType::FixedSizeList(field, _) => Ok(field),
             _ => exec_err!("array_struct_field requires a list, got {data_type}"),
         }
@@ -75,6 +80,8 @@ impl ArrayStructField {
         match data_type {
             DataType::List(_) => Ok(DataType::List(field)),
             DataType::LargeList(_) => Ok(DataType::LargeList(field)),
+            DataType::ListView(_) => Ok(DataType::ListView(field)),
+            DataType::LargeListView(_) => Ok(DataType::LargeListView(field)),
             DataType::FixedSizeList(_, size) => Ok(DataType::FixedSizeList(field, *size)),
             _ => unreachable!("list_field accepted only list data types"),
         }
@@ -106,6 +113,21 @@ impl ArrayStructField {
         Ok(Arc::new(GenericListArray::<O>::try_new(
             Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable()),
             array.offsets().clone(),
+            values,
+            array.nulls().cloned(),
+        )?))
+    }
+
+    fn project_list_view<O>(array: &GenericListViewArray<O>, field_name: &str) -> Result<ArrayRef>
+    where
+        O: OffsetSizeTrait,
+    {
+        let list_field = Self::list_field(array.data_type())?;
+        let (values, child) = Self::struct_values(array.values(), field_name)?;
+        Ok(Arc::new(GenericListViewArray::<O>::try_new(
+            Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable()),
+            array.offsets().clone(),
+            array.sizes().clone(),
             values,
             array.nulls().cloned(),
         )?))
@@ -177,6 +199,12 @@ impl ScalarUDFImpl for ArrayStructField {
         let out = match array.data_type() {
             DataType::List(_) => Self::project_list(as_list_array(array)?, field_name)?,
             DataType::LargeList(_) => Self::project_list(as_large_list_array(array)?, field_name)?,
+            DataType::ListView(_) => {
+                Self::project_list_view(as_list_view_array(array)?, field_name)?
+            }
+            DataType::LargeListView(_) => {
+                Self::project_list_view(as_large_list_view_array(array)?, field_name)?
+            }
             DataType::FixedSizeList(_, size) => {
                 let Some(array) = array.as_any().downcast_ref::<FixedSizeListArray>() else {
                     return exec_err!(
@@ -194,5 +222,85 @@ impl ScalarUDFImpl for ArrayStructField {
             }
         };
         Ok(ColumnarValue::Array(out))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{AsArray, Int32Array, StringArray};
+    use datafusion::arrow::buffer::ScalarBuffer;
+    use datafusion::arrow::datatypes::{Fields, Int32Type};
+    use datafusion_common::config::ConfigOptions;
+
+    use super::*;
+
+    fn project(array: ArrayRef) -> Result<ArrayRef> {
+        let udf = ArrayStructField::new();
+        let name = ScalarValue::Utf8(Some("a".to_string()));
+        let arg_fields = vec![
+            Arc::new(Field::new("array", array.data_type().clone(), true)),
+            Arc::new(Field::new("name", DataType::Utf8, false)),
+        ];
+        let return_field = udf.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, Some(&name)],
+        })?;
+        let number_rows = array.len();
+        let ColumnarValue::Array(result) = udf.invoke_with_args(ScalarFunctionArgs {
+            args: vec![ColumnarValue::Array(array), ColumnarValue::Scalar(name)],
+            arg_fields,
+            number_rows,
+            return_field: Arc::clone(&return_field),
+            config_options: Arc::new(ConfigOptions::default()),
+        })?
+        else {
+            return internal_err!("expected an array");
+        };
+        assert_eq!(result.data_type(), return_field.data_type());
+        Ok(result)
+    }
+
+    fn check_list_view<O: OffsetSizeTrait>() -> Result<()> {
+        let values = StructArray::try_new(
+            Fields::from(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Utf8, true),
+            ]),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["x", "y", "z"])),
+            ],
+            Some(NullBuffer::from(vec![true, false, true])),
+        )?;
+        let item = Arc::new(Field::new_list_field(values.data_type().clone(), true));
+        // Rows [{2, y} as NULL, {3, z}], NULL and [{1, x}], out of offset order.
+        let offsets = [1, 0, 0].map(O::usize_as);
+        let sizes = [2, 0, 1].map(O::usize_as);
+        let array = GenericListViewArray::<O>::try_new(
+            item,
+            ScalarBuffer::from(offsets.to_vec()),
+            ScalarBuffer::from(sizes.to_vec()),
+            Arc::new(values),
+            Some(NullBuffer::from(vec![true, false, true])),
+        )?;
+        let result = project(Arc::new(array))?;
+        let result = result.as_list_view::<O>();
+        let row = |index: usize| {
+            result
+                .value(index)
+                .as_primitive::<Int32Type>()
+                .iter()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(row(0), vec![None, Some(3)]);
+        assert!(result.is_null(1));
+        assert_eq!(row(2), vec![Some(1)]);
+        Ok(())
+    }
+
+    #[test]
+    fn projects_a_field_of_list_view_elements() -> Result<()> {
+        check_list_view::<i32>()?;
+        check_list_view::<i64>()
     }
 }

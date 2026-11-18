@@ -87,7 +87,7 @@ def test_python_data_source_table_is_read_for_each_reference(spark, counting_tab
         df = spark.sql(query.format(t=table_name, v=view_name))
         assert scalar_subquery_slots(df) == [2]
         assert [tuple(row) for row in df.collect()] == [(7, 7)]
-        assert reads(counter) == 2  # noqa: PLR2004
+        assert reads(counter) == 2
     finally:
         spark.sql(f"DROP VIEW IF EXISTS {view_name}")
 
@@ -103,7 +103,7 @@ def test_python_data_source_dataframe_view_is_read_for_each_reference(spark, cou
         df = spark.sql(f"SELECT (SELECT x FROM {view_name}) AS a, (SELECT x FROM {view_name}) AS b")  # noqa: S608
         assert scalar_subquery_slots(df) == [2]
         assert [tuple(row) for row in df.collect()] == [(7, 7)]
-        assert reads(counter) == 2  # noqa: PLR2004
+        assert reads(counter) == 2
     finally:
         spark.catalog.dropTempView(view_name)
 

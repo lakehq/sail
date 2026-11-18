@@ -81,6 +81,7 @@ message ExtendedPhysicalPlanNode {
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
     SeededRandomExecNode seeded_random = 67;
     IdentityGenerateExecNode identity_generate = 68;
+    TailExecNode tail = 69;
   }
 }
 
@@ -196,10 +197,19 @@ message HigherOrderUdf {
     SparkTransformValuesUdf transform_values = 11;
     SparkTransformKeysUdf transform_keys = 12;
     CoalesceLazyUdf coalesce_lazy = 13;
+    SparkMapZipWithUdf map_zip_with = 14;
+    SparkArrayZipWithUdf zip_with = 15;
   }
 }
 
 message CoalesceLazyUdf {}
+
+message SparkMapZipWithUdf {
+  bool ansi_mode = 1;
+  string session_timezone = 2;
+}
+
+message SparkArrayZipWithUdf {}
 
 message SparkArrayAggregateUdf {
   bool element_first = 1;
@@ -219,6 +229,7 @@ message SparkTransformValuesUdf {}
 
 message SparkTransformKeysUdf {
   bool last_value_wins = 1;
+  bool preserve_duplicates = 2;
 }
 
 message SparkArrayFilterUdf {
@@ -297,6 +308,7 @@ message ExtendedScalarUdf {
     SparkToStringUdf spark_to_string = 40;
     UuidCastUdf uuid_cast = 41;
     SparkIntervalUdf spark_interval = 42;
+    SparkSchemaOfXmlUdf spark_schema_of_xml = 43;
   }
 }
 
@@ -749,6 +761,11 @@ message SystemTableExecNode {
   optional PhysicalProjection projection = 2;
   repeated bytes filters = 3;
   optional uint64 fetch = 4;
+}
+
+message TailExecNode {
+  bytes input = 1;
+  uint64 fetch = 2;
 }
 
 message SchemaPivotExecNode {
@@ -1406,4 +1423,9 @@ message DeltaOptimizeRewriteExecNode {
 
 message DeltaOptimizeGroupAssignment {
   repeated uint64 groups = 1;
+}
+
+message SparkSchemaOfXmlUdf {
+  bool case_sensitive = 1;
+  bool timestamp_ntz = 2;
 }

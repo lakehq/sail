@@ -86,17 +86,15 @@ build-backend = "maturin"
 # otherwise Hatch triggers a fresh build to install the project, which can be slow.
 # To install the project as an editable package, run `hatch run [<env>:]maturin develop` instead.
 
-# We use `uv` in CI for faster package installation, but we still use `pip` for local development,
-# since the IDE may only support `pip`. Also, if we used `uv` for local development, the `pip` command
-# would then be associated with the global Python installation in the command line. In this case,
-# the developer may incorrectly run `pip` instead of `uv pip`, resulting in unintended modification
-# to the global Python installation.
+# Use uv locally and in CI to reuse its dependency cache across environments.
+# Keep pip in each environment for IDE support and environment-local pip commands.
 
 [tool.hatch.envs.default]
 python = "3.11"
-installer = "pip"
+installer = "uv"
 skip-install = true
 dependencies = [
+    "pip",
     "pyspark[connect]==4.3.0",
     "ibis-framework>=12,<13",
     "pandas<3",
@@ -126,9 +124,6 @@ dependencies = [
 ]
 path = ".venvs/default"
 
-[tool.hatch.envs.default.overrides]
-env.CI.installer = "uv"
-
 [tool.hatch.envs.default.scripts]
 # The scripts can be inherited by other environments.
 install-pysail = "\"{env:HATCH_UV}\" pip install pysail --no-index -f target/wheels --force-reinstall"
@@ -139,9 +134,10 @@ env-vars = { RUSTC_WORKSPACE_WRAPPER = ".github/scripts/rustc-workspace-wrapper.
 
 [tool.hatch.envs.docs]
 python = "3.11"
-installer = "pip"
+installer = "uv"
 skip-install = true
 dependencies = [
+    "pip",
     "sphinx>=8.0,<9",
 ]
 path = ".venvs/docs"
@@ -149,15 +145,13 @@ path = ".venvs/docs"
 [tool.hatch.envs.docs.extra-scripts]
 build = "sphinx-build python/pysail/docs python/pysail/docs/_build -b json"
 
-[tool.hatch.envs.docs.overrides]
-env.CI.installer = "uv"
-
 [tool.hatch.envs.test]
 matrix-name-format = "{variable}-{value}"
 python = "3.11"
-installer = "pip"
+installer = "uv"
 skip-install = true
 dependencies = [
+    "pip",
     "pandas<3",
     "packaging>=21.3,<27",
     "pytest>=9.1,<9.2",
@@ -201,7 +195,6 @@ matrix.spark.extra-dependencies = [
     { value = "pyspark[connect]==4.2.1", if = ["4.2.1"] },
     { value = "pyspark[connect]==4.3.0", if = ["4.3.0"] },
 ]
-env.CI.installer = "uv"
 
 [tool.hatch.envs.test-discovery]
 template = "test"
@@ -211,9 +204,10 @@ path = ".venvs/test-discovery"
 [tool.hatch.envs.test-spark]
 matrix-name-format = "{variable}-{value}"
 python = "3.11"
-installer = "pip"
+installer = "uv"
 skip-install = true
 dependencies = [
+    "pip",
     "pytest>=8.4,<9",
     "pytest-xdist>=3.7,<4",
     "pytest-timeout>=2.4,<3",
@@ -231,13 +225,13 @@ matrix.spark.path = [
     { value = ".venvs/test-spark.spark-3.5.9", if = ["3.5.9"] },
     { value = ".venvs/test-spark.spark-4.3.0", if = ["4.3.0"] },
 ]
-env.CI.installer = "uv"
 
 [tool.hatch.envs.test-ibis]
 python = "3.11"
-installer = "pip"
+installer = "uv"
 skip-install = true
 dependencies = [
+    "pip",
     "pyspark[connect]==3.5.9",
     "ibis-framework[pyspark]>=12,<13",
     "pyarrow>=24.0,<25",
@@ -270,9 +264,6 @@ dependencies = [
 ]
 path = ".venvs/test-ibis"
 
-[tool.hatch.envs.test-ibis.overrides]
-env.CI.installer = "uv"
-
 [tool.ruff]
 line-length = 120
 
@@ -291,7 +282,8 @@ extend-select = ["TID251"]
 "python/pysail/docs/conf.py" = ["INP001"]
 "python/pysail/examples/**/*.py" = ["T201", "PLC0415"]
 "python/pysail/testing/**/*.py" = ["S101"]
-"python/pysail/tests/**/*.py" = ["S101", "PLC0415"]
+"python/pysail/tests/**/*.py" = ["S101", "PLC0415", "PLR2004"]
+"scripts/spark-tests/**/*.py" = ["PLR2004"]
 "scripts/**/*.py" = ["SLF001", "PLC0415"]
 
 [tool.pytest.ini_options]

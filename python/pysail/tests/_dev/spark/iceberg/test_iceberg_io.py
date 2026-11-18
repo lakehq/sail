@@ -125,7 +125,7 @@ def test_append_after_upgrade_preserves_manifest_summaries(spark, sql_catalog, f
         for path, summaries in before.items():
             assert after[path] == summaries
         assert external.scan(row_filter=EqualTo("p", 10)).to_arrow().to_pylist() == [{"id": 1, "p": 10}]
-        assert external.scan().to_arrow().num_rows == 4  # noqa: PLR2004
+        assert external.scan().to_arrow().num_rows == 4
         rows = spark.sql(f"SELECT id, p FROM {name} WHERE p=10").collect()  # noqa: S608
         assert [tuple(row) for row in rows] == [(1, 10)]
     finally:
@@ -157,9 +157,9 @@ def test_manifest_wire_schema_and_snapshot_headers(spark, tmp_path, format_versi
             assert header["snapshot-id"] == str(snapshot["snapshot-id"])
             assert header["parent-snapshot-id"] == str(snapshot["parent-snapshot-id"])
             assert header["format-version"] == str(format_version)
-            if format_version >= 2:  # noqa: PLR2004
+            if format_version >= 2:
                 assert header["sequence-number"] == str(snapshot["sequence-number"])
-            if format_version == 3:  # noqa: PLR2004
+            if format_version == 3:
                 assert header["first-row-id"] == str(snapshot["first-row-id"])
             partitions = next(field for field in schema["fields"] if field["name"] == "partitions")
             array = next(branch for branch in partitions["type"] if isinstance(branch, dict))
@@ -179,11 +179,11 @@ def test_manifest_wire_schema_and_snapshot_headers(spark, tmp_path, format_versi
             assert annotations["ts"]["adjust-to-utc"] is True
             assert annotations["ntz"]["adjust-to-utc"] is False
             version_three_fields = {"first_row_id", "content_offset", "content_size_in_bytes"}
-            if format_version < 3:  # noqa: PLR2004
+            if format_version < 3:
                 assert not version_three_fields.intersection(fields)
             else:
                 assert version_three_fields <= fields.keys()
-            assert ("referenced_data_file" in fields) == (format_version >= 2)  # noqa: PLR2004
+            assert ("referenced_data_file" in fields) == (format_version >= 2)
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
@@ -450,7 +450,7 @@ def test_iceberg_io_create_or_replace_v3_table_preserves_next_row_id(spark, tmp_
         )
         spark.sql(f"INSERT INTO {table_name} VALUES (1), (2), (3)")  # noqa: S608
         insert_metadata = latest_iceberg_metadata(table_path)
-        assert insert_metadata["next-row-id"] == 3  # noqa: PLR2004
+        assert insert_metadata["next-row-id"] == 3
 
         spark.sql(
             f"""
@@ -462,7 +462,7 @@ def test_iceberg_io_create_or_replace_v3_table_preserves_next_row_id(spark, tmp_
         )
 
         replacement_metadata = latest_iceberg_metadata(table_path)
-        assert replacement_metadata["format-version"] == 3  # noqa: PLR2004
+        assert replacement_metadata["format-version"] == 3
         assert replacement_metadata["next-row-id"] == insert_metadata["next-row-id"]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -699,7 +699,7 @@ def test_iceberg_io_multiple_files(spark, sql_catalog):
             result_df.toPandas(), expected_data.sort_values("id").reset_index(drop=True), check_dtype=True
         )
 
-        assert result_df.count() == 4  # noqa: PLR2004
+        assert result_df.count() == 4
     finally:
         sql_catalog.drop_table(f"default.{table_name}")
 

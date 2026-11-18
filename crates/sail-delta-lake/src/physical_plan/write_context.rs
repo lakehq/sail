@@ -174,7 +174,19 @@ pub fn prepare_delta_write_context(
             _ => SaveMode::Append,
         };
         let schema_mode = get_schema_mode(options, save_mode, sink_mode)?;
-        handle_schema_evolution(snapshot, &input_schema, schema_mode, partition_columns)?
+        let (schema, mut metadata) =
+            handle_schema_evolution(snapshot, &input_schema, schema_mode, partition_columns)?;
+        if matches!(sink_mode, PhysicalSinkMode::Overwrite)
+            && let Some(comment) = metadata_configuration.get("comment")
+            && snapshot.metadata().description() != Some(comment.as_str())
+        {
+            metadata = Some(
+                metadata
+                    .unwrap_or_else(|| snapshot.metadata().clone())
+                    .with_description(Some(comment.clone())),
+            );
+        }
+        (schema, metadata.into_iter().map(Action::Metadata).collect())
     } else {
         (input_schema.clone(), Vec::new())
     };
@@ -421,7 +433,7 @@ fn handle_schema_evolution(
     input_schema: &SchemaRef,
     schema_mode: Option<SchemaMode>,
     partition_columns: &[String],
-) -> Result<(SchemaRef, Vec<Action>)> {
+) -> Result<(SchemaRef, Option<Metadata>)> {
     let table_arrow_schema = Arc::new(
         snapshot
             .metadata()
@@ -482,9 +494,9 @@ fn handle_schema_evolution(
                 let (_final_kernel, updated_metadata) =
                     evolve_schema(&current_kernel, &candidate_kernel, current_metadata, mode)
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                Ok((merged_schema, vec![Action::Metadata(updated_metadata)]))
+                Ok((merged_schema, Some(updated_metadata)))
             } else {
-                Ok((table_arrow_schema, Vec::new()))
+                Ok((table_arrow_schema, None))
             }
         }
         Some(SchemaMode::Overwrite) => {
@@ -499,14 +511,11 @@ fn handle_schema_evolution(
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let updated_metadata =
                 updated_metadata.with_partition_columns(partition_columns.to_vec());
-            Ok((
-                input_schema.clone(),
-                vec![Action::Metadata(updated_metadata)],
-            ))
+            Ok((input_schema.clone(), Some(updated_metadata)))
         }
         None => {
             validate_schema_compatibility(&table_arrow_schema, input_schema)?;
-            Ok((table_arrow_schema, Vec::new()))
+            Ok((table_arrow_schema, None))
         }
     }
 }

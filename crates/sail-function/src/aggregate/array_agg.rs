@@ -1,4 +1,5 @@
-// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions-aggregate/src/array_agg.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions-aggregate/src/array_agg.rs
 
 //! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
@@ -2017,7 +2018,7 @@ impl OrderSensitiveArrayAggAccumulator {
 /// Dictionary GC removes unused values without decoding the dictionary, while
 /// view GC copies only referenced bytes. Recurse into children so nested payloads
 /// cannot retain the source buffers either.
-fn compact_payload(array: ArrayRef) -> Result<ArrayRef> {
+pub fn compact_payload(array: ArrayRef) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::Utf8View => Ok(Arc::new(array.as_string_view().gc())),
         DataType::BinaryView => Ok(Arc::new(array.as_binary_view().gc())),

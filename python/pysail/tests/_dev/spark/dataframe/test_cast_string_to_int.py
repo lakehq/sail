@@ -3,7 +3,6 @@ from pyspark.sql import Row
 
 
 def test_legacy_string_to_int_cast_handles_decimals_and_overflow(spark):
-    expected_filter_value = 100
     original_ansi = spark.conf.get("spark.sql.ansi.enabled")
     spark.conf.set("spark.sql.ansi.enabled", "false")
     try:
@@ -27,7 +26,7 @@ def test_legacy_string_to_int_cast_handles_decimals_and_overflow(spark):
             Row(id=4, result=-4),
         ]
 
-        filtered = source.filter(F.col("value").cast("int") == expected_filter_value).collect()
+        filtered = source.filter(F.col("value").cast("int") == 100).collect()
         assert filtered == [Row(id=1, value="100")]
     finally:
         spark.conf.set("spark.sql.ansi.enabled", original_ansi)

@@ -114,8 +114,7 @@ def test_merge_by_default_explicit_and_null_are_not_generated(spark, identity_ta
     assert spark.table(name).orderBy("k").collect() == [(42, 1, 10), (None, 2, 20)]
     assert _watermark(path) is None
     spark.sql(f"INSERT INTO {name} (k,v) VALUES (3,30)").collect()  # noqa: S608
-    expected_next_id = 10
-    assert spark.table(name).where("k=3").first().id == expected_next_id
+    assert spark.table(name).where("k=3").first().id == 10
 
 
 @pytest.mark.parametrize("matched", [False, True], ids=["fast-append", "copy-on-write"])
@@ -189,7 +188,8 @@ def test_merge_identity_star_omission_requires_evolution(spark, identity_table, 
     assert _state(spark, name, path) == before
 
 
-# [CREDIT]: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/test/scala/org/apache/spark/sql/delta/IdentityColumnDMLSuite.scala#L130-L205
+# SPDX-SnippetBegin
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/test/scala/org/apache/spark/sql/delta/IdentityColumnDMLSuite.scala#L130-L205
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
 @pytest.mark.parametrize(
     ("api", "update_action"),
@@ -258,6 +258,9 @@ def test_merge_identity_star_evolution_lifecycle(spark, identity_table, mode, ap
     assert _watermark(path) == appended[2].id
 
 
+# SPDX-SnippetEnd
+
+
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
 def test_merge_identity_evolution_update_only_preserves_watermark(spark, identity_table, mode):
     name, path = identity_table(mode=mode)
@@ -270,7 +273,8 @@ def test_merge_identity_evolution_update_only_preserves_watermark(spark, identit
     assert _watermark(path) == before
 
 
-# [CREDIT]: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/test/scala/org/apache/spark/sql/delta/MergeIntoSchemaEvolutionSuite.scala#L387-L499
+# SPDX-SnippetBegin
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/test/scala/org/apache/spark/sql/delta/MergeIntoSchemaEvolutionSuite.scala#L387-L499
 @pytest.mark.parametrize("matched", [False, True], ids=["fast-append", "copy-on-write"])
 def test_merge_identity_evolution_mixed_insert_first_match(spark, identity_table, matched):
     name, path = identity_table(mode="BY DEFAULT")
@@ -301,6 +305,9 @@ def test_merge_identity_evolution_mixed_insert_first_match(spark, identity_table
     assert spark.table(name).where("k=5").first().id > before
 
 
+# SPDX-SnippetEnd
+
+
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
 @pytest.mark.parametrize("value", ["100L", "CAST(NULL AS BIGINT)"])
 def test_merge_identity_evolution_star_supplied_value(spark, identity_table, mode, value):
@@ -319,8 +326,9 @@ def test_merge_identity_evolution_star_supplied_value(spark, identity_table, mod
         assert _watermark(path) is None
 
 
-# [CREDIT]: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/main/scala/org/apache/spark/sql/delta/ColumnWithDefaultExprUtils.scala#L172-L180
 # Spark 4.2 / Delta 4.4: explicit DEFAULT becomes NULL, not an omitted identity.
+# SPDX-SnippetBegin
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/main/scala/org/apache/spark/sql/delta/ColumnWithDefaultExprUtils.scala#L172-L180
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
 @pytest.mark.parametrize("values", ["(DEFAULT,2,22)", "(DEFAULT,2,22),(99,3,33)", "(NULL,2,22)"])
 def test_insert_identity_default_is_explicit(spark, identity_table, mode, values):
@@ -340,6 +348,9 @@ def test_insert_identity_default_is_explicit(spark, identity_table, mode, values
         assert _watermark(path) == watermark
         spark.sql(f"INSERT INTO {name} (k,v) VALUES (4,44)").collect()  # noqa: S608
         assert spark.table(name).where("k=4").first().id == watermark + 3
+
+
+# SPDX-SnippetEnd
 
 
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
@@ -702,8 +713,7 @@ def test_merge_identity_tracking_is_independent_of_file_statistics(spark, identi
         assert "id" not in stats.get("maxValues", {})
     spark.sql(f"INSERT INTO {name} (k,v) VALUES (2,20)").collect()  # noqa: S608
     reopened = spark.read.format("delta").load(str(path)).orderBy("k").collect()
-    expected_count = 2
-    assert len(reopened) == expected_count
+    assert len(reopened) == 2
     assert reopened[1].id > generated
     assert _watermark(path) == reopened[1].id
 
@@ -738,10 +748,9 @@ def test_merge_identity_tracker_accepts_null_row_groups(single_partition_spark, 
         # The committed file has no bound for its all-null first row group.
         files = list(path.glob("*.parquet"))
         assert files
-        expected_row_groups = 2
         for file in files:
             parquet = pq.ParquetFile(file)
-            assert parquet.metadata.num_row_groups == expected_row_groups
+            assert parquet.metadata.num_row_groups == 2
             null_group = parquet.metadata.row_group(0)
             value_group = parquet.metadata.row_group(1)
             assert null_group.num_rows == limit

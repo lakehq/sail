@@ -319,7 +319,9 @@ mod tests {
 
     #[tokio::test]
     async fn uncached_in_commit_timestamp_falls_back_to_commit_json() -> DeltaResult<()> {
-        // [Credit]: <https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/InCommitTimestampSuite.scala>
+        // SPDX-SnippetBegin
+        // SPDX-License-Identifier: Apache-2.0
+        // SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/InCommitTimestampSuite.scala
         // Missing CRC or CRC without ICT requires the commit.
         for checksum_present in [false, true] {
             let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -345,6 +347,7 @@ mod tests {
             assert_eq!(timestamp, 123);
         }
         Ok(())
+        // SPDX-SnippetEnd
     }
 
     #[tokio::test]

@@ -41,7 +41,7 @@ def test_cow_bucket_pruning_without_metrics(spark, sql_catalog, tmp_path, format
                 moved.append((path, backup))
         assert moved
         spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{table.location()}'")
-        if format_version == 3:  # noqa: PLR2004
+        if format_version == 3:
             spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('format-version'='3')")
         spark.sql(f"UPDATE {name} SET value=-1 WHERE id={updated_id}").collect()
         for path, backup in moved:
@@ -91,7 +91,7 @@ def test_cow_day_metadata_delete_without_metrics(spark, sql_catalog, tmp_path, f
             source.rename(backup)
             moved.append((source, backup))
         spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{table.location()}'")
-        if format_version == 3:  # noqa: PLR2004
+        if format_version == 3:
             spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('format-version'='3')")
         start = "2026-01-01" if whole_day else "2026-01-01 12:00:00"
         condition = f"ts >= TIMESTAMP_NTZ '{start}' AND ts < TIMESTAMP_NTZ '2026-01-02'"
@@ -140,7 +140,7 @@ def test_cow_output_partition_sort_and_compression(spark, sql_catalog, format_ve
         path = _local_file_path(table.location())
         before = _find_latest_metadata(path)
         spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{table.location()}'")
-        if format_version == 3:  # noqa: PLR2004
+        if format_version == 3:
             spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('format-version'='3')")
         spark.sql(f"UPDATE {name} SET value=value+10").collect()
         files = _current_manifest_entries(path, ManifestContent.DATA)
@@ -281,7 +281,7 @@ def test_uuid_and_fixed16_have_distinct_parquet_annotations(spark, sql_catalog, 
     )
     try:
         spark.sql(f"CREATE TABLE uuid_annotations USING iceberg LOCATION '{table.location()}'")
-        if format_version == 3:  # noqa: PLR2004
+        if format_version == 3:
             spark.sql("ALTER TABLE uuid_annotations SET TBLPROPERTIES ('format-version'='3')")
         values = [(bytes.fromhex("00112233445566778899aabbccddeeff"), b"abcdefghijklmnop")]
         spark.createDataFrame(values, "u BINARY, f BINARY").write.format("iceberg").mode("append").save(

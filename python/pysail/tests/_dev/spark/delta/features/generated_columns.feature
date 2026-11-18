@@ -334,7 +334,8 @@ Feature: Delta Lake Generated Columns
         LOCATION {{ location.sql }}
         """
       # Semantic port of the NULL cases in Delta 4.4.0 GeneratedColumnSuite.
-      # [CREDIT]: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/GeneratedColumnSuite.scala#L815-L839
+      # SPDX-SnippetBegin
+      # SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/GeneratedColumnSuite.scala#L815-L839
       Given statement
         """
         INSERT INTO delta_gen_col_enforce
@@ -357,6 +358,7 @@ Feature: Delta Lake Generated Columns
       Then query result ordered
         | id | event_date |
         | 1  | NULL       |
+      # SPDX-SnippetEnd
 
     Scenario: Insert with incorrect explicit generated column value fails
       Given statement template

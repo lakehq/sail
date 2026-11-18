@@ -44,6 +44,9 @@ impl ReadFormat for CsvReadFormat {
         Ok(infer_listing_compression(files)?.unwrap_or(CompressionTypeVariant::UNCOMPRESSED))
     }
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/0d1f2ebe2cc97c91b736bc0a160b5b73cf40437a/datafusion/datasource-csv/src/file_format.rs
     async fn infer_schema(
         &self,
         ctx: &dyn Session,
@@ -107,7 +110,11 @@ impl ReadFormat for CsvReadFormat {
 
         Ok(Arc::new(schema))
     }
+    // SPDX-SnippetEnd
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/0d1f2ebe2cc97c91b736bc0a160b5b73cf40437a/datafusion/datasource-csv/src/file_format.rs
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
         let mut options = self
             .options
@@ -143,6 +150,7 @@ impl ReadFormat for CsvReadFormat {
 
         Ok(config)
     }
+    // SPDX-SnippetEnd
 
     fn path_glob_filter(&self) -> Option<&str> {
         self.options.path_glob_filter.as_deref()

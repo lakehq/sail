@@ -193,7 +193,9 @@ struct Generator {
     increment: Option<i64>,
 }
 impl Generator {
-    // [CREDIT]: https://github.com/delta-io/delta/blob/bb1057f43/spark/src/main/scala/org/apache/spark/sql/delta/GenerateIdentityValues.scala#L108-L154
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/main/scala/org/apache/spark/sql/delta/GenerateIdentityValues.scala#L108-L154
     fn next(&mut self, partition: usize, partitions: usize) -> Result<i64> {
         let overflow = || {
             DataFusionError::Execution(format!(
@@ -226,6 +228,7 @@ impl Generator {
         self.increment = Some(increment);
         Ok(current)
     }
+    // SPDX-SnippetEnd
 }
 struct IdentityGenerateStream {
     output_rows: Count,

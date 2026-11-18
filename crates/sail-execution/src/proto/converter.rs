@@ -7,7 +7,7 @@ use datafusion::arrow::datatypes::{ArrowPrimitiveType, FieldRef, Float16Type, Sc
 use datafusion::common::metadata::FieldMetadata;
 use datafusion::common::{Result, ScalarValue, plan_datafusion_err, plan_err};
 use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
-use datafusion::logical_expr::{LambdaParametersProgress, ValueOrLambda};
+use datafusion::logical_expr::{HigherOrderUDF, LambdaParametersProgress, ValueOrLambda};
 use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable, Literal};
 use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
@@ -300,12 +300,8 @@ impl RemotePhysicalProtoConverter {
             }
         }
 
-        let param_sets = match fun.lambda_parameters(0, &value_or_lambda)? {
-            LambdaParametersProgress::Complete(params) => params,
-            LambdaParametersProgress::Partial(_) => {
-                return plan_err!("`{}` returned partial lambda parameters", fun.name());
-            }
-        };
+        let param_sets =
+            self.resolve_lambda_parameters(&fun, inputs, input_schema, &mut value_or_lambda, ctx)?;
 
         let mut lambda_index = 0usize;
         let args = inputs
@@ -335,6 +331,63 @@ impl RemotePhysicalProtoConverter {
             input_schema,
             Arc::clone(ctx.task_ctx().session_config().options()),
         )?))
+    }
+
+    fn resolve_lambda_parameters(
+        &self,
+        fun: &HigherOrderUDF,
+        inputs: &[PhysicalExprNode],
+        input_schema: &Schema,
+        value_or_lambda: &mut [ValueOrLambda<FieldRef, Option<FieldRef>>],
+        ctx: &PhysicalPlanDecodeContext<'_>,
+    ) -> Result<Vec<Vec<FieldRef>>> {
+        let mut step = 0;
+        loop {
+            match fun.lambda_parameters(step, value_or_lambda)? {
+                LambdaParametersProgress::Complete(params) => return Ok(params),
+                LambdaParametersProgress::Partial(partial_params) => {
+                    let lambda_count = value_or_lambda
+                        .iter()
+                        .filter(|value| matches!(value, ValueOrLambda::Lambda(_)))
+                        .count();
+                    if partial_params.len() != lambda_count {
+                        return plan_err!(
+                            "`{}` returned {} lambda parameter sets, expected {lambda_count}",
+                            fun.name(),
+                            partial_params.len()
+                        );
+                    }
+                    let mut lambda_ordinal = 0;
+                    for (input, value) in inputs.iter().zip(value_or_lambda.iter_mut()) {
+                        let ValueOrLambda::Lambda(field) = value else {
+                            continue;
+                        };
+                        let fields = partial_params.get(lambda_ordinal).and_then(Option::as_ref);
+                        lambda_ordinal += 1;
+                        let Some(fields) = fields else {
+                            continue;
+                        };
+                        let Some((params, body)) = lambda_proto_parts(input)? else {
+                            return plan_err!(
+                                "`{}` returned parameters for a non-lambda input",
+                                fun.name()
+                            );
+                        };
+                        let schema = extend_lambda_schema(input_schema, &params, fields);
+                        let body = self.proto_to_physical_expr(body, &schema, ctx)?;
+                        *field = Some(body.return_field(&schema)?);
+                    }
+                    step += 1;
+                    let limit = fun.signature().lambda_parameters_max_iterations;
+                    if step > limit {
+                        return plan_err!(
+                            "`{}` lambda parameters did not resolve within {limit} iterations",
+                            fun.name()
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -395,15 +448,114 @@ fn extend_lambda_schema(base: &Schema, params: &[String], fields: &[FieldRef]) -
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::datatypes::DataType;
+    use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion::execution::TaskContext;
-    use datafusion::logical_expr::Operator;
-    use datafusion::physical_expr::expressions::BinaryExpr;
+    use datafusion::logical_expr::{
+        ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+        HigherOrderUDFImpl, Operator, Volatility,
+    };
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column};
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::projection::ProjectionExec;
     use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
 
     use super::*;
+    use crate::proto::codec::RemoteExecutionCodec;
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    enum InferenceBehavior {
+        ChangingFields,
+        NeverCompletes,
+        WrongParameterCount,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestInference {
+        signature: HigherOrderSignature,
+        behavior: InferenceBehavior,
+    }
+
+    impl HigherOrderUDFImpl for TestInference {
+        fn name(&self) -> &str {
+            "test_inference"
+        }
+
+        fn signature(&self) -> &HigherOrderSignature {
+            &self.signature
+        }
+
+        fn lambda_parameters(
+            &self,
+            step: usize,
+            fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+        ) -> Result<LambdaParametersProgress> {
+            match self.behavior {
+                InferenceBehavior::ChangingFields => {
+                    let expected = match step {
+                        0 => None,
+                        1 => Some(DataType::Int32),
+                        _ => Some(DataType::Int64),
+                    };
+                    let [ValueOrLambda::Lambda(actual)] = fields else {
+                        return plan_err!("expected one lambda");
+                    };
+                    if actual.as_ref().map(|field| field.data_type()) != expected.as_ref() {
+                        return plan_err!("unexpected lambda field at step {step}");
+                    }
+                    let data_type = if step == 0 {
+                        DataType::Int32
+                    } else {
+                        DataType::Int64
+                    };
+                    let params = vec![Arc::new(Field::new("", data_type, true))];
+                    if step >= 2 {
+                        Ok(LambdaParametersProgress::Complete(vec![params]))
+                    } else {
+                        Ok(LambdaParametersProgress::Partial(vec![Some(params)]))
+                    }
+                }
+                InferenceBehavior::NeverCompletes => Ok(LambdaParametersProgress::Partial(vec![
+                    Some(vec![Arc::new(Field::new("", DataType::Int32, true))]),
+                ])),
+                InferenceBehavior::WrongParameterCount => {
+                    Ok(LambdaParametersProgress::Partial(vec![]))
+                }
+            }
+        }
+
+        fn return_field_from_args(&self, _args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
+            plan_err!("not used")
+        }
+
+        fn invoke_with_args(&self, _args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
+            plan_err!("not used")
+        }
+    }
+
+    fn resolve_test_parameters(behavior: InferenceBehavior) -> Result<Vec<Vec<FieldRef>>> {
+        let converter = RemotePhysicalProtoConverter::default();
+        let body = Arc::new(Column::new("parameter", 0)) as Arc<dyn PhysicalExpr>;
+        let lambda = Arc::new(LambdaExpr::try_new(vec!["parameter".to_string()], body)?)
+            as Arc<dyn PhysicalExpr>;
+        let inputs = vec![converter.physical_expr_to_proto(&lambda, &RemoteExecutionCodec)?];
+        let mut signature = HigherOrderSignature::variadic_any(Volatility::Immutable);
+        signature.lambda_parameters_max_iterations = 2;
+        let fun = HigherOrderUDF::new_from_impl(TestInference {
+            signature,
+            behavior,
+        });
+        let mut fields = vec![ValueOrLambda::Lambda(None)];
+        let task_context = TaskContext::default();
+        let ctx = PhysicalPlanDecodeContext::new(&task_context, &RemoteExecutionCodec);
+        converter.resolve_lambda_parameters(&fun, &inputs, &Schema::empty(), &mut fields, &ctx)
+    }
+
+    #[test]
+    fn test_revisits_lambda_when_parameter_fields_change() -> Result<()> {
+        let params = resolve_test_parameters(InferenceBehavior::ChangingFields)?;
+        assert_eq!(params[0][0].data_type(), &DataType::Int64);
+        Ok(())
+    }
 
     fn round_trip(expr: &Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
         let converter = RemotePhysicalProtoConverter::default();
@@ -504,6 +656,20 @@ mod tests {
                 .ok_or_else(|| plan_datafusion_err!("invalid payload was accepted"))?;
             assert!(error.to_string().contains(message), "{error}");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_rejects_unresolved_or_invalid_lambda_parameters() -> Result<()> {
+        let error = resolve_test_parameters(InferenceBehavior::NeverCompletes)
+            .err()
+            .ok_or_else(|| plan_datafusion_err!("non-converging inference was accepted"))?;
+        assert!(error.to_string().contains("within 2 iterations"));
+
+        let error = resolve_test_parameters(InferenceBehavior::WrongParameterCount)
+            .err()
+            .ok_or_else(|| plan_datafusion_err!("wrong parameter count was accepted"))?;
+        assert!(error.to_string().contains("expected 1"));
         Ok(())
     }
 

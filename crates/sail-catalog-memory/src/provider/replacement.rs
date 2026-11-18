@@ -113,7 +113,11 @@ impl MemoryCatalogProvider {
             partition_by: options.partition_by,
             sort_by: options.sort_by,
             properties,
-            property_updates: options.properties,
+            property_updates: options
+                .properties
+                .into_iter()
+                .chain(options.comment.map(|value| ("comment".to_string(), value)))
+                .collect(),
             is_external: options.is_external,
         })
     }
@@ -209,7 +213,11 @@ fn prepared_status(
                     is_cluster: false,
                 })
                 .collect(),
-            comment: None,
+            comment: replacement
+                .properties
+                .iter()
+                .find(|(key, _)| key == "comment")
+                .map(|(_, value)| value.clone()),
             constraints: vec![],
             location: Some(replacement.location.clone()),
             format: replacement.format.clone(),

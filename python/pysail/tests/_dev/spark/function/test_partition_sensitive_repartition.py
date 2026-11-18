@@ -78,13 +78,11 @@ def test_no_round_robin_repartition_below_partition_sensitive_operators(spark):
 def test_monotonically_increasing_id_over_filter_is_deterministic(spark):
     # Spark assigns the IDs within each of the 2 partitions of the range in order, as in
     # `(0, 0), (3, 1), ...` and `(1000002, 8589934592), (1000005, 8589934593), ...`.
-    partition_size = 1_000_000
     first_id_in_second_partition = 1_000_002
-    expected_rows = 666_667
     df = spark.range(0, 2_000_000, 1, 2).filter("id % 3 = 0").withColumn("m", F.monotonically_increasing_id())
-    expected = F.when(F.col("id") < partition_size, F.col("id") / 3).otherwise(
+    expected = F.when(F.col("id") < 1_000_000, F.col("id") / 3).otherwise(
         F.lit(1 << 33) + (F.col("id") - first_id_in_second_partition) / 3
     )
     for _ in range(3):
         assert df.where(F.col("m") != expected).count() == 0
-        assert df.count() == expected_rows
+        assert df.count() == 666_667

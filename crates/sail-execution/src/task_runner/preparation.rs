@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::memory::DataSourceExec;
-use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, internal_err};
 use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -12,7 +12,7 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::protobuf::PhysicalPlanNode;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use sail_common::actor::ActorHandle;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
@@ -65,6 +65,13 @@ impl TaskPreparation {
             plan,
             context.clone(),
         )?;
+        let mut reads = vec![];
+        plan.apply(|node| {
+            if let Some(read) = node.downcast_ref::<ShuffleReadExec>() {
+                reads.push(read.clone());
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
         debug!(
             "{} execution plan\n{}",
             TaskKeyDisplay(key),
@@ -86,7 +93,8 @@ impl TaskPreparation {
                 "task canceled during preparation".into(),
             ));
         }
-        Ok(plan.execute(key.partition, context)?)
+        let stream = plan.execute(key.partition, context)?;
+        Ok(release_unexecuted_on_drop(stream, reads))
     }
 
     fn rewrite_file_scans(
@@ -146,6 +154,7 @@ impl TaskPreparation {
                     return Ok(Transformed::yes(Arc::new(ShuffleReadExec::new(
                         streams.reader(key.clone(), input.clone(), placeholder.schema()),
                         placeholder.properties().clone(),
+                        input.replicated,
                     ))));
                 }
                 Ok(Transformed::no(node))
@@ -157,6 +166,33 @@ impl TaskPreparation {
         let writer = streams.writer(key.clone(), output.clone(), schema.clone());
         Ok(Arc::new(ShuffleWriteExec::new(plan, writer, partitioning)))
     }
+}
+
+/// Releases the inputs the task never executed once its stream is dropped,
+/// which happens when the task succeeds, fails, or is canceled.
+fn release_unexecuted_on_drop(
+    stream: SendableRecordBatchStream,
+    reads: Vec<ShuffleReadExec>,
+) -> SendableRecordBatchStream {
+    struct Guard(Vec<ShuffleReadExec>);
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            for read in &self.0 {
+                read.release_unexecuted();
+            }
+        }
+    }
+
+    let guard = Guard(reads);
+    let schema = stream.schema();
+    Box::pin(RecordBatchStreamAdapter::new(
+        schema,
+        stream.map(move |item| {
+            let _ = &guard;
+            item
+        }),
+    ))
 }
 
 /// Dropping the pending stream cancels preparation cooperatively. The blocking task owns

@@ -1,4 +1,6 @@
-//! [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/optimizer/src/analyzer/type_coercion.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/optimizer/src/analyzer/type_coercion.rs
+
 //!
 //! Spark-compatible type coercion for Sail's logical analyzer.
 //!
@@ -61,10 +63,8 @@ use datafusion_expr::type_coercion::functions::{
 };
 use datafusion_expr::type_coercion::{is_datetime, is_interval, is_signed_numeric, is_timestamp};
 use datafusion_expr::utils::merge_schema;
-// DataFusion's MERGE statement is coerced as in DataFusion, though Sail does not create it.
-#[expect(clippy::disallowed_types)]
 use datafusion_expr::{
-    Cast, DmlStatement, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
+    Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
     ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, WriteOp, is_false,
     is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
@@ -336,7 +336,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     }
 
     #[expect(clippy::disallowed_types)]
-    fn coerce_dml(&self, mut dml: DmlStatement) -> Result<LogicalPlan> {
+    fn coerce_dml(&self, mut dml: datafusion_expr::DmlStatement) -> Result<LogicalPlan> {
         let WriteOp::MergeInto(merge_op) = &dml.op else {
             return Ok(LogicalPlan::Dml(dml));
         };
@@ -1933,7 +1933,9 @@ fn coerce_multi_column_in_subquery(
     ))
 }
 
-// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/optimizer/src/utils.rs#L85-L94
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/optimizer/src/utils.rs#L85-L94
 /// Return the expression schema for a MERGE DML node.
 fn merge_into_schema(plan: &LogicalPlan) -> Result<Option<DFSchema>> {
     let LogicalPlan::Dml(dml) = plan else {
@@ -1944,12 +1946,15 @@ fn merge_into_schema(plan: &LogicalPlan) -> Result<Option<DFSchema>> {
     };
     merge_dml_schema(dml).map(Some)
 }
+// SPDX-SnippetEnd
 
-// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/logical_plan/dml.rs#L213-L221
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/logical_plan/dml.rs#L213-L221
 // TODO: Remove after DataFusion 56
 /// Build the target-plus-source schema used by MERGE expressions.
 #[expect(clippy::disallowed_types)]
-pub fn merge_dml_schema(dml: &DmlStatement) -> Result<DFSchema> {
+pub fn merge_dml_schema(dml: &datafusion_expr::DmlStatement) -> Result<DFSchema> {
     let WriteOp::MergeInto(_) = &dml.op else {
         return internal_err!("DmlStatement::merge_schema requires a MERGE operation");
     };
@@ -1957,8 +1962,11 @@ pub fn merge_dml_schema(dml: &DmlStatement) -> Result<DFSchema> {
     //  DataFusion 55 qualifies the MERGE target with the table name.
     expression_merge_op_schema_for(&dml.table_name, &dml.target.schema(), dml.input.schema())
 }
+// SPDX-SnippetEnd
 
-// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/logical_plan/dml.rs#L361-L378
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/logical_plan/dml.rs#L361-L378
 // TODO: Remove after DataFusion 56
 /// Build a MERGE expression schema before constructing the operation.
 fn expression_merge_op_schema_for(
@@ -1978,9 +1986,12 @@ fn expression_merge_op_schema_for(
     DFSchema::try_from_qualified_schema(target_qualifier.clone(), target_schema)?
         .join(source_schema)
 }
+// SPDX-SnippetEnd
 
 // TODO: Remove after DataFusion 56
-// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/expr_schema.rs#L862-L919
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/expr_schema.rs#L862-L919
 /// Cast the leading columns of a subquery to the given types, one per column,
 /// like [`cast_subquery`] does for its first column. The result keeps only
 /// the `cast_to_types.len()` leading columns.
@@ -2036,9 +2047,12 @@ fn cast_subquery_columns(subquery: Subquery, cast_to_types: &[DataType]) -> Resu
         spans: Spans::new(),
     })
 }
+// SPDX-SnippetEnd
 
 // TODO: Remove after DataFusion 56
-// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/expr.rs#L1405-L1451
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/expr.rs#L1405-L1451
 /// The tuple elements of a multi-column `(a, b, ...) IN (SELECT x, y, ...)`,
 /// given the compared expression `expr` and the `subquery` plan, or `None`
 /// for a single-column `IN`.
@@ -2084,6 +2098,7 @@ fn in_subquery_tuple_values<'a>(
     }
     Ok(Some(values))
 }
+// SPDX-SnippetEnd
 
 #[cfg(test)]
 #[expect(

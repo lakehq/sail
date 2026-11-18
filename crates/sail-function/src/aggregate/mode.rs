@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/mode.rs
+
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
-/// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/mode.rs>
 use datafusion::arrow::array::{
     Array, ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray,
 };
@@ -236,7 +238,9 @@ fn resolve_tie_break(args: &AccumulatorArgs) -> Result<TieBreak> {
     }
 }
 
-/// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/native.rs>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/native.rs
 #[derive(Debug)]
 pub struct PrimitiveModeAccumulator<T>
 where
@@ -510,8 +514,11 @@ where
         Ok(())
     }
 }
+// SPDX-SnippetEnd
 
-/// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/bytes.rs>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/bytes.rs
 #[derive(Debug)]
 pub struct BytesModeAccumulator {
     value_counts: HashMap<String, i64>,
@@ -651,6 +658,7 @@ impl Accumulator for BytesModeAccumulator {
         Ok(())
     }
 }
+// SPDX-SnippetEnd
 
 #[cfg(test)]
 mod tests {

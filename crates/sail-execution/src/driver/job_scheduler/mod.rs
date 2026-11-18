@@ -3,6 +3,8 @@ mod options;
 mod state;
 mod topology;
 
+#[cfg(test)]
+pub(crate) use core::tests::event_reporter;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -52,6 +54,10 @@ pub enum JobAction {
         handle: JobOutputHandle,
         key: TaskStreamKey,
         schema: SchemaRef,
+        /// The cause of the task failures of the job so far, if the task attempt is a
+        /// retry. It is the cause that the driver infers for a job that fails, which
+        /// is not necessarily the failure that led to this attempt.
+        retry_cause: Option<CommonErrorCause>,
     },
     FailJobOutput {
         handle: JobOutputHandle,

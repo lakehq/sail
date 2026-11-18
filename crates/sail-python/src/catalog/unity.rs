@@ -15,19 +15,12 @@ pub(super) struct PyUnityCatalogProvider;
 #[pymethods]
 impl PyUnityCatalogProvider {
     #[new]
-    #[pyo3(signature = (
-        name,
-        uri,
-        default_catalog,
-        *,
-        quote_object_name=true,
-    ))]
+    #[pyo3(signature = (name, uri, default_catalog))]
     fn new(
         py: Python<'_>,
         name: String,
         uri: String,
         default_catalog: String,
-        quote_object_name: bool,
     ) -> PyResult<PyClassInitializer<Self>> {
         let runtime = GlobalState::instance(py)?.runtime.handle();
         let catalog = RuntimeAwareCatalogProvider::try_new(
@@ -38,7 +31,6 @@ impl PyUnityCatalogProvider {
                         default_catalog,
                         uri,
                         credentials: Arc::new(EmptyCatalogCredentials),
-                        quote_object_name,
                     },
                 )
             },

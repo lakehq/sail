@@ -124,8 +124,7 @@ def test_text_read_partition_columns(spark, tmp_path):
         ("hudson", "us", "ny"),
         ("harbour", "ca", "to"),
     }
-    expected_us_rows = 3
-    assert read_df.filter("country = 'us'").count() == expected_us_rows
+    assert read_df.filter("country = 'us'").count() == 3
 
 
 def test_text_read_large_file(spark, tmp_path):

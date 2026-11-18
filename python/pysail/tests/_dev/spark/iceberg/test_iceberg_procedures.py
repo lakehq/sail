@@ -99,7 +99,7 @@ def test_rewrite_data_files_uses_workers_and_coordinator_commit(
         before = spark.sql(
             f"SELECT file_path, file_size_in_bytes FROM {table_name}.files ORDER BY file_path"  # noqa: S608
         ).collect()
-        assert len(before) == 8  # noqa: PLR2004
+        assert len(before) == 8
         target_file_size = sum(row.file_size_in_bytes for row in before)
         group_size = files_per_group * max(row.file_size_in_bytes for row in before)
         assert group_size < (files_per_group + 1) * min(row.file_size_in_bytes for row in before)
@@ -197,7 +197,7 @@ def test_rewrite_groups_preserve_transformed_partitions(local_cluster_spark, tmp
         after = spark.table(f"{table_name}.files").collect()
         assert len(after) == partition_count
         assert len({tuple(row.partition) for row in after}) == partition_count
-        assert all(row.record_count == 2 for row in after)  # noqa: PLR2004
+        assert all(row.record_count == 2 for row in after)
         assert spark.table(f"{table_name}.files").select().count() == partition_count
         assert len(spark.table(f"{table_name}.files").where("record_count = 2").limit(1).collect()) == 1
     finally:
@@ -239,7 +239,7 @@ def test_explicit_procedure_catalog_owns_unqualified_target(multi_catalog_spark,
             spark.sql(f"INSERT INTO {catalog}.default.{table_name} VALUES ({identifier})")  # noqa: S608
 
     ancestors = spark.sql(f"CALL second.system.ancestors_of(table => 'default.{table_name}')").collect()
-    assert len(ancestors) == 2  # noqa: PLR2004
+    assert len(ancestors) == 2
 
     with pytest.raises(
         Exception,
@@ -275,7 +275,7 @@ def test_iceberg_snapshot_procedures(spark, tmp_path):
             f"SELECT snapshot_id FROM {table_name}.snapshots ORDER BY committed_at, snapshot_id"  # noqa: S608
         ).collect()
         snapshot_ids = [row.snapshot_id for row in snapshots]
-        assert len(snapshot_ids) == 3  # noqa: PLR2004
+        assert len(snapshot_ids) == 3
 
         ancestors = spark.sql(f"CALL SyStEm.AnCeStOrS_Of(table => '{table_name}')").collect()
         assert [row.snapshot_id for row in ancestors] == list(reversed(snapshot_ids))
@@ -339,11 +339,11 @@ def test_iceberg_snapshot_procedures(spark, tmp_path):
         assert current_from_ref.current_snapshot_id == snapshot_ids[2]
         assert [row.id for row in spark.table(table_name).orderBy("id").collect()] == [1, 2, 3]
 
-        with pytest.raises(
-            Exception,
-            match="Iceberg system procedure 'expire_snapshots' is recognized but not implemented",
-        ):
-            spark.sql(f"CALL system.expire_snapshots('{table_name}')").collect()
+        # The fixed 2024 timestamps are outside the default retention window. All refs
+        # now point to the tip; older manifest lists expire, but append data stays live.
+        assert tuple(spark.sql(f"CALL system.expire_snapshots('{table_name}')").first()) == (0, 0, 0, 0, 2, 0)
+        assert [row.snapshot_id for row in spark.table(f"{table_name}.snapshots").collect()] == snapshot_ids[-1:]
+        assert [row.id for row in spark.table(table_name).orderBy("id").collect()] == [1, 2, 3]
 
         with pytest.raises(Exception, match="Exactly one of snapshot_id or ref"):
             spark.sql(

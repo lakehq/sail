@@ -142,12 +142,12 @@ def test_create_table_with_column_mapping_name(spark, tmp_path: Path):
     assert protocol is not None, "protocol action not found in first commit"
     assert metadata is not None, "metadata action not found in first commit"
 
-    assert protocol.get("minReaderVersion", 0) >= 2  # noqa: PLR2004
-    assert protocol.get("minWriterVersion", 0) >= 5  # noqa: PLR2004
+    assert protocol.get("minReaderVersion", 0) >= 2
+    assert protocol.get("minWriterVersion", 0) >= 5
     config = metadata.get("configuration", {})
     assert config.get("delta.columnMapping.mode") == "name"
     assert "delta.columnMapping.maxColumnId" in config
-    assert int(config["delta.columnMapping.maxColumnId"]) >= 2  # noqa: PLR2004
+    assert int(config["delta.columnMapping.maxColumnId"]) >= 2
 
 
 def test_explicit_stats_columns_follow_nested_physical_names(spark, tmp_path: Path):
@@ -243,12 +243,12 @@ def test_create_and_append_with_column_mapping_id(spark, tmp_path: Path):
 
     assert protocol is not None, "protocol action not found in first commit"
     assert metadata is not None, "metadata action not found in first commit"
-    assert protocol.get("minReaderVersion", 0) >= 2  # noqa: PLR2004
-    assert protocol.get("minWriterVersion", 0) >= 5  # noqa: PLR2004
+    assert protocol.get("minReaderVersion", 0) >= 2
+    assert protocol.get("minWriterVersion", 0) >= 5
     config = metadata.get("configuration", {})
     assert config.get("delta.columnMapping.mode") == "id"
     assert "delta.columnMapping.maxColumnId" in config
-    assert int(config["delta.columnMapping.maxColumnId"]) >= 2  # noqa: PLR2004
+    assert int(config["delta.columnMapping.maxColumnId"]) >= 2
 
 
 @pytest.mark.parametrize("mapping_mode", ["name", "id"])
@@ -475,7 +475,7 @@ def test_add_new_array_struct_field(spark, tmp_path: Path):
     rows = [r.asDict(recursive=True) for r in out]
     assert rows[0]["id"] == 1
     assert rows[0]["items"] is None
-    assert rows[1]["id"] == 2  # noqa: PLR2004
+    assert rows[1]["id"] == 2
     assert isinstance(rows[1]["items"], list)
     assert len(rows[1]["items"]) == 1
     assert rows[1]["items"][0] == {"a": 10}
