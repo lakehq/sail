@@ -414,8 +414,7 @@ def test_delta_pruning_correctness(spark, tmp_path):
 
     filtered_df = spark.read.format("delta").load(delta_table_path).filter("year = 2021 AND month = 3 AND day = 15")
     result_count = filtered_df.count()
-    expected_count = 10  # 10 records
-    assert result_count == expected_count, f"Expected {expected_count} rows for specific date, got {result_count}"
+    assert result_count == 10, f"Expected 10 rows for specific date, got {result_count}"
 
     filtered_df = spark.read.format("delta").load(delta_table_path).filter("year >= 2023 AND month <= 3")
     result_count = filtered_df.count()

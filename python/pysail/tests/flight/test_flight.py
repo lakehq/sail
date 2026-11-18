@@ -170,13 +170,10 @@ def test_flight_cursor_reuse(flight_connection):
     """Test that we can reuse a cursor for multiple queries."""
     cur = flight_connection.cursor()
 
-    # Expected values
-    expected_first = 1
-
     # First query
     cur.execute("SELECT 1 AS first")
     rows1 = cur.fetchall()
-    assert rows1[0][0] == expected_first
+    assert rows1[0][0] == 1
 
     # Second query with same cursor
     cur.execute("SELECT 2 AS second")
@@ -196,8 +193,6 @@ def test_flight_multiple_cursors(flight_connection):
     cur1 = flight_connection.cursor()
     cur2 = flight_connection.cursor()
 
-    expected_val1 = 1
-
     # Execute different queries on different cursors
     cur1.execute("SELECT 1 AS result")
     cur2.execute("SELECT 2 AS result")
@@ -205,7 +200,7 @@ def test_flight_multiple_cursors(flight_connection):
     rows1 = cur1.fetchall()
     rows2 = cur2.fetchall()
 
-    assert rows1[0][0] == expected_val1
+    assert rows1[0][0] == 1
     assert rows2[0][0] == 2
 
     cur1.close()
