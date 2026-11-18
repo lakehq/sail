@@ -280,6 +280,7 @@ def hms_s3_container(
     container.with_env(
         "SERVICE_OPTS",
         f"-Dhive.metastore.warehouse.dir={hms_warehouse_dir.as_uri()} "
+        "-Dmetastore.limit.partition.request=100 "
         "-Dhive.metastore.disallow.incompatible.col.type.changes=false",
     )
     container.with_network(hms_s3_network)

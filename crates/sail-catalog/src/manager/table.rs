@@ -106,9 +106,12 @@ impl CatalogManager {
     pub async fn list_file_partitions<T: AsRef<str>>(
         &self,
         table: &[T],
+        partition_values: &[Option<String>],
     ) -> CatalogResult<Option<Vec<crate::provider::CatalogFilePartition>>> {
         let (provider, database, table) = self.resolve_object(table)?;
-        provider.list_file_partitions(&database, &table).await
+        provider
+            .list_file_partitions(&database, &table, partition_values)
+            .await
     }
 
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {

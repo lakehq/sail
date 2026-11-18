@@ -323,6 +323,31 @@ def test_import_empty_sources(catalog, source, target, spark, jvm_spark, databas
         assert_rows(catalog, spark, tables, [])
 
 
+@pytest.fixture(scope="module")
+def many_registered_partitions(jvm_spark, database):
+    name = f"{database}.many_{uuid.uuid4().hex}"
+    jvm_spark.sql(f"CREATE TABLE {name} (id INT) PARTITIONED BY (p INT, dept STRING) STORED AS parquet")
+    jvm_spark.sql(f"INSERT INTO {name} PARTITION (p=0, dept='hr') SELECT 1")
+    jvm_spark.sql(f"INSERT INTO {name} PARTITION (p=999, dept='sales') SELECT 2")
+    # Cross the HMS descriptor request limit with empty partitions between the two data files.
+    empty = f"s3://hms-warehouse/{database}/empty"
+    partitions = " ".join(f"PARTITION (p={p}, dept='hr') LOCATION '{empty}'" for p in range(1, 101))
+    jvm_spark.sql(f"ALTER TABLE {name} ADD {partitions}")
+    return name
+
+
+def test_partition_import_above_hms_request_limit(catalog, many_registered_partitions, target, spark):
+    parts = ("p", "dept")
+    with target(parts, schema="id INT, p INT, dept STRING") as tables:
+        assert call(spark, tables[0], many_registered_partitions, ", map('dept', 'sales')") == catalog.manifest_counts(
+            1, 1
+        )
+        assert_rows(catalog, spark, tables, [(2, 999, "sales")], "id, p, dept")
+    with target(parts, schema="id INT, p INT, dept STRING") as tables:
+        assert call(spark, tables[0], many_registered_partitions) == catalog.manifest_counts(2, 2)
+        assert_rows(catalog, spark, tables, [(1, 0, "hr"), (2, 999, "sales")], "id, p, dept")
+
+
 def test_incremental_hive_partitions(catalog, source, target, spark):
     registered, _ = source(("id",))
     with target(("id",)) as tables:

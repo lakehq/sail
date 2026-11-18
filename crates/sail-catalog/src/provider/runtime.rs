@@ -236,12 +236,18 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
         &self,
         database: &Namespace,
         table: &str,
+        partition_values: &[Option<String>],
     ) -> CatalogResult<Option<Vec<super::CatalogFilePartition>>> {
         let inner = self.inner.clone();
         let database = database.clone();
         let table = table.to_string();
+        let partition_values = partition_values.to_vec();
         self.handle
-            .spawn(async move { inner.list_file_partitions(&database, &table).await })
+            .spawn(async move {
+                inner
+                    .list_file_partitions(&database, &table, &partition_values)
+                    .await
+            })
             .await
             .map_err(|e| {
                 CatalogError::External(format!("Failed to execute list_file_partitions: {e}"))

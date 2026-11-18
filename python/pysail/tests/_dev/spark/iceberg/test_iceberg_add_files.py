@@ -181,6 +181,27 @@ def _write_source_file(path, file_format, rows):
 
 @pytest.mark.parametrize("file_format", ["avro", "orc"])
 @pytest.mark.parametrize("partitioned", [False, True])
+def test_imported_file_metadata_as_data_filter(spark, tmp_path, file_format, partitioned):
+    source = tmp_path / "source"
+    directory = source / "p=a" if partitioned else source
+    _write_source_file(directory / f"data.{file_format}", file_format, [(1, "first"), (2, "second")])
+    name = "imported_file_filter"
+    target = tmp_path / "target"
+    columns = "id BIGINT, value STRING" + (", p STRING" if partitioned else "")
+    partition = "PARTITIONED BY (p)" if partitioned else ""
+    spark.sql(f"CREATE TABLE {name} ({columns}) USING iceberg {partition} LOCATION '{target}'")
+    try:
+        assert _add(spark, name, f"{file_format}.`{source}`") == (1, None)
+        frame = spark.read.format("iceberg").option("metadataAsDataRead", "true").load(str(target))
+        matched = frame.where("id = 2").select("value")
+        assert [row.value for row in matched.collect()] == ["second"]
+        assert [row.value for row in matched.limit(1).collect()] == ["second"]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize("file_format", ["avro", "orc"])
+@pytest.mark.parametrize("partitioned", [False, True])
 def test_add_files_source_formats(spark, tmp_path, file_format, partitioned):
     source = tmp_path / "source"
     if partitioned:

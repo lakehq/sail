@@ -1,5 +1,30 @@
 use crate::error::{CatalogError, CatalogResult};
 
+/// Hive storage descriptors use Hadoop Path strings, whose percent signs and URI delimiters are
+/// literal in the path component. File catalog consumers take ordinary URLs.
+pub fn file_source_location(location: String) -> String {
+    let Some((scheme, rest)) = location.split_once(':') else {
+        return location;
+    };
+    if scheme.len() <= 1 || scheme.contains(['/', '\\']) || !rest.starts_with('/') {
+        return location;
+    }
+    let path = match rest.strip_prefix("//") {
+        Some(authority_path) => authority_path
+            .find('/')
+            .map(|i| &authority_path[i..])
+            .unwrap_or(""),
+        None => rest,
+    };
+    let prefix = &location[..location.len() - path.len()];
+    format!(
+        "{prefix}{}",
+        path.replace('%', "%25")
+            .replace('?', "%3F")
+            .replace('#', "%23")
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HiveStorageFormat {
     pub input_format: &'static str,
@@ -179,6 +204,18 @@ mod tests {
     #![expect(clippy::unwrap_used)]
 
     use super::{HiveCatalogFormat, HiveDetectedFormat, HiveStorageFormat};
+    #[test]
+    fn hadoop_file_locations_escape_only_the_uri_path() {
+        for (raw, expected) in [
+            ("s3://bucket/p=a%2Fb", "s3://bucket/p=a%252Fb"),
+            ("file:/tmp/x%20y", "file:/tmp/x%2520y"),
+            ("abfss://a%25b@account/x?#", "abfss://a%25b@account/x%3F%23"),
+            ("/tmp/a:/x%20y", "/tmp/a:/x%20y"),
+        ] {
+            assert_eq!(super::file_source_location(raw.into()), expected);
+        }
+    }
+
     #[test]
     fn test_textfile_storage_format_uses_lazy_simple_serde() {
         let format = HiveStorageFormat::textfile();

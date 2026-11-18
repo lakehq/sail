@@ -5,9 +5,9 @@ use futures::future::try_join_all;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveCatalogFormat;
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
-    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    LakeSourceCreateMetadataMode, Namespace, PartitionTransform,
+    AlterTableOptions, CatalogFilePartition, CatalogProvider, CreateDatabaseOptions,
+    CreateTableMetadataRequirement, CreateTableOptions, CreateViewOptions, DropDatabaseOptions,
+    DropTableOptions, DropViewOptions, LakeSourceCreateMetadataMode, Namespace, PartitionTransform,
     plain_lakehouse_create_table_metadata_requirement,
 };
 use sail_common::runtime::RuntimeHandle;
@@ -107,6 +107,18 @@ struct DropTableRequest {
 }
 
 const HMS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn partition_rpc_result<T, E: std::fmt::Debug>(
+    context: &str,
+    result: Result<MaybeException<T, E>, ClientError>,
+) -> CatalogResult<T> {
+    match result.map_err(|e| HmsCatalogProvider::hms_client_error(context, e))? {
+        MaybeException::Ok(value) => Ok(value),
+        MaybeException::Exception(error) => {
+            Err(CatalogError::External(format!("{context}: {error:?}")))
+        }
+    }
+}
 
 fn build_drop_table_request(purge: bool) -> DropTableRequest {
     let environment_context = purge.then(|| EnvironmentContext {
@@ -1140,13 +1152,14 @@ impl CatalogProvider for HmsCatalogProvider {
         &self,
         database: &Namespace,
         table: &str,
-    ) -> CatalogResult<Option<Vec<sail_catalog::provider::CatalogFilePartition>>> {
-        let metadata = self.fetch_hms_table(database, table).await?;
-        if metadata.partition_keys.as_ref().is_none_or(Vec::is_empty) {
-            return Ok(Some(vec![sail_catalog::provider::CatalogFilePartition {
+        partition_values: &[Option<String>],
+    ) -> CatalogResult<Option<Vec<CatalogFilePartition>>> {
+        if partition_values.is_empty() {
+            let metadata = self.fetch_hms_table(database, table).await?;
+            return Ok(Some(vec![CatalogFilePartition {
                 values: vec![],
                 location: crate::convert::table_location(&metadata)
-                    .map(crate::convert::file_source_location),
+                    .map(sail_catalog::hive_format::file_source_location),
                 format: crate::convert::resolve_data_source_format(
                     metadata.parameters.as_ref(),
                     metadata.sd.as_ref(),
@@ -1154,38 +1167,68 @@ impl CatalogProvider for HmsCatalogProvider {
             }]));
         }
         let database = validate_namespace(database)?;
-        let table = table.to_string();
-        let partitions = self
+        let names = self
             .with_failover(|client| {
                 let database = database.clone();
-                let table = table.clone();
                 async move {
-                    match client.get_partitions(database, table, -1).await {
-                        Ok(MaybeException::Ok(partitions)) => Ok(partitions),
-                        Ok(MaybeException::Exception(error)) => Err(CatalogError::External(
-                            format!("Failed to list HMS partitions: {error:?}"),
-                        )),
-                        Err(error) => Err(Self::hms_client_error(
-                            "Failed to list HMS partitions",
-                            error,
-                        )),
+                    let context = "Failed to list HMS partition names";
+                    if partition_values.iter().all(Option::is_none) {
+                        partition_rpc_result(
+                            context,
+                            client
+                                .get_partition_names(database, table.to_string(), -1)
+                                .await,
+                        )
+                    } else {
+                        // HMS uses empty strings as wildcards for unspecified columns.
+                        let values = partition_values
+                            .iter()
+                            .cloned()
+                            .map(Option::unwrap_or_default)
+                            .collect();
+                        partition_rpc_result(
+                            context,
+                            client
+                                .get_partition_names_ps(database, table.to_string(), values, -1)
+                                .await,
+                        )
                     }
                 }
             })
             .await?;
-        Ok(Some(
-            partitions
-                .into_iter()
-                .map(|partition| sail_catalog::provider::CatalogFilePartition {
+        // HMS name listing has no cursor. Fetch full storage descriptors in bounded batches.
+        const BATCH_SIZE: usize = 100;
+        let mut partitions = Vec::with_capacity(names.len());
+        for names in names.chunks(BATCH_SIZE) {
+            let batch = self
+                .with_failover(|client| {
+                    let database = database.clone();
+                    async move {
+                        partition_rpc_result(
+                            "Failed to fetch HMS partitions by name",
+                            client
+                                .get_partitions_by_names(
+                                    database,
+                                    table.to_string(),
+                                    names.to_vec(),
+                                )
+                                .await,
+                        )
+                    }
+                })
+                .await?;
+            partitions.extend(batch.into_iter().map(|partition| {
+                CatalogFilePartition {
                     values: partition.values.unwrap_or_default(),
                     format: crate::convert::resolve_data_source_format(None, partition.sd.as_ref()),
                     location: partition
                         .sd
                         .and_then(|sd| sd.location)
-                        .map(crate::convert::file_source_location),
-                })
-                .collect(),
-        ))
+                        .map(sail_catalog::hive_format::file_source_location),
+                }
+            }));
+        }
+        Ok(Some(partitions))
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {

@@ -53,7 +53,11 @@ impl AddFiles {
             .and_then(sail_sql_analyzer::expression::from_ast_object_name)
             .map_err(|e| DataFusionError::Plan(e.to_string()))?;
         let parts: Vec<String> = name.into();
-        let mut catalog_partitions = None;
+        let filter = self
+            .filter
+            .iter()
+            .map(|(key, value)| (key.to_lowercase(), value))
+            .collect::<HashMap<_, _>>();
         let (format, location, declared_parts) = match parts.as_slice() {
             [format, location]
                 if ["parquet", "avro", "orc"].contains(&format.to_lowercase().as_str()) =>
@@ -72,10 +76,6 @@ impl AddFiles {
                     .iter()
                     .map(|c| c.name.clone())
                     .collect::<Vec<_>>();
-                catalog_partitions = manager
-                    .list_file_partitions(&parts)
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 match source.kind {
                     TableKind::Table {
                         format,
@@ -94,11 +94,22 @@ impl AddFiles {
             .as_deref()
             .map(|names| self.source_spec(metadata, names))
             .transpose()?;
-        let filter = self
-            .filter
-            .iter()
-            .map(|(key, value)| (key.to_lowercase(), value))
-            .collect::<HashMap<_, _>>();
+        let catalog_partitions = if let Some(names) = &declared_parts {
+            let values = names
+                .iter()
+                .map(|name| {
+                    filter
+                        .get(&name.to_lowercase())
+                        .map(|value| (*value).clone())
+                })
+                .collect::<Vec<_>>();
+            ctx.extension::<CatalogManager>()?
+                .list_file_partitions(&parts, &values)
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
+        } else {
+            None
+        };
         let sources = match catalog_partitions {
             Some(partitions) => {
                 let names = declared_parts.as_deref().unwrap_or_default();
