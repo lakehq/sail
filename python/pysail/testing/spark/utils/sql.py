@@ -89,7 +89,10 @@ def escape_sql_string_literal(s: str) -> str:
     while ASCII characters are converted to their octal representation
     unless they are alphanumeric.
     """
-    return "".join(f"\\{ord(c):03o}" if ord(c) < 128 and not c.isalnum() else c for c in s)
+    return "".join(
+        f"\\{ord(c):03o}" if ord(c) < 128 and not c.isalnum() else c  # noqa: PLR2004
+        for c in s
+    )
 
 
 def _display_width(c):
