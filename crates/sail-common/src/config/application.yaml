@@ -1040,8 +1040,10 @@
     aggregation or a sort), so that the rows kept for a reference that reads it later are
     no more than what evaluating it holds anyway. A CTE of another kind is shared only
     if every reference is the build side of a hash join, which holds the rows that it
-    reads, and is evaluated for each reference otherwise. With a memory limit, only the
-    first two kinds are shared if temporary files are disabled or in cluster mode.
+    reads, and is evaluated for each reference otherwise. Sharing a CTE of the last two
+    kinds can keep one more copy of the output of the CTE in memory than evaluating it
+    for each reference. With a memory limit, only the first two kinds are shared if
+    temporary files are disabled or in cluster mode.
     If the value is `false`, the CTE is planned and evaluated for each reference.
   experimental: true
 

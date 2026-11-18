@@ -90,7 +90,10 @@ fn holds_semi_join(
 /// columns. A build side holds all its rows until its join ends, so the rows that such a
 /// shared CTE keeps for a reference that reads it late are no more than what the
 /// reference that has read them holds, and than what each reference holds in the end,
-/// whether the plan of the shared CTE holds its output or not.
+/// whether the plan of the shared CTE holds its output or not. At worst, when a join
+/// ends before the build side of another join starts to read, the shared CTE keeps one
+/// more copy of its output, with the columns that any reference reads, than the memory
+/// that the build sides take when each of them evaluates the CTE itself.
 pub fn ctes_read_without_holding(plan: &Arc<dyn ExecutionPlan>) -> HashSet<usize> {
     fn visit(plan: &Arc<dyn ExecutionPlan>, held: bool, ids: &mut HashSet<usize>) {
         if let Some(scan) = plan.downcast_ref::<SharedCteScanExec>() {
