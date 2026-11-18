@@ -15,15 +15,12 @@ reference reads the row, as it does when the CTE is evaluated for each reference
 
 Sail cluster mode evaluates a shared CTE in a stage of its own, which starts when it is
 scheduled and stops when no reference reads it anymore. So a volatile CTE can be
-evaluated, in part or in full, although no reference reads it, and the query can fail on
-a row of a volatile CTE that no reference reads.
+evaluated, in part or in full, although no reference reads it.
 """
 
 import os
-import re
 
 import pytest
-from pyspark.errors import PySparkException
 
 from pysail.testing.spark.utils.common import is_jvm_spark
 
@@ -68,24 +65,6 @@ def ansi(spark):
 
 def rows(spark, query):
     return [tuple(row) for row in spark.sql(query).collect()]
-
-
-def check_rows_unless_an_unread_row_fails(spark, query, expected):
-    """Checks the result of a query over a volatile CTE with a failing row that no
-    reference reads. In Sail cluster mode, the stage of the CTE can reach the row before
-    the references stop reading, and the query then fails. Measured with Flight shuffle in
-    local-cluster mode (10 runs): the queries of the tests that use this check returned
-    their rows in every run."""
-    if not LOCAL_CLUSTER:
-        assert rows(spark, query) == expected
-        return
-    try:
-        result = rows(spark, query)
-    except PySparkException as e:
-        if not re.search(DIVISION_BY_ZERO, str(e)):
-            raise
-        return
-    assert result == expected
 
 
 def volatile(function="rand()"):
@@ -380,8 +359,8 @@ def test_limits_over_volatile_cte_do_not_read_a_failing_row(spark, ansi):  # noq
             with pytest.raises(Exception, match="DIVIDE_BY_ZERO"):
                 spark.sql(query).collect()
     else:
-        check_rows_unless_an_unread_row_fails(spark, union, [(10, 10, True)])
-        check_rows_unless_an_unread_row_fails(spark, join, [(True, True)])
+        assert rows(spark, union) == [(10, 10, True)]
+        assert rows(spark, join) == [(True, True)]
 
 
 def test_sorted_limits_over_deterministic_cte_do_not_compute_a_failing_column(spark, ansi):  # noqa: ARG001
@@ -410,7 +389,7 @@ def test_failing_volatile_cte_whose_references_are_not_read(spark, ansi):  # noq
         with pytest.raises(Exception, match="DIVIDE_BY_ZERO"):
             spark.sql(query).collect()
     else:
-        check_rows_unless_an_unread_row_fails(spark, query, [(0, None)])
+        assert rows(spark, query) == [(0, None)]
 
 
 def test_failing_deterministic_cte_whose_references_are_not_read(spark, ansi):  # noqa: ARG001
