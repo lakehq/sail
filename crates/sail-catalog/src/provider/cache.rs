@@ -398,6 +398,14 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
             .await
     }
 
+    async fn list_file_partitions(
+        &self,
+        database: &Namespace,
+        table: &str,
+    ) -> CatalogResult<Option<Vec<super::CatalogFilePartition>>> {
+        self.inner.list_file_partitions(database, table).await
+    }
+
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         self.inner.get_table(database, table).await
     }

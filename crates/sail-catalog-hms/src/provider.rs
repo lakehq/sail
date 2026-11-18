@@ -1136,6 +1136,59 @@ impl CatalogProvider for HmsCatalogProvider {
         }
     }
 
+    async fn list_file_partitions(
+        &self,
+        database: &Namespace,
+        table: &str,
+    ) -> CatalogResult<Option<Vec<sail_catalog::provider::CatalogFilePartition>>> {
+        let metadata = self.fetch_hms_table(database, table).await?;
+        if metadata.partition_keys.as_ref().is_none_or(Vec::is_empty) {
+            return Ok(None);
+        }
+        let database = validate_namespace(database)?;
+        let table = table.to_string();
+        let partitions = self
+            .with_failover(|client| {
+                let database = database.clone();
+                let table = table.clone();
+                async move {
+                    match client.get_partitions(database, table, -1).await {
+                        Ok(MaybeException::Ok(partitions)) => Ok(partitions),
+                        Ok(MaybeException::Exception(error)) => Err(CatalogError::External(
+                            format!("Failed to list HMS partitions: {error:?}"),
+                        )),
+                        Err(error) => Err(Self::hms_client_error(
+                            "Failed to list HMS partitions",
+                            error,
+                        )),
+                    }
+                }
+            })
+            .await?;
+        partitions
+            .into_iter()
+            .map(|partition| {
+                let location = partition
+                    .sd
+                    .as_ref()
+                    .and_then(|sd| sd.location.clone())
+                    .ok_or_else(|| {
+                        CatalogError::InvalidArgument(
+                            "HMS partition is missing its storage location".into(),
+                        )
+                    })?;
+                let format =
+                    crate::convert::resolve_data_source_format(None, partition.sd.as_ref());
+                Ok(sail_catalog::provider::CatalogFilePartition {
+                    values: partition.values.unwrap_or_default(),
+                    location,
+                    format,
+                })
+            })
+            .collect::<CatalogResult<Vec<_>>>()
+            .map(Some)
+    }
+
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         let table_value = self.fetch_hms_table(database, table).await?;
         if is_view_table(&table_value) {

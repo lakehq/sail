@@ -103,6 +103,14 @@ impl CatalogManager {
         provider.create_table_metadata_requirement(options)
     }
 
+    pub async fn list_file_partitions<T: AsRef<str>>(
+        &self,
+        table: &[T],
+    ) -> CatalogResult<Option<Vec<crate::provider::CatalogFilePartition>>> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider.list_file_partitions(&database, &table).await
+    }
+
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.get_table(&database, &table).await

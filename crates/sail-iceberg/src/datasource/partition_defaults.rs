@@ -102,10 +102,7 @@ pub(super) async fn create_data_scan(
     session: &dyn Session,
     mut config: FileScanConfig,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let parquet = config
-        .file_source
-        .downcast_ref::<ParquetSource>()
-        .ok_or_else(|| internal_datafusion_err!("Iceberg scan requires a Parquet source"))?;
+    let parquet = config.file_source.downcast_ref::<ParquetSource>();
     // Explicit partitioning or preserved order prevents row-group repartitioning, so leave
     // footer reads to execution. Row-level delete scans set these flags and may be discarded
     // when the planner chooses a metadata-only delete, which must not read Parquet files.
@@ -113,7 +110,10 @@ pub(super) async fn create_data_scan(
     // can choose a metadata-only delete.
     // WARNING: Do not remove this guard; eager footer reads will break metadata-only deletes
     // when data files are unavailable.
-    if config.output_partitioning.is_none() && !config.preserve_order {
+    if config.output_partitioning.is_none()
+        && !config.preserve_order
+        && let Some(parquet) = parquet
+    {
         let store = session
             .runtime_env()
             .object_store(&config.object_store_url)?;
@@ -212,16 +212,18 @@ pub(crate) fn create_data_scan_with_partition_defaults(
     }
 
     let target = config.projected_schema()?;
-    let parquet = config
-        .file_source
-        .downcast_ref::<ParquetSource>()
-        .ok_or_else(|| internal_datafusion_err!("Iceberg scan requires a Parquet source"))?;
+    let original_source = config.file_source.clone();
     let mut scans = Vec::with_capacity(groups.len());
     for (defaults, file_groups) in groups {
         let table_schema =
-            TableSchema::builder(defaults.schema(parquet.table_schema().file_schema())?)
-                .with_table_partition_cols(parquet.table_schema().table_partition_cols().to_vec())
-                .with_virtual_columns(parquet.table_schema().virtual_columns().clone())
+            TableSchema::builder(defaults.schema(original_source.table_schema().file_schema())?)
+                .with_table_partition_cols(
+                    original_source
+                        .table_schema()
+                        .table_partition_cols()
+                        .to_vec(),
+                )
+                .with_virtual_columns(original_source.table_schema().virtual_columns().clone())
                 .build();
         // Preserve whole-file partitions without advertising compatible hash
         // partitioning: interleaving these scans would reset file-local row offsets.
@@ -229,20 +231,31 @@ pub(crate) fn create_data_scan_with_partition_defaults(
             .output_partitioning
             .as_ref()
             .map(|_| Partitioning::UnknownPartitioning(file_groups.len()));
-        let mut source = ParquetSource::new(table_schema)
-            .with_table_parquet_options(parquet.table_parquet_options().clone());
-        if let Some(reader_factory) = parquet.parquet_file_reader_factory() {
-            source = source.with_parquet_file_reader_factory(Arc::clone(reader_factory));
-        }
-        if let Some(predicate) = parquet.filter() {
-            source = source.with_predicate(predicate);
-        }
-        let source = match parquet.projection() {
-            Some(projection) => source
-                .try_pushdown_projection(projection)?
-                .ok_or_else(|| internal_datafusion_err!("Cannot project Iceberg Parquet scan"))?,
-            None => Arc::new(source),
-        };
+        let source: Arc<dyn FileSource> =
+            if let Some(parquet) = original_source.downcast_ref::<ParquetSource>() {
+                let mut source = ParquetSource::new(table_schema)
+                    .with_table_parquet_options(parquet.table_parquet_options().clone());
+                if let Some(reader_factory) = parquet.parquet_file_reader_factory() {
+                    source = source.with_parquet_file_reader_factory(Arc::clone(reader_factory));
+                }
+                if let Some(predicate) = parquet.filter() {
+                    source = source.with_predicate(predicate);
+                }
+                match parquet.projection() {
+                    Some(projection) => {
+                        source.try_pushdown_projection(projection)?.ok_or_else(|| {
+                            internal_datafusion_err!("Cannot project Iceberg Parquet scan")
+                        })?
+                    }
+                    None => Arc::new(source),
+                }
+            } else if let Some(imported) =
+                original_source.downcast_ref::<super::imported_source::IcebergImportedFileSource>()
+            {
+                imported.with_schema(table_schema)?
+            } else {
+                return Err(internal_datafusion_err!("Unsupported Iceberg file source"));
+            };
         let unknown =
             datafusion_common::Statistics::new_unknown(source.table_schema().table_schema());
         let mut statistics = sail_common_datafusion::statistics::aggregate_statistics(

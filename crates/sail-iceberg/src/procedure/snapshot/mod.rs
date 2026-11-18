@@ -1,5 +1,5 @@
 mod commit;
-mod operation;
+pub(crate) mod operation;
 mod reference;
 
 pub(crate) use commit::commit_snapshot_operation;

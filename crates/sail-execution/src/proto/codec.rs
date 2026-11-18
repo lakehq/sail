@@ -853,6 +853,30 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let source = FileScanConfigBuilder::from(source).build();
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
+            NodeKind::IcebergImported(r#gen::IcebergImportedExecNode {
+                base_config,
+                format,
+            }) => {
+                let format = match format.as_str() {
+                    "avro" => sail_iceberg::spec::DataFileFormat::Avro,
+                    "orc" => sail_iceberg::spec::DataFileFormat::Orc,
+                    _ => return plan_err!("Invalid imported Iceberg file format: {format}"),
+                };
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
+                let source = parse_protobuf_file_scan_config(
+                    &base_config,
+                    &PhysicalPlanDecodeContext::new(ctx, self),
+                    proto_converter,
+                    Arc::new(
+                        sail_iceberg::datasource::imported_source::IcebergImportedFileSource::new(
+                            table_schema,
+                            format,
+                        ),
+                    ),
+                )?;
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+            }
             NodeKind::Avro(r#gen::AvroExecNode { base_config }) => {
                 let base_config = try_decode_message(&base_config)?;
                 let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
@@ -2725,6 +2749,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         proto_converter,
                     )?)?;
                     NodeKind::Arrow(r#gen::ArrowExecNode { base_config })
+                } else if let Some(imported) = file_source.downcast_ref::<sail_iceberg::datasource::imported_source::IcebergImportedFileSource>() {
+                    let base_config = try_encode_message(serialize_file_scan_config(file_scan, self, proto_converter)?)?;
+                    NodeKind::IcebergImported(r#gen::IcebergImportedExecNode { base_config, format: match imported.format() { sail_iceberg::spec::DataFileFormat::Orc => "orc", _ => "avro" }.into() })
                 } else if file_source.is::<AvroSource>() {
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,

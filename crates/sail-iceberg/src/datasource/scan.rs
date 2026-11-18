@@ -1261,6 +1261,66 @@ impl IcebergScan {
                 .get_file_metadata_cache(),
         ));
 
+        if all_data_files
+            .iter()
+            .any(|file| file.file_format != crate::spec::DataFileFormat::Parquet)
+        {
+            if !dirty_units.is_empty()
+                || self.file_column_name.is_some()
+                || self.row_index_column_name.is_some()
+            {
+                return plan_err!(
+                    "Row-level operations on imported Avro/ORC files are not supported"
+                );
+            }
+            let mut branches = vec![];
+            for format in [
+                crate::spec::DataFileFormat::Parquet,
+                crate::spec::DataFileFormat::Avro,
+                crate::spec::DataFileFormat::Orc,
+            ] {
+                let files = all_data_files
+                    .iter()
+                    .filter(|file| file.file_format == format)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if files.is_empty() {
+                    continue;
+                }
+                let source = if format == crate::spec::DataFileFormat::Parquet {
+                    self.build_parquet_source(session, false, reader_factory.clone())
+                } else {
+                    Arc::new(super::imported_source::IcebergImportedFileSource::new(
+                        TableSchema::from(self.arrow_schema.clone()),
+                        format,
+                    ))
+                };
+                let groups =
+                    self.create_file_groups(self.create_partitioned_files(&store_ctx, files)?);
+                let config = FileScanConfigBuilder::new(object_store_url.clone(), source)
+                    .with_file_groups(groups)
+                    .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
+                    .build();
+                branches.push(create_data_scan(session, config).await?);
+            }
+            let mut plan = UnionExec::try_new(branches)?;
+            if let Some(predicate) = conjunction(parquet_pushdown_filters.clone()) {
+                let schema = plan.schema().to_dfschema()?;
+                plan = Arc::new(FilterExec::try_new(
+                    simplify_expr(session, &schema, predicate)?,
+                    plan,
+                )?);
+            }
+            if let Some(projection) = projection {
+                plan = self
+                    .project_scan_schema(plan, &self.projected_arrow_schema(Some(projection))?)?;
+            }
+            if let Some(limit) = limit {
+                plan = Arc::new(GlobalLimitExec::new(plan, 0, Some(limit)));
+            }
+            return Ok(plan);
+        }
+
         if dirty_units.is_empty() {
             // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
             // is identical to the pre-delete-integration behavior.

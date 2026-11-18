@@ -16,6 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "get_table",
             "get_table_objects_by_name",
             "get_table_req",
+            "get_partitions",
             "alter_table",
             "lock",
             "check_lock",

@@ -200,7 +200,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "strum 0.28.0",
- "thiserror",
+ "thiserror 2.0.21",
  "uuid",
 ]
 
@@ -402,7 +402,7 @@ dependencies = [
  "bytes",
  "futures",
  "once_cell",
- "prost",
+ "prost 0.14.4",
  "prost-types",
  "tonic",
  "tonic-prost",
@@ -1595,7 +1595,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
 dependencies = [
- "thiserror",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2658,7 +2658,7 @@ dependencies = [
  "datafusion-proto-common",
  "datafusion-proto-models",
  "object_store",
- "prost",
+ "prost 0.14.4",
 ]
 
 [[package]]
@@ -2669,7 +2669,7 @@ checksum = "a95763d5fa64a88b658ba4ec7314d9c538e2aea749dc88d5ce2afaafbb4c69b8"
 dependencies = [
  "arrow",
  "datafusion-common",
- "prost",
+ "prost 0.14.4",
 ]
 
 [[package]]
@@ -2680,7 +2680,7 @@ checksum = "3c4982d05dee1e0b90b7f3b39845dca7eee5635c550db09158d385b8181bdc6a"
 dependencies = [
  "datafusion-common",
  "datafusion-proto-common",
- "prost",
+ "prost 0.14.4",
 ]
 
 [[package]]
@@ -2815,7 +2815,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
 dependencies = [
- "thiserror",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3067,7 +3067,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3089,6 +3089,12 @@ dependencies = [
  "event-listener",
  "pin-project-lite",
 ]
+
+[[package]]
+name = "fallible-streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "fancy-regex"
@@ -3639,13 +3645,13 @@ dependencies = [
  "md-5 0.10.6",
  "num-traits",
  "once_cell",
- "prost",
+ "prost 0.14.4",
  "prost-types",
  "rand 0.9.5",
  "regex",
  "roxmltree",
  "socket2",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "url",
  "uuid",
@@ -3664,7 +3670,7 @@ dependencies = [
  "futures",
  "hdfs-native",
  "object_store",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
 ]
 
@@ -3718,7 +3724,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "windows-sys 0.61.2",
 ]
@@ -4495,7 +4501,7 @@ dependencies = [
  "quote",
  "strum 0.27.2",
  "syn 2.0.119",
- "thiserror",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4668,7 +4674,7 @@ dependencies = [
  "jni-sys",
  "log",
  "simd_cesu8",
- "thiserror",
+ "thiserror 2.0.21",
  "walkdir",
  "windows-link",
 ]
@@ -4742,7 +4748,7 @@ dependencies = [
  "pest_derive",
  "regex",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4797,7 +4803,7 @@ dependencies = [
  "serde",
  "serde-saphyr",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "tower",
@@ -4819,7 +4825,7 @@ dependencies = [
  "serde",
  "serde-value",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5057,6 +5063,15 @@ dependencies = [
 
 [[package]]
 name = "lz4_flex"
+version = "0.11.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13591d77a9b6d941f7e6fcade7f9dfd9e801308752bde50c0a9bb5852778c22c"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
+name = "lz4_flex"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ef0d4ed8669f8f8826eb00dc878084aa8f253506c4fd5e8f58f5bce72ddb97e"
@@ -5071,6 +5086,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
 dependencies = [
  "twox-hash",
+]
+
+[[package]]
+name = "lzokay-native"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96ab312376eec4f900987620048ff27d8bdc7a8095b717963cafb80ffc873905"
+dependencies = [
+ "byteorder",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -5411,7 +5436,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "url",
@@ -5448,7 +5473,7 @@ dependencies = [
  "futures-sink",
  "js-sys",
  "pin-project-lite",
- "thiserror",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -5487,10 +5512,10 @@ dependencies = [
  "opentelemetry-http",
  "opentelemetry-proto",
  "opentelemetry_sdk",
- "prost",
+ "prost 0.14.4",
  "reqwest 0.13.4",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "tonic",
  "tonic-types",
@@ -5506,7 +5531,7 @@ dependencies = [
  "const-hex",
  "opentelemetry",
  "opentelemetry_sdk",
- "prost",
+ "prost 0.14.4",
  "serde",
  "tonic",
  "tonic-prost",
@@ -5525,7 +5550,7 @@ dependencies = [
  "percent-encoding",
  "portable-atomic",
  "rand 0.9.5",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
 ]
 
@@ -5534,6 +5559,29 @@ name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
+
+[[package]]
+name = "orc-rust"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e54c163f843c4f0fcfca65b9b73ca6f93c37c8e86736d5a1e578c6e843eed0a0"
+dependencies = [
+ "arrow",
+ "bytemuck",
+ "bytes",
+ "chrono",
+ "chrono-tz",
+ "fallible-streaming-iterator",
+ "flate2",
+ "log",
+ "lz4_flex 0.11.7",
+ "lzokay-native",
+ "num",
+ "prost 0.13.5",
+ "snafu",
+ "snap",
+ "zstd 0.13.3",
+]
 
 [[package]]
 name = "ordered-float"
@@ -5728,7 +5776,7 @@ checksum = "2ed4d5c6ae95e08ac768883c8401cf0e8deb4e6e1d6a4e1fd3d2ec4f0ec63200"
 dependencies = [
  "heck 0.5.0",
  "itertools 0.14.0",
- "prost",
+ "prost 0.14.4",
  "prost-types",
 ]
 
@@ -5742,7 +5790,7 @@ dependencies = [
  "chrono",
  "pbjson",
  "pbjson-build",
- "prost",
+ "prost 0.14.4",
  "prost-build",
  "serde",
 ]
@@ -6109,12 +6157,22 @@ dependencies = [
 
 [[package]]
 name = "prost"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
+dependencies = [
+ "bytes",
+ "prost-derive 0.13.5",
+]
+
+[[package]]
+name = "prost"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "528ac67416ff8646872a3c02cad9cc4ee5dc9f9540c9b10771855c95cb2e5ae1"
 dependencies = [
  "bytes",
- "prost-derive",
+ "prost-derive 0.14.4",
 ]
 
 [[package]]
@@ -6129,13 +6187,26 @@ dependencies = [
  "multimap",
  "petgraph",
  "prettyplease 0.2.37",
- "prost",
+ "prost 0.14.4",
  "prost-types",
  "pulldown-cmark",
  "pulldown-cmark-to-cmark",
  "regex",
  "syn 2.0.119",
  "tempfile",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
+dependencies = [
+ "anyhow",
+ "itertools 0.14.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -6157,7 +6228,7 @@ version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f94967dc7688f3054c7fac87473ffae4cc4c3904800e2d9f5b857246d8963b0a"
 dependencies = [
- "prost",
+ "prost 0.14.4",
 ]
 
 [[package]]
@@ -6288,7 +6359,7 @@ dependencies = [
  "rustc-hash",
  "rustls",
  "socket2",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "web-time",
@@ -6310,7 +6381,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror",
+ "thiserror 2.0.21",
  "tinyvec",
  "tracing",
  "web-time",
@@ -6327,7 +6398,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6529,7 +6600,7 @@ checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
 dependencies = [
  "getrandom 0.2.17",
  "libredox",
- "thiserror",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -6775,7 +6846,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6834,7 +6905,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6880,7 +6951,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "syn 3.0.9",
- "thiserror",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -6896,7 +6967,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-object-store",
- "thiserror",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -6919,7 +6990,7 @@ dependencies = [
  "serde_arrow",
  "serde_json",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "url",
 ]
@@ -6976,7 +7047,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "url",
  "uuid",
@@ -7045,7 +7116,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "wiremock",
 ]
@@ -7060,10 +7131,10 @@ dependencies = [
  "log",
  "lz4_flex 0.14.0",
  "num_enum",
- "prost",
+ "prost 0.14.4",
  "readonly",
  "sail-common",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "tonic",
  "tonic-prost-build",
@@ -7113,7 +7184,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "toml 1.1.6+spec-1.1.0",
  "tonic",
@@ -7148,13 +7219,13 @@ dependencies = [
  "parquet-variant-compute",
  "parquet-variant-json",
  "pin-project-lite",
- "prost",
+ "prost 0.14.4",
  "rand 0.10.3",
  "sail-common",
  "serde",
  "serde_arrow",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "tonic",
  "tonic-prost-build",
@@ -7220,7 +7291,7 @@ dependencies = [
  "sail-physical-plan",
  "sail-sql-analyzer",
  "serde",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "url",
@@ -7266,7 +7337,7 @@ dependencies = [
  "serde",
  "serde_arrow",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "url",
  "uuid",
@@ -7296,7 +7367,7 @@ dependencies = [
  "log",
  "object_store",
  "opentelemetry-proto",
- "prost",
+ "prost 0.14.4",
  "prost-build",
  "rand 0.10.3",
  "readonly",
@@ -7318,7 +7389,7 @@ dependencies = [
  "sail-telemetry",
  "serde",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "toml 1.1.6+spec-1.1.0",
@@ -7340,7 +7411,7 @@ dependencies = [
  "env_logger",
  "futures",
  "log",
- "prost",
+ "prost 0.14.4",
  "sail-catalog",
  "sail-catalog-memory",
  "sail-common",
@@ -7351,7 +7422,7 @@ dependencies = [
  "sail-sql-analyzer",
  "sail-sql-parser",
  "sail-telemetry",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "tonic",
  "tonic-health",
@@ -7414,7 +7485,7 @@ dependencies = [
  "sail-sql-analyzer",
  "serde",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "url",
  "uuid",
@@ -7456,6 +7527,7 @@ dependencies = [
  "murmur3",
  "object_store",
  "once_cell",
+ "orc-rust",
  "ordered-float 5.5.1",
  "parquet",
  "parquet-variant",
@@ -7549,7 +7621,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "sail-common",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -7641,7 +7713,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "tonic",
  "url",
@@ -7689,7 +7761,7 @@ dependencies = [
  "pyo3",
  "sail-common",
  "sail-common-datafusion",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
 ]
@@ -7739,7 +7811,7 @@ dependencies = [
  "sail-telemetry",
  "secrecy",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "tonic",
  "uuid",
@@ -7762,7 +7834,7 @@ dependencies = [
  "pbjson-types",
  "phf 0.14.0",
  "prettyplease 0.3.0",
- "prost",
+ "prost 0.14.4",
  "prost-build",
  "prost-types",
  "pyo3",
@@ -7782,7 +7854,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 3.0.9",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "tonic",
  "tonic-prost",
@@ -7804,7 +7876,7 @@ dependencies = [
  "sail-common-spark",
  "sail-sql-parser",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -7857,7 +7929,7 @@ dependencies = [
  "smallvec",
  "syn 3.0.9",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
 ]
 
@@ -7888,7 +7960,7 @@ dependencies = [
  "pin-project-lite",
  "prettyplease 0.3.0",
  "proc-macro2",
- "prost",
+ "prost 0.14.4",
  "quote",
  "regex",
  "sail-common",
@@ -7899,7 +7971,7 @@ dependencies = [
  "serde_yaml",
  "syn 3.0.9",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.21",
  "tokio",
  "tonic",
 ]
@@ -7910,7 +7982,7 @@ version = "0.7.3"
 dependencies = [
  "async-trait",
  "num_enum",
- "thiserror",
+ "thiserror 2.0.21",
  "thrift",
  "tokio",
 ]
@@ -8257,6 +8329,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "snafu"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e84b3f4eacbf3a1ce05eac6763b4d629d60cbc94d632e4092c54ade71f1e1a2"
+dependencies = [
+ "snafu-derive",
+]
+
+[[package]]
+name = "snafu-derive"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "snap"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8504,7 +8597,16 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "thiserror"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+dependencies = [
+ "thiserror-impl 1.0.69",
 ]
 
 [[package]]
@@ -8513,7 +8615,18 @@ version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 2.0.21",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -8823,7 +8936,7 @@ version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc97d645691d64d96db1afe386d0d2918ac84ab56e2c91e153f22f6349a378cd"
 dependencies = [
- "prost",
+ "prost 0.14.4",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -8837,7 +8950,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eba464054e2226f182a34489b8b079bf4c6e3e7ab5fd7fc30e024f24aa92a484"
 dependencies = [
  "bytes",
- "prost",
+ "prost 0.14.4",
  "tonic",
 ]
 
@@ -8863,7 +8976,7 @@ version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7eb4700e220803efd45baf3babaa1958c79adc9e0fe6fbd4422f9188d1e57d26"
 dependencies = [
- "prost",
+ "prost 0.14.4",
  "prost-types",
  "tokio",
  "tokio-stream",
@@ -8877,7 +8990,7 @@ version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccbb6c31deb8e99dcdf87df19c5289b7838a600da74a8224baa671e52fe7c5ad"
 dependencies = [
- "prost",
+ "prost 0.14.4",
  "prost-types",
  "tonic",
 ]
@@ -9345,7 +9458,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9687,7 +9800,7 @@ dependencies = [
  "rust_decimal",
  "static_assertions",
  "strum 0.27.2",
- "thiserror",
+ "thiserror 2.0.21",
  "v_jsonescape",
  "xee-name",
  "xee-schema-type",
@@ -9744,7 +9857,7 @@ dependencies = [
  "iri-string",
  "ordered-float 5.5.1",
  "rust_decimal",
- "thiserror",
+ "thiserror 2.0.21",
  "xee-interpreter",
  "xee-ir",
  "xee-schema-type",
@@ -9765,7 +9878,7 @@ dependencies = [
  "ibig",
  "ordered-float 5.5.1",
  "rust_decimal",
- "thiserror",
+ "thiserror 2.0.21",
  "xee-name",
  "xee-schema-type",
  "xee-xpath-lexer",
@@ -9784,7 +9897,7 @@ dependencies = [
  "iri-string",
  "ordered-float 5.5.1",
  "rust_decimal",
- "thiserror",
+ "thiserror 2.0.21",
  "xee-interpreter",
  "xee-ir",
  "xee-schema-type",

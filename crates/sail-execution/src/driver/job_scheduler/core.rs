@@ -546,6 +546,7 @@ impl JobScheduler {
                     };
                     actions.push(JobAction::ExtendJobOutput {
                         handle: output.handle(),
+                        retry_cause: None,
                         key,
                         schema: schema.clone(),
                     });
@@ -553,6 +554,20 @@ impl JobScheduler {
             }
         }
 
+        let cause = std::cell::OnceCell::new();
+        for action in &mut actions {
+            if let JobAction::ExtendJobOutput {
+                key, retry_cause, ..
+            } = action
+                && key.attempt > 0
+            {
+                *retry_cause = Some(
+                    cause
+                        .get_or_init(|| Self::infer_job_failure_cause(job))
+                        .clone(),
+                );
+            }
+        }
         actions
     }
 

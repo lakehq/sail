@@ -53,8 +53,8 @@ impl StoreContext {
         &'a self,
         raw: &str,
     ) -> Result<(&'a Arc<dyn object_store::ObjectStore>, ObjectPath), DataFusionError> {
-        if let Some(url) = crate::utils::parse_absolute_url(raw) {
-            return Ok((&self.base, crate::utils::url_to_object_path(&url)?));
+        if crate::utils::parse_absolute_url(raw).is_some() {
+            return Ok((&self.base, self.resolve_to_absolute_path(raw)?));
         }
         if raw.starts_with(object_store::path::DELIMITER) {
             let no_leading = raw.strip_prefix('/').unwrap_or(raw);
@@ -68,6 +68,27 @@ impl StoreContext {
 
     pub fn resolve_to_absolute_path(&self, raw_path: &str) -> Result<ObjectPath, DataFusionError> {
         if let Some(url) = crate::utils::parse_absolute_url(raw_path) {
+            // Hadoop Path strings in manifests contain literal object keys, including
+            // spaces and Hive percent escapes. URL parsing would re-encode them.
+            if let Some((_, rest)) = raw_path.split_once(':') {
+                let path = match rest.strip_prefix("//") {
+                    Some(authority_path) => authority_path.split_once('/').map(|(_, path)| path),
+                    None => rest.strip_prefix('/'),
+                };
+                if let Some(path) = path {
+                    #[cfg(windows)]
+                    if url.scheme() == "file" {
+                        let path = url::Url::parse(&raw_path.replace('%', "%25"))
+                            .map_err(|e| DataFusionError::Plan(e.to_string()))?
+                            .to_file_path()
+                            .map_err(|_| {
+                                DataFusionError::Plan(format!("Invalid file path: {raw_path}"))
+                            })?;
+                        return Ok(ObjectPath::from_absolute_path(path)?);
+                    }
+                    return Ok(ObjectPath::parse(path)?);
+                }
+            }
             return crate::utils::url_to_object_path(&url);
         }
 

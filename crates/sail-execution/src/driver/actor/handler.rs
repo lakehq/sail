@@ -456,6 +456,7 @@ impl DriverActor {
                 handle,
                 key,
                 schema,
+                retry_cause,
             } => {
                 let assignment =
                     TaskAssignmentGetter::get(&self.task_assigner, &TaskKey::from(key.clone()));
@@ -504,6 +505,7 @@ impl DriverActor {
                 ctx.spawn(async move {
                     handle
                         .send(JobOutputItem::Stream {
+                            retry_cause,
                             key,
                             stream: Box::pin(stream),
                         })

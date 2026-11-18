@@ -31,8 +31,15 @@ const MAX_PROCEDURE_COMMIT_RETRIES: usize = 5;
 
 pub(crate) enum ProcedureCommitOperation {
     Snapshot(SnapshotOperation),
+    AddFiles(crate::procedure::add_files::AddFiles),
     RewriteManifests(RewriteManifests),
     ExpireSnapshots(ExpireSnapshots),
+}
+
+impl From<crate::procedure::add_files::AddFiles> for ProcedureCommitOperation {
+    fn from(operation: crate::procedure::add_files::AddFiles) -> Self {
+        Self::AddFiles(operation)
+    }
 }
 
 impl From<ExpireSnapshots> for ProcedureCommitOperation {
@@ -200,6 +207,17 @@ pub(crate) async fn commit_snapshot_operation(
         }
         let mut expiration: Option<Expiration> = None;
         let prepared = match &operation {
+            ProcedureCommitOperation::AddFiles(operation) => {
+                operation
+                    .prepare(
+                        ctx,
+                        &store_context,
+                        table_url,
+                        &metadata,
+                        output_schema.clone(),
+                    )
+                    .await?
+            }
             ProcedureCommitOperation::ExpireSnapshots(operation) => {
                 let prepared = operation
                     .prepare(&store_context, table_url, &metadata)
