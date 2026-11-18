@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use datafusion::physical_plan::ExecutionPlanProperties;
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexSet;
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::job_graph::{InputMode, JobGraph, OutputMode, TaskPlacement};
+use crate::job_graph::{InputMode, JobGraph, OutputMode};
 
 #[derive(Debug)]
 #[readonly::make]
@@ -48,10 +48,7 @@ impl JobTopology {
         for (s, stage) in graph.stages().iter().enumerate() {
             for input in &stage.inputs {
                 stages[input.stage].consumers.push(s);
-                if matches!(
-                    &graph.stages()[input.stage].mode,
-                    OutputMode::Pipelined | OutputMode::Shared
-                ) {
+                if matches!(&graph.stages()[input.stage].mode, OutputMode::Pipelined) {
                     pipelined_adjacency[s].push(input.stage);
                     pipelined_adjacency[input.stage].push(s);
                 }
@@ -221,53 +218,6 @@ impl JobTopology {
     }
 }
 
-impl JobTopology {
-    /// Returns the number of worker task slots that the region needs, as the job scheduler
-    /// counts its task sets: the stages of a slot-sharing group share task sets, which are
-    /// filled with the partitions of each stage in turn, so that no two partitions of a
-    /// stage share a task set.
-    pub fn worker_slots(&self, graph: &JobGraph, region: usize) -> usize {
-        let Some(region) = self.regions.get(region) else {
-            return 0;
-        };
-        let mut groups: IndexMap<&str, IndexMap<usize, usize>> = IndexMap::new();
-        for task in &region.tasks {
-            let stage = &graph.stages()[task.stage];
-            if matches!(stage.placement, TaskPlacement::Worker) {
-                let partitions = stage.plan.output_partitioning().partition_count();
-                groups
-                    .entry(stage.group.as_str())
-                    .or_default()
-                    .insert(task.stage, partitions);
-            }
-        }
-        groups
-            .values()
-            .map(|partitions| {
-                let count = partitions.values().copied().max().unwrap_or(0);
-                let mut offsets = HashMap::new();
-                let mut offset = 0;
-                for (&stage, &n) in partitions {
-                    if n > 0 {
-                        offsets.insert(stage, offset);
-                        offset = (offset + n) % count;
-                    }
-                }
-                region
-                    .tasks
-                    .iter()
-                    .filter_map(|task| {
-                        offsets
-                            .get(&task.stage)
-                            .map(|o| (o + task.partition) % count)
-                    })
-                    .collect::<HashSet<_>>()
-                    .len()
-            })
-            .sum()
-    }
-}
-
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
@@ -304,7 +254,6 @@ mod tests {
                     max_file_size: 1,
                     compression: ShuffleCompression::None,
                 },
-                worker_slots: None,
             },
         )
         .unwrap();
@@ -336,6 +285,65 @@ mod tests {
             for input_region in &blocking_input_regions {
                 assert!(region.dependencies.contains(input_region));
             }
+        }
+    }
+
+    #[test]
+    fn flight_shared_build_region_depends_on_build_reproducibility() {
+        use datafusion::common::{JoinType, NullEquality};
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::physical_expr::expressions::col;
+        use datafusion::physical_plan::ExecutionPlan;
+        use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
+        use datafusion::physical_plan::limit::GlobalLimitExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let memory = || MemorySourceConfig::try_new_exec(&[vec![]], schema.clone(), None).unwrap();
+        // A build that every join task computes identically stays in the join stage, whose
+        // partitions run as independent one-task regions. A limit is materialized once, and
+        // the broadcast puts the producer and every join partition into one region.
+        for (build, region_sizes) in [
+            (memory() as Arc<dyn ExecutionPlan>, vec![1, 1, 1, 1]),
+            (
+                Arc::new(GlobalLimitExec::new(memory(), 0, Some(1))),
+                vec![5],
+            ),
+        ] {
+            let probe = (0..4)
+                .map(|_| Arc::new(EmptyExec::new(schema.clone())) as Arc<dyn ExecutionPlan>)
+                .collect();
+            let key = col("id", &schema).unwrap();
+            let join = HashJoinExec::try_new(
+                build,
+                UnionExec::try_new(probe).unwrap(),
+                vec![(key.clone(), key)],
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                false,
+            )
+            .unwrap();
+            let graph = JobGraph::try_new(
+                Arc::new(join),
+                JobGraphOptions {
+                    shuffle_backend: ShuffleBackendKind::Flight {
+                        compression: ShuffleCompression::None,
+                        connection_count: std::num::NonZeroUsize::MIN,
+                        initial_stream_window_size: None,
+                        initial_connection_window_size: None,
+                    },
+                },
+            )
+            .unwrap();
+            let topology = JobTopology::try_new(&graph).unwrap();
+            let sizes = topology
+                .regions
+                .iter()
+                .map(|region| region.tasks.len())
+                .collect::<Vec<_>>();
+            assert_eq!(sizes, region_sizes);
         }
     }
 }

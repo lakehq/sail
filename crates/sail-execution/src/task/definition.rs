@@ -22,8 +22,9 @@ pub struct TaskDefinition {
 pub struct TaskInput {
     pub stage: usize,
     pub locator: Arc<TaskInputLocator>,
-    /// Shared replay keeps producer batch sizes instead of coalescing them at every reader.
-    pub preserve_batches: bool,
+    /// Whether each consumer task reads its own replica of the input streams,
+    /// as for merge and broadcast inputs, rather than one consumer partition per stream.
+    pub replicated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -89,13 +90,11 @@ pub enum TaskOutputDistribution {
 pub enum TaskOutputLocator {
     Pipelined {
         replicas: usize,
+        /// Whether the task waits for the readers of its output when they fall behind.
+        /// The task queues its output in memory without any limit otherwise.
+        bounded: bool,
     },
     Blocking,
-    /// The output is read by each replica at its own pace, and produced when a replica
-    /// asks for rows that no replica has read yet.
-    Shared {
-        replicas: usize,
-    },
 }
 
 impl From<TaskDefinition> for r#gen::TaskDefinition {
@@ -143,12 +142,12 @@ impl From<TaskInput> for r#gen::TaskInput {
         let TaskInput {
             stage,
             locator,
-            preserve_batches,
+            replicated,
         } = value;
         r#gen::TaskInput {
             stage: stage as u64,
             locator: Some(locator.as_ref().clone().into()),
-            preserve_batches,
+            replicated,
         }
     }
 }
@@ -168,7 +167,7 @@ impl TryFrom<r#gen::TaskInput> for TaskInput {
         Ok(TaskInput {
             stage: value.stage as usize,
             locator: Arc::new(locator),
-            preserve_batches: value.preserve_batches,
+            replicated: value.replicated,
         })
     }
 }
@@ -518,18 +517,14 @@ impl TryFrom<r#gen::TaskOutputDistribution> for TaskOutputDistribution {
 impl From<TaskOutputLocator> for r#gen::TaskOutputLocator {
     fn from(value: TaskOutputLocator) -> Self {
         let kind = match value {
-            TaskOutputLocator::Pipelined { replicas } => {
+            TaskOutputLocator::Pipelined { replicas, bounded } => {
                 r#gen::task_output_locator::Kind::Pipelined(r#gen::TaskOutputPipelinedLocator {
                     replicas: replicas as u64,
+                    bounded,
                 })
             }
             TaskOutputLocator::Blocking => {
                 r#gen::task_output_locator::Kind::Blocking(r#gen::TaskOutputBlockingLocator {})
-            }
-            TaskOutputLocator::Shared { replicas } => {
-                r#gen::task_output_locator::Kind::Shared(r#gen::TaskOutputSharedLocator {
-                    replicas: replicas as u64,
-                })
             }
         };
         r#gen::TaskOutputLocator { kind: Some(kind) }
@@ -542,16 +537,12 @@ impl TryFrom<r#gen::TaskOutputLocator> for TaskOutputLocator {
     fn try_from(value: r#gen::TaskOutputLocator) -> Result<Self, Self::Error> {
         match value.kind {
             Some(r#gen::task_output_locator::Kind::Pipelined(
-                r#gen::TaskOutputPipelinedLocator { replicas },
+                r#gen::TaskOutputPipelinedLocator { replicas, bounded },
             )) => Ok(TaskOutputLocator::Pipelined {
                 replicas: replicas as usize,
+                bounded,
             }),
             Some(r#gen::task_output_locator::Kind::Blocking(_)) => Ok(TaskOutputLocator::Blocking),
-            Some(r#gen::task_output_locator::Kind::Shared(r#gen::TaskOutputSharedLocator {
-                replicas,
-            })) => Ok(TaskOutputLocator::Shared {
-                replicas: replicas as usize,
-            }),
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task output locator".to_string(),
             )),
@@ -621,25 +612,31 @@ impl TaskOutput {
 
 #[cfg(test)]
 mod tests {
-    use prost::Message;
-
     use super::*;
 
     #[test]
-    fn task_input_batch_policy_round_trips() -> ExecutionResult<()> {
-        for preserve_batches in [false, true] {
-            let input = TaskInput {
-                stage: 7,
-                locator: Arc::new(TaskInputLocator::Worker { keys: vec![] }),
-                preserve_batches,
+    fn pipelined_output_locator_keeps_bounded() -> Result<(), ExecutionError> {
+        for bounded in [false, true] {
+            let locator = TaskOutputLocator::Pipelined {
+                replicas: 3,
+                bounded,
             };
-            let encoded = r#gen::TaskInput::from(input).encode_to_vec();
-            let decoded = r#gen::TaskInput::decode(encoded.as_slice())
-                .map_err(|e| ExecutionError::InvalidArgument(e.to_string()))?;
-            let input = TaskInput::try_from(decoded)?;
-            assert_eq!(input.stage, 7);
-            assert_eq!(input.preserve_batches, preserve_batches);
+            let locator = TaskOutputLocator::try_from(r#gen::TaskOutputLocator::from(locator))?;
+            assert!(matches!(
+                locator,
+                TaskOutputLocator::Pipelined { replicas: 3, bounded: decoded } if decoded == bounded
+            ));
         }
+        // A locator that does not say anything never makes the task wait.
+        let locator = r#gen::TaskOutputLocator {
+            kind: Some(r#gen::task_output_locator::Kind::Pipelined(
+                r#gen::TaskOutputPipelinedLocator::default(),
+            )),
+        };
+        assert!(matches!(
+            TaskOutputLocator::try_from(locator)?,
+            TaskOutputLocator::Pipelined { bounded: false, .. }
+        ));
         Ok(())
     }
 }

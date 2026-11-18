@@ -29,6 +29,9 @@ pub struct DriverOptions {
     pub worker_launch_retry_strategy: RetryStrategy,
     pub task_launch_timeout: Duration,
     pub task_stream_buffer: usize,
+    pub task_stream_memory_limit: usize,
+    pub shuffle_write_buffer_size: usize,
+    pub task_stream_stall_timeout: Duration,
     pub task_stream_creation_timeout: Duration,
     pub task_max_attempts: usize,
     pub shuffle_backend: ShuffleBackendKind,
@@ -42,13 +45,6 @@ pub struct DriverComponents {
 }
 
 impl DriverOptions {
-    /// Returns the number of worker task slots that the cluster can provide, if the number
-    /// of workers is limited.
-    pub(crate) fn worker_slots(&self) -> Option<usize> {
-        (self.worker_max_count > 0)
-            .then(|| self.worker_max_count.saturating_mul(self.worker_task_slots))
-    }
-
     pub fn try_new(
         config: &AppConfig,
         runtime: RuntimeHandle,
@@ -84,6 +80,11 @@ impl DriverOptions {
             rpc_retry_strategy: (&config.cluster.rpc_retry_strategy).into(),
             task_launch_timeout: Duration::from_secs(config.cluster.task_launch_timeout_secs),
             task_stream_buffer: config.cluster.task_stream_buffer,
+            task_stream_memory_limit: config.cluster.task_stream_memory_limit,
+            shuffle_write_buffer_size: config.cluster.shuffle_write_buffer_size,
+            task_stream_stall_timeout: Duration::from_secs(
+                config.cluster.task_stream_stall_timeout_secs,
+            ),
             task_stream_creation_timeout: Duration::from_secs(
                 config.cluster.task_stream_creation_timeout_secs,
             ),

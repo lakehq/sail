@@ -20,7 +20,8 @@ use crate::driver::worker_scaler::{WorkerLaunchRequest, WorkerRetryRequest};
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{
-    JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId,
+    JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay,
+    TaskStreamKeySet, WorkerId,
 };
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
@@ -361,17 +362,17 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_fetch_worker_stream(
+    pub(super) fn handle_fetch_worker_streams(
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
         let _ = result.send(
             self.worker_pool
-                .fetch_task_stream(ctx, worker_id, &key, schema),
+                .fetch_task_streams(ctx, worker_id, keys, schema),
         );
         ActorAction::Continue
     }
@@ -456,6 +457,7 @@ impl DriverActor {
                 handle,
                 key,
                 schema,
+                retry_cause,
             } => {
                 let assignment =
                     TaskAssignmentGetter::get(&self.task_assigner, &TaskKey::from(key.clone()));
@@ -488,10 +490,12 @@ impl DriverActor {
                         }
                     }
                     Some(TaskAssignment::Worker { worker_id, slot: _ }) => {
-                        let _ = result.send(
-                            self.worker_pool
-                                .fetch_task_stream(ctx, *worker_id, &key, schema),
-                        );
+                        let _ = result.send(self.worker_pool.fetch_task_streams(
+                            ctx,
+                            *worker_id,
+                            key.clone().into(),
+                            schema,
+                        ));
                     }
                 }
                 let stream = futures::stream::once(async move {
@@ -506,6 +510,7 @@ impl DriverActor {
                         .send(JobOutputItem::Stream {
                             key,
                             stream: Box::pin(stream),
+                            retry_cause,
                         })
                         .await;
                 });
@@ -518,7 +523,6 @@ impl DriverActor {
             JobAction::CleanUpJob {
                 job_id,
                 stage,
-                attempts,
                 context,
             } => {
                 // Job closure is a lifecycle operation, independent of shuffle ownership.
@@ -532,8 +536,7 @@ impl DriverActor {
                         });
                     }
                     for worker_id in self.task_assigner.active_worker_ids() {
-                        self.worker_pool
-                            .clean_up_job(ctx, worker_id, job_id, None, vec![]);
+                        self.worker_pool.clean_up_job(ctx, worker_id, job_id, None);
                     }
                 }
                 if self.task_assigner.untrack_storage_streams(job_id, stage)
@@ -559,13 +562,7 @@ impl DriverActor {
                     }
                     if stage.is_some() {
                         for worker_id in self.task_assigner.active_worker_ids() {
-                            self.worker_pool.clean_up_job(
-                                ctx,
-                                worker_id,
-                                job_id,
-                                stage,
-                                attempts.clone(),
-                            );
+                            self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage);
                         }
                     }
                 }
@@ -573,13 +570,11 @@ impl DriverActor {
                     match x {
                         TaskStreamAssignment::Driver => {
                             if let Some(task_runner) = self.task_runner.clone() {
-                                let attempts = attempts.clone();
                                 ctx.spawn(async move {
                                     let _ = task_runner
                                         .send(TaskRunnerMessage::CleanUpLocalStreams {
                                             job_id,
                                             stage,
-                                            attempts,
                                         })
                                         .await;
                                 });
@@ -587,13 +582,7 @@ impl DriverActor {
                         }
                         TaskStreamAssignment::Worker { worker_id } => {
                             if stage.is_some() {
-                                self.worker_pool.clean_up_job(
-                                    ctx,
-                                    worker_id,
-                                    job_id,
-                                    stage,
-                                    attempts.clone(),
-                                );
+                                self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage);
                             }
                         }
                     }

@@ -197,10 +197,19 @@ message HigherOrderUdf {
     SparkTransformValuesUdf transform_values = 11;
     SparkTransformKeysUdf transform_keys = 12;
     CoalesceLazyUdf coalesce_lazy = 13;
+    SparkMapZipWithUdf map_zip_with = 14;
+    SparkArrayZipWithUdf zip_with = 15;
   }
 }
 
 message CoalesceLazyUdf {}
+
+message SparkMapZipWithUdf {
+  bool ansi_mode = 1;
+  string session_timezone = 2;
+}
+
+message SparkArrayZipWithUdf {}
 
 message SparkArrayAggregateUdf {
   bool element_first = 1;
@@ -220,6 +229,7 @@ message SparkTransformValuesUdf {}
 
 message SparkTransformKeysUdf {
   bool last_value_wins = 1;
+  bool preserve_duplicates = 2;
 }
 
 message SparkArrayFilterUdf {

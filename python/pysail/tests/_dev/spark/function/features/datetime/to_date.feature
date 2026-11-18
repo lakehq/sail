@@ -432,13 +432,10 @@ Feature: to_date with an argument coming from a column
         | 2025-11-02 23:30:45.123456+01:00 | 2025-11-02 23:30:45.123456 | 2025-11-02 22:30:45.123456 | 2025-11-02 | 2025-11-02 |
 
   Rule: Strings Spark's date cast accepts
-    # Spark parses a date-ish string with the hand-written parseTimestampString, not with a
+    # Spark parses a date string with the hand-written stringToDate, not with a
     # DateTimeFormatter. That parser trims leading and trailing whitespace (and ISO control
-    # characters) and accepts an ISO `T` separator, so all of these succeed.
-    #
-    # The forms Sail ALREADY handles are kept in the first table as the contrasting half:
-    # a parser that simply rejected "unusual" strings would fail those too, so listing only
-    # the broken ones would not discriminate a narrow parser from a correct one.
+    # characters) and ignores everything after a space or `T` that follows a complete date,
+    # so all of these succeed.
     # All values measured on Spark JVM 4.2.0, session time zone UTC.
 
     Scenario Outline: Accepted date string: <case>
@@ -453,28 +450,100 @@ Feature: to_date with an argument coming from a column
       Examples:
         | case                       | input                                  | result       |
         | trailing whitespace        | '2024-01-15 '                          | 2024-01-15   |
+        | leading whitespace         | ' 2024-01-15'                          | 2024-01-15   |
+        | surrounding whitespace     | '  2024-01-15  '                       | 2024-01-15   |
         | single-digit month and day | '2024-1-5'                             | 2024-01-05   |
         | leading plus on the year   | '+2024-01-15'                          | 2024-01-15   |
+        | ISO T separator            | '2024-01-15T12:00:00'                  | 2024-01-15   |
         | zone designator suffix     | '2024-01-15 12:00:00Z'                 | 2024-01-15   |
         | numeric offset suffix      | '2024-01-15 12:00:00+05:30'            | 2024-01-15   |
         | region zone suffix         | '2024-01-15 12:00:00 America/New_York' | 2024-01-15   |
         | year zero                  | '0000-12-31'                           | 0000-12-31   |
         | five-digit year            | '10000-01-01'                          | +10000-01-01 |
 
-    @sail-bug
-    Scenario Outline: Accepted date string that Sail rejects: <case>
-      # Under ANSI these raise CAST_INVALID_INPUT in Sail; with ANSI off they come back as
-      # NULL. Both are wrong — Spark parses all three.
+  Rule: A space or `T` after a complete date ends the date
+    # Spark's stringToDate stops at the first space or uppercase `T` after the day and
+    # ignores the rest of the string. A partial date (`yyyy` or `yyyy-[m]m`) must be the
+    # whole string, and any other character after the day makes the string malformed.
+
+    Scenario Outline: A string with a time part casts to its date with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
-        SELECT to_date(<input>) AS result
+        SELECT
+          id,
+          CAST(value AS DATE) AS cast_result,
+          try_cast(value AS DATE) AS try_cast_result,
+          to_date(value) AS to_date_result
+        FROM VALUES
+          (1, '2023-01-31T00:00:00'),
+          (2, '2023-01-31T13:45:00.123'),
+          (3, '2023-01-31T01:30:00+02:00'),
+          (4, '2023-1-5T10:00:00'),
+          (5, '2023-01-31T'),
+          (6, '2023-01-31 13:45:00')
+          AS t(id, value)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | cast_result | try_cast_result | to_date_result |
+        | 1  | 2023-01-31  | 2023-01-31      | 2023-01-31     |
+        | 2  | 2023-01-31  | 2023-01-31      | 2023-01-31     |
+        | 3  | 2023-01-31  | 2023-01-31      | 2023-01-31     |
+        | 4  | 2023-01-05  | 2023-01-05      | 2023-01-05     |
+        | 5  | 2023-01-31  | 2023-01-31      | 2023-01-31     |
+        | 6  | 2023-01-31  | 2023-01-31      | 2023-01-31     |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario: A date literal with a time part is its date
+      When query
+        """
+        SELECT DATE '2023-01-31T13:45:00' AS result
         """
       Then query result
         | result     |
-        | 2024-01-15 |
+        | 2023-01-31 |
+
+    Scenario: A malformed date string is NULL with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          id,
+          CAST(value AS DATE) AS cast_result,
+          try_cast(value AS DATE) AS try_cast_result,
+          to_date(value) AS to_date_result
+        FROM VALUES
+          (1, '2023-01-31Z'),
+          (2, '2023-01-31t13:45:00'),
+          (3, '2023-01-31\t13:45:00'),
+          (4, '2023-01T13:45:00'),
+          (5, '2023 13:45:00')
+          AS t(id, value)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | cast_result | try_cast_result | to_date_result |
+        | 1  | NULL        | NULL            | NULL           |
+        | 2  | NULL        | NULL            | NULL           |
+        | 3  | NULL        | NULL            | NULL           |
+        | 4  | NULL        | NULL            | NULL           |
+        | 5  | NULL        | NULL            | NULL           |
+
+    Scenario Outline: A malformed date string fails the cast with ANSI enabled: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(value AS DATE) AS result FROM VALUES (<input>) AS t(value)
+        """
+      Then query error CAST_INVALID_INPUT
 
       Examples:
-        | case                   | input                 |
-        | ISO T separator        | '2024-01-15T12:00:00' |
-        | leading whitespace     | ' 2024-01-15'         |
-        | surrounding whitespace | '  2024-01-15  '      |
+        | case                         | input                 |
+        | zone designator after a day  | '2023-01-31Z'         |
+        | lowercase t after a day      | '2023-01-31t13:45:00' |
+        | T after a year and month     | '2023-01T13:45:00'    |

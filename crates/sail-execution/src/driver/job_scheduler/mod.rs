@@ -1,8 +1,10 @@
 mod core;
 mod options;
 mod state;
-pub(crate) mod topology;
+mod topology;
 
+#[cfg(test)]
+pub(crate) use core::tests::event_reporter;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -52,6 +54,10 @@ pub enum JobAction {
         handle: JobOutputHandle,
         key: TaskStreamKey,
         schema: SchemaRef,
+        /// The cause of the task failures of the job so far, if the task attempt is a
+        /// retry. It is the cause that the driver infers for a job that fails, which
+        /// is not necessarily the failure that led to this attempt.
+        retry_cause: Option<CommonErrorCause>,
     },
     FailJobOutput {
         handle: JobOutputHandle,
@@ -60,9 +66,6 @@ pub enum JobAction {
     CleanUpJob {
         job_id: JobId,
         stage: Option<usize>,
-        /// The latest attempt of each partition of the stage, whose streams and the
-        /// streams of the earlier attempts are cleaned up.
-        attempts: Vec<usize>,
         context: Arc<TaskContext>,
     },
 }

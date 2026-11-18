@@ -15,8 +15,11 @@ use crate::driver::{DriverActor, DriverComponents, DriverHandle, DriverMessage, 
 use crate::job_graph::{JobGraph, JobGraphOptions};
 use crate::shuffle::ShuffleBackendKind;
 
-fn explain_job_graph(plan: Arc<dyn ExecutionPlan>, options: JobGraphOptions) -> Result<String> {
-    JobGraph::try_new(plan, options)
+fn explain_job_graph(
+    plan: Arc<dyn ExecutionPlan>,
+    shuffle_backend: ShuffleBackendKind,
+) -> Result<String> {
+    JobGraph::try_new(plan, JobGraphOptions { shuffle_backend })
         .map(|graph| graph.to_string())
         .map_err(|e| DataFusionError::External(Box::new(e)))
 }
@@ -48,14 +51,11 @@ impl JobRunner for LocalJobRunner {
     fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
         explain_job_graph(
             plan,
-            JobGraphOptions {
-                shuffle_backend: ShuffleBackendKind::Flight {
-                    compression: crate::shuffle::ShuffleCompression::None,
-                    connection_count: std::num::NonZeroUsize::MIN,
-                    initial_stream_window_size: None,
-                    initial_connection_window_size: None,
-                },
-                worker_slots: None,
+            ShuffleBackendKind::Flight {
+                compression: crate::shuffle::ShuffleCompression::None,
+                connection_count: std::num::NonZeroUsize::MIN,
+                initial_stream_window_size: None,
+                initial_connection_window_size: None,
             },
         )
     }
@@ -88,8 +88,7 @@ impl JobRunner for LocalJobRunner {
 
 pub struct ClusterJobRunner {
     driver: DriverHandle,
-    /// The options of the job graphs, which are the same for EXPLAIN as for execution.
-    graph_options: JobGraphOptions,
+    shuffle_backend: ShuffleBackendKind,
 }
 
 impl ClusterJobRunner {
@@ -98,14 +97,11 @@ impl ClusterJobRunner {
         options: DriverOptions,
         components: DriverComponents,
     ) -> Self {
-        let graph_options = JobGraphOptions {
-            shuffle_backend: options.shuffle_backend.clone(),
-            worker_slots: options.worker_slots(),
-        };
+        let shuffle_backend = options.shuffle_backend.clone();
         let driver = DriverHandle::new(system.spawn::<DriverActor>((options, components)));
         Self {
             driver,
-            graph_options,
+            shuffle_backend,
         }
     }
 
@@ -117,7 +113,7 @@ impl ClusterJobRunner {
 #[tonic::async_trait]
 impl JobRunner for ClusterJobRunner {
     fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
-        explain_job_graph(plan, self.graph_options.clone())
+        explain_job_graph(plan, self.shuffle_backend.clone())
     }
 
     /// Executes a plan on the cluster. This is where the cool stuff happens.

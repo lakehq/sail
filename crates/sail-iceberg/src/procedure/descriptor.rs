@@ -205,6 +205,41 @@ impl IcebergProcedureType {
                 ],
                 LakeProcedureAccess::MetadataCommit,
             ),
+            Self::ExpireSnapshots => (
+                vec![
+                    LakeProcedureParameter::required("table", string),
+                    LakeProcedureParameter::optional("older_than", timestamp),
+                    LakeProcedureParameter::optional("retain_last", LakeProcedureDataType::Int32),
+                    LakeProcedureParameter::optional(
+                        "max_concurrent_deletes",
+                        LakeProcedureDataType::Int32,
+                    ),
+                    LakeProcedureParameter::optional(
+                        "stream_results",
+                        LakeProcedureDataType::Boolean,
+                    ),
+                    LakeProcedureParameter::optional(
+                        "snapshot_ids",
+                        LakeProcedureDataType::Int64Array,
+                    ),
+                    LakeProcedureParameter::optional(
+                        "clean_expired_metadata",
+                        LakeProcedureDataType::Boolean,
+                    ),
+                ],
+                [
+                    "deleted_data_files_count",
+                    "deleted_position_delete_files_count",
+                    "deleted_equality_delete_files_count",
+                    "deleted_manifest_files_count",
+                    "deleted_manifest_lists_count",
+                    "deleted_statistics_files_count",
+                ]
+                .into_iter()
+                .map(|name| LakeProcedureField::new(name, long, true))
+                .collect(),
+                LakeProcedureAccess::MetadataCommit,
+            ),
             Self::FastForward => (
                 vec![
                     LakeProcedureParameter::required("table", string),
