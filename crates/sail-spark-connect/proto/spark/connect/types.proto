@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileNotice: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements.
+// SPDX-FileAttributionText: Source release: Apache Spark v4.3.0
+// SPDX-FileComment: Credit: https://github.com/apache/spark/blob/98bc0212c94705434471627068f41e374ccab143/sql/connect/common/src/main/protobuf/spark/connect/types.proto
 
 syntax = 'proto3';
 

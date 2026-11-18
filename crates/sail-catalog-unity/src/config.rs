@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/16621c499106dbaac11560441e0c59ed9346b4b9/crates/catalog-unity/src/lib.rs License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/16621c499106dbaac11560441e0c59ed9346b4b9/crates/catalog-unity/src/lib.rs
 // SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
 // SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
 // SPDX-FileContributor: Modified by LakeSail, Inc. in 2025

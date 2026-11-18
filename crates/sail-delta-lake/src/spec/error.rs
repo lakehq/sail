@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileComment: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt License: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
 // SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
 // SPDX-FileCopyrightText: Copyright 2023-2024 The Delta Kernel Rust Authors
 // SPDX-FileCopyrightText: Portions Copyright 2025-2026 LakeSail, Inc.

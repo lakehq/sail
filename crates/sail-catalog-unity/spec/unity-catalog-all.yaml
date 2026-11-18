@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileComment: Credit: https://github.com/unitycatalog/unitycatalog/blob/4fa81306825341728580f0ecd2733b58a029e53a/api/all.yaml License: https://github.com/unitycatalog/unitycatalog/blob/b33279336000d0d315e667d3825155183c04b2f4/LICENSE Notice: https://github.com/unitycatalog/unitycatalog/blob/b33279336000d0d315e667d3825155183c04b2f4/NOTICE
+# SPDX-FileAttributionText: License: https://github.com/unitycatalog/unitycatalog/blob/b33279336000d0d315e667d3825155183c04b2f4/LICENSE
+# SPDX-FileAttributionText: Notice: https://github.com/unitycatalog/unitycatalog/blob/b33279336000d0d315e667d3825155183c04b2f4/NOTICE
+# SPDX-FileComment: Credit: https://github.com/unitycatalog/unitycatalog/blob/4fa81306825341728580f0ecd2733b58a029e53a/api/all.yaml
 # SPDX-FileCopyrightText: Copyright (2024) Databricks, Inc.
 # SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
 # SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
