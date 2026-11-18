@@ -114,8 +114,7 @@ def test_merge_by_default_explicit_and_null_are_not_generated(spark, identity_ta
     assert spark.table(name).orderBy("k").collect() == [(42, 1, 10), (None, 2, 20)]
     assert _watermark(path) is None
     spark.sql(f"INSERT INTO {name} (k,v) VALUES (3,30)").collect()  # noqa: S608
-    expected_next_id = 10
-    assert spark.table(name).where("k=3").first().id == expected_next_id
+    assert spark.table(name).where("k=3").first().id == 10
 
 
 @pytest.mark.parametrize("matched", [False, True], ids=["fast-append", "copy-on-write"])
@@ -702,8 +701,7 @@ def test_merge_identity_tracking_is_independent_of_file_statistics(spark, identi
         assert "id" not in stats.get("maxValues", {})
     spark.sql(f"INSERT INTO {name} (k,v) VALUES (2,20)").collect()  # noqa: S608
     reopened = spark.read.format("delta").load(str(path)).orderBy("k").collect()
-    expected_count = 2
-    assert len(reopened) == expected_count
+    assert len(reopened) == 2
     assert reopened[1].id > generated
     assert _watermark(path) == reopened[1].id
 
@@ -738,10 +736,9 @@ def test_merge_identity_tracker_accepts_null_row_groups(single_partition_spark, 
         # The committed file has no bound for its all-null first row group.
         files = list(path.glob("*.parquet"))
         assert files
-        expected_row_groups = 2
         for file in files:
             parquet = pq.ParquetFile(file)
-            assert parquet.metadata.num_row_groups == expected_row_groups
+            assert parquet.metadata.num_row_groups == 2
             null_group = parquet.metadata.row_group(0)
             value_group = parquet.metadata.row_group(1)
             assert null_group.num_rows == limit

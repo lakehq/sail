@@ -584,7 +584,7 @@ def test_iceberg_sql_delete_partitioned_and_noop(spark, tmp_path):
         assert entries[0].data_file.content == DataFileContent.POSITION_DELETES
         assert entries[0].data_file.partition == Record("A")
         metadata = _find_latest_metadata(table_path)
-        assert len(metadata["snapshots"]) == 4  # noqa: PLR2004
+        assert len(metadata["snapshots"]) == 4
         rows = [
             tuple(row)
             for row in spark.sql("SELECT id, flag, part FROM iceberg_sql_delete_partitioned ORDER BY id").collect()
@@ -616,7 +616,7 @@ def test_iceberg_sql_delete_prunes_files_and_preserves_positions(spark, sql_cata
         selected = [file for file in files if int.from_bytes(file.lower_bounds[1], "little", signed=True) == 1]
         assert len(selected) == 1
         excluded = [file.file_path for file in files if file.file_path != selected[0].file_path]
-        assert len(excluded) == 3  # noqa: PLR2004
+        assert len(excluded) == 3
         if existing_delete:
             _append_equality_delete_snapshot(table, pa.table({"id": [1]}), [1])
         spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{_uri_sql(path)}'")
@@ -777,7 +777,7 @@ def test_iceberg_unpartitioned_equality_delete_filters_matching_rows_and_records
             assert len(position_deletes) == 1
             deleted = pq.read_table(_local_table_path(position_deletes[0].file_path)).to_pylist()
             assert len(deleted) == 1
-            assert deleted[0]["pos"] == 3  # noqa: PLR2004
+            assert deleted[0]["pos"] == 3
         finally:
             _drop_table(spark, name)
     finally:
@@ -924,7 +924,7 @@ def test_limit_counts_survivors_after_equality_deletes(spark, tmp_path):
         _append_equality_delete_snapshot(table, pa.table({"id": [4, 5, 6]}), [1])
         survivors = spark.read.format("iceberg").load(table.location())
         rows = survivors.limit(2).collect()
-        assert len(rows) == 2  # noqa: PLR2004
+        assert len(rows) == 2
         assert {row.id for row in rows} <= {1, 2, 3}
     finally:
         catalog.drop_table(identifier)

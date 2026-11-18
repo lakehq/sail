@@ -132,7 +132,7 @@ def spark_doctest_session(doctest_namespace, request):
 @pytest.fixture(autouse=_is_spark_testing())
 def spark_math_function_tolerance(request, monkeypatch):
     keywords = ["test_connect_function.py", "SparkConnectFunctionTests", "test_math_functions"]
-    if _spark_major_version() >= 4 or not all(key in request.node.keywords for key in keywords):  # noqa: PLR2004
+    if _spark_major_version() >= 4 or not all(key in request.node.keywords for key in keywords):
         return
 
     import pandas as pd
@@ -600,7 +600,7 @@ def normalize_show_string(s: str) -> str:
     """
 
     lines = s.split("\n")
-    if len(lines) < 4:  # noqa: PLR2004
+    if len(lines) < 4:
         return s
     if re.match(r"(\+-+)+\+", lines[0]) is None:
         return s

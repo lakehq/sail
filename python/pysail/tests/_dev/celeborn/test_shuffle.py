@@ -410,10 +410,10 @@ def test_shuffle_client_does_not_reuse_a_worker_that_failed_in_an_earlier_epoch(
                 ConnectionClosed,
                 reason="test",
             )
-            == 2  # noqa: PLR2004
+            == 2
         )
-        assert _event_count(celeborn_push_proxies, ConnectionOpened) == 2  # noqa: PLR2004
-        assert len(_event_workers(celeborn_push_proxies, ConnectionOpened)) == 2  # noqa: PLR2004
+        assert _event_count(celeborn_push_proxies, ConnectionOpened) == 2
+        assert len(_event_workers(celeborn_push_proxies, ConnectionOpened)) == 2
 
 
 def test_shuffle_client_reader_discovers_epochs_revived_by_another_client(
@@ -451,8 +451,8 @@ def test_shuffle_client_reader_discovers_epochs_revived_by_another_client(
             )
             == 1
         )
-        assert _event_count(celeborn_push_proxies, ConnectionOpened) == 2  # noqa: PLR2004
-        assert len(_event_workers(celeborn_push_proxies, ConnectionOpened)) == 2  # noqa: PLR2004
+        assert _event_count(celeborn_push_proxies, ConnectionOpened) == 2
+        assert len(_event_workers(celeborn_push_proxies, ConnectionOpened)) == 2
 
         # Replication is disabled, so the two payloads live on different workers.
         # Reading their concatenation proves the reader opens both epoch streams.

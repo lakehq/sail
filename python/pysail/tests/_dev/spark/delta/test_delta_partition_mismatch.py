@@ -101,7 +101,7 @@ def test_append_with_same_partition_columns_succeeds(spark, tmp_path):
     # Verify the data
     result_df = spark.read.format("delta").load(str(delta_path)).sort("id")
     result_count = result_df.count()
-    assert result_count == 4, f"Expected 4 rows, got {result_count}"  # noqa: PLR2004
+    assert result_count == 4, f"Expected 4 rows, got {result_count}"
 
 
 def test_append_without_specifying_partition_columns_inherits_partitioning(spark, tmp_path):
@@ -127,7 +127,7 @@ def test_append_without_specifying_partition_columns_inherits_partitioning(spark
     # Verify the data
     result_df = spark.read.format("delta").load(str(delta_path)).sort("id")
     result_count = result_df.count()
-    assert result_count == 4, f"Expected 4 rows, got {result_count}"  # noqa: PLR2004
+    assert result_count == 4, f"Expected 4 rows, got {result_count}"
 
     # Verify partition layout inherited the existing spec
     partition_dirs = {p.name for p in delta_path.iterdir() if p.is_dir() and not p.name.startswith("_")}
@@ -183,7 +183,7 @@ def test_overwrite_with_different_partition_and_schema_overwrite_succeeds(spark,
     # Verify the data and new partitioning
     result_df = spark.read.format("delta").load(str(delta_path)).sort("id")
     result_count = result_df.count()
-    assert result_count == 2, f"Expected 2 rows after overwrite, got {result_count}"  # noqa: PLR2004
+    assert result_count == 2, f"Expected 2 rows after overwrite, got {result_count}"
     assert [row.asDict() for row in result_df.collect()] == [
         {"id": 3, "category": "C", "value": 300, "region": "East"},
         {"id": 4, "category": "D", "value": 400, "region": "West"},

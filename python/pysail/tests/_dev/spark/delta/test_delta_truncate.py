@@ -56,7 +56,7 @@ def test_truncate_metadata_only_preserves_history_and_cdf(spark, tmp_path, parti
         info = next(action["commitInfo"] for action in actions if "commitInfo" in action)
         assert info["operation"] == "TRUNCATE"
         assert info["operationParameters"] == {}
-        assert int(info["operationMetrics"]["numDeletedRows"]) == 3  # noqa: PLR2004
+        assert int(info["operationMetrics"]["numDeletedRows"]) == 3
         assert {next(iter(action)) for action in actions} == {"commitInfo", "remove"}
         assert all(action["remove"]["dataChange"] for action in actions if "remove" in action)
         assert spark.table(name).schema == schema
