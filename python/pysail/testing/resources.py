@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Weighted fixture resources for assigning tests to PySpark versions."""
 
 from __future__ import annotations

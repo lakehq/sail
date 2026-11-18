@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use md5::{Digest, Md5};
 use num_bigint::BigUint;
 

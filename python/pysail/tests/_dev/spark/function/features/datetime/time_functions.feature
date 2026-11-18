@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: TIME functions (make_time, time_diff, time_trunc)
 
   # `spark.sql.timeType.enabled` is an internal Spark configuration whose default is

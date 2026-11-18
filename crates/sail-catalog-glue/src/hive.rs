@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// Hive-style table creation logic for AWS Glue Data Catalog.
 use std::collections::{HashMap, HashSet};
 

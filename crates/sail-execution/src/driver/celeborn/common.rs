@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_celeborn::common::PartitionLocation;
 use sail_celeborn::error::CelebornError;
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 
 # Semantic coverage: Apache Iceberg 1.11.0 TestRewriteDataFilesAction

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: CREATE TABLE AS SELECT
   Scenario: CREATE TABLE AS SELECT with LOCATION and COMMENT clauses
     Given variable location for temporary directory ctas_location_table

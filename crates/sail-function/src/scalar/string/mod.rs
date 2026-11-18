@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod btrim;
 pub mod common;
 pub mod decimal_format;

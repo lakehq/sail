@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Fjall transactional backend expressed through the typed store contracts.
 
 use std::borrow::Borrow;

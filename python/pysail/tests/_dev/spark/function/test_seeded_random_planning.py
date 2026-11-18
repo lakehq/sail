@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for random functions with a seed next to expressions that are planned separately.
 
 The expected values were verified on JVM Spark 4.2.0.

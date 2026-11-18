@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Measures the heap memory that a shuffle write holds while it runs.
 //!
 //! What the writer buffers cannot be seen from outside, so these tests count the bytes

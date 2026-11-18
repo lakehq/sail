@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Spark's casts between TIMESTAMP_NTZ and TIMESTAMP, which use the session time zone.
 
 use std::cell::OnceCell;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Sail's Rust global allocator, backed by mimalloc.
 
 #![no_std]

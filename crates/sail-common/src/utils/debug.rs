@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{Debug, Formatter};
 
 const MAX_BINARY_DEBUG_LENGTH: usize = 128;

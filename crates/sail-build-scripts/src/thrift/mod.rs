@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Client-only Thrift generation using Apache's in-memory protocol API.
 //!
 //! The parser accepts a subset of Thrift IDL. Only selected methods and their

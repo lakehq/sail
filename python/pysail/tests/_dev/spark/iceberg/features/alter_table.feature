@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Iceberg ALTER TABLE SET/UNSET TBLPROPERTIES
 
   Rule: CREATE TABLE TBLPROPERTIES are materialized into Iceberg metadata

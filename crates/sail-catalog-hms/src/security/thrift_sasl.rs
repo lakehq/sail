@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::io;
 
 use sail_catalog::error::{CatalogError, CatalogResult};

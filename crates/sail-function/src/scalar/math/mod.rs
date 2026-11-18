@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod java_random;
 pub mod mersenne_twister;
 pub mod partition_random;

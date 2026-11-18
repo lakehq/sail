@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake Column Mapping (DDL TBLPROPERTIES)
 
   Rule: Column mapping name mode creates proper protocol and metadata

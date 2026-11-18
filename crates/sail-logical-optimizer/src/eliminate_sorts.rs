@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::functions_aggregate::{average, bit_and_or_xor, bool_and_or, count, sum};

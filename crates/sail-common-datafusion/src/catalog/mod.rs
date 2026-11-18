@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod delta;
 pub mod display;
 pub mod iceberg;

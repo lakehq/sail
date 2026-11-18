@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Nested loop joins in distributed execution
 
   Scenario Outline: Row existence combines all probe partitions

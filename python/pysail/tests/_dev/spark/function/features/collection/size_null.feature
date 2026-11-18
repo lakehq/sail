@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: size and cardinality null handling
 
   Scenario Outline: Nullable collections with ANSI <ansi> and legacy size of null <legacy>

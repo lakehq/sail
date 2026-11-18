@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Join reorder preserves inner-join correctness contracts
 
   Scenario: Inner join reorder preserves duplicate names and null-safe equality

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """Iceberg REST DDL and cross-client metadata evolution."""
 

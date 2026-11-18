@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: array_sort higher-order function
 
   Rule: No-comparator form — natural ascending order, NULLs last

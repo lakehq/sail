@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Higher-order functions in distributed execution
 
   Scenario: Distributed zip_with resolves the deferred right array

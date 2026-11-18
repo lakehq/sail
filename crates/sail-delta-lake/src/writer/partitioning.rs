@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::array::{ArrayRef, RecordBatch};
 use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion::common::scalar::ScalarValue;

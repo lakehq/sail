@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake Default Columns
 
   Rule: Default columns are materialized during inserts

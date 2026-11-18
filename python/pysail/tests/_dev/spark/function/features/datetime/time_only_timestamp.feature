@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Time-only strings as timestamps
   Time-only LTZ timestamps use today's date in the input timezone, or the session timezone
   when none is supplied. NTZ timestamps require a date.

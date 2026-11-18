@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake checksum read path
 
   Rule: Metadata-as-data reads can use the latest checksum directly

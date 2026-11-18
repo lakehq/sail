@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Correlated EXISTS / NOT EXISTS / IN / scalar subqueries whose body has a LIMIT (with or
 without ORDER BY and OFFSET) return the same rows as Spark, which keeps the top rows for every
 outer row.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod convert_tz;
 pub mod format;
 pub mod negate_duration;

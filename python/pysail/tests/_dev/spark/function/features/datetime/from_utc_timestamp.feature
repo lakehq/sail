@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: from_utc_timestamp
 
   Rule: Type coercion

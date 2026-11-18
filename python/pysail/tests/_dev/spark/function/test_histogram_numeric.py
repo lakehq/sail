@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for the histogram_numeric aggregate function."""
 
 import pandas as pd

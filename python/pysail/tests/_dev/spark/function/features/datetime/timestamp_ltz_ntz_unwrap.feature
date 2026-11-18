@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: TIMESTAMP cast to TIMESTAMP_NTZ compares with TIMESTAMP_NTZ constants
   Spark compares CAST(timestamp AS TIMESTAMP_NTZ) with a TIMESTAMP_NTZ constant by converting the constant to TIMESTAMP in
   the session time zone when the conversion round-trips (UnwrapCastInBinaryComparison), and pushes filters on a UNION

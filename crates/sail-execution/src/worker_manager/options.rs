@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::time::Duration;
 
 use sail_common::utils::retry::RetryStrategy;

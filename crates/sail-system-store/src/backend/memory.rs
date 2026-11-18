@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Actor-owned in-memory backend.
 
 use std::borrow::{Borrow, BorrowMut};

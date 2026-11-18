@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use chumsky::prelude::*;
 
 use super::reader::{name_char, name_start};

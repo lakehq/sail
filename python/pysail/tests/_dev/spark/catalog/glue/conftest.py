@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Pytest fixtures for Glue catalog integration tests using Moto."""
 
 from __future__ import annotations

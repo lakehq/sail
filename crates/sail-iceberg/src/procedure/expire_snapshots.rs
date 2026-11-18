@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Snapshot retention and physical reachability cleanup. No candidate is a staged artifact.
 
 use std::collections::{HashMap, HashSet};

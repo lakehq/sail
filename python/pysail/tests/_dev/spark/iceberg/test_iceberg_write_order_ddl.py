@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 from urllib.parse import urlparse
 from urllib.request import url2pathname

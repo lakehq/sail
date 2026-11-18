@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use object_store::{ObjectMeta, ObjectStoreExt};
 
 use crate::delta_log::{LogStore, get_actions};

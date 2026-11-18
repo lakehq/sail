@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """Iceberg DML returns empty SQL results without repeating writes on collection."""
 

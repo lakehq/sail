@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Redundant semijoin reductions for selective dimension joins.
 //!
 //! A predicate on dimension attributes cannot be copied to a fact's foreign key.

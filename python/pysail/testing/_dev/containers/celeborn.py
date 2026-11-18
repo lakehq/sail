@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Celeborn container fixtures."""
 
 from __future__ import annotations

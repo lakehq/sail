@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for partition-sensitive functions in correlated subqueries.
 
 Spark removes the correlated equalities from a subquery when it decorrelates it, so the

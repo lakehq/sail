@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod array_intersect;
 pub mod array_position;
 pub mod arrays_zip;

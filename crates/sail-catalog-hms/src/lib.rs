@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod convert;
 mod data_type;
 mod managed_table;

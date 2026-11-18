@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake CHECK Constraints
 
   Rule: CHECK constraints are enforced on writes

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Test Delta Lake write options (write_batch_size, target_file_size) in Sail.
 """

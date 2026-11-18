@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Wire validation shared by generated client codecs.
 
 use thrift::protocol::TType;

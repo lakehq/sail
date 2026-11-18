@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 @sail-only
 Feature: XPath uses the engine version with Spark XML DOM behavior
 

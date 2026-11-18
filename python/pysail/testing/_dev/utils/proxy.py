@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """TCP endpoint proxies for integration tests.
 
 An :class:`EndpointProxy` forwards one listening endpoint to one upstream

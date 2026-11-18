@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 from contextlib import nullcontext
 from datetime import UTC, date, datetime

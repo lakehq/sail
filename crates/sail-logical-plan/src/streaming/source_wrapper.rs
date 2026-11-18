@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Formatter;
 use std::hash::Hash;
 use std::sync::Arc;

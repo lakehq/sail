@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Fixtures for native Hive Metastore catalog integration tests."""
 
 from __future__ import annotations

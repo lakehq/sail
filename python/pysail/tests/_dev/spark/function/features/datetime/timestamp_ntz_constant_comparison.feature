@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: TIMESTAMP_NTZ compares with TIMESTAMP constants in the session time zone
   Spark compares a TIMESTAMP_NTZ value with a TIMESTAMP constant by converting the constant to its wall-clock time in
   the session time zone when the conversion round-trips (UnwrapCastInBinaryComparison), so filters keep pruning.

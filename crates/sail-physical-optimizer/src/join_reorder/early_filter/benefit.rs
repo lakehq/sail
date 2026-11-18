@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Conservative work estimates for optional semijoin reductions.
 
 use datafusion::common::{ColumnStatistics, NullEquality, ScalarValue};

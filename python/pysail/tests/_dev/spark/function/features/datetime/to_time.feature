@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 @spark-4.1
 Feature: to_time (strict variant)
   Strict to_time that throws an error on invalid input.

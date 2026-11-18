@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: CAST expressions
 
   Rule: Timestamp timezone conversion

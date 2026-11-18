@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use bytes::Bytes;
 use datafusion_common::{DataFusionError, Result, internal_err};
 use object_store::ObjectStoreExt;

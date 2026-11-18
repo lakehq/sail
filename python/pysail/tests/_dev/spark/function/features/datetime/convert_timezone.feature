@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: convert_timezone
 
   Rule: Type coercion

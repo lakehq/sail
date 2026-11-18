@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: to_xml converts a struct value to an XML string
 
   Rule: Basic serialization

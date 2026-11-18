@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 @sail-only
 Feature: try_aes_encrypt with arguments resolved per row
   # Sail's extension uses Spark aes_encrypt behavior for valid rows and returns

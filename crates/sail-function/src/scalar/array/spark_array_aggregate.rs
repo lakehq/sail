@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// Spark-compatible `aggregate(array, zero, merge[, finish])` higher-order function.
 ///
 /// Spark semantics: see `ArrayAggregate` in

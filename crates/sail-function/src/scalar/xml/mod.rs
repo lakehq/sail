@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod entities;
 pub mod from_xml;
 mod parser;

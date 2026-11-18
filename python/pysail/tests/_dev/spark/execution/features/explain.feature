@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: EXPLAIN CODEGEN in distributed execution
   Scenario: EXPLAIN CODEGEN includes the distributed execution plan
     When query
