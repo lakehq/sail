@@ -791,9 +791,15 @@ mod tests {
         use datafusion::arrow::array::{Float64Array, Int64Array};
         use datafusion::physical_plan::collect;
         use sail_common_datafusion::session::shared_cte::SharedCteConfig;
+        use sail_physical_optimizer::get_physical_optimizers;
         use sail_physical_plan::shared_cte::SharedCteExec;
 
-        let session = create_session()?;
+        // The session has the physical optimizer rules of a Sail session, which keep a
+        // sort above an offset.
+        let state = SessionStateBuilder::new_from_existing(create_session()?.state())
+            .with_physical_optimizer_rules(get_physical_optimizers(Default::default()))
+            .build();
+        let session = SessionContext::new_with_state(state);
         session
             .state_ref()
             .write()
@@ -813,7 +819,7 @@ mod tests {
             (
                 "SELECT k, r FROM ((SELECT k, r FROM c LIMIT 2 OFFSET 3) UNION ALL \
                  (SELECT k, r FROM c LIMIT 4)) ORDER BY k",
-                None,
+                Some(6),
             ),
         ] {
             let query = format!("{cte} {query}");
