@@ -865,13 +865,14 @@ fn build_shared_cte_job_graph(
             PartitionUsage::Once,
             graph,
             DriverStageHandling::CreateStage,
-            None,
+            scalar_context,
         )?;
+        let plan = wrap_pending_scalar_subqueries(plan, scalar_context);
         let distribution = match graph.options.shuffle_backend {
             // The shuffle service serves each partition of the CTE as a channel, which
             // keeps the partitioning of the CTE.
             ShuffleBackendKind::Celeborn { .. } => {
-                let partitioning = plan.plan.output_partitioning();
+                let partitioning = plan.output_partitioning();
                 let channels = partitioning.partition_count();
                 match partitioning {
                     Partitioning::Hash(keys, _) => OutputDistribution::Hash {
@@ -885,7 +886,7 @@ fn build_shared_cte_job_graph(
                 OutputDistribution::RoundRobinBatch { channels: 1 }
             }
         };
-        let stage = push_stage(plan.plan, graph, distribution, TaskPlacement::Worker, mode)?;
+        let stage = push_stage(plan, graph, distribution, TaskPlacement::Worker, mode)?;
         stages.insert(Arc::as_ptr(cte), stage);
     }
     plan_job_graph_stages(
@@ -2405,6 +2406,110 @@ mod tests {
             assert_eq!(modes.len(), 2);
             assert!(modes.iter().all(|x| matches!(x, InputMode::Broadcast)));
         }
+    }
+
+    #[test]
+    fn shared_cte_is_repartitioned_for_its_references_if_its_partitions_change() {
+        use sail_physical_plan::shared_cte::share_ctes;
+
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            // The CTE has the four partitions of the probe side of the join when the query
+            // is planned, and its references in a union report them. The job runs the
+            // join in one task, since the tasks cannot share the unmatched rows of the
+            // build side.
+            let probe = UnionExec::try_new(vec![empty_plan(); 4]).unwrap();
+            let body: Arc<dyn ExecutionPlan> = Arc::new(
+                NestedLoopJoinExec::try_new(empty_plan(), probe, None, &JoinType::Left, None)
+                    .unwrap(),
+            );
+            assert_eq!(body.output_partitioning().partition_count(), 4);
+            let (cte, scan) = shared_cte(0, &body);
+            let plan = share_ctes(
+                UnionExec::try_new(vec![scan(), scan()]).unwrap(),
+                vec![(cte, body)],
+            )
+            .unwrap();
+            let graph = JobGraph::try_new(plan, options).unwrap();
+            let stage = graph
+                .stages
+                .iter()
+                .position(|x| x.plan.is::<NestedLoopJoinExec>())
+                .unwrap();
+            assert_eq!(
+                graph.stages[stage]
+                    .plan
+                    .output_partitioning()
+                    .partition_count(),
+                1
+            );
+            // Each reference reads the CTE in a stage that distributes it to four
+            // partitions again.
+            let readers = graph
+                .stages
+                .iter()
+                .filter(|x| x.inputs.iter().any(|i| i.stage == stage))
+                .collect::<Vec<_>>();
+            assert_eq!(readers.len(), 2);
+            for reader in readers {
+                assert!(reader.plan.is::<StageInputExec<usize>>());
+                assert!(matches!(
+                    reader.distribution,
+                    OutputDistribution::RoundRobinBatch { channels: 4 }
+                ));
+            }
+            let last = graph.stages.last().unwrap();
+            assert_eq!(last.plan.output_partitioning().partition_count(), 8);
+            assert!(last.inputs.iter().all(|i| i.stage != stage));
+        }
+    }
+
+    #[test]
+    fn shared_cte_keeps_scalar_subquery_context() {
+        use sail_physical_plan::shared_cte::share_ctes;
+
+        let results = ScalarSubqueryResults::new(1);
+        let predicate = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Boolean,
+            false,
+            SubqueryIndex::new(0),
+            results.clone(),
+        ));
+        let body: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, empty_plan()).unwrap());
+        let (cte, scan) = shared_cte(0, &body);
+        let shared = share_ctes(
+            UnionExec::try_new(vec![scan(), scan()]).unwrap(),
+            vec![(cte, body)],
+        )
+        .unwrap();
+        let plan = Arc::new(ScalarSubqueryExec::new(
+            shared,
+            vec![ScalarSubqueryLink {
+                plan: Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new(
+                    "keep",
+                    DataType::Boolean,
+                    true,
+                )])))),
+                index: SubqueryIndex::new(0),
+            }],
+            results.clone(),
+        ));
+        let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
+        // The stage of the CTE evaluates the filter with the result of the subquery.
+        let stages = graph
+            .stages
+            .iter()
+            .filter(|stage| stage.plan.is::<ScalarSubqueryExec>())
+            .collect::<Vec<_>>();
+        assert_eq!(stages.len(), 1);
+        let scalar = stages[0].plan.downcast_ref::<ScalarSubqueryExec>().unwrap();
+        assert!(scalar.input().is::<FilterExec>());
+        assert!(ScalarSubqueryResults::ptr_eq(scalar.results(), &results));
+        assert_eq!(graph.replicas(graph.stages.len() - 2), 2);
     }
 
     #[test]
