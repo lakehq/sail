@@ -41,6 +41,8 @@ pub struct SharedCte {
     name: String,
     /// The partitioning of the output, which the references report as their own.
     partitioning: Partitioning,
+    /// The plan of the CTE when the references were planned, if it is known.
+    plan: Option<Arc<dyn ExecutionPlan>>,
     state: Mutex<SharedCteState>,
 }
 
@@ -80,7 +82,16 @@ impl SharedCte {
             id,
             name,
             partitioning,
+            plan: None,
             state: Mutex::new(SharedCteState::default()),
+        }
+    }
+
+    /// Returns the shared CTE with the plan that its references stand for.
+    pub fn with_plan(self, plan: Arc<dyn ExecutionPlan>) -> Self {
+        Self {
+            plan: Some(plan),
+            ..self
         }
     }
 
@@ -550,6 +561,16 @@ impl SharedCteScanExec {
 
     pub fn projection(&self) -> Option<&[usize]> {
         self.projection.as_deref()
+    }
+
+    /// Returns the plan that takes the place of the reference when each reference
+    /// evaluates the CTE itself (see [`share_ctes`]), if the plan of the CTE is known.
+    pub fn inlined(&self) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        self.cte
+            .plan
+            .as_ref()
+            .map(|plan| project(Arc::clone(plan), self.projection()))
+            .transpose()
     }
 
     /// Returns the reference that reads only the rows of the given restriction, and of

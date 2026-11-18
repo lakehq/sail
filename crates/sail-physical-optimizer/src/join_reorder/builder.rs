@@ -17,6 +17,7 @@ use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::{AnalysisContext, analyze};
 use log::trace;
+use sail_physical_plan::shared_cte::SharedCteScanExec;
 
 use crate::join_reorder::JoinReorderOptions;
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode, StableColumn};
@@ -49,6 +50,7 @@ pub enum ColumnMapEntry {
 }
 
 /// Builder for constructing query graph from ExecutionPlan.
+#[derive(Clone)]
 pub struct GraphBuilder {
     /// The query graph being built.
     graph: QueryGraph,
@@ -148,6 +150,14 @@ impl GraphBuilder {
         // If it's not a reorderable join or a projection we can see through,
         // it's either a boundary (leaf of our graph) or not part of a reorderable region.
         // AggregateExec and other transformation nodes are not part of reorderable regions.
+
+        if let Some(scan) = plan.downcast_ref::<SharedCteScanExec>()
+            && let Some(inlined) = scan.inlined()?
+        {
+            // The reference is a leaf, but no region is formed where none would be formed
+            // with the plan that takes the place of the reference when the CTE is not shared.
+            self.clone().visit_plan(inlined)?;
+        }
 
         if plan.is::<AggregateExec>() {
             trace!("AggregateExec encountered - not part of reorderable region");
@@ -1081,6 +1091,67 @@ mod tests {
         // Check that two relations were created (left and right)
         assert_eq!(builder.graph.relation_count(), 2);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_shared_cte_reference_ends_the_region_where_its_plan_ends_it() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_plan::aggregates::{AggregateMode, PhysicalGroupBy};
+        use datafusion::physical_plan::joins::PartitionMode;
+        use datafusion::physical_plan::{Partitioning, Statistics};
+        use sail_physical_plan::shared_cte::SharedCte;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let key = || Arc::new(Column::new("k", 0)) as Arc<dyn PhysicalExpr>;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let aggregate: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![(key(), "k".to_string())]),
+            vec![],
+            vec![],
+            Arc::clone(&input),
+            Arc::clone(&schema),
+        )?);
+        let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(true)))),
+            Arc::clone(&input),
+        )?);
+        let reference = |body: &Arc<dyn ExecutionPlan>| -> Arc<SharedCteScanExec> {
+            let cte = SharedCte::new(0, "c".to_string(), Partitioning::UnknownPartitioning(1))
+                .with_plan(Arc::clone(body));
+            Arc::new(SharedCteScanExec::new(
+                Arc::new(cte),
+                Arc::clone(&schema),
+                &Statistics::new_unknown(&schema),
+                Some(vec![0]),
+            ))
+        };
+        let relations = |left: Arc<dyn ExecutionPlan>| -> Result<Option<usize>> {
+            let join = Arc::new(HashJoinExec::try_new(
+                left,
+                Arc::new(EmptyExec::new(Arc::clone(&schema))),
+                vec![(key(), key())],
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::Auto,
+                NullEquality::NullEqualsNothing,
+                false,
+            )?);
+            let region = GraphBuilder::default().build(join)?;
+            Ok(region.map(|(graph, _)| graph.relation_count()))
+        };
+        for (body, expected) in [(aggregate, None), (filter, Some(2))] {
+            let reference = reference(&body);
+            let Some(inlined) = reference.inlined()? else {
+                unreachable!("the plan of the CTE is known");
+            };
+            // The plan that takes the place of the reference is a projection of plain
+            // columns over the body, which is seen through.
+            assert_eq!(relations(inlined)?, expected);
+            assert_eq!(relations(reference)?, expected);
+        }
         Ok(())
     }
 
