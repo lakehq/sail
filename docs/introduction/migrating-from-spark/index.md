@@ -26,11 +26,11 @@ To install the CLI:
 ::: code-group
 
 ```bash [uv]
-uv tool install https://migrate.lakesail.com/dist/spark_to_sail-0.1.0-py3-none-any.whl
+uv tool install https://migrate.lakesail.com/dist/spark_to_sail-0.2.0-py3-none-any.whl
 ```
 
 ```bash [pip]
-pip install https://migrate.lakesail.com/dist/spark_to_sail-0.1.0-py3-none-any.whl
+pip install https://migrate.lakesail.com/dist/spark_to_sail-0.2.0-py3-none-any.whl
 ```
 
 :::

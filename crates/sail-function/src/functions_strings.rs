@@ -1,4 +1,6 @@
-// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/strings.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/strings.rs
+
 #![expect(
     dead_code,
     reason = "Copied from DataFusion as-is; only some helpers are used by Sail so far."

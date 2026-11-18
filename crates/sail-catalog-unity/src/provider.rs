@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,7 +16,7 @@ use sail_catalog::provider::{
     CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
     LakeSourceCreateMetadataMode, Namespace, PartitionTransform,
 };
-use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
+use sail_catalog::utils::{get_property, quote_names_if_needed, quote_namespace_if_needed};
 use sail_common::utils::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
@@ -55,7 +45,6 @@ pub struct UnityCatalogOptions {
     pub default_catalog: String,
     pub uri: String,
     pub credentials: Arc<dyn CatalogCredentials>,
-    pub quote_object_name: bool,
 }
 
 impl UnityCatalogProvider {
@@ -91,14 +80,6 @@ impl UnityCatalogProvider {
         ))
     }
 
-    fn object_name(&self, name: &str) -> String {
-        if self.options.quote_object_name {
-            quote_name_if_needed(name)
-        } else {
-            name.to_string()
-        }
-    }
-
     fn get_catalog_and_schema_name(
         &self,
         namespace: &Namespace,
@@ -124,9 +105,9 @@ impl UnityCatalogProvider {
         table: &str,
     ) -> CatalogResult<String> {
         let request = r#gen::CreateStagingTable {
-            name: self.object_name(table),
-            catalog_name: self.object_name(catalog_name),
-            schema_name: self.object_name(schema_name),
+            name: table.to_string(),
+            catalog_name: catalog_name.to_string(),
+            schema_name: schema_name.to_string(),
         };
         let response = match client.create_staging_table(request).await {
             Ok(response) => response,
@@ -143,12 +124,12 @@ impl UnityCatalogProvider {
         })
     }
 
-    fn qualified_object_name(&self, names: &[&str]) -> String {
-        names
-            .iter()
-            .map(|name| self.object_name(name))
-            .collect::<Vec<_>>()
-            .join(".")
+    /// Returns full name of an object for the REST API (`catalog.schema.table`).
+    ///
+    /// Names are joined without SQL quoting. Unity Catalog does not parse backticks in
+    /// full names, so `` main.`a-b` `` would refer to a schema named `` `a-b` `` instead of `a-b`.
+    fn full_name(names: &[&str]) -> String {
+        names.join(".")
     }
 
     fn schema_info_to_database_status(
@@ -389,8 +370,8 @@ impl CatalogProvider for UnityCatalogProvider {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
 
         let request = r#gen::CreateSchema {
-            catalog_name: self.object_name(&catalog_name),
-            name: self.object_name(&schema_name),
+            catalog_name: catalog_name.clone(),
+            name: schema_name.clone(),
             comment,
             properties: if props.is_empty() {
                 None
@@ -429,9 +410,9 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        let full_name = self.qualified_object_name(&[&catalog_name, &schema_name]);
+        let full_name = Self::full_name(&[&catalog_name, &schema_name]);
 
-        let result = client.get_schema(full_name.clone()).await;
+        let result = client.get_schema(full_name).await;
 
         match result {
             Ok(response) => {
@@ -443,7 +424,10 @@ impl CatalogProvider for UnityCatalogProvider {
                 ))
             }
             Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {
-                Err(CatalogError::NotFound(CatalogObject::Schema, full_name))
+                Err(CatalogError::NotFound(
+                    CatalogObject::Schema,
+                    quote_names_if_needed(&[&catalog_name, &schema_name]),
+                ))
             }
             Err(e) => Err(CatalogError::External(format!("Failed to get schema: {e}"))),
         }
@@ -468,9 +452,7 @@ impl CatalogProvider for UnityCatalogProvider {
                 )));
             }
         };
-        let result = client
-            .list_schemas(self.object_name(&catalog_name), None, None)
-            .await;
+        let result = client.list_schemas(catalog_name.clone(), None, None).await;
 
         match result {
             Ok(response) => {
@@ -503,7 +485,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        let full_name = self.qualified_object_name(&[&catalog_name, &schema_name]);
+        let full_name = Self::full_name(&[&catalog_name, &schema_name]);
 
         let result = client.delete_schema(full_name, Some(cascade)).await;
 
@@ -646,9 +628,9 @@ impl CatalogProvider for UnityCatalogProvider {
         };
 
         let request = r#gen::CreateTable {
-            name: self.object_name(table),
-            catalog_name: self.object_name(&catalog_name),
-            schema_name: self.object_name(&schema_name),
+            name: table.to_string(),
+            catalog_name: catalog_name.clone(),
+            schema_name: schema_name.clone(),
             table_type: Box::new(table_type),
             data_source_format: Box::new(data_source_format),
             columns: unity_columns,
@@ -696,9 +678,9 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        let full_name = self.qualified_object_name(&[&catalog_name, &schema_name, table]);
+        let full_name = Self::full_name(&[&catalog_name, &schema_name, table]);
 
-        let result = client.get_table(full_name.clone(), None, None).await;
+        let result = client.get_table(full_name, None, None).await;
 
         match result {
             Ok(response) => {
@@ -706,7 +688,10 @@ impl CatalogProvider for UnityCatalogProvider {
                 self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
             }
             Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {
-                Err(CatalogError::NotFound(CatalogObject::Table, full_name))
+                Err(CatalogError::NotFound(
+                    CatalogObject::Table,
+                    quote_names_if_needed(&[&catalog_name, &schema_name, table]),
+                ))
             }
             Err(e) => Err(CatalogError::External(format!("Failed to get table: {e}"))),
         }
@@ -721,12 +706,7 @@ impl CatalogProvider for UnityCatalogProvider {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
 
         let result = client
-            .list_tables(
-                self.object_name(&catalog_name),
-                self.object_name(&schema_name),
-                None,
-                None,
-            )
+            .list_tables(catalog_name.clone(), schema_name.clone(), None, None)
             .await;
 
         match result {
@@ -767,7 +747,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        let full_name = self.qualified_object_name(&[&catalog_name, &schema_name, table]);
+        let full_name = Self::full_name(&[&catalog_name, &schema_name, table]);
 
         match client.delete_table(full_name).await {
             Ok(_) => Ok(()),
@@ -1014,7 +994,6 @@ impl CatalogProvider for UnityCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        let full_name = self.qualified_object_name(&[&catalog_name, &schema_name, table]);
 
         match client.get_commits(request).await {
             Ok(response) => {
@@ -1040,7 +1019,10 @@ impl CatalogProvider for UnityCatalogProvider {
                 )))
             }
             Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {
-                Err(CatalogError::NotFound(CatalogObject::Table, full_name))
+                Err(CatalogError::NotFound(
+                    CatalogObject::Table,
+                    quote_names_if_needed(&[&catalog_name, &schema_name, table]),
+                ))
             }
             Err(e) if e.status() == Some(reqwest::StatusCode::NOT_IMPLEMENTED) => {
                 Err(CatalogError::NotSupported(format!(
@@ -1109,6 +1091,8 @@ fn parse_data_source_format(format: &str) -> CatalogResult<r#gen::DataSourceForm
 mod tests {
     use sail_catalog::credentials::{CatalogCredentials, EmptyCatalogCredentials};
     use secrecy::ExposeSecret;
+    use wiremock::matchers::{method, path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
     use crate::config::UnityCatalogConfig;
@@ -1125,19 +1109,14 @@ mod tests {
             default_catalog: default_catalog.into(),
             uri: config.uri,
             credentials,
-            quote_object_name: true,
         }
     }
 
-    fn empty_options(
-        default_catalog: impl Into<String>,
-        quote_object_name: bool,
-    ) -> UnityCatalogOptions {
+    fn empty_options(default_catalog: impl Into<String>) -> UnityCatalogOptions {
         UnityCatalogOptions {
             default_catalog: default_catalog.into(),
             uri: DEFAULT_URI.to_string(),
             credentials: Arc::new(EmptyCatalogCredentials),
-            quote_object_name,
         }
     }
 
@@ -1259,49 +1238,189 @@ mod tests {
         assert_eq!(provider.options.uri, "https://test.databricks.com");
     }
 
-    #[test]
-    fn test_provider_quotes_object_names_by_default() {
-        let config = UnityCatalogConfig::new(None, &None, None).unwrap();
-        let provider = UnityCatalogProvider::new(
-            "test".to_string(),
-            options_from_config("catalog.name", config),
-        )
-        .unwrap();
+    fn mock_provider(server: &MockServer, default_catalog: &str) -> UnityCatalogProvider {
+        let options = UnityCatalogOptions {
+            uri: server.uri(),
+            ..empty_options(default_catalog)
+        };
+        UnityCatalogProvider::new("test".to_string(), options).unwrap()
+    }
 
-        assert_eq!(provider.options.default_catalog, "catalog.name");
+    /// Returns the method and the percent-decoded path and query of each received request.
+    async fn received_targets(server: &MockServer) -> Vec<String> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| {
+                let url = &request.url;
+                let target = match url.query() {
+                    Some(query) => format!("{}?{query}", url.path()),
+                    None => url.path().to_string(),
+                };
+                let target = percent_encoding::percent_decode_str(&target)
+                    .decode_utf8()
+                    .unwrap();
+                format!("{} {target}", request.method)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_schema_requests_do_not_quote_names() {
+        let server = MockServer::start().await;
+        let schema = serde_json::json!({"catalog_name": "cat-x", "name": "a12b34cd-5678"});
+        Mock::given(method("POST"))
+            .and(path("/schemas"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&schema))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/schemas"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"schemas": [schema]})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/schemas/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&schema))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path_regex("^/schemas/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let catalog = Namespace::try_from(vec!["cat-x"]).unwrap();
+        let database = Namespace::try_from(vec!["cat-x", "a12b34cd-5678"]).unwrap();
+        provider
+            .create_database(
+                &database,
+                CreateDatabaseOptions {
+                    comment: None,
+                    location: None,
+                    if_not_exists: false,
+                    properties: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        provider.get_database(&database).await.unwrap();
+        provider.list_databases(Some(&catalog)).await.unwrap();
+        provider
+            .drop_database(
+                &database,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: false,
+                },
+            )
+            .await
+            .unwrap();
+
         assert_eq!(
-            provider.object_name(&provider.options.default_catalog),
-            "`catalog.name`"
+            received_targets(&server).await,
+            vec![
+                "POST /schemas",
+                "GET /schemas/cat-x.a12b34cd-5678",
+                "GET /schemas?catalog_name=cat-x",
+                "DELETE /schemas/cat-x.a12b34cd-5678?force=false",
+            ]
         );
-        assert_eq!(provider.object_name("schema.name"), "`schema.name`");
+        let requests = server.received_requests().await.unwrap();
+        let body: serde_json::Value = requests[0].body_json().unwrap();
+        assert_eq!(body["catalog_name"], "cat-x");
+        assert_eq!(body["name"], "a12b34cd-5678");
+    }
+
+    #[tokio::test]
+    async fn test_table_requests_do_not_quote_names() {
+        let server = MockServer::start().await;
+        // OneLake catalog names contain a dot, which must not be quoted either.
+        let table = serde_json::json!({
+            "catalog_name": "lakehouse.Lakehouse",
+            "schema_name": "a12b34cd-5678",
+            "name": "dash-table",
+            "columns": []
+        });
+        Mock::given(method("GET"))
+            .and(path("/tables"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"tables": [table]})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/tables/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&table))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path_regex("^/tables/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "lakehouse.Lakehouse");
+        let database = Namespace::try_from(vec!["a12b34cd-5678"]).unwrap();
+        provider.get_table(&database, "dash-table").await.unwrap();
+        provider.list_tables(&database).await.unwrap();
+        provider
+            .drop_table(
+                &database,
+                "dash-table",
+                DropTableOptions {
+                    if_exists: false,
+                    purge: false,
+                },
+            )
+            .await
+            .unwrap();
+
         assert_eq!(
-            provider.qualified_object_name(&["catalog.name", "schema.name", "table.name"]),
-            "`catalog.name`.`schema.name`.`table.name`"
-        );
-        let namespace = Namespace::try_from(vec!["schema.name"]).unwrap();
-        assert_eq!(
-            provider.get_catalog_and_schema_name(&namespace).unwrap(),
-            ("catalog.name".to_string(), "schema.name".to_string())
+            received_targets(&server).await,
+            vec![
+                "GET /tables/lakehouse.Lakehouse.a12b34cd-5678.dash-table",
+                "GET /tables?catalog_name=lakehouse.Lakehouse&schema_name=a12b34cd-5678",
+                "DELETE /tables/lakehouse.Lakehouse.a12b34cd-5678.dash-table",
+            ]
         );
     }
 
-    #[test]
-    fn test_provider_can_preserve_unquoted_object_names() {
-        let provider = UnityCatalogProvider::new(
-            "test".to_string(),
-            empty_options("lakehouse.Lakehouse", false),
-        )
-        .unwrap();
+    #[tokio::test]
+    async fn test_not_found_errors_quote_names_for_display() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "error_code": "NOT_FOUND",
+                "message": "not found"
+            })))
+            .mount(&server)
+            .await;
 
-        assert_eq!(provider.options.default_catalog, "lakehouse.Lakehouse");
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["a12b34cd-5678"]).unwrap();
+        let schema_error = provider.get_database(&database).await.unwrap_err();
+        let table_error = provider.get_table(&database, "t").await.unwrap_err();
+
         assert_eq!(
-            provider.object_name(&provider.options.default_catalog),
-            "lakehouse.Lakehouse"
+            schema_error.to_string(),
+            "Schema not found: main.`a12b34cd-5678`"
         );
-        assert_eq!(provider.object_name("schema.name"), "schema.name");
         assert_eq!(
-            provider.qualified_object_name(&["catalog.name", "schema.name", "table.name"]),
-            "catalog.name.schema.name.table.name"
+            table_error.to_string(),
+            "Table not found: main.`a12b34cd-5678`.t"
+        );
+        assert_eq!(
+            received_targets(&server).await,
+            vec![
+                "GET /schemas/main.a12b34cd-5678",
+                "GET /tables/main.a12b34cd-5678.t",
+            ]
         );
     }
 
@@ -1329,7 +1448,7 @@ mod tests {
         .unwrap();
 
         let provider =
-            UnityCatalogProvider::new("test".to_string(), empty_options("catalog", true)).unwrap();
+            UnityCatalogProvider::new("test".to_string(), empty_options("catalog")).unwrap();
 
         let mut tables = response.tables.unwrap_or_default().into_iter();
         let empty_table = provider
@@ -1378,7 +1497,7 @@ mod tests {
         .unwrap();
 
         let provider =
-            UnityCatalogProvider::new("test".to_string(), empty_options("catalog", true)).unwrap();
+            UnityCatalogProvider::new("test".to_string(), empty_options("catalog")).unwrap();
 
         let status = provider
             .table_info_to_table_status(response, "catalog", "schema")
@@ -1419,7 +1538,7 @@ mod tests {
         .unwrap();
 
         let provider =
-            UnityCatalogProvider::new("test".to_string(), empty_options("catalog", true)).unwrap();
+            UnityCatalogProvider::new("test".to_string(), empty_options("catalog")).unwrap();
 
         let status = provider
             .table_info_to_table_status(response, "catalog", "schema")

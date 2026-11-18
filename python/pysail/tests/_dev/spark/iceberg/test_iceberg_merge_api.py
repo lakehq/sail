@@ -64,9 +64,6 @@ def _assert_rows_and_schema(frame, expected):
 
 
 def _merge_all_clauses(spark, name, source, api):
-    matched_delete_id = 2
-    target_update_id = 3
-    target_delete_id = 4
     if api == "sql":
         spark.sql(f"""MERGE INTO {name} AS t USING {SOURCE_VIEW} AS s ON t.id = s.id
             WHEN MATCHED AND t.id = 1 THEN UPDATE SET *
@@ -80,13 +77,13 @@ def _merge_all_clauses(spark, name, source, api):
             .mergeInto(name, F.col(f"{name}.id") == F.col("s.id"))
             .whenMatched(F.col(f"{name}.id") == 1)
             .updateAll()
-            .whenMatched(F.col(f"{name}.id") == matched_delete_id)
+            .whenMatched(F.col(f"{name}.id") == 2)
             .delete()
             .whenNotMatched()
             .insertAll()
-            .whenNotMatchedBySource(F.col(f"{name}.id") == target_update_id)
+            .whenNotMatchedBySource(F.col(f"{name}.id") == 3)
             .update({"dep": F.lit("invalid")})
-            .whenNotMatchedBySource(F.col(f"{name}.id") == target_delete_id)
+            .whenNotMatchedBySource(F.col(f"{name}.id") == 4)
             .delete()
             .merge()
         )
@@ -106,7 +103,7 @@ def test_merge_all_clauses_aligns_reordered_columns(spark, merge_table, api, ini
     before = _find_latest_metadata(path)
     before_entries = _current_manifest_entries(path, ManifestContent.DATA) if initial_state != "empty-target" else []
     before_paths = {entry.data_file.file_path for entry in before_entries}
-    before_lineage = _current_row_lineage(path) if version == 3 and before_entries else {}  # noqa: PLR2004
+    before_lineage = _current_row_lineage(path) if version == 3 and before_entries else {}
     changed_ids = {3, 4} if initial_state == "empty-source" else {1, 2, 3, 4}
     expected_deletes = {
         (entry.data_file.file_path, position)
@@ -145,7 +142,7 @@ def test_merge_all_clauses_aligns_reordered_columns(spark, merge_table, api, ini
         assert sum(entry.data_file.record_count for entry in after_entries) == len(expected)
     else:
         assert before_paths <= after_paths
-        if version == 2:  # noqa: PLR2004
+        if version == 2:
             assert all(entry.data_file.content == DataFileContent.POSITION_DELETES for entry in delete_entries)
             assert all(entry.data_file.file_format == FileFormat.PARQUET for entry in delete_entries)
             actual_deletes = {
@@ -162,7 +159,7 @@ def test_merge_all_clauses_aligns_reordered_columns(spark, merge_table, api, ini
             }
         assert actual_deletes == expected_deletes
 
-    if version == 3:  # noqa: PLR2004
+    if version == 3:
         lineage = _current_row_lineage(path)
         assert set(lineage) == {row[0] for row in expected}
         previous_ids = {row_id for row_id, _ in before_lineage.values()}

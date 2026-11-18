@@ -32,7 +32,7 @@ def test_rest_identifier_fields(spark, reference_catalog):
             update.set_identifier_fields("key")
         spark.sql(f"ALTER TABLE {table} DROP IDENTIFIER FIELDS key")
         assert reference_catalog.load_table(table).schema().identifier_field_ids == []
-        assert reference_catalog.load_table(table).scan().to_arrow().num_rows == 2  # noqa: PLR2004
+        assert reference_catalog.load_table(table).scan().to_arrow().num_rows == 2
     finally:
         spark.sql(f"DROP NAMESPACE {namespace} CASCADE")
 
@@ -73,13 +73,13 @@ def test_rest_lakehouse_ddl(spark, reference_catalog):
         location = reference.location()
         spark.sql(f"DROP TABLE {table}")
         spark.sql(f"CREATE TABLE {table} USING iceberg LOCATION '{location}'")
-        assert spark.table(table).count() == 3  # noqa: PLR2004
+        assert spark.table(table).count() == 3
         assert reference_catalog.load_table(table).schema() == reference.schema()
         spark.sql(f"DROP TABLE {table}")
         table = f"{namespace}.ctas"
         spark.sql(f"CREATE TABLE {table} USING iceberg AS SELECT 4 AS id")
         spark.sql(f"CREATE TABLE IF NOT EXISTS {table} (other INT) USING iceberg")
-        assert spark.table(table).first().id == 4  # noqa: PLR2004
+        assert spark.table(table).first().id == 4
     finally:
         spark.sql(f"DROP NAMESPACE {namespace} CASCADE")
 
@@ -146,9 +146,9 @@ def test_rest_invalid_ddl_preserves_metadata(spark, reference_catalog):
             assert reference_catalog.load_table(table).metadata_location == before
         spark.sql(f"ALTER TABLE {table} SET TBLPROPERTIES ('format-version'='3')")
         spark.sql(f"ALTER TABLE {table} ALTER COLUMN id SET DEFAULT 7")
-        assert reference_catalog.load_table(table).schema().find_field("id").write_default == 7  # noqa: PLR2004
+        assert reference_catalog.load_table(table).schema().find_field("id").write_default == 7
         spark.sql(f"INSERT INTO {table} VALUES (DEFAULT)")
-        assert spark.table(table).first().id == 7  # noqa: PLR2004
+        assert spark.table(table).first().id == 7
     finally:
         spark.sql(f"DROP NAMESPACE {namespace} CASCADE")
 
@@ -242,7 +242,7 @@ def test_rest_write_order(spark, reference_catalog):
         spark.sql(f"CREATE TABLE {table} (id INT, value INT) USING iceberg")
         exercise_iceberg_write_order(spark, table)
         loaded = reference_catalog.load_table(table)
-        assert len(loaded.sort_order().fields) == 2  # noqa: PLR2004
+        assert len(loaded.sort_order().fields) == 2
         assert loaded.sort_order().fields[0].direction.value == "desc"
         assert loaded.properties["write.distribution-mode"] == "range"
         spark.sql(f"ALTER TABLE {table} WRITE UNORDERED")

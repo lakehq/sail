@@ -52,15 +52,17 @@ impl Actor for TaskRunnerActor {
                 message,
                 cause,
             } => self.handle_report_task_status(ctx, key, status, message, cause),
-            TaskRunnerMessage::ProbePendingLocalStream { key } => {
-                self.handle_probe_pending_local_stream(key)
+            TaskRunnerMessage::ProbePendingLocalStream { key, probe } => {
+                self.handle_probe_pending_local_stream(key, probe)
             }
             TaskRunnerMessage::CreateLocalStream {
                 key,
+                channels,
                 replicas,
+                bounded,
                 schema,
                 result,
-            } => self.handle_create_local_stream(key, replicas, schema, result),
+            } => self.handle_create_local_stream(key, channels, replicas, bounded, schema, result),
             TaskRunnerMessage::CreateStorageStream {
                 key,
                 schema,
@@ -79,14 +81,14 @@ impl Actor for TaskRunnerActor {
                 schema,
                 result,
             } => self.handle_fetch_driver_stream(ctx, key, schema, result),
-            TaskRunnerMessage::FetchWorkerStream {
+            TaskRunnerMessage::FetchWorkerStreams {
                 worker_id,
-                key,
+                keys,
                 schema,
                 result,
-            } => self.handle_fetch_worker_stream(ctx, worker_id, key, schema, result),
-            TaskRunnerMessage::FetchLocalStream { key, result } => {
-                self.handle_fetch_local_stream(ctx, key, result)
+            } => self.handle_fetch_worker_streams(ctx, worker_id, keys, schema, result),
+            TaskRunnerMessage::FetchLocalStreams { keys, result } => {
+                self.handle_fetch_local_streams(ctx, keys, result)
             }
             TaskRunnerMessage::FetchStorageStream {
                 key,

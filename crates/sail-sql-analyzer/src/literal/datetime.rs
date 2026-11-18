@@ -4,6 +4,7 @@ use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use chumsky::Parser;
 use chumsky::extra::ParserExtra;
 use chumsky::prelude::{any, choice, end, just, one_of};
+use sail_common::utils::string::SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS;
 
 use crate::error::{SqlError, SqlResult};
 
@@ -228,18 +229,29 @@ where
         })
 }
 
+/// Creates a parser for a date string, following Spark's `stringToDate`.
+///
+/// The date is `[+-]yyyy`, `[+-]yyyy-[m]m`, or `[+-]yyyy-[m]m-[d]d`, and leading and
+/// trailing whitespace and ISO control characters are ignored.
 pub fn create_date_parser<'a, E>() -> impl Parser<'a, &'a str, DateValue, E>
 where
     E: ParserExtra<'a, &'a str> + 'a,
 {
-    // A date value is allowed to be followed by an arbitrary string which is ignored.
-    date()
-        .then_ignore(
-            any()
-                .filter(|c: &char| c.is_ascii_whitespace())
-                .then(any().repeated())
-                .or_not(),
-        )
+    let padding = any()
+        .filter(|c: &char| SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS.contains(*c))
+        .repeated();
+    let complete_date = signed(4, 7)
+        .then_ignore(just('-'))
+        .then(unsigned(1, 2))
+        .then_ignore(just('-'))
+        .then(unsigned(1, 2))
+        // A complete date may be followed by a space or `T` and an arbitrary string, which is ignored.
+        .then_ignore(one_of([' ', 'T']).then(any().repeated()).or_not())
+        .map(|((year, month), day)| DateValue { year, month, day });
+
+    // If the date is not complete, nothing may follow it.
+    choice((complete_date, date()))
+        .padded_by(padding)
         .then_ignore(end())
 }
 

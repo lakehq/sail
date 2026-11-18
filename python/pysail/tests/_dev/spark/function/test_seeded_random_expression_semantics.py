@@ -166,7 +166,7 @@ def test_correlated_aggregate_can_replay_reproducible_inputs(spark, expression):
     query = f"""SELECT id, k, (SELECT count(*) FROM range(0, 3, 1, 1) i WHERE i.id < o.k) AS n
     FROM (SELECT id, {expression} AS k FROM range(0, 12, 1, 1)) o"""  # noqa: S608
     rows = spark.sql(query).collect()
-    assert len(rows) == 12  # noqa: PLR2004
+    assert len(rows) == 12
     assert all(row.n == sum(value < row.k for value in range(3)) for row in rows)
 
 
@@ -189,5 +189,5 @@ def test_correlated_aggregate_replays_cached_nonnull_seeds(spark, function):
     query = f"""SELECT k, (SELECT count(*) FROM VALUES ('!'), ('~') i(v) WHERE i.v < o.k) AS n
     FROM (SELECT concat(CAST(rand(42) AS STRING), {function}) AS k FROM range(0, 12, 1, 1)) o"""  # noqa: S608
     rows = spark.sql(query).collect()
-    assert len(rows) == 12  # noqa: PLR2004
+    assert len(rows) == 12
     assert all(row.n == 1 for row in rows)

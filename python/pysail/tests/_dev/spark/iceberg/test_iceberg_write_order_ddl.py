@@ -41,13 +41,13 @@ def test_write_order_metadata_and_data_files(spark, tmp_path):
         spark.sql(f"ALTER TABLE {table} WRITE LOCALLY ORDERED BY (value DESC)")
         local = _find_latest_metadata(tmp_path)
         assert local["properties"]["write.distribution-mode"] == "range"
-        assert current_order(local)["fields"][0]["source-id"] == 2  # noqa: PLR2004
+        assert current_order(local)["fields"][0]["source-id"] == 2
         spark.sql(f"ALTER TABLE {table} WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY bucket(4, id)")
         distributed = _find_latest_metadata(tmp_path)
         assert distributed["properties"]["write.distribution-mode"] == "hash"
         assert current_order(distributed)["fields"][0]["transform"] == "bucket[4]"
         spark.sql(f"INSERT INTO {table} VALUES (5, 5)")
-        assert spark.table(table).count() == 5  # noqa: PLR2004
+        assert spark.table(table).count() == 5
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
@@ -123,7 +123,7 @@ def test_sorted_partitioned_table_row_level_operations(spark, tmp_path, mode, ve
         )
         spark.sql(f"UPDATE {table} SET value=30 WHERE id=3")
         assert [tuple(row) for row in spark.table(table).orderBy("id").collect()] == [(1, 10), (3, 30), (4, 40)]
-        if version == 2 and mode == "merge-on-read":  # noqa: PLR2004
+        if version == 2 and mode == "merge-on-read":
             reference = StaticTable.from_metadata(
                 _latest_metadata_path(tmp_path).as_uri(), properties=pyiceberg_file_io_properties()
             )

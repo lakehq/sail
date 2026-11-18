@@ -9830,7 +9830,10 @@ mod tests {
                 keys: vec![Arc::from(key)],
                 channels: 4,
             },
-            locator: TaskOutputLocator::Pipelined { replicas: 1 },
+            locator: TaskOutputLocator::Pipelined {
+                replicas: 1,
+                bounded: false,
+            },
         };
 
         let ctx = TaskContext::default();
@@ -9881,7 +9884,10 @@ mod tests {
             .map_err(|error| plan_datafusion_err!("failed to decode task output: {error}"))?;
         let output = TaskOutput {
             distribution,
-            locator: TaskOutputLocator::Pipelined { replicas: 1 },
+            locator: TaskOutputLocator::Pipelined {
+                replicas: 1,
+                bounded: false,
+            },
         };
 
         let actual = output

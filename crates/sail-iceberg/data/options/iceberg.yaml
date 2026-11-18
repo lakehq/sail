@@ -1,7 +1,7 @@
 # References:
-#   TableProperties:    https://raw.githubusercontent.com/apache/iceberg/apache-iceberg-1.10.1/core/src/main/java/org/apache/iceberg/TableProperties.java
-#   SparkReadOptions:   https://raw.githubusercontent.com/apache/iceberg/apache-iceberg-1.10.1/spark/v3.5/spark/src/main/java/org/apache/iceberg/spark/SparkReadOptions.java
-#   SparkWriteOptions:  https://raw.githubusercontent.com/apache/iceberg/apache-iceberg-1.10.1/spark/v3.5/spark/src/main/java/org/apache/iceberg/spark/SparkWriteOptions.java
+#   TableProperties:    https://github.com/apache/iceberg/blob/apache-iceberg-1.10.1/core/src/main/java/org/apache/iceberg/TableProperties.java
+#   SparkReadOptions:   https://github.com/apache/iceberg/blob/apache-iceberg-1.10.1/spark/v3.5/spark/src/main/java/org/apache/iceberg/spark/SparkReadOptions.java
+#   SparkWriteOptions:  https://github.com/apache/iceberg/blob/apache-iceberg-1.10.1/spark/v3.5/spark/src/main/java/org/apache/iceberg/spark/SparkWriteOptions.java
 
 ### Read-Only Options ###
 # Snapshot selectors are mutually exclusive. Legacy Sail aliases remain supported.
@@ -129,7 +129,9 @@
 ### Write-Only Options ###
 
 - key: snapshot_properties
-  description: Per-write snapshot summary annotations from snapshot-property.<key> options.
+  description: |
+    Per-write snapshot summary annotations from snapshot-property.<key> options.
+    Each overrides the session setting spark.sql.iceberg.snapshot-property.<key>.
   supported: true
   rust_type: "std::collections::BTreeMap<String, String>"
   scopes: [write]

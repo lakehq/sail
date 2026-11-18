@@ -4,18 +4,21 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::TaskContext;
-use futures::future::try_join_all;
+use futures::future::{join_all, try_join_all};
+use indexmap::IndexMap;
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
 
 use crate::error::ExecutionResult;
-use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskKey, TaskStreamKey, TaskStreamKeySet, WorkerId};
 use crate::stream::merge::merged_stream;
 use crate::stream::reader::{TaskStreamReader, TaskStreamSource};
 use crate::stream::writer::{
     MultiChannelTaskStreamSink, TaskStreamChannelSink, TaskStreamSink, TaskStreamWriter,
 };
-use crate::task::definition::{TaskInput, TaskInputLocator, TaskOutput, TaskOutputLocator};
+use crate::task::definition::{
+    TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputLocator,
+};
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
 pub struct TaskStreamFactory {
@@ -118,15 +121,19 @@ impl TaskStreamAccessor {
 
     async fn create_local_stream(
         &self,
-        key: TaskStreamKey,
+        key: TaskKey,
+        channels: usize,
         replicas: usize,
+        bounded: bool,
         schema: SchemaRef,
-    ) -> Result<Box<dyn TaskStreamChannelSink>> {
+    ) -> Result<Box<dyn TaskStreamSink>> {
         let (result, rx) = oneshot::channel();
         self.receive(
             TaskRunnerMessage::CreateLocalStream {
                 key,
+                channels,
                 replicas,
+                bounded,
                 schema,
                 result,
             },
@@ -191,17 +198,17 @@ impl TaskStreamAccessor {
         .await
     }
 
-    async fn fetch_worker_stream(
+    async fn fetch_worker_streams(
         &self,
         worker_id: WorkerId,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         schema: SchemaRef,
     ) -> Result<TaskStreamSource> {
         let (result, rx) = oneshot::channel();
         self.receive(
-            TaskRunnerMessage::FetchWorkerStream {
+            TaskRunnerMessage::FetchWorkerStreams {
                 worker_id,
-                key,
+                keys,
                 schema,
                 result,
             },
@@ -300,12 +307,10 @@ impl TaskStreamReader for MultiChannelTaskStreamReader {
                 let keys = keys.get(partition).ok_or_else(|| {
                     DataFusionError::Execution(format!("input partition {partition} not found"))
                 })?;
-                try_join_all(keys.iter().map(|(worker_id, key)| {
-                    self.streams.fetch_worker_stream(
-                        *worker_id,
-                        key.task_stream_key(self.key.job_id, self.input.stage),
-                        self.schema.clone(),
-                    )
+                let keys = worker_key_sets(self.key.job_id, self.input.stage, keys);
+                try_join_all(keys.into_iter().map(|(worker_id, keys)| {
+                    self.streams
+                        .fetch_worker_streams(worker_id, keys, self.schema.clone())
                 }))
                 .await?
             }
@@ -340,20 +345,85 @@ impl TaskStreamReader for MultiChannelTaskStreamReader {
         Ok(merged_stream(self.schema.clone(), streams))
     }
 
+    fn close_unopened(&self) -> bool {
+        // Pipelined streams stay in the memory of the producing tasks until they are read.
+        matches!(
+            self.input.locator.as_ref(),
+            TaskInputLocator::Driver { .. } | TaskInputLocator::Worker { .. }
+        )
+    }
+
     async fn release(&self, partition: usize) -> Result<()> {
         match self.input.locator.as_ref() {
-            // Opening takes this consumer's replica of each stream, and dropping it
-            // closes the replica for the writer. Tasks on the driver fetch worker
-            // streams lazily, so this does not reach those producers; driver stages
-            // (commits, catalog commands, coordinators) read all of their input.
-            TaskInputLocator::Driver { .. } | TaskInputLocator::Worker { .. } => {
-                drop(self.open(partition).await?);
+            TaskInputLocator::Worker { keys } => {
+                let keys = keys.get(partition).ok_or_else(|| {
+                    DataFusionError::Execution(format!("input partition {partition} not found"))
+                })?;
+                let keys = worker_key_sets(self.key.job_id, self.input.stage, keys);
+                // The streams of each worker are released whether or not the release
+                // has failed for another worker.
+                let released = join_all(keys.into_iter().map(|(worker_id, mut keys)| {
+                    keys.release = true;
+                    self.streams
+                        .fetch_worker_streams(worker_id, keys, self.schema.clone())
+                }))
+                .await;
+                released.into_iter().try_for_each(|x| x.map(|_| ()))
             }
-            // Blocking outputs are complete before they are read, so nothing waits on them.
-            TaskInputLocator::Storage { .. } | TaskInputLocator::ShuffleService { .. } => {}
+            // The streams on the driver are opened and closed.
+            TaskInputLocator::Driver { .. } => self.open(partition).await.map(|_| ()),
+            TaskInputLocator::Storage { .. } | TaskInputLocator::ShuffleService { .. } => Ok(()),
         }
-        Ok(())
     }
+}
+
+/// Groups the streams that a single call of [`TaskStreamReader::open`] reads from
+/// workers, so that the streams on each worker are fetched in one request.
+///
+/// The streams of a group have one consumer, which is the source that the call
+/// returns. It reads all of them in arbitrary order and never waits for the data of
+/// one of them while it leaves the data of another one unread. This is required for
+/// streams that are fetched in one request, since their data arrives through one
+/// Flight stream, where data that is not read holds back all the data after it.
+/// So the streams of different calls or of different tasks must never be grouped,
+/// and the data of a group must never be divided again among several consumers.
+/// An input that is read in order has a call for each stream of that order.
+fn worker_key_sets(
+    job_id: JobId,
+    stage: usize,
+    keys: &[(WorkerId, TaskInputKey)],
+) -> Vec<(WorkerId, TaskStreamKeySet)> {
+    // The channels of each task on each worker.
+    let mut workers: IndexMap<WorkerId, IndexMap<(usize, usize), Vec<usize>>> = IndexMap::new();
+    for (worker_id, key) in keys {
+        workers
+            .entry(*worker_id)
+            .or_default()
+            .entry((key.partition, key.attempt))
+            .or_default()
+            .push(key.channel);
+    }
+    let mut sets = vec![];
+    for (worker_id, tasks) in workers {
+        // A set has the same channels for all its tasks. This holds for all the tasks
+        // on a worker in the inputs that the scheduler creates, so that there is one
+        // set for each worker. Other tasks would get a set of their own.
+        let mut channels: IndexMap<Vec<usize>, Vec<(usize, usize)>> = IndexMap::new();
+        for (task, task_channels) in tasks {
+            channels.entry(task_channels).or_default().push(task);
+        }
+        for (channels, tasks) in channels {
+            let keys = TaskStreamKeySet {
+                job_id,
+                stage,
+                tasks,
+                channels,
+                release: false,
+            };
+            sets.push((worker_id, keys));
+        }
+    }
+    sets
 }
 
 pub(crate) struct MultiChannelTaskStreamWriter {
@@ -396,30 +466,31 @@ impl TaskStreamWriter for MultiChannelTaskStreamWriter {
             )));
         }
         let channels = self.output.channels();
-        let sinks = match &self.output.locator {
-            TaskOutputLocator::Pipelined { replicas } => {
-                try_join_all((0..channels).map(|channel| {
-                    self.streams.create_local_stream(
-                        self.key.task_stream_key(channel),
+        match &self.output.locator {
+            TaskOutputLocator::Pipelined { replicas, bounded } => {
+                self.streams
+                    .create_local_stream(
+                        self.key.clone(),
+                        channels,
                         *replicas,
+                        *bounded,
                         self.schema.clone(),
                     )
-                }))
-                .await?
+                    .await
             }
             TaskOutputLocator::Blocking => {
-                try_join_all((0..channels).map(|channel| {
+                let sinks = try_join_all((0..channels).map(|channel| {
                     self.streams.create_storage_stream(
                         self.key.task_stream_key(channel),
                         self.schema.clone(),
                     )
                 }))
-                .await?
+                .await?;
+                Ok(Box::new(MultiChannelTaskStreamSink {
+                    sinks: sinks.into_iter().map(Some).collect(),
+                }))
             }
-        };
-        Ok(Box::new(MultiChannelTaskStreamSink {
-            sinks: sinks.into_iter().map(Some).collect(),
-        }))
+        }
     }
 }
 
@@ -473,5 +544,117 @@ impl TaskStreamWriter for CelebornTaskStreamWriter {
                 self.schema.clone(),
             )
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input_key(partition: usize, attempt: usize, channel: usize) -> TaskInputKey {
+        TaskInputKey {
+            partition,
+            attempt,
+            channel,
+        }
+    }
+
+    /// The worker, the tasks and the channels of each set.
+    type Sets = Vec<(u64, Vec<(usize, usize)>, Vec<usize>)>;
+
+    fn sets(keys: &[(u64, TaskInputKey)]) -> Sets {
+        let keys = keys
+            .iter()
+            .map(|(worker_id, key)| (WorkerId::from(*worker_id), key.clone()))
+            .collect::<Vec<_>>();
+        let sets = worker_key_sets(JobId::from(1), 2, &keys);
+        // The sets have exactly the streams of the keys.
+        let mut expected = keys
+            .iter()
+            .map(|(worker_id, key)| (*worker_id, key.task_stream_key(JobId::from(1), 2)))
+            .collect::<Vec<_>>();
+        let mut actual = sets
+            .iter()
+            .flat_map(|(worker_id, keys)| keys.keys().map(move |key| (*worker_id, key)))
+            .collect::<Vec<_>>();
+        let order = |(worker_id, key): &(WorkerId, TaskStreamKey)| {
+            (
+                u64::from(*worker_id),
+                key.partition,
+                key.attempt,
+                key.channel,
+            )
+        };
+        expected.sort_by_key(order);
+        actual.sort_by_key(order);
+        assert_eq!(actual, expected);
+        sets.into_iter()
+            .map(|(worker_id, keys)| (worker_id.into(), keys.tasks, keys.channels))
+            .collect()
+    }
+
+    #[test]
+    fn streams_of_one_call_are_grouped_by_worker() {
+        // A shuffle input has one channel of all tasks. The attempts can differ.
+        let keys = [
+            (7, input_key(0, 0, 3)),
+            (5, input_key(1, 2, 3)),
+            (7, input_key(2, 0, 3)),
+            (9, input_key(3, 0, 3)),
+            (5, input_key(4, 0, 3)),
+        ];
+        assert_eq!(
+            sets(&keys),
+            vec![
+                (7, vec![(0, 0), (2, 0)], vec![3]),
+                (5, vec![(1, 2), (4, 0)], vec![3]),
+                (9, vec![(3, 0)], vec![3]),
+            ]
+        );
+
+        // A broadcast input has all channels of all tasks.
+        let keys = [
+            (7, input_key(0, 0, 0)),
+            (7, input_key(0, 0, 1)),
+            (5, input_key(1, 0, 0)),
+            (5, input_key(1, 0, 1)),
+            (7, input_key(2, 1, 0)),
+            (7, input_key(2, 1, 1)),
+        ];
+        assert_eq!(
+            sets(&keys),
+            vec![
+                (7, vec![(0, 0), (2, 1)], vec![0, 1]),
+                (5, vec![(1, 0)], vec![0, 1]),
+            ]
+        );
+
+        // An input that is read in order has all channels of one task in each call,
+        // so the streams of different tasks are never grouped.
+        let keys = [(7, input_key(4, 0, 0)), (7, input_key(4, 0, 1))];
+        assert_eq!(sets(&keys), vec![(7, vec![(4, 0)], vec![0, 1])]);
+
+        assert_eq!(sets(&[]), vec![]);
+    }
+
+    #[test]
+    fn tasks_with_different_channels_are_not_grouped() {
+        let keys = [
+            (7, input_key(0, 0, 0)),
+            (7, input_key(0, 0, 1)),
+            (7, input_key(1, 0, 1)),
+            (7, input_key(2, 0, 0)),
+            (7, input_key(2, 0, 1)),
+            (7, input_key(3, 0, 1)),
+            (7, input_key(3, 0, 1)),
+        ];
+        assert_eq!(
+            sets(&keys),
+            vec![
+                (7, vec![(0, 0), (2, 0)], vec![0, 1]),
+                (7, vec![(1, 0)], vec![1]),
+                (7, vec![(3, 0)], vec![1, 1]),
+            ]
+        );
     }
 }

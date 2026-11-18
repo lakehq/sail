@@ -30,8 +30,8 @@ def test_reference_metadata_is_published(spark, tmp_path, moto_endpoint, version
         spark.sql(f"ALTER TABLE {name} REPLACE BRANCH audit WITH SNAPSHOT RETENTION 2 SNAPSHOTS")
         current = load()
         assert current.refs()["audit"].snapshot_id == current.current_snapshot().snapshot_id
-        assert current.refs()["audit"].min_snapshots_to_keep == 2  # noqa: PLR2004
-        assert current.refs()["release"].max_ref_age_ms == 86400000  # noqa: PLR2004
+        assert current.refs()["audit"].min_snapshots_to_keep == 2
+        assert current.refs()["release"].max_ref_age_ms == 86400000
         spark.sql(f"ALTER TABLE {name} DROP TAG release")
         spark.sql(f"ALTER TABLE {name} DROP BRANCH audit")
         assert set(load().refs()) == {"main"}

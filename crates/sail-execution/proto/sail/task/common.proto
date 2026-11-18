@@ -116,6 +116,7 @@ message TaskOutputLocator {
 
 message TaskOutputPipelinedLocator {
   uint64 replicas = 1;
+  bool bounded = 2;
 }
 
 message TaskOutputBlockingLocator {

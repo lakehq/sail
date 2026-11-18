@@ -1,4 +1,3 @@
-# ruff: noqa: PLR2004
 import pytest
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal

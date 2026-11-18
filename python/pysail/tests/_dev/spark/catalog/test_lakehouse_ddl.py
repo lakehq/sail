@@ -28,7 +28,7 @@ def test_memory_lakehouse_ddl(spark, tmp_path, fmt):
         )
         spark.sql(f"DROP TABLE {table}")
         spark.sql(f"CREATE TABLE {table} USING {fmt} LOCATION '{location}'")
-        assert spark.table(table).count() == 3  # noqa: PLR2004
+        assert spark.table(table).count() == 3
         assert spark.table(table).schema["id"].dataType.simpleString() == "bigint"
         spark.sql(f"DROP TABLE {table}")
         spark.sql(f"CREATE TABLE {table} USING {fmt} AS SELECT 4 AS id, 'ctas' AS value")

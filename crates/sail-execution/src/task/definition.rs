@@ -88,7 +88,12 @@ pub enum TaskOutputDistribution {
 
 #[derive(Debug, Clone)]
 pub enum TaskOutputLocator {
-    Pipelined { replicas: usize },
+    Pipelined {
+        replicas: usize,
+        /// Whether the task waits for the readers of its output when they fall behind.
+        /// The task queues its output in memory without any limit otherwise.
+        bounded: bool,
+    },
     Blocking,
 }
 
@@ -512,9 +517,10 @@ impl TryFrom<r#gen::TaskOutputDistribution> for TaskOutputDistribution {
 impl From<TaskOutputLocator> for r#gen::TaskOutputLocator {
     fn from(value: TaskOutputLocator) -> Self {
         let kind = match value {
-            TaskOutputLocator::Pipelined { replicas } => {
+            TaskOutputLocator::Pipelined { replicas, bounded } => {
                 r#gen::task_output_locator::Kind::Pipelined(r#gen::TaskOutputPipelinedLocator {
                     replicas: replicas as u64,
+                    bounded,
                 })
             }
             TaskOutputLocator::Blocking => {
@@ -531,9 +537,10 @@ impl TryFrom<r#gen::TaskOutputLocator> for TaskOutputLocator {
     fn try_from(value: r#gen::TaskOutputLocator) -> Result<Self, Self::Error> {
         match value.kind {
             Some(r#gen::task_output_locator::Kind::Pipelined(
-                r#gen::TaskOutputPipelinedLocator { replicas },
+                r#gen::TaskOutputPipelinedLocator { replicas, bounded },
             )) => Ok(TaskOutputLocator::Pipelined {
                 replicas: replicas as usize,
+                bounded,
             }),
             Some(r#gen::task_output_locator::Kind::Blocking(_)) => Ok(TaskOutputLocator::Blocking),
             None => Err(ExecutionError::InvalidArgument(
@@ -600,5 +607,36 @@ impl TaskOutput {
                 Ok(ShufflePartitioning::RoundRobinRow(*channels))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pipelined_output_locator_keeps_bounded() -> Result<(), ExecutionError> {
+        for bounded in [false, true] {
+            let locator = TaskOutputLocator::Pipelined {
+                replicas: 3,
+                bounded,
+            };
+            let locator = TaskOutputLocator::try_from(r#gen::TaskOutputLocator::from(locator))?;
+            assert!(matches!(
+                locator,
+                TaskOutputLocator::Pipelined { replicas: 3, bounded: decoded } if decoded == bounded
+            ));
+        }
+        // A locator that does not say anything never makes the task wait.
+        let locator = r#gen::TaskOutputLocator {
+            kind: Some(r#gen::task_output_locator::Kind::Pipelined(
+                r#gen::TaskOutputPipelinedLocator::default(),
+            )),
+        };
+        assert!(matches!(
+            TaskOutputLocator::try_from(locator)?,
+            TaskOutputLocator::Pipelined { bounded: false, .. }
+        ));
+        Ok(())
     }
 }
