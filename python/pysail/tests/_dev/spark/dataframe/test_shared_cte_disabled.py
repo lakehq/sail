@@ -19,7 +19,7 @@ def test_cte_references_are_inlined_when_sharing_is_disabled(spark):
     assert spark.sql(query).collect() == [(2000,)]
     plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
     assert "SharedCteExec" not in plan
-    assert plan.count("RangeExec") == 2  # noqa: PLR2004
+    assert plan.count("RangeExec") == 2
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail configuration")
@@ -31,7 +31,7 @@ def test_volatile_cte_references_are_evaluated_separately_when_sharing_is_disabl
     assert spark.sql(query).collect() == [(0,)]
     plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
     assert "SharedCteExec" not in plan
-    assert plan.count("RangeExec") == 2  # noqa: PLR2004
+    assert plan.count("RangeExec") == 2
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail configuration")

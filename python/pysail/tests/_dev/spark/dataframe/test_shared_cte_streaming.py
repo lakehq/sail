@@ -279,7 +279,7 @@ def test_cte_is_not_evaluated_when_the_other_join_side_is_empty(spark, counted, 
         # with Flight, storage and Celeborn shuffle. Without sharing, the same queries count
         # 2000 and 0 with Flight shuffle.
         if cte in ("aggregate-body", "volatile-body") and LOCAL_CLUSTER:
-            assert counted() <= 1000  # noqa: PLR2004
+            assert counted() <= 1000
         else:
             assert counted() == 0
 
@@ -292,7 +292,7 @@ DETERMINISTIC_FALLIBLE = (
     "c AS (SELECT k, max(v) AS v, 100 DIV (k - 3) AS f FROM (SELECT id AS k, id AS v FROM range(0, 2000, 1, 3)) "
     "GROUP BY k)"
 )
-EXPECTED_SUM_F = sum(100 // (k - 3) if (k - 3) > 0 else -(100 // (3 - k)) for k in range(2000) if k != 3)  # noqa: PLR2004
+EXPECTED_SUM_F = sum(100 // (k - 3) if (k - 3) > 0 else -(100 // (3 - k)) for k in range(2000) if k != 3)
 
 
 @pytest.mark.parametrize("cte", [VOLATILE_FALLIBLE, DETERMINISTIC_FALLIBLE], ids=["volatile", "deterministic"])
@@ -327,7 +327,7 @@ def test_failing_column_that_no_reference_reads(spark, ansi, cte):  # noqa: ARG0
 def test_failing_row_filtered_out_by_every_reference(spark, ansi, volatile):  # noqa: ARG001
     if volatile:
         cte = "c AS (SELECT id AS k, rand() AS r, 10 DIV (id - 5) AS q FROM range(0, 1000, 1, 4))"
-        on, expected = "a.k = b.k AND a.r = b.r", [(999, sum(2 * int(10 / (k - 5)) for k in range(1000) if k != 5))]  # noqa: PLR2004
+        on, expected = "a.k = b.k AND a.r = b.r", [(999, sum(2 * int(10 / (k - 5)) for k in range(1000) if k != 5))]
     else:
         cte = "c AS (SELECT k, 10 DIV (k - 5) AS q FROM (SELECT id % 10 AS k FROM range(0, 1000, 1, 4)) GROUP BY k)"
         on, expected = "a.k = b.k", [(9, -4)]

@@ -46,14 +46,14 @@ def test_nested_cte_plan_is_linear_in_depth(spark, depth):
     query = nested(depth)
     if is_jvm_spark():
         # Spark plans 2^depth copies of the first CTE.
-        if depth > 8:  # noqa: PLR2004
+        if depth > 8:
             pytest.skip("the plan is exponential in the depth")
     else:
         text = plan(spark, query)
         assert len(text.splitlines()) < 10 * depth + 20
         # The first CTE only projects the range, so it is inlined into the second one,
         # whose join is evaluated by each of its two references in the third one.
-        assert text.count("RangeExec") == 4  # noqa: PLR2004
+        assert text.count("RangeExec") == 4
     assert spark.sql(query).collect() == [(10,)]
 
 
@@ -120,7 +120,7 @@ def test_references_with_the_same_limit_are_inlined(spark):
     cte = "c AS (SELECT id, 1 / (id - 150000) AS r FROM range(0, 200000, 1, 1))"
     branch = "(SELECT r FROM c WHERE id >= 0 LIMIT 1)"
     query = f"WITH {cte} {branch} UNION ALL {branch}"
-    assert len(spark.sql(query).collect()) == 2  # noqa: PLR2004
+    assert len(spark.sql(query).collect()) == 2
     if not is_jvm_spark():
         assert "SharedCteExec" not in plan(spark, query)
     query = f"WITH {CTE} (SELECT max(n) FROM c) UNION ALL (SELECT max(m) FROM c) LIMIT 2"  # noqa: S608
@@ -132,7 +132,7 @@ def test_filter_columns_are_evaluated_by_the_filter_only(spark):
     cte = "c AS (SELECT id, 1 / (id - 3) AS r FROM range(0, 6, 1, 2))"
     branch = "(SELECT id FROM c WHERE id >= 0 OR r > 0)"
     query = f"WITH {cte} {branch} UNION ALL {branch}"
-    assert len(spark.sql(query).collect()) == 12  # noqa: PLR2004
+    assert len(spark.sql(query).collect()) == 12
 
 
 def test_parameters_in_shared_cte(spark):
@@ -156,7 +156,7 @@ def test_input_files_of_shared_cte(spark, tmp_path):
         files = spark.read.parquet(path).inputFiles()
         assert files
         assert sorted(df.inputFiles()) == sorted(files)
-        assert df.count() == 30  # noqa: PLR2004
+        assert df.count() == 30
     finally:
         spark.catalog.dropTempView("shared_cte_input_files")
 
@@ -412,10 +412,10 @@ def test_sorted_cte_with_limit_in_exists_subqueries_of_other_ctes(spark, tmp_pat
             scans = sum("DataSourceExec" in line and "shared_cte_items_data/" in line for line in text.splitlines())
             assert shared == shares_deterministic_ctes(), text
             if shared:
-                assert text.count("SharedCteScanExec") == 3, text  # noqa: PLR2004
+                assert text.count("SharedCteScanExec") == 3, text
                 assert scans == 1, text
             else:
-                assert scans == 3, text  # noqa: PLR2004
+                assert scans == 3, text
     finally:
         spark.sql("DROP VIEW IF EXISTS shared_cte_items")
         spark.sql("DROP VIEW IF EXISTS shared_cte_labels")
@@ -483,7 +483,7 @@ def test_schema_of_nested_ctes_is_analyzed_once_for_each_cte(spark):
         assert [field.name for field in spark.sql(query).schema.fields] == ["count(1)"]
         if not is_jvm_spark():
             assert spark.sql(query).collect() == [(10,)]
-            assert len(plan(spark, query).splitlines()) < 300  # noqa: PLR2004
+            assert len(plan(spark, query).splitlines()) < 300
     finally:
         spark.conf.unset("spark.sql.session.timeZone")
         spark.catalog.dropTempView("shared_cte_schema_view")

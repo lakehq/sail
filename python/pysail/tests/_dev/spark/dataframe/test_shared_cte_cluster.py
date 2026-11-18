@@ -182,10 +182,10 @@ def test_sorted_cte_with_limit_is_read_by_exists_subqueries_of_other_ctes(spark)
     assert ("SharedCteExec" in plan) == shared, plan
     rows = spark.sql(query).collect()
     if shared:
-        assert plan.count("SharedCteScanExec") == 3, plan  # noqa: PLR2004
+        assert plan.count("SharedCteScanExec") == 3, plan
         assert rows == [(50, 150, 50)]
     else:
-        assert rows[0][0] == 50  # noqa: PLR2004
+        assert rows[0][0] == 50
 
 
 def test_shared_cte_error_reaches_the_query(spark):
@@ -288,6 +288,6 @@ def test_insert_from_volatile_cte_on_finite_cluster(small_cluster_spark, tmp_pat
         for row in small_cluster_spark.table("shared_cte_capacity_write").collect():
             values[row.id].append(row.r)
         assert set(values) == set(range(100))
-        assert all(len(items) == 2 and len(set(items)) == 1 for items in values.values())  # noqa: PLR2004
+        assert all(len(items) == 2 and len(set(items)) == 1 for items in values.values())
     finally:
         small_cluster_spark.sql("DROP TABLE IF EXISTS shared_cte_capacity_write")
