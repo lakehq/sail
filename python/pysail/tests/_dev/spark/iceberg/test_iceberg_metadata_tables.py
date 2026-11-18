@@ -72,7 +72,7 @@ def test_iceberg_metadata_tables(spark, tmp_path):
             ORDER BY committed_at, snapshot_id
             """  # noqa: S608
         ).collect()
-        assert len(snapshots) == 2  # noqa: PLR2004
+        assert len(snapshots) == 2
         assert [row.operation for row in snapshots] == ["append", "append"]
         assert snapshots[0].parent_id is None
         assert snapshots[1].parent_id == snapshots[0].snapshot_id
@@ -112,7 +112,7 @@ def test_iceberg_metadata_tables(spark, tmp_path):
             ORDER BY timestamp, file
             """  # noqa: S608
         ).collect()
-        assert len(metadata_log) == 3  # noqa: PLR2004
+        assert len(metadata_log) == 3
         assert metadata_log[0].latest_snapshot_id is None
         assert [row.latest_snapshot_id for row in metadata_log[1:]] == [
             snapshots[0].snapshot_id,
@@ -135,11 +135,11 @@ def test_iceberg_metadata_tables(spark, tmp_path):
             ORDER BY path
             """  # noqa: S608
         ).collect()
-        assert len(manifests) == 2  # noqa: PLR2004
+        assert len(manifests) == 2
         assert all(row.content == 0 for row in manifests)
         assert all(row.path.endswith(".avro") and row.length > 0 for row in manifests)
         assert all(row.partition_spec_id == 0 for row in manifests)
-        assert sum(row.added_data_files_count for row in manifests) == 2  # noqa: PLR2004
+        assert sum(row.added_data_files_count for row in manifests) == 2
         assert all(row.added_delete_files_count == 0 for row in manifests)
         summaries = [row.partition_summaries for row in manifests]
         assert all(len(summary) == 1 for summary in summaries)
@@ -158,7 +158,7 @@ def test_iceberg_metadata_tables(spark, tmp_path):
             ORDER BY partition_id, file_path
             """  # noqa: S608
         ).collect()
-        assert len(files) == 2  # noqa: PLR2004
+        assert len(files) == 2
         assert all(row.content == 0 for row in files)
         assert all(row.file_path.endswith(".parquet") for row in files)
         assert all(row.file_format == "PARQUET" for row in files)
@@ -323,7 +323,7 @@ def test_iceberg_metadata_tables_track_schema_evolution(spark, tmp_path):
         snapshots = spark.sql(
             f"SELECT snapshot_id FROM {table_name}.snapshots ORDER BY committed_at, snapshot_id"  # noqa: S608
         ).collect()
-        assert len(snapshots) == 2  # noqa: PLR2004
+        assert len(snapshots) == 2
 
         metadata_log = spark.sql(
             f"""
@@ -332,7 +332,7 @@ def test_iceberg_metadata_tables_track_schema_evolution(spark, tmp_path):
             ORDER BY timestamp, file
             """  # noqa: S608
         ).collect()
-        assert len(metadata_log) == 3  # noqa: PLR2004
+        assert len(metadata_log) == 3
         assert [row.latest_snapshot_id for row in metadata_log] == [
             None,
             snapshots[0].snapshot_id,
@@ -365,7 +365,7 @@ def test_iceberg_metadata_tables_load_gzip_metadata(spark, tmp_path):
         metadata_files = spark.sql(
             f"SELECT file FROM {table_name}.metadata_log_entries ORDER BY timestamp, file"  # noqa: S608
         ).collect()
-        assert len(metadata_files) == 2  # noqa: PLR2004
+        assert len(metadata_files) == 2
         assert metadata_files[0].file.endswith("/v1.metadata.json")
         assert metadata_files[1].file.endswith("/v2.gz.metadata.json")
         assert spark.sql(f"SELECT count(*) FROM {table_name}.snapshots").first()[0] == 1  # noqa: S608

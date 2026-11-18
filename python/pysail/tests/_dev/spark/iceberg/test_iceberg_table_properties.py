@@ -1,4 +1,4 @@
-# ruff: noqa: S608, PLR2004
+# ruff: noqa: S608
 import pytest
 from pyiceberg.schema import Schema
 from pyiceberg.table import StaticTable

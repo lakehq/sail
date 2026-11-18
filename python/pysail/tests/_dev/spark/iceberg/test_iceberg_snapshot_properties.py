@@ -1,4 +1,8 @@
-"""Per-write snapshot annotations."""
+# ruff: noqa: S608
+"""Per-write and session snapshot annotations."""
+
+from concurrent.futures import ThreadPoolExecutor
+from time import monotonic, sleep
 
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
@@ -317,4 +321,203 @@ def test_snapshot_properties_do_not_force_noop_snapshots(spark, tmp_path, operat
         assert set(location.rglob("*")) == files_before
         assert [row.id for row in spark.table(table).orderBy("id").collect()] == [0, 1]
     finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+_SESSION_RUN_ID = "spark.sql.iceberg.snapshot-property.run-id"
+_SESSION_JOB_NAME = "spark.sql.iceberg.snapshot-property.Job.Name"
+_ROW_LEVEL_MODES = {
+    "copy-on-write": "'format-version' = '2'",
+    "merge-on-read": (
+        "'format-version' = '2', 'write.delete.mode' = 'merge-on-read', "
+        "'write.update.mode' = 'merge-on-read', 'write.merge.mode' = 'merge-on-read'"
+    ),
+    "merge-on-read-v3": (
+        "'format-version' = '3', 'write.delete.mode' = 'merge-on-read', "
+        "'write.update.mode' = 'merge-on-read', 'write.merge.mode' = 'merge-on-read'"
+    ),
+}
+_ROW_LEVEL_COMMANDS = {
+    "merge": """
+        MERGE INTO {table} t USING (SELECT 2L AS id, 'b' AS category, 21L AS value) s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN INSERT *
+        """,
+    "update": "UPDATE {table} SET value = 31 WHERE id = 3",
+    "delete": "DELETE FROM {table} WHERE id = 2",
+    # Removes whole data files only, so it commits without a writer.
+    "metadata-delete": "DELETE FROM {table} WHERE category = 'a'",
+    "truncate": "TRUNCATE TABLE {table}",
+}
+_METADATA_ONLY_COMMANDS = ("metadata-delete", "truncate")
+# TRUNCATE takes the same path in every write mode.
+_ROW_LEVEL_CASES = [
+    (mode, command)
+    for mode in _ROW_LEVEL_MODES
+    for command in _ROW_LEVEL_COMMANDS
+    if command != "truncate" or mode == "copy-on-write"
+]
+
+
+@pytest.fixture
+def unset_session_snapshot_properties(spark):
+    yield
+    for key in (_SESSION_RUN_ID, _SESSION_JOB_NAME):
+        spark.conf.unset(key)
+
+
+def _create_row_level_table(spark, table, location, mode):
+    spark.sql(f"DROP TABLE IF EXISTS {table}")
+    spark.sql(
+        f"""
+        CREATE TABLE {table} (id BIGINT, category STRING, value BIGINT)
+        USING iceberg
+        PARTITIONED BY (category)
+        LOCATION '{escape_sql_string_literal(str(location))}'
+        TBLPROPERTIES ({_ROW_LEVEL_MODES[mode]})
+        """
+    )
+    spark.sql(
+        f"""
+        INSERT INTO {table} SELECT /*+ COALESCE(1) */ * FROM VALUES
+        (1L, 'a', 10L), (2L, 'b', 20L), (3L, 'b', 30L)
+        """
+    )
+
+
+@pytest.mark.usefixtures("unset_session_snapshot_properties")
+@pytest.mark.parametrize(("mode", "command"), _ROW_LEVEL_CASES)
+def test_session_snapshot_properties_reach_row_level_commits(spark, tmp_path, mode, command):
+    table = "snapshot_properties_row_level"
+    location = tmp_path / table
+    try:
+        _create_row_level_table(spark, table, location, mode)
+        before = _current_snapshot(_find_latest_metadata(location))
+        if command in _METADATA_ONLY_COMMANDS:
+            # Without the data files, only a commit that removes whole files succeeds.
+            for path in location.rglob("*.parquet"):
+                path.unlink()
+        spark.conf.set(_SESSION_RUN_ID, "SessionRun")
+        spark.sql(_ROW_LEVEL_COMMANDS[command].format(table=table))
+        snapshot = _current_snapshot(_find_latest_metadata(location))
+        assert snapshot["parent-snapshot-id"] == before["snapshot-id"]
+        assert snapshot["summary"]["run-id"] == "SessionRun"
+        if command in _METADATA_ONLY_COMMANDS:
+            assert snapshot["summary"]["operation"] == "delete"
+            assert int(snapshot["summary"]["deleted-data-files"]) > 0
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.usefixtures("unset_session_snapshot_properties")
+def test_session_snapshot_properties_reach_rewrite_data_files(spark, tmp_path):
+    table = "snapshot_properties_rewrite"
+    location = tmp_path / table
+    try:
+        _create_row_level_table(spark, table, location, "copy-on-write")
+        spark.conf.set(_SESSION_RUN_ID, "SessionRun")
+        spark.sql(f"CALL system.rewrite_data_files('{table}', options => map('rewrite-all', 'true'))")
+        summary = _current_snapshot(_find_latest_metadata(location))["summary"]
+        assert summary["operation"] == "replace"
+        assert summary["run-id"] == "SessionRun"
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.usefixtures("unset_session_snapshot_properties")
+def test_write_options_take_precedence_over_session_snapshot_properties(spark, tmp_path):
+    table = "snapshot_properties_session_precedence"
+    location = tmp_path / table
+    try:
+        spark.conf.set(_SESSION_RUN_ID, "SessionRun")
+        spark.conf.set(_SESSION_JOB_NAME, "SessionJob")
+        spark.range(1).writeTo(table).using("iceberg").option("path", str(location)).create()
+        metadata = _find_latest_metadata(location)
+        summary = _current_snapshot(metadata)["summary"]
+        assert summary["run-id"] == "SessionRun"
+        # Like the write options, the session keys are lowercased.
+        assert summary["job.name"] == "SessionJob"
+        assert "Job.Name" not in summary
+        # The session annotates snapshots only; the table it creates keeps none of it.
+        for properties in (metadata.get("properties", {}), dict(spark.sql(f"SHOW TBLPROPERTIES {table}").collect())):
+            assert not any(
+                "snapshot-property" in key.lower() or key.lower() in {"run-id", "job.name"} for key in properties
+            )
+
+        spark.range(1, 2).writeTo(table).option("snapshot-property.RUN-ID", "WriteRun").append()
+        summary = _current_snapshot(_find_latest_metadata(location))["summary"]
+        assert summary["run-id"] == "WriteRun"
+        assert summary["job.name"] == "SessionJob"
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.usefixtures("unset_session_snapshot_properties")
+@pytest.mark.parametrize("next_run", ["next-operation", None])
+@pytest.mark.parametrize("command", ["append", "merge"])
+@pytest.mark.spark(cross_version=True)
+def test_session_snapshot_properties_are_captured_before_execution(spark, tmp_path, command, next_run):
+    table = "snapshot_properties_captured"
+    source = "snapshot_properties_captured_source"
+    location = tmp_path / table
+    started = tmp_path / "started"
+    released = tmp_path / "released"
+
+    @F.udf("long", useArrow=False)
+    def wait_for_release(value):
+        started.touch()
+        deadline = monotonic() + 30
+        while not released.exists():
+            if monotonic() > deadline:
+                msg = "timed out waiting for configuration update"
+                raise TimeoutError(msg)
+            sleep(0.01)
+        return value
+
+    # The UDF reads a column, so that it runs when the command executes.
+    rows = spark.range(2, 3).select(
+        wait_for_release("id").alias("id"), F.lit("b").alias("category"), F.lit(21).cast("long").alias("value")
+    )
+    rows.createOrReplaceTempView(source)
+
+    def run_command():
+        if command == "append":
+            rows.writeTo(table).append()
+        else:
+            spark.sql(
+                f"""
+                MERGE INTO {table} t USING {source} s
+                ON t.id = s.id
+                WHEN MATCHED THEN UPDATE SET value = s.value
+                WHEN NOT MATCHED THEN INSERT *
+                """
+            )
+
+    try:
+        _create_row_level_table(spark, table, location, "copy-on-write")
+        spark.conf.set(_SESSION_RUN_ID, "running-operation")
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(run_command)
+            try:
+                deadline = monotonic() + 30
+                while not started.exists():
+                    if future.done():
+                        future.result()
+                        pytest.fail("command completed without executing its UDF")
+                    assert monotonic() < deadline, "timed out waiting for the command to start"
+                    sleep(0.01)
+                if next_run is None:
+                    spark.conf.unset(_SESSION_RUN_ID)
+                else:
+                    spark.conf.set(_SESSION_RUN_ID, next_run)
+            finally:
+                released.touch()
+            future.result(timeout=30)
+
+        assert _current_snapshot(_find_latest_metadata(location))["summary"]["run-id"] == "running-operation"
+        spark.sql(f"INSERT INTO {table} VALUES (9L, 'c', 90L)")
+        assert _current_snapshot(_find_latest_metadata(location))["summary"].get("run-id") == next_run
+    finally:
+        spark.catalog.dropTempView(source)
         spark.sql(f"DROP TABLE IF EXISTS {table}")

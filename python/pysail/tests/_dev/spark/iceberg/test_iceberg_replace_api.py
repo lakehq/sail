@@ -59,7 +59,7 @@ def test_iceberg_named_overwrite_schema_drops_partition_column(spark, sql_catalo
         )
         after = _find_latest_metadata(path)
         _assert_replacement_history(before, after)
-        assert _current_spec(before)["fields"][0]["source-id"] == 2  # noqa: PLR2004
+        assert _current_spec(before)["fields"][0]["source-id"] == 2
         assert _current_spec(after)["fields"] == []
         assert after["default-spec-id"] != before["default-spec-id"]
         assert after["current-schema-id"] != before["current-schema-id"]
@@ -260,7 +260,7 @@ def test_iceberg_replacement_partition_and_property_definition(spark, replacemen
     assert after["properties"]["change"] == "new"
     assert after["properties"]["added"] == "new"
     entries = _current_manifest_entries(path, ManifestContent.DATA)
-    assert sum(entry.data_file.record_count for entry in entries) == 2  # noqa: PLR2004
+    assert sum(entry.data_file.record_count for entry in entries) == 2
     assert all(len(entry.data_file.partition) == 1 for entry in entries)
     source.writeTo(name).append()
     _assert_rows(spark.table(name), [("x", 10), ("y", 20)] * 2, ["b", "c"])

@@ -192,7 +192,7 @@ def lakekeeper_endpoint(lakekeeper_container: DockerContainer) -> str:
             response = requests.get(f"{endpoint}/health", timeout=10)
             response.raise_for_status()
         except requests.RequestException:
-            if attempt == 29:  # noqa: PLR2004
+            if attempt == 29:
                 raise
             time.sleep(1)
         else:

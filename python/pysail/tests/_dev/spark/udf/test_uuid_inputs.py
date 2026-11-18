@@ -94,7 +94,7 @@ def test_nested_uuid_inputs_are_binary(spark, shape, entry):
     def binary_value(value):
         if value is not None:
             if shape == "list":
-                assert len(value) == 2  # noqa: PLR2004
+                assert len(value) == 2
                 assert value[1] is None
                 value = value[0]
             elif shape == "struct":
