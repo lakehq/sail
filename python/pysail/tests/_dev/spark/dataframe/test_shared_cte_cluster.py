@@ -155,6 +155,39 @@ def test_limit_stops_reading_shared_cte(spark):
     assert spark.sql(query).collect() == [(2 * LARGE_ROWS,)]
 
 
+def test_sorted_cte_with_limit_is_read_by_exists_subqueries_of_other_ctes(spark):
+    """The rows of the sorted CTE are tied in the sort, and the query and the `EXISTS`
+    subqueries of the two other CTEs read the same rows of it."""
+    query = """
+        WITH top_items AS (
+            SELECT id AS item, id % 7 AS owner FROM range(0, 100000, 1, 4) ORDER BY id % 1000 DESC LIMIT 50
+        ),
+        item_labels AS (
+            SELECT l.item, count(*) AS n
+            FROM (SELECT id % 100000 AS item FROM range(0, 300000, 1, 4)) l
+            WHERE EXISTS (SELECT 1 FROM top_items r WHERE r.item = l.item)
+            GROUP BY l.item
+        ),
+        item_owners AS (
+            SELECT o.owner FROM (SELECT id AS owner FROM range(7)) o
+            WHERE EXISTS (SELECT 1 FROM top_items r WHERE r.owner = o.owner)
+        )
+        SELECT count(*), sum(item_labels.n), count(item_owners.owner)
+        FROM top_items
+            LEFT JOIN item_labels ON item_labels.item = top_items.item
+            LEFT JOIN item_owners ON item_owners.owner = top_items.owner
+    """
+    plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
+    shared = shares_deterministic_ctes({"SAIL_MODE": "local-cluster"})
+    assert ("SharedCteExec" in plan) == shared, plan
+    rows = spark.sql(query).collect()
+    if shared:
+        assert plan.count("SharedCteScanExec") == 3, plan  # noqa: PLR2004
+        assert rows == [(50, 150, 50)]
+    else:
+        assert rows[0][0] == 50  # noqa: PLR2004
+
+
 def test_shared_cte_error_reaches_the_query(spark):
     cte = "c AS (SELECT id, max(100 DIV (id - 3)) AS q FROM range(10) GROUP BY id)"
     query = f"WITH {cte} SELECT sum(a.q + b.q) FROM c a JOIN c b ON a.id = b.id"  # noqa: S608

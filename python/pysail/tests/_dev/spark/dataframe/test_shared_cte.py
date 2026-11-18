@@ -308,9 +308,11 @@ def test_sorted_cte_with_limit_is_inlined_for_a_reference_that_depends_on_its_or
     check(spark, query, [([99, 98, 97, 96, 95],), ([99],)], shared=False, scans=2)
 
 
-def test_sorted_cte_with_limit_in_exists_subqueries_of_other_ctes(spark, tmp_path):
+@pytest.mark.parametrize("order", ["i.score DESC NULLS LAST, i.item_id DESC", "i.score % 3 DESC"])
+def test_sorted_cte_with_limit_in_exists_subqueries_of_other_ctes(spark, tmp_path, order):
     """The CTE that selects the first rows of a sort is read by the query and by the
-    `EXISTS` subqueries of two other CTEs, and its table is scanned once."""
+    `EXISTS` subqueries of two other CTEs, and its table is scanned once. When rows are
+    tied in the sort, the references that share one evaluation read the same rows."""
     items, labels, owners = (str(tmp_path / f"shared_cte_{name}_data") for name in ("items", "labels", "owners"))
     spark.sql("""
         SELECT id AS item_id, CASE WHEN id % 2 = 0 THEN 'x' ELSE 'y' END AS kind,
@@ -330,12 +332,12 @@ def test_sorted_cte_with_limit_in_exists_subqueries_of_other_ctes(spark, tmp_pat
     spark.read.parquet(items).createOrReplaceTempView("shared_cte_items")
     spark.read.parquet(labels).createOrReplaceTempView("shared_cte_labels")
     spark.read.parquet(owners).createOrReplaceTempView("shared_cte_owners")
-    query = """
+    query = f"""
         WITH top_items AS (
             SELECT i.item_id, i.kind, coalesce(i.name, '') AS name, i.owner_id
             FROM shared_cte_items i
             WHERE i.kind = 'x' AND (i.removed IS NULL OR i.removed = 0)
-            ORDER BY i.score DESC NULLS LAST, i.item_id DESC
+            ORDER BY {order}
             LIMIT 20
         ),
         item_labels AS (
@@ -365,31 +367,34 @@ def test_sorted_cte_with_limit_in_exists_subqueries_of_other_ctes(spark, tmp_pat
         SELECT count(*) AS n, count(DISTINCT item_id) AS n_items, sum(size(labels)) AS total_labels,
                count_if(owner <> '') AS with_owner, sum(item_id) AS items
         FROM joined
-    """
+    """  # noqa: S608
     try:
         rows = [tuple(row) for row in spark.sql(query).collect()]
-        expected = [
-            tuple(row)
-            for row in spark.sql("""
-                WITH top_items AS (
-                    SELECT item_id, owner_id FROM shared_cte_items
-                    WHERE kind = 'x' AND (removed IS NULL OR removed = 0)
-                    ORDER BY score DESC NULLS LAST, item_id DESC LIMIT 20
+        text = "" if is_jvm_spark() else plan(spark, query)
+        shared = "SharedCteExec" in text
+        if "item_id" in order:
+            # The sort has no ties, so every evaluation returns the same rows.
+            (total,) = spark.sql(f"""
+                SELECT sum(item_id) FROM (
+                    SELECT i.item_id FROM shared_cte_items i
+                    WHERE i.kind = 'x' AND (i.removed IS NULL OR i.removed = 0)
+                    ORDER BY {order} LIMIT 20
                 )
-                SELECT count(*), count(*), 3 * count(*), count(*), sum(item_id) FROM top_items
-            """).collect()
-        ]
-        assert rows == expected
-        assert rows[0][0] == 20  # noqa: PLR2004
+            """).collect()[0]  # noqa: S608
+            assert rows == [(20, 20, 60, 20, total)]
+        elif shared:
+            # Each item has three labels and an owner, which the subqueries find only
+            # for the rows that they read.
+            assert rows[0][:4] == (20, 20, 60, 20)
+        else:
+            assert rows[0][:2] == (20, 20)
         if not is_jvm_spark():
-            text = plan(spark, query)
             scans = sum("DataSourceExec" in line and "shared_cte_items_data/" in line for line in text.splitlines())
-            if shares_deterministic_ctes():
-                assert "SharedCteExec" in text, text
+            assert shared == shares_deterministic_ctes(), text
+            if shared:
                 assert text.count("SharedCteScanExec") == 3, text  # noqa: PLR2004
                 assert scans == 1, text
             else:
-                assert "SharedCteExec" not in text, text
                 assert scans == 3, text  # noqa: PLR2004
     finally:
         spark.sql("DROP VIEW IF EXISTS shared_cte_items")
