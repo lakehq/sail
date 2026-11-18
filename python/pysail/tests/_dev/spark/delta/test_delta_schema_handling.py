@@ -303,7 +303,7 @@ def test_delta_schema_read_with_custom_schema(spark, tmp_path):
 
     result_df = spark.read.format("delta").load(delta_table_path).filter("name IS NOT NULL AND score > 80")
     result = result_df.collect()
-    assert len(result) == 2  # noqa: PLR2004
+    assert len(result) == 2
     assert {row.name for row in result} == {"Alice", "Charlie"}
 
     loaded_schema = result_df.schema

@@ -1,5 +1,3 @@
-# ruff: noqa: PLR2004
-
 import json
 
 import pytest

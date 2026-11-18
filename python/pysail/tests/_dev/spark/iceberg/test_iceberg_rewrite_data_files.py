@@ -626,7 +626,6 @@ def test_partial_rewrite_respects_shared_global_equality_delete_sequences(spark,
 
 
 def test_first_v3_partial_rewrite_assigns_untouched_legacy_lineage_then_preserves_it(spark, tmp_path):
-    selected_file_count = 2
     selected_row_count = 6
     name = "rewrite_partial_upgrade"
     path = tmp_path / name
@@ -642,7 +641,7 @@ def test_first_v3_partial_rewrite_assigns_untouched_legacy_lineage_then_preserve
         old_files = _data_entries(path)
         selected = {file for file, entry in old_files.items() if entry.data_file.partition[0] == "A"}
         untouched = old_files.keys() - selected
-        assert len(selected) == selected_file_count
+        assert len(selected) == 2
         assert len(untouched) == 1
         untouched_sequence = old_files[next(iter(untouched))].sequence_number
         spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('format-version'='3')")

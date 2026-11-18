@@ -34,7 +34,6 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.integration
 
 
-_FRAME_COUNT = 2
 _MAX_TEST_FRAME_LENGTH = 255
 
 
@@ -174,7 +173,7 @@ def test_endpoint_proxy_records_frames_and_replaces_a_response() -> None:
             client.sendall(codec.encode(request))
             assert _recv_exact(client, len(codec.encode(response))) == codec.encode(response)
 
-        _wait_until(lambda: proxy.events.count(FrameReceived) == _FRAME_COUNT)
+        _wait_until(lambda: proxy.events.count(FrameReceived) == 2)
         assert proxy.events.count(ConnectionAccepted) == 1
         assert proxy.events.count(ConnectionOpened) == 1
         assert proxy.events.count(FrameReceived, direction="client_to_server") == 1
