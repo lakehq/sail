@@ -300,13 +300,14 @@ def _write_checkpoint_with_compacted_tail(
     return latest
 
 
+# SPDX-SnippetBegin
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaLogMinorCompactionSuite.scala
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
 @pytest.mark.parametrize(
     "tail",
     ["compaction-then-commit", "commit-then-compaction", "checkpoint-only", "commit-only", "compaction-only"],
 )
 def test_checkpoint_replays_compacted_and_ordinary_tail(spark, tmp_path: Path, tail: str, metadata_as_data: str):
-    # [Credit]: <https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaLogMinorCompactionSuite.scala>
     # Compacted deltas at either end after a checkpoint.
     latest = _write_checkpoint_with_compacted_tail(tmp_path, tail)
     names = ["old", "first", "middle", "new"]
@@ -321,6 +322,12 @@ def test_checkpoint_replays_compacted_and_ordinary_tail(spark, tmp_path: Path, t
         ], f"tail={tail}, version={version}, metadataAsDataRead={metadata_as_data}"
 
 
+# SPDX-SnippetEnd
+
+
+# SPDX-SnippetBegin
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaTimeTravelSuite.scala
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/InCommitTimestampSuite.scala
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
 @pytest.mark.parametrize("tail", ["compaction-then-commit", "commit-then-compaction"])
 @pytest.mark.parametrize(
@@ -330,8 +337,6 @@ def test_checkpoint_replays_compacted_and_ordinary_tail(spark, tmp_path: Path, t
 def test_checkpoint_compacted_tail_uses_original_commit_timestamps(
     spark, tmp_path: Path, tail: str, metadata_as_data: str, ict_enablement_version: int | None
 ):
-    # [Credit]: <https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaTimeTravelSuite.scala>
-    # [Credit]: <https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/InCommitTimestampSuite.scala>
     # Exact and between-commit timestamps use ICT rather than mtime, including the enablement boundary.
     _write_checkpoint_with_compacted_tail(tmp_path, tail, ict_enablement_version=ict_enablement_version)
     names = ["old", "first", "middle", "new"]
@@ -347,6 +352,9 @@ def test_checkpoint_compacted_tail_uses_original_commit_timestamps(
             assert reader.option("timestampAsOf", timestamp).load(str(tmp_path)).collect() == [
                 Row(id=expected_version, value=names[expected_version])
             ], f"tail={tail}, timestamp={timestamp}, after_latest={after_latest}"
+
+
+# SPDX-SnippetEnd
 
 
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])

@@ -1,4 +1,6 @@
-/// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/shared.rs>
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/shared.rs
+
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{DataType, Field};
 use datafusion_common::{ScalarValue, exec_err};

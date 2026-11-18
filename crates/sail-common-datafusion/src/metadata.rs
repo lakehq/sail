@@ -10,7 +10,9 @@ use sail_common::spec::{
     SAIL_SPARK_INTERVAL_METADATA_KEY, SAIL_SPARK_UDT_METADATA_KEY, SparkIntervalMetadata,
 };
 
-// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/common/src/metadata.rs#L108-L175
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/common/src/metadata.rs#L108-L175
 /// Compute the field metadata to propagate for an expression whose result
 /// may come from any one of several inputs coerced to a common type, such as
 /// `COALESCE`, `NVL2`, or `CASE WHEN`.
@@ -79,6 +81,7 @@ pub fn coerced_fields_metadata<'a>(
 
     Ok(FieldMetadata::from(merged))
 }
+// SPDX-SnippetEnd
 
 /// Keeps only the field metadata that describes the type of a value, such as an Arrow
 /// extension type, a Spark UDT or a Spark interval type.
