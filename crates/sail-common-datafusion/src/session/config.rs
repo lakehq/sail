@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use datafusion_common::{Result, internal_datafusion_err};
@@ -14,6 +15,12 @@ pub trait SessionConfigProvider: Send + Sync + 'static {
     /// the provider. Read failures must return errors, not missing values.
     /// Separate calls need not observe the same state.
     fn get_options(&self, keys: &[&str]) -> Result<Vec<Option<String>>>;
+
+    /// Reads every set key that starts with `prefix` from one coherent configuration state.
+    ///
+    /// Returns owned values by key. Keys keep the prefix, and keys that are not set
+    /// are absent. Read failures must return errors, not missing values.
+    fn get_options_with_prefix(&self, prefix: &str) -> Result<BTreeMap<String, String>>;
 }
 
 /// A session extension exposing a shared, live configuration provider.
@@ -44,6 +51,10 @@ impl SessionConfigService {
             .pop()
             .ok_or_else(|| internal_datafusion_err!("missing session configuration result"))
     }
+
+    pub fn get_options_with_prefix(&self, prefix: &str) -> Result<BTreeMap<String, String>> {
+        self.provider.get_options_with_prefix(prefix)
+    }
 }
 
 impl SessionExtension for SessionConfigService {
@@ -63,6 +74,10 @@ mod tests {
     impl SessionConfigProvider for FixedProvider {
         fn get_options(&self, _keys: &[&str]) -> Result<Vec<Option<String>>> {
             Ok(self.0.clone())
+        }
+
+        fn get_options_with_prefix(&self, _prefix: &str) -> Result<BTreeMap<String, String>> {
+            Ok(BTreeMap::new())
         }
     }
 

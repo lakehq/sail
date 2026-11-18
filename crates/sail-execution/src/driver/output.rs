@@ -54,6 +54,9 @@ pub enum JobOutputItem {
     Stream {
         key: TaskStreamKey,
         stream: TaskStreamSource,
+        /// The cause of the task failures of the job so far, if the task attempt is a
+        /// retry. It is the cause that the driver infers for a job that fails, which
+        /// is not necessarily the failure that led to this attempt.
         retry_cause: Option<CommonErrorCause>,
     },
     Error {
@@ -188,17 +191,16 @@ impl Stream for JobOutputStream {
                 })) => {
                     if self.emitted.contains(&OutputPartition::from(&key)) {
                         self.state = JobOutputState::Failed;
-                        if let Some(cause) = retry_cause {
-                            return Poll::Ready(Some(Err(DataFusionError::External(Box::new(
-                                TaskStreamError::from(cause),
-                            )))));
-                        }
-                        return Poll::Ready(Some(Err(DataFusionError::External(Box::new(
-                            TaskStreamError::Unknown(format!(
+                        // The output of the earlier attempt cannot be taken back, so the
+                        // job fails with the cause of its task failures so far.
+                        let error = match retry_cause {
+                            Some(cause) => TaskStreamError::from(cause),
+                            None => TaskStreamError::Unknown(format!(
                                 "cannot add stream for {}: a different attempt has already produced job output",
                                 TaskStreamKeyDisplay(&key)
                             )),
-                        )))));
+                        };
+                        return Poll::Ready(Some(Err(DataFusionError::External(Box::new(error)))));
                     }
                     inner.iter_mut().for_each(|s| s.mute_if_needed(&key));
                     inner.push(TaskStreamWrapper::new(key, stream));
@@ -370,59 +372,155 @@ mod tests {
 
     #[test]
     fn completed_attempt_output_rejects_retry() -> Result<()> {
-        for retry_cause in [
-            None,
-            Some(CommonErrorCause::Execution("Invalid UUID value".into())),
-        ] {
-            let batch = RecordBatch::try_from_iter([(
-                "value",
-                Arc::new(Int32Array::from(vec![42])) as ArrayRef,
-            )])?;
-            let (sender, receiver) = mpsc::channel(1);
-            let mut output = JobOutputStream::new(receiver);
-            let waker = futures::task::noop_waker();
-            let mut cx = Context::from_waker(&waker);
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+        )])?;
+        let (sender, receiver) = mpsc::channel(1);
+        let mut output = JobOutputStream::new(receiver);
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
 
-            assert!(
-                sender
-                    .try_send(JobOutputItem::Stream {
-                        retry_cause: None,
-                        key: stream_key(),
-                        stream: Box::pin(futures::stream::iter([Ok(batch.clone())])),
-                    })
-                    .is_ok()
-            );
-            assert!(matches!(
-                Pin::new(&mut output).poll_next(&mut cx),
-                Poll::Ready(Some(Ok(actual))) if actual == batch
-            ));
+        assert!(
+            sender
+                .try_send(JobOutputItem::Stream {
+                    key: stream_key(),
+                    stream: Box::pin(futures::stream::iter([Ok(batch.clone())])),
+                    retry_cause: None,
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            Pin::new(&mut output).poll_next(&mut cx),
+            Poll::Ready(Some(Ok(actual))) if actual == batch
+        ));
 
-            // Poll through EOF so the first attempt's wrapper is removed before retrying.
-            assert!(Pin::new(&mut output).poll_next(&mut cx).is_pending());
-            assert!(matches!(
-                &output.state,
-                JobOutputState::Active { inner, .. } if inner.is_empty()
-            ));
+        // Poll through EOF so the first attempt's wrapper is removed before retrying.
+        assert!(Pin::new(&mut output).poll_next(&mut cx).is_pending());
+        assert!(matches!(
+            &output.state,
+            JobOutputState::Active { inner, .. } if inner.is_empty()
+        ));
 
-            assert!(
-                sender
-                    .try_send(JobOutputItem::Stream {
-                        retry_cause: retry_cause.clone(),
-                        key: TaskStreamKey {
-                            attempt: 1,
-                            ..stream_key()
-                        },
-                        stream: Box::pin(futures::stream::iter([Ok(batch)])),
-                    })
-                    .is_ok()
-            );
-            assert!(matches!(
-                Pin::new(&mut output).poll_next(&mut cx),
-                Poll::Ready(Some(Err(error))) if error.to_string().contains(
-                    if retry_cause.is_some() { "Invalid UUID value" } else { "a different attempt has already produced job output" }
-                )
+        assert!(
+            sender
+                .try_send(JobOutputItem::Stream {
+                    key: TaskStreamKey {
+                        attempt: 1,
+                        ..stream_key()
+                    },
+                    stream: Box::pin(futures::stream::iter([Ok(batch)])),
+                    retry_cause: None,
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            Pin::new(&mut output).poll_next(&mut cx),
+            Poll::Ready(Some(Err(error))) if error.to_string().contains(
+                "a different attempt has already produced job output"
+            )
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn completed_attempt_output_fails_retry_with_its_cause() -> Result<()> {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+        )])?;
+        let (sender, receiver) = mpsc::channel(1);
+        let mut output = JobOutputStream::new(receiver);
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        assert!(
+            sender
+                .try_send(JobOutputItem::Stream {
+                    key: stream_key(),
+                    stream: Box::pin(futures::stream::iter([Ok(batch.clone())])),
+                    retry_cause: None,
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            Pin::new(&mut output).poll_next(&mut cx),
+            Poll::Ready(Some(Ok(actual))) if actual == batch
+        ));
+        assert!(Pin::new(&mut output).poll_next(&mut cx).is_pending());
+
+        // The retry cannot replace the output, so the job fails with the task failure
+        // that the retry carries.
+        assert!(
+            sender
+                .try_send(JobOutputItem::Stream {
+                    key: TaskStreamKey {
+                        attempt: 1,
+                        ..stream_key()
+                    },
+                    stream: Box::pin(futures::stream::iter([Ok(batch)])),
+                    retry_cause: Some(CommonErrorCause::Execution(
+                        "forced task failure".to_string(),
+                    )),
+                })
+                .is_ok()
+        );
+        let Poll::Ready(Some(Err(error))) = Pin::new(&mut output).poll_next(&mut cx) else {
+            return Err(DataFusionError::Internal(
+                "the retry must fail the job output".to_string(),
             ));
-        }
+        };
+        let message = error.to_string();
+        assert!(message.contains("forced task failure"), "{message}");
+        assert!(!message.contains("a different attempt"), "{message}");
+        assert!(matches!(
+            Pin::new(&mut output).poll_next(&mut cx),
+            Poll::Ready(None)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn retry_replaces_attempt_without_output() -> Result<()> {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+        )])?;
+        let (sender, receiver) = mpsc::channel(2);
+        let mut output = JobOutputStream::new(receiver);
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        // The first attempt has not produced any output when the retry arrives, so the
+        // retry replaces it whether or not it carries a cause.
+        assert!(
+            sender
+                .try_send(JobOutputItem::Stream {
+                    key: stream_key(),
+                    stream: Box::pin(futures::stream::pending()),
+                    retry_cause: None,
+                })
+                .is_ok()
+        );
+        assert!(
+            sender
+                .try_send(JobOutputItem::Stream {
+                    key: TaskStreamKey {
+                        attempt: 1,
+                        ..stream_key()
+                    },
+                    stream: Box::pin(futures::stream::iter([Ok(batch.clone())])),
+                    retry_cause: Some(CommonErrorCause::Execution(
+                        "forced task failure".to_string(),
+                    )),
+                })
+                .is_ok()
+        );
+        assert!(Pin::new(&mut output).poll_next(&mut cx).is_pending());
+        assert!(matches!(
+            Pin::new(&mut output).poll_next(&mut cx),
+            Poll::Ready(Some(Ok(actual))) if actual == batch
+        ));
         Ok(())
     }
 
@@ -441,9 +539,9 @@ mod tests {
                 assert!(
                     sender
                         .try_send(JobOutputItem::Stream {
-                            retry_cause: None,
                             key,
                             stream: Box::pin(futures::stream::empty()),
+                            retry_cause: None,
                         })
                         .is_ok()
                 );
@@ -476,11 +574,11 @@ mod tests {
             assert!(
                 sender
                     .try_send(JobOutputItem::Stream {
-                        retry_cause: None,
                         key: stream_key(),
                         stream: Box::pin(futures::stream::iter([Err(TaskStreamError::Unknown(
                             "test stream failure".to_string(),
                         ))])),
+                        retry_cause: None,
                     })
                     .is_ok()
             );
@@ -553,9 +651,9 @@ mod tests {
 
     fn empty_stream() -> JobOutputItem {
         JobOutputItem::Stream {
-            retry_cause: None,
             key: stream_key(),
             stream: Box::pin(futures::stream::empty()),
+            retry_cause: None,
         }
     }
 
