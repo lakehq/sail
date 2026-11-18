@@ -6210,13 +6210,8 @@ mod tests {
             .await;
 
         let properties = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.uri())]);
-        let catalog = IcebergRestCatalogProvider::new(
-            String::new(),
-            IcebergRestCatalogOptions {
-                credentials: Arc::new(EmptyCatalogCredentials),
-                properties,
-            },
-        );
+        let catalog =
+            IcebergRestCatalogProvider::new(String::new(), test_options(properties)).unwrap();
         catalog.list_databases(None).await.unwrap();
     }
 }
