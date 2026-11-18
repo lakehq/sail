@@ -137,16 +137,7 @@ impl AddFiles {
             }
             let source_url =
                 crate::lake_source::IcebergLakeSource::parse_table_url(vec![location]).await?;
-            if (
-                source_url.scheme(),
-                source_url.host_str(),
-                source_url.port(),
-            ) != (table_url.scheme(), table_url.host_str(), table_url.port())
-            {
-                return plan_err!(
-                    "add_files requires source and target to use the same object store"
-                );
-            }
+            validate_source_store(&source_url, table_url)?;
             let source_store = ctx
                 .runtime_env()
                 .object_store_registry
@@ -379,6 +370,14 @@ impl AddFiles {
         )
         .await
     }
+}
+
+fn validate_source_store(source_url: &url::Url, table_url: &url::Url) -> Result<()> {
+    if source_url.scheme() != table_url.scheme() || source_url.authority() != table_url.authority()
+    {
+        return plan_err!("add_files requires source and target to use the same object store");
+    }
+    Ok(())
 }
 
 async fn import_record_count(
@@ -676,8 +675,18 @@ mod tests {
     use object_store::buffered::DEFAULT_BUFFER_SIZE;
     use object_store::memory::InMemory;
 
-    use super::import_record_count;
+    use super::{import_record_count, validate_source_store};
     use crate::io::test_store::TestStore;
+
+    #[test]
+    fn source_store_includes_azure_container() -> Result<(), Box<dyn std::error::Error>> {
+        let target = url::Url::parse("abfss://target@account.dfs.core.windows.net/table")?;
+        let same = url::Url::parse("abfss://target@account.dfs.core.windows.net/source")?;
+        let other = url::Url::parse("abfss://other@account.dfs.core.windows.net/source")?;
+        validate_source_store(&same, &target)?;
+        assert!(validate_source_store(&other, &target).is_err());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn import_counts_with_bounded_object_reads() -> Result<(), Box<dyn std::error::Error>> {
