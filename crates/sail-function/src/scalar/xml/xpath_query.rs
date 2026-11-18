@@ -168,6 +168,21 @@ fn adapt_primary(primary: &mut ast::PrimaryExpr) -> AdaptResult {
                 .parse_xpath(&source)
                 .map_err(|e| format!("{e:?}"))?;
             let mut expr = parsed.0;
+            if reference.arity == 0 {
+                let [single] = expr.value.0.as_mut_slice() else {
+                    return Err("Expected a single XPath wrapper function".into());
+                };
+                if let ast::ExprSingle::Path(path) = &mut single.value
+                    && let [step] = path.steps.as_mut_slice()
+                    && let ast::StepExpr::PrimaryExpr(primary) = &mut step.value
+                    && let ast::PrimaryExpr::InlineFunction(function) = &mut primary.value
+                {
+                    // Zero-argument name functions capture the focus at the reference.
+                    function.wrapper = true;
+                } else {
+                    return Err("Expected an inline XPath wrapper function".into());
+                }
+            }
             adapt_expr(&mut expr.value)?;
             *primary = ast::PrimaryExpr::Expr(Some(expr.value).with_span(expr.span));
         }

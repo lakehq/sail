@@ -573,6 +573,38 @@ Feature: XML functions follow Spark lexical names and XPath semantics
         """
       Then query error (?s).*(XML|xml|character data).*
 
+  Rule: Primitive fields require scalar content
+
+    Scenario Outline: XML compatibility: Fail-fast mode rejects nested content in primitive fields: <content>
+      When query
+        """
+        SELECT from_xml('<r><a><content></a></r>', 'a INT', map('mode', 'FAILFAST'))
+        """
+      Then query error (?s).*(XML|xml|MALFORMED).*
+
+      Examples:
+        | content  |
+        | 1<b/>2   |
+        | <b/>1    |
+        | 1<b/>    |
+
+    @sail-only
+    Scenario: XML compatibility: Permissive mode keeps rows aligned after malformed nested array elements
+      When query
+        """
+        SELECT id, from_xml(xml, 'b INT, a ARRAY<STRUCT<v: INT>>') AS result
+        FROM VALUES
+          (1, '<r><b>1</b><a><v>2</v></a></r>'),
+          (2, '<r><b>3</b><a><v>4</v></a><a><v>5<x/>6</v></a></r>'),
+          (3, '<r><b>7</b><a><v>8</v></a></r>') AS input(id, xml)
+        ORDER BY id
+        """
+      Then query result
+        | id | result       |
+        | 1  | {1, [{2}]}   |
+        | 2  | {NULL, NULL} |
+        | 3  | {7, [{8}]}   |
+
   Rule: String field serialization does not depend on the thread stack size
 
     # The JVM StAX parser limits element depth to 1000.

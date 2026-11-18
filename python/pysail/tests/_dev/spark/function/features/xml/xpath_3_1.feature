@@ -26,6 +26,9 @@ Feature: XPath uses the engine version with Spark XML DOM behavior
       | (head#1)(r/a)                                       | 1       |
       | name(head(r/a))                                     | p:a     |
       | (local-name#1)(r/a[2])                              | a       |
+      | r/a[1] ! (name#0)()                                | p:a     |
+      | r/a[2] ! (local-name#0)()                          | a       |
+      | r/a[1] ! (let $f := name#0 return (../a[2] ! $f())) | p:a     |
       | string-join(r/a ! name(.), ",")                     | p:a,q:a |
       | Q{http://www.w3.org/2005/xpath-functions}head(r/a)  | 1       |
       | head(r/*:a)                                         | 1       |
