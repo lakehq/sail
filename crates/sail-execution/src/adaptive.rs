@@ -512,7 +512,12 @@ async fn materialize(
     let input = handoffs.resolve(input)?;
     let schema = input.schema();
     // A failure here would recur in the main job, which reports it with the full plan.
-    let handoff = HandoffOutput { distribution };
+    // Stream memory counts whole arrays, up to twice the sliced bytes of the threshold, so
+    // a side below the threshold always ends within the budget and gets decided.
+    let handoff = HandoffOutput {
+        distribution,
+        budget: options.broadcast_threshold.saturating_mul(4),
+    };
     let (mut stream, handoff) = match runner.run(input, Some(handoff)).await {
         Ok(x) => x,
         Err(error) => {

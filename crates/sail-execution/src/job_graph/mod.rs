@@ -30,6 +30,9 @@ pub struct JobGraphOptions {
 #[derive(Debug, Clone)]
 pub struct HandoffOutput {
     pub distribution: OutputDistribution,
+    /// The bytes that the streams of the stage on one worker hold before its tasks wait
+    /// for the readers, so that a running hand-off job cannot race ahead of its readers.
+    pub budget: usize,
 }
 
 /// A job graph represents a distributed execution plan for a job.
@@ -116,7 +119,16 @@ impl JobGraph {
 
     /// Whether the stage's output is handed to a later job.
     pub fn is_handoff_stage(&self, stage: usize) -> bool {
-        self.options.handoff.is_some() && stage + 1 == self.stages.len()
+        self.handoff_budget(stage).is_some()
+    }
+
+    /// The budget of a stage whose output is handed to a later job.
+    pub fn handoff_budget(&self, stage: usize) -> Option<usize> {
+        self.options
+            .handoff
+            .as_ref()
+            .filter(|_| stage + 1 == self.stages.len())
+            .map(|handoff| handoff.budget)
     }
 
     /// The final stage of a hand-off job, as a later job reads it.

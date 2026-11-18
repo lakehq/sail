@@ -1263,6 +1263,7 @@ impl<'a> TaskOutputBuilder<'a> {
                 replicas: self.job.graph.replicas(self.key.stage),
                 bounded: self.job.graph.bounded_output(self.key.stage)
                     || self.job.graph.is_handoff_stage(self.key.stage),
+                handoff_budget: self.job.graph.handoff_budget(self.key.stage),
             },
             OutputMode::Blocking => TaskOutputLocator::Blocking,
         };

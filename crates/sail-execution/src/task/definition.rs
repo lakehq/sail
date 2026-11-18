@@ -103,6 +103,9 @@ pub enum TaskOutputLocator {
         /// Whether the task waits for the readers of its output when they fall behind.
         /// The task queues its output in memory without any limit otherwise.
         bounded: bool,
+        /// For the output of a stage handed to a later job, the bytes that the streams of
+        /// the stage on one worker hold before its tasks wait for the readers.
+        handoff_budget: Option<usize>,
     },
     Blocking,
 }
@@ -530,12 +533,15 @@ impl TryFrom<r#gen::TaskOutputDistribution> for TaskOutputDistribution {
 impl From<TaskOutputLocator> for r#gen::TaskOutputLocator {
     fn from(value: TaskOutputLocator) -> Self {
         let kind = match value {
-            TaskOutputLocator::Pipelined { replicas, bounded } => {
-                r#gen::task_output_locator::Kind::Pipelined(r#gen::TaskOutputPipelinedLocator {
-                    replicas: replicas as u64,
-                    bounded,
-                })
-            }
+            TaskOutputLocator::Pipelined {
+                replicas,
+                bounded,
+                handoff_budget,
+            } => r#gen::task_output_locator::Kind::Pipelined(r#gen::TaskOutputPipelinedLocator {
+                replicas: replicas as u64,
+                bounded,
+                handoff_budget: handoff_budget.map(|x| x as u64),
+            }),
             TaskOutputLocator::Blocking => {
                 r#gen::task_output_locator::Kind::Blocking(r#gen::TaskOutputBlockingLocator {})
             }
@@ -550,10 +556,15 @@ impl TryFrom<r#gen::TaskOutputLocator> for TaskOutputLocator {
     fn try_from(value: r#gen::TaskOutputLocator) -> Result<Self, Self::Error> {
         match value.kind {
             Some(r#gen::task_output_locator::Kind::Pipelined(
-                r#gen::TaskOutputPipelinedLocator { replicas, bounded },
+                r#gen::TaskOutputPipelinedLocator {
+                    replicas,
+                    bounded,
+                    handoff_budget,
+                },
             )) => Ok(TaskOutputLocator::Pipelined {
                 replicas: replicas as usize,
                 bounded,
+                handoff_budget: handoff_budget.map(|x| x as usize),
             }),
             Some(r#gen::task_output_locator::Kind::Blocking(_)) => Ok(TaskOutputLocator::Blocking),
             None => Err(ExecutionError::InvalidArgument(
@@ -629,15 +640,17 @@ mod tests {
 
     #[test]
     fn pipelined_output_locator_keeps_bounded() -> Result<(), ExecutionError> {
-        for bounded in [false, true] {
+        for (bounded, handoff_budget) in [(false, None), (true, None), (true, Some(7))] {
             let locator = TaskOutputLocator::Pipelined {
                 replicas: 3,
                 bounded,
+                handoff_budget,
             };
             let locator = TaskOutputLocator::try_from(r#gen::TaskOutputLocator::from(locator))?;
             assert!(matches!(
                 locator,
-                TaskOutputLocator::Pipelined { replicas: 3, bounded: decoded } if decoded == bounded
+                TaskOutputLocator::Pipelined { replicas: 3, bounded: decoded, handoff_budget: budget }
+                    if decoded == bounded && budget == handoff_budget
             ));
         }
         // A locator that does not say anything never makes the task wait.

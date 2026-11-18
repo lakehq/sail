@@ -127,6 +127,7 @@ impl TaskStreamAccessor {
         channels: usize,
         replicas: usize,
         bounded: bool,
+        handoff_budget: Option<usize>,
         schema: SchemaRef,
     ) -> Result<Box<dyn TaskStreamSink>> {
         let (result, rx) = oneshot::channel();
@@ -136,6 +137,7 @@ impl TaskStreamAccessor {
                 channels,
                 replicas,
                 bounded,
+                handoff_budget,
                 schema,
                 result,
             },
@@ -479,13 +481,18 @@ impl TaskStreamWriter for MultiChannelTaskStreamWriter {
         }
         let channels = self.output.channels();
         match &self.output.locator {
-            TaskOutputLocator::Pipelined { replicas, bounded } => {
+            TaskOutputLocator::Pipelined {
+                replicas,
+                bounded,
+                handoff_budget,
+            } => {
                 self.streams
                     .create_local_stream(
                         self.key.clone(),
                         channels,
                         *replicas,
                         *bounded,
+                        *handoff_budget,
                         self.schema.clone(),
                     )
                     .await
