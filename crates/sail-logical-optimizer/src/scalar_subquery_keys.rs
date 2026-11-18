@@ -21,6 +21,7 @@ use projection::project_with_keys;
 use sail_common_datafusion::OPTIMIZER_CORRELATION_KEY_PREFIX;
 use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 
+use crate::float_decimal_keys::restore_cast_keys;
 use crate::scalar_subquery_domain::cast_column;
 
 mod projection;
@@ -64,8 +65,9 @@ impl OptimizerRule for NormalizeScalarSubqueryKeys {
                     if query.outer_ref_columns.is_empty() {
                         return Ok(Transformed::no(Expr::ScalarSubquery(query)));
                     }
-                    normalize_keys(&query.subquery, config.alias_generator(), &mut reserved).map(
-                        |result| {
+                    normalize_keys(&query.subquery, config.alias_generator(), &mut reserved)?
+                        .transform_data(|plan| restore_cast_keys(&plan))
+                        .map(|result| {
                             if result.transformed {
                                 query.subquery = Arc::new(result.data);
                             }
@@ -73,8 +75,7 @@ impl OptimizerRule for NormalizeScalarSubqueryKeys {
                                 Expr::ScalarSubquery(query),
                                 result.transformed,
                             )
-                        },
-                    )
+                        })
                 })
                 .map(|result| result.update_data(|expression| name.restore(expression)))
         })

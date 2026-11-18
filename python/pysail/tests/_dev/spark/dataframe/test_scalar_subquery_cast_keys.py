@@ -1526,3 +1526,45 @@ def test_float_string_correlation_normalizes_private_keys_and_preserves_raw_valu
     finally:
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
         spark.catalog.dropTempView("scalar_float_string_payloads")
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (
+            "SELECT k, (SELECT max(v) FROM i WHERE CAST(i.d AS DECIMAL(10,2)) = o.k AND uuid() <> '') FROM o",
+            [(Decimal("1.50"), 30), (Decimal("2.25"), 20), (Decimal("3.00"), None)],
+        ),
+        (
+            "SELECT k FROM o WHERE k IN"
+            " (SELECT max(CAST(d AS DECIMAL(10,2))) FROM i WHERE CAST(i.d AS DECIMAL(10,2)) = o.k)",
+            [(Decimal("1.50"),), (Decimal("2.25"),)],
+        ),
+        (
+            "SELECT k FROM o WHERE k IN"
+            " (SELECT max(CAST(d AS DECIMAL(10,2))) FROM i WHERE CAST(i.d AS DECIMAL(10,2)) = o.k GROUP BY i.g)",
+            [(Decimal("1.50"),), (Decimal("2.25"),)],
+        ),
+        (
+            "SELECT k FROM o WHERE EXISTS"
+            " (SELECT count(*) FROM i WHERE CAST(i.d AS DECIMAL(10,2)) = o.k HAVING count(*) > 1)",
+            [(Decimal("1.50"),)],
+        ),
+    ],
+    ids=["scalar_with_volatile_filter", "in_aggregate", "in_grouped_aggregate", "exists_having"],
+)
+def test_double_to_decimal_correlation_key_that_is_not_lifted(spark, query, expected):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        spark.sql(
+            "SELECT * FROM VALUES (1.5D, 1, 10), (2.25D, 1, 20), (1.5D, 2, 30) AS i(d, g, v)"
+        ).createOrReplaceTempView("i")
+        spark.sql(
+            "SELECT CAST(k AS DECIMAL(10,2)) AS k FROM VALUES (1.50), (2.25), (3.00) AS o(k)"
+        ).createOrReplaceTempView("o")
+        assert sorted(tuple(row) for row in spark.sql(query).collect()) == expected
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+        spark.catalog.dropTempView("i")
+        spark.catalog.dropTempView("o")

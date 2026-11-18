@@ -9,6 +9,7 @@ use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 mod correlated_limit;
 mod deduplicate;
 mod eliminate_sorts;
+mod float_decimal_keys;
 mod input_file_metadata;
 mod lateral_join;
 mod partition_sensitive_subquery;
@@ -26,6 +27,7 @@ pub mod type_coercion;
 pub use correlated_limit::exists_by_count;
 use eliminate_sorts::EliminateSorts;
 pub use eliminate_sorts::{is_order_irrelevant_aggregate, push_down_left_semi_anti_join};
+use float_decimal_keys::RestorePredicateSubqueryCastKeys;
 use input_file_metadata::PushDownLimit;
 use lateral_join::DecorrelateLateralProjection;
 pub use partition_sensitive_subquery::pull_up_correlated_filters_in_predicate_subquery;
@@ -94,6 +96,7 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
             // are converted to joins.
             custom.push(Arc::new(correlated_limit::RemoveExistsLimit));
             custom.push(Arc::new(correlated_limit::DecorrelateLimit));
+            custom.push(Arc::new(RestorePredicateSubqueryCastKeys));
             custom.push(rule);
             continue;
         }
