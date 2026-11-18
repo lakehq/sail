@@ -10,6 +10,9 @@ comment:
 
 ignore:
   - "crates/sail-gold-test"
+  - "**/build.rs"
+  - "crates/sail-build-scripts"
+  - "crates/sail-sql-macro"
 
 flags:
   rust-unit-tests:
