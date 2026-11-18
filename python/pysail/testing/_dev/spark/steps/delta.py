@@ -464,11 +464,11 @@ def delta_log_json_file_contains(
 
     assert datatable is not None, "expected a datatable: | path | value |"
     header, *rows = datatable
-    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PLR2004 PT018
+    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PT018
         "expected datatable with columns: | path | value |"
     )
     for row in rows:
-        if not row or len(row) < 2:  # noqa: PLR2004
+        if not row or len(row) < 2:
             continue
         path, raw_value = row[0], row[1]
         actual = _get_by_path(obj, path)
@@ -729,11 +729,11 @@ def checkpoint_parquet_contains_add_fields(
 
     assert datatable is not None, "expected a datatable: | path | value |"
     header, *dtable_rows = datatable
-    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PLR2004 PT018
+    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PT018
         "expected datatable with columns: | path | value |"
     )
     for drow in dtable_rows:
-        if not drow or len(drow) < 2:  # noqa: PLR2004
+        if not drow or len(drow) < 2:
             continue
         path, raw_value = drow[0], drow[1]
         expected = _parse_expected_value(raw_value)

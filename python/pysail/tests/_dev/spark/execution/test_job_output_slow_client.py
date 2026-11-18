@@ -40,7 +40,7 @@ def test_tasks_do_not_keep_their_slots_while_the_client_reads_the_result(spark):
         rows = 0
         for _ in result:
             rows += 1
-            if rows == 2000:  # noqa: PLR2004
+            if rows == 2000:
                 break
 
         other = spark.sql("""

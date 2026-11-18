@@ -26,7 +26,7 @@ def test_rate_basic(spark):
 def test_rate_with_options(spark):
     actual = spark.sql("SELECT * FROM t2 OFFSET 0 LIMIT 2").collect()
 
-    assert len(actual) == 2  # noqa: PLR2004
+    assert len(actual) == 2
     assert actual[1]["timestamp"] >= actual[0]["timestamp"]
     assert actual[0]["value"] >= 0
     assert actual[1]["value"] >= 0
@@ -43,7 +43,7 @@ def test_rate_with_projection(spark):
 def test_rate_with_filtering(spark):
     actual = spark.sql("SELECT * FROM t2 WHERE value > 1 LIMIT 2").collect()
 
-    assert len(actual) == 2  # noqa: PLR2004
+    assert len(actual) == 2
     assert actual[0]["value"] > 1
     assert actual[1]["value"] > 1
 

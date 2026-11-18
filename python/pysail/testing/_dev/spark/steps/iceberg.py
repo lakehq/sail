@@ -776,7 +776,7 @@ def _assert_noop_snapshot(before: dict, after: dict, operation: str) -> None:
     else:
         assert current.get("parent-snapshot-id") is None
     assert after["refs"]["main"]["snapshot-id"] == current["snapshot-id"]
-    if after["format-version"] >= 2:  # noqa: PLR2004
+    if after["format-version"] >= 2:
         assert current["sequence-number"] == before.get("last-sequence-number", 0) + 1
         assert after["last-sequence-number"] == current["sequence-number"]
     summary = current["summary"]
@@ -972,7 +972,7 @@ def check_iceberg_deletion_vectors(variables, rows: int, files: int):
 
 def _current_row_lineage(table_path: Path) -> dict[int, tuple[int, int]]:
     metadata = _find_latest_metadata(table_path)
-    assert metadata["format-version"] == 3  # noqa: PLR2004
+    assert metadata["format-version"] == 3
     io = PyArrowFileIO()
     result = {}
     vectors = _current_deletion_vectors(table_path)

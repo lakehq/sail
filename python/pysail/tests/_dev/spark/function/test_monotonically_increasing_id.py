@@ -64,7 +64,7 @@ def test_monotonically_increasing_id_in_aggregate_projection(spark):
         ORDER BY id
         """
     ).collect()
-    assert len(rows) == 10  # noqa: PLR2004
+    assert len(rows) == 10
     for index, row in enumerate(rows):
         assert row["id"] == index
         assert isinstance(row["id1"], int)
@@ -81,7 +81,7 @@ def test_monotonically_increasing_id_in_grouping_expression_projection(spark):
         ORDER BY group_id
         """
     ).collect()
-    assert len(rows) == 10  # noqa: PLR2004
+    assert len(rows) == 10
 
     max_ids = sorted(row[0] for row in rows)
     group_ids = [row[1] for row in rows]
@@ -101,7 +101,7 @@ def test_monotonically_increasing_id_in_aggregate_with_group_by_id(spark):
         ORDER BY id
         """
     ).collect()
-    assert len(rows) == 10  # noqa: PLR2004
+    assert len(rows) == 10
 
     for index, row in enumerate(rows):
         assert row[0] == index
@@ -118,7 +118,7 @@ def test_monotonically_increasing_id_inside_lateral_view_expression(spark):
         ORDER BY id
         """
     ).collect()
-    assert len(rows) == 10  # noqa: PLR2004
+    assert len(rows) == 10
     for index, row in enumerate(rows):
         assert row["id"] == index
         assert isinstance(row["v"], int)

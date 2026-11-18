@@ -1,4 +1,4 @@
-# ruff: noqa: S608, PLR2004
+# ruff: noqa: S608
 import json
 
 import pytest

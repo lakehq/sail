@@ -15,7 +15,7 @@ def test_nondeterministic_aggregate_udf_calls_are_evaluated_separately(spark, df
 
     noise = noise.asNondeterministic()
     rows = df.groupBy("g").agg(noise("v").alias("a"), noise("v").alias("b")).collect()
-    assert len(rows) == 5  # noqa: PLR2004
+    assert len(rows) == 5
     assert all(row.a != row.b for row in rows)
 
     spark.udf.register("noise_agg", noise)
@@ -23,7 +23,7 @@ def test_nondeterministic_aggregate_udf_calls_are_evaluated_separately(spark, df
     rows = spark.sql(
         "SELECT g, noise_agg(v) AS a, noise_agg(v) AS b FROM nondeterministic_agg_input GROUP BY g"
     ).collect()
-    assert len(rows) == 5  # noqa: PLR2004
+    assert len(rows) == 5
     assert all(row.a != row.b for row in rows)
 
 
