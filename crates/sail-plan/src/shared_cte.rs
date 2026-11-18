@@ -251,12 +251,6 @@ impl SharedCteBody {
         &self.definition.name
     }
 
-    /// Returns whether the definition is volatile, so that its references must read one
-    /// evaluation.
-    pub fn volatile(&self) -> bool {
-        self.definition.volatile
-    }
-
     /// Returns whether the references share the body whatever it computes: when the
     /// definition is volatile, so that they read one evaluation, or when it refers to
     /// other definitions, so that each level of nested definitions is evaluated once

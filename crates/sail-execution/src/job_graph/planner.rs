@@ -2242,7 +2242,6 @@ mod tests {
     /// references.
     fn shared_cte(
         id: usize,
-        volatile: bool,
         body: &Arc<dyn ExecutionPlan>,
     ) -> (
         Arc<sail_physical_plan::shared_cte::SharedCte>,
@@ -2251,10 +2250,11 @@ mod tests {
         use datafusion::common::Statistics;
         use sail_physical_plan::shared_cte::{SharedCte, SharedCteScanExec};
 
-        let cte = Arc::new(
-            SharedCte::new(id, format!("c{id}"), body.output_partitioning().clone())
-                .with_volatile(volatile),
-        );
+        let cte = Arc::new(SharedCte::new(
+            id,
+            format!("c{id}"),
+            body.output_partitioning().clone(),
+        ));
         let scan = {
             let cte = Arc::clone(&cte);
             move || -> Arc<dyn ExecutionPlan> {
@@ -2282,36 +2282,34 @@ mod tests {
     fn shared_cte_is_a_pipelined_stage_read_by_each_reference_with_flight_shuffle() {
         use sail_physical_plan::shared_cte::{SharedCteExec, share_ctes};
 
-        for volatile in [false, true] {
-            let body = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
-            let (cte, scan) = shared_cte(0, volatile, &body);
-            let plan = share_ctes(
-                UnionExec::try_new(vec![scan(), scan(), scan()]).unwrap(),
-                vec![(cte, body)],
-            )
-            .unwrap();
-            let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
-            // The CTE is planned once, and the references are read in the last stage.
-            assert_eq!(graph.stages.len(), 2);
-            assert!(graph.stages[0].plan.is::<UnionExec>());
-            assert!(graph.stages[0].inputs.is_empty());
-            assert!(matches!(graph.stages[0].mode, OutputMode::Pipelined));
-            assert_eq!(graph.stages[0].distribution.channels(), 1);
-            let modes = reader_modes(&graph, 0);
-            assert_eq!(modes.len(), 3);
-            assert!(
-                modes
-                    .iter()
-                    .all(|x| matches!(x, InputMode::Rescale { partitions: 2 }))
-            );
-            // Each reference reads its own copy of the output at its own pace.
-            assert_eq!(graph.replicas(0), 3);
-            assert!(!graph.bounded_output(0));
-        }
+        let body = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
+        let (cte, scan) = shared_cte(0, &body);
+        let plan = share_ctes(
+            UnionExec::try_new(vec![scan(), scan(), scan()]).unwrap(),
+            vec![(cte, body)],
+        )
+        .unwrap();
+        let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
+        // The CTE is planned once, and the references are read in the last stage.
+        assert_eq!(graph.stages.len(), 2);
+        assert!(graph.stages[0].plan.is::<UnionExec>());
+        assert!(graph.stages[0].inputs.is_empty());
+        assert!(matches!(graph.stages[0].mode, OutputMode::Pipelined));
+        assert_eq!(graph.stages[0].distribution.channels(), 1);
+        let modes = reader_modes(&graph, 0);
+        assert_eq!(modes.len(), 3);
+        assert!(
+            modes
+                .iter()
+                .all(|x| matches!(x, InputMode::Rescale { partitions: 2 }))
+        );
+        // Each reference reads its own copy of the output at its own pace.
+        assert_eq!(graph.replicas(0), 3);
+        assert!(!graph.bounded_output(0));
 
         // The output of a shared CTE with a single reference has a single reader.
         let body = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
-        let (cte, scan) = shared_cte(0, true, &body);
+        let (cte, scan) = shared_cte(0, &body);
         let plan = Arc::new(SharedCteExec::new(scan(), vec![(cte, body)]));
         let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
         assert_eq!(graph.stages.len(), 2);
@@ -2342,39 +2340,37 @@ mod tests {
         };
         for options in [blocking_shuffle_options(), celeborn_shuffle_options()] {
             let celeborn = matches!(options.shuffle_backend, ShuffleBackendKind::Celeborn { .. });
-            for volatile in [false, true] {
-                for joined in [false, true] {
-                    let body = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
-                    let (cte, scan) = shared_cte(0, volatile, &body);
-                    let input = if joined {
-                        join(scan(), scan())
-                    } else {
-                        UnionExec::try_new(vec![scan(), scan()]).unwrap()
-                    };
-                    let plan = share_ctes(input, vec![(cte, body)]).unwrap();
-                    let graph = JobGraph::try_new(plan, options.clone()).unwrap();
-                    // The CTE is planned once.
-                    let stages = (0..graph.stages.len())
-                        .filter(|&s| {
-                            let stage = &graph.stages[s];
-                            stage.plan.is::<UnionExec>() && stage.inputs.is_empty()
-                        })
-                        .collect::<Vec<_>>();
-                    assert_eq!(stages, vec![0]);
-                    assert!(matches!(graph.stages[0].mode, OutputMode::Blocking));
-                    // The shuffle service serves each partition of the CTE as a channel.
-                    assert_eq!(
-                        graph.stages[0].distribution.channels(),
-                        if celeborn { 2 } else { 1 }
-                    );
-                    let modes = reader_modes(&graph, 0);
-                    assert_eq!(modes.len(), 2);
-                    assert!(modes.iter().all(|x| if celeborn {
-                        matches!(x, InputMode::Shuffle)
-                    } else {
-                        matches!(x, InputMode::Rescale { partitions: 2 })
-                    }));
-                }
+            for joined in [false, true] {
+                let body = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
+                let (cte, scan) = shared_cte(0, &body);
+                let input = if joined {
+                    join(scan(), scan())
+                } else {
+                    UnionExec::try_new(vec![scan(), scan()]).unwrap()
+                };
+                let plan = share_ctes(input, vec![(cte, body)]).unwrap();
+                let graph = JobGraph::try_new(plan, options.clone()).unwrap();
+                // The CTE is planned once.
+                let stages = (0..graph.stages.len())
+                    .filter(|&s| {
+                        let stage = &graph.stages[s];
+                        stage.plan.is::<UnionExec>() && stage.inputs.is_empty()
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(stages, vec![0]);
+                assert!(matches!(graph.stages[0].mode, OutputMode::Blocking));
+                // The shuffle service serves each partition of the CTE as a channel.
+                assert_eq!(
+                    graph.stages[0].distribution.channels(),
+                    if celeborn { 2 } else { 1 }
+                );
+                let modes = reader_modes(&graph, 0);
+                assert_eq!(modes.len(), 2);
+                assert!(modes.iter().all(|x| if celeborn {
+                    matches!(x, InputMode::Shuffle)
+                } else {
+                    matches!(x, InputMode::Rescale { partitions: 2 })
+                }));
             }
         }
     }
@@ -2390,7 +2386,7 @@ mod tests {
         ] {
             let flight = matches!(options.shuffle_backend, ShuffleBackendKind::Flight { .. });
             let body = empty_plan();
-            let (cte, scan) = shared_cte(0, true, &body);
+            let (cte, scan) = shared_cte(0, &body);
             let plan = share_ctes(
                 UnionExec::try_new(vec![shared_join(scan()), shared_join(scan())]).unwrap(),
                 vec![(cte, body)],
@@ -2442,7 +2438,7 @@ mod tests {
                 let mut body = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
                 let mut ctes = vec![];
                 for id in 0..depth {
-                    let (cte, scan) = shared_cte(id, false, &body);
+                    let (cte, scan) = shared_cte(id, &body);
                     ctes.push((cte, body));
                     body = join(scan(), scan());
                 }

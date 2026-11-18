@@ -27,7 +27,7 @@ use futures::StreamExt;
 use crate::shared_cte::tee::{Tee, TeeReader};
 
 pub mod blocking;
-pub mod tee;
+mod tee;
 
 /// The output of a shared CTE, which is produced once and read by every reference.
 ///
@@ -41,8 +41,6 @@ pub struct SharedCte {
     name: String,
     /// The partitioning of the output, which the references report as their own.
     partitioning: Partitioning,
-    /// Whether the references must read one evaluation of the CTE.
-    volatile: bool,
     state: Mutex<SharedCteState>,
 }
 
@@ -82,20 +80,8 @@ impl SharedCte {
             id,
             name,
             partitioning,
-            volatile: false,
             state: Mutex::new(SharedCteState::default()),
         }
-    }
-
-    /// Returns the shared CTE whose references must read one evaluation, if it is
-    /// volatile.
-    pub fn with_volatile(mut self, volatile: bool) -> Self {
-        self.volatile = volatile;
-        self
-    }
-
-    pub fn volatile(&self) -> bool {
-        self.volatile
     }
 
     pub fn partitioning(&self) -> &Partitioning {
@@ -320,42 +306,6 @@ impl SharedCteExec {
     pub fn ctes(&self) -> &[(Arc<SharedCte>, Arc<dyn ExecutionPlan>)] {
         &self.ctes
     }
-
-    /// Returns the plan in which the given references, as pairs of the identifier of the
-    /// shared CTE and the number of the reference, evaluate their CTE themselves.
-    pub fn inline_references(
-        &self,
-        references: &HashSet<(usize, usize)>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let bodies = self
-            .ctes
-            .iter()
-            .map(|(cte, body)| (cte.id(), Arc::clone(body)))
-            .collect::<HashMap<_, _>>();
-        let inline = |plan: &Arc<dyn ExecutionPlan>| {
-            Arc::clone(plan)
-                .transform_up(|plan| match plan.downcast_ref::<SharedCteScanExec>() {
-                    Some(scan) if references.contains(&(scan.cte.id(), scan.reference)) => {
-                        match bodies.get(&scan.cte.id()) {
-                            Some(body) => Ok(Transformed::yes(project(
-                                Arc::clone(body),
-                                scan.projection(),
-                            )?)),
-                            None => internal_err!("shared CTE {} has no plan", scan.cte.id()),
-                        }
-                    }
-                    _ => Ok(Transformed::no(plan)),
-                })
-                .data()
-        };
-        let input = inline(&self.input)?;
-        let ctes = self
-            .ctes
-            .iter()
-            .map(|(cte, body)| Ok((Arc::clone(cte), inline(body)?)))
-            .collect::<Result<Vec<_>>>()?;
-        share_ctes(input, ctes)
-    }
 }
 
 impl DisplayAs for SharedCteExec {
@@ -553,11 +503,6 @@ impl SharedCteScanExec {
 
     pub fn projection(&self) -> Option<&[usize]> {
         self.projection.as_deref()
-    }
-
-    /// Returns the number of the reference among the references of the shared CTE.
-    pub fn reference(&self) -> usize {
-        self.reference
     }
 }
 
