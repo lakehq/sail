@@ -1619,6 +1619,9 @@ mod tests {
     pub(crate) type ConcatLargeBinaryBuilder = ConcatByteArrayBuilder<LargeBinaryType>;
     pub(crate) type ConcatBinaryViewBuilder = ConcatByteViewBuilder<BinaryViewType>;
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/utils.rs#L648-L661
     fn sliced_byte_array(visible: &[Option<&str>], data_type: &DataType) -> Result<ArrayRef> {
         let padding = "x".repeat(65536);
         let mut values = vec![Some(padding.as_str())];
@@ -1628,6 +1631,7 @@ mod tests {
         // Cast before slicing so every data type retains the padding.
         Ok(cast(&input, data_type)?.slice(1, visible.len()))
     }
+    // SPDX-SnippetEnd
 
     #[test]
     fn sub_view_matches_make_view() {

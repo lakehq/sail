@@ -660,6 +660,9 @@ impl Accumulator for BytesModeAccumulator {
 }
 // SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/bytes.rs#L157-L302
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -812,3 +815,4 @@ mod tests {
         Ok(())
     }
 }
+// SPDX-SnippetEnd

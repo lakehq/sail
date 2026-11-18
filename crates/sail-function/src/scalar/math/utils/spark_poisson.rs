@@ -29,6 +29,11 @@ const K: usize = 19937;
 const M1: usize = 70;
 const M2: usize = 179;
 const M3: usize = 449;
+// SPDX-SnippetEnd
+
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/AbstractWell.java#L97-L103
 const R: usize = K.div_ceil(32);
 // SPDX-SnippetEnd
 
