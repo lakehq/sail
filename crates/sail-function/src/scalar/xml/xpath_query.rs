@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use datafusion_common::{DataFusionError, Result};
 use xee_xpath::{Documents, Query, Sequence, context};
 use xee_xpath_ast::{FN_NAMESPACE, WithSpan, XPathParserContext, ast};
@@ -11,20 +13,44 @@ use super::reader::NAMESPACE_ATTRIBUTE;
 /// and namespace nodes of the namespace-unaware DOM used by Spark.
 pub(super) fn compile(path: &str) -> Result<DomQuery> {
     let mut parser = XPathParserContext::default();
+    let mut unbound_prefixes = Vec::new();
+    let mut explicit_uris = HashSet::new();
     for (token, _) in xee_xpath_lexer::lexer(path) {
         let prefix = match token {
             Token::PrefixedQName(name) => name.prefix,
             Token::LocalNameWildcard(name) => name.prefix,
+            Token::URIQualifiedName(name) => {
+                explicit_uris.insert(name.uri);
+                continue;
+            }
+            Token::BracedURILiteralWildcard(name) => {
+                explicit_uris.insert(name.uri);
+                continue;
+            }
             _ => continue,
         };
         if parser.namespaces.by_prefix(prefix).is_none() {
-            // Spark does not resolve query prefixes against XML declarations.
-            // Bind them to an unused namespace so node tests match no nodes.
-            parser
-                .namespaces
-                .add(&[(prefix, "urn:sail:unbound-xpath-prefix")]);
+            unbound_prefixes.push(prefix);
         }
     }
+
+    // Bind each unknown prefix to a distinct namespace so expanded names stay
+    // distinct. These namespaces also make the corresponding node tests fail.
+    let mut next_id = 0;
+    for prefix in unbound_prefixes {
+        if parser.namespaces.by_prefix(prefix).is_some() {
+            continue;
+        }
+        loop {
+            let uri = format!("urn:sail:unbound-xpath-prefix:{next_id}");
+            next_id += 1;
+            if !explicit_uris.contains(uri.as_str()) {
+                parser.namespaces.add(&[(prefix, &uri)]);
+                break;
+            }
+        }
+    }
+
     let result = (|| {
         let mut xpath = parser.parse_xpath(path).map_err(|e| format!("{e:?}"))?;
         adapt_expr(&mut xpath.0.value)?;

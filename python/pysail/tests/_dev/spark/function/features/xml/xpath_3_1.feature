@@ -33,6 +33,50 @@ Feature: XPath uses the engine version with Spark XML DOM behavior
       | Q{http://www.w3.org/2005/xpath-functions}head(r/a)  | 1       |
       | head(r/*:a)                                         | 1       |
 
+  Scenario: XPath 3.1 variables with different unbound prefixes are distinct
+    When query
+      """
+      SELECT xpath_string('<r/>',
+        'let $p:x := 7, $q:x := 9 return concat($p:x, ":", $q:x)') AS result
+      """
+    Then query result
+      | result |
+      | 7:9    |
+
+  Scenario: XPath 3.1 rejects an undeclared variable with a different unbound prefix
+    When query
+      """
+      SELECT xpath_string('<r/>', 'let $p:x := 7 return $q:x')
+      """
+    Then query error (?s).*XPST0008.*
+
+  Scenario: XPath 3.1 variables with unbound prefixes are distinct from explicit EQNames
+    When query
+      """
+      SELECT xpath_string('<r/>',
+        'let $p:x := 7, $Q{urn:sail:unbound-xpath-prefix:0}x := 9
+         return concat($p:x, ":", $Q{urn:sail:unbound-xpath-prefix:0}x)') AS result
+      """
+    Then query result
+      | result |
+      | 7:9    |
+
+  Scenario Outline: XPath 3.1 node tests keep lexical XML name matching: <test>
+    When query
+      """
+      SELECT xpath_int('<r xmlns:p="urn:p"><p:a/></r>', 'count(r/<test>)') AS result
+      """
+    Then query result
+      | result   |
+      | <result> |
+
+    Examples:
+      | test         | result |
+      | p:a          | 0      |
+      | p:*          | 0      |
+      | element(p:a) | 0      |
+      | *:a          | 1      |
+
   Scenario: XPath 3.1 sequences retain Spark node values
     When query
       """
