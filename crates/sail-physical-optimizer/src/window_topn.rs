@@ -39,22 +39,22 @@ use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
 use arrow::datatypes::DataType;
+use datafusion::functions_window::rank::{dense_rank_udwf, rank_udwf};
+use datafusion::functions_window::row_number::row_number_udwf;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::execution_plan::replace_children_if_necessary;
+use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::sorts::partitioned_topk::{PartitionedTopKExec, WindowFnKind};
+use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
-use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
-use datafusion_functions_window::row_number::row_number_udwf;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::window::StandardWindowExpr;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
-use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::sorts::partitioned_topk::{PartitionedTopKExec, WindowFnKind};
-use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 
 /// Physical optimizer rule that converts per-partition `ROW_NUMBER`,
 /// `RANK`, and `DENSE_RANK` top-K queries into a more efficient plan
