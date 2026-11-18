@@ -99,6 +99,8 @@ def test_early_filters_restrict_a_shared_cte_to_the_keys_of_its_references(spark
     expected = [(k, g, totals[(k, g)], totals[(k + 5, g)]) for k in range(10) for g in range(7)]
     assert [tuple(row) for row in spark.sql(query).collect()] == expected
 
+    if not shares_deterministic_ctes():
+        return
     plan = spark.sql(f"EXPLAIN {query}").first()[0]
     lines = plan.splitlines()
     references = [i for i, line in enumerate(lines) if "SharedCteScanExec" in line]
