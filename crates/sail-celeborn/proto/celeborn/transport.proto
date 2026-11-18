@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileNotice: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE file distributed with this work for additional information regarding copyright ownership.
-// SPDX-FileComment: https://github.com/apache/celeborn/blob/f583b73d292afdfeed865e20610838121c9db9cf/common/src/main/proto/TransportMessages.proto
+// SPDX-FileComment: Credit: https://github.com/apache/celeborn/blob/f583b73d292afdfeed865e20610838121c9db9cf/common/src/main/proto/TransportMessages.proto
 // SPDX-FileAttributionText: Notice: https://github.com/apache/celeborn/blob/f583b73d292afdfeed865e20610838121c9db9cf/NOTICE
 // SPDX-FileAttributionText: Source release: Apache Celeborn v0.6.3
 
