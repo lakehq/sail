@@ -25,7 +25,7 @@ def test_shared_cte_is_read_by_several_stages(spark):
     """
     assert spark.sql(query).collect() == [(100000, 100000, 14286)]
     plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
-    assert ("SharedCteExec" in plan) == shares_deterministic_ctes(), plan
+    assert ("SharedCteExec" in plan) == shares_deterministic_ctes({"SAIL_MODE": "local-cluster"}), plan
 
 
 def test_shared_cte_is_read_by_union_branches(spark):
@@ -97,7 +97,7 @@ def test_shared_cte_error_fails_only_the_stages_that_read_it(spark):
         query = f"WITH {cte} SELECT count(*) FROM shared_cte_e e {join}"  # noqa: S608
         assert spark.sql(query).collect() == [(0,)]
         plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
-        assert ("SharedCteExec" in plan) == shares_deterministic_ctes(), plan
+        assert ("SharedCteExec" in plan) == shares_deterministic_ctes({"SAIL_MODE": "local-cluster"}), plan
         query = f"WITH {cte} SELECT count(*) FROM shared_cte_t e {join}"  # noqa: S608
         # The error can be reported as a conflict between task attempts, since the
         # failed stage is retried after the query has received partial output.

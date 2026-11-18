@@ -1039,8 +1039,8 @@
     repeatedly), or when it holds its output before returning it (for example, an
     aggregation or a sort), so that the rows kept for a reference that reads it later are
     no more than what evaluating it holds anyway. Any other CTE is evaluated for each
-    reference. With a memory limit and temporary files disabled, only the first two kinds
-    are shared.
+    reference. With a memory limit, only the first two kinds are shared if temporary
+    files are disabled or in cluster mode.
     If the value is `false`, the CTE is planned and evaluated for each reference.
   experimental: true
 

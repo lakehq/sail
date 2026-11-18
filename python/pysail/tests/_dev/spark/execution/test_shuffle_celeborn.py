@@ -172,7 +172,9 @@ _SHARED_CTE = "c AS (SELECT id % 7 AS k, count(*) AS n FROM range(1000) GROUP BY
 )
 def test_shared_cte_with_celeborn_shuffle(spark, query, expected):
     assert [tuple(row) for row in spark.sql(query).collect()] == expected
-    assert ("SharedCteExec" in spark.sql(f"EXPLAIN {query}").collect()[0][0]) == shares_deterministic_ctes()
+    assert ("SharedCteExec" in spark.sql(f"EXPLAIN {query}").collect()[0][0]) == shares_deterministic_ctes(
+        {"SAIL_MODE": "local-cluster"}
+    )
 
 
 def test_shared_cte_error_with_celeborn_shuffle(spark):

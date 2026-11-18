@@ -5,15 +5,17 @@ from pysail.testing.spark.session import spark_connect_server
 from pysail.testing.spark.utils.common import is_jvm_spark, shares_deterministic_ctes
 
 
+ENVS = {
+    "SAIL_MODE": "local-cluster",
+    "SAIL_CLUSTER__TASK_STREAM_BUFFER": "2",
+    "SAIL_RUNTIME__MEMORY_POOL__TYPE": "greedy",
+    "SAIL_RUNTIME__MEMORY_POOL__GREEDY__MAX_SIZE": str(1024 * 1024 * 1024),
+}
+
+
 @pytest.fixture(scope="module")
 def remote():
-    envs = {
-        "SAIL_MODE": "local-cluster",
-        "SAIL_CLUSTER__TASK_STREAM_BUFFER": "2",
-        "SAIL_RUNTIME__MEMORY_POOL__TYPE": "greedy",
-        "SAIL_RUNTIME__MEMORY_POOL__GREEDY__MAX_SIZE": str(1024 * 1024 * 1024),
-    }
-    with spark_connect_server(envs=envs) as server:
+    with spark_connect_server(envs=ENVS) as server:
         yield server.remote
 
 
@@ -27,7 +29,7 @@ def test_self_join_reads_shared_cte_at_different_paces(spark):
     query = f"WITH {CTE} SELECT count(*), sum(a.g + b.g) FROM c a JOIN c b ON a.id = b.id"  # noqa: S608
     assert spark.sql(query).collect() == [(ROWS, 2 * 999 * ROWS // 2)]
     plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
-    assert ("SharedCteExec" in plan) == shares_deterministic_ctes(), plan
+    assert ("SharedCteExec" in plan) == shares_deterministic_ctes(ENVS), plan
 
 
 def test_union_all_reads_shared_cte_twice(spark):

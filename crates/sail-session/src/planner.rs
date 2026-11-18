@@ -34,6 +34,7 @@ use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
+use sail_common_datafusion::session::shared_cte::SharedCteConfig;
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
@@ -113,10 +114,15 @@ impl QueryPlanner for ExtensionQueryPlanner {
         let mut shared_ctes = SharedCtePlanner::default();
         // Without temporary files, a shared CTE keeps its rows in memory outside the memory
         // pool, so with a memory limit only the CTEs that must be evaluated once are shared.
+        // This is also the case in cluster mode, where the task streams keep the rows.
         let runtime = session.runtime_env();
+        let spill = runtime.disk_manager.tmp_files_enabled()
+            && session
+                .extension::<SharedCteConfig>()
+                .map(|x| x.spill())
+                .unwrap_or(true);
         let retains_within_limit =
-            !matches!(runtime.memory_pool.memory_limit(), MemoryLimit::Finite(_))
-                || runtime.disk_manager.tmp_files_enabled();
+            !matches!(runtime.memory_pool.memory_limit(), MemoryLimit::Finite(_)) || spill;
         let mut bodies = vec![];
         for body in shared_cte_bodies(logical_plan)? {
             let plan = self.plan(body.plan(), session, &shared_ctes).await?;

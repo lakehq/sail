@@ -514,83 +514,88 @@ mod tests {
 
         // A memory limit without temporary files lets only the CTEs that must be evaluated
         // once be shared: the volatile CTEs and the CTEs that refer to other shared CTEs.
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(64 << 20, 1.0)
-            .with_disk_manager_builder(
-                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
-            )
-            .build_arc()?;
-        let state = SessionStateBuilder::new_from_existing(create_session()?.state())
-            .with_runtime_env(runtime)
-            .build();
-        let session = SessionContext::new_with_state(state);
-        session
-            .state_ref()
-            .write()
-            .config_mut()
-            .set_extension(Arc::new(SharedCteConfig::new(true)));
-        let cte = |body: &str| {
-            format!("c AS (SELECT a, {body} AS b FROM VALUES (1), (2) AS t(a) GROUP BY a)")
-        };
-        for (query, expected) in [
-            (
-                format!(
-                    "WITH {} SELECT x.b FROM c x JOIN c y ON x.a = y.a",
-                    cte("count(*)")
-                ),
-                0,
-            ),
-            (
-                format!(
-                    "WITH {} SELECT x.b FROM c x JOIN c y ON x.a = y.a",
-                    cte("rand()")
-                ),
-                2,
-            ),
-            // The second CTE refers to the first one twice, and is referenced twice.
-            (
-                format!(
-                    "WITH {}, d AS (SELECT x.a, x.b + y.b AS b FROM c x JOIN c y ON x.a = y.a) \
-                     SELECT x.b FROM d x JOIN d y ON x.a = y.a",
-                    cte("count(*)")
-                ),
-                2,
-            ),
+        // So does a memory limit when the rows that are kept are not written to temporary
+        // files, as in cluster mode.
+        for (disk, spill) in [
+            (DiskManagerMode::Disabled, true),
+            (DiskManagerMode::OsTmpDirectory, false),
         ] {
-            let resolver =
-                PlanResolver::new(&session, Arc::new(PlanConfig::default())).with_shared_ctes();
-            let plan = from_ast_statement(parse_one_statement(&query)?)?;
-            let plan = resolver.resolve_named_plan(plan).await?.plan;
-            let state = session.state();
-            let mut restart = false;
-            let plan = optimize_and_plan_shared_ctes(
-                plan,
-                &mut |plan, query| {
-                    if query && std::mem::replace(&mut restart, true) {
-                        session_state_for_restart(&state).optimize(&plan)
-                    } else {
-                        state.optimize(&plan)
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(64 << 20, 1.0)
+                .with_disk_manager_builder(DiskManagerBuilder::default().with_mode(disk))
+                .build_arc()?;
+            let state = SessionStateBuilder::new_from_existing(create_session()?.state())
+                .with_runtime_env(runtime)
+                .build();
+            let session = SessionContext::new_with_state(state);
+            session
+                .state_ref()
+                .write()
+                .config_mut()
+                .set_extension(Arc::new(SharedCteConfig::new(true).with_spill(spill)));
+            let cte = |body: &str| {
+                format!("c AS (SELECT a, {body} AS b FROM VALUES (1), (2) AS t(a) GROUP BY a)")
+            };
+            for (query, expected) in [
+                (
+                    format!(
+                        "WITH {} SELECT x.b FROM c x JOIN c y ON x.a = y.a",
+                        cte("count(*)")
+                    ),
+                    0,
+                ),
+                (
+                    format!(
+                        "WITH {} SELECT x.b FROM c x JOIN c y ON x.a = y.a",
+                        cte("rand()")
+                    ),
+                    2,
+                ),
+                // The second CTE refers to the first one twice, and is referenced twice.
+                (
+                    format!(
+                        "WITH {}, d AS (SELECT x.a, x.b + y.b AS b FROM c x JOIN c y ON x.a = y.a) \
+                         SELECT x.b FROM d x JOIN d y ON x.a = y.a",
+                        cte("count(*)")
+                    ),
+                    2,
+                ),
+            ] {
+                let resolver =
+                    PlanResolver::new(&session, Arc::new(PlanConfig::default())).with_shared_ctes();
+                let plan = from_ast_statement(parse_one_statement(&query)?)?;
+                let plan = resolver.resolve_named_plan(plan).await?.plan;
+                let state = session.state();
+                let mut restart = false;
+                let plan = optimize_and_plan_shared_ctes(
+                    plan,
+                    &mut |plan, query| {
+                        if query && std::mem::replace(&mut restart, true) {
+                            session_state_for_restart(&state).optimize(&plan)
+                        } else {
+                            state.optimize(&plan)
+                        }
+                    },
+                    |plan| async {
+                        state
+                            .query_planner()
+                            .create_physical_plan(&plan, &state)
+                            .await?;
+                        Ok(plan)
+                    },
+                )
+                .await?;
+                let mut references = 0;
+                plan.apply_with_subqueries(|plan| {
+                    if let LogicalPlan::TableScan(scan) = plan
+                        && CteReference::try_from_scan(scan).is_some_and(|x| x.body().is_some())
+                    {
+                        references += 1;
                     }
-                },
-                |plan| async {
-                    state
-                        .query_planner()
-                        .create_physical_plan(&plan, &state)
-                        .await?;
-                    Ok(plan)
-                },
-            )
-            .await?;
-            let mut references = 0;
-            plan.apply_with_subqueries(|plan| {
-                if let LogicalPlan::TableScan(scan) = plan
-                    && CteReference::try_from_scan(scan).is_some_and(|x| x.body().is_some())
-                {
-                    references += 1;
-                }
-                Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
-            })?;
-            assert_eq!(references, expected, "{query}");
+                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                })?;
+                assert_eq!(references, expected, "{query}");
+            }
         }
         Ok(())
     }
