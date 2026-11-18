@@ -21,8 +21,8 @@ use rand::{RngExt, rng};
 use sail_common::spec;
 use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::math::partition_random::PartitionSeed;
 use sail_function::scalar::math::random::Random;
+use sail_function::scalar::math::utils::partition_random::PartitionSeed;
 use sail_logical_plan::seeded_random::{SeededRandomColumn, SeededRandomNode};
 
 use crate::error::{PlanError, PlanResult};

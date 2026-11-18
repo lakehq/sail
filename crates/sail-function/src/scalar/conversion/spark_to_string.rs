@@ -141,7 +141,7 @@ define_to_string_udf!(
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/arrow-rs/blob/9322547590ab32efeff8c0486e4a3a2cb5887a26/arrow-cast/src/cast/string.rs
+// SPDX-SnippetComment: Credit: https://github.com/apache/arrow-rs/blob/9322547590ab32efeff8c0486e4a3a2cb5887a26/arrow-cast/src/cast/string.rs#L21-L63
 
 fn value_to_string<O: OffsetSizeTrait>(
     array: &dyn Array,

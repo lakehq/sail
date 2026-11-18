@@ -10,7 +10,7 @@ use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, UserDefinedLogicalNodeCo
 use educe::Educe;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_shuffle::SparkShuffle;
-use sail_function::scalar::math::partition_random::{
+use sail_function::scalar::math::utils::partition_random::{
     PartitionSeed, is_row_argument, seed_argument_position,
 };
 use sail_function::scalar::misc::spark_uuid::SparkUuid;

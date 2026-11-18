@@ -5,7 +5,7 @@ use arrow::datatypes::ArrowNativeType;
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/94d178ebe9674669b32ecd7896b5597f49e90791/datafusion/functions-nested/src/utils.rs
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/94d178ebe9674669b32ecd7896b5597f49e90791/datafusion/functions-nested/src/utils.rs#L37-L46
 macro_rules! downcast_arg {
     ($ARG:expr_2021, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
@@ -16,6 +16,7 @@ macro_rules! downcast_arg {
         })?
     }};
 }
+// SPDX-SnippetEnd
 
 macro_rules! opt_downcast_arg {
     ($ARG:expr_2021, $ARRAY_TYPE:ident) => {{ $ARG.as_any().downcast_ref::<$ARRAY_TYPE>() }};
@@ -23,7 +24,6 @@ macro_rules! opt_downcast_arg {
 
 pub(crate) use downcast_arg;
 pub(crate) use opt_downcast_arg;
-// SPDX-SnippetEnd
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0

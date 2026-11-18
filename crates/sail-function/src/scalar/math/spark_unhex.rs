@@ -72,7 +72,7 @@ impl ScalarUDFImpl for SparkUnHex {
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/hex.rs
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/hex.rs#L32-L161
 
 fn hex_int64(num: i64) -> String {
     format!("{num:X}")
@@ -218,7 +218,7 @@ pub fn spark_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/unhex.rs
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/unhex.rs#L25-L141
 
 /// Helper function to convert a hex digit to a binary value.
 fn unhex_digit(c: u8) -> Result<u8, DataFusionError> {

@@ -19,7 +19,7 @@ use crate::error::generic_exec_err;
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/f911d529a57b211eb44a98b253f97d839f60019f/datafusion/functions-nested/src/lambda_utils.rs
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/f911d529a57b211eb44a98b253f97d839f60019f/datafusion/functions-nested/src/lambda_utils.rs#L46-L72
 /// Coerces a single list argument for `(array, lambda)` style higher-order functions.
 ///
 /// Normalises `ListView`/`FixedSizeList` → `List` and `LargeListView` → `LargeList`.
@@ -45,6 +45,11 @@ pub(crate) fn coerce_single_list_arg(name: &str, arg_types: &[DataType]) -> Resu
     Ok(vec![coerced])
 }
 
+// SPDX-SnippetEnd
+
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/f911d529a57b211eb44a98b253f97d839f60019f/datafusion/functions-nested/src/lambda_utils.rs#L91-L126
 /// Result of extracting flat list values, with fast-path short-circuits handled.
 pub(crate) enum ListValuesResult {
     /// Caller should return this value immediately.

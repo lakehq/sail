@@ -6,7 +6,7 @@ use datafusion_expr::ColumnarValue;
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/94d178ebe9674669b32ecd7896b5597f49e90791/datafusion/functions-nested/src/utils.rs
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/94d178ebe9674669b32ecd7896b5597f49e90791/datafusion/functions-nested/src/utils.rs#L62-L91
 // TODO: Remove all usage of `make_scalar_function` and implement `ScalarUDFImpl` directly.
 /// array function wrapper that differentiates between scalar (length 1) and array.
 pub(crate) fn make_scalar_function<F>(

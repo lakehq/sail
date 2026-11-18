@@ -24,7 +24,7 @@ use crate::utils::nested::downcast_arg;
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-SnippetName: JSON-to-Arrow parsing logic inspired by DataFusion Comet
-// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/6211315511b12905fcce48c24b3f849d16e49fcd/native/spark-expr/src/json_funcs/from_json.rs
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/6211315511b12905fcce48c24b3f849d16e49fcd/native/spark-expr/src/json_funcs/from_json.rs#L132-L192
 /// UDF implementation of `from_json`, similar to Spark's `from_json`.
 /// This function parses a column of JSON strings using a specified schema
 /// and returns a structured Arrow array (Struct, Array, or Map) with the parsed fields.
@@ -297,7 +297,7 @@ fn is_arr_and_obj_match(builder: &FieldBuilder, value: &Value) -> bool {
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-SnippetName: Field builder logic inspired by DataFusion Comet
-// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/6211315511b12905fcce48c24b3f849d16e49fcd/native/spark-expr/src/json_funcs/from_json.rs
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/6211315511b12905fcce48c24b3f849d16e49fcd/native/spark-expr/src/json_funcs/from_json.rs#L195-L403
 #[derive(Debug)]
 enum FieldBuilder {
     Boolean(BooleanBuilder),

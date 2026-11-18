@@ -20,7 +20,7 @@ use datafusion_expr::{
 };
 use rand::{RngExt, rng};
 
-use crate::scalar::math::mersenne_twister::MersenneTwister;
+use crate::scalar::math::utils::mersenne_twister::MersenneTwister;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkShuffle {
@@ -116,7 +116,7 @@ fn extract_seed(seed_arg: &ColumnarValue) -> Result<Option<i64>> {
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/spark/blob/32f7299601108917fb01920a54e084595b7b3bf8/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/RandomIndicesGenerator.scala
+// SPDX-SnippetComment: Credit: https://github.com/apache/spark/blob/32f7299601108917fb01920a54e084595b7b3bf8/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/RandomIndicesGenerator.scala#L22-L45
 /// Port of Spark's `RandomIndicesGenerator`.
 ///
 pub struct RandomIndicesGenerator {

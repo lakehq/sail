@@ -10,7 +10,7 @@ use datafusion_expr::{LambdaArgument, ValueOrLambda};
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/f911d529a57b211eb44a98b253f97d839f60019f/datafusion/functions-nested/src/lambda_utils.rs
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/f911d529a57b211eb44a98b253f97d839f60019f/datafusion/functions-nested/src/lambda_utils.rs#L29-L44
 /// Extracts a `(value, lambda)` pair from a [`ValueOrLambda`] slice.
 pub(crate) fn value_lambda_pair<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
     name: &str,

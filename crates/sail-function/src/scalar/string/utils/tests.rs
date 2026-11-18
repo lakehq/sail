@@ -2,7 +2,7 @@
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/utils.rs
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/utils.rs#L527-L637
 /// $FUNC ScalarUDFImpl to test
 /// $ARGS arguments (vec) to pass to function
 /// $EXPECTED a Result<ColumnarValue>
