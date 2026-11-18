@@ -1,4 +1,4 @@
-// [CREDIT]: https://raw.githubusercontent.com/apache/datafusion/454bf2978660f69744eb220bed19b0a1d60f4128/datafusion/physical-optimizer/src/window_topn.rs
+// [CREDIT]: https://github.com/apache/datafusion/blob/454bf2978660f69744eb220bed19b0a1d60f4128/datafusion/physical-optimizer/src/window_topn.rs
 
 //! [`WindowTopN`] optimizer rule for per-partition top-K window queries.
 //!
