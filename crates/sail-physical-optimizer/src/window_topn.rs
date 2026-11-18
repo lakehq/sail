@@ -37,7 +37,6 @@
 
 use std::sync::Arc;
 
-use crate::PhysicalOptimizerRule;
 use arrow::datatypes::DataType;
 use datafusion::functions_window::rank::{dense_rank_udwf, rank_udwf};
 use datafusion::functions_window::row_number::row_number_udwf;
@@ -55,6 +54,8 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::window::StandardWindowExpr;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+
+use crate::PhysicalOptimizerRule;
 
 /// Physical optimizer rule that converts per-partition `ROW_NUMBER`,
 /// `RANK`, and `DENSE_RANK` top-K queries into a more efficient plan
