@@ -1,4 +1,4 @@
-# ruff: noqa: PT018, S608, TC002
+# ruff: noqa: S608, TC002
 """Spark -> Sail roundtrip tests through a shared HMS metastore.
 
 All tests use the MinIO-backed S3 warehouse to avoid Docker bind-mount
@@ -58,9 +58,7 @@ def test_spark_creates_sail_reads_parquet(
     _assert_sail_describes_spark_table(spark, table_fqn, table_type="EXTERNAL")
     sail_rows = spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
 
-    assert len(sail_rows) == 2, f"Sail expected 2 rows, got {len(sail_rows)}"
-    assert sail_rows[0].id == 1 and sail_rows[0].name == "alice"
-    assert sail_rows[1].id == 2 and sail_rows[1].name == "bob"
+    assert [(row.id, row.name) for row in sail_rows] == [(1, "alice"), (2, "bob")]
     sail_properties = _describe_extended_properties(spark, table_fqn)
     assert "interop.owner=spark" in sail_properties.get("Table Properties", "")
     assert "spark.sql." not in sail_properties.get("Table Properties", "")
@@ -198,9 +196,7 @@ def test_spark_creates_sail_reads_parquet_with_explicit_location(
 
     _assert_sail_describes_spark_table(spark, table_fqn, table_type="EXTERNAL")
     sail_rows = spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
-    assert len(sail_rows) == 2, f"Sail expected 2 rows, got {len(sail_rows)}"
-    assert sail_rows[0].id == 1 and sail_rows[0].name == "alice"
-    assert sail_rows[1].id == 2 and sail_rows[1].name == "bob"
+    assert [(row.id, row.name) for row in sail_rows] == [(1, "alice"), (2, "bob")]
 
 
 def test_spark_creates_sail_reads_parquet_with_relative_location(
@@ -221,9 +217,7 @@ def test_spark_creates_sail_reads_parquet_with_relative_location(
 
     _assert_sail_describes_spark_table(spark, table_fqn, table_type="EXTERNAL")
     sail_rows = spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
-    assert len(sail_rows) == 2, f"Sail expected 2 rows, got {len(sail_rows)}"
-    assert sail_rows[0].id == 1 and sail_rows[0].name == "alice"
-    assert sail_rows[1].id == 2 and sail_rows[1].name == "bob"
+    assert [(row.id, row.name) for row in sail_rows] == [(1, "alice"), (2, "bob")]
 
 
 def test_spark_alters_datasource_table_sail_still_reads_path_metadata(
