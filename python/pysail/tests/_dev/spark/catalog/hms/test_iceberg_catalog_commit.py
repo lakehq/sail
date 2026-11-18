@@ -286,3 +286,25 @@ def test_add_files_repeated_location_in_one_import(spark, jvm_spark, hms_s3_data
     assert jvm_spark.table(f"iceberg.{target}.snapshots").count() == 0
     assert tuple(spark.sql(f"{call}, check_duplicate_files => false)").first()) == (2, None)
     assert [tuple(row) for row in spark.table(target).orderBy("p").collect()] == [(1, "a"), (1, "b")]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("registered_partition", [False, True])
+def test_add_files_catalog_location_with_literal_escape(spark, jvm_spark, hms_s3_database, registered_partition):
+    source = f"{hms_s3_database}.source"
+    target = f"{hms_s3_database}.target"
+    root = f"s3://hms-warehouse/{hms_s3_database}"
+    literal = f"{root}/with%20space"
+    jvm_spark.range(11, 12).write.parquet(literal)
+    jvm_spark.range(22, 23).write.parquet(f"{root}/with space")
+    if registered_partition:
+        jvm_spark.sql(f"CREATE TABLE {source} (id BIGINT) PARTITIONED BY (p STRING) STORED AS parquet")
+        jvm_spark.sql(f"ALTER TABLE {source} ADD PARTITION (p='a') LOCATION '{literal}'")
+        spark.sql(f"CREATE TABLE {target} (id BIGINT, p STRING) USING iceberg PARTITIONED BY (p)")
+    else:
+        jvm_spark.sql(f"CREATE TABLE {source} (id BIGINT) STORED AS parquet LOCATION '{literal}'")
+        spark.sql(f"CREATE TABLE {target} (id BIGINT) USING iceberg")
+    expected = [row.id for row in jvm_spark.table(source).collect()]
+    assert expected == [11]
+    spark.sql(f"CALL system.add_files('{target}', '{source}')").collect()
+    assert [row.id for row in spark.table(target).collect()] == expected

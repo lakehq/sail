@@ -1143,7 +1143,15 @@ impl CatalogProvider for HmsCatalogProvider {
     ) -> CatalogResult<Option<Vec<sail_catalog::provider::CatalogFilePartition>>> {
         let metadata = self.fetch_hms_table(database, table).await?;
         if metadata.partition_keys.as_ref().is_none_or(Vec::is_empty) {
-            return Ok(None);
+            return Ok(Some(vec![sail_catalog::provider::CatalogFilePartition {
+                values: vec![],
+                location: crate::convert::table_location(&metadata)
+                    .map(crate::convert::file_source_location),
+                format: crate::convert::resolve_data_source_format(
+                    metadata.parameters.as_ref(),
+                    metadata.sd.as_ref(),
+                ),
+            }]));
         }
         let database = validate_namespace(database)?;
         let table = table.to_string();
@@ -1171,7 +1179,10 @@ impl CatalogProvider for HmsCatalogProvider {
                 .map(|partition| sail_catalog::provider::CatalogFilePartition {
                     values: partition.values.unwrap_or_default(),
                     format: crate::convert::resolve_data_source_format(None, partition.sd.as_ref()),
-                    location: partition.sd.and_then(|sd| sd.location),
+                    location: partition
+                        .sd
+                        .and_then(|sd| sd.location)
+                        .map(crate::convert::file_source_location),
                 })
                 .collect(),
         ))

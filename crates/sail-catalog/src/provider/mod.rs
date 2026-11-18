@@ -203,7 +203,8 @@ pub trait CatalogProvider: Send + Sync {
     /// Gets the status of a table in the catalog.
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus>;
 
-    /// Returns registered file partitions, or `None` when partitions are discovered from storage.
+    /// Returns registered file locations, including a single root for an unpartitioned table,
+    /// or `None` to discover files at the location in the table status.
     async fn list_file_partitions(
         &self,
         _database: &Namespace,
