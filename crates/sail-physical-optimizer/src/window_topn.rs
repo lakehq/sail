@@ -1,4 +1,7 @@
-// [CREDIT]: https://github.com/apache/datafusion/blob/454bf2978660f69744eb220bed19b0a1d60f4128/datafusion/physical-optimizer/src/window_topn.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileNotice: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE file distributed with this work for additional information regarding copyright ownership.
+// SPDX-FileAttributionText: Notice: https://github.com/apache/datafusion/blob/454bf2978660f69744eb220bed19b0a1d60f4128/NOTICE.txt
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/454bf2978660f69744eb220bed19b0a1d60f4128/datafusion/physical-optimizer/src/window_topn.rs
 
 //! [`WindowTopN`] optimizer rule for per-partition top-K window queries.
 //!
