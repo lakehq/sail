@@ -149,8 +149,7 @@ _SHARED_CTE = "c AS (SELECT id % 7 AS k, count(*) AS n FROM range(1000) GROUP BY
             [(0,)],
         ),
         (f"WITH {_SHARED_CTE} SELECT a.k FROM c a JOIN c b ON a.k = b.k ORDER BY 1 LIMIT 3", [(0,), (1,), (2,)]),  # noqa: S608
-        # The output of the shared CTE is empty in most partitions, which are read as ranges
-        # without batches of a file with batches.
+        # The output of the shared CTE is empty in most partitions.
         (
             "WITH c AS (SELECT id % 2 AS k, count(*) AS n FROM range(100) GROUP BY 1) "
             "SELECT count(*), sum(a.n + b.n) FROM c a JOIN c b ON a.k = b.k",

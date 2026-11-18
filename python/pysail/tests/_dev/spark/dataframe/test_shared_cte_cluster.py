@@ -130,6 +130,58 @@ def test_scalar_subquery_stage_reads_the_same_evaluation(spark, function):
     assert spark.sql(sql).collect() == [(ROWS,)]
 
 
+# A CTE that is large enough for its references to read it at different paces.
+
+LARGE_ROWS = 2_000_000
+LARGE_CTE = f"c AS (SELECT id, max(id % 1000) AS g FROM range({LARGE_ROWS}) GROUP BY id)"  # noqa: S608
+
+
+def test_self_join_reads_shared_cte_at_different_paces(spark):
+    query = f"WITH {LARGE_CTE} SELECT count(*), sum(a.g + b.g) FROM c a JOIN c b ON a.id = b.id"  # noqa: S608
+    assert spark.sql(query).collect() == [(LARGE_ROWS, 2 * 999 * LARGE_ROWS // 2)]
+    plan = spark.sql(f"EXPLAIN {query}").collect()[0][0]
+    assert ("SharedCteExec" in plan) == shares_deterministic_ctes({"SAIL_MODE": "local-cluster"}), plan
+
+
+def test_union_all_reads_shared_cte_twice(spark):
+    query = f"WITH {LARGE_CTE} SELECT count(*), sum(g) FROM (SELECT * FROM c UNION ALL SELECT * FROM c)"  # noqa: S608
+    assert spark.sql(query).collect() == [(2 * LARGE_ROWS, 999 * LARGE_ROWS)]
+
+
+def test_limit_stops_reading_shared_cte(spark):
+    query = f"WITH {LARGE_CTE} SELECT a.id FROM c a JOIN c b ON a.id = b.id ORDER BY 1 LIMIT 3"  # noqa: S608
+    assert spark.sql(query).collect() == [(0,), (1,), (2,)]
+    query = f"WITH {LARGE_CTE} SELECT count(*) FROM (SELECT a.id FROM c a UNION ALL SELECT b.id FROM c b) LIMIT 1"  # noqa: S608
+    assert spark.sql(query).collect() == [(2 * LARGE_ROWS,)]
+
+
+def test_shared_cte_error_reaches_the_query(spark):
+    cte = "c AS (SELECT id, max(100 DIV (id - 3)) AS q FROM range(10) GROUP BY id)"
+    query = f"WITH {cte} SELECT sum(a.q + b.q) FROM c a JOIN c b ON a.id = b.id"  # noqa: S608
+    with pytest.raises(PySparkException):
+        spark.sql(query).collect()
+    # The session runs other queries after the failure.
+    assert spark.sql("SELECT 1").collect() == [(1,)]
+
+
+def test_memory_limit_shares_only_the_ctes_that_must_be_evaluated_once():
+    """The task streams keep the rows of a shared CTE in memory outside the memory pool."""
+    envs = {
+        "SAIL_MODE": "local-cluster",
+        "SAIL_RUNTIME__MEMORY_POOL__TYPE": "greedy",
+        "SAIL_RUNTIME__MEMORY_POOL__GREEDY__MAX_SIZE": str(1024 * 1024 * 1024),
+    }
+    with spark_connect_server(envs=envs) as server, spark_session_factory(server.remote) as sessions:
+        spark = sessions.create()
+        body = "SELECT id % 7 AS k, {} AS n FROM range(1000) GROUP BY 1"
+        query = "WITH c AS ({}) SELECT count(*) FROM c a JOIN c b ON a.k = b.k"
+        for aggregate, shared in [("count(*)", False), ("max(rand())", True)]:
+            sql = query.format(body.format(aggregate))
+            assert spark.sql(sql).collect() == [(7,)]
+            plan = spark.sql(f"EXPLAIN {sql}").collect()[0][0]
+            assert ("SharedCteExec" in plan) == shared, plan
+
+
 @pytest.fixture(scope="module")
 def small_cluster_spark(request):
     envs = {
