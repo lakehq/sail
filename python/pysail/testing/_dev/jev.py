@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Deterministic System One HTTP fixture shared by tests and the Jev benchmark."""
 
 from __future__ import annotations

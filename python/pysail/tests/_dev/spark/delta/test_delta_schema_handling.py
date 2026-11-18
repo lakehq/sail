@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Test Delta Lake schema handling (mergeSchema, overwriteSchema, evolution) in Sail.
 """
@@ -10,6 +12,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from pyspark.errors import PySparkException
 from pyspark.sql.types import (
     ArrayType,
     DecimalType,
@@ -27,6 +30,93 @@ from pyspark.sql.types import (
 )
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
+
+
+@pytest.fixture
+def write_target(spark, tmp_path):
+    name = "delta_write_schema"
+    path = tmp_path / "table"
+    try:
+        yield name, path
+    finally:
+        spark.sql("DROP VIEW IF EXISTS delta_write_schema_source")
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def _create_write_target(spark, target, *, default=False):
+    name, path = target
+    spark.sql(
+        f"CREATE TABLE {name} (a INT, b INT) USING delta "
+        f"LOCATION '{escape_sql_string_literal(str(path))}' "
+        "TBLPROPERTIES ('delta.feature.allowColumnDefaults'='supported')"
+    )
+    if default:
+        spark.sql(f"ALTER TABLE {name} ALTER COLUMN b SET DEFAULT 42")
+    spark.sql(f"INSERT INTO {name} VALUES (1, 2)")  # noqa: S608
+
+
+def _write_files(path):
+    return {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()}
+
+
+def _assert_write_rows_and_schema(frame, expected):
+    schema = StructType([StructField(name, IntegerType(), True) for name in ("a", "b")])
+    assert [(f.name, f.dataType, f.nullable) for f in frame.schema] == [
+        (f.name, f.dataType, f.nullable) for f in schema
+    ]
+    assert [tuple(row) for row in frame.orderBy(*schema.fieldNames()).collect()] == sorted(expected)
+
+
+def _append_write_target(spark, target, source, api):
+    name, path = target
+    if api in ("sql_name", "sql_position"):
+        source.createOrReplaceTempView("delta_write_schema_source")
+        clause = " BY NAME" if api == "sql_name" else ""
+        spark.sql(f"INSERT INTO {name}{clause} SELECT * FROM delta_write_schema_source").collect()  # noqa: S608
+    elif api == "insert_into":
+        source.write.mode("append").insertInto(name)
+    elif api == "save_table":
+        source.write.format("delta").mode("append").option("path", str(path)).saveAsTable(name)
+    else:
+        assert api == "v2"
+        source.writeTo(name).append()
+
+
+@pytest.mark.parametrize("api", ["sql_name", "save_table", "v2"])
+@pytest.mark.parametrize("source_schema", ["a INT, c INT", "a INT, b INT, c INT"])
+def test_delta_defaults_do_not_discard_unknown_write_columns(spark, write_target, api, source_schema):
+    # The extended name-matching path is shared with Delta default columns.
+    _create_write_target(spark, write_target, default=True)
+    name, path = write_target
+    before = _write_files(path)
+    source = spark.createDataFrame([tuple(range(10, 10 + len(source_schema.split(","))))], source_schema)
+    with pytest.raises(PySparkException, match="column not found in target table: c"):
+        _append_write_target(spark, write_target, source, api)
+    assert _write_files(path) == before
+    _assert_write_rows_and_schema(spark.table(name), [(1, 2)])
+    _append_write_target(spark, write_target, spark.createDataFrame([(10,)], "a INT"), api)
+    _assert_write_rows_and_schema(spark.table(name), [(1, 2), (10, 42)])
+
+
+@pytest.mark.parametrize("api", ["sql_name", "save_table", "v2"])
+def test_delta_nullable_omission_policy_is_unchanged(spark, write_target, api):
+    # Iceberg's nullable-only omission rule must not widen Delta's fast path.
+    _create_write_target(spark, write_target)
+    name, path = write_target
+    before = _write_files(path)
+    source = spark.createDataFrame([(10,)], "a INT")
+    with pytest.raises(PySparkException, match="input schema for INSERT has 1 fields"):
+        _append_write_target(spark, write_target, source, api)
+    assert _write_files(path) == before
+    _assert_write_rows_and_schema(spark.table(name), [(1, 2)])
+
+
+@pytest.mark.parametrize("api", ["sql_position", "insert_into"])
+def test_delta_positional_default_omission_is_unchanged(spark, write_target, api):
+    _create_write_target(spark, write_target, default=True)
+    source = spark.createDataFrame([(10,)], "a INT")
+    _append_write_target(spark, write_target, source, api)
+    _assert_write_rows_and_schema(spark.table(write_target[0]), [(1, 2), (10, 42)])
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -66,6 +156,137 @@ def _delta_field(schema, name):
     raise AssertionError(msg)
 
 
+def _catalog_nullability_schema(shape, nullable):
+    array_type = ArrayType(StringType(), containsNull=nullable)
+    payload_type = {
+        "array": array_type,
+        "struct": StructType([StructField("items", array_type, nullable)]),
+        "map": MapType(StringType(), array_type, valueContainsNull=nullable),
+    }[shape]
+    return StructType([StructField("id", IntegerType(), False), StructField("payload", payload_type, True)])
+
+
+def _catalog_nullability_rows(shape):
+    populated, empty, nested_null, null_child = {
+        "array": (["a"], [], [None, "b"], None),
+        "struct": (Row(items=["a"]), Row(items=[]), Row(items=[None, "b"]), Row(items=None)),
+        "map": ({"items": ["a"]}, {}, {"items": [None, "b"]}, {"items": None}),
+    }[shape]
+    return [(0, populated)], [(1, populated), (2, empty)], [(3, nested_null), (4, null_child), (5, None)]
+
+
+def _assert_catalog_nullability(spark, table_name, delta_path, expected_type, expected_rows):
+    logged_payload = _delta_field(_latest_delta_schema(delta_path), "payload")
+    if isinstance(expected_type, StructType):
+        # Spark field metadata has a separate encoding in Sail's log schema.
+        assert logged_payload["type"]["type"] == "struct"
+        [logged_items] = logged_payload["type"]["fields"]
+        assert logged_items["name"] == "items"
+        assert logged_items["nullable"] == expected_type["items"].nullable
+        assert logged_items["type"] == expected_type["items"].dataType.jsonValue()
+    else:
+        assert logged_payload["type"] == expected_type.jsonValue()
+    assert logged_payload["nullable"] is True
+    named = spark.table(table_name)
+    by_path = spark.read.format("delta").load(str(delta_path))
+    assert named.schema == by_path.schema
+    assert named.schema["payload"].dataType == expected_type
+    assert named.schema["payload"].nullable is True
+    for frame in (named, by_path):
+        rows = sorted(frame.collect(), key=lambda row: row.id)
+        assert [(row.id, row.payload) for row in rows] == expected_rows
+
+
+def _exercise_catalog_nullability(
+    spark, table_name, delta_path, creation, mode, shape, initial_nullable, *, use_insert_into=False
+):
+    initial_schema = _catalog_nullability_schema(shape, initial_nullable)
+    initial_rows, strict_rows, nullable_rows = _catalog_nullability_rows(shape)
+    initial = spark.createDataFrame(initial_rows, initial_schema)
+    if creation == "ddl":
+        spark.sql(
+            f"CREATE TABLE {table_name} (id INT, payload {initial_schema['payload'].dataType.simpleString()}) "
+            f"USING DELTA LOCATION '{escape_sql_string_literal(str(delta_path))}'"
+        ).collect()
+        initial.write.format("delta").mode("append").saveAsTable(table_name)
+    else:
+        initial.write.format("delta").option("path", str(delta_path)).saveAsTable(table_name)
+    expected_type = initial_schema["payload"].dataType
+    _assert_catalog_nullability(spark, table_name, delta_path, expected_type, initial_rows)
+
+    strict = spark.createDataFrame(strict_rows, _catalog_nullability_schema(shape, False))
+    if use_insert_into:
+        strict.write.insertInto(table_name, overwrite=mode == "overwrite")
+    else:
+        strict.write.format("delta").mode(mode).saveAsTable(table_name)
+    expected_rows = (initial_rows if mode == "append" else []) + strict_rows
+    _assert_catalog_nullability(spark, table_name, delta_path, expected_type, expected_rows)
+
+    if initial_nullable:
+        nullable = spark.createDataFrame(nullable_rows, _catalog_nullability_schema(shape, True))
+        nullable.write.format("delta").mode("append").saveAsTable(table_name)
+        _assert_catalog_nullability(spark, table_name, delta_path, expected_type, expected_rows + nullable_rows)
+
+
+@pytest.mark.parametrize(
+    ("creation", "mode", "shape", "initial_nullable"),
+    [
+        pytest.param("ddl", "overwrite", "array", True, id="ddl-array"),
+        pytest.param("dataframe", "overwrite", "array", True, id="dataframe-array"),
+        pytest.param("dataframe", "append", "array", True, id="append-array"),
+        pytest.param("dataframe", "overwrite", "array", False, id="always-strict-array"),
+        pytest.param("dataframe", "overwrite", "struct", True, id="nested-struct"),
+        pytest.param("dataframe", "overwrite", "map", True, id="nested-map"),
+    ],
+)
+def test_delta_catalog_uses_snapshot_nullability(spark, tmp_path, creation, mode, shape, initial_nullable):
+    table_name = "delta_catalog_nullability"
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}").collect()
+    try:
+        _exercise_catalog_nullability(spark, table_name, tmp_path / "table", creation, mode, shape, initial_nullable)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}").collect()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("creation", "shape"),
+    [("ddl", "array"), ("dataframe", "array"), ("dataframe", "struct"), ("dataframe", "map")],
+)
+def test_delta_catalog_nullability_delta_spark(spark, delta_jvm_spark, tmp_path, creation, shape):
+    """Reference lifecycle, then alternate Sail and Delta-Spark writes to the same log."""
+    delta_path = tmp_path / "table"
+    sail_table = "delta_catalog_nullability_sail"
+    jvm_table = "delta_catalog_nullability_jvm"
+    spark.sql(f"DROP TABLE IF EXISTS {sail_table}").collect()
+    delta_jvm_spark.sql(f"DROP TABLE IF EXISTS {jvm_table}").collect()
+    try:
+        # Delta 3.3 staged table replacements do not advertise truncate support.
+        # Insert into the existing table to exercise named overwrites on Spark 3.5.
+        _exercise_catalog_nullability(
+            delta_jvm_spark, jvm_table, delta_path, creation, "overwrite", shape, True, use_insert_into=True
+        )
+        spark.sql(
+            f"CREATE TABLE {sail_table} USING DELTA LOCATION '{escape_sql_string_literal(str(delta_path))}'"
+        ).collect()
+        _, strict_rows, nullable_rows = _catalog_nullability_rows(shape)
+        expected_type = _catalog_nullability_schema(shape, True)["payload"].dataType
+        _assert_catalog_nullability(spark, sail_table, delta_path, expected_type, strict_rows + nullable_rows)
+
+        strict = spark.createDataFrame(strict_rows, _catalog_nullability_schema(shape, False))
+        strict.write.format("delta").mode("overwrite").saveAsTable(sail_table)
+        for engine, table in ((spark, sail_table), (delta_jvm_spark, jvm_table)):
+            _assert_catalog_nullability(engine, table, delta_path, expected_type, strict_rows)
+
+        nullable = delta_jvm_spark.createDataFrame(nullable_rows, _catalog_nullability_schema(shape, True))
+        nullable.write.format("delta").mode("append").save(str(delta_path))
+        for engine, table in ((spark, sail_table), (delta_jvm_spark, jvm_table)):
+            _assert_catalog_nullability(engine, table, delta_path, expected_type, strict_rows + nullable_rows)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {sail_table}").collect()
+        delta_jvm_spark.sql(f"DROP TABLE IF EXISTS {jvm_table}").collect()
+
+
 def test_delta_schema_read_with_custom_schema(spark, tmp_path):
     """Test with a custom schema and filter conditions."""
     delta_path = tmp_path / "delta_custom_schema"
@@ -84,7 +305,7 @@ def test_delta_schema_read_with_custom_schema(spark, tmp_path):
 
     result_df = spark.read.format("delta").load(delta_table_path).filter("name IS NOT NULL AND score > 80")
     result = result_df.collect()
-    assert len(result) == 2  # noqa: PLR2004
+    assert len(result) == 2
     assert {row.name for row in result} == {"Alice", "Charlie"}
 
     loaded_schema = result_df.schema

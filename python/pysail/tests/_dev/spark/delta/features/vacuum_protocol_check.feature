@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake VACUUM protocol check
 
   Scenario: VACUUM protocol check allows ordinary reads and writes

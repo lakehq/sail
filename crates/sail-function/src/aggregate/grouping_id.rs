@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{Result, not_impl_err};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};

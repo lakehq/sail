@@ -1,4 +1,6 @@
-//! [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/optimizer/src/analyzer/type_coercion.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/optimizer/src/analyzer/type_coercion.rs
+
 //!
 //! Spark-compatible type coercion for Sail's logical analyzer.
 //!
@@ -40,7 +42,7 @@ use std::borrow::Cow;
 use std::sync::{Arc, LazyLock};
 
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+use arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion::optimizer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
@@ -59,13 +61,10 @@ use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::functions::{
     UDFCoercionExt, fields_with_udf, value_fields_with_higher_order_udf_and_lambdas,
 };
-use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::type_coercion::{is_datetime, is_interval, is_signed_numeric, is_timestamp};
 use datafusion_expr::utils::merge_schema;
-// DataFusion's MERGE statement is coerced as in DataFusion, though Sail does not create it.
-#[expect(clippy::disallowed_types)]
 use datafusion_expr::{
-    Cast, DmlStatement, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
+    Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
     ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, WriteOp, is_false,
     is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
@@ -337,7 +336,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     }
 
     #[expect(clippy::disallowed_types)]
-    fn coerce_dml(&self, mut dml: DmlStatement) -> Result<LogicalPlan> {
+    fn coerce_dml(&self, mut dml: datafusion_expr::DmlStatement) -> Result<LogicalPlan> {
         let WriteOp::MergeInto(merge_op) = &dml.op else {
             return Ok(LogicalPlan::Dml(dml));
         };
@@ -1567,8 +1566,8 @@ fn coerce_case_expression(
         })
         .transpose()?;
     let then_else_coerce_type =
-        get_coerce_type_for_case_expression(&then_types, else_type.as_ref()).ok_or_else(|| {
-            if let Some(else_type) = else_type {
+        case_result_type(&then_types, else_type.as_ref()).ok_or_else(|| {
+            if let Some(else_type) = &else_type {
                 plan_datafusion_err!(
                     "Failed to coerce then ({}) and else ({else_type}) \
                          to common types in CASE WHEN expression",
@@ -1593,7 +1592,8 @@ fn coerce_case_expression(
     let when_then = case
         .when_then_expr
         .into_iter()
-        .map(|(when, then)| {
+        .zip(&then_types)
+        .map(|((when, then), then_type)| {
             let when_type = case_when_coerce_type.as_ref().unwrap_or(&DataType::Boolean);
             let when = when.cast_to(when_type, schema).map_err(|e| {
                 DataFusionError::Context(
@@ -1604,17 +1604,152 @@ fn coerce_case_expression(
                     Box::new(e),
                 )
             })?;
-            let then = then.cast_to(&then_else_coerce_type, schema)?;
+            let then = cast_case_result_value(*then, then_type, &then_else_coerce_type, schema)?;
             Ok((Box::new(when), Box::new(then)))
         })
         .collect::<Result<Vec<_>>>()?;
     let else_expr = case
         .else_expr
-        .map(|expr| expr.cast_to(&then_else_coerce_type, schema))
+        .zip(else_type.as_ref())
+        .map(|(expr, else_type)| {
+            cast_case_result_value(*expr, else_type, &then_else_coerce_type, schema)
+        })
         .transpose()?
         .map(Box::new);
 
     Ok(Case::new(case_expr, when_then, else_expr))
+}
+
+// The functions below are specific to Sail. They are shared by `coerce_case_expression` and the
+// plan resolver.
+
+/// Returns the common type of the result values of a CASE expression, given the types of its THEN
+/// values and the type of its ELSE value if there is one.
+///
+/// The plan resolver casts the values of a CASE expression to this type when the expression is
+/// resolved (see `coerce_conditional_values` in `sail-plan`), so that the resolved expression has
+/// this type, which DataFusion would otherwise type by its first non-null value.
+// TODO: Unlike Spark, the common type keeps the scale of DECIMAL values that exceed the maximum
+//  precision instead of their integral digits, and it is DECIMAL rather than DOUBLE for FLOAT or
+//  DOUBLE with DECIMAL values. The type coercion of `coalesce` and UNION shares this.
+pub fn case_result_type(then_types: &[DataType], else_type: Option<&DataType>) -> Option<DataType> {
+    let (first_type, other_types) = match else_type {
+        Some(else_type) => (else_type, then_types),
+        None => then_types.split_first()?,
+    };
+    let common_type = other_types
+        .iter()
+        .try_fold(first_type.clone(), |common_type, data_type| {
+            type_union_coercion(&common_type, data_type)
+        })?;
+    // The common type of nested values may not keep their field metadata (e.g. interval qualifiers).
+    // TODO: Widen different interval qualifiers (e.g. YEAR and MONTH to YEAR TO MONTH) instead of
+    //  keeping the first one.
+    Some(
+        then_types
+            .iter()
+            .chain(else_type)
+            .fold(common_type, |common_type, data_type| {
+                with_nested_field_metadata(common_type, data_type)
+            }),
+    )
+}
+
+/// Casts a result value of a CASE expression from its type to the common type of the values.
+///
+/// A value of a nested type is cast even if it already has the common type. Constant folding can
+/// make nested fields of the value non-nullable later (e.g. `array(named_struct('a', 1))`), but
+/// CASE evaluation requires every value to have exactly the type of the expression.
+pub fn cast_case_result_value(
+    value: Expr,
+    data_type: &DataType,
+    common_type: &DataType,
+    schema: &DFSchema,
+) -> Result<Expr> {
+    if data_type == common_type {
+        Ok(cast_nested_value(value, common_type))
+    } else {
+        value.cast_to(common_type, schema)
+    }
+}
+
+/// Casts a value of a nested type to the type explicitly, unless it is a cast already.
+pub fn cast_nested_value(value: Expr, data_type: &DataType) -> Expr {
+    if data_type.is_nested() && !matches!(value, Expr::Cast(_) | Expr::TryCast(_)) {
+        Expr::Cast(Cast::new(Box::new(value), data_type.clone()))
+    } else {
+        value
+    }
+}
+
+/// Fills in missing field metadata of a nested data type from a data type of the same shape, and
+/// makes its nested fields nullable if the corresponding fields are nullable.
+fn with_nested_field_metadata(data_type: DataType, source: &DataType) -> DataType {
+    let field = |field: &FieldRef, source: &FieldRef| {
+        let data_type = with_nested_field_metadata(field.data_type().clone(), source.data_type());
+        let mut field = field
+            .as_ref()
+            .clone()
+            .with_data_type(data_type)
+            .with_nullable(field.is_nullable() || source.is_nullable());
+        if field.metadata().is_empty() {
+            field.set_metadata(source.metadata().clone());
+        }
+        Arc::new(field)
+    };
+    match (&data_type, source) {
+        (DataType::Struct(fields), DataType::Struct(sources)) => {
+            let aligned = fields.len() == sources.len()
+                && fields
+                    .iter()
+                    .zip(sources)
+                    .all(|(f, s)| f.name() == s.name());
+            let sources = if aligned {
+                // Repeated names identify different fields when their positions agree.
+                sources.iter().collect()
+            } else {
+                match fields
+                    .iter()
+                    .map(|field| sources.find(field.name()).map(|(_, source)| source))
+                    .collect::<Option<Vec<_>>>()
+                {
+                    Some(sources) => sources,
+                    None if fields.len() == sources.len() => sources.iter().collect(),
+                    None => return data_type,
+                }
+            };
+            DataType::Struct(
+                fields
+                    .iter()
+                    .zip(sources)
+                    .map(|(f, source)| field(f, source))
+                    .collect(),
+            )
+        }
+        (
+            DataType::List(f)
+            | DataType::LargeList(f)
+            | DataType::FixedSizeList(f, _)
+            | DataType::ListView(f)
+            | DataType::LargeListView(f),
+            DataType::List(source)
+            | DataType::LargeList(source)
+            | DataType::FixedSizeList(source, _)
+            | DataType::ListView(source)
+            | DataType::LargeListView(source),
+        ) => match &data_type {
+            DataType::List(_) => DataType::List(field(f, source)),
+            DataType::LargeList(_) => DataType::LargeList(field(f, source)),
+            DataType::FixedSizeList(_, size) => DataType::FixedSizeList(field(f, source), *size),
+            DataType::ListView(_) => DataType::ListView(field(f, source)),
+            DataType::LargeListView(_) => DataType::LargeListView(field(f, source)),
+            _ => data_type,
+        },
+        (DataType::Map(f, sorted), DataType::Map(source, _)) => {
+            DataType::Map(field(f, source), *sorted)
+        }
+        _ => data_type,
+    }
 }
 
 /// Get a common schema that is compatible with all inputs of UNION.
@@ -1798,7 +1933,9 @@ fn coerce_multi_column_in_subquery(
     ))
 }
 
-// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/optimizer/src/utils.rs#L85-L94
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/optimizer/src/utils.rs#L85-L94
 /// Return the expression schema for a MERGE DML node.
 fn merge_into_schema(plan: &LogicalPlan) -> Result<Option<DFSchema>> {
     let LogicalPlan::Dml(dml) = plan else {
@@ -1809,12 +1946,15 @@ fn merge_into_schema(plan: &LogicalPlan) -> Result<Option<DFSchema>> {
     };
     merge_dml_schema(dml).map(Some)
 }
+// SPDX-SnippetEnd
 
-// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/logical_plan/dml.rs#L213-L221
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/logical_plan/dml.rs#L213-L221
 // TODO: Remove after DataFusion 56
 /// Build the target-plus-source schema used by MERGE expressions.
 #[expect(clippy::disallowed_types)]
-pub fn merge_dml_schema(dml: &DmlStatement) -> Result<DFSchema> {
+pub fn merge_dml_schema(dml: &datafusion_expr::DmlStatement) -> Result<DFSchema> {
     let WriteOp::MergeInto(_) = &dml.op else {
         return internal_err!("DmlStatement::merge_schema requires a MERGE operation");
     };
@@ -1822,8 +1962,11 @@ pub fn merge_dml_schema(dml: &DmlStatement) -> Result<DFSchema> {
     //  DataFusion 55 qualifies the MERGE target with the table name.
     expression_merge_op_schema_for(&dml.table_name, &dml.target.schema(), dml.input.schema())
 }
+// SPDX-SnippetEnd
 
-// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/logical_plan/dml.rs#L361-L378
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/logical_plan/dml.rs#L361-L378
 // TODO: Remove after DataFusion 56
 /// Build a MERGE expression schema before constructing the operation.
 fn expression_merge_op_schema_for(
@@ -1843,9 +1986,12 @@ fn expression_merge_op_schema_for(
     DFSchema::try_from_qualified_schema(target_qualifier.clone(), target_schema)?
         .join(source_schema)
 }
+// SPDX-SnippetEnd
 
 // TODO: Remove after DataFusion 56
-// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/expr_schema.rs#L862-L919
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/expr_schema.rs#L862-L919
 /// Cast the leading columns of a subquery to the given types, one per column,
 /// like [`cast_subquery`] does for its first column. The result keeps only
 /// the `cast_to_types.len()` leading columns.
@@ -1901,9 +2047,12 @@ fn cast_subquery_columns(subquery: Subquery, cast_to_types: &[DataType]) -> Resu
         spans: Spans::new(),
     })
 }
+// SPDX-SnippetEnd
 
 // TODO: Remove after DataFusion 56
-// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/expr.rs#L1405-L1451
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/expr.rs#L1405-L1451
 /// The tuple elements of a multi-column `(a, b, ...) IN (SELECT x, y, ...)`,
 /// given the compared expression `expr` and the `subquery` plan, or `None`
 /// for a single-column `IN`.
@@ -1949,6 +2098,7 @@ fn in_subquery_tuple_values<'a>(
     }
     Ok(Some(values))
 }
+// SPDX-SnippetEnd
 
 #[cfg(test)]
 #[expect(
@@ -3227,6 +3377,20 @@ mod test {
         }
     }
 
+    /// Like [`cast_if_not_same_type`], but values of a nested type are cast even if they already
+    /// have the type.
+    fn cast_or_pin_if_not_same_type(
+        expr: Box<Expr>,
+        data_type: &DataType,
+        schema: &DFSchemaRef,
+    ) -> Box<Expr> {
+        if data_type.is_nested() && &expr.get_type(schema).unwrap() == data_type {
+            Box::new(cast(*expr, data_type.clone()))
+        } else {
+            cast_if_not_same_type(expr, data_type, schema)
+        }
+    }
+
     fn cast_helper(
         case: Case,
         case_when_type: &DataType,
@@ -3242,19 +3406,290 @@ mod test {
             .map(|(when, then)| {
                 (
                     cast_if_not_same_type(when, case_when_type, schema),
-                    cast_if_not_same_type(then, then_else_type, schema),
+                    cast_or_pin_if_not_same_type(then, then_else_type, schema),
                 )
             })
             .collect::<Vec<_>>();
         let else_expr = case
             .else_expr
-            .map(|e| cast_if_not_same_type(e, then_else_type, schema));
+            .map(|e| cast_or_pin_if_not_same_type(e, then_else_type, schema));
 
         Case {
             expr,
             when_then_expr,
             else_expr,
         }
+    }
+
+    /// The common type of CASE values is the same as in DataFusion, except for DECIMAL types whose
+    /// common precision overflows `i8` in DataFusion (e.g. with negative scales), which are excluded.
+    #[test]
+    fn test_case_result_type_matches_datafusion() {
+        use arrow::datatypes::{Fields, IntervalUnit};
+        use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
+
+        use crate::type_coercion::case_result_type;
+
+        let item = |data_type: DataType, nullable: bool| {
+            Arc::new(Field::new_list_field(data_type, nullable))
+        };
+        let dictionary =
+            |value: DataType| DataType::Dictionary(Box::new(DataType::Int32), Box::new(value));
+        let struct_type = |fields: Vec<Field>| DataType::Struct(Fields::from(fields));
+        let types = [
+            DataType::Null,
+            DataType::Boolean,
+            DataType::Int8,
+            DataType::UInt32,
+            DataType::Int64,
+            DataType::UInt64,
+            DataType::Float16,
+            DataType::Float64,
+            DataType::Decimal32(9, 2),
+            DataType::Decimal128(38, 0),
+            DataType::Decimal128(38, 38),
+            DataType::Decimal256(76, 0),
+            Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+            DataType::Binary,
+            DataType::BinaryView,
+            DataType::Date32,
+            DataType::Date64,
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+05:30".into())),
+            DataType::Duration(TimeUnit::Microsecond),
+            DataType::Interval(IntervalUnit::YearMonth),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            dictionary(Utf8),
+            dictionary(DataType::Int64),
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                Arc::new(Field::new("values", Utf8, true)),
+            ),
+            DataType::List(item(DataType::Int32, false)),
+            DataType::List(item(DataType::Int64, true)),
+            DataType::LargeList(item(DataType::Int32, true)),
+            DataType::FixedSizeList(item(DataType::Int32, false), 2),
+            struct_type(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", Utf8, true),
+            ]),
+            struct_type(vec![
+                Field::new("b", Utf8, false),
+                Field::new("a", DataType::Int64, true),
+            ]),
+            struct_type(vec![
+                Field::new("x", DataType::Int32, true),
+                Field::new("y", Utf8, true),
+            ]),
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    struct_type(vec![
+                        Field::new("key", Utf8, false),
+                        Field::new("value", DataType::Int32, true),
+                    ]),
+                    false,
+                )),
+                false,
+            ),
+        ];
+        for first in &types {
+            for second in &types {
+                for else_type in [None, Some(second)] {
+                    let then_types = match else_type {
+                        Some(_) => vec![first.clone()],
+                        None => vec![first.clone(), second.clone()],
+                    };
+                    assert_eq!(
+                        case_result_type(&then_types, else_type),
+                        get_coerce_type_for_case_expression(&then_types, else_type),
+                        "{first} and {second}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Unlike DataFusion 55.2, the common precision of DECIMAL types is not computed with `i8`, which
+    /// overflows for negative scales (the same as in DataFusion 56).
+    #[test]
+    fn test_case_result_type_of_decimals_with_negative_scales() {
+        use crate::type_coercion::case_result_type;
+
+        assert_eq!(
+            case_result_type(
+                &[DataType::Decimal128(10, 0)],
+                Some(&DataType::Decimal128(38, -90))
+            ),
+            Some(DataType::Decimal128(38, 0))
+        );
+    }
+
+    /// The common type of CASE values with nested types is nullable wherever a value is nullable,
+    /// regardless of the order of the values.
+    #[test]
+    fn test_case_result_type_widens_nested_nullability() {
+        use crate::type_coercion::case_result_type;
+
+        let int_field =
+            |name: &str, nullable| Arc::new(Field::new(name, DataType::Int32, nullable));
+        let r#struct = |nullable| DataType::Struct(vec![int_field("a", nullable)].into());
+        let renamed_struct = |nullable| DataType::Struct(vec![int_field("b", nullable)].into());
+        let list =
+            |nullable| DataType::List(Arc::new(Field::new_list_field(DataType::Int32, nullable)));
+        let map = |nullable| {
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(
+                        vec![
+                            Arc::new(Field::new("key", DataType::Utf8, false)),
+                            int_field("value", nullable),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                false,
+            )
+        };
+        let list_of_struct =
+            |nullable| DataType::List(Arc::new(Field::new_list_field(r#struct(nullable), true)));
+        let nested_struct = |nullable| {
+            DataType::Struct(vec![Arc::new(Field::new("s", r#struct(nullable), true))].into())
+        };
+
+        for (nullable, non_nullable) in [
+            (r#struct(true), r#struct(false)),
+            (r#struct(true), renamed_struct(false)),
+            (list(true), list(false)),
+            (map(true), map(false)),
+            (list_of_struct(true), list_of_struct(false)),
+            (nested_struct(true), nested_struct(false)),
+        ] {
+            for (then_type, else_type) in [(&nullable, &non_nullable), (&non_nullable, &nullable)] {
+                let common_type =
+                    case_result_type(std::slice::from_ref(then_type), Some(else_type));
+                assert!(
+                    common_type
+                        .as_ref()
+                        .is_some_and(|common_type| common_type.equals_datatype(&nullable)),
+                    "THEN {then_type} and ELSE {else_type} have the common type {common_type:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_case_result_type_preserves_duplicate_field_metadata() {
+        use sail_common_datafusion::uuid::{UUID_EXTENSION_NAME, UUID_METADATA_KEY};
+
+        use crate::type_coercion::case_result_type;
+
+        let uuid = Field::new("x", DataType::FixedSizeBinary(16), true).with_metadata(
+            [(
+                UUID_METADATA_KEY.to_string(),
+                UUID_EXTENSION_NAME.to_string(),
+            )]
+            .into(),
+        );
+        let string = Field::new("x", DataType::Utf8, true);
+        for fields in [vec![uuid.clone(), string.clone()], vec![string, uuid]] {
+            let data_type = DataType::Struct(fields.into());
+            assert_eq!(
+                case_result_type(std::slice::from_ref(&data_type), Some(&data_type)),
+                Some(data_type.clone())
+            );
+            let nested = DataType::List(Arc::new(Field::new_list_field(data_type, true)));
+            assert_eq!(
+                case_result_type(std::slice::from_ref(&nested), Some(&nested)),
+                Some(nested)
+            );
+        }
+    }
+
+    /// List views are coerced like lists, to a list type, unless the values have the same type.
+    #[test]
+    fn test_case_result_type_of_list_views() {
+        use sail_common_datafusion::type_coercion::binary_type_coercion::comparison_coercion;
+
+        use crate::type_coercion::case_result_type;
+
+        let item = |data_type, nullable| Arc::new(Field::new_list_field(data_type, nullable));
+        let int_item = |nullable| item(DataType::Int32, nullable);
+        for (then_type, else_type, expected) in [
+            (
+                DataType::ListView(int_item(false)),
+                DataType::List(int_item(true)),
+                DataType::List(int_item(true)),
+            ),
+            (
+                DataType::List(int_item(true)),
+                DataType::ListView(item(DataType::Int64, false)),
+                DataType::List(item(DataType::Int64, true)),
+            ),
+            (
+                DataType::ListView(int_item(true)),
+                DataType::ListView(int_item(false)),
+                DataType::List(int_item(true)),
+            ),
+            (
+                DataType::LargeListView(int_item(true)),
+                DataType::List(int_item(true)),
+                DataType::LargeList(int_item(true)),
+            ),
+            (
+                DataType::ListView(int_item(true)),
+                DataType::LargeList(int_item(true)),
+                DataType::LargeList(int_item(true)),
+            ),
+            (
+                DataType::ListView(int_item(true)),
+                DataType::FixedSizeList(int_item(true), 2),
+                DataType::List(int_item(true)),
+            ),
+            (
+                DataType::LargeListView(int_item(true)),
+                DataType::ListView(int_item(true)),
+                DataType::LargeList(int_item(true)),
+            ),
+            (
+                DataType::LargeList(int_item(true)),
+                DataType::LargeListView(int_item(true)),
+                DataType::LargeList(int_item(true)),
+            ),
+            (
+                DataType::FixedSizeList(int_item(true), 2),
+                DataType::LargeListView(int_item(true)),
+                DataType::LargeList(int_item(true)),
+            ),
+            (
+                DataType::ListView(int_item(true)),
+                DataType::ListView(int_item(true)),
+                DataType::ListView(int_item(true)),
+            ),
+            (
+                DataType::LargeListView(int_item(true)),
+                DataType::LargeListView(int_item(true)),
+                DataType::LargeListView(int_item(true)),
+            ),
+        ] {
+            assert_eq!(
+                case_result_type(std::slice::from_ref(&then_type), Some(&else_type)),
+                Some(expected),
+                "THEN {then_type} and ELSE {else_type}"
+            );
+        }
+        assert_eq!(
+            comparison_coercion(
+                &DataType::ListView(int_item(false)),
+                &DataType::List(item(DataType::Int64, true))
+            ),
+            Some(DataType::List(item(DataType::Int64, true)))
+        );
     }
 
     #[test]

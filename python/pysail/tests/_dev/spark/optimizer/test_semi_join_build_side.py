@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -5,10 +7,9 @@ from dataclasses import dataclass
 import pytest
 
 from pysail.testing.spark.session import spark_connect_server
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.plan import normalize_plan_text
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail optimizer plans")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail optimizer plans")
 
 
 @dataclass(frozen=True)

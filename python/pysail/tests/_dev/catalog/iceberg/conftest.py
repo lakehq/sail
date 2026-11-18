@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Fixtures for native Iceberg REST catalog integration tests."""
 
 from __future__ import annotations
@@ -8,7 +10,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
-    from pysail.testing._dev.containers.iceberg_rest import IcebergRestService
+    from pysail.testing._dev.containers.iceberg import IcebergRestService
 
 
 @pytest.fixture(scope="session")

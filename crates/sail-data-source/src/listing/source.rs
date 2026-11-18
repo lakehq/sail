@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -288,6 +290,7 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
             options,
             lakehouse_table,
             sql_insert: _,
+            identity_columns_to_track: _,
         } = info;
         let catalog_managed = lakehouse_table.is_some();
         if bucket_by.is_some() {

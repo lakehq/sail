@@ -1,16 +1,23 @@
 [package]
 name = "sail-sql-analyzer"
 version = { workspace = true }
+authors = { workspace = true }
 edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+repository = { workspace = true }
 rust-version = { workspace = true }
 
 [lints]
 workspace = true
 
 [dependencies]
+sail-common-spark = { path = "../sail-common-spark" }
 sail-common = { path = "../sail-common" }
 sail-sql-parser = { path = "../sail-sql-parser" }
 
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 regex = { workspace = true }
 lazy_static = { workspace = true }

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 @spark-4
 Feature: CAST(... AS VARIANT) output schema
 

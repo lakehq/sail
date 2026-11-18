@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Integration tests for the Celeborn shuffle client actor."""
 
 from __future__ import annotations
@@ -8,7 +10,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from pysail import _native
 from pysail.testing._dev.containers.celeborn import CelebornFrame, CelebornMessageType, CelebornStatus
 from pysail.testing._dev.utils.proxy import (
     Close,
@@ -17,13 +18,16 @@ from pysail.testing._dev.utils.proxy import (
     ConnectionOpened,
     ConnectionRule,
     FrameReceived,
+    FrameRule,
     ProxyEvent,
+    Replace,
     RuleApplied,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+    from pysail import _native
     from pysail.testing._dev.containers.celeborn import (
         MasterService,
         WorkerService,
@@ -31,12 +35,11 @@ if TYPE_CHECKING:
     from pysail.testing._dev.utils.proxy import EndpointProxy
 
 
-ShuffleClient = _native._celeborn.ShuffleClient  # noqa: SLF001
-LifecycleManager = _native._celeborn.LifecycleManager  # noqa: SLF001
 _DATA = b"hello Celeborn"
 _REPLICATION_WORKER_COUNT = 2
 _MAX_RECOVERY_TIME_SECONDS = 2
 _MULTI_EPOCH_WORKER_COUNT = 2
+_OPEN_STREAM_MESSAGE_TYPE = 51
 
 
 def _add_drop_next_connection(proxies: dict[str, EndpointProxy]) -> None:
@@ -141,9 +144,11 @@ def lifecycle_manager(
     celeborn_master: MasterService,
     celeborn_workers: dict[str, WorkerService],
     celeborn_endpoint_resolver: object,
-) -> Generator[LifecycleManager, None, None]:
+) -> Generator[_native._celeborn.LifecycleManager, None, None]:
+    from pysail import _native
+
     assert celeborn_workers["celeborn-worker-1"].push_port > 0
-    with LifecycleManager(
+    with _native._celeborn.LifecycleManager(  # noqa: SLF001
         [f"{celeborn_master.host}:{celeborn_master.port}"],
         "sail-celeborn-shuffle-integration",
         endpoint_resolver=celeborn_endpoint_resolver,
@@ -153,16 +158,18 @@ def lifecycle_manager(
 
 @pytest.fixture(scope="module")
 def shuffle_client(
-    lifecycle_manager: LifecycleManager,
-) -> Generator[ShuffleClient, None, None]:
-    with ShuffleClient(lifecycle_manager) as client:
+    lifecycle_manager: _native._celeborn.LifecycleManager,
+) -> Generator[_native._celeborn.ShuffleClient, None, None]:
+    from pysail import _native
+
+    with _native._celeborn.ShuffleClient(lifecycle_manager) as client:  # noqa: SLF001
         yield client
     assert lifecycle_manager.running
 
 
 def test_shuffle_client_registers_and_unregisters(
-    shuffle_client: ShuffleClient,
-    lifecycle_manager: LifecycleManager,
+    shuffle_client: _native._celeborn.ShuffleClient,
+    lifecycle_manager: _native._celeborn.LifecycleManager,
 ) -> None:
     assert shuffle_client.running
     workers = shuffle_client.register_shuffle(1, [0, 1], False, 1)
@@ -174,8 +181,8 @@ def test_shuffle_client_registers_and_unregisters(
 
 
 def test_shuffle_client_pushes_and_reads_partition(
-    shuffle_client: ShuffleClient,
-    lifecycle_manager: LifecycleManager,
+    shuffle_client: _native._celeborn.ShuffleClient,
+    lifecycle_manager: _native._celeborn.LifecycleManager,
 ) -> None:
     shuffle_client.register_shuffle(2, [0], False, 1)
     assert shuffle_client.push_data(2, 0, 0, 0, _DATA) == len(_DATA) + 16
@@ -185,8 +192,8 @@ def test_shuffle_client_pushes_and_reads_partition(
 
 
 def test_shuffle_client_commits_after_all_mappers_end(
-    shuffle_client: ShuffleClient,
-    lifecycle_manager: LifecycleManager,
+    shuffle_client: _native._celeborn.ShuffleClient,
+    lifecycle_manager: _native._celeborn.LifecycleManager,
 ) -> None:
     shuffle_client.register_shuffle(3, [0], False, 1)
     shuffle_client.push_data(3, 0, 0, 0, b"first map")
@@ -197,19 +204,119 @@ def test_shuffle_client_commits_after_all_mappers_end(
     lifecycle_manager.unregister_shuffle(3)
 
 
+@pytest.mark.parametrize("compression", ["none", "lz4", pytest.param("zstd(1)", id="zstd")])
+def test_shuffle_client_uses_native_batch_headers(
+    celeborn_master: MasterService,
+    celeborn_push_endpoint_resolver: object,
+    celeborn_push_proxies: dict[str, EndpointProxy],
+    compression: str,
+) -> None:
+    """Batch metadata matches the native integers read by the Java client and worker."""
+    from pysail import _native
+
+    with (
+        _native._celeborn.LifecycleManager(  # noqa: SLF001
+            [f"{celeborn_master.host}:{celeborn_master.port}"],
+            f"sail-celeborn-native-batch-headers-{compression}",
+            endpoint_resolver=celeborn_push_endpoint_resolver,
+            compression=compression,
+        ) as manager,
+        _native._celeborn.ShuffleClient(manager) as client,  # noqa: SLF001
+    ):
+        client.register_shuffle(1, [0], False, 1)
+        batches = [b"first batch" * 128, b"second batch" * 128]
+        for batch in batches:
+            client.push_data(1, 0, 1, 2, batch)
+        client.mapper_end(1, 0, 0, 2)
+        client.mapper_end(1, 1, 2, 2)
+
+        frames = [
+            event.frame
+            for proxy in celeborn_push_proxies.values()
+            for event in proxy.events.snapshot()
+            if isinstance(event, FrameReceived)
+            and event.direction == "client_to_server"
+            and isinstance(event.frame, CelebornFrame)
+            and event.frame.message_type == CelebornMessageType.PUSH_DATA
+        ]
+        assert len(frames) == len(batches)
+        for batch_id, frame in enumerate(frames):
+            # '=' uses native byte order with four-byte integers and no alignment padding.
+            assert struct.unpack_from("=4i", frame.body) == (1, 2, batch_id, len(frame.body) - 16)
+        assert list(client.read_partition_stream(1, 0)) == batches
+
+
+@pytest.mark.parametrize("compression", ["none", "lz4", pytest.param("zstd(1)", id="zstd")])
+def test_shuffle_client_reads_a_sorted_map_range(
+    celeborn_master: MasterService,
+    celeborn_fetch_endpoint_resolver: object,
+    celeborn_fetch_proxies: dict[str, EndpointProxy],
+    compression: str,
+) -> None:
+    """A range read forces the worker to interpret batch headers while sorting the file."""
+    from pysail import _native
+
+    def select_middle_map(event: FrameReceived[CelebornFrame]) -> Replace[CelebornFrame]:
+        frame = event.frame
+        # Append PbOpenStream.startIndex=1 and endIndex=2. The last value of a singular
+        # protobuf field overrides the original value, so the worker sorts and filters maps.
+        payload = frame.body[8:] + b"\x18\x01\x20\x02"
+        body = struct.pack(">ii", _OPEN_STREAM_MESSAGE_TYPE, len(payload)) + payload
+        return Replace(
+            CelebornFrame(
+                frame.message_type,
+                frame.metadata[:8] + struct.pack(">i", len(body)),
+                body,
+            )
+        )
+
+    rule = FrameRule(
+        frame_type=CelebornFrame,
+        condition=lambda event: (
+            event.direction == "client_to_server"
+            and event.frame.message_type == CelebornMessageType.RPC_REQUEST
+            and struct.unpack_from(">i", event.frame.body)[0] == _OPEN_STREAM_MESSAGE_TYPE
+        ),
+        action=select_middle_map,
+    )
+    for proxy in celeborn_fetch_proxies.values():
+        proxy.rules.add(rule)
+
+    with (
+        _native._celeborn.LifecycleManager(  # noqa: SLF001
+            [f"{celeborn_master.host}:{celeborn_master.port}"],
+            f"sail-celeborn-sorted-map-range-{compression}",
+            endpoint_resolver=celeborn_fetch_endpoint_resolver,
+            compression=compression,
+        ) as manager,
+        _native._celeborn.ShuffleClient(manager) as client,  # noqa: SLF001
+    ):
+        client.register_shuffle(1, [0], False, 1)
+        # Write out of map order so sorting must use map IDs as well as batch lengths.
+        for map_id in [2, 0, 1]:
+            for batch_id in range(2):
+                client.push_data(1, 0, map_id, map_id + 1, f"map {map_id} batch {batch_id}".encode() * 128)
+            client.mapper_end(1, map_id, map_id + 1, 3)
+
+        assert b"".join(client.read_partition_stream(1, 0)) == b"map 1 batch 0" * 128 + b"map 1 batch 1" * 128
+        assert _event_count(celeborn_fetch_proxies, RuleApplied) == 1
+
+
 def test_shuffle_client_replicates_data(
     celeborn_master: MasterService,
     celeborn_workers: dict[str, WorkerService],
     celeborn_endpoint_resolver: object,
 ) -> None:
+    from pysail import _native
+
     assert celeborn_workers["celeborn-worker-2"].replicate_port > 0
     with (
-        LifecycleManager(
+        _native._celeborn.LifecycleManager(  # noqa: SLF001
             [f"{celeborn_master.host}:{celeborn_master.port}"],
             "sail-celeborn-replication-integration",
             endpoint_resolver=celeborn_endpoint_resolver,
         ) as manager,
-        ShuffleClient(manager) as client,
+        _native._celeborn.ShuffleClient(manager) as client,  # noqa: SLF001
     ):
         workers = client.register_shuffle(4, [0], True, _REPLICATION_WORKER_COUNT)
         assert len(workers) == _REPLICATION_WORKER_COUNT
@@ -220,18 +327,22 @@ def test_shuffle_client_replicates_data(
 
 
 def test_shuffle_client_returns_registration_failure() -> None:
+    from pysail import _native
+
     with (
-        LifecycleManager(["127.0.0.1:0"], "sail-celeborn-unavailable") as manager,
-        ShuffleClient(manager) as client,
+        _native._celeborn.LifecycleManager(["127.0.0.1:0"], "sail-celeborn-unavailable") as manager,  # noqa: SLF001
+        _native._celeborn.ShuffleClient(manager) as client,  # noqa: SLF001
         pytest.raises(RuntimeError, match="application error: registration failed: I/O error"),
     ):
         client.register_shuffle(1, [0], False, 1)
 
 
 def test_shuffle_client_stop_does_not_stop_lifecycle_manager(
-    lifecycle_manager: LifecycleManager,
+    lifecycle_manager: _native._celeborn.LifecycleManager,
 ) -> None:
-    with ShuffleClient(lifecycle_manager) as client:
+    from pysail import _native
+
+    with _native._celeborn.ShuffleClient(lifecycle_manager) as client:  # noqa: SLF001
         assert client.running
     assert lifecycle_manager.running
 
@@ -252,15 +363,17 @@ def test_shuffle_client_handles_a_partition_split(
     split_status: int,
 ) -> None:
     """A partition split preserves batches and moves future writes to a new epoch."""
+    from pysail import _native
+
     with (
-        LifecycleManager(
+        _native._celeborn.LifecycleManager(  # noqa: SLF001
             [f"{celeborn_master.host}:{celeborn_master.port}"],
             f"sail-celeborn-split-{split_mode}",
             endpoint_resolver=celeborn_push_endpoint_resolver,
             partition_split_threshold=4,
             partition_split_mode=split_mode,
         ) as manager,
-        ShuffleClient(manager) as client,
+        _native._celeborn.ShuffleClient(manager) as client,  # noqa: SLF001
     ):
         client.register_shuffle(5, [0], False, 1)
 
@@ -293,13 +406,15 @@ def test_shuffle_client_revives_a_dropped_push_connection(
     celeborn_push_proxies: dict[str, EndpointProxy],
 ) -> None:
     """A failed first push is retried on the other already-running worker."""
+    from pysail import _native
+
     with (
-        LifecycleManager(
+        _native._celeborn.LifecycleManager(  # noqa: SLF001
             [f"{celeborn_master.host}:{celeborn_master.port}"],
             "sail-celeborn-revive-first-push",
             endpoint_resolver=celeborn_push_endpoint_resolver,
         ) as manager,
-        ShuffleClient(manager) as client,
+        _native._celeborn.ShuffleClient(manager) as client,  # noqa: SLF001
     ):
         workers = client.register_shuffle(1, [0], False, 1)
         assert workers
@@ -330,15 +445,17 @@ def test_shuffle_client_reads_data_from_epochs_before_and_after_revive(
     celeborn_push_proxies: dict[str, EndpointProxy],
 ) -> None:
     """A recoverable location change must preserve earlier committed epoch data."""
+    from pysail import _native
+
     before_revive = b"epoch zero"
     after_revive = b"epoch one"
     with (
-        LifecycleManager(
+        _native._celeborn.LifecycleManager(  # noqa: SLF001
             [f"{celeborn_master.host}:{celeborn_master.port}"],
             "sail-celeborn-revive-multi-epoch",
             endpoint_resolver=celeborn_push_endpoint_resolver,
         ) as manager,
-        ShuffleClient(manager) as client,
+        _native._celeborn.ShuffleClient(manager) as client,  # noqa: SLF001
     ):
         workers = client.register_shuffle(2, [0], False, 1)
         assert workers
@@ -368,13 +485,15 @@ def test_shuffle_client_does_not_reuse_a_worker_that_failed_in_an_earlier_epoch(
     celeborn_push_proxies: dict[str, EndpointProxy],
 ) -> None:
     """A second revive must not route data back to the worker that failed first."""
+    from pysail import _native
+
     with (
-        LifecycleManager(
+        _native._celeborn.LifecycleManager(  # noqa: SLF001
             [f"{celeborn_master.host}:{celeborn_master.port}"],
             "sail-celeborn-revive-worker-exclusion",
             endpoint_resolver=celeborn_push_endpoint_resolver,
         ) as manager,
-        ShuffleClient(manager) as client,
+        _native._celeborn.ShuffleClient(manager) as client,  # noqa: SLF001
     ):
         client.register_shuffle(3, [0], False, 1)
 
@@ -394,10 +513,10 @@ def test_shuffle_client_does_not_reuse_a_worker_that_failed_in_an_earlier_epoch(
                 ConnectionClosed,
                 reason="test",
             )
-            == 2  # noqa: PLR2004
+            == 2
         )
-        assert _event_count(celeborn_push_proxies, ConnectionOpened) == 2  # noqa: PLR2004
-        assert len(_event_workers(celeborn_push_proxies, ConnectionOpened)) == 2  # noqa: PLR2004
+        assert _event_count(celeborn_push_proxies, ConnectionOpened) == 2
+        assert len(_event_workers(celeborn_push_proxies, ConnectionOpened)) == 2
 
 
 def test_shuffle_client_reader_discovers_epochs_revived_by_another_client(
@@ -406,16 +525,18 @@ def test_shuffle_client_reader_discovers_epochs_revived_by_another_client(
     celeborn_push_proxies: dict[str, EndpointProxy],
 ) -> None:
     """A pre-registered reader must include epochs created by a different writer."""
+    from pysail import _native
+
     before_revive = b"epoch zero"
     after_revive = b"epoch one"
     with (
-        LifecycleManager(
+        _native._celeborn.LifecycleManager(  # noqa: SLF001
             [f"{celeborn_master.host}:{celeborn_master.port}"],
             "sail-celeborn-revive-reader-location-update",
             endpoint_resolver=celeborn_push_endpoint_resolver,
         ) as manager,
-        ShuffleClient(manager) as writer,
-        ShuffleClient(manager) as reader,
+        _native._celeborn.ShuffleClient(manager) as writer,  # noqa: SLF001
+        _native._celeborn.ShuffleClient(manager) as reader,  # noqa: SLF001
     ):
         writer.register_shuffle(4, [0], False, 1)
         reader.register_shuffle(4, [0], False, 1)
@@ -433,8 +554,8 @@ def test_shuffle_client_reader_discovers_epochs_revived_by_another_client(
             )
             == 1
         )
-        assert _event_count(celeborn_push_proxies, ConnectionOpened) == 2  # noqa: PLR2004
-        assert len(_event_workers(celeborn_push_proxies, ConnectionOpened)) == 2  # noqa: PLR2004
+        assert _event_count(celeborn_push_proxies, ConnectionOpened) == 2
+        assert len(_event_workers(celeborn_push_proxies, ConnectionOpened)) == 2
 
         # Replication is disabled, so the two payloads live on different workers.
         # Reading their concatenation proves the reader opens both epoch streams.

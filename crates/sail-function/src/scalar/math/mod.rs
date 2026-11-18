@@ -1,4 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod java_random;
+pub mod mersenne_twister;
+pub mod partition_random;
 pub mod rand_poisson;
 pub mod randn;
 pub mod random;
@@ -10,6 +14,7 @@ pub mod spark_conv;
 pub mod spark_div;
 pub mod spark_negative;
 pub mod spark_pmod;
+pub mod spark_poisson;
 pub mod spark_signum;
 pub mod spark_sqrt;
 pub mod spark_try_add;

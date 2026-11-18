@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: round with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -203,10 +205,9 @@ Feature: round with an argument coming from a column
         """
       Then query error (?i)cannot (be )?cast
 
-  # CASE branch coercion and final expression typing are shared analyzer limitations.
+  # The common type of mixed CASE branches does not yet follow Spark's ANSI rules.
   Rule: Deferred common-type coercion of mixed CASE arguments
 
-    @sail-bug
     Scenario: round of a mixed CASE uses the final string type under ANSI off
       Given config spark.sql.ansi.enabled = false
       When query

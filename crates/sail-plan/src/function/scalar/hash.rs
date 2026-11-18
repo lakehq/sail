@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::functions::expr_fn;
@@ -8,6 +10,7 @@ use datafusion_spark::function::hash::xxhash64::SparkXxhash64;
 use datafusion_spark::function::math::hex::SparkHex;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
+use sail_function::scalar::string::lower::LowerFunc;
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -31,7 +34,7 @@ fn sha2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         func: Arc::new(ScalarUDF::from(SparkHex::new())),
         args: vec![result],
     });
-    Ok(expr_fn::lower(hex))
+    Ok(ScalarUDF::from(LowerFunc::new()).call(vec![hex]))
 }
 
 pub(super) fn list_built_in_hash_functions() -> Vec<(&'static str, ScalarFunction)> {

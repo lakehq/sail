@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -45,8 +47,9 @@ from pyspark.sql.types import (
     StructType as SparkStructType,
 )
 
+from pysail.testing._dev.spark.steps.iceberg import _find_latest_metadata
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
-from pysail.tests._dev.spark.iceberg.utils import pyiceberg_file_io_properties
+from pysail.tests._dev.spark.iceberg.utils import _local_file_path, pyiceberg_file_io_properties
 
 
 def test_iceberg_write_overwrite_and_read(spark, sql_catalog):
@@ -603,13 +606,24 @@ def test_iceberg_overwrite_schema_rejects_dropping_partition_column(spark, sql_c
             [(10, "overwrite")],
             schema="id LONG, value STRING",
         )
+        path = _local_file_path(table.location())
+        before = _find_latest_metadata(path)
+        before_files = {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()}
+        seed_rows = spark.read.format("iceberg").load(table.location()).collect()
+        seed_schema = spark.table(spark_table).schema
         with pytest.raises(Exception, match=r"(?i)Partition (?:field|column)"):
             (
                 replacement_df.write.format("iceberg")
                 .mode("overwrite")
                 .option("overwriteSchema", "true")
-                .saveAsTable(spark_table)
+                .save(table.location())
             )
+        assert _find_latest_metadata(path) == before
+        assert {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()} == before_files
+        assert spark.read.format("iceberg").load(table.location()).collect() == seed_rows
+        assert spark.table(spark_table).schema == seed_schema
+        assert spark.table(spark_table).collect() == seed_rows
+
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {spark_table}")
         sql_catalog.drop_table(identifier)
@@ -636,7 +650,7 @@ def test_iceberg_write_allows_int_to_long_without_merge_schema(spark, sql_catalo
         rows = result_df.collect()
         assert len(rows) == 1
         assert rows[0].id == 1
-        assert rows[0].value == 100  # noqa: PLR2004
+        assert rows[0].value == 100
     finally:
         sql_catalog.drop_table(identifier)
 

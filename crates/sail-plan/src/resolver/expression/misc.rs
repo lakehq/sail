@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -8,16 +10,17 @@ use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions::expr_fn as datafusion_fn;
-use datafusion_functions_nested::expr_fn::{array_element, array_length, map_extract};
+use datafusion_functions_nested::expr_fn::array_length;
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::drop_struct_field::DropStructField;
+use sail_function::scalar::collection::element::{array_element, map_element};
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::r#struct::drop_struct_field::DropStructField;
+use sail_function::scalar::r#struct::update_struct_field::UpdateStructField;
 use sail_function::scalar::table_input::TableInput;
-use sail_function::scalar::update_struct_field::UpdateStructField;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -327,6 +330,34 @@ impl PlanResolver<'_> {
             self.resolve_named_expression(child, schema, state).await?;
         let data_type = expr.get_type(schema)?;
 
+        // Spark reads a string literal on an array of structs as a field of every element, even
+        // if the string looks like a number. A column never selects a field, even if it is named
+        // like one, so this must run before attribute selectors are turned into literals below.
+        if let spec::Expr::Literal(spec::Literal::Utf8 { value: Some(field) }) = &extraction
+            && matches!(
+                &data_type,
+                DataType::List(item)
+                    | DataType::LargeList(item)
+                    | DataType::ListView(item)
+                    | DataType::LargeListView(item)
+                    | DataType::FixedSizeList(item, _)
+                    if matches!(item.data_type(), DataType::Struct(_))
+            )
+        {
+            let Ok(Some(values)) = self.resolve_potentially_nested_field(
+                expr.clone(),
+                &data_type,
+                std::slice::from_ref(field),
+            ) else {
+                discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
+                return Err(PlanError::AnalysisError(format!(
+                    "missing or ambiguous field: {field}"
+                )));
+            };
+            let name = format!("{}.{field}", name.one()?);
+            return Ok(NamedExpr::new(vec![name], values));
+        }
+
         // For Maps, we support non-literal expressions as keys
         if matches!(data_type, DataType::Map(_, _)) {
             let NamedExpr {
@@ -338,8 +369,7 @@ impl PlanResolver<'_> {
                 .await?;
 
             let result_name = format!("{}[{}]", name.one()?, extraction_name.one()?);
-            // Use map_extract which supports dynamic keys, then extract first element
-            let result_expr = array_element(map_extract(expr, extraction_expr), lit(1));
+            let result_expr = map_element(expr, extraction_expr);
             return Ok(NamedExpr::new(vec![result_name], result_expr));
         }
 

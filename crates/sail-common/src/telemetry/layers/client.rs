@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::task::{Context, Poll};
 
 use fastrace::Span;

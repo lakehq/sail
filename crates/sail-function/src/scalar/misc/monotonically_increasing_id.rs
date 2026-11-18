@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{Result, exec_err};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};

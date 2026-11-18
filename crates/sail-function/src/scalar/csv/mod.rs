@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod options;
 mod schema_of_csv;
 pub mod spark_from_csv;

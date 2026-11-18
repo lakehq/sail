@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Kerberos-authenticated native Hive Metastore integration tests."""
 
 from __future__ import annotations
@@ -8,10 +10,15 @@ import sys
 import uuid
 from typing import TYPE_CHECKING
 
+import pytest
+
 if TYPE_CHECKING:
     from pathlib import Path
 
     from pysail.testing._dev.containers.hms import KerberosHmsService
+
+# Allow time for KDC and HMS startup followed by the 300-second probe.
+pytestmark = pytest.mark.timeout(1200)
 
 _PROBE_MODULE = "pysail.testing._dev.containers.hms_probe"
 

@@ -1,10 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::mem;
 
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{Result, plan_datafusion_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF};
-use sail_function::scalar::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_function::StructFunction;
 use sail_function::scalar::table_input::TableInput;
 
 use crate::resolver::PlanResolver;
@@ -22,8 +24,8 @@ impl<'s> PlanRewriter<'s> for TableInputRewriter<'s> {
         Self { plan, state }
     }
 
-    fn into_plan(self) -> LogicalPlan {
-        self.plan
+    fn into_plan(self) -> Result<LogicalPlan> {
+        Ok(self.plan)
     }
 }
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The transport Protocol Buffers file is copied from the Celeborn project.
     // See `common/src/main/proto/TransportMessages.proto` for the original file.

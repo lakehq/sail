@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """Named-table semantics follow Iceberg 1.11 / Spark 4.1 TestDeleteFrom.
 
@@ -13,7 +15,7 @@ from pyspark.sql.types import StructType
 
 from pysail.testing._dev.spark.steps.iceberg import _current_snapshot, _find_latest_metadata
 from pysail.tests._dev.spark.iceberg.test_iceberg_equality_delete import _append_equality_delete_snapshot
-from pysail.tests._dev.spark.iceberg.test_iceberg_merge import _current_manifest_entries
+from pysail.tests._dev.spark.iceberg.utils import _current_manifest_entries
 
 
 @pytest.mark.parametrize("format_version", [1, 2, 3])
@@ -93,7 +95,7 @@ def test_truncate_removes_position_deletes_and_deletion_vectors(spark, tmp_path,
         summary = _current_snapshot(_find_latest_metadata(path))["summary"]
         assert int(summary["removed-delete-files"]) > 0
         assert summary["total-position-deletes"] == "0"
-        if format_version == 3:  # noqa: PLR2004
+        if format_version == 3:
             assert int(summary["removed-dvs"]) > 0
         assert all(file.exists() for file in files)
         historical = (

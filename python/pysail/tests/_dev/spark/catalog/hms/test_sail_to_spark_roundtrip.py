@@ -1,4 +1,6 @@
-# ruff: noqa: PLR2004, PT018, S608, TC002
+# SPDX-License-Identifier: Apache-2.0
+
+# ruff: noqa: S608, TC002
 """Sail -> Spark roundtrip tests through a shared HMS metastore.
 
 All tests use the MinIO-backed S3 warehouse to avoid Docker bind-mount
@@ -7,7 +9,6 @@ permission issues on CI.
 
 from __future__ import annotations
 
-import pytest
 from pyspark.sql import SparkSession
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
@@ -74,9 +75,7 @@ def test_sail_creates_spark_reads_parquet(
     )
     ref_rows = jvm_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
 
-    assert len(ref_rows) == 2, f"Reference Spark expected 2 rows, got {len(ref_rows)}"
-    assert ref_rows[0].id == 1 and ref_rows[0].name == "alice"
-    assert ref_rows[1].id == 2 and ref_rows[1].name == "bob"
+    assert [(row.id, row.name) for row in ref_rows] == [(1, "alice"), (2, "bob")]
     ref_properties = _describe_extended_properties(jvm_spark, table_fqn)
     assert ref_properties.get("Type") == "EXTERNAL"
     assert ref_properties.get("Provider", "").lower() == "parquet"
@@ -85,7 +84,6 @@ def test_sail_creates_spark_reads_parquet(
     assert _describe_column_comments(jvm_spark, table_fqn)["id"] == "identifier"
 
 
-@pytest.mark.xfail(reason="not yet working in Hive 4", strict=True)
 def test_sail_creates_spark_reads_schema_matrix_parquet(
     spark: SparkSession,
     jvm_spark: SparkSession,
@@ -235,9 +233,7 @@ def test_sail_creates_spark_reads_parquet_with_explicit_location(
         table_type="EXTERNAL",
     )
     ref_rows = jvm_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
-    assert len(ref_rows) == 2, f"Reference Spark expected 2 rows, got {len(ref_rows)}"
-    assert ref_rows[0].id == 1 and ref_rows[0].name == "alice"
-    assert ref_rows[1].id == 2 and ref_rows[1].name == "bob"
+    assert [(row.id, row.name) for row in ref_rows] == [(1, "alice"), (2, "bob")]
 
 
 def test_sail_unsets_table_properties_spark_observes_metadata_change(
@@ -326,7 +322,6 @@ def test_sail_dataframe_writer_creates_spark_readable_external_table(
     assert [(row.id, row.name) for row in rows] == [(1, "alice"), (2, "bob")]
 
 
-@pytest.mark.xfail(reason="not yet working in Hive 4", strict=True)
 def test_sail_creates_spark_reads_mixed_complex_partitioned_parquet(
     spark: SparkSession,
     jvm_spark: SparkSession,

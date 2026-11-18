@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pandas as pd
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
@@ -5,6 +7,7 @@ from pyspark.sql import functions as F  # noqa: N812
 
 @pytest.mark.parametrize("operand", ["subject", "pattern"])
 @pytest.mark.parametrize("explicit_index", [False, True])
+@pytest.mark.spark(cross_version=True)
 def test_regexp_instr_evaluates_nondeterministic_input_once(spark, operand, explicit_index):
     calls = 0
 

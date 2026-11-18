@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
 
@@ -27,6 +17,12 @@ pub struct DeltaWriterExecOptions {
     pub write_batch_size: std::num::NonZeroUsize,
     pub merge_schema: bool,
     pub change_data: bool,
+    #[serde(default)]
+    pub merge_change_data_preimage: Option<String>,
+    #[serde(default)]
+    pub change_data_row_tags: bool,
+    #[serde(default)]
+    pub merge_on_read: bool,
     pub overwrite_schema: bool,
     pub replace_where: Option<String>,
     #[serde(default)]
@@ -46,6 +42,9 @@ impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
             write_batch_size: options.write_batch_size,
             merge_schema: options.merge_schema,
             change_data: false,
+            merge_change_data_preimage: None,
+            change_data_row_tags: false,
+            merge_on_read: false,
             overwrite_schema: options.overwrite_schema,
             replace_where: options.replace_where,
             generation_expressions: HashMap::new(),

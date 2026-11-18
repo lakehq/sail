@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session time zone
 
   # Every expected value was measured on Spark 4.2 over Spark Connect (Java 17), starting from a session pinned to UTC.
@@ -385,7 +387,6 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
         | Asia/Kolkata |
 
     # `intervalValue` takes an optional sign before the number.
-    @sail-bug
     Scenario: SET TIME ZONE accepts an interval with a plus sign
       Given config spark.sql.session.timeZone = UTC
       Given statement

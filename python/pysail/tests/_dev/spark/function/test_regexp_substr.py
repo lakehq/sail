@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for the regexp_substr function."""
 
 import pandas as pd

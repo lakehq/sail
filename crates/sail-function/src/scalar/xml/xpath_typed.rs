@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -10,8 +12,9 @@ use datafusion_common::{DataFusionError, Result, internal_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use xee_xpath::{Documents, Queries, Query};
+use xee_xpath::{Documents, Query};
 
+use super::{reader, xpath_query};
 use crate::functions_utils::make_scalar_function;
 
 pub fn xpath_typed_name_to_kind(name: &str) -> Result<XpathTypedKind> {
@@ -164,16 +167,13 @@ fn evaluate_xpath_boolean(xml: &str, path: &str) -> Result<Option<bool>> {
     if xml.is_empty() || path.is_empty() {
         return Ok(None);
     }
-    let wrapped = format!("boolean({path})");
+    let wrapped = format!("boolean(({path}))");
     let mut documents = Documents::new();
-    let document = documents
-        .add_string_without_uri(xml)
+    let document = reader::parse(documents.xot_mut(), xml, reader::ParseMode::XPathValue)
         .map_err(|e| DataFusionError::Execution(format!("Invalid XML document: {e}")))?;
-    let query = Queries::default()
-        .one(&wrapped, |_, item| Ok(item.try_into_value::<bool>()?))
-        .map_err(|e| DataFusionError::Execution(format!("Invalid XPath '{path}': {e}")))?;
-    let result = query
-        .execute(&mut documents, document)
+    let query = xpath_query::compile(&wrapped)?
+        .map(|sequence, _, _| Ok(sequence.one()?.try_into_value::<bool>()?));
+    let result = Query::execute(&query, &mut documents, document.node)
         .map_err(|e| DataFusionError::Execution(format!("Error evaluating XPath '{path}': {e}")))?;
     Ok(Some(result))
 }
@@ -182,16 +182,13 @@ fn evaluate_xpath_number(xml: &str, path: &str) -> Result<Option<f64>> {
     if xml.is_empty() || path.is_empty() {
         return Ok(None);
     }
-    let wrapped = format!("number({path})");
+    let wrapped = format!("number(({path}))");
     let mut documents = Documents::new();
-    let document = documents
-        .add_string_without_uri(xml)
+    let document = reader::parse(documents.xot_mut(), xml, reader::ParseMode::XPathValue)
         .map_err(|e| DataFusionError::Execution(format!("Invalid XML document: {e}")))?;
-    let query = Queries::default()
-        .one(&wrapped, |_, item| Ok(item.try_into_value::<f64>()?))
-        .map_err(|e| DataFusionError::Execution(format!("Invalid XPath '{path}': {e}")))?;
-    let result = query
-        .execute(&mut documents, document)
+    let query = xpath_query::compile(&wrapped)?
+        .map(|sequence, _, _| Ok(sequence.one()?.try_into_value::<f64>()?));
+    let result = Query::execute(&query, &mut documents, document.node)
         .map_err(|e| DataFusionError::Execution(format!("Error evaluating XPath '{path}': {e}")))?;
     Ok(Some(result))
 }
@@ -200,16 +197,13 @@ fn evaluate_xpath_string(xml: &str, path: &str) -> Result<Option<String>> {
     if xml.is_empty() || path.is_empty() {
         return Ok(None);
     }
-    let wrapped = format!("string({path})");
+    let wrapped = format!("string(({path}))");
     let mut documents = Documents::new();
-    let document = documents
-        .add_string_without_uri(xml)
+    let document = reader::parse(documents.xot_mut(), xml, reader::ParseMode::XPathValue)
         .map_err(|e| DataFusionError::Execution(format!("Invalid XML document: {e}")))?;
-    let query = Queries::default()
-        .one(&wrapped, |_, item| Ok(item.try_into_value::<String>()?))
-        .map_err(|e| DataFusionError::Execution(format!("Invalid XPath '{path}': {e}")))?;
-    let result = query
-        .execute(&mut documents, document)
+    let query = xpath_query::compile(&wrapped)?
+        .map(|sequence, _, _| Ok(sequence.one()?.try_into_value::<String>()?));
+    let result = Query::execute(&query, &mut documents, document.node)
         .map_err(|e| DataFusionError::Execution(format!("Error evaluating XPath '{path}': {e}")))?;
     Ok(Some(result))
 }
@@ -296,7 +290,7 @@ fn build_int16_array(xmls: &StringArray, paths: &StringArray) -> Result<ArrayRef
             builder.append_null();
         } else {
             match evaluate_xpath_number(xmls.value(row), paths.value(row))? {
-                Some(v) => builder.append_value(v as i16),
+                Some(v) => builder.append_value(v as i32 as i16),
                 None => builder.append_null(),
             }
         }

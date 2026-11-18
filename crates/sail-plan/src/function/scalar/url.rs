@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
 use datafusion_spark::function::url::url_decode::UrlDecode;
 use datafusion_spark::function::url::url_encode::UrlEncode;

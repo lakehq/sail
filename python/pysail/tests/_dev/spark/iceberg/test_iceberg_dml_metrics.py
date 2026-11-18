@@ -1,8 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """Iceberg action summaries count affected rows separately from storage records."""
 
 import pytest
-from pyspark.errors import UnsupportedOperationException
 from pyspark.sql.types import StructType
 
 from pysail.testing._dev.spark.steps.iceberg import _current_snapshot, _find_latest_metadata
@@ -108,7 +109,7 @@ def _check(spark, table, path, sql, rows, metrics, *, changed=True, operation=No
     current = _current_snapshot(after)
     parent = _current_snapshot(before)["snapshot-id"] if before.get("snapshots") else None
     assert current.get("parent-snapshot-id") == parent
-    if after["format-version"] >= 2:  # noqa: PLR2004
+    if after["format-version"] >= 2:
         assert after["last-sequence-number"] == before["last-sequence-number"] + 1
     summary = current["summary"]
     assert {k: v for k, v in summary.items() if k.startswith(PREFIXES)} == metrics
@@ -116,7 +117,7 @@ def _check(spark, table, path, sql, rows, metrics, *, changed=True, operation=No
         assert summary["operation"] == operation
     if files is not None:
         assert _files_by_path(spark, table) == files
-        if after["format-version"] == 3:  # noqa: PLR2004
+        if after["format-version"] == 3:
             assert after["next-row-id"] == before["next-row-id"]
             assert current["added-rows"] == 0
     return summary
@@ -544,16 +545,6 @@ def test_rewrite_procedure_does_not_publish_action_metrics(spark, tmp_path, metr
     table, _ = metrics_table
     _seed(spark, table, tmp_path)
     statement = f"CALL system.rewrite_data_files('{table}', options => map('rewrite-all', 'true'))"
-    before = _find_latest_metadata(tmp_path)
-    if before["format-version"] == 3:  # noqa: PLR2004
-        # v3 rewriting is explicitly unsupported; rejection must not publish a summary.
-        files = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
-        with pytest.raises(UnsupportedOperationException, match="v3 row-lineage preservation"):
-            spark.sql(statement)
-        assert _find_latest_metadata(tmp_path) == before
-        assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == files
-        assert spark.table(table).orderBy("id").collect() == list(BASE)
-        return
     result = spark.sql(statement).first()
     assert result.rewritten_data_files_count == 1
     metadata = _find_latest_metadata(tmp_path)

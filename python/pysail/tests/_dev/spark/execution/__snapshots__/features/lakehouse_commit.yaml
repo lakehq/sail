@@ -9,7 +9,7 @@ data:
     == Plan Steps ==
     initial_logical_plan:
     Barrier
-      DeltaWrite: options=DeltaWriteNodeOptions { output: Empty, path: "<tmp>/distributed_delta_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [] }, OptionList { items: [("path", "<tmp>/distributed_delta_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_delta_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("<tmp>/distributed_delta_commit") }, operation: Write, format: Delta, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_delta_commit:Delta:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }) }
+      DeltaWrite: options=DeltaWriteNodeOptions { identity_columns_to_track: [], output: Empty, path: "<tmp>/distributed_delta_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [] }, OptionList { items: [("path", "<tmp>/distributed_delta_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_delta_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("<tmp>/distributed_delta_commit") }, operation: Write, format: Delta, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_delta_commit:Delta:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }) }
         Projection: CASE WHEN Boolean(true) THEN range.id ELSE Int64(NULL) END AS id
           Projection: range.#1 AS id
             Projection: range.#0 AS #1
@@ -51,7 +51,7 @@ data:
 
     logical_plan after simplify_expressions:
     Barrier
-      DeltaWrite: options=DeltaWriteNodeOptions { output: Empty, path: "<tmp>/distributed_delta_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [] }, OptionList { items: [("path", "<tmp>/distributed_delta_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_delta_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("<tmp>/distributed_delta_commit") }, operation: Write, format: Delta, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_delta_commit:Delta:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }) }
+      DeltaWrite: options=DeltaWriteNodeOptions { identity_columns_to_track: [], output: Empty, path: "<tmp>/distributed_delta_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [] }, OptionList { items: [("path", "<tmp>/distributed_delta_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_delta_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("<tmp>/distributed_delta_commit") }, operation: Write, format: Delta, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_delta_commit:Delta:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }) }
         Projection: range.id AS id
           Projection: range.#1 AS id
             Projection: range.#0 AS #1
@@ -64,10 +64,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -106,6 +115,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -126,9 +138,12 @@ data:
 
     logical_plan after optimize_projections:
     Barrier
-      DeltaWrite: options=DeltaWriteNodeOptions { output: Empty, path: "<tmp>/distributed_delta_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [] }, OptionList { items: [("path", "<tmp>/distributed_delta_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_delta_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("<tmp>/distributed_delta_commit") }, operation: Write, format: Delta, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_delta_commit:Delta:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }) }
+      DeltaWrite: options=DeltaWriteNodeOptions { identity_columns_to_track: [], output: Empty, path: "<tmp>/distributed_delta_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [] }, OptionList { items: [("path", "<tmp>/distributed_delta_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_delta_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("<tmp>/distributed_delta_commit") }, operation: Write, format: Delta, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_delta_commit:Delta:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }) }
         Projection: range.id AS id
           TableScan: range projection=[id]
+
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -157,10 +172,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -199,6 +223,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -220,6 +247,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -228,7 +258,7 @@ data:
 
     logical_plan:
     Barrier
-      DeltaWrite: options=DeltaWriteNodeOptions { output: Empty, path: "<tmp>/distributed_delta_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [] }, OptionList { items: [("path", "<tmp>/distributed_delta_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_delta_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("<tmp>/distributed_delta_commit") }, operation: Write, format: Delta, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_delta_commit:Delta:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }) }
+      DeltaWrite: options=DeltaWriteNodeOptions { identity_columns_to_track: [], output: Empty, path: "<tmp>/distributed_delta_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [] }, OptionList { items: [("path", "<tmp>/distributed_delta_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_delta_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("<tmp>/distributed_delta_commit") }, operation: Write, format: Delta, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_delta_commit:Delta:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }) }
         Projection: range.id AS id
           TableScan: range projection=[id]
 
@@ -250,8 +280,8 @@ data:
 
     initial_physical_plan_with_schema:
     DeltaCommitExec(table_path=file://<tmp>/distributed_delta_commit/), schema=[]
-      CoalescePartitionsExec, schema=[action:Union(Dense, 0: ("add": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "modificationTime": non-null Int64, "dataChange": non-null Boolean, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64, "clusteringProvider": Utf8)), 1: ("remove": non-null Struct("path": non-null Utf8, "dataChange": non-null Boolean, "deletionTimestamp": Int64, "extendedFileMetadata": Boolean, "partitionValues": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": Int64, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64)), 2: ("protocol": non-null Struct("minReaderVersion": non-null Int32, "minWriterVersion": non-null Int32, "readerFeatures": List(Utf8, field: 'element'), "writerFeatures": List(Utf8, field: 'element'))), 3: ("metadata": non-null Struct("id": non-null Utf8, "name": Utf8, "description": Utf8, "format": non-null Struct("provider": non-null Utf8, "options": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted)), "schemaString": non-null Utf8, "partitionColumns": non-null List(Utf8, field: 'element'), "createdTime": Int64, "configuration": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))), 4: ("commit_meta": non-null Struct("commit_row_count": non-null UInt64, "operation_json": Utf8, "operation_metrics_json": Utf8)), 5: ("cdc": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "dataChange": non-null Boolean, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))))]
-        DeltaWriterExec(table_path=file://<tmp>/distributed_delta_commit/), schema=[action:Union(Dense, 0: ("add": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "modificationTime": non-null Int64, "dataChange": non-null Boolean, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64, "clusteringProvider": Utf8)), 1: ("remove": non-null Struct("path": non-null Utf8, "dataChange": non-null Boolean, "deletionTimestamp": Int64, "extendedFileMetadata": Boolean, "partitionValues": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": Int64, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64)), 2: ("protocol": non-null Struct("minReaderVersion": non-null Int32, "minWriterVersion": non-null Int32, "readerFeatures": List(Utf8, field: 'element'), "writerFeatures": List(Utf8, field: 'element'))), 3: ("metadata": non-null Struct("id": non-null Utf8, "name": Utf8, "description": Utf8, "format": non-null Struct("provider": non-null Utf8, "options": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted)), "schemaString": non-null Utf8, "partitionColumns": non-null List(Utf8, field: 'element'), "createdTime": Int64, "configuration": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))), 4: ("commit_meta": non-null Struct("commit_row_count": non-null UInt64, "operation_json": Utf8, "operation_metrics_json": Utf8)), 5: ("cdc": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "dataChange": non-null Boolean, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))))]
+      CoalescePartitionsExec, schema=[action:Union(Dense, 0: ("add": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "modificationTime": non-null Int64, "dataChange": non-null Boolean, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64, "clusteringProvider": Utf8)), 1: ("remove": non-null Struct("path": non-null Utf8, "dataChange": non-null Boolean, "deletionTimestamp": Int64, "extendedFileMetadata": Boolean, "partitionValues": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": Int64, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64)), 2: ("protocol": non-null Struct("minReaderVersion": non-null Int32, "minWriterVersion": non-null Int32, "readerFeatures": List(Utf8, field: 'element'), "writerFeatures": List(Utf8, field: 'element'))), 3: ("metadata": non-null Struct("id": non-null Utf8, "name": Utf8, "description": Utf8, "format": non-null Struct("provider": non-null Utf8, "options": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted)), "schemaString": non-null Utf8, "partitionColumns": non-null List(Utf8, field: 'element'), "createdTime": Int64, "configuration": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))), 4: ("commit_meta": non-null Struct("commit_row_count": non-null UInt64, "operation_json": Utf8, "operation_metrics_json": Utf8, "identity_high_water_marks_json": Utf8)), 5: ("cdc": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "dataChange": non-null Boolean, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))))]
+        DeltaWriterExec(table_path=file://<tmp>/distributed_delta_commit/), schema=[action:Union(Dense, 0: ("add": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "modificationTime": non-null Int64, "dataChange": non-null Boolean, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64, "clusteringProvider": Utf8)), 1: ("remove": non-null Struct("path": non-null Utf8, "dataChange": non-null Boolean, "deletionTimestamp": Int64, "extendedFileMetadata": Boolean, "partitionValues": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": Int64, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64)), 2: ("protocol": non-null Struct("minReaderVersion": non-null Int32, "minWriterVersion": non-null Int32, "readerFeatures": List(Utf8, field: 'element'), "writerFeatures": List(Utf8, field: 'element'))), 3: ("metadata": non-null Struct("id": non-null Utf8, "name": Utf8, "description": Utf8, "format": non-null Struct("provider": non-null Utf8, "options": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted)), "schemaString": non-null Utf8, "partitionColumns": non-null List(Utf8, field: 'element'), "createdTime": Int64, "configuration": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))), 4: ("commit_meta": non-null Struct("commit_row_count": non-null UInt64, "operation_json": Utf8, "operation_metrics_json": Utf8, "identity_high_water_marks_json": Utf8)), 5: ("cdc": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "dataChange": non-null Boolean, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))))]
           ProjectionExec: expr=[id@0 as id], schema=[id:Int64]
             RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0], schema=[id:Int64]
 
@@ -352,6 +382,9 @@ data:
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepPartitionSensitiveInputs:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -414,7 +447,7 @@ data:
     == Plan Steps ==
     initial_logical_plan:
     Barrier
-      IcebergWrite: options=IcebergWriteNodeOptions { output: Empty, path: "file://<tmp>/distributed_iceberg_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [("metadata_location", "file://<tmp>/distributed_iceberg_commit/metadata/v1.metadata.json")] }, OptionList { items: [("path", "file://<tmp>/distributed_iceberg_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_iceberg_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("file://<tmp>/distributed_iceberg_commit") }, operation: Write, format: Iceberg, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_iceberg_commit:Iceberg:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }), planned_metadata_location: None, defer_commit: false, target_file_size: None, preserve_input_partitions: false }
+      IcebergWrite: options=IcebergWriteNodeOptions { output: Empty, path: "file://<tmp>/distributed_iceberg_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [("metadata_location", "file://<tmp>/distributed_iceberg_commit/metadata/v1.metadata.json")] }, OptionList { items: [("path", "file://<tmp>/distributed_iceberg_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_iceberg_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("file://<tmp>/distributed_iceberg_commit") }, operation: Write, format: Iceberg, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_iceberg_commit:Iceberg:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }), planned_metadata_location: None, defer_commit: false, target_file_size: None, preserve_input_partitions: false, rewrite_lineage: false }
         Projection: CASE WHEN Boolean(true) THEN range.id ELSE Int64(NULL) END AS id
           Projection: range.#1 AS id
             Projection: range.#0 AS #1
@@ -456,7 +489,7 @@ data:
 
     logical_plan after simplify_expressions:
     Barrier
-      IcebergWrite: options=IcebergWriteNodeOptions { output: Empty, path: "file://<tmp>/distributed_iceberg_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [("metadata_location", "file://<tmp>/distributed_iceberg_commit/metadata/v1.metadata.json")] }, OptionList { items: [("path", "file://<tmp>/distributed_iceberg_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_iceberg_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("file://<tmp>/distributed_iceberg_commit") }, operation: Write, format: Iceberg, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_iceberg_commit:Iceberg:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }), planned_metadata_location: None, defer_commit: false, target_file_size: None, preserve_input_partitions: false }
+      IcebergWrite: options=IcebergWriteNodeOptions { output: Empty, path: "file://<tmp>/distributed_iceberg_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [("metadata_location", "file://<tmp>/distributed_iceberg_commit/metadata/v1.metadata.json")] }, OptionList { items: [("path", "file://<tmp>/distributed_iceberg_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_iceberg_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("file://<tmp>/distributed_iceberg_commit") }, operation: Write, format: Iceberg, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_iceberg_commit:Iceberg:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }), planned_metadata_location: None, defer_commit: false, target_file_size: None, preserve_input_partitions: false, rewrite_lineage: false }
         Projection: range.id AS id
           Projection: range.#1 AS id
             Projection: range.#0 AS #1
@@ -469,10 +502,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -511,6 +553,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -531,9 +576,12 @@ data:
 
     logical_plan after optimize_projections:
     Barrier
-      IcebergWrite: options=IcebergWriteNodeOptions { output: Empty, path: "file://<tmp>/distributed_iceberg_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [("metadata_location", "file://<tmp>/distributed_iceberg_commit/metadata/v1.metadata.json")] }, OptionList { items: [("path", "file://<tmp>/distributed_iceberg_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_iceberg_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("file://<tmp>/distributed_iceberg_commit") }, operation: Write, format: Iceberg, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_iceberg_commit:Iceberg:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }), planned_metadata_location: None, defer_commit: false, target_file_size: None, preserve_input_partitions: false }
+      IcebergWrite: options=IcebergWriteNodeOptions { output: Empty, path: "file://<tmp>/distributed_iceberg_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [("metadata_location", "file://<tmp>/distributed_iceberg_commit/metadata/v1.metadata.json")] }, OptionList { items: [("path", "file://<tmp>/distributed_iceberg_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_iceberg_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("file://<tmp>/distributed_iceberg_commit") }, operation: Write, format: Iceberg, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_iceberg_commit:Iceberg:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }), planned_metadata_location: None, defer_commit: false, target_file_size: None, preserve_input_partitions: false, rewrite_lineage: false }
         Projection: range.id AS id
           TableScan: range projection=[id]
+
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -562,10 +610,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -604,6 +661,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -625,6 +685,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -633,7 +696,7 @@ data:
 
     logical_plan:
     Barrier
-      IcebergWrite: options=IcebergWriteNodeOptions { output: Empty, path: "file://<tmp>/distributed_iceberg_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [("metadata_location", "file://<tmp>/distributed_iceberg_commit/metadata/v1.metadata.json")] }, OptionList { items: [("path", "file://<tmp>/distributed_iceberg_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_iceberg_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("file://<tmp>/distributed_iceberg_commit") }, operation: Write, format: Iceberg, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_iceberg_commit:Iceberg:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }), planned_metadata_location: None, defer_commit: false, target_file_size: None, preserve_input_partitions: false }
+      IcebergWrite: options=IcebergWriteNodeOptions { output: Empty, path: "file://<tmp>/distributed_iceberg_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [("metadata_location", "file://<tmp>/distributed_iceberg_commit/metadata/v1.metadata.json")] }, OptionList { items: [("path", "file://<tmp>/distributed_iceberg_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_iceberg_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("file://<tmp>/distributed_iceberg_commit") }, operation: Write, format: Iceberg, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_iceberg_commit:Iceberg:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }), planned_metadata_location: None, defer_commit: false, target_file_size: None, preserve_input_partitions: false, rewrite_lineage: false }
         Projection: range.id AS id
           TableScan: range projection=[id]
 
@@ -655,7 +718,7 @@ data:
 
     initial_physical_plan_with_schema:
     IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/), schema=[]
-      IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/), schema=[action:Union(Dense, 0: ("add": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64)), 1: ("delete": non-null Struct("data_file": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64))), 2: ("commit_meta": non-null Struct("table_uri": non-null Utf8, "row_count": non-null UInt64, "action_summary_json": Utf8, "removed_data_file_paths": non-null List(non-null Utf8, field: 'element'), "skip_empty_commit": non-null Boolean, "requirements_json": non-null Utf8, "table_properties_json": non-null Utf8, "lakehouse_table_json": Utf8, "schema_json": Utf8, "partition_spec_json": Utf8)))]
+      IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/), schema=[action:Union(Dense, 0: ("add": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64)), 1: ("delete": non-null Struct("data_file": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64))), 2: ("commit_meta": non-null Struct("table_uri": non-null Utf8, "row_count": non-null UInt64, "action_summary_json": Utf8, "removed_data_file_paths": non-null List(non-null Utf8, field: 'element'), "skip_empty_commit": non-null Boolean, "requirements_json": non-null Utf8, "table_properties_json": non-null Utf8, "snapshot_properties_json": non-null Utf8, "lakehouse_table_json": Utf8, "schema_json": Utf8, "partition_spec_json": Utf8)))]
         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=4, schema=[id:Int64]
           ProjectionExec: expr=[id@0 as id], schema=[id:Int64]
             RangeExec: start=0, end=400, step=1, num_partitions=4, projection=[0], schema=[id:Int64]
@@ -761,6 +824,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -889,10 +955,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -929,6 +1004,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_limit:
@@ -957,6 +1035,9 @@ data:
             Projection: distributed_iceberg_commit.id AS id, distributed_iceberg_commit.__sail_file_path AS __sail_file_path, CASE WHEN distributed_iceberg_commit.id < Int64(10) THEN Int32(1) ELSE Int32(0) END AS __sail_operation_type
               TableScan: distributed_iceberg_commit projection=[id, __sail_file_path]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -984,10 +1065,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -1026,6 +1116,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -1045,6 +1138,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -1087,7 +1183,7 @@ data:
 
     initial_physical_plan_with_schema:
     IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/), schema=[]
-      IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/, row_level_mode=CopyOnWrite), schema=[action:Union(Dense, 0: ("add": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64)), 1: ("delete": non-null Struct("data_file": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64))), 2: ("commit_meta": non-null Struct("table_uri": non-null Utf8, "row_count": non-null UInt64, "action_summary_json": Utf8, "removed_data_file_paths": non-null List(non-null Utf8, field: 'element'), "skip_empty_commit": non-null Boolean, "requirements_json": non-null Utf8, "table_properties_json": non-null Utf8, "lakehouse_table_json": Utf8, "schema_json": Utf8, "partition_spec_json": Utf8)))]
+      IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/, row_level_mode=CopyOnWrite), schema=[action:Union(Dense, 0: ("add": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64)), 1: ("delete": non-null Struct("data_file": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64))), 2: ("commit_meta": non-null Struct("table_uri": non-null Utf8, "row_count": non-null UInt64, "action_summary_json": Utf8, "removed_data_file_paths": non-null List(non-null Utf8, field: 'element'), "skip_empty_commit": non-null Boolean, "requirements_json": non-null Utf8, "table_properties_json": non-null Utf8, "snapshot_properties_json": non-null Utf8, "lakehouse_table_json": Utf8, "schema_json": Utf8, "partition_spec_json": Utf8)))]
         ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_operation_type@2 as __sail_operation_type], schema=[id:Int64;N, __sail_file_path:Utf8, __sail_operation_type:Int32]
           FilterExec: max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 != 0, schema=[id:Int64;N, __sail_file_path:Utf8, __sail_operation_type:Int32, max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int32;N]
             BoundedWindowAggExec: wdw=[max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], schema=[id:Int64;N, __sail_file_path:Utf8, __sail_operation_type:Int32, max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int32;N]
@@ -1225,6 +1321,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -1427,10 +1526,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -1485,6 +1593,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_limit:
@@ -1565,6 +1676,9 @@ data:
                           Filter: range.id < Int64(10)
                             TableScan: range projection=[id]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -1592,10 +1706,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -1634,6 +1757,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -1653,6 +1779,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -1730,7 +1859,7 @@ data:
 
     initial_physical_plan_with_schema:
     IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/), schema=[]
-      IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/, row_level_mode=CopyOnWrite), schema=[action:Union(Dense, 0: ("add": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64)), 1: ("delete": non-null Struct("data_file": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64))), 2: ("commit_meta": non-null Struct("table_uri": non-null Utf8, "row_count": non-null UInt64, "action_summary_json": Utf8, "removed_data_file_paths": non-null List(non-null Utf8, field: 'element'), "skip_empty_commit": non-null Boolean, "requirements_json": non-null Utf8, "table_properties_json": non-null Utf8, "lakehouse_table_json": Utf8, "schema_json": Utf8, "partition_spec_json": Utf8)))]
+      IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/, row_level_mode=CopyOnWrite), schema=[action:Union(Dense, 0: ("add": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64)), 1: ("delete": non-null Struct("data_file": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64))), 2: ("commit_meta": non-null Struct("table_uri": non-null Utf8, "row_count": non-null UInt64, "action_summary_json": Utf8, "removed_data_file_paths": non-null List(non-null Utf8, field: 'element'), "skip_empty_commit": non-null Boolean, "requirements_json": non-null Utf8, "table_properties_json": non-null Utf8, "snapshot_properties_json": non-null Utf8, "lakehouse_table_json": Utf8, "schema_json": Utf8, "partition_spec_json": Utf8)))]
         ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_file_metadata@4 as __sail_iceberg_file_metadata, __sail_operation_type@5 as __sail_operation_type, __sail_merge_source_metric@6 as __sail_merge_source_metric], schema=[id:Int64;N, __sail_file_path:Utf8;N, __sail_file_row_index:Int64;N, __sail_iceberg_partition_spec_id:Int32, __sail_iceberg_file_metadata:Utf8, __sail_operation_type:Int32, __sail_merge_source_metric:Int64;N]
           FilterExec: max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 != 0, schema=[id:Int64;N, __sail_file_path:Utf8;N, __sail_file_row_index:Int64;N, __sail_iceberg_partition_spec_id:Int32, __sail_iceberg_file_metadata:Utf8, __sail_operation_type:Int32, __sail_merge_source_metric:Int64;N, max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int32;N]
             BoundedWindowAggExec: wdw=[max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], schema=[id:Int64;N, __sail_file_path:Utf8;N, __sail_file_row_index:Int64;N, __sail_iceberg_partition_spec_id:Int32, __sail_iceberg_file_metadata:Utf8, __sail_operation_type:Int32, __sail_merge_source_metric:Int64;N, max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int32;N]
@@ -1945,6 +2074,9 @@ data:
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
+    physical_plan after KeepPartitionSensitiveInputs:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteExplicitRepartition:
     SAME TEXT AS ABOVE
 
@@ -2143,10 +2275,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -2183,6 +2324,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_limit:
@@ -2220,6 +2364,9 @@ data:
               Projection: distributed_iceberg_commit.id < Int64(10) AS __common_expr_1, distributed_iceberg_commit.id AS id, distributed_iceberg_commit.__sail_file_path AS __sail_file_path
                 TableScan: distributed_iceberg_commit projection=[id, __sail_file_path]
 
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
+
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
@@ -2247,10 +2394,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -2289,6 +2445,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -2308,6 +2467,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -2353,7 +2515,7 @@ data:
 
     initial_physical_plan_with_schema:
     IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/), schema=[]
-      IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/, row_level_mode=CopyOnWrite), schema=[action:Union(Dense, 0: ("add": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64)), 1: ("delete": non-null Struct("data_file": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64))), 2: ("commit_meta": non-null Struct("table_uri": non-null Utf8, "row_count": non-null UInt64, "action_summary_json": Utf8, "removed_data_file_paths": non-null List(non-null Utf8, field: 'element'), "skip_empty_commit": non-null Boolean, "requirements_json": non-null Utf8, "table_properties_json": non-null Utf8, "lakehouse_table_json": Utf8, "schema_json": Utf8, "partition_spec_json": Utf8)))]
+      IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/, row_level_mode=CopyOnWrite), schema=[action:Union(Dense, 0: ("add": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64)), 1: ("delete": non-null Struct("data_file": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64))), 2: ("commit_meta": non-null Struct("table_uri": non-null Utf8, "row_count": non-null UInt64, "action_summary_json": Utf8, "removed_data_file_paths": non-null List(non-null Utf8, field: 'element'), "skip_empty_commit": non-null Boolean, "requirements_json": non-null Utf8, "table_properties_json": non-null Utf8, "snapshot_properties_json": non-null Utf8, "lakehouse_table_json": Utf8, "schema_json": Utf8, "partition_spec_json": Utf8)))]
         ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_operation_type@2 as __sail_operation_type], schema=[id:Int64;N, __sail_file_path:Utf8, __sail_operation_type:Int32]
           FilterExec: max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 != 0, schema=[id:Int64;N, __sail_file_path:Utf8, __sail_operation_type:Int32, max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int32;N]
             BoundedWindowAggExec: wdw=[max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], schema=[id:Int64;N, __sail_file_path:Utf8, __sail_operation_type:Int32, max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int32;N]
@@ -2496,6 +2658,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -2665,10 +2830,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -2707,6 +2881,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -2732,6 +2909,9 @@ data:
           WindowAggr: windowExpr=[[max(__sail_operation_type) PARTITION BY [__sail_file_path] ORDER BY [__sail_operation_type DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             Projection: distributed_iceberg_commit.id AS id, distributed_iceberg_commit.__sail_file_path AS __sail_file_path, CASE WHEN distributed_iceberg_commit.id >= Int64(0) THEN Int32(1) ELSE Int32(0) END AS __sail_operation_type
               TableScan: distributed_iceberg_commit projection=[id, __sail_file_path]
+
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -2760,10 +2940,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -2802,6 +2991,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -2821,6 +3013,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -2849,7 +3044,7 @@ data:
 
     initial_physical_plan_with_schema:
     IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/), schema=[]
-      DataSourceExec: partitions=1, partition_sizes=[1], schema=[action:Union(Dense, 0: ("add": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64)), 1: ("delete": non-null Struct("data_file": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64))), 2: ("commit_meta": non-null Struct("table_uri": non-null Utf8, "row_count": non-null UInt64, "action_summary_json": Utf8, "removed_data_file_paths": non-null List(non-null Utf8, field: 'element'), "skip_empty_commit": non-null Boolean, "requirements_json": non-null Utf8, "table_properties_json": non-null Utf8, "lakehouse_table_json": Utf8, "schema_json": Utf8, "partition_spec_json": Utf8)))]
+      DataSourceExec: partitions=1, partition_sizes=[1], schema=[action:Union(Dense, 0: ("add": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64)), 1: ("delete": non-null Struct("data_file": non-null Struct("content": non-null Utf8, "file_path": non-null Utf8, "file_format": non-null Utf8, "partition": non-null List(non-null Union(Dense, 0: ("Boolean": non-null Boolean), 1: ("Int": non-null Int32), 2: ("Long": non-null Int64), 3: ("Float": non-null Float32), 4: ("Double": non-null Float64), 5: ("String": non-null Utf8), 6: ("Int128": non-null Utf8), 7: ("UInt128": non-null Utf8), 8: ("Binary": non-null List(non-null UInt8, field: 'element')), 9: ("Null": non-null Boolean)), field: 'element'), "record_count": non-null UInt64, "file_size_in_bytes": non-null UInt64, "column_sizes": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "null_value_counts": non-null Map("entries": non-null Struct("key": non-null Int32, "value": non-null UInt64), unsorted), "nan_value_counts": non-null Map("entries": non-null Struct("keys": non-null Int32, "values": non-null UInt64), unsorted), "lower_bounds_json": non-null Utf8, "upper_bounds_json": non-null Utf8, "split_offsets": non-null List(non-null Int64, field: 'element'), "equality_ids": non-null List(non-null Int32, field: 'element'), "sort_order_id": Int32, "first_row_id": Int64, "partition_spec_id": non-null Int32, "referenced_data_file": Utf8, "content_offset": Int64, "content_size_in_bytes": Int64))), 2: ("commit_meta": non-null Struct("table_uri": non-null Utf8, "row_count": non-null UInt64, "action_summary_json": Utf8, "removed_data_file_paths": non-null List(non-null Utf8, field: 'element'), "skip_empty_commit": non-null Boolean, "requirements_json": non-null Utf8, "table_properties_json": non-null Utf8, "snapshot_properties_json": non-null Utf8, "lakehouse_table_json": Utf8, "schema_json": Utf8, "partition_spec_json": Utf8)))]
 
 
     physical_plan after OutputRequirements:
@@ -2936,6 +3131,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Coverage for the Spark Connect table-valued-function relation, using `variant_explode`.
 
 A table-valued function returns a relation rather than a value, so it is called in a `FROM`
@@ -21,10 +23,10 @@ form 3 only, because Sail does not implement the Connect relation behind it and 
 import pytest
 from pyspark.sql import functions as F  # noqa: N812
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 pytestmark = [
-    pytest.mark.skipif(pyspark_version() < (4,), reason="VARIANT requires Spark 4+"),
+    pytest.mark.spark(version=">=4", reason="Uses VARIANT SQL functions"),
     pytest.mark.xfail(not is_jvm_spark(), reason="Sail does not support the Connect TVF relation", strict=True),
 ]
 

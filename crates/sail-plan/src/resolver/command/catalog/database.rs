@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_expr::LogicalPlan;
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::provider::CreateDatabaseOptions;

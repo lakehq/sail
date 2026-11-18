@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use super::DeltaSnapshot;
 use crate::spec::{ColumnMappingMode, DeltaError, DeltaResult, TableFeature};
 

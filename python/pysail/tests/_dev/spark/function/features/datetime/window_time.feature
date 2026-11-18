@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: window_time() event-time extraction function
 
   Rule: window_time returns the window end minus one microsecond

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::unicode::reverse::ReverseFunc;
 use datafusion_common::{Result, exec_err};

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -14,7 +16,7 @@ use sail_common::spec;
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_function::scalar::explode;
-use sail_function::scalar::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -22,6 +24,7 @@ use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::seeded_random::SeededRandomRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 
 impl PlanResolver<'_> {
@@ -432,6 +435,7 @@ impl PlanResolver<'_> {
             self.rewrite_projection::<MonotonicIdRewriter>(input.clone(), projections, state)?;
         let (input, expr) =
             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
+        let (input, expr) = self.rewrite_projection::<SeededRandomRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
 
         let expr = self.rewrite_multi_expr(expr)?;

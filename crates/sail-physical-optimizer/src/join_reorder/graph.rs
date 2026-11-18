@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;

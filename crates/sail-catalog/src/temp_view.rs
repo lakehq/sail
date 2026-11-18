@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -127,6 +129,11 @@ impl TemporaryViewManager {
             .zip(comments)
             .map(|(field, comment)| {
                 Ok(TableColumnStatus {
+                    metadata: field
+                        .metadata()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
                     name: field.name().clone(),
                     data_type: field.data_type().clone(),
                     nullable: field.is_nullable(),

@@ -1,4 +1,6 @@
-# ruff: noqa: S608, PLR2004
+# SPDX-License-Identifier: Apache-2.0
+
+# ruff: noqa: S608
 """DDL interoperability for Delta and Iceberg tables registered in HMS."""
 
 import json

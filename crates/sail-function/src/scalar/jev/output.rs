@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use arrow::array::{Float64Array, Int64Array, StringArray};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal16};

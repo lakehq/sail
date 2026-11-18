@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Backend-neutral system store model types.
 
 use std::collections::BTreeMap;

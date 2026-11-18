@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
@@ -23,6 +25,7 @@ pub mod formatter;
 pub mod function;
 pub mod procedure;
 pub mod resolver;
+pub mod scalar_subquery_key;
 mod streaming;
 
 /// Executes a logical plan.

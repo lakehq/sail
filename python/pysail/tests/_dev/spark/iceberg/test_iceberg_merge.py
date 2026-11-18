@@ -1,17 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from pathlib import Path
-from urllib.parse import urlparse
-from urllib.request import url2pathname
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
-from pyiceberg.manifest import DataFileContent, ManifestContent, read_manifest_list
+from pyiceberg.manifest import DataFileContent, ManifestContent
 from pyiceberg.schema import Schema
 from pyiceberg.table import TableProperties
 from pyiceberg.typedef import Record
 from pyiceberg.types import LongType, NestedField, StringType
-from pyspark.sql.dataframe import DataFrame as SparkDataFrame
 
 from pysail.testing._dev.spark.steps.iceberg import (
     _current_manifest_list,
@@ -19,23 +18,15 @@ from pysail.testing._dev.spark.steps.iceberg import (
     _find_latest_metadata,
     _latest_metadata_path,
     _metadata_file_version,
-    _pyarrow_input_file,
 )
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
-from pysail.tests._dev.spark.iceberg.utils import WindowsLocalPyArrowFileIO
+from pysail.tests._dev.spark.iceberg.utils import _current_manifest_entries, _local_file_path
 
 UNPARTITIONED_LAST_PARTITION_ID = 999
 
 
 def _uri_sql(path: Path) -> str:
     return escape_sql_string_literal(path.as_uri())
-
-
-def _local_file_path(uri: str) -> Path:
-    parsed = urlparse(uri)
-    if parsed.scheme not in ("", "file"):
-        pytest.fail(f"cannot inspect non-local file URI: {uri}")
-    return Path(url2pathname(f"//{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path))
 
 
 def _drop_table(spark, name: str) -> None:
@@ -65,17 +56,6 @@ def _current_manifests(table_path: Path) -> list[dict]:
 
 def _manifest_count(manifests: list[dict], *, content: str, key: str) -> int:
     return sum(manifest.get(key) or 0 for manifest in manifests if manifest.get("content") == content)
-
-
-def _current_manifest_entries(table_path: Path, content: ManifestContent):
-    metadata = _find_latest_metadata(table_path)
-    snapshot = _current_snapshot(metadata)
-    io = WindowsLocalPyArrowFileIO()
-    entries = []
-    for manifest in read_manifest_list(_pyarrow_input_file(io, snapshot["manifest-list"])):
-        if manifest.content == content:
-            entries.extend(manifest.fetch_manifest_entry(io))
-    return entries
 
 
 def _assert_current_snapshot_metadata(
@@ -175,7 +155,6 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
         assert current_snapshot["summary"]["total-records"] == "5"
 
         manifests = _current_manifest_list(metadata)["manifests"]
-        expected_deleted_row_count = 2
         data_manifests = [manifest for manifest in manifests if manifest.get("content") == "data"]
         delete_manifests = [manifest for manifest in manifests if manifest.get("content") == "deletes"]
         assert any(manifest["sequence-number"] < current_snapshot["sequence-number"] for manifest in data_manifests)
@@ -186,7 +165,7 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
         )
         assert all(manifest["sequence-number"] == current_snapshot["sequence-number"] for manifest in delete_manifests)
         assert _manifest_count(manifests, content="deletes", key="added-files-count") >= 1
-        assert _manifest_count(manifests, content="deletes", key="added-rows-count") >= expected_deleted_row_count
+        assert _manifest_count(manifests, content="deletes", key="added-rows-count") >= 2
         assert _manifest_count(manifests, content="data", key="deleted-files-count") == 0
         assert _manifest_count(manifests, content="data", key="deleted-rows-count") == 0
 
@@ -214,15 +193,13 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
         assert all(not entry.data_file.equality_ids for entry in delete_entries)
         assert all(getattr(entry.data_file, "content_offset", None) is None for entry in delete_entries)
         assert all(getattr(entry.data_file, "content_size_in_bytes", None) is None for entry in delete_entries)
-        assert sum(entry.data_file.record_count for entry in delete_entries) >= expected_deleted_row_count
+        assert sum(entry.data_file.record_count for entry in delete_entries) >= 2
     finally:
         _drop_table(spark, table_name)
 
 
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame.mergeInto")
 def test_iceberg_dataframe_merge_into_mor_update_delete_insert(spark, tmp_path):
-    if not hasattr(SparkDataFrame, "mergeInto"):
-        pytest.skip("DataFrame.mergeInto requires Spark 4.0+ (missing in this PySpark)")
-
     table_name = "iceberg_dataframe_merge_mor"
     table_path = tmp_path / table_name
 
@@ -866,7 +843,7 @@ def test_iceberg_merge_partition_delete_granularity_groups_data_files(
 
         before_data_entries = _current_manifest_entries(table_path, ManifestContent.DATA)
         before_data_paths = {entry.data_file.file_path for entry in before_data_entries}
-        assert len(before_data_paths) == 2  # noqa: PLR2004
+        assert len(before_data_paths) == 2
 
         spark.sql(
             """

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: position() finds the position of a substring in a string
 
   Rule: Basic usage

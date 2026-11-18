@@ -1,9 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pyspark.errors import AnalysisException
 from pyspark.sql.types import IntegerType, Row, StringType, StructField, StructType
 
-from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 def test_get_item_ignore_case(spark):
@@ -12,15 +16,71 @@ def test_get_item_ignore_case(spark):
     assert df.select(df.a.getItem("B")).collect() == [Row(**{"a.B": 1})]
 
 
+def test_array_of_structs_field_by_name(spark):
+    df = spark.sql("SELECT array(named_struct('p', 'x', 'q', 1), named_struct('p', 'y', 'q', 2)) AS a")
+    a = F.col("a")
+
+    assert df.select(a["p"]).collect() == [Row(**{"a.p": ["x", "y"]})]
+    assert df.select(a["P"]).collect() == [Row(**{"a.P": ["x", "y"]})]
+    assert df.select(a.getField("q")).collect() == [Row(**{"a.q": [1, 2]})]
+    assert df.select(a.getItem("q")).collect() == [Row(**{"a.q": [1, 2]})]
+    assert df.select(F.slice(a, -1, 1)["p"][0]).collect() == [Row(**{"slice(a, -1, 1).p[0]": "y"})]
+    assert df.select(F.slice(a, -1, 1).getField("p")).collect() == [Row(**{"slice(a, -1, 1).p": ["y"]})]
+    assert df.where(a["q"][1] == F.lit(2)).select(a["q"].alias("v")).collect() == [Row(v=[1, 2])]
+
+
+@pytest.mark.spark(version=">=4", reason="The PySpark 3.5 client cannot subscript with a column")
+def test_array_of_structs_field_by_literal_column(spark):
+    df = spark.sql("SELECT array(named_struct('q', 1), named_struct('q', 2)) AS a")
+
+    assert df.select(F.col("a")[F.lit("q")]).collect() == [Row(**{"a.q": [1, 2]})]
+
+
+@pytest.mark.parametrize("field", ["zz", "0"])
+@pytest.mark.parametrize("ansi", ["true", "false"])
+def test_array_of_structs_missing_field(spark, field, ansi):
+    df = spark.sql("SELECT array(named_struct('p', 'x')) AS a")
+    previous = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", ansi)
+    try:
+        with pytest.raises(AnalysisException, match=r"FIELD_NOT_FOUND|missing or ambiguous field"):
+            df.select(F.col("a")[field]).collect()
+        with pytest.raises(AnalysisException, match=r"FIELD_NOT_FOUND|missing or ambiguous field"):
+            df.select(F.col("a").getField(field)).collect()
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous)
+
+
+@pytest.mark.parametrize(
+    "list_type",
+    [pa.large_list, lambda item: pa.list_(item, 2)],
+    ids=["large_list", "fixed_size_list"],
+)
+def test_array_of_structs_field_by_name_in_arrow_list_types(spark, tmp_path, list_type):
+    item = pa.struct([("p", pa.int32())])
+    table = pa.table({"a": pa.array([[{"p": 1}, {"p": 2}]], type=list_type(item))})
+    pq.write_table(table, tmp_path / "data.parquet")
+
+    df = spark.read.parquet(str(tmp_path))
+
+    assert df.select(F.col("a")["p"]).collect() == [Row(**{"a.p": [1, 2]})]
+
+
+def test_array_of_structs_index_stays_an_index(spark):
+    df = spark.sql("SELECT array(named_struct('q', 1), named_struct('q', 2)) AS a")
+
+    assert df.select(F.col("a")[1]).collect() == [Row(**{"a[1]": Row(q=2)})]
+    assert df.select(F.col("a").getItem(0)["q"]).collect() == [Row(**{"a[0].q": 1})]
+
+
 @pytest.mark.parametrize("computed", [False, True])
+@pytest.mark.spark(version=">=4", reason="Uses Spark Connect column selectors")
 def test_struct_field_selector_kind(spark, computed):
     df = spark.createDataFrame([((1,), "selector")], "payload struct<selector:int>, selector string")
     payload = F.coalesce(F.col("payload"), F.col("payload")) if computed else F.col("payload")
 
     assert df.select(payload.getField("selector").alias("value")).collect() == [Row(value=1)]
     assert df.select(payload["selector"].alias("value")).collect() == [Row(value=1)]
-    if pyspark_version() < (4,):
-        pytest.skip("the Spark Connect client does not support column selectors before PySpark 4")
     with pytest.raises(AnalysisException, match=r"INVALID_EXTRACT_FIELD_TYPE|extraction must be a literal"):
         df.select(payload[F.col("selector")]).collect()
 
@@ -95,16 +155,12 @@ def test_get_item_nested_map(spark):
     assert df.select(df.a.getItem("b").getItem(1)).collect() == [Row(**{"a[b][1]": 2})]
 
 
+@pytest.mark.spark(version=">=4", reason="Uses Column.try_cast")
 def test_try_cast_invalid_date(spark):
     """Test that try_cast returns NULL for invalid date/timestamp values.
 
     See: https://github.com/lakehq/sail/issues/1192
     """
-    # try_cast was added in Spark 4.0
-    col = F.col("x")
-    if not callable(getattr(col, "try_cast", None)):
-        pytest.skip("try_cast not available in this Spark version")
-
     df = spark.createDataFrame(
         schema="id STRING, some_date STRING",
         data=[("a", "2025-99-99")],
@@ -198,7 +254,7 @@ def test_recovered_struct_field_preserves_successful_extraction_after_array(spar
         projected.where("s.a.x = 1").collect()
 
 
-@pytest.mark.skipif(pyspark_version() < (4, 2), reason="NullType extraction propagation was added in Spark 4.2")
+@pytest.mark.spark(version=">=4.2", reason="Tests NullType propagation through recovered column extraction")
 @pytest.mark.xfail(
     not is_jvm_spark(),
     reason="Sail follows Spark 3.5-4.1 recovery; Spark 4.2 propagates NULL through the newer map value",
@@ -214,8 +270,8 @@ def _sail_bug(reason):
     return pytest.mark.xfail(not is_jvm_spark(), reason=reason, strict=True)
 
 
-SPARK_42_DATAFRAME_COLUMN_MARK = pytest.mark.skipif(
-    pyspark_version() < (4, 2), reason="Spark 4.2 filters DataFrame column candidates by the output before merging"
+SPARK_42_DATAFRAME_COLUMN_MARK = pytest.mark.spark(
+    version=">=4.2", reason="Tests output-based filtering of DataFrame column candidates before merging"
 )
 
 

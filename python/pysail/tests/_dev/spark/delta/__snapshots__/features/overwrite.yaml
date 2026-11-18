@@ -57,8 +57,11 @@ data:
         UnionExec
           DeltaWriterExec(table_path=file://<tmp>/delta_overwrite/)
             UnionExec
-              ProjectionExec: expr=[CAST(CAST(column1@0 AS Int64) AS Int64) as id, CAST(column2@1 AS Utf8) as category, CAST(CAST(column3@2 AS Int64) AS Int64) as value]
-                DataSourceExec: partitions=1, partition_sizes=[1]
+              ProjectionExec: expr=[CAST(CAST(#3@0 AS Int64) AS Int64) as id, CAST(#4@1 AS Utf8) as category, CAST(CAST(#5@2 AS Int64) AS Int64) as value]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  ProjectionExec: expr=[column1@0 as #3, column2@1 as #4, column3@2 as #5]
+                    FilterExec: CASE WHEN (column2@1 = A) IS NOT DISTINCT FROM true THEN 1 ELSE CAST(raise_error([DELTA_REPLACE_WHERE_MISMATCH] Written data does not conform to partial table overwrite condition or constraint 'category = 'A' '.) AS Int8) END = 1
+                      DataSourceExec: partitions=1, partition_sizes=[1]
               FilterExec: (category@1 = A) IS DISTINCT FROM true
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_overwrite/, version=1, projection=None, limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
@@ -89,8 +92,11 @@ data:
         UnionExec
           DeltaWriterExec(table_path=file://<tmp>/delta_overwrite/)
             UnionExec
-              ProjectionExec: expr=[CAST(CAST(column1@0 AS Int64) AS Int64) as id, CAST(column2@1 AS Utf8) as category, CAST(CAST(column3@2 AS Int64) AS Int64) as value]
-                DataSourceExec: partitions=1, partition_sizes=[1]
+              ProjectionExec: expr=[CAST(CAST(#3@0 AS Int64) AS Int64) as id, CAST(#4@1 AS Utf8) as category, CAST(CAST(#5@2 AS Int64) AS Int64) as value]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  ProjectionExec: expr=[column1@0 as #3, column2@1 as #4, column3@2 as #5]
+                    FilterExec: CASE WHEN (column1@0 >= 0) IS NOT DISTINCT FROM true THEN 1 ELSE CAST(raise_error([DELTA_REPLACE_WHERE_MISMATCH] Written data does not conform to partial table overwrite condition or constraint 'id >= CAST ( 0 AS BIGINT ) '.) AS Int8) END = 1
+                      DataSourceExec: partitions=1, partition_sizes=[1]
               FilterExec: (id@0 >= CAST(0 AS Int64)) IS DISTINCT FROM true
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_overwrite/, version=1, projection=None, limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)

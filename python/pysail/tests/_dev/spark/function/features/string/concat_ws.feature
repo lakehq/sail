@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: concat_ws function
 
   Rule: concat_ws with scalar arguments

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
@@ -11,6 +13,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::input_file::{InputFileBlockLengthFunc, InputFileBlockStartFunc};
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
 use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
 use sail_function::scalar::misc::raise_error::RaiseError;
@@ -18,6 +21,7 @@ use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
 use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
+use sail_function::scalar::misc::spark_uuid::SparkUuid;
 use sail_function::scalar::misc::theta_sketch::{
     ThetaDifferenceFunction, ThetaIntersectionFunction, ThetaSketchEstimateFunction,
     ThetaUnionFunction,
@@ -95,7 +99,7 @@ fn input_file_name() -> expr::Expr {
     // COALESCE gives the expression Spark's non-nullable string schema; it does not catch errors.
     // RewriteInputFileMetadataFallback replaces the UDF with an empty string outside file scans
     // before execution, since DataFusion's UDF cannot be evaluated directly.
-    expr_fn::coalesce(vec![expr_fn::input_file_name(), lit("")])
+    ScalarUDF::from(CoalesceFunc::new()).call(vec![expr_fn::input_file_name(), lit("")])
 }
 
 fn input_file_block_start() -> expr::Expr {
@@ -312,7 +316,7 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("try_reflect", F::unknown("try_reflect")),
         ("typeof", F::custom(type_of)),
         ("user", F::custom(current_user)),
-        ("uuid", F::nullary(expr_fn::uuid)),
+        ("uuid", F::udf(SparkUuid::new())),
         ("version", F::udf(SparkVersion::new())),
     ]
 }

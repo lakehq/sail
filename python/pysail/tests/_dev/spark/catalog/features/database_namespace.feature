@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Database, schema, and namespace aliases
 
   Scenario Outline: Database, schema, and namespace keywords are interchangeable

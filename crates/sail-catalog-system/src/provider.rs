@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -41,6 +43,7 @@ impl SystemCatalogProvider {
             .columns()
             .iter()
             .map(|col| TableColumnStatus {
+                metadata: Default::default(),
                 name: col.name.to_string(),
                 data_type: col.arrow_type.clone(),
                 nullable: col.nullable,

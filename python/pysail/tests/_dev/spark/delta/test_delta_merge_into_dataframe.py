@@ -1,14 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import functions as F  # noqa: N812
-from pyspark.sql.dataframe import DataFrame as SparkDataFrame
 
-from pysail.testing.spark.utils.common import pyspark_version
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
-if not hasattr(SparkDataFrame, "mergeInto"):
-    pytest.skip("DataFrame.mergeInto requires Spark 4.0+ (missing in this PySpark)", allow_module_level=True)
+pytestmark = pytest.mark.spark(version=">=4", reason="Uses DataFrame.mergeInto")
 
 
 def test_dataframe_merge_into_basic(spark, tmp_path):
@@ -36,6 +35,30 @@ def test_dataframe_merge_into_basic(spark, tmp_path):
             {"id": "int32", "value": "string"}
         )
         assert_frame_equal(result, expected, check_dtype=False)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_dataframe_merge_into_omitted_identity(spark, tmp_path):
+    table_name = "delta_merge_into_df_identity"
+    table_path = tmp_path / "identity_target"
+    table_path_literal = escape_sql_string_literal(str(table_path))
+    spark.sql(f"""
+        CREATE TABLE {table_name} (id BIGINT GENERATED ALWAYS AS IDENTITY, k INT, value INT)
+        USING DELTA LOCATION '{table_path_literal}'
+    """)
+    try:
+        spark.sql(f"INSERT INTO {table_name} (k,value) VALUES (1,10)")  # noqa: S608
+        source = spark.createDataFrame([(1, 11), (2, 22)], "src_k INT, src_value INT")
+        (
+            source.mergeInto(table_name, F.expr("k = src_k"))
+            .whenMatched()
+            .update(assignments={"value": F.col("src_value")})
+            .whenNotMatched()
+            .insert(assignments={"k": F.col("src_k"), "value": F.col("src_value")})
+            .merge()
+        )
+        assert spark.read.format("delta").load(str(table_path)).orderBy("k").collect() == [(1, 1, 11), (2, 2, 22)]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -72,10 +95,7 @@ def test_dataframe_merge_into_insert_all_and_delete(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
-@pytest.mark.skipif(
-    pyspark_version() < (4,),
-    reason="DataFrame arguments in spark.sql() require Spark 4+",
-)
+@pytest.mark.spark(version=">=4", reason="Uses DataFrame arguments in spark.sql()")
 def test_merge_into_path_target_with_dataframe_source(spark, tmp_path):
     table_path = tmp_path / "delta_merge_df_arg_target"
     table_path_str = str(table_path)

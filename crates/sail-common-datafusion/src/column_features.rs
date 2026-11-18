@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Engine-level contract for column-feature metadata.
 //!
 //! Column features (generation expressions, identity columns, default values,

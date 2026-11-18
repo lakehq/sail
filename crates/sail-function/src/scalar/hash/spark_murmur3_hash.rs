@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Int32Array};
@@ -53,8 +55,10 @@ impl ScalarUDFImpl for SparkMurmur3Hash {
         spark_murmur3_hash(&args[..])
     }
 }
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/hash_expressions.rs#L28-L70
 
-/// [Credit]: <https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/hash_expressions.rs#L28-L70>
 /// Spark compatible murmur3 hash (just `hash` in Spark) in vectorized execution fashion
 pub fn spark_murmur3_hash(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
     let length = args.len();
@@ -96,3 +100,4 @@ pub fn spark_murmur3_hash(args: &[ColumnarValue]) -> Result<ColumnarValue, DataF
         }
     }
 }
+// SPDX-SnippetEnd

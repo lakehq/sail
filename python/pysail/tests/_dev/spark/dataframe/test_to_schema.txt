@@ -1,0 +1,31 @@
+>>> from pyspark.sql import types as T
+
+`DataFrame.to(schema)` fills a nullable target field that is missing from the input
+with nulls of the target type, keeping the target field metadata.
+`select("*")` is used to get the schema from the server, since the client caches
+the target schema for `DataFrame.to`.
+
+>>> df = spark.createDataFrame([(1, "a"), (2, None)], "id int, s string")
+>>> schema = T.StructType([
+...     T.StructField("x", T.LongType()),
+...     T.StructField("id", T.IntegerType()),
+...     T.StructField("s", T.StringType()),
+...     T.StructField("arr", T.ArrayType(T.StringType())),
+...     T.StructField("st", T.StructType([T.StructField("a", T.IntegerType(), False)])),
+...     T.StructField("c", T.StringType(), metadata={"k": "v"}),
+...     T.StructField("i", T.DayTimeIntervalType(T.DayTimeIntervalType.HOUR, T.DayTimeIntervalType.MINUTE)),
+... ])
+>>> df.to(schema).select("*").schema == schema
+True
+>>> df.to(schema).collect()
+[Row(x=None, id=1, s='a', arr=None, st=None, c=None, i=None), Row(x=None, id=2, s=None, arr=None, st=None, c=None, i=None)]
+
+>>> spark.range(3).select().to(T.StructType([T.StructField("x", T.IntegerType())])).collect()
+[Row(x=None), Row(x=None), Row(x=None)]
+
+A missing field that is not nullable cannot be resolved.
+
+>>> df.to(T.StructType([T.StructField("x", T.IntegerType(), False)])).select("*").schema
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.AnalysisException: ...UNRESOLVED_COLUMN...

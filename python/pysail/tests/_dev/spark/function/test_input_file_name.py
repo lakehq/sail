@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 from collections import Counter
 from itertools import pairwise
@@ -180,7 +182,7 @@ def test_input_file_metadata_nested_expressions_limit(parquet_metadata):
         ]
     )
     rows = dataframe.collect()
-    assert len(rows) == len({row.id for row in rows}) == 2  # noqa: PLR2004
+    assert len(rows) == len({row.id for row in rows}) == 2
     for row in rows:
         name, start, length = files[row.id]
         assert tuple(row.bundle) == (name, start, length)
@@ -198,6 +200,7 @@ def test_input_file_metadata_filename_filter_limit(parquet_metadata):
 # test_udf.test_udf_with_input_file_name; extended to all three metadata functions.
 @pytest.mark.parametrize("receiving", [False, True])
 @pytest.mark.parametrize("limited", [False, True])
+@pytest.mark.spark(cross_version=True)
 def test_input_file_metadata_python_udf(parquet_metadata, receiving, limited):
     dataframe, files = parquet_metadata
     if receiving:
@@ -262,7 +265,7 @@ def test_input_file_metadata_reader_limit(spark, tmp_path, file_format):
         def encode_long(value):
             value <<= 1
             result = bytearray()
-            while value > 127:  # noqa: PLR2004
+            while value > 127:
                 result.append((value & 127) | 128)
                 value >>= 7
             return bytes([*result, value])
@@ -273,7 +276,7 @@ def test_input_file_metadata_reader_limit(spark, tmp_path, file_format):
         schema = json.dumps({"type": "record", "name": "row", "fields": [{"name": "id", "type": "long"}]}).encode()
         metadata = encode_long(1) + encode_bytes(b"avro.schema") + encode_bytes(schema) + encode_long(0)
         sync = b"input-file-smoke"
-        assert len(sync) == 16  # noqa: PLR2004
+        assert len(sync) == 16
         records = encode_long(1) + encode_long(2)
         path.write_bytes(b"Obj\x01" + metadata + sync + encode_long(2) + encode_long(len(records)) + records + sync)
     # Spark 4.0.4 verified CSV/JSON/text/binaryFile. Avro's module was unavailable,

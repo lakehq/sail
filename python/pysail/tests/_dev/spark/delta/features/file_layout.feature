@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake File Layout
 
   Rule: Partitioned writes create expected directory structure

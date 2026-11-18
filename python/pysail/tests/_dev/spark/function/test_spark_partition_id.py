@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 
@@ -14,7 +16,7 @@ def test_spark_partition_id_constant_within_single_partition(spark):
     # `range(..., numPartitions=1)` forces one partition; all rows must
     # share the same partition id (which is 0).
     rows = spark.range(0, 10, numPartitions=1).selectExpr("id", "spark_partition_id() AS pid").collect()
-    assert len(rows) == 10  # noqa: PLR2004
+    assert len(rows) == 10
     pids = {row["pid"] for row in rows}
     assert pids == {0}
 
@@ -51,7 +53,7 @@ def test_spark_partition_id_inside_lateral_view_expression(spark):
         ORDER BY id
         """
     ).collect()
-    assert len(rows) == 10  # noqa: PLR2004
+    assert len(rows) == 10
     for index, row in enumerate(rows):
         assert row["id"] == index
         assert isinstance(row["v"], int)
@@ -67,9 +69,8 @@ def test_spark_partition_id_return_type_is_int(spark):
 
 
 def test_spark_partition_id_in_filter(spark):
-    partition = 2
     df = spark.range(40, numPartitions=4)
-    filtered = df.filter(F.spark_partition_id() == partition)
+    filtered = df.filter(F.spark_partition_id() == 2)
     assert filtered.columns == ["id"]
     assert sorted(row.id for row in filtered.collect()) == list(range(20, 30))
 

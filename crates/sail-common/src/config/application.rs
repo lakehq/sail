@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{Display, Formatter};
 use std::num::NonZeroUsize;
 use std::str::FromStr;
@@ -224,6 +226,9 @@ pub struct ClusterConfig {
     pub worker_task_slots: usize,
     pub task_launch_timeout_secs: u64,
     pub task_stream_buffer: usize,
+    pub task_stream_memory_limit: usize,
+    pub shuffle_write_buffer_size: usize,
+    pub task_stream_stall_timeout_secs: u64,
     pub task_stream_creation_timeout_secs: u64,
     pub task_max_attempts: usize,
     pub rpc_retry_strategy: RetryStrategy,
@@ -872,6 +877,10 @@ pub enum CatalogType {
         prefix: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         namespace_separator: Option<String>,
+        /// The value of the `X-Iceberg-Access-Delegation` header sent when loading a table.
+        /// Set this to `none` to omit the header for servers that reject it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        access_delegation: Option<String>,
         #[serde(
             skip_serializing_if = "Option::is_none",
             serialize_with = "serialize_optional_secret"
@@ -890,6 +899,29 @@ pub enum CatalogType {
         /// plain string.
         #[serde(skip_serializing_if = "Option::is_none")]
         bearer_access_token_file: Option<String>,
+        /// User name for HTTP Basic authentication, which some REST catalog
+        /// servers accept instead of a token. Must be set together with
+        /// `password` and cannot be combined with the token options.
+        /// The user name is not a secret, so it is kept as a plain string.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        username: Option<String>,
+        /// Password for HTTP Basic authentication. Must be set together with
+        /// `username`.
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "serialize_optional_secret"
+        )]
+        password: Option<SecretString>,
+        /// Signs every request with AWS Signature Version 4, for example for the
+        /// Amazon S3 Tables or RustFS Iceberg REST endpoints.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sigv4_enabled: Option<bool>,
+        /// The SigV4 signing region. Defaults to the AWS region provider chain.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signing_region: Option<String>,
+        /// The SigV4 signing name, such as `s3tables` or `s3`. Defaults to `execute-api`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signing_name: Option<String>,
         #[serde(flatten)]
         cache: CatalogCacheConfig,
     },
@@ -1045,6 +1077,9 @@ impl ClusterConfigEnv {
         WORKER_EXTERNAL_HOST,
         WORKER_HEARTBEAT_INTERVAL_SECS,
         TASK_STREAM_BUFFER,
+        TASK_STREAM_MEMORY_LIMIT,
+        SHUFFLE_WRITE_BUFFER_SIZE,
+        TASK_STREAM_STALL_TIMEOUT_SECS,
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
         SHUFFLE_BACKEND__TYPE,

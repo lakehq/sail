@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::common::{DataFusionError, Result};
@@ -48,6 +50,7 @@ pub(super) async fn build_truncate_plan(
     let batch = encode_actions(
         vec![],
         Some(ExecCommitMeta {
+            identity_high_water_marks: None,
             operation: Some(DeltaOperation::Truncate {}),
             ..Default::default()
         }),

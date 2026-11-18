@@ -1,14 +1,4 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
 
@@ -44,6 +34,7 @@ pub struct IcebergPlanBuilder<'a> {
     sink_mode: PhysicalSinkMode,
     sort_order: Option<Vec<PhysicalSortExpr>>,
     expected_snapshot_id: Option<Option<i64>>,
+    table_replacement: Option<crate::operations::replacement::IcebergTableReplacement>,
     removed_data_file_paths: Vec<String>,
     dynamic_partition_overwrite: bool,
     preserve_input_partitions: bool,
@@ -66,11 +57,20 @@ impl<'a> IcebergPlanBuilder<'a> {
             sink_mode,
             sort_order,
             expected_snapshot_id: None,
+            table_replacement: None,
             removed_data_file_paths: Vec::new(),
             dynamic_partition_overwrite: false,
             preserve_input_partitions: false,
             session,
         }
+    }
+
+    pub fn with_table_replacement(
+        mut self,
+        replacement: Option<crate::operations::replacement::IcebergTableReplacement>,
+    ) -> Self {
+        self.table_replacement = replacement;
+        self
     }
 
     pub fn with_output(mut self, output: CommandOutput) -> Self {
@@ -268,6 +268,7 @@ impl<'a> IcebergPlanBuilder<'a> {
                 snapshot_update_kind,
             )
             .with_output(self.output)
+            .with_table_replacement(self.table_replacement.clone())
             .with_expected_snapshot_id(self.expected_snapshot_id)
             .with_removed_data_file_paths(self.removed_data_file_paths.clone())
             .with_dynamic_partition_overwrite(self.dynamic_partition_overwrite),

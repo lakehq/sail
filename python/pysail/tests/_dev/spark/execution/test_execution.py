@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from datetime import datetime
 
 import pandas as pd
@@ -7,9 +9,7 @@ from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 from pyspark.sql.window import Window
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail local-cluster mode only")
 
 
 def _partition_count(df):
@@ -33,10 +33,19 @@ def large_dataset(spark):
     spark.catalog.dropTempView("large_dataset")
 
 
+@pytest.mark.timeout(30)
+def test_float16_comparison_in_cluster_mode(spark):
+    rows = spark.sql("""
+        SELECT id, variant_get(parse_json(CAST(id AS STRING)), '$', 'Float16') = 1 AS ok
+        FROM range(0, 2, 1, 2)
+    """).collect()
+    assert sorted((row.id, row.ok) for row in rows) == [(0, False), (1, True)]
+
+
 def test_basic_query_execution(spark):
     """Test basic query execution in local-cluster mode."""
     result = spark.sql("SELECT 1 + 1 AS result").collect()
-    assert result[0]["result"] == 2  # noqa: PLR2004
+    assert result[0]["result"] == 2
 
 
 @pytest.mark.parametrize(
@@ -59,14 +68,7 @@ def test_builtin_functions_in_driver_system_table_filter(spark, predicate):
     ("with_replacement", "expected"),
     [
         (False, [2, 3]),
-        pytest.param(
-            True,
-            [0, 2, 3, 4],
-            marks=pytest.mark.xfail(
-                reason="Replacement sampling RNG differs from Spark",
-                strict=True,
-            ),
-        ),
+        (True, [0, 2, 3, 4]),
     ],
 )
 def test_seeded_sample_in_cluster_mode(spark, with_replacement, expected):
@@ -128,7 +130,7 @@ def test_top_k_dynamic_filter_pushdown_is_enabled_in_cluster_mode(spark, tmp_pat
     path = str(tmp_path / "dynamic_filter_top_k")
     spark.range(100, numPartitions=4).write.parquet(path)
 
-    query = spark.read.parquet(path).filter(F.col("id") >= 10).orderBy(F.col("id").desc()).limit(5)  # noqa: PLR2004
+    query = spark.read.parquet(path).filter(F.col("id") >= 10).orderBy(F.col("id").desc()).limit(5)
     assert "DynamicFilter" in query._explain_string()  # noqa: SLF001
     assert [row.id for row in query.collect()] == [99, 98, 97, 96, 95]
 
@@ -163,11 +165,11 @@ def test_aggregation_with_groupby(large_dataset):
         .toPandas()
     )
 
-    assert len(result) == 10  # noqa: PLR2004
-    assert result["count"].sum() == 1000  # noqa: PLR2004
+    assert len(result) == 10
+    assert result["count"].sum() == 1000
 
     group_0 = result[result["group"] == 0].iloc[0]
-    assert group_0["count"] == 100  # noqa: PLR2004
+    assert group_0["count"] == 100
     assert group_0["sum_value"] == sum(i * 2 for i in range(0, 1000, 10))
 
 
@@ -228,7 +230,7 @@ def test_window_functions(large_dataset):
         .toPandas()
     )
 
-    assert len(result) == 5  # noqa: PLR2004
+    assert len(result) == 5
     assert result["row_num"].tolist() == [1, 2, 3, 4, 5]
     assert result["rank"].tolist() == [1, 2, 3, 4, 5]
     assert pd.isna(result["prev_value"].iloc[0])
@@ -280,13 +282,13 @@ def test_complex_sql_query(spark):
         ORDER BY region, rank
     """).toPandas()
 
-    assert len(result) == 15  # noqa: PLR2004
+    assert len(result) == 15
     regions = result["region"].unique()
-    assert len(regions) == 5  # noqa: PLR2004
+    assert len(regions) == 5
 
     for region in regions:
         region_data = result[result["region"] == region]
-        assert len(region_data) == 3  # noqa: PLR2004
+        assert len(region_data) == 3
         assert region_data["rank"].tolist() == [1, 2, 3]
 
     spark.catalog.dropTempView("sales")
@@ -304,7 +306,7 @@ def test_multiple_operations(spark):
     expected_sum = sum(range(100))  # 0 + 1 + ... + 99 = 4950
     assert result1 == expected_sum
     assert result2 == expected_sum
-    assert result3 == 100  # noqa: PLR2004
+    assert result3 == 100
 
 
 def test_repartitioning_in_cluster_mode(large_dataset):
@@ -313,7 +315,7 @@ def test_repartitioning_in_cluster_mode(large_dataset):
 
     original_count = large_dataset.count()
     repartitioned_count = repartitioned.count()
-    assert original_count == repartitioned_count == 1000  # noqa: PLR2004
+    assert original_count == repartitioned_count == 1000
 
     original_sum = large_dataset.agg(F.sum("value")).collect()[0][0]
     repartitioned_sum = repartitioned.agg(F.sum("value")).collect()[0][0]
@@ -322,7 +324,7 @@ def test_repartitioning_in_cluster_mode(large_dataset):
     coalesced = large_dataset.coalesce(4)
     coalesced_count = coalesced.count()
     coalesced_sum = coalesced.agg(F.sum("value")).collect()[0][0]
-    assert coalesced_count == 1000  # noqa: PLR2004
+    assert coalesced_count == 1000
     assert coalesced_sum == original_sum
 
 
@@ -349,6 +351,7 @@ def test_coalesce_plan_contains_dedicated_exec_in_cluster_mode(spark):
         (10, 2, 1, 1),
     ],
 )
+@pytest.mark.spark(cross_version=True)
 def test_coalesce_partition_count_in_cluster_mode(
     spark,
     row_count,
@@ -360,6 +363,7 @@ def test_coalesce_partition_count_in_cluster_mode(
     assert _partition_count(df) == expected_partition_count
 
 
+@pytest.mark.spark(cross_version=True)
 def test_coalesce_spark_parity_in_cluster_mode(spark):
     row_count = 48
     input_partition_count = 4
@@ -454,6 +458,7 @@ def test_coalesce_hint_in_cluster_mode(spark):
         (6, 4),
     ],
 )
+@pytest.mark.spark(cross_version=True)
 def test_coalesce_hint_partition_count_in_cluster_mode(
     spark,
     output_partition_count,

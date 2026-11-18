@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -172,7 +174,7 @@ impl PlanResolver<'_> {
         &self,
         input: LogicalPlan,
         format: &str,
-        info: &SinkInfo,
+        info: &mut SinkInfo,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         if !is_delta_format(format) {
@@ -224,6 +226,11 @@ impl PlanResolver<'_> {
             .map(|field| {
                 let features = ColumnFeatures::from_field(field);
                 TableColumnStatus {
+                    metadata: field
+                        .metadata()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
                     name: field.name().clone(),
                     data_type: field.data_type().clone(),
                     nullable: field.is_nullable(),
@@ -253,7 +260,7 @@ impl PlanResolver<'_> {
             return Ok(input);
         }
 
-        let info = TableInfo {
+        let table_info = TableInfo {
             default_values: Default::default(),
             lakehouse_table: info.lakehouse_table.clone(),
             columns,
@@ -264,8 +271,14 @@ impl PlanResolver<'_> {
             bucket_by: None,
             properties: metadata.properties,
         };
+        info.identity_columns_to_track
+            .extend(Self::omitted_identity_columns(
+                &input,
+                &WriteColumnMatch::ByName,
+                &table_info,
+            )?);
         let input = self
-            .rewrite_write_input(input, WriteColumnMatch::ByName, &info, state)
+            .rewrite_write_input(input, WriteColumnMatch::ByName, &table_info, state)
             .await?;
         self.apply_delta_check_constraints(input, constraints, state)
             .await

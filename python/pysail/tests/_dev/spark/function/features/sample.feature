@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: DataFrame sample operations
 
   Rule: Sample without replacement
@@ -22,7 +24,6 @@ Feature: DataFrame sample operations
         | 1    | [2, 3, 6, 7, 8]           |
         | 2    | [1, 2, 3, 5, 6, 7, 9]     |
 
-    @sail-bug
     Scenario: a seeded sample uses Spark's partition-specific seed
       Given statement
         """
@@ -38,7 +39,6 @@ Feature: DataFrame sample operations
         | sampled_ids     |
         | [2, 3, 6, 7, 8] |
 
-    @sail-bug
     Scenario: a seeded sample advances its RNG across execution batches
       Given statement
         """
@@ -57,7 +57,6 @@ Feature: DataFrame sample operations
 
   Rule: Sample with replacement
 
-    @sail-bug
     Scenario: a seeded replacement sample matches Spark's Poisson sampler
       Given sample with replacement fraction 0.5 seed 1 as temporary view sample_data
       When query

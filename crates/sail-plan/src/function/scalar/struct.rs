@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::functions::expr_fn;
 use datafusion_expr::{Expr, ScalarUDF, expr};
-use sail_function::scalar::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};

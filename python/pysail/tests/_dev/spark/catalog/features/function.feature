@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Catalog function queries
 
   Scenario: SHOW SYSTEM FUNCTIONS filters built-in functions

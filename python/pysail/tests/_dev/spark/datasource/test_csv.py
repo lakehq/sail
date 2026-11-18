@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import glob
 import gzip
 from collections.abc import Mapping
@@ -274,8 +276,7 @@ def test_csv_read_options(spark, tmp_path, infer_schema):
         .option("inferSchema", infer_schema)
         .csv(str(path))
     )
-    expected_row_count = 2
-    assert read_df.count() == expected_row_count
+    assert read_df.count() == 2
     assert read_df.columns == ["col1", "col2"]
     expected_col2_value = 10 if infer_schema else "10"
     assert read_df.collect()[0].col2 == expected_col2_value
@@ -331,7 +332,7 @@ def test_csv_read_truncated_rows_dropmalformed(spark, tmp_path, infer_schema):
     assert df.collect() == [full_row(infer_schema)]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="`allowTruncatedRows` is a Sail-only option")
+@pytest.mark.spark(skip_if_jvm=True, reason="`allowTruncatedRows` is a Sail-only option")
 @pytest.mark.parametrize("infer_schema", [True, False])
 def test_csv_read_truncated_rows_disallowed(spark, tmp_path, infer_schema):
     df = read_truncated_rows_csv(spark, tmp_path, infer_schema, {"allowTruncatedRows": "false"})
@@ -373,7 +374,7 @@ def test_csv_infer_schema_skips_whitespace_only_lines(spark, tmp_path):
     assert [tuple(r) for r in df.collect()] == [(1, 2), (3, 4)]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark splits quoted values at line breaks without `multiLine`")
+@pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark splits quoted values at line breaks without `multiLine`")
 @pytest.mark.parametrize(
     ("value", "expected"),
     [("p\n\nq", "p\n\nq"), ("p\n   \nq", "p\nq")],
@@ -469,8 +470,7 @@ def test_csv_infer_schema_false(spark, tmp_path):
 
     # Should be able to collect all rows without error
     rows = df.collect()
-    expected_len = 3
-    assert len(rows) == expected_len
+    assert len(rows) == 3
     assert rows[0].id == "1"
     assert rows[0].name == "Alice"
     assert rows[0].birthday == "2025-01-01"
@@ -505,9 +505,8 @@ def test_csv_infer_schema_false_no_header(spark, tmp_path):
 
     # Should be able to collect all rows without error
     rows = df.collect()
-    expected_len = 3
     # ruff: noqa: SLF001
-    assert len(rows) == expected_len
+    assert len(rows) == 3
     assert rows[0]._c0 == "1"
     assert rows[0]._c1 == "Alice"
     assert rows[0]._c2 == "2025-01-01"
@@ -521,7 +520,7 @@ def test_csv_format_path(spark, tmp_path):
     # so column names cannot be asserted.
     csv_file.write_text("1,Alice\n2,Bob\n")
     df = spark.sql(f"SELECT * FROM csv.`{escape_sql_identifier(str(csv_file))}`")  # noqa: S608
-    assert df.count() == 2  # noqa: PLR2004
+    assert df.count() == 2
 
 
 @pytest.mark.parametrize("ext", ["CSV", "Csv", "cSv"])

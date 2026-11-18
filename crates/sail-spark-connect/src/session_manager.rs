@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -52,11 +54,13 @@ impl ServerSessionMutator for SparkSessionMutator {
         let spark = Arc::new(
             SparkSession::try_new(
                 info.session_id.clone(),
+                info.client_session_id.clone(),
                 info.user_id.clone(),
                 SparkSessionOptions {
                     execution_heartbeat_interval: Duration::from_secs(
                         self.config.spark.execution_heartbeat_interval_secs,
                     ),
+                    parquet_binary_as_string: self.config.parquet.binary_as_string,
                 },
             )
             .map_err(|e| internal_datafusion_err!("{e}"))?,

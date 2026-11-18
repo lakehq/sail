@@ -1,17 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Native Iceberg REST catalog provider integration tests."""
 
 from __future__ import annotations
 
 import uuid
+from typing import TYPE_CHECKING
 
 import pytest
 
-from pysail import _native
+if TYPE_CHECKING:
+    from pysail import _native
 
-IcebergRestCatalogProvider = _native._catalog._iceberg.IcebergRestCatalogProvider  # noqa: SLF001
-DatabaseNotFoundError = _native._catalog.DatabaseNotFoundError  # noqa: SLF001
-TableNotFoundError = _native._catalog.TableNotFoundError  # noqa: SLF001
-ViewNotFoundError = _native._catalog.ViewNotFoundError  # noqa: SLF001
 
 _TABLE_COLUMNS = [
     ("foo", "utf8", True, None),
@@ -33,9 +33,6 @@ _DYNAMIC_TABLE_PROPERTIES = {
     "metadata.last-updated-ms",
     "metadata.table-uuid",
 }
-_BASIC_TABLE_PROPERTY_COUNT = 15
-_DETAILED_TABLE_PROPERTY_COUNT = 18
-_VIEW_PROPERTY_COUNT = 6
 
 
 def _namespace(prefix: str, *tail: str) -> list[str]:
@@ -53,12 +50,12 @@ def _column_statuses(status: object) -> set[tuple[str, str, bool, str | None, bo
     }
 
 
-def _create_database(catalog: IcebergRestCatalogProvider, namespace: list[str]) -> None:
+def _create_database(catalog: _native._catalog._iceberg.IcebergRestCatalogProvider, namespace: list[str]) -> None:
     catalog.create_database(namespace)
 
 
 def _create_detailed_table(
-    catalog: IcebergRestCatalogProvider,
+    catalog: _native._catalog._iceberg.IcebergRestCatalogProvider,
     namespace: list[str],
     table: str,
     location: str,
@@ -85,7 +82,7 @@ def _assert_detailed_table(status: object, namespace: list[str], table: str, loc
     properties = _properties(status)
     static_properties = {key: value for key, value in properties.items() if key not in _DYNAMIC_TABLE_PROPERTIES}
 
-    assert len(properties) == _DETAILED_TABLE_PROPERTY_COUNT
+    assert len(properties) == 18
     assert static_properties == {
         "comment": "test table",
         "metadata.current-schema-id": "0",
@@ -125,7 +122,7 @@ def _assert_detailed_table(status: object, namespace: list[str], table: str, loc
     }
 
 
-def test_create_namespace(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_create_namespace(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider) -> None:
     namespace = _namespace("create_namespace")
     created = iceberg_rest_catalog.create_database(
         namespace,
@@ -160,16 +157,20 @@ def test_create_namespace(iceberg_rest_catalog: IcebergRestCatalogProvider) -> N
     assert created_again.location == f"s3://icebergdata/demo/{second_namespace[0]}"
 
 
-def test_get_non_exist_namespace(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
-    with pytest.raises(DatabaseNotFoundError):
+def test_get_non_exist_namespace(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider) -> None:
+    from pysail import _native
+
+    with pytest.raises(_native._catalog.DatabaseNotFoundError):  # noqa: SLF001
         iceberg_rest_catalog.get_database(_namespace("missing_namespace"))
 
 
-def test_get_namespace(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_get_namespace(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider) -> None:
+    from pysail import _native
+
     namespace = _namespace("get_namespace", "ios")
     properties = [("owner", "Lake"), ("community", "Sail")]
 
-    with pytest.raises(DatabaseNotFoundError):
+    with pytest.raises(_native._catalog.DatabaseNotFoundError):  # noqa: SLF001
         iceberg_rest_catalog.get_database(namespace)
 
     created = iceberg_rest_catalog.create_database(namespace, properties=properties)
@@ -181,7 +182,7 @@ def test_get_namespace(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None
     assert set(properties).issubset(set(fetched.properties))
 
 
-def test_list_namespaces(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_list_namespaces(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider) -> None:
     parent = _namespace("list_namespaces")[0]
     first = [parent, "ios"]
     second = [parent, "macos"]
@@ -196,7 +197,7 @@ def test_list_namespaces(iceberg_rest_catalog: IcebergRestCatalogProvider) -> No
     assert {tuple(status.database) for status in databases} == {tuple(first), tuple(second)}
 
 
-def test_list_empty_namespaces(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_list_empty_namespaces(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider) -> None:
     namespace = _namespace("list_empty_namespaces", "apple")
 
     with pytest.raises(RuntimeError):
@@ -206,7 +207,7 @@ def test_list_empty_namespaces(iceberg_rest_catalog: IcebergRestCatalogProvider)
     assert iceberg_rest_catalog.list_databases(namespace) == []
 
 
-def test_list_root_namespaces(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_list_root_namespaces(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider) -> None:
     root = _namespace("list_root_namespaces")[0]
     first = [root, "apple", "ios"]
     second = [root, "google", "android"]
@@ -221,7 +222,9 @@ def test_list_root_namespaces(iceberg_rest_catalog: IcebergRestCatalogProvider) 
     assert matching_roots == [[root]]
 
 
-def test_list_empty_multi_level_namespaces(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_list_empty_multi_level_namespaces(
+    iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider,
+) -> None:
     namespace = _namespace("list_empty_multi_level_namespaces", "a_a", "apple")
 
     with pytest.raises(RuntimeError):
@@ -231,13 +234,15 @@ def test_list_empty_multi_level_namespaces(iceberg_rest_catalog: IcebergRestCata
     assert iceberg_rest_catalog.list_databases(namespace) == []
 
 
-def test_drop_namespace(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_drop_namespace(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider) -> None:
+    from pysail import _native
+
     namespace = _namespace("drop_namespace")
     iceberg_rest_catalog.create_database(namespace)
     assert iceberg_rest_catalog.get_database(namespace).database == namespace
 
     iceberg_rest_catalog.drop_database(namespace)
-    with pytest.raises(DatabaseNotFoundError):
+    with pytest.raises(_native._catalog.DatabaseNotFoundError):  # noqa: SLF001
         iceberg_rest_catalog.get_database(namespace)
     with pytest.raises(RuntimeError):
         iceberg_rest_catalog.drop_database(namespace)
@@ -245,7 +250,7 @@ def test_drop_namespace(iceberg_rest_catalog: IcebergRestCatalogProvider) -> Non
     iceberg_rest_catalog.drop_database(namespace, if_exists=True)
 
 
-def test_create_table(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_create_table(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider) -> None:
     namespace = _namespace("create_table", "apple", "ios")
     iceberg_rest_catalog.create_database(namespace, properties=[("owner", "Lake"), ("community", "Sail")])
 
@@ -260,7 +265,7 @@ def test_create_table(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
     static_properties = {key: value for key, value in properties.items() if key not in _DYNAMIC_TABLE_PROPERTIES}
     expected_location = f"s3://icebergdata/demo/{'/'.join(namespace)}/t1"
 
-    assert len(properties) == _BASIC_TABLE_PROPERTY_COUNT
+    assert len(properties) == 15
     assert static_properties == {
         "comment": "peow",
         "metadata.current-schema-id": "0",
@@ -319,7 +324,7 @@ def test_create_table(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
     assert detailed.partition_by == [("baz", None)]
     assert set(detailed.sort_by) == {("bar", False), ("foo", True)}
     assert detailed.bucket_by is None
-    assert len(detailed.properties) == _DETAILED_TABLE_PROPERTY_COUNT
+    assert len(detailed.properties) == 18
     assert {("option.key1", "value1"), ("owner", "mr. meow"), ("team", "data-eng")}.issubset(set(detailed.properties))
     assert _column_statuses(detailed) == {
         ("foo", "Utf8", True, None, False),
@@ -328,7 +333,7 @@ def test_create_table(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
     }
 
 
-def test_get_table(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_get_table(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider) -> None:
     namespace = _namespace("get_table", "apple", "ios")
     _create_database(iceberg_rest_catalog, namespace)
     location = f"s3://icebergdata/custom/{namespace[0]}/meow"
@@ -337,7 +342,7 @@ def test_get_table(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
     _assert_detailed_table(iceberg_rest_catalog.get_table(namespace, "t2"), namespace, "t2", location)
 
 
-def test_list_tables(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_list_tables(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider) -> None:
     namespace = _namespace("list_tables")
     _create_database(iceberg_rest_catalog, namespace)
     assert iceberg_rest_catalog.list_tables(namespace) == []
@@ -354,14 +359,16 @@ def test_list_tables(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
         assert table.format == "iceberg"
 
 
-def test_drop_table(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_drop_table(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider) -> None:
+    from pysail import _native
+
     namespace = _namespace("drop_table")
     _create_database(iceberg_rest_catalog, namespace)
     iceberg_rest_catalog.create_table(namespace, "t1", _ID_COLUMN, format="iceberg")
     assert iceberg_rest_catalog.get_table(namespace, "t1").name == "t1"
 
     iceberg_rest_catalog.drop_table(namespace, "t1")
-    with pytest.raises(TableNotFoundError):
+    with pytest.raises(_native._catalog.TableNotFoundError):  # noqa: SLF001
         iceberg_rest_catalog.get_table(namespace, "t1")
     with pytest.raises(RuntimeError):
         iceberg_rest_catalog.drop_table(namespace, "t1")
@@ -369,11 +376,11 @@ def test_drop_table(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
 
     iceberg_rest_catalog.create_table(namespace, "t2", _ID_COLUMN, format="iceberg")
     iceberg_rest_catalog.drop_table(namespace, "t2", purge=True)
-    with pytest.raises(TableNotFoundError):
+    with pytest.raises(_native._catalog.TableNotFoundError):  # noqa: SLF001
         iceberg_rest_catalog.get_table(namespace, "t2")
 
 
-def test_create_view(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_create_view(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider) -> None:
     namespace = _namespace("create_view")
     _create_database(iceberg_rest_catalog, namespace)
 
@@ -390,7 +397,7 @@ def test_create_view(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
     }
     expected_location = f"s3://icebergdata/demo/{namespace[0]}/view1"
 
-    assert len(properties) == _VIEW_PROPERTY_COUNT
+    assert len(properties) == 6
     assert properties["metadata-location"].startswith(f"{expected_location}/metadata/")
     assert properties["metadata.view-uuid"]
     assert static_properties == {
@@ -445,7 +452,9 @@ def test_create_view(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
     assert {("owner", "alice"), ("team", "analytics")}.issubset(set(second.properties))
 
 
-def test_get_view(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_get_view(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider) -> None:
+    from pysail import _native
+
     namespace = _namespace("get_view")
     _create_database(iceberg_rest_catalog, namespace)
     columns = [("foo", "utf8", True, None), ("bar", "int32", False, "meow")]
@@ -470,11 +479,11 @@ def test_get_view(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
     }
     assert {("owner", "bob"), ("version", "1.0")}.issubset(set(view.properties))
 
-    with pytest.raises(ViewNotFoundError):
+    with pytest.raises(_native._catalog.ViewNotFoundError):  # noqa: SLF001
         iceberg_rest_catalog.get_view(namespace, "nonexistent")
 
 
-def test_list_views(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_list_views(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider) -> None:
     namespace = _namespace("list_views")
     _create_database(iceberg_rest_catalog, namespace)
     assert iceberg_rest_catalog.list_views(namespace) == []
@@ -490,14 +499,16 @@ def test_list_views(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
         assert view.kind == "view"
 
 
-def test_drop_view(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_drop_view(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider) -> None:
+    from pysail import _native
+
     namespace = _namespace("drop_view")
     _create_database(iceberg_rest_catalog, namespace)
     iceberg_rest_catalog.create_view(namespace, "view1", _ID_COLUMN, "SELECT * FROM t1")
     assert iceberg_rest_catalog.get_view(namespace, "view1").name == "view1"
 
     iceberg_rest_catalog.drop_view(namespace, "view1")
-    with pytest.raises(ViewNotFoundError):
+    with pytest.raises(_native._catalog.ViewNotFoundError):  # noqa: SLF001
         iceberg_rest_catalog.get_view(namespace, "view1")
     with pytest.raises(RuntimeError):
         iceberg_rest_catalog.drop_view(namespace, "view1")
@@ -505,7 +516,7 @@ def test_drop_view(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
 
 
 def _assert_partition_transform(
-    catalog: IcebergRestCatalogProvider,
+    catalog: _native._catalog._iceberg.IcebergRestCatalogProvider,
     test_name: str,
     table: str,
     partition: tuple[str, str | None],
@@ -522,19 +533,27 @@ def _assert_partition_transform(
     assert created.partition_by == [partition]
 
 
-def test_create_table_partition_identity(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_create_table_partition_identity(
+    iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider,
+) -> None:
     _assert_partition_transform(iceberg_rest_catalog, "partition_identity", "identity_table", ("id", None))
 
 
-def test_create_table_partition_year(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_create_table_partition_year(
+    iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider,
+) -> None:
     _assert_partition_transform(iceberg_rest_catalog, "partition_year", "year_table", ("ts", "year"))
 
 
-def test_create_table_partition_bucket(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_create_table_partition_bucket(
+    iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider,
+) -> None:
     _assert_partition_transform(iceberg_rest_catalog, "partition_bucket", "bucket_table", ("id", "bucket(16)"))
 
 
-def test_create_table_partition_truncate(iceberg_rest_catalog: IcebergRestCatalogProvider) -> None:
+def test_create_table_partition_truncate(
+    iceberg_rest_catalog: _native._catalog._iceberg.IcebergRestCatalogProvider,
+) -> None:
     _assert_partition_transform(
         iceberg_rest_catalog,
         "partition_truncate",

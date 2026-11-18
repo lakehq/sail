@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for partition transforms with the DataFrameWriterV2 API.
 
 These tests verify that partition transforms are correctly parsed when using
@@ -7,16 +9,8 @@ partition transforms, so these tests verify parsing by checking the error messag
 
 import pytest
 
-try:
-    from pyspark.sql.functions import partitioning
 
-    HAS_PARTITIONING = True
-except ImportError:
-    HAS_PARTITIONING = False
-    partitioning = None
-
-
-@pytest.mark.skipif(not HAS_PARTITIONING, reason="partitioning module not available in this Spark version")
+@pytest.mark.spark(version=">=4", reason="Uses pyspark.sql.functions.partitioning")
 @pytest.mark.parametrize(
     ("transform_name", "transform_func"),
     [
@@ -29,6 +23,8 @@ except ImportError:
 )
 def test_partition_transform_time_based(spark, tmp_path, transform_name, transform_func):
     """Test that time-based partition transforms are correctly parsed from PySpark V2 API."""
+    from pyspark.sql.functions import partitioning
+
     location = str(tmp_path / f"t_{transform_name}")
     df = spark.createDataFrame(
         [(1, "2023-03-15 10:30:00")],
@@ -40,9 +36,11 @@ def test_partition_transform_time_based(spark, tmp_path, transform_name, transfo
         df.writeTo(f"t_{transform_name}").option("path", location).partitionedBy(transform_func(partitioning)).create()
 
 
-@pytest.mark.skipif(not HAS_PARTITIONING, reason="partitioning module not available in this Spark version")
+@pytest.mark.spark(version=">=4", reason="Uses pyspark.sql.functions.partitioning")
 def test_partition_transform_bucket(spark, tmp_path):
     """Test that bucket partition transform is correctly parsed from PySpark V2 API."""
+    from pyspark.sql.functions import partitioning
+
     location = str(tmp_path / "t_bucket")
     df = spark.createDataFrame([(1, "a")], schema="id INT, name STRING")
 

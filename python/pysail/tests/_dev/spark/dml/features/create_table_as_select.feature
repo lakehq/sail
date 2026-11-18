@@ -1,5 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: CREATE TABLE AS SELECT
-  Scenario: CREATE TABLE AS SELECT with LOCATION clause
+  Scenario: CREATE TABLE AS SELECT with LOCATION and COMMENT clauses
     Given variable location for temporary directory ctas_location_table
     Given final statement
       """
@@ -10,6 +12,7 @@ Feature: CREATE TABLE AS SELECT
       CREATE TABLE ctas_location_table
       USING PARQUET
       LOCATION {{ location.sql }}
+      COMMENT 'Customer records'
       AS SELECT * FROM VALUES
         (1, 'Alice', 10.5),
         (2, 'Bob', 20.75),

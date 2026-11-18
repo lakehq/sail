@@ -1,18 +1,26 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion::common::{JoinType, Result, plan_datafusion_err};
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
+use datafusion::physical_expr::{EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr};
+use datafusion::physical_expr_common::physical_expr::is_volatile;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::coop::CooperativeExec;
+use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
 };
 use datafusion::physical_plan::limit::GlobalLimitExec;
+use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -30,6 +38,7 @@ use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
+use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
@@ -49,7 +58,6 @@ impl JobGraph {
         let plan = ensure_single_input_partition_for_global_limit(plan)?;
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
         let plan = ensure_single_probe_partition_for_nested_loop_join(plan)?;
-        let plan = materialize_shared_file_scan_builds(plan)?;
         let plan = ensure_worker_input_for_lake_procedure(plan)?;
         let mut graph = Self {
             stages: vec![],
@@ -103,48 +111,6 @@ fn ensure_worker_input_for_lake_procedure(
             Ok(Transformed::yes(replace_children_if_necessary(
                 plan,
                 vec![input],
-            )?))
-        })?
-        .data)
-}
-
-/// A single-partition build no longer needs a physical coalesce, but should
-/// still be scanned once and broadcast rather than read again by every task.
-fn materialize_shared_file_scan_builds(
-    plan: Arc<dyn ExecutionPlan>,
-) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    Ok(plan
-        .transform_up(|plan| {
-            let shared_build = plan
-                .downcast_ref::<HashJoinExec>()
-                .is_some_and(|join| join.mode == PartitionMode::CollectLeft)
-                || plan.is::<CrossJoinExec>()
-                || plan.is::<NestedLoopJoinExec>()
-                || plan.is::<PiecewiseMergeJoinExec>();
-            if !shared_build {
-                return Ok(Transformed::no(plan));
-            }
-            let (left, right) = plan.children().two()?;
-            if left.is::<CoalescePartitionsExec>()
-                || left.output_partitioning().partition_count() != 1
-                || right.output_partitioning().partition_count() <= 1
-                || !left.exists(|node| {
-                    Ok(node.downcast_ref::<DataSourceExec>().is_some_and(|source| {
-                        source
-                            .data_source()
-                            .downcast_ref::<FileScanConfig>()
-                            .is_some()
-                    }))
-                })?
-            {
-                return Ok(Transformed::no(plan));
-            }
-            let children = vec![
-                Arc::new(CoalescePartitionsExec::new(Arc::clone(left))) as Arc<dyn ExecutionPlan>,
-                Arc::clone(right),
-            ];
-            Ok(Transformed::yes(replace_children_if_necessary(
-                plan, children,
             )?))
         })?
         .data)
@@ -393,6 +359,85 @@ fn build_job_graph(
     plan_job_graph_stages(plan, usage, graph, DriverStageHandling::CreateStage, None)
 }
 
+// Plain exchanges finish at a reusable input that every reading task receives in full,
+// with no row selection, computation, or added sort above the exchange. A merge without
+// a fetch merges the sorted input streams directly, while an order-preserving
+// repartition needs a sort above the shuffle.
+fn is_plain_exchange(plan: &dyn ExecutionPlan) -> bool {
+    plan.downcast_ref::<CoalescePartitionsExec>()
+        .is_some_and(|coalesce| coalesce.fetch().is_none())
+        || plan
+            .downcast_ref::<RepartitionExec>()
+            .is_some_and(|repartition| repartition_ordering_to_restore(repartition).is_none())
+        || plan.is::<ExplicitRepartitionExec>()
+        || plan.is::<CoalesceExec>()
+        || plan
+            .downcast_ref::<SortPreservingMergeExec>()
+            .is_some_and(|merge| merge.fetch().is_none())
+}
+
+fn repartition_ordering_to_restore(repartition: &RepartitionExec) -> Option<&LexOrdering> {
+    if repartition.preserve_order() {
+        repartition.properties().output_ordering()
+    } else {
+        None
+    }
+}
+
+/// Returns whether every join task that computes this build itself gets the same rows.
+/// This holds for projections and filters without volatile expressions over in-memory, range,
+/// empty, or placeholder sources, or over plain exchanges, whose complete output every reading
+/// task receives.
+/// Other operators, such as limits, aggregates, or windows over rows read from a shuffle,
+/// may give different rows in different tasks.
+fn is_reproducible_build(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+    if is_plain_exchange(plan.as_ref()) {
+        return Ok(true);
+    }
+    let source = plan.downcast_ref::<DataSourceExec>().is_some_and(|source| {
+        source
+            .data_source()
+            .downcast_ref::<MemorySourceConfig>()
+            .is_some()
+    }) || plan.is::<RangeExec>()
+        || plan.is::<EmptyExec>()
+        || plan.is::<PlaceholderRowExec>();
+    let row_wise =
+        plan.is::<ProjectionExec>() || plan.is::<FilterExec>() || plan.is::<CooperativeExec>();
+    if !(source || row_wise) || plan.fetch().is_some() {
+        return Ok(false);
+    }
+    let mut volatile = false;
+    plan.apply_expressions(&mut |expr| {
+        volatile = is_volatile(expr);
+        Ok(if volatile {
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    })?;
+    if volatile {
+        return Ok(false);
+    }
+    for child in plan.children() {
+        if !is_reproducible_build(child)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn contains_file_scan(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+    plan.exists(|node| {
+        Ok(node.downcast_ref::<DataSourceExec>().is_some_and(|source| {
+            source
+                .data_source()
+                .downcast_ref::<FileScanConfig>()
+                .is_some()
+        }))
+    })
+}
+
 fn plan_job_graph_stages(
     plan: Arc<dyn ExecutionPlan>,
     usage: PartitionUsage,
@@ -400,6 +445,32 @@ fn plan_job_graph_stages(
     driver_stage_handling: DriverStageHandling,
     scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<PlannedSubtree> {
+    if matches!(usage, PartitionUsage::Shared)
+        && plan.output_partitioning().partition_count() == 1
+        && !is_plain_exchange(plan.as_ref())
+        && (!is_reproducible_build(&plan)? || contains_file_scan(&plan)?)
+    {
+        // The complete build relation is shared, including limits, TopK, pushed-down
+        // fetches, and volatile expressions. Sharing only its inputs can select different
+        // rows in different join tasks. This also materializes single-partition file scans.
+        // With Flight shuffle, the broadcast puts the producer and all join partitions in one
+        // task region that is scheduled as a whole, so a join whose partitions could run as
+        // independent single-slot regions now needs one worker slot per partition at once.
+        // This is acceptable since Flight shuffle usually assumes all nodes are interconnected
+        // to form a single task region.
+        let properties = plan.properties().clone();
+        let build = plan_job_graph_stages(
+            plan,
+            PartitionUsage::Once,
+            graph,
+            driver_stage_handling,
+            scalar_context,
+        )?;
+        return Ok(PlannedSubtree::without_pending_scalar_subquery_expr(
+            create_shared_input(build, graph, properties, scalar_context)?,
+        ));
+    }
+
     if let Some(scalar) = plan.downcast_ref::<ScalarSubqueryExec>() {
         return build_scalar_subquery_job_graph(scalar, usage, graph, driver_stage_handling);
     }
@@ -435,7 +506,11 @@ fn plan_job_graph_stages(
                 vec![
                     plan_job_graph_stages(
                         left.clone(),
-                        PartitionUsage::Shared,
+                        if right.output_partitioning().partition_count() > 1 {
+                            PartitionUsage::Shared
+                        } else {
+                            usage
+                        },
                         graph,
                         DriverStageHandling::CreateStage,
                         scalar_context,
@@ -463,7 +538,11 @@ fn plan_job_graph_stages(
         vec![
             plan_job_graph_stages(
                 left.clone(),
-                PartitionUsage::Shared,
+                if right.output_partitioning().partition_count() > 1 {
+                    PartitionUsage::Shared
+                } else {
+                    usage
+                },
                 graph,
                 DriverStageHandling::CreateStage,
                 scalar_context,
@@ -525,10 +604,7 @@ fn plan_job_graph_stages(
         PartitionUsage::Shared => ShuffleConsumption::Multiple,
     };
     let plan = if let Some(repartition) = subtree.plan.downcast_ref::<RepartitionExec>() {
-        let ordering = repartition
-            .preserve_order()
-            .then(|| repartition.properties().output_ordering().cloned())
-            .flatten();
+        let ordering = repartition_ordering_to_restore(repartition).cloned();
         if ordering.is_some() && repartition.properties().boundedness.is_unbounded() {
             return Err(ExecutionError::InternalError(
                 "order-preserving repartition of unbounded input is not supported in distributed execution".to_string()
@@ -613,8 +689,19 @@ fn plan_job_graph_stages(
         PlannedSubtree::new(plan, subtree.node_has_scalar_subquery_expr)
     } else if let Some(coalesce) = subtree.plan.downcast_ref::<CoalesceExec>() {
         let child = subtree.only_child()?;
-        let plan =
-            create_rescale_input(child, coalesce.output_partitions(), graph, scalar_context)?;
+        let plan = if matches!(usage, PartitionUsage::Shared) && coalesce.output_partitions() == 1 {
+            // Rescale reads this same set of streams but reserves only one replica.
+            // Broadcast makes the single coalesced partition reusable by every reader.
+            create_shuffle(
+                child,
+                graph,
+                coalesce.properties().clone(),
+                ShuffleConsumption::Multiple,
+                scalar_context,
+            )?
+        } else {
+            create_rescale_input(child, coalesce.output_partitions(), graph, scalar_context)?
+        };
         PlannedSubtree::without_pending_scalar_subquery_expr(plan)
     } else if subtree.plan.is::<SystemTableExec>()
         || subtree.plan.is::<CatalogCommandExec>()
@@ -826,6 +913,22 @@ fn physical_expr_has_scalar_subquery(expr: &Arc<dyn PhysicalExpr>) -> bool {
             .children()
             .iter()
             .any(|child| physical_expr_has_scalar_subquery(child))
+}
+
+/// Materializes a complete single-partition build relation for all of its consumers.
+fn create_shared_input(
+    plan: PlannedSubtree,
+    graph: &mut JobGraph,
+    properties: Arc<PlanProperties>,
+    scalar_context: Option<ScalarSubqueryContext<'_>>,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    create_shuffle(
+        plan,
+        graph,
+        properties,
+        ShuffleConsumption::Multiple,
+        scalar_context,
+    )
 }
 
 fn create_merge_input(
@@ -1071,6 +1174,7 @@ fn create_driver_stage(
 mod tests {
     use std::sync::Arc;
 
+    use datafusion::arrow::compute::SortOptions;
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion::common::{JoinType, NullEquality, ScalarValue};
     use datafusion::execution::object_store::ObjectStoreUrl;
@@ -1080,7 +1184,7 @@ mod tests {
         ScalarSubqueryResults, SubqueryIndex,
     };
     use datafusion::physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion::physical_expr::expressions::{binary, col};
+    use datafusion::physical_expr::expressions::{binary, col, lit};
     use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
     use datafusion::physical_expr::{
         LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning, SplitPoint,
@@ -1090,12 +1194,15 @@ mod tests {
     use datafusion::physical_plan::coop::CooperativeExec;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::filter::FilterExec;
-    use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
+    use datafusion::physical_plan::joins::{
+        HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    };
     use datafusion::physical_plan::limit::GlobalLimitExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
     use datafusion::physical_plan::sorts::sort::SortExec;
-    use datafusion::physical_plan::union::UnionExec;
+    use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+    use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
     use sail_catalog::command::CatalogCommand;
     use sail_celeborn::common::PartitionSplitMode;
@@ -1106,7 +1213,10 @@ mod tests {
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
     use super::{JobGraph, JobGraphOptions, create_scalar_subquery_input};
-    use crate::job_graph::{InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement};
+    use crate::job_graph::{
+        InputMode, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
+        reads_inputs_in_fixed_order,
+    };
     use crate::plan::StageInputExec;
     use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
 
@@ -1150,6 +1260,32 @@ mod tests {
                 partition_split_mode: PartitionSplitMode::Soft,
             },
         }
+    }
+
+    fn shared_build_producer<'a>(graph: &'a JobGraph, consumer: &Stage) -> &'a Stage {
+        let join = consumer.plan.downcast_ref::<HashJoinExec>().unwrap();
+        let input = join.children()[0]
+            .downcast_ref::<StageInputExec<usize>>()
+            .unwrap();
+        let mut input = &consumer.inputs[*input.input()];
+        if matches!(
+            graph.options.shuffle_backend,
+            ShuffleBackendKind::Storage { .. }
+        ) {
+            assert!(matches!(input.mode, InputMode::Forward));
+            let collector = &graph.stages[input.stage];
+            assert!(matches!(collector.mode, OutputMode::Blocking));
+            let source = collector
+                .plan
+                .downcast_ref::<StageInputExec<usize>>()
+                .unwrap();
+            input = &collector.inputs[*source.input()];
+        }
+        assert!(matches!(input.mode, InputMode::Broadcast));
+        let producer = &graph.stages[input.stage];
+        assert_eq!(producer.placement, TaskPlacement::Worker);
+        assert_eq!(producer.plan.output_partitioning().partition_count(), 1);
+        producer
     }
 
     #[test]
@@ -1257,6 +1393,665 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn broadcast_limit_is_applied_once() {
+        use datafusion::common::tree_node::TreeNode;
+
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let limited =
+                CoalescePartitionsExec::new(UnionExec::try_new(vec![empty_plan(); 4]).unwrap())
+                    .with_fetch(Some(3));
+            let key = col("id", &schema()).unwrap();
+            let join = HashJoinExec::try_new(
+                Arc::new(limited),
+                UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                vec![(Arc::clone(&key), key)],
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                false,
+            )
+            .unwrap();
+            let graph = JobGraph::try_new(Arc::new(join), options).unwrap();
+            let limits = graph
+                .stages
+                .iter()
+                .filter(|stage| {
+                    stage
+                        .plan
+                        .exists(|plan| Ok(plan.is::<GlobalLimitExec>()))
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+            // The limit is applied by one task, whose output every task of the join reads.
+            assert_eq!(limits.len(), 1);
+            assert_eq!(limits[0].plan.output_partitioning().partition_count(), 1);
+            let join = graph
+                .stages
+                .iter()
+                .find(|stage| {
+                    stage
+                        .plan
+                        .exists(|plan| Ok(plan.is::<HashJoinExec>()))
+                        .unwrap()
+                })
+                .unwrap();
+            assert_eq!(join.plan.output_partitioning().partition_count(), 4);
+        }
+    }
+
+    #[test]
+    fn broadcast_global_limit_preserves_skip_and_fetch() {
+        use datafusion::common::tree_node::TreeNode;
+
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            for explicit_coalesce in [false, true] {
+                for (skip, fetch) in [(0, Some(3)), (2, Some(3)), (2, None), (0, Some(0))] {
+                    let input = UnionExec::try_new(vec![empty_plan(); 4]).unwrap();
+                    let input = if explicit_coalesce {
+                        Arc::new(CoalescePartitionsExec::new(input)) as Arc<dyn ExecutionPlan>
+                    } else {
+                        // Exercise the no-fetch coalesce inserted by JobGraph::try_new too.
+                        input
+                    };
+                    let limited = Arc::new(GlobalLimitExec::new(input, skip, fetch));
+                    let key = col("id", &schema()).unwrap();
+                    let join = HashJoinExec::try_new(
+                        limited,
+                        UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                        vec![(Arc::clone(&key), key)],
+                        None,
+                        &JoinType::Inner,
+                        None,
+                        PartitionMode::CollectLeft,
+                        NullEquality::NullEqualsNothing,
+                        false,
+                    )
+                    .unwrap();
+                    let graph = JobGraph::try_new(Arc::new(join), options.clone()).unwrap();
+                    let stage = graph.stages.last().unwrap();
+                    assert_eq!(stage.plan.output_partitioning().partition_count(), 4);
+                    assert!(
+                        !stage
+                            .plan
+                            .exists(|plan| Ok(plan.is::<GlobalLimitExec>()))
+                            .unwrap()
+                    );
+                    let producer = shared_build_producer(&graph, stage);
+                    let limit = producer.plan.downcast_ref::<GlobalLimitExec>().unwrap();
+                    assert_eq!((limit.skip(), limit.fetch()), (skip, fetch));
+                    assert_eq!(producer.plan.output_partitioning().partition_count(), 1);
+                    assert_eq!(limit.input().output_partitioning().partition_count(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shared_plain_exchanges_broadcast_without_an_extra_producer() {
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let input = UnionExec::try_new(vec![empty_plan(); 4]).unwrap();
+            let builds: Vec<Arc<dyn ExecutionPlan>> = vec![
+                Arc::new(CoalescePartitionsExec::new(input.clone())),
+                Arc::new(
+                    RepartitionExec::try_new(input.clone(), Partitioning::RoundRobinBatch(1))
+                        .unwrap(),
+                ),
+                Arc::new(ExplicitRepartitionExec::new(
+                    input.clone(),
+                    Partitioning::RoundRobinBatch(1),
+                )),
+                Arc::new(CoalesceExec::new(input, 1)),
+            ];
+            for build in builds {
+                let explicit = build.is::<ExplicitRepartitionExec>();
+                let key = col("id", &schema()).unwrap();
+                let join = HashJoinExec::try_new(
+                    build,
+                    UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                    vec![(key.clone(), key)],
+                    None,
+                    &JoinType::Inner,
+                    None,
+                    PartitionMode::CollectLeft,
+                    NullEquality::NullEqualsNothing,
+                    false,
+                )
+                .unwrap();
+                let graph = JobGraph::try_new(Arc::new(join), options.clone()).unwrap();
+                let storage = matches!(options.shuffle_backend, ShuffleBackendKind::Storage { .. });
+                assert_eq!(graph.stages.len(), if storage { 3 } else { 2 });
+                let producer = &graph.stages[0];
+                assert!(producer.plan.is::<UnionExec>());
+                assert_eq!(producer.plan.output_partitioning().partition_count(), 4);
+                assert_eq!(producer.placement, TaskPlacement::Worker);
+                if explicit {
+                    assert!(matches!(
+                        producer.distribution,
+                        OutputDistribution::RoundRobinRow { channels: 1 }
+                    ));
+                } else {
+                    assert!(matches!(
+                        producer.distribution,
+                        OutputDistribution::RoundRobinBatch { channels: 1 }
+                    ));
+                }
+                let consumer = graph.stages.last().unwrap();
+                assert_eq!(consumer.plan.output_partitioning().partition_count(), 4);
+                let join = consumer.plan.downcast_ref::<HashJoinExec>().unwrap();
+                let input = join.children()[0]
+                    .downcast_ref::<StageInputExec<usize>>()
+                    .unwrap();
+                assert_eq!(
+                    input.properties().output_partitioning().partition_count(),
+                    1
+                );
+                let mut input = &consumer.inputs[*input.input()];
+                if storage {
+                    assert!(matches!(input.mode, InputMode::Forward));
+                    let collector = &graph.stages[input.stage];
+                    assert!(matches!(collector.mode, OutputMode::Blocking));
+                    let source = collector
+                        .plan
+                        .downcast_ref::<StageInputExec<usize>>()
+                        .unwrap();
+                    input = &collector.inputs[*source.input()];
+                }
+                assert_eq!(input.stage, 0);
+                assert!(matches!(input.mode, InputMode::Broadcast));
+                // In Storage mode the sole collector reads the producer once;
+                // otherwise each probe needs its own broadcast stream replica.
+                assert_eq!(graph.replicas(0), if storage { 1 } else { 4 });
+            }
+        }
+    }
+
+    #[test]
+    fn shared_ordered_repartition_materializes_the_restored_sort() {
+        let key = col("id", &schema()).unwrap();
+        let ordering: LexOrdering = [PhysicalSortExpr::new_default(key.clone())].into();
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let source = Arc::new(
+                SortExec::new(
+                    ordering.clone(),
+                    UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                )
+                .with_preserve_partitioning(true),
+            );
+            let build = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(1))
+                .unwrap()
+                .with_preserve_order();
+            assert!(build.preserve_order());
+            let join = HashJoinExec::try_new(
+                Arc::new(build),
+                UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                vec![(key.clone(), key.clone())],
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                false,
+            )
+            .unwrap();
+            let graph = JobGraph::try_new(Arc::new(join), options).unwrap();
+            let consumer = graph.stages.last().unwrap();
+            let producer = shared_build_producer(&graph, consumer);
+            let sort = producer.plan.downcast_ref::<SortExec>().unwrap();
+            assert!(sort.preserve_partitioning());
+            assert_eq!(sort.expr(), &ordering);
+            assert!(sort.input().properties().output_ordering().is_none());
+            let join = consumer.plan.downcast_ref::<HashJoinExec>().unwrap();
+            assert_eq!(join.children()[0].output_ordering(), Some(&ordering));
+        }
+    }
+
+    #[test]
+    fn shared_selection_roots_preserve_the_complete_plan() {
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            for fetch in [None, Some(0), Some(3)] {
+                let input = UnionExec::try_new(vec![empty_plan(); 4]).unwrap();
+                let coalesced =
+                    Arc::new(CoalescePartitionsExec::new(input.clone())) as Arc<dyn ExecutionPlan>;
+                let key = col("id", &schema()).unwrap();
+                let ordering: LexOrdering = [PhysicalSortExpr::new_default(key.clone())].into();
+                let filter = binary(key.clone(), Operator::Eq, key.clone(), &schema()).unwrap();
+                let roots: Vec<Arc<dyn ExecutionPlan>> = vec![
+                    Arc::new(SortExec::new(ordering.clone(), coalesced.clone()).with_fetch(fetch)),
+                    Arc::new(
+                        SortExec::new(
+                            ordering.clone(),
+                            Arc::new(ExplicitRepartitionExec::new(
+                                input.clone(),
+                                Partitioning::RoundRobinBatch(1),
+                            )),
+                        )
+                        .with_fetch(fetch),
+                    ),
+                    FilterExec::try_new(filter, coalesced)
+                        .unwrap()
+                        .with_fetch(fetch)
+                        .unwrap(),
+                    Arc::new(
+                        SortPreservingMergeExec::new(
+                            ordering.clone(),
+                            Arc::new(
+                                SortExec::new(ordering, input).with_preserve_partitioning(true),
+                            ),
+                        )
+                        .with_fetch(fetch),
+                    ),
+                ];
+                for build in roots {
+                    if fetch.is_none() && !build.is::<SortExec>() {
+                        // Every join task computes a filter or merge without a fetch itself.
+                        continue;
+                    }
+                    let name = build.name().to_string();
+                    let ordering = build.output_ordering().cloned();
+                    let join = HashJoinExec::try_new(
+                        build,
+                        UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                        vec![(key.clone(), key.clone())],
+                        None,
+                        &JoinType::Inner,
+                        None,
+                        PartitionMode::CollectLeft,
+                        NullEquality::NullEqualsNothing,
+                        false,
+                    )
+                    .unwrap();
+                    let graph = JobGraph::try_new(Arc::new(join), options.clone()).unwrap();
+                    let consumer = graph.stages.last().unwrap();
+                    assert_eq!(consumer.plan.output_partitioning().partition_count(), 4);
+                    let producer = shared_build_producer(&graph, consumer);
+                    assert_eq!(producer.plan.name(), name);
+                    assert_eq!(producer.plan.fetch(), fetch);
+                    assert_eq!(producer.plan.output_ordering().cloned(), ordering);
+                }
+            }
+        }
+    }
+
+    fn shared_join(build: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        let schema = build.schema();
+        let key = col("id", &schema).unwrap();
+        Arc::new(
+            HashJoinExec::try_new(
+                build,
+                UnionExec::try_new(
+                    (0..4)
+                        .map(|_| Arc::new(EmptyExec::new(schema.clone())) as Arc<dyn ExecutionPlan>)
+                        .collect(),
+                )
+                .unwrap(),
+                vec![(key.clone(), key)],
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                false,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn file_scan(file_groups: usize) -> Arc<dyn ExecutionPlan> {
+        use datafusion::datasource::listing::PartitionedFile;
+        use datafusion::datasource::physical_plan::{
+            FileGroup, FileScanConfigBuilder, ParquetSource,
+        };
+        use datafusion::datasource::source::DataSourceExec;
+
+        let groups = (0..file_groups)
+            .map(|i| FileGroup::new(vec![PartitionedFile::new(format!("build-{i}.parquet"), 1)]))
+            .collect();
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::new(ParquetSource::new(schema())),
+        )
+        .with_file_groups(groups)
+        .build();
+        DataSourceExec::from_data_source(config)
+    }
+
+    #[test]
+    fn reproducible_shared_builds_stay_inline() {
+        use datafusion::common::tree_node::TreeNode;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
+        use datafusion::physical_plan::projection::ProjectionExec;
+        use sail_logical_plan::range::Range;
+        use sail_physical_plan::range::RangeExec;
+
+        let key = col("id", &schema()).unwrap();
+        let filter = || binary(key.clone(), Operator::Eq, key.clone(), &schema()).unwrap();
+        let range_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let range = Arc::new(
+            RangeExec::try_new(
+                Range {
+                    start: 0,
+                    end: 10,
+                    step: 1,
+                },
+                1,
+                range_schema.clone(),
+                vec![0],
+            )
+            .unwrap(),
+        );
+        let range_key = col("id", &range_schema).unwrap();
+        let range_filter = binary(
+            range_key.clone(),
+            Operator::Lt,
+            range_key.clone(),
+            &range_schema,
+        )
+        .unwrap();
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let sources: Vec<Arc<dyn ExecutionPlan>> = vec![
+                MemorySourceConfig::try_new_exec(&[vec![]], schema(), None).unwrap(),
+                Arc::new(
+                    ProjectionExec::try_new(
+                        vec![(range_key.clone(), "id".to_string())],
+                        Arc::new(FilterExec::try_new(range_filter.clone(), range.clone()).unwrap()),
+                    )
+                    .unwrap(),
+                ),
+                Arc::new(CooperativeExec::new(Arc::new(
+                    FilterExec::try_new(filter(), Arc::new(PlaceholderRowExec::new(schema())))
+                        .unwrap(),
+                ))),
+                Arc::new(FilterExec::try_new(filter(), empty_plan()).unwrap()),
+            ];
+            for build in sources {
+                let name = build.name().to_string();
+                let graph = JobGraph::try_new(shared_join(build), options.clone()).unwrap();
+                assert_eq!(graph.stages.len(), 1, "{name}");
+                let join = graph.stages[0].plan.downcast_ref::<HashJoinExec>().unwrap();
+                assert_eq!(join.children()[0].name(), name);
+            }
+
+            // Every join task reads the complete exchange output and filters it itself.
+            let build = Arc::new(
+                FilterExec::try_new(
+                    filter(),
+                    Arc::new(CoalescePartitionsExec::new(
+                        UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                    )),
+                )
+                .unwrap(),
+            );
+            let graph = JobGraph::try_new(shared_join(build), options.clone()).unwrap();
+            let storage = matches!(options.shuffle_backend, ShuffleBackendKind::Storage { .. });
+            assert_eq!(graph.stages.len(), if storage { 3 } else { 2 });
+            assert!(graph.stages[0].plan.is::<UnionExec>());
+            let consumer = graph.stages.last().unwrap();
+            let join = consumer.plan.downcast_ref::<HashJoinExec>().unwrap();
+            assert!(join.children()[0].is::<FilterExec>());
+            assert!(graph.stages[..graph.stages.len() - 1].iter().all(|stage| {
+                !stage
+                    .plan
+                    .exists(|plan| Ok(plan.is::<FilterExec>()))
+                    .unwrap()
+            }));
+        }
+    }
+
+    #[test]
+    fn shared_merge_without_fetch_is_read_by_every_join_task() {
+        let key = col("id", &schema()).unwrap();
+        let ordering: LexOrdering = [PhysicalSortExpr::new_default(key)].into();
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let build = Arc::new(SortPreservingMergeExec::new(
+                ordering.clone(),
+                Arc::new(
+                    SortExec::new(
+                        ordering.clone(),
+                        UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                    )
+                    .with_preserve_partitioning(true),
+                ),
+            ));
+            let graph = JobGraph::try_new(shared_join(build), options).unwrap();
+            assert_eq!(graph.stages.len(), 2);
+            let consumer = &graph.stages[1];
+            assert_eq!(consumer.plan.output_partitioning().partition_count(), 4);
+            let join = consumer.plan.downcast_ref::<HashJoinExec>().unwrap();
+            let merge = join.children()[0]
+                .downcast_ref::<SortPreservingMergeExec>()
+                .unwrap();
+            assert_eq!(merge.fetch(), None);
+            assert_eq!(join.children()[0].output_ordering(), Some(&ordering));
+            let input = merge
+                .input()
+                .downcast_ref::<StageInputExec<usize>>()
+                .unwrap();
+            let input = &consumer.inputs[*input.input()];
+            assert_eq!(input.stage, 0);
+            assert!(matches!(input.mode, InputMode::Merge));
+            assert_eq!(
+                graph.stages[0].plan.output_partitioning().partition_count(),
+                4
+            );
+            assert_eq!(graph.replicas(0), 4);
+        }
+    }
+
+    #[test]
+    fn shared_builds_that_may_differ_per_task_are_materialized() {
+        use datafusion::config::ConfigOptions;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::physical_expr::ScalarFunctionExpr;
+        use datafusion::physical_plan::projection::ProjectionExec;
+
+        let key = col("id", &schema()).unwrap();
+        let random = Arc::new(
+            ScalarFunctionExpr::try_new(
+                datafusion::functions::math::random(),
+                vec![],
+                schema().as_ref(),
+                Arc::new(ConfigOptions::default()),
+            )
+            .unwrap(),
+        ) as Arc<dyn PhysicalExpr>;
+        let aggregate_expr = Arc::new(
+            AggregateExprBuilder::new(
+                sum_udaf(),
+                vec![
+                    datafusion::physical_expr::expressions::cast(
+                        key.clone(),
+                        &schema(),
+                        DataType::Int64,
+                    )
+                    .unwrap(),
+                ],
+            )
+            .schema(schema())
+            .alias("total")
+            .build()
+            .unwrap(),
+        );
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let memory = || MemorySourceConfig::try_new_exec(&[vec![]], schema(), None).unwrap();
+            let builds: Vec<Arc<dyn ExecutionPlan>> = vec![
+                Arc::new(
+                    ProjectionExec::try_new(
+                        vec![
+                            (key.clone(), "id".to_string()),
+                            (random.clone(), "value".to_string()),
+                        ],
+                        memory(),
+                    )
+                    .unwrap(),
+                ),
+                Arc::new(GlobalLimitExec::new(memory(), 0, Some(1))),
+                Arc::new(
+                    AggregateExec::try_new(
+                        AggregateMode::Single,
+                        PhysicalGroupBy::new_single(vec![(key.clone(), "id".to_string())]),
+                        vec![aggregate_expr.clone()],
+                        vec![None],
+                        Arc::new(CoalescePartitionsExec::new(
+                            UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                        )),
+                        schema(),
+                    )
+                    .unwrap(),
+                ),
+            ];
+            for build in builds {
+                let name = build.name().to_string();
+                let graph = JobGraph::try_new(shared_join(build), options.clone()).unwrap();
+                let producer = shared_build_producer(&graph, graph.stages.last().unwrap());
+                assert_eq!(producer.plan.name(), name);
+            }
+        }
+    }
+
+    #[test]
+    fn shared_file_scan_builds_are_scanned_once() {
+        use datafusion::common::tree_node::TreeNode;
+        use datafusion::datasource::source::DataSourceExec;
+        use datafusion::physical_plan::projection::ProjectionExec;
+
+        let key = col("id", &schema()).unwrap();
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let project = |input| {
+                Arc::new(
+                    ProjectionExec::try_new(vec![(key.clone(), "id".to_string())], input).unwrap(),
+                ) as Arc<dyn ExecutionPlan>
+            };
+            for build in [
+                project(file_scan(1)),
+                // As on main, a file scan anywhere in the build materializes it.
+                project(Arc::new(CoalescePartitionsExec::new(file_scan(2)))),
+            ] {
+                let graph = JobGraph::try_new(shared_join(build), options.clone()).unwrap();
+                let consumer = graph.stages.last().unwrap();
+                let producer = shared_build_producer(&graph, consumer);
+                assert!(producer.plan.is::<ProjectionExec>());
+                assert!(
+                    !consumer
+                        .plan
+                        .exists(|plan| Ok(plan.is::<DataSourceExec>()))
+                        .unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn single_probe_build_stays_inline_unless_the_whole_join_is_shared() {
+        use datafusion::common::tree_node::TreeNode;
+
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let key = col("id", &schema()).unwrap();
+            let inner = Arc::new(
+                HashJoinExec::try_new(
+                    Arc::new(GlobalLimitExec::new(empty_plan(), 0, Some(3))),
+                    empty_plan(),
+                    vec![(key.clone(), key.clone())],
+                    None,
+                    &JoinType::Inner,
+                    None,
+                    PartitionMode::CollectLeft,
+                    NullEquality::NullEqualsNothing,
+                    false,
+                )
+                .unwrap(),
+            ) as Arc<dyn ExecutionPlan>;
+            let graph = JobGraph::try_new(inner.clone(), options.clone()).unwrap();
+            assert_eq!(graph.stages.len(), 1);
+
+            let outer = HashJoinExec::try_new(
+                inner,
+                UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                vec![(key.clone(), key)],
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                false,
+            )
+            .unwrap();
+            let graph = JobGraph::try_new(Arc::new(outer), options.clone()).unwrap();
+            let producer = shared_build_producer(&graph, graph.stages.last().unwrap());
+            assert!(producer.plan.is::<HashJoinExec>());
+            assert!(
+                producer
+                    .plan
+                    .exists(|plan| Ok(plan.is::<GlobalLimitExec>()))
+                    .unwrap()
+            );
+            if matches!(options.shuffle_backend, ShuffleBackendKind::Flight { .. }) {
+                assert_eq!(graph.stages.len(), 2);
+            }
+        }
+    }
+
+    #[test]
+    fn unshared_global_limit_stays_in_its_consuming_stage() {
+        let input = UnionExec::try_new(vec![empty_plan(); 4]).unwrap();
+        let plan = Arc::new(GlobalLimitExec::new(input, 2, Some(3)));
+        let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
+        assert_eq!(graph.stages.len(), 2);
+        let stage = graph.stages.last().unwrap();
+        let limit = stage.plan.downcast_ref::<GlobalLimitExec>().unwrap();
+        assert_eq!((limit.skip(), limit.fetch()), (2, Some(3)));
+        assert_eq!(limit.input().output_partitioning().partition_count(), 1);
+        assert!(
+            stage
+                .inputs
+                .iter()
+                .all(|input| matches!(input.mode, InputMode::Shuffle))
+        );
     }
 
     #[test]
@@ -1551,27 +2346,29 @@ mod tests {
         let input =
             UnionExec::try_new(vec![empty_plan(), empty_plan(), empty_plan(), empty_plan()])
                 .unwrap();
-        let graph = JobGraph::try_new(
-            Arc::new(CoalesceExec::new(input, 2)),
-            flight_shuffle_options(),
-        )
-        .unwrap();
+        for output_partitions in [1, 2] {
+            let graph = JobGraph::try_new(
+                Arc::new(CoalesceExec::new(input.clone(), output_partitions)),
+                flight_shuffle_options(),
+            )
+            .unwrap();
 
-        assert_eq!(graph.stages().len(), 2);
-        assert_eq!(
-            graph.stages()[1]
-                .plan
-                .output_partitioning()
-                .partition_count(),
-            2
-        );
-        assert!(matches!(
-            graph.stages()[1].inputs.as_slice(),
-            [StageInput {
-                stage: 0,
-                mode: InputMode::Rescale { partitions: 2 },
-            }]
-        ));
+            assert_eq!(graph.stages().len(), 2);
+            assert_eq!(
+                graph.stages()[1]
+                    .plan
+                    .output_partitioning()
+                    .partition_count(),
+                output_partitions
+            );
+            assert!(matches!(
+                graph.stages()[1].inputs.as_slice(),
+                [StageInput {
+                    stage: 0,
+                    mode: InputMode::Rescale { partitions },
+                }] if *partitions == output_partitions
+            ));
+        }
     }
 
     #[test]
@@ -1750,6 +2547,142 @@ mod tests {
     }
 
     #[test]
+    fn shared_build_keeps_scalar_subquery_context() {
+        for wrapper_is_shared in [false, true] {
+            let results = ScalarSubqueryResults::new(1);
+            let predicate = Arc::new(ScalarSubqueryExpr::new(
+                DataType::Boolean,
+                false,
+                SubqueryIndex::new(0),
+                results.clone(),
+            ));
+            // The fetch keeps the filter from being recomputed by every join task.
+            let filtered = FilterExec::try_new(predicate, empty_plan())
+                .unwrap()
+                .with_fetch(Some(1))
+                .unwrap();
+            let wrap =
+                |input| {
+                    Arc::new(ScalarSubqueryExec::new(
+                        input,
+                        vec![ScalarSubqueryLink {
+                            plan: Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![
+                                Field::new("keep", DataType::Boolean, true),
+                            ])))),
+                            index: SubqueryIndex::new(0),
+                        }],
+                        results.clone(),
+                    )) as Arc<dyn ExecutionPlan>
+                };
+            let build = if wrapper_is_shared {
+                wrap(filtered)
+            } else {
+                filtered
+            };
+            let key = col("id", &schema()).unwrap();
+            let join = Arc::new(
+                HashJoinExec::try_new(
+                    build,
+                    UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+                    vec![(key.clone(), key)],
+                    None,
+                    &JoinType::Inner,
+                    None,
+                    PartitionMode::CollectLeft,
+                    NullEquality::NullEqualsNothing,
+                    false,
+                )
+                .unwrap(),
+            ) as Arc<dyn ExecutionPlan>;
+            let plan = if wrapper_is_shared { join } else { wrap(join) };
+            let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
+            let producer = shared_build_producer(&graph, graph.stages.last().unwrap());
+            let scalar = producer.plan.downcast_ref::<ScalarSubqueryExec>().unwrap();
+            assert_eq!(scalar.subqueries().len(), 1);
+            let filter = scalar.input().downcast_ref::<FilterExec>().unwrap();
+            let predicate = filter
+                .predicate()
+                .downcast_ref::<ScalarSubqueryExpr>()
+                .unwrap();
+            assert!(ScalarSubqueryResults::ptr_eq(scalar.results(), &results));
+            assert!(ScalarSubqueryResults::ptr_eq(
+                scalar.results(),
+                predicate.results()
+            ));
+            let link = scalar.subqueries()[0]
+                .plan
+                .downcast_ref::<StageInputExec<usize>>()
+                .unwrap();
+            assert!(matches!(
+                producer.inputs[*link.input()].mode,
+                InputMode::Broadcast
+            ));
+            assert_eq!(
+                graph
+                    .stages
+                    .iter()
+                    .filter(|stage| stage.plan.is::<ScalarSubqueryExec>())
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn shared_build_keeps_driver_barrier_and_preconditions() {
+        let precondition = Arc::new(
+            RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(1)).unwrap(),
+        );
+        let command = Arc::new(CooperativeExec::new(Arc::new(CatalogCommandExec::new(
+            CatalogCommand::CurrentCatalog,
+            schema(),
+        ))));
+        let build = Arc::new(BarrierExec::new(vec![precondition], command));
+        let key = col("id", &schema()).unwrap();
+        let join = HashJoinExec::try_new(
+            build,
+            UnionExec::try_new(vec![empty_plan(); 4]).unwrap(),
+            vec![(key.clone(), key)],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap();
+        let graph = JobGraph::try_new(Arc::new(join), flight_shuffle_options()).unwrap();
+        let producer = shared_build_producer(&graph, graph.stages.last().unwrap());
+        let input = producer
+            .plan
+            .downcast_ref::<StageInputExec<usize>>()
+            .unwrap();
+        let input = &producer.inputs[*input.input()];
+        assert!(matches!(input.mode, InputMode::Forward));
+        let driver = &graph.stages[input.stage];
+        assert_eq!(driver.placement, TaskPlacement::Driver);
+        let barrier = driver.plan.downcast_ref::<BarrierExec>().unwrap();
+        let command = barrier.plan().downcast_ref::<CooperativeExec>().unwrap();
+        assert!(command.input().is::<CatalogCommandExec>());
+        assert_eq!(barrier.preconditions().len(), 1);
+        let precondition = barrier.preconditions()[0]
+            .downcast_ref::<StageInputExec<usize>>()
+            .unwrap();
+        assert!(matches!(
+            driver.inputs[*precondition.input()].mode,
+            InputMode::Shuffle
+        ));
+        assert_eq!(
+            graph
+                .stages
+                .iter()
+                .filter(|stage| stage.plan.is::<BarrierExec>())
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn test_job_graph_wraps_scalar_subquery_stage_after_shuffle_split() {
         let results = ScalarSubqueryResults::new(1);
         let predicate = Arc::new(ScalarSubqueryExpr::new(
@@ -1908,5 +2841,255 @@ mod tests {
                 .iter()
                 .any(|input| matches!(input.mode, InputMode::Broadcast))
         );
+    }
+
+    /// Plans a job, and returns for each stage and each of its inputs whether the
+    /// input is neither broadcast nor merged in order, and whether the tasks that
+    /// produce it wait for their readers.
+    fn bounded_inputs(plan: Arc<dyn ExecutionPlan>) -> Vec<Vec<(bool, bool)>> {
+        let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
+        let stages = graph.stages().iter();
+        stages
+            .map(|stage| {
+                let inputs = stage.inputs.iter().map(|input| {
+                    let streamed = !matches!(input.mode, InputMode::Broadcast | InputMode::Merge);
+                    (streamed, graph.bounded_output(input.stage))
+                });
+                inputs.collect()
+            })
+            .collect()
+    }
+
+    /// Creates the exchange of some partitions by a key.
+    fn shuffle(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        let partitioning = Partitioning::Hash(vec![col("id", &schema()).unwrap()], 4);
+        Arc::new(RepartitionExec::try_new(input, partitioning).unwrap())
+    }
+
+    fn source() -> Arc<dyn ExecutionPlan> {
+        UnionExec::try_new(vec![empty_plan(); 2]).unwrap()
+    }
+
+    fn sort_merge_join(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
+        let key = |input: &Arc<dyn ExecutionPlan>| col("id", &input.schema()).unwrap();
+        let sort = |input: Arc<dyn ExecutionPlan>| {
+            let ordering: LexOrdering = [PhysicalSortExpr::new_default(key(&input))].into();
+            Arc::new(SortExec::new(ordering, input).with_preserve_partitioning(true))
+        };
+        let on = vec![(key(&left), key(&right))];
+        let join = SortMergeJoinExec::try_new(
+            sort(left),
+            sort(right),
+            on,
+            None,
+            JoinType::Inner,
+            vec![SortOptions::default()],
+            NullEquality::NullEqualsNothing,
+        );
+        Arc::new(join.unwrap())
+    }
+
+    #[test]
+    fn test_bounded_output_under_an_ordered_merge() {
+        let schema = schema();
+        let ordering: LexOrdering =
+            [PhysicalSortExpr::new_default(col("id", &schema).unwrap())].into();
+        let predicate = binary(
+            col("id", &schema).unwrap(),
+            Operator::Gt,
+            lit(0_i32),
+            &schema,
+        )
+        .unwrap();
+
+        // The exchange of a single sorted partition keeps the order of the rows in each
+        // channel, and the merge on top reads the channels in the order of the data.
+        let source = Arc::new(SortExec::new(ordering.clone(), empty_plan()));
+        let exchange =
+            Arc::new(RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(4)).unwrap());
+        let filter = Arc::new(FilterExec::try_new(predicate, exchange).unwrap());
+        let merge = SortPreservingMergeExec::new(ordering, filter);
+        let graph = JobGraph::try_new(Arc::new(merge), flight_shuffle_options()).unwrap();
+        assert_eq!(graph.stages().len(), 3);
+        assert!(matches!(
+            graph.stages()[1].inputs.as_slice(),
+            [StageInput {
+                stage: 0,
+                mode: InputMode::Shuffle,
+            }]
+        ));
+        assert!(matches!(
+            graph.stages()[2].inputs.as_slice(),
+            [StageInput {
+                stage: 1,
+                mode: InputMode::Merge,
+            }]
+        ));
+        // The tasks under the merge cannot wait for it, since the merge may need the
+        // rest of one channel before it takes anything else from the other channels.
+        // So they always take the data of the exchange, whose task can wait for them.
+        assert!(graph.bounded_output(0));
+        assert!(!graph.bounded_output(1));
+        assert!(!graph.bounded_output(2));
+    }
+
+    #[test]
+    fn test_bounded_output_requires_a_single_reader_that_reads_as_the_data_comes() {
+        let stage = |inputs: Vec<(usize, InputMode)>| Stage {
+            inputs: inputs
+                .into_iter()
+                .map(|(stage, mode)| StageInput { stage, mode })
+                .collect(),
+            plan: empty_plan(),
+            group: String::new(),
+            mode: OutputMode::Pipelined,
+            distribution: OutputDistribution::RoundRobinBatch { channels: 1 },
+            placement: TaskPlacement::Worker,
+        };
+        let graph = JobGraph {
+            stages: vec![
+                stage(vec![]),
+                stage(vec![]),
+                stage(vec![]),
+                stage(vec![]),
+                stage(vec![]),
+                stage(vec![]),
+                stage(vec![
+                    (0, InputMode::Shuffle),
+                    (1, InputMode::Forward),
+                    (2, InputMode::Rescale { partitions: 2 }),
+                    (3, InputMode::Broadcast),
+                    (4, InputMode::Merge),
+                    (5, InputMode::Broadcast),
+                ]),
+                stage(vec![(5, InputMode::Broadcast), (6, InputMode::Shuffle)]),
+            ],
+            schema: schema(),
+            options: flight_shuffle_options(),
+        };
+        // The stages with a single reader that takes the data as it comes.
+        assert!(graph.bounded_output(0));
+        assert!(graph.bounded_output(1));
+        assert!(graph.bounded_output(2));
+        assert!(graph.bounded_output(6));
+        // The output is read in full by every task of the reading stage.
+        assert!(!graph.bounded_output(3));
+        // The output is merged in order.
+        assert!(!graph.bounded_output(4));
+        // The output is read by two stages.
+        assert!(!graph.bounded_output(5));
+        // The output is the result of the job.
+        assert!(!graph.bounded_output(7));
+    }
+
+    #[test]
+    fn test_bounded_output_with_operators_that_read_inputs_in_fixed_order() {
+        let key = || col("id", &schema()).unwrap();
+        let hash_join = |mode| {
+            let join = HashJoinExec::try_new(
+                shuffle(source()),
+                shuffle(source()),
+                vec![(key(), key())],
+                None,
+                &JoinType::Inner,
+                None,
+                mode,
+                NullEquality::NullEqualsNothing,
+                false,
+            );
+            Arc::new(join.unwrap()) as Arc<dyn ExecutionPlan>
+        };
+        let nested_loop_join = NestedLoopJoinExec::try_new(
+            shuffle(source()),
+            shuffle(source()),
+            None,
+            &JoinType::Inner,
+            None,
+        );
+        let inputs = vec![shuffle(source()), shuffle(source())];
+        let interleave = InterleaveExec::try_new(inputs.clone());
+        let plans: Vec<Arc<dyn ExecutionPlan>> = vec![
+            hash_join(PartitionMode::Partitioned),
+            hash_join(PartitionMode::CollectLeft),
+            Arc::new(nested_loop_join.unwrap()),
+            UnionExec::try_new(inputs).unwrap(),
+            Arc::new(interleave.unwrap()),
+        ];
+        for plan in plans {
+            // The producers of all inputs wait, unless the input is broadcast.
+            let stages = bounded_inputs(plan.clone());
+            let inputs = stages.last().unwrap();
+            let plan = displayable(plan.as_ref()).one_line().to_string();
+            assert_eq!(inputs.len(), 2, "{plan}");
+            assert!(inputs.iter().any(|(_, bounded)| *bounded), "{plan}");
+            for (streamed, bounded) in stages.into_iter().flatten() {
+                assert_eq!(streamed, bounded, "{plan}");
+            }
+        }
+
+        // The stage of a barrier is planned in a different way.
+        let barrier = BarrierExec::new(vec![empty_plan()], empty_plan());
+        let barrier = Arc::new(barrier) as Arc<dyn ExecutionPlan>;
+        assert!(reads_inputs_in_fixed_order(&barrier));
+    }
+
+    #[test]
+    fn test_bounded_output_with_scalar_subquery() {
+        let results = ScalarSubqueryResults::new(1);
+        let predicate = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Boolean,
+            false,
+            SubqueryIndex::new(0),
+            results.clone(),
+        ));
+        let filtered = Arc::new(FilterExec::try_new(predicate, shuffle(source())).unwrap());
+        let plan = Arc::new(ScalarSubqueryExec::new(
+            filtered,
+            vec![ScalarSubqueryLink {
+                plan: shuffle(source()),
+                index: SubqueryIndex::new(0),
+            }],
+            results,
+        ));
+        // The stage waits for the tasks that read it, but not for the subquery to be read.
+        let stages = bounded_inputs(plan);
+        let mut inputs = stages.last().unwrap().clone();
+        inputs.sort();
+        assert_eq!(inputs, [(false, false), (true, true)]);
+    }
+
+    #[test]
+    fn test_bounded_output_with_operators_that_may_read_inputs_in_any_order() {
+        // The join decides by the data which input it reads next.
+        let stages = bounded_inputs(sort_merge_join(shuffle(source()), shuffle(source())));
+        assert_eq!(stages.last().unwrap(), &[(true, false), (true, false)]);
+
+        // This applies to all inputs of the stage that has such an operator, whichever
+        // operator reads them, but not to the stages that the stage does not read.
+        let key = || col("id", &schema()).unwrap();
+        let hash_join = HashJoinExec::try_new(
+            shuffle(source()),
+            shuffle(source()),
+            vec![(key(), key())],
+            None,
+            &JoinType::LeftSemi,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        );
+        let predicate = binary(key(), Operator::Gt, lit(0_i32), &schema()).unwrap();
+        let other = Arc::new(FilterExec::try_new(predicate, shuffle(source())).unwrap());
+        let other = shuffle(other);
+        let stages = bounded_inputs(sort_merge_join(Arc::new(hash_join.unwrap()), other));
+        assert_eq!(
+            stages.last().unwrap(),
+            &[(true, false), (true, false), (true, false)]
+        );
+        let others = &stages[..stages.len() - 1];
+        assert_eq!(others.iter().flatten().collect::<Vec<_>>(), [&(true, true)]);
     }
 }

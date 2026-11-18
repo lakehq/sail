@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
@@ -6,6 +8,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::{Bound, BoundObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python};
 use sail_common_datafusion::schema::{
     normalize_array, normalize_data_type, normalize_record_batch, normalize_schema,
+    spark_arrow_array, spark_arrow_data_type, spark_arrow_record_batch, spark_arrow_schema,
 };
 
 /// A trait that defines the custom behavior of converting Rust data to a Python object.
@@ -31,9 +34,13 @@ impl<'py> TryToPy<'py> for &DataType {
         py: Python<'py>,
         large_var_types: bool,
     ) -> Result<Self::Output, Self::Error> {
-        normalize_data_type(self, large_var_types, !large_var_types)
-            .to_pyarrow(py)
-            .map(|obj| obj.into_bound())
+        spark_arrow_data_type(&normalize_data_type(
+            self,
+            large_var_types,
+            !large_var_types,
+        ))
+        .to_pyarrow(py)
+        .map(|obj| obj.into_bound())
     }
 }
 
@@ -48,7 +55,7 @@ impl<'py> TryToPy<'py> for &[DataType] {
         large_var_types: bool,
     ) -> Result<Self::Output, Self::Error> {
         self.iter()
-            .map(|x| normalize_data_type(x, large_var_types, !large_var_types).to_pyarrow(py))
+            .map(|x| x.try_to_py(py, large_var_types))
             .collect::<PyResult<Vec<_>>>()
             .map(|x| x.into_pyobject(py))?
     }
@@ -65,6 +72,7 @@ impl<'py> TryToPy<'py> for ArrayRef {
         large_var_types: bool,
     ) -> Result<Self::Output, Self::Error> {
         normalize_array(self, large_var_types, !large_var_types)
+            .and_then(|array| spark_arrow_array(&array))
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
             .into_data()
             .to_pyarrow(py)
@@ -113,7 +121,7 @@ impl<'py> TryToPy<'py> for &Schema {
         py: Python<'py>,
         large_var_types: bool,
     ) -> Result<Self::Output, Self::Error> {
-        normalize_schema(self, large_var_types, !large_var_types)
+        spark_arrow_schema(&normalize_schema(self, large_var_types, !large_var_types))
             .to_pyarrow(py)
             .map(|obj| obj.into_bound())
     }
@@ -129,9 +137,7 @@ impl<'py> TryToPy<'py> for SchemaRef {
         py: Python<'py>,
         large_var_types: bool,
     ) -> Result<Self::Output, Self::Error> {
-        normalize_schema(self.as_ref(), large_var_types, !large_var_types)
-            .to_pyarrow(py)
-            .map(|obj| obj.into_bound())
+        self.as_ref().try_to_py(py, large_var_types)
     }
 }
 
@@ -146,6 +152,7 @@ impl<'py> TryToPy<'py> for RecordBatch {
         large_var_types: bool,
     ) -> Result<Self::Output, Self::Error> {
         normalize_record_batch(self, large_var_types, !large_var_types)
+            .and_then(|batch| spark_arrow_record_batch(&batch))
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
             .to_pyarrow(py)
             .map(|obj| obj.into_bound())

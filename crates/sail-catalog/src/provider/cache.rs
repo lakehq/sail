@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -281,6 +283,38 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
             c.invalidate(database).await;
         }
         Ok(status)
+    }
+
+    async fn stage_table_replacement(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CreateTableOptions,
+    ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
+        self.inner
+            .stage_table_replacement(database, table, options)
+            .await
+    }
+
+    async fn publish_table_replacement(
+        &self,
+        replacement: sail_common_datafusion::catalog::TableReplacement,
+        publication: crate::provider::TablePublication,
+    ) -> CatalogResult<()> {
+        let inner = self.inner.clone();
+        let cache = self.table_cache.clone();
+        // Cache invalidation is part of cancellation-safe finalization too.
+        tokio::spawn(async move {
+            let result = inner
+                .publish_table_replacement(replacement, publication)
+                .await;
+            if let Some(cache) = cache {
+                cache.invalidate_all();
+            }
+            result
+        })
+        .await
+        .map_err(|error| CatalogError::Internal(error.to_string()))?
     }
 
     fn create_table_metadata_requirement(

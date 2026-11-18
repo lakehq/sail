@@ -1,7 +1,12 @@
 [package]
 name = "sail-common-datafusion"
 version = { workspace = true }
+authors = { workspace = true }
 edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+readme = { workspace = true }
+repository = { workspace = true }
 rust-version = { workspace = true }
 
 [lints]
@@ -16,6 +21,9 @@ datafusion = { workspace = true }
 datafusion-datasource = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-expr-common = { workspace = true }
+datafusion-physical-expr = { workspace = true }
+datafusion-functions-aggregate-common = { workspace = true }
 object_store = { workspace = true }
 url = { workspace = true }
 arrow-schema = { workspace = true }
@@ -36,6 +44,9 @@ parquet-variant-json = { workspace = true }
 tokio = { workspace = true }
 serde_arrow = { workspace = true }
 itertools = { workspace = true }
+half = { workspace = true }
+rand = { workspace = true }
+uuid = { workspace = true }
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }

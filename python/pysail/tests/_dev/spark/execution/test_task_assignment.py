@@ -1,10 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 from pyspark.errors import PySparkException
 
 from pysail.testing.spark.session import spark_connect_server
-from pysail.testing.spark.utils.common import is_jvm_spark
 
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
+pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail local-cluster mode only")
 
 
 @pytest.fixture(scope="module", params=[1, 32])
@@ -37,7 +38,7 @@ def test_task_region_capacity(spark, worker_task_slots):
         ):
             query.collect()
         # Failure should leave the session usable for regions that fit.
-        assert spark.range(20, numPartitions=1).count() == 20  # noqa: PLR2004
+        assert spark.range(20, numPartitions=1).count() == 20
     else:
         assert sorted(row.id for row in query.collect()) == list(range(20))
 
@@ -60,7 +61,7 @@ def test_partition_regions_preserve_union_input_partition_indices(spark):
 
 @pytest.mark.timeout(30)
 def test_task_batch_failure_leaves_session_usable(spark, worker_task_slots):
-    if worker_task_slots < 4:  # noqa: PLR2004
+    if worker_task_slots < 4:
         pytest.skip("the shuffle region needs four slots")
     query = (
         spark.range(64, numPartitions=4)

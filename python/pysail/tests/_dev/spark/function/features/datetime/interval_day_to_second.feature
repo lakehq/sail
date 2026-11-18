@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: INTERVAL DAY TO SECOND literal parsing and operations
 
   Rule: Basic literals

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: map_concat output schema
 
   Rule: Duplicate key policy

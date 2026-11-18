@@ -1,25 +1,12 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/mod.rs
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 //! Local log store abstraction backed by `object_store`.
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/mod.rs>
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/default_logstore.rs>
 use std::sync::{Arc, LazyLock};
 
 use async_trait::async_trait;
@@ -29,6 +16,7 @@ use datafusion_common::{DataFusionError, Result as DataFusionResult};
 use log::{debug, error};
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStore, ObjectStoreExt, PutMode, PutOptions};
+use sail_common_datafusion::error::CommitStateUnknownError;
 use serde_json::Deserializer as JsonDeserializer;
 use url::Url;
 use uuid::Uuid;
@@ -164,6 +152,9 @@ pub trait LogStore: Send + Sync {
     }
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/default_logstore.rs
 #[derive(Debug, Clone)]
 struct DefaultLogStore {
     prefixed_store: ObjectStoreRef,
@@ -202,21 +193,40 @@ impl LogStore for DefaultLogStore {
         _: Uuid,
     ) -> Result<(), TransactionError> {
         match commit_or_bytes {
-            CommitOrBytes::LogBytes(log_bytes) => self
-                .object_store(None)
-                .put_opts(
-                    &commit_path(version),
-                    log_bytes.into(),
-                    put_options().clone(),
-                )
-                .await
-                .map(|_| ())
-                .map_err(|err| match err {
-                    ObjectStoreError::AlreadyExists { .. } => {
-                        TransactionError::VersionAlreadyExists(version)
+            CommitOrBytes::LogBytes(log_bytes) => {
+                let store = self.object_store(None);
+                let path = commit_path(version);
+                match store
+                    .put_opts(&path, log_bytes.clone().into(), put_options().clone())
+                    .await
+                {
+                    Ok(_) => Ok(()),
+                    Err(ObjectStoreError::AlreadyExists { .. }) => {
+                        // A conditional PUT retry may collide with its own durable write.
+                        let existing = async { store.get(&path).await?.bytes().await }
+                            .await
+                            .map_err(|source| {
+                                let msg = format!(
+                                    "Failed to verify Delta commit at version {version} ({path}): \
+                                     commit outcome unknown; commit may have succeeded"
+                                );
+                                TransactionError::LogStoreError {
+                                    source: Box::new(CommitStateUnknownError::with_source(
+                                        msg.clone(),
+                                        source,
+                                    )),
+                                    msg,
+                                }
+                            })?;
+                        if existing == log_bytes {
+                            Ok(())
+                        } else {
+                            Err(TransactionError::VersionAlreadyExists(version))
+                        }
                     }
-                    _ => TransactionError::from(err),
-                }),
+                    Err(err) => Err(TransactionError::from(err)),
+                }
+            }
             CommitOrBytes::TmpCommit(_) => {
                 unreachable!("DefaultLogStore should not receive temporary commits")
             }
@@ -258,7 +268,11 @@ impl LogStore for DefaultLogStore {
         &self.config
     }
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/default_logstore.rs
 fn put_options() -> &'static PutOptions {
     static PUT_OPTS: LazyLock<PutOptions> = LazyLock::new(|| PutOptions {
         mode: PutMode::Create,
@@ -266,6 +280,7 @@ fn put_options() -> &'static PutOptions {
     });
     &PUT_OPTS
 }
+// SPDX-SnippetEnd
 
 async fn read_commit_entry(storage: &dyn ObjectStore, version: i64) -> DeltaResult<Option<Bytes>> {
     let commit_uri = commit_path(version);

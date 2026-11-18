@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake LogScan Parallelism
 
   Rule: EXPLAIN shows distributed delta log scan plan before execution

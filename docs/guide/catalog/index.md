@@ -97,7 +97,7 @@ HMS refers to [Hive Metastore](./hms).
 | `CREATE TABLE ... LIKE`                                                 |   :construction:   |   :construction:   |   :construction:   | :construction: |   :construction:   |   :construction:   | :construction: |
 | `DROP TABLE [IF EXISTS]`                                                | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :white_check_mark: | :white_check_mark: | :construction: |
 | `DROP TABLE ... PURGE` (delete data)                                    |   :construction:   |   :construction:   |   :construction:   | :construction: |   :construction:   |   :construction:   | :construction: |
-| `TRUNCATE TABLE`                                                        |   :construction:   |   :construction:   |   :construction:   | :construction: |   :construction:   |   :construction:   | :construction: |
+| `TRUNCATE TABLE`                                                        | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :white_check_mark: | :white_check_mark: | :construction: |
 | `ALTER TABLE ... RENAME TO`                                             |   :construction:   |   :construction:   |   :construction:   | :construction: |   :construction:   |   :construction:   | :construction: |
 | `ALTER TABLE ... ADD COLUMNS`                                           |   :construction:   |   :construction:   |   :construction:   | :construction: |   :construction:   |   :construction:   | :construction: |
 | `ALTER TABLE ... DROP COLUMNS`                                          |   :construction:   |   :construction:   |   :construction:   | :construction: |   :construction:   |   :construction:   | :construction: |
@@ -148,14 +148,14 @@ changes, but do not support `ADD CONSTRAINT`.
 | `CREATE TABLE ... LIKE`                                                 |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
 | `DROP TABLE [IF EXISTS]`                                                | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :construction: |
 | `DROP TABLE ... PURGE` (delete data)                                    |   :construction:   |   :construction:   |   :construction:   |     :warning:      | :construction: | :construction: |
-| `TRUNCATE TABLE`                                                        |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
+| `TRUNCATE TABLE`                                                        | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :construction: |
 | `ALTER TABLE ... RENAME TO`                                             |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
 | `ALTER TABLE ... ADD COLUMN(S)`                                         |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
 | `ALTER TABLE ... DROP COLUMN(S)`                                        |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
 | `ALTER TABLE ... RENAME COLUMN`                                         |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
 | `ALTER TABLE ... REPLACE COLUMNS`                                       |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
 | `ALTER/CHANGE COLUMN ... TYPE`                                          | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :construction: |
-| `ALTER/CHANGE COLUMN ... TYPE` (nested field)                           |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
+| `ALTER/CHANGE COLUMN ... TYPE` (nested field)                           | :white_check_mark: |   :construction:   |   :construction:   | :white_check_mark: | :construction: | :construction: |
 | `ALTER COLUMN ... SET DEFAULT`                                          | :white_check_mark: | :white_check_mark: | :white_check_mark: |     :warning:      | :construction: | :construction: |
 | `ALTER COLUMN ... DROP DEFAULT`                                         | :white_check_mark: | :white_check_mark: | :white_check_mark: |     :warning:      | :construction: | :construction: |
 | `ALTER COLUMN ... COMMENT`                                              |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
@@ -166,25 +166,27 @@ changes, but do not support `ADD CONSTRAINT`.
 | `ALTER TABLE ... SET TBLPROPERTIES ('format-version' = ...)` (upgrade)  | :white_check_mark: | :white_check_mark: | :white_check_mark: |     :warning:      | :construction: | :construction: |
 | `ALTER TABLE ... SET LOCATION`                                          |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
 | `COMMENT ON TABLE/COLUMN`                                               |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
-| `ALTER TABLE ... ADD PARTITION FIELD`                                   |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
-| `ALTER TABLE ... DROP PARTITION FIELD`                                  |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
-| `ALTER TABLE ... REPLACE PARTITION FIELD`                               |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
-| `ALTER TABLE ... WRITE ORDERED BY`                                      |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
-| `ALTER TABLE ... WRITE LOCALLY ORDERED BY`                              |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
-| `ALTER TABLE ... WRITE UNORDERED`                                       |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
-| `ALTER TABLE ... WRITE DISTRIBUTED BY PARTITION`                        |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
-| `ALTER TABLE ... SET/DROP IDENTIFIER FIELDS`                            |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
-| `ALTER TABLE ... CREATE/REPLACE/DROP BRANCH`                            |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
-| `ALTER TABLE ... CREATE/REPLACE/DROP TAG`                               |   :construction:   |   :construction:   |   :construction:   |   :construction:   | :construction: | :construction: |
+| `ALTER TABLE ... ADD PARTITION FIELD`                                   | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :construction: |
+| `ALTER TABLE ... DROP PARTITION FIELD`                                  | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :construction: |
+| `ALTER TABLE ... REPLACE PARTITION FIELD`                               | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :construction: |
+| `ALTER TABLE ... WRITE ORDERED BY`                                      | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :construction: |
+| `ALTER TABLE ... WRITE LOCALLY ORDERED BY`                              | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :construction: |
+| `ALTER TABLE ... WRITE UNORDERED`                                       | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :construction: |
+| `ALTER TABLE ... WRITE DISTRIBUTED BY PARTITION`                        | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :construction: |
+| `ALTER TABLE ... SET/DROP IDENTIFIER FIELDS`                            | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :construction: |
+| `ALTER TABLE ... CREATE/REPLACE/DROP BRANCH`                            | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :construction: |
+| `ALTER TABLE ... CREATE/REPLACE/DROP TAG`                               | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark: | :construction: | :construction: |
 
 Iceberg type promotions permit `INT` to `BIGINT`, `FLOAT` to `DOUBLE`, and decimal
-precision increases at the same scale. Type and default changes target top-level
-columns. Column defaults require format version 3 and typed literals.
+precision increases at the same scale. Memory and Iceberg REST support nested type
+changes; HMS and Glue restrict type and default changes to top-level columns.
+Column defaults require format version 3 and typed literals.
 
 Iceberg REST operations require server support for the requested endpoints and
 format version. See [Iceberg REST table DDL](./iceberg-rest#table-ddl) for registration,
 format-version, and data-deletion requirements.
-Branch/tag rows include the `IF NOT EXISTS` and `CREATE OR REPLACE` variants.
+Branch/tag rows include the `IF NOT EXISTS` and `CREATE OR REPLACE` variants and
+retention options; they do not enable branch-targeted data writes.
 
 ### Catalog and Storage Requirements
 

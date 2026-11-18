@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Physical execution nodes for row-level Merge-on-Read deletion vector writing.
 
 use std::collections::HashMap;
@@ -871,6 +873,7 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
             encode_actions(
                 output_actions,
                 Some(ExecCommitMeta {
+                    identity_high_water_marks: None,
                     row_count,
                     operation,
                     operation_metrics,

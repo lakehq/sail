@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// Spark-compatible `forall(array, predicate)` higher-order function.
 ///
 /// Spark semantics (`ArrayForAll`, three-valued logic):

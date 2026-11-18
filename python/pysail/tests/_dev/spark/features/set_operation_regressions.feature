@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Set operation coercion preserves matching and Spark result types
   Background:
     Given config spark.sql.ansi.enabled = true

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::common::{DataFusionError, Result, plan_err};
 use datafusion::execution::TaskContext;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;

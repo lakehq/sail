@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake Generated Columns
 
   Rule: Generated columns are computed from generation expressions during inserts
@@ -322,7 +324,7 @@ Feature: Delta Lake Generated Columns
         | id | event_time          | event_date |
         | 1  | 2024-05-10 12:00:00 | 2024-05-10 |
 
-    Scenario: Insert with NULL explicit generated column value is replaced by the expression
+    Scenario: Explicit NULL generated column values must match the expression
       Given statement template
         """
         CREATE TABLE delta_gen_col_enforce (
@@ -333,10 +335,23 @@ Feature: Delta Lake Generated Columns
         USING DELTA
         LOCATION {{ location.sql }}
         """
+      # Semantic port of the NULL cases in Delta 4.4.0 GeneratedColumnSuite.
+      # SPDX-SnippetBegin
+      # SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/GeneratedColumnSuite.scala#L815-L839
       Given statement
         """
         INSERT INTO delta_gen_col_enforce
-        VALUES (1, TIMESTAMP '2024-05-10 12:00:00', CAST(NULL AS DATE))
+        VALUES (1, CAST(NULL AS TIMESTAMP), CAST(NULL AS DATE))
+        """
+      Given statement with error DELTA_GENERATED_COLUMNS_VALUE_MISMATCH
+        """
+        INSERT INTO delta_gen_col_enforce
+        VALUES (2, TIMESTAMP '2024-05-10 12:00:00', CAST(NULL AS DATE))
+        """
+      Given statement with error DELTA_GENERATED_COLUMNS_VALUE_MISMATCH
+        """
+        INSERT INTO delta_gen_col_enforce (id, event_time, event_date)
+        VALUES (3, CAST(NULL AS TIMESTAMP), DATE '2024-05-10')
         """
       When query
         """
@@ -344,7 +359,8 @@ Feature: Delta Lake Generated Columns
         """
       Then query result ordered
         | id | event_date |
-        | 1  | 2024-05-10 |
+        | 1  | NULL       |
+      # SPDX-SnippetEnd
 
     Scenario: Insert with incorrect explicit generated column value fails
       Given statement template
@@ -420,6 +436,51 @@ Feature: Delta Lake Generated Columns
       Then query result ordered
         | id | event_time          | event_date |
         | 1  | 2024-09-01 00:00:00 | 2024-09-01 |
+
+    Scenario: MERGE preserves uppercase generated and ordinary column names
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_merge (
+          ID INT,
+          Amount INT,
+          Doubled INT GENERATED ALWAYS AS (Amount * 2)
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_merge_src (
+          ID INT,
+          Amount INT
+        )
+        USING DELTA
+        LOCATION {{ location2.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_merge (ID, Amount) VALUES (1, 10)
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_merge_src VALUES (1, 20), (2, 30)
+        """
+      Given statement
+        """
+        MERGE INTO delta_gen_col_merge AS t
+        USING delta_gen_col_merge_src AS s
+        ON t.ID = s.ID
+        WHEN MATCHED THEN UPDATE SET t.Amount = s.Amount
+        WHEN NOT MATCHED THEN INSERT (ID, Amount) VALUES (s.ID, s.Amount)
+        """
+      When query
+        """
+        SELECT ID, Amount, Doubled FROM delta_gen_col_merge ORDER BY ID
+        """
+      Then query result ordered
+        | ID | Amount | Doubled |
+        | 1  | 20     | 40      |
+        | 2  | 30     | 60      |
 
     Scenario: MERGE matched update validates an explicitly assigned generated column
       Given statement template

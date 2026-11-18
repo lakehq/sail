@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -28,6 +30,7 @@ use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::metrics::{MetricsRecordingContext, MetricsRecordingStream, StatementType};
+use crate::session::FlightSession;
 use crate::state::{QueryHandle, SailFlightSqlState};
 
 pub struct SailFlightSqlService {
@@ -128,6 +131,9 @@ impl FlightSqlService for SailFlightSqlService {
         let service = ctx
             .extension::<JobService>()
             .map_err(|e| Status::internal(format!("job service not found: {e}")))?;
+        let session = ctx
+            .extension::<FlightSession>()
+            .map_err(|e| Status::internal(format!("session not found: {e}")))?;
         let stream = service
             .runner()
             .execute(&ctx, plan)
@@ -139,7 +145,7 @@ impl FlightSqlService for SailFlightSqlService {
                 stream,
                 m.clone(),
                 MetricsRecordingContext {
-                    session_id: Self::DEFAULT_SESSION_ID.to_string(),
+                    session_id: session.session_id.clone(),
                     statement_type,
                 },
             ))

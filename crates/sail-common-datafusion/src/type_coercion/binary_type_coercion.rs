@@ -1,4 +1,6 @@
-//! [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr-common/src/type_coercion/binary.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr-common/src/type_coercion/binary.rs
+
 //!
 //! # Intentional divergences from Spark
 //!
@@ -992,7 +994,7 @@ where
     F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
 {
     if lhs_type.equals_datatype(rhs_type) {
-        return Some(lhs_type.clone());
+        return coerced_nested_type(lhs_type.clone(), lhs_type, rhs_type);
     }
     binary_numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, true, coerce_fn))
@@ -1006,6 +1008,19 @@ where
         .or_else(|| binary_coercion(lhs_type, rhs_type))
         .or_else(|| struct_coercion(lhs_type, rhs_type, coerce_fn))
         .or_else(|| map_coercion(lhs_type, rhs_type, coerce_fn))
+        .and_then(|target| coerced_nested_type(target, lhs_type, rhs_type))
+}
+
+/// Retain physical coercion while resolving nested logical identity from both inputs.
+fn coerced_nested_type(target: DataType, lhs: &DataType, rhs: &DataType) -> Option<DataType> {
+    let lhs = Field::new("", lhs.clone(), true);
+    let rhs = Field::new("", rhs.clone(), true);
+    if !crate::uuid::contains_uuid(&lhs) && !crate::uuid::contains_uuid(&rhs) {
+        return Some(target);
+    }
+    crate::metadata::coerced_type_field(&Field::new("", target, true), &[&lhs, &rhs])
+        .ok()
+        .map(|field| field.data_type().clone())
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for comparison
@@ -1041,8 +1056,8 @@ where
     F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
 {
     if lhs_type.equals_datatype(rhs_type) {
-        // same type => equality is possible
-        return Some(lhs_type.clone());
+        // Physical equality does not imply agreement on nested logical types.
+        return coerced_nested_type(lhs_type.clone(), lhs_type, rhs_type);
     }
     binary_numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, true, coerce_fn))
@@ -1057,6 +1072,7 @@ where
         .or_else(|| struct_coercion(lhs_type, rhs_type, coerce_fn))
         .or_else(|| map_coercion(lhs_type, rhs_type, coerce_fn))
         .or_else(|| union_coercion(lhs_type, rhs_type))
+        .and_then(|target| coerced_nested_type(target, lhs_type, rhs_type))
 }
 
 fn comparison_coercion_with_session_timezone_inner(
@@ -1908,6 +1924,34 @@ where
         // Lists on both sides
         (List(lhs_field), List(rhs_field) | FixedSizeList(rhs_field, _))
         | (FixedSizeList(lhs_field, _), List(rhs_field)) => {
+            Some(List(coerce_list_children(lhs_field, rhs_field, coerce_fn)?))
+        }
+        // Sail: list views are coerced like lists, to LargeList if either side is large
+        (
+            LargeListView(lhs_field),
+            List(rhs_field)
+            | LargeList(rhs_field)
+            | FixedSizeList(rhs_field, _)
+            | ListView(rhs_field)
+            | LargeListView(rhs_field),
+        )
+        | (
+            List(lhs_field)
+            | LargeList(lhs_field)
+            | FixedSizeList(lhs_field, _)
+            | ListView(lhs_field),
+            LargeListView(rhs_field),
+        )
+        | (ListView(lhs_field), LargeList(rhs_field))
+        | (LargeList(lhs_field), ListView(rhs_field)) => Some(LargeList(coerce_list_children(
+            lhs_field, rhs_field, coerce_fn,
+        )?)),
+        // Sail: list views are coerced like lists, to List otherwise
+        (
+            ListView(lhs_field),
+            List(rhs_field) | FixedSizeList(rhs_field, _) | ListView(rhs_field),
+        )
+        | (List(lhs_field) | FixedSizeList(lhs_field, _), ListView(rhs_field)) => {
             Some(List(coerce_list_children(lhs_field, rhs_field, coerce_fn)?))
         }
         _ => None,

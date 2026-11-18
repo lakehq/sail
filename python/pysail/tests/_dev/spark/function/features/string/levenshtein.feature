@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: levenshtein() returns edit distance between two strings
 
   Rule: Basic usage

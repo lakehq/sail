@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: find_in_set output schema
 
   @function(nullability)

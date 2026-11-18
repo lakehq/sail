@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Output-schema nullability via the DataFrame API.
 
 Complements the SQL `@function(nullability)` feature suite with the DataFrame path: build a
@@ -82,6 +84,77 @@ def test_nullifzero_preserves_null_type_with_nullable_output(spark, nullable):
     assert result.schema == expected
 
 
+@pytest.mark.parametrize("reverse", [False, True], ids=["forward", "reverse"])
+@pytest.mark.parametrize("constructor", ["array", "map"])
+@pytest.mark.parametrize("nested", [False, True], ids=["scalar", "nested"])
+@pytest.mark.parametrize(
+    ("left", "right", "interval_type", "nullable"),
+    [
+        ("INTERVAL '1' YEAR", "INTERVAL '2' MONTH", T.YearMonthIntervalType(0, 1), False),
+        ("INTERVAL '1' DAY", "INTERVAL '2' HOUR", T.DayTimeIntervalType(0, 1), False),
+        ("INTERVAL '1' HOUR", "INTERVAL '2' SECOND", T.DayTimeIntervalType(1, 3), False),
+        (
+            "INTERVAL '1' YEAR",
+            "CAST(INTERVAL '2' MONTH AS INTERVAL YEAR TO MONTH)",
+            T.YearMonthIntervalType(0, 1),
+            False,
+        ),
+        ("INTERVAL '1' YEAR", "NULL", T.YearMonthIntervalType(0, 0), True),
+        ("INTERVAL '1' YEAR", "CAST(NULL AS INTERVAL MONTH)", T.YearMonthIntervalType(0, 1), True),
+        ("INTERVAL '1' YEAR", "CAST(NULL AS INTERVAL YEAR TO MONTH)", T.YearMonthIntervalType(0, 1), True),
+        ("INTERVAL '1' HOUR", "NULL", T.DayTimeIntervalType(1, 1), True),
+        ("INTERVAL '1' HOUR", "CAST(NULL AS INTERVAL SECOND)", T.DayTimeIntervalType(1, 3), True),
+        ("INTERVAL '1' HOUR", "CAST(NULL AS INTERVAL DAY TO SECOND)", T.DayTimeIntervalType(0, 3), True),
+    ],
+    ids=[
+        "year-month",
+        "day-hour",
+        "hour-second",
+        "typed-wide",
+        "year-null",
+        "year-typed-null",
+        "year-wide-null",
+        "hour-null",
+        "hour-typed-null",
+        "hour-wide-null",
+    ],
+)
+def test_constructor_interval_qualifiers(spark, left, right, interval_type, nullable, nested, constructor, reverse):
+    # Spark 4.1.3 widens declared interval ranges, including those of typed NULLs.
+    if reverse:
+        left, right = right, left
+    if nested:
+        left, right = f"array({left})", f"array({right})"
+        interval_type = T.ArrayType(interval_type, containsNull=nullable)
+        nullable = False
+    if constructor == "array":
+        expression = f"array({left}, {right})"
+        expected = T.ArrayType(interval_type, containsNull=nullable)
+    else:
+        expression = f"map('a', {left}, 'b', {right})"
+        expected = T.MapType(T.StringType(), interval_type, valueContainsNull=nullable)
+    assert spark.sql(f"SELECT {expression} AS result").schema == T.StructType(
+        [T.StructField("result", expected, nullable=False)]
+    )
+
+
+@pytest.mark.parametrize("reverse", [False, True], ids=["year-month", "month-year"])
+def test_array_preserves_duplicate_struct_field_intervals(spark, reverse):
+    fields = [
+        (F.expr("INTERVAL '1' YEAR").alias("x"), T.YearMonthIntervalType(0, 0), "INTERVAL '1-0' YEAR TO MONTH"),
+        (F.expr("INTERVAL '2' MONTH").alias("x"), T.YearMonthIntervalType(1, 1), "INTERVAL '0-2' YEAR TO MONTH"),
+    ]
+    if reverse:
+        fields.reverse()
+    result = spark.range(2, numPartitions=2).select(F.array(F.struct(*(field[0] for field in fields))).alias("a"))
+    expected_type = T.ArrayType(
+        T.StructType([T.StructField("x", field[1], nullable=False) for field in fields]), containsNull=False
+    )
+    assert result.schema == T.StructType([T.StructField("a", expected_type, nullable=False)])
+    expected_value = "[{" + ", ".join(field[2] for field in fields) + "}]"
+    assert [row[0] for row in result.selectExpr("CAST(a AS STRING)").collect()] == [expected_value] * 2
+
+
 # --- functions that correctly propagate nullability (pass on Sail and JVM) ---
 
 
@@ -125,12 +198,37 @@ def test_pure_string_fn_of_nullable_is_nullable(spark, fn):
     assert _nullable(out, "result") is True
 
 
-@pytest.mark.parametrize("fn", [F.upper, F.lower, F.ascii, F.initcap])
-@sail_bug
+@pytest.mark.parametrize(
+    "fn",
+    [
+        F.upper,
+        F.lower,
+        pytest.param(F.ascii, marks=sail_bug),
+        pytest.param(F.initcap, marks=sail_bug),
+    ],
+)
 def test_pure_string_fn_of_non_null_is_non_nullable(spark, fn):
-    # non-null input -> non-nullable output: Sail diverges (says nullable=True)
+    # non-null input -> non-nullable output: Sail diverges for ascii and initcap (says nullable=True)
     out = _frame(spark).select(fn("nn").alias("result"))
     assert _nullable(out, "result") is False
+
+
+@pytest.mark.parametrize(
+    "fn",
+    [
+        F.trim,
+        F.ltrim,
+        F.rtrim,
+        lambda c: F.expr(f"btrim({c})"),
+        lambda c: F.expr(f"trim(BOTH 'h' FROM {c})"),
+        lambda c: F.expr(f"replace({c}, 'l', 'L')"),
+    ],
+    ids=["trim", "ltrim", "rtrim", "btrim", "trim_both_chars", "replace"],
+)
+def test_trim_and_replace_nullability_follows_the_input(spark, fn):
+    df = _frame(spark)
+    assert _nullable(df.select(fn("nn").alias("result")), "result") is False
+    assert _nullable(df.select(fn("nl").alias("result")), "result") is True
 
 
 # --- the dangerous direction: Sail UNDER-nullable ---

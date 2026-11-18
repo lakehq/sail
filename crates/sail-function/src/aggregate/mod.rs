@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// Utility macro to match string data types and create corresponding ScalarValue.
 ///
 /// This macro handles the three string type variants (Utf8View, LargeUtf8, Utf8)
@@ -73,10 +75,13 @@ macro_rules! duration_none {
     };
 }
 
+pub mod approx_percentile;
+pub mod array_agg;
 pub mod bitmap_and_agg;
 pub mod bitmap_construct_agg;
 pub mod bitmap_or_agg;
 pub mod count_min_sketch;
+pub mod first_last;
 pub mod grouping_id;
 pub mod histogram_numeric;
 pub mod hll_sketch;
@@ -87,6 +92,7 @@ pub mod percentile;
 pub mod percentile_disc;
 pub mod percentile_disc_groups;
 pub mod product;
+mod quantile_summary;
 pub mod regr;
 pub mod schema_of_variant_agg;
 pub mod skewness;

@@ -1,4 +1,6 @@
-# ruff: noqa: PLR2004, S608
+# SPDX-License-Identifier: Apache-2.0
+
+# ruff: noqa: S608
 """Spark -> Sail roundtrip tests for Spark datasource v2 (DSV2) formats and Iceberg.
 
 The JVM reference Spark creates a table in HMS using a datasource format; Sail

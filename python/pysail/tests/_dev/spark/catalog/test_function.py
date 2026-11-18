@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for Spark Catalog function APIs."""
 
 import uuid
@@ -113,6 +115,7 @@ def test_list_functions_has_metadata_for_built_ins(spark):
         assert functions[name].description
 
 
+@pytest.mark.spark(cross_version=True)
 def test_list_functions_includes_user_registered_udfs(spark):
     function_name = "catalog_add_one"
     spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {function_name}")
@@ -131,7 +134,7 @@ def test_list_functions_includes_user_registered_udfs(spark):
         assert _show_function_names(spark, f"SHOW USER FUNCTIONS LIKE '{function_name}'") == {function_name}
         assert _show_function_names(spark, f"SHOW SYSTEM FUNCTIONS LIKE '{function_name}'") == set()
         assert _show_function_names(spark, f"SHOW ALL FUNCTIONS LIKE '{function_name}'") == {function_name}
-        assert spark.sql(f"SELECT {function_name}(1) AS value").collect()[0].value == 2  # noqa PLR2004
+        assert spark.sql(f"SELECT {function_name}(1) AS value").collect()[0].value == 2
 
         rows = [row.function_desc for row in spark.sql(f"DESCRIBE FUNCTION {function_name}").collect()]
         assert rows[0] == f"Function: {function_name}"
@@ -275,6 +278,7 @@ def test_get_missing_or_qualified_builtin_function(spark, name):
 @pytest.mark.xfail(
     not is_jvm_spark(), reason="Catalog.getFunction is not implemented", raises=AnalysisException, strict=True
 )
+@pytest.mark.spark(cross_version=True)
 def test_get_python_function_metadata(spark, python_function):
     function = spark.catalog.getFunction(python_function)
     assert function.name == python_function
@@ -285,6 +289,7 @@ def test_get_python_function_metadata(spark, python_function):
 
 # Adapted from Spark 3 (3.5.9): pyspark/sql/tests/connect/test_parity_catalog.py,
 # CatalogParityTests.test_list_functions; uses built-ins/Python UDFs instead of persistent Java functions.
+@pytest.mark.spark(cross_version=True)
 def test_list_python_functions_in_namespaces(spark, python_function):
     database = f"functions_{uuid.uuid4().hex}"
     spark.sql(f"CREATE DATABASE {database}")
@@ -294,7 +299,7 @@ def test_list_python_functions_in_namespaces(spark, python_function):
             assert "to_date" in {f.name for f in spark.catalog.listFunctions(namespace, "to*")}
             assert spark.catalog.listFunctions(namespace, "*missing_catalog_function*") == []
         spark.udf.register(python_function, lambda value: value + 2, "long")
-        assert spark.sql(f"SELECT {python_function}(1) AS v").first().v == 3  # noqa: PLR2004
+        assert spark.sql(f"SELECT {python_function}(1) AS v").first().v == 3
         spark.sql(f"DROP TEMPORARY FUNCTION {python_function}")
         assert spark.catalog.listFunctions(pattern=python_function) == []
         with pytest.raises(AnalysisException):

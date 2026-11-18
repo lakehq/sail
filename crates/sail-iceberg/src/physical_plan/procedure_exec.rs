@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -330,6 +332,7 @@ impl ExecutionPlan for IcebergProcedureExec {
                     execution_schema.clone(),
                     rewrite_data_files.rewritten_data_files_count(),
                     rewrite_data_files.rewritten_bytes_count(),
+                    rewrite_data_files.starting_sequence_number(),
                 )
                 .execute(0, Arc::clone(&context))?;
                 let batch = stream.next().await.ok_or_else(|| {

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{HashMap, HashSet};
 
 use arrow::datatypes::{DataType, Field};
@@ -271,7 +273,11 @@ pub(crate) fn inject_spark_metadata(
     let fields: Vec<_> = columns
         .iter()
         .map(|col| {
-            let mut metadata = std::collections::HashMap::new();
+            let mut metadata = col
+                .metadata
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect::<std::collections::HashMap<_, _>>();
             if let Some(expr) = &col.generated_always_as {
                 metadata.extend(
                     ColumnFeaturesBuilder::new()
@@ -664,6 +670,11 @@ fn columns_from_spark_properties(
         .map(|field| {
             let features = ColumnFeatures::from_field(&field);
             TableColumnStatus {
+                metadata: field
+                    .metadata()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
                 name: field.name().to_string(),
                 data_type: field.data_type().clone(),
                 nullable: field.is_nullable(),
@@ -847,6 +858,7 @@ fn field_schema_to_status(
         .ok_or_else(|| CatalogError::External("Field schema is missing a name".to_string()))?;
     let data_type = hive_type_to_arrow(field.r#type.as_deref().unwrap_or("string"))?;
     Ok(TableColumnStatus {
+        metadata: Default::default(),
         name: name.to_string(),
         data_type,
         nullable: true,
@@ -1044,6 +1056,7 @@ mod tests {
             "default",
             "items",
             vec![CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "id".to_string(),
                 data_type: DataType::Int64,
                 nullable: false,
@@ -1094,6 +1107,7 @@ mod tests {
                 "default",
                 "items",
                 vec![CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "id".to_string(),
                     data_type: DataType::Int64,
                     nullable: false,
@@ -1144,6 +1158,7 @@ mod tests {
             "default",
             "items",
             vec![CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "id".to_string(),
                 data_type: DataType::Int64,
                 nullable: false,
@@ -1203,6 +1218,7 @@ mod tests {
             "default",
             "items",
             vec![CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "id".to_string(),
                 data_type: DataType::Int64,
                 nullable: false,
@@ -1236,6 +1252,7 @@ mod tests {
             "default",
             "items",
             vec![CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "id".to_string(),
                 data_type: DataType::Int64,
                 nullable: false,
@@ -1271,6 +1288,7 @@ mod tests {
             "default",
             "items",
             vec![CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "id".to_string(),
                 data_type: DataType::Int64,
                 nullable: false,
@@ -1307,6 +1325,7 @@ mod tests {
             "items",
             vec![
                 CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "id".to_string(),
                     data_type: DataType::Int64,
                     nullable: false,
@@ -1316,6 +1335,7 @@ mod tests {
                     identity: None,
                 },
                 CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "day".to_string(),
                     data_type: DataType::Utf8,
                     nullable: false,
@@ -1358,6 +1378,7 @@ mod tests {
             "items",
             vec![
                 CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "id".to_string(),
                     data_type: DataType::Int64,
                     nullable: false,
@@ -1367,6 +1388,7 @@ mod tests {
                     identity: None,
                 },
                 CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "day".to_string(),
                     data_type: DataType::Utf8,
                     nullable: false,
@@ -1391,6 +1413,7 @@ mod tests {
             &mut table,
             &[
                 CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "id".to_string(),
                     data_type: DataType::Int64,
                     nullable: false,
@@ -1400,6 +1423,7 @@ mod tests {
                     identity: None,
                 },
                 CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "day".to_string(),
                     data_type: DataType::Utf8,
                     nullable: false,
@@ -1436,6 +1460,7 @@ mod tests {
             "default",
             "items",
             vec![CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "id".to_string(),
                 data_type: DataType::Int64,
                 nullable: false,
@@ -1458,6 +1483,7 @@ mod tests {
         inject_spark_metadata(
             &mut table,
             &[CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "id".to_string(),
                 data_type: DataType::Int64,
                 nullable: false,
@@ -1488,6 +1514,7 @@ mod tests {
     fn test_spark_metadata_round_trips_column_features() {
         let columns = vec![
             CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "id".to_string(),
                 data_type: DataType::Int64,
                 nullable: false,
@@ -1497,6 +1524,7 @@ mod tests {
                 identity: None,
             },
             CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "text".to_string(),
                 data_type: DataType::Utf8,
                 nullable: true,
@@ -1506,6 +1534,7 @@ mod tests {
                 identity: None,
             },
             CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "gen".to_string(),
                 data_type: DataType::Int64,
                 nullable: true,
@@ -1576,6 +1605,7 @@ mod tests {
     fn test_alter_spark_column_default_preserves_other_features() {
         let columns = vec![
             CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "id".to_string(),
                 data_type: DataType::Int64,
                 nullable: false,
@@ -1585,6 +1615,7 @@ mod tests {
                 identity: None,
             },
             CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "gen".to_string(),
                 data_type: DataType::Int64,
                 nullable: true,
@@ -1680,6 +1711,7 @@ mod tests {
             "items",
             vec![
                 CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "id".to_string(),
                     data_type: DataType::Int64,
                     nullable: false,
@@ -1689,6 +1721,7 @@ mod tests {
                     identity: None,
                 },
                 CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "day".to_string(),
                     data_type: DataType::Utf8,
                     nullable: false,
@@ -1713,6 +1746,7 @@ mod tests {
             &mut table,
             &[
                 CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "id".to_string(),
                     data_type: DataType::Int64,
                     nullable: false,
@@ -1722,6 +1756,7 @@ mod tests {
                     identity: None,
                 },
                 CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "day".to_string(),
                     data_type: DataType::Utf8,
                     nullable: false,
@@ -2218,6 +2253,7 @@ mod tests {
             "mixed_events",
             vec![
                 CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "id".to_string(),
                     data_type: DataType::Int64,
                     nullable: false,
@@ -2227,6 +2263,7 @@ mod tests {
                     identity: None,
                 },
                 CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "payload".to_string(),
                     data_type: DataType::Struct(Fields::from(vec![
                         Field::new(
@@ -2273,6 +2310,7 @@ mod tests {
                     identity: None,
                 },
                 CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "category".to_string(),
                     data_type: DataType::Utf8,
                     nullable: false,
@@ -2282,6 +2320,7 @@ mod tests {
                     identity: None,
                 },
                 CreateTableColumnOptions {
+                    metadata: Default::default(),
                     name: "event_date".to_string(),
                     data_type: DataType::Date32,
                     nullable: false,
@@ -2304,6 +2343,7 @@ mod tests {
 
         let all_columns = vec![
             CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "id".to_string(),
                 data_type: DataType::Int64,
                 nullable: false,
@@ -2313,6 +2353,7 @@ mod tests {
                 identity: None,
             },
             CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "payload".to_string(),
                 data_type: DataType::Struct(Fields::from(vec![
                     Field::new(
@@ -2359,6 +2400,7 @@ mod tests {
                 identity: None,
             },
             CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "category".to_string(),
                 data_type: DataType::Utf8,
                 nullable: false,
@@ -2368,6 +2410,7 @@ mod tests {
                 identity: None,
             },
             CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "event_date".to_string(),
                 data_type: DataType::Date32,
                 nullable: false,
@@ -2648,6 +2691,7 @@ mod tests {
             "default",
             "items",
             vec![CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "id".to_string(),
                 data_type: DataType::Int64,
                 nullable: false,
@@ -2679,6 +2723,7 @@ mod tests {
             "default",
             "items",
             vec![CreateTableColumnOptions {
+                metadata: Default::default(),
                 name: "id".to_string(),
                 data_type: DataType::Int64,
                 nullable: false,

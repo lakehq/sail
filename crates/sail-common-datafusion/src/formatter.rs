@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{Display, Formatter, Write};
 
 use chrono::format::{Item, Numeric, Pad};

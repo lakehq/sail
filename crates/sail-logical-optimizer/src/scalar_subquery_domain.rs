@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
@@ -6,6 +8,7 @@ use datafusion_common::{Column, Result};
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator};
+use sail_logical_plan::seeded_random::{SeededRandomNode, is_reproducible_seeded_random_call};
 
 /// Evaluate non-equality scalar aggregates over the distinct outer values.
 /// Native decorrelation can then pull up equality on those values without
@@ -47,38 +50,61 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                     match node {
                         LogicalPlan::Aggregate(aggregate) => {
                             aggregates += 1;
-                            unsupported |= !aggregate.group_expr.is_empty();
+                            if !unsupported {
+                                unsupported = !aggregate.group_expr.is_empty();
+                            }
                         }
                         LogicalPlan::Filter(filter) if filter.predicate.contains_outer() => {
                             // This traversal is top-down. A filter encountered
                             // before the aggregate is HAVING, not its input.
-                            unsupported |= aggregates == 0;
+                            if !unsupported {
+                                unsupported = aggregates == 0;
+                            }
                             filters += 1;
-                            needs_domain |= split_conjunction(&filter.predicate)
-                                .iter()
-                                .any(|expr| expr.contains_outer() && !native_equality(expr));
+                            if !needs_domain {
+                                needs_domain =
+                                    split_conjunction(&filter.predicate).iter().any(|expr| {
+                                        expr.contains_outer()
+                                            && correlated_equality_key(expr, true).is_none()
+                                    });
+                            }
+                        }
+                        // The domain joins the input of the correlated filter, so a join below
+                        // the filter only produces that input.
+                        LogicalPlan::Join(_) if filters > 0 => {
+                            if !unsupported {
+                                unsupported = node.contains_outer_reference();
+                            }
                         }
                         LogicalPlan::Join(_)
                         | LogicalPlan::Union(_)
                         | LogicalPlan::Window(_)
                         | LogicalPlan::Limit(_)
                         | LogicalPlan::Subquery(_) => unsupported = true,
-                        _ => unsupported |= node.contains_outer_reference(),
+                        _ => {
+                            if !unsupported {
+                                unsupported = node.contains_outer_reference();
+                            }
+                        }
                     }
-                    Ok(TreeNodeRecursion::Continue)
+                    // An unsupported subquery is left as is, so the rest of it is not needed.
+                    Ok(if unsupported {
+                        TreeNodeRecursion::Stop
+                    } else {
+                        TreeNodeRecursion::Continue
+                    })
                 })?;
                 if unsupported || !needs_domain || aggregates != 1 || filters != 1 {
                     return Ok(Transformed::no(Expr::ScalarSubquery(query)));
                 }
                 // The domain reads the outer input again; do not duplicate volatile
                 // evaluations whose values must be shared with the original row.
-                if input.exists(|node| Ok(node.expressions().iter().any(Expr::is_volatile)))? {
+                // Only reproducible seeded calls may be replayed, including calls inside a node.
+                if has_unreproducible_volatile_expression(&input)? {
                     return Ok(Transformed::no(Expr::ScalarSubquery(query)));
                 }
-                if query
-                    .subquery
-                    .exists(|node| Ok(node.expressions().iter().any(Expr::is_volatile)))?
-                {
+                // A node above the correlated filter is evaluated by a projection before this rule.
+                if has_unreproducible_volatile_expression(&query.subquery)? {
                     return datafusion_common::not_impl_err!(
                         "correlated scalar aggregate with volatile inner expressions"
                     );
@@ -304,17 +330,103 @@ fn empty_scalar_value(plan: &LogicalPlan) -> Result<Expr> {
     }
 }
 
-fn native_equality(expr: &Expr) -> bool {
+/// Returns the inner column of a correlated equality of an inner column, or of a cast of one if
+/// `cast` is true, and an outer expression without inner columns, which DataFusion decorrelates
+/// by pulling it up as a join key.
+pub(crate) fn correlated_equality_key(expr: &Expr, cast: bool) -> Option<&Column> {
     let Expr::BinaryExpr(binary) = expr else {
-        return false;
+        return None;
     };
     if binary.op != Operator::Eq {
-        return false;
+        return None;
     }
-    let inner_key = |expr: &Expr| {
-        matches!(expr, Expr::Column(_))
-            || matches!(expr, Expr::Cast(cast) if matches!(cast.expr.as_ref(), Expr::Column(_)))
-    };
-    (inner_key(&binary.left) && !binary.right.any_column_refs())
-        || (inner_key(&binary.right) && !binary.left.any_column_refs())
+    fn key(expr: &Expr, cast: bool) -> Option<&Column> {
+        match expr {
+            Expr::Column(column) => Some(column),
+            Expr::Cast(c) if cast => match c.expr.as_ref() {
+                Expr::Column(column) => Some(column),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    let outer = |expr: &Expr| expr.contains_outer() && !expr.any_column_refs();
+    match (key(&binary.left, cast), key(&binary.right, cast)) {
+        (Some(column), _) if outer(&binary.right) => Some(column),
+        (_, Some(column)) if outer(&binary.left) => Some(column),
+        _ => None,
+    }
+}
+
+fn has_unreproducible_volatile_expression(plan: &LogicalPlan) -> Result<bool> {
+    // Uncorrelated scalar subqueries are evaluated once and their results are shared by both
+    // copies of the plan. Inspect this plan's expressions, not those subquery bodies.
+    plan.exists(|node| {
+        let seeded = matches!(node, LogicalPlan::Extension(extension)
+            if extension.node.as_any().is::<SeededRandomNode>());
+        for expr in node.expressions() {
+            if expr.exists(|expr| {
+                Ok(
+                    expr.is_volatile_node()
+                        && !(seeded && is_reproducible_seeded_random_call(expr)),
+                )
+            })? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::datasource::empty::EmptyTable;
+    use datafusion::datasource::provider_as_source;
+    use datafusion::functions_aggregate::expr_fn::sum;
+    use datafusion::optimizer::OptimizerContext;
+    use datafusion_expr::{JoinType, col, scalar_subquery};
+
+    use super::*;
+
+    #[test]
+    fn keeps_correlated_join_below_correlated_inequality_filter() -> Result<()> {
+        let scan = |name| {
+            let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+            LogicalPlanBuilder::scan(
+                name,
+                provider_as_source(Arc::new(EmptyTable::new(schema))),
+                None,
+            )
+        };
+        let outer = Expr::OuterReferenceColumn(
+            Arc::new(Field::new("id", DataType::Int64, true)),
+            Column::new(Some("o"), "id"),
+        );
+        for correlated_join in [false, true] {
+            let mut on = col("l.id").eq(col("r.id"));
+            if correlated_join {
+                on = on.and(col("r.id").eq(outer.clone()));
+            }
+            let subquery = scan("l")?
+                .join_on(scan("r")?.build()?, JoinType::Inner, vec![on])?
+                .filter(col("l.id").lt(outer.clone()))?
+                .aggregate(Vec::<Expr>::new(), vec![sum(col("l.id"))])?
+                .build()?;
+            let plan = scan("o")?
+                .project(vec![scalar_subquery(Arc::new(subquery))])?
+                .build()?;
+            let result =
+                NormalizeScalarSubqueryDomain.rewrite(plan.clone(), &OptimizerContext::new())?;
+            if correlated_join {
+                assert!(!result.transformed);
+                assert_eq!(result.data, plan);
+            } else {
+                // The otherwise identical input is eligible for domain normalization.
+                assert!(result.transformed);
+                assert_ne!(result.data, plan);
+            }
+        }
+        Ok(())
+    }
 }

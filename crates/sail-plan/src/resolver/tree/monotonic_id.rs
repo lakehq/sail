@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::mem;
 use std::sync::Arc;
 
@@ -28,8 +30,8 @@ impl<'s> PlanRewriter<'s> for MonotonicIdRewriter<'s> {
         }
     }
 
-    fn into_plan(self) -> LogicalPlan {
-        self.plan
+    fn into_plan(self) -> Result<LogicalPlan> {
+        Ok(self.plan)
     }
 }
 

@@ -133,6 +133,12 @@
       }
     },
     {
+      "input": "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id BIN BY (\n  RANGE t1.ts_start TO t1.ts_end\n  BIN WIDTH INTERVAL '5:30' HOUR TO MINUTE\n  DISTRIBUTE UNIFORM (t1.value)\n)",
+      "output": {
+        "failure": "invalid argument: found BIN at 42:45 expected '.', '(', '[', '::', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'IS', 'NOT', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'ESCAPE', 'IN', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
       "input": "select * from a join b join c right join d",
       "output": {
         "success": {
@@ -1391,6 +1397,73 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "select * from t asof join u match_condition (t.a != u.a)",
+      "exception": "\n[ASOF_JOIN_MATCH_CONDITION_INVALID_OPERATOR] The MATCH_CONDITION operator must be one of >=, >, <=, <. Got: !=. SQLSTATE: 42K0E\n== SQL (line 1, position 17) ==\nselect * from t asof join u match_condition (t.a != u.a)\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found . at 46:47 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from t asof join u match_condition (t.a <=> u.a)",
+      "exception": "\n[ASOF_JOIN_MATCH_CONDITION_INVALID_OPERATOR] The MATCH_CONDITION operator must be one of >=, >, <=, <. Got: <=>. SQLSTATE: 42K0E\n== SQL (line 1, position 17) ==\nselect * from t asof join u match_condition (t.a <=> u.a)\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found . at 46:47 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from t asof join u match_condition (t.a <> u.a)",
+      "exception": "\n[ASOF_JOIN_MATCH_CONDITION_INVALID_OPERATOR] The MATCH_CONDITION operator must be one of >=, >, <=, <. Got: <>. SQLSTATE: 42K0E\n== SQL (line 1, position 17) ==\nselect * from t asof join u match_condition (t.a <> u.a)\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found . at 46:47 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from t asof join u match_condition (t.a = u.a)",
+      "exception": "\n[ASOF_JOIN_MATCH_CONDITION_INVALID_OPERATOR] The MATCH_CONDITION operator must be one of >=, >, <=, <. Got: =. SQLSTATE: 42K0E\n== SQL (line 1, position 17) ==\nselect * from t asof join u match_condition (t.a = u.a)\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found . at 46:47 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from t asof join u match_condition (t.a >= u.a and t.b >= u.b)",
+      "exception": "\n[ASOF_JOIN_MATCH_CONDITION_INVALID_OPERATOR] The MATCH_CONDITION operator must be one of >=, >, <=, <. Got: AND. SQLSTATE: 42K0E\n== SQL (line 1, position 17) ==\nselect * from t asof join u match_condition (t.a >= u.a and t.b >= u.b)\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found . at 46:47 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from t asof join u match_condition (t.a >= u.a)",
+      "output": {
+        "failure": "invalid argument: found . at 46:47 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from t asof join u match_condition (t.a >= u.a) using (b)",
+      "output": {
+        "failure": "invalid argument: found . at 46:47 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from t asof join u match_condition (t.a is distinct from u.a)",
+      "exception": "\n[ASOF_JOIN_MATCH_CONDITION_INVALID_OPERATOR] The MATCH_CONDITION operator must be one of >=, >, <=, <. Got: IS DISTINCT FROM. SQLSTATE: 42K0E\n== SQL (line 1, position 17) ==\nselect * from t asof join u match_condition (t.a is distinct from u.a)\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found . at 46:47 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from t asof join u match_condition (t.a is not distinct from u.a)",
+      "exception": "\n[ASOF_JOIN_MATCH_CONDITION_INVALID_OPERATOR] The MATCH_CONDITION operator must be one of >=, >, <=, <. Got: IS NOT DISTINCT FROM. SQLSTATE: 42K0E\n== SQL (line 1, position 17) ==\nselect * from t asof join u match_condition (t.a is not distinct from u.a)\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found . at 46:47 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from t asof join u match_condition (u.a <= t.a)",
+      "output": {
+        "failure": "invalid argument: found . at 46:47 expected ',', or ')'"
       }
     },
     {
@@ -2672,6 +2745,12 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "select * from t left asof join u match_condition (t.a >= u.a) on t.b = u.b",
+      "output": {
+        "failure": "invalid argument: found asof at 21:25 expected 'OUTER', 'SEMI', 'ANTI', or 'JOIN'"
       }
     },
     {

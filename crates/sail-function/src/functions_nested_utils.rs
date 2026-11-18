@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/94d178ebe9674669b32ecd7896b5597f49e90791/datafusion/functions-nested/src/utils.rs
+
 use std::sync::Arc;
 
 use arrow::array::{NullArray, UInt64Array};
-/// [Credit]: <https://github.com/apache/datafusion/blob/94d178ebe9674669b32ecd7896b5597f49e90791/datafusion/functions-nested/src/utils.rs>
 use datafusion::arrow::array::{Array, ArrayRef};
 use datafusion::arrow::compute::take_arrays;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
@@ -25,6 +27,7 @@ macro_rules! opt_downcast_arg {
 pub(crate) use downcast_arg;
 pub(crate) use opt_downcast_arg;
 
+// TODO: Remove all usage of `make_scalar_function` and implement `ScalarUDFImpl` directly.
 /// array function wrapper that differentiates between scalar (length 1) and array.
 pub(crate) fn make_scalar_function<F>(
     inner: F,
@@ -46,7 +49,7 @@ where
 
         let args = ColumnarValue::values_to_arrays(args)?;
 
-        let result = inner(&args);
+        let result = (inner)(&args);
 
         if is_scalar {
             // If all inputs are scalar, keeps output as scalar
@@ -65,6 +68,17 @@ pub(crate) fn evaluate_lambda_rows(lambda: &LambdaArgument, rows: &[u64]) -> Res
     lambda
         .evaluate(&[&dummy], |arrays| Ok(take_arrays(arrays, &indices, None)?))?
         .into_array(rows.len())
+}
+
+/// Like [`evaluate_lambda_rows`] for every row, without gathering the captures.
+pub(crate) fn evaluate_lambda_all_rows(
+    lambda: &LambdaArgument,
+    number_rows: usize,
+) -> Result<ArrayRef> {
+    let dummy = || Ok(Arc::new(NullArray::new(number_rows)) as ArrayRef);
+    lambda
+        .evaluate(&[&dummy], |arrays| Ok(arrays.to_vec()))?
+        .into_array(number_rows)
 }
 
 pub(crate) fn evaluate_lambdas_until_null(

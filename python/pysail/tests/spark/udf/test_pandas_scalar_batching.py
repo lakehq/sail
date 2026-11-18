@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from decimal import Decimal
 
 import pandas as pd
@@ -35,6 +37,7 @@ def test_scalar_pandas_batch_sizes_and_values(spark, arrow_batch_size, eval_type
 @pytest.mark.parametrize("arrow_batch_size", [3], indirect=True)
 @pytest.mark.parametrize("count", [10, 20003])
 @pytest.mark.parametrize("invocation", ["inline", "registered", "constant"])
+@pytest.mark.suite(name="slow")
 def test_scalar_iterator_preserves_state_across_batches(spark, arrow_batch_size, count, invocation):  # noqa: ARG001
     @pandas_udf("long", PandasUDFType.SCALAR_ITER)
     def running_offset(batches):
@@ -81,6 +84,7 @@ def test_scalar_pandas_batches_preserve_struct_decimal_and_timestamp(spark, arro
 
 
 @pytest.mark.parametrize("arrow_batch_size", [3], indirect=True)
+@pytest.mark.suite(name="slow")
 def test_scalar_pandas_input_spans_engine_batches(spark, arrow_batch_size):
     @pandas_udf("long", PandasUDFType.SCALAR_ITER)
     def identity(batches):
@@ -137,8 +141,7 @@ def test_scalar_iterator_in_relational_expressions(spark, arrow_batch_size, oper
         actual = df.select("id", (add_one(add_one("id")) + 1).alias("value")).collect()
         assert sorted((row.id, row.value) for row in actual) == [(i, i + 3) for i in range(2003)]
     elif operation == "filter":
-        threshold = 2000
-        assert sorted(row.id for row in df.filter(add_one("id") > threshold).collect()) == [2000, 2001, 2002]
+        assert sorted(row.id for row in df.filter(add_one("id") > 2000).collect()) == [2000, 2001, 2002]
     elif operation == "aggregate":
         assert df.agg(F.sum(add_one("id"))).first()[0] == sum(range(1, 2004))
     elif operation == "sort":

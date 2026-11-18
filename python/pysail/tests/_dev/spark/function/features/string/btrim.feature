@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: btrim function
 
   Rule: Numeric arguments are implicitly cast to strings
@@ -249,7 +251,6 @@ Feature: btrim function
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to btrim yields the schema Spark declares
       When query
         """
@@ -261,7 +262,6 @@ Feature: btrim function
          |-- result: string (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null column input to btrim yields the schema Spark declares
       When query
         """

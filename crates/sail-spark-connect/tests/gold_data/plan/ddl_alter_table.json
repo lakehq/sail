@@ -941,6 +941,638 @@
       }
     },
     {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIME(0))",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "c"
+                        ],
+                        "data_type": {
+                          "time32": {
+                            "timeUnit": "second"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIME(3))",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "c"
+                        ],
+                        "data_type": {
+                          "time32": {
+                            "timeUnit": "millisecond"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIME(6))",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "c"
+                        ],
+                        "data_type": {
+                          "time64": {
+                            "timeUnit": "microsecond"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIME)",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "c"
+                        ],
+                        "data_type": {
+                          "time64": {
+                            "timeUnit": "microsecond"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIMESTAMP(7) WITH LOCAL TIME ZONE)",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIMESTAMP(7) WITHOUT TIME ZONE)",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIMESTAMP(8) WITH LOCAL TIME ZONE)",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIMESTAMP(8) WITHOUT TIME ZONE)",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIMESTAMP(9) WITH LOCAL TIME ZONE)",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "c"
+                        ],
+                        "data_type": {
+                          "timestamp": {
+                            "timeUnit": "nanosecond",
+                            "timestampType": "withLocalTimeZone"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIMESTAMP(9) WITHOUT TIME ZONE)",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "c"
+                        ],
+                        "data_type": {
+                          "timestamp": {
+                            "timeUnit": "nanosecond",
+                            "timestampType": "withoutTimeZone"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIMESTAMP_LTZ(7))",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIMESTAMP_LTZ(8))",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIMESTAMP_LTZ(9))",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "c"
+                        ],
+                        "data_type": {
+                          "timestamp": {
+                            "timeUnit": "nanosecond",
+                            "timestampType": "withLocalTimeZone"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIMESTAMP_NTZ(7))",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIMESTAMP_NTZ(8))",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ADD COLUMNS (c TIMESTAMP_NTZ(9))",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "c"
+                        ],
+                        "data_type": {
+                          "timestamp": {
+                            "timeUnit": "nanosecond",
+                            "timestampType": "withoutTimeZone"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIME",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumnType": {
+                  "name": [
+                    "c"
+                  ],
+                  "data_type": {
+                    "time64": {
+                      "timeUnit": "microsecond"
+                    }
+                  }
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIME(0)",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumnType": {
+                  "name": [
+                    "c"
+                  ],
+                  "data_type": {
+                    "time32": {
+                      "timeUnit": "second"
+                    }
+                  }
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIME(3)",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumnType": {
+                  "name": [
+                    "c"
+                  ],
+                  "data_type": {
+                    "time32": {
+                      "timeUnit": "millisecond"
+                    }
+                  }
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIME(6)",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumnType": {
+                  "name": [
+                    "c"
+                  ],
+                  "data_type": {
+                    "time64": {
+                      "timeUnit": "microsecond"
+                    }
+                  }
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIMESTAMP(7) WITH LOCAL TIME ZONE",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIMESTAMP(7) WITHOUT TIME ZONE",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIMESTAMP(8) WITH LOCAL TIME ZONE",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIMESTAMP(8) WITHOUT TIME ZONE",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIMESTAMP(9) WITH LOCAL TIME ZONE",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumnType": {
+                  "name": [
+                    "c"
+                  ],
+                  "data_type": {
+                    "timestamp": {
+                      "timeUnit": "nanosecond",
+                      "timestampType": "withLocalTimeZone"
+                    }
+                  }
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIMESTAMP(9) WITHOUT TIME ZONE",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumnType": {
+                  "name": [
+                    "c"
+                  ],
+                  "data_type": {
+                    "timestamp": {
+                      "timeUnit": "nanosecond",
+                      "timestampType": "withoutTimeZone"
+                    }
+                  }
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIMESTAMP_LTZ(7)",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIMESTAMP_LTZ(8)",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIMESTAMP_LTZ(9)",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumnType": {
+                  "name": [
+                    "c"
+                  ],
+                  "data_type": {
+                    "timestamp": {
+                      "timeUnit": "nanosecond",
+                      "timestampType": "withLocalTimeZone"
+                    }
+                  }
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIMESTAMP_NTZ(7)",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIMESTAMP_NTZ(8)",
+      "output": {
+        "failure": "invalid argument: timestamp precision"
+      }
+    },
+    {
+      "input": "ALTER TABLE t ALTER COLUMN c TYPE TIMESTAMP_NTZ(9)",
+      "output": {
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t"
+              ],
+              "ifExists": false,
+              "operation": {
+                "alterColumnType": {
+                  "name": [
+                    "c"
+                  ],
+                  "data_type": {
+                    "timestamp": {
+                      "timeUnit": "nanosecond",
+                      "timestampType": "withoutTimeZone"
+                    }
+                  }
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "ALTER TABLE t DEFAULT COLLATION sr",
       "output": {
         "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'CREATE', 'REPLACE', 'DROP', 'SET', 'ADD', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"

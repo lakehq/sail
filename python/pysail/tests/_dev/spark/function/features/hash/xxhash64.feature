@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: xxhash64() returns 64-bit xxHash
 
   Rule: Basic usage

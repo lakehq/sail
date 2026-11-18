@@ -1,9 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Hive Metastore container fixtures."""
 
 from __future__ import annotations
 
 import os
 import socket
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -16,6 +19,8 @@ from testcontainers.core.image import DockerImage
 from testcontainers.core.network import Network
 from testcontainers.core.waiting_utils import wait_for_logs
 
+from pysail.testing.resources import resource
+
 if TYPE_CHECKING:
     from collections.abc import Generator
 
@@ -23,7 +28,6 @@ _HMS_IMAGE = "apache/hive:4.0.0"
 _HMS_PORT = 9083
 _KDC_PORT = 88
 _KDC_TCP_PORT = f"{_KDC_PORT}/tcp"
-_KDC_UDP_PORT = f"{_KDC_PORT}/udp"
 _KERBEROS_REALM = "SAIL.TEST"
 _KDC_HOSTNAME = "sail-kerberos-kdc"
 _HMS_HOSTNAME = "sail-kerberos-hms"
@@ -96,7 +100,11 @@ def _wait_for_nonempty_file(container: DockerContainer, path: str) -> None:
     raise TimeoutError(message)
 
 
-def _host_krb5_config(kdc_host: str, kdc_tcp_port: int, kdc_udp_port: int) -> str:
+def _host_krb5_config(kdc_host: str, kdc_tcp_port: int) -> str:
+    # Kerberos tries TCP first. A UDP mapping can share its port number with
+    # an unrelated TCP service, so advertise only the published TCP endpoint.
+    # macOS Heimdal needs an explicit transport instead of udp_preference_limit.
+    kdc_transport = "tcp/" if sys.platform == "darwin" else ""
     return f"""[libdefaults]
  default_realm = {_KERBEROS_REALM}
  dns_lookup_kdc = false
@@ -111,8 +119,7 @@ def _host_krb5_config(kdc_host: str, kdc_tcp_port: int, kdc_udp_port: int) -> st
 
 [realms]
  {_KERBEROS_REALM} = {{
-  kdc = {kdc_host}:{kdc_udp_port}
-  kdc = {kdc_host}:{kdc_tcp_port}
+  kdc = {kdc_transport}{kdc_host}:{kdc_tcp_port}
  }}
 
 [domain_realm]
@@ -199,6 +206,7 @@ def _core_site_config(rpc_protection: str) -> str:
 
 
 @pytest.fixture(scope="session", params=["buffered", "framed"])
+@resource(name="hms-native", weight=10)
 def hms_service(request: pytest.FixtureRequest) -> Generator[HmsService, None, None]:
     """Exercise the native provider against both server transport modes."""
     transport = str(request.param)
@@ -218,6 +226,7 @@ def hms_service(request: pytest.FixtureRequest) -> Generator[HmsService, None, N
 
 
 @pytest.fixture(scope="session")
+@resource(name="hms-kerberos", weight=10)
 def kerberos_kdc_image() -> Generator[str, None, None]:
     """Build once and remove only this run's tag, preserving concurrent users."""
     image_tag = f"pysail-kerberos-kdc:test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
@@ -246,7 +255,9 @@ def kerberos_hms_service(
             .with_kwargs(hostname=_KDC_HOSTNAME)
             .with_env("KERBEROS_REALM", _KERBEROS_REALM)
             .with_env("KDC_HOSTNAME", _KDC_HOSTNAME)
-            .with_exposed_ports(_KDC_TCP_PORT, _KDC_UDP_PORT)
+            # The host probe uses TCP. Host-side UDP fallback is unavailable.
+            # HMS can still reach the KDC over TCP and UDP on port 88 on this Docker network.
+            .with_exposed_ports(_KDC_TCP_PORT)
             .with_network(network)
             .with_network_aliases(_KDC_HOSTNAME)
         )
@@ -254,7 +265,6 @@ def kerberos_hms_service(
             wait_for_logs(kdc, "KDC ready", timeout=120)
             kdc_host = _published_host(kdc)
             kdc_tcp_port = int(kdc.get_exposed_port(_KDC_TCP_PORT))  # type: ignore[arg-type]
-            kdc_udp_port = int(kdc.get_exposed_port(_KDC_UDP_PORT))  # type: ignore[arg-type]
             _wait_for_port(kdc_host, kdc_tcp_port, timeout=60)
 
             _exec_checked(
@@ -286,7 +296,7 @@ def kerberos_hms_service(
 
             host_krb5_config = fixture_dir / "krb5-host.conf"
             host_krb5_config.write_text(
-                _host_krb5_config(kdc_host, kdc_tcp_port, kdc_udp_port),
+                _host_krb5_config(kdc_host, kdc_tcp_port),
                 encoding="utf-8",
             )
             hive_site = fixture_dir / "hive-site.xml"

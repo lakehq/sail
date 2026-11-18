@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import re
 
 import pytest
@@ -56,10 +58,10 @@ def test_min_max_keep_semantically_required_inner_groups(spark, inner, outer, ex
     query += outer.format(inner=inner)
     assert [tuple(row) for row in spark.sql(query).collect()] == expected
     if not is_jvm_spark() and "WHERE false" not in inner:
-        assert len(re.findall(r"^\s*Aggregate:", _optimized_plan(spark, query), re.MULTILINE)) == 2  # noqa: PLR2004
+        assert len(re.findall(r"^\s*Aggregate:", _optimized_plan(spark, query), re.MULTILINE)) == 2
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific conservative float-group representation guard")
+@pytest.mark.spark(skip_if_jvm=True, reason="Sail-specific conservative float-group representation guard")
 def test_min_max_keep_float_grouping_zero_representation(spark):
     query = """
         SELECT CAST(min(k) AS STRING),CAST(max(k) AS STRING)
@@ -67,11 +69,11 @@ def test_min_max_keep_float_grouping_zero_representation(spark):
     """
     # The lower group normalizes zero keys; dropping it could expose a negative raw zero.
     assert [tuple(row) for row in spark.sql(query).collect()] == [("0.0", "0.0")]
-    assert len(re.findall(r"^\s*Aggregate:", _optimized_plan(spark, query), re.MULTILINE)) == 2  # noqa: PLR2004
+    assert len(re.findall(r"^\s*Aggregate:", _optimized_plan(spark, query), re.MULTILINE)) == 2
 
 
-@pytest.mark.skipif(
-    is_jvm_spark(), reason="Preserve Sail's existing evaluation of unused DISTINCT grouping expressions"
+@pytest.mark.spark(
+    skip_if_jvm=True, reason="Preserve Sail's existing evaluation of unused DISTINCT grouping expressions"
 )
 def test_min_max_keep_errors_from_unused_group_columns(spark):
     previous = spark.conf.get("spark.sql.ansi.enabled")

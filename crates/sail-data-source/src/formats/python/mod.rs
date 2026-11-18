@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Python data source support for Sail.
 //!
 //! This module provides the infrastructure for Python-defined data sources,

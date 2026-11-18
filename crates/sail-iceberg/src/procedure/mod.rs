@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Iceberg system procedures.
 
 use std::sync::Arc;
@@ -15,8 +17,10 @@ use sail_common_datafusion::lakeprocedure::{
 
 mod arguments;
 mod descriptor;
+mod expire_snapshots;
 mod logical;
 mod rewrite_data_files;
+mod rewrite_manifests;
 pub(crate) mod snapshot;
 pub(crate) mod table;
 
@@ -127,6 +131,30 @@ pub(crate) async fn execute_iceberg_procedure(
                     .await?;
             ancestors_output(&metadata, &invocation)
         }
+        IcebergProcedureType::ExpireSnapshots => {
+            let operation = expire_snapshots::ExpireSnapshots::from_invocation(&invocation)?;
+            commit_snapshot_operation(
+                ctx,
+                &table_url,
+                table_properties,
+                lakehouse_table.as_ref(),
+                operation,
+                invocation.procedure.schema(),
+            )
+            .await
+        }
+        IcebergProcedureType::RewriteManifests => {
+            let operation = rewrite_manifests::RewriteManifests::from_invocation(&invocation)?;
+            commit_snapshot_operation(
+                ctx,
+                &table_url,
+                table_properties,
+                lakehouse_table.as_ref(),
+                operation,
+                invocation.procedure.schema(),
+            )
+            .await
+        }
         IcebergProcedureType::RollbackToSnapshot => {
             let snapshot_id = required_i64(&invocation, "snapshot_id")?;
             commit_snapshot_operation(
@@ -206,7 +234,7 @@ mod tests {
         ));
         assert!(matches!(
             source.resolve_procedure(&namespace, "expire_snapshots"),
-            LakeProcedureResolution::Unsupported { .. }
+            LakeProcedureResolution::Supported(_)
         ));
         assert_eq!(
             source.resolve_procedure(&namespace, "not_an_iceberg_procedure"),
@@ -275,6 +303,8 @@ mod tests {
                 "rollback_to_timestamp",
                 "set_current_snapshot",
                 "rewrite_data_files",
+                "rewrite_manifests",
+                "expire_snapshots",
                 "ancestors_of",
                 "fast_forward",
             ]

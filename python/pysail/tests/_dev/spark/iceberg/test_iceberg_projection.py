@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pyarrow as pa
 from pyiceberg.schema import Schema
 from pyiceberg.types import IntegerType, NestedField, StringType, StructType

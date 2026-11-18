@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;

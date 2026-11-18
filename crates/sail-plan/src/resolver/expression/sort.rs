@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_common::{Column, DFSchemaRef};
 use datafusion_expr::expr;
 use sail_common::spec;

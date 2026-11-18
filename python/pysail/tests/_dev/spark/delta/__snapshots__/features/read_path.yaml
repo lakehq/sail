@@ -73,10 +73,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -115,6 +124,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -136,6 +148,9 @@ data:
     logical_plan after optimize_projections:
     Projection: delta_read_metadata_path.id AS #3, delta_read_metadata_path.name AS #4, delta_read_metadata_path.value AS #5
       TableScan: delta_read_metadata_path projection=[id, name, value]
+
+    logical_plan after prune_seeded_random_columns:
+    SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -164,10 +179,19 @@ data:
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_predicate_subquery:
+    logical_plan after pull_up_correlated_filters_above_partition_sensitive_nodes:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
+    logical_plan after remove_exists_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -206,6 +230,9 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_sorts:
+    SAME TEXT AS ABOVE
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
@@ -225,6 +252,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after prune_seeded_random_columns:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
@@ -389,6 +419,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
+    SAME TEXT AS ABOVE
+
+    physical_plan after KeepPartitionSensitiveInputs:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:

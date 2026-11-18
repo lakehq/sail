@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod cache;
 mod namespace;
 mod options;
@@ -18,6 +20,11 @@ use crate::lakehouse::{
     LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
     plan_lakehouse_create_from_requirement, resolve_lakehouse_table_status,
 };
+
+/// Storage publication performed only after the catalog has reserved and prevalidated the
+/// replacement. An uncertain result must use `CatalogError::CommitStateUnknown`.
+pub type TablePublication =
+    std::pin::Pin<Box<dyn std::future::Future<Output = CatalogResult<()>> + Send + 'static>>;
 
 /// A trait that defines the interface for a catalog.
 /// A catalog contains *databases*, where each database has a multi-level name
@@ -70,6 +77,32 @@ pub trait CatalogProvider: Send + Sync {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus>;
+
+    /// Stage an Iceberg replacement without changing visible catalog or storage state.
+    async fn stage_table_replacement(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CreateTableOptions,
+    ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
+        let _ = (database, table, options);
+        Err(CatalogError::UnsupportedCapability(
+            "atomic Iceberg table replacement".to_string(),
+        ))
+    }
+
+    /// Reserve the staged identity, publish storage, and install prepared status without a
+    /// second fallible catalog mutation. Finalization must outlive caller cancellation.
+    async fn publish_table_replacement(
+        &self,
+        replacement: sail_common_datafusion::catalog::TableReplacement,
+        publication: TablePublication,
+    ) -> CatalogResult<()> {
+        let _ = (replacement, publication);
+        Err(CatalogError::UnsupportedCapability(
+            "atomic Iceberg table replacement".to_string(),
+        ))
+    }
 
     /// Whether catalog `CREATE TABLE` needs the lake source to create storage metadata before
     /// registering the catalog object. Providers that can reject create options should do so here

@@ -1,12 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
-use datafusion_functions::core::expr_fn::coalesce;
 use datafusion_functions::math::expr_fn::abs;
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::collection::element::{array_element, map_element};
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
+use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::error::{PlanError, PlanResult};
@@ -29,7 +32,7 @@ fn size(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
     let config = input.function_context.plan_config;
     if config.legacy_size_of_null && !config.ansi_mode {
-        Ok(coalesce(vec![result, lit(-1_i32)]))
+        Ok(ScalarUDF::from(CoalesceFunc::new()).call(vec![result, lit(-1_i32)]))
     } else {
         // TODO: Preserve input nullability in nonlegacy mode; see the size/cardinality schema tests.
         Ok(result)
@@ -60,11 +63,9 @@ fn element_at(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr
                 )).when( abs(element.clone()).not_between(lit(1), expr_fn::array_length(collection.clone())),
                 null_or_out_of_bounds
                 )
-                .when(lit(true), expr_fn::array_element(collection, element)).end()?
+                .when(lit(true), array_element(collection, element)).end()?
         }
-        DataType::Map(..) => {
-            expr_fn::array_element(expr_fn::map_extract(collection, element), lit(1))
-        }
+        DataType::Map(..) => map_element(collection, element),
         wrong_type => ScalarUDF::from(RaiseError::new()).call(vec![lit(format!(
             "{name} expects List or Map type as first argument, got {wrong_type:?}",
         ))]),

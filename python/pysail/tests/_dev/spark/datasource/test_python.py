@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Tests for Python DataSource integration.
 
@@ -6,6 +8,9 @@ including both Arrow RecordBatch and tuple-based paths.
 """
 
 import json
+import os
+import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -18,22 +23,7 @@ from pysail.testing.spark.session import spark_session_factory
 from pysail.testing.spark.utils.common import pyspark_version
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
-try:
-    from pyspark.sql.datasource import (
-        DataSource,
-        DataSourceArrowWriter,
-        DataSourceReader,
-        DataSourceWriter,
-        EqualTo,
-        Filter,
-        GreaterThan,
-        GreaterThanOrEqual,
-        InputPartition,
-        LessThan,
-        LessThanOrEqual,
-    )
-except ImportError:
-    pytest.skip("Python DataSource API is not available in this Spark version", allow_module_level=True)
+pytestmark = pytest.mark.spark(version=">=4.1", reason="Uses Python DataSource filter pushdown")
 
 
 def _read_test_state(path: str | Path) -> dict[str, Any]:
@@ -55,145 +45,10 @@ def _update_test_state(path: str, **updates: Any) -> None:
 # ============================================================================
 
 
-class RangeInputPartition(InputPartition):
-    """Partition for RangeDataSource containing a range of values."""
-
-    def __init__(self, partition_id: int, start: int, end: int):
-        super().__init__(partition_id)
-        self.start = start
-        self.end = end
-
-    def __repr__(self):
-        return f"RangeInputPartition({self.partition_id}, start={self.start}, end={self.end})"
-
-
-class RangeDataSourceReader(DataSourceReader):
-    """Reader for RangeDataSource that generates sequential integers."""
-
-    BATCH_SIZE = 8192
-
-    def __init__(self, start: int, end: int, num_partitions: int, step: int = 1):
-        self.start = start
-        self.end = end
-        self.num_partitions = max(1, num_partitions)
-        self.step = step
-        self._filters: list[Filter] = []
-
-    def pushFilters(self, filters: list[Filter]) -> Iterator[Filter]:  # noqa: N802
-        """
-        Accept filters that can be applied to the range.
-
-        We can handle simple comparison filters on the 'id' column.
-        """
-        for f in filters:
-            if isinstance(
-                f, EqualTo | GreaterThan | GreaterThanOrEqual | LessThan | LessThanOrEqual
-            ) and f.attribute == ("id",):
-                self._filters.append(f)
-            else:
-                yield f
-
-    def partitions(self) -> list[InputPartition]:
-        """Split the range into partitions for parallel reading."""
-        total_values = (self.end - self.start) // self.step
-        values_per_partition = max(1, total_values // self.num_partitions)
-
-        partitions = []
-        current_start = self.start
-
-        for i in range(self.num_partitions):
-            if current_start >= self.end:
-                break
-
-            if i == self.num_partitions - 1:
-                partition_end = self.end
-            else:
-                partition_end = min(current_start + values_per_partition * self.step, self.end)
-
-            partitions.append(RangeInputPartition(i, current_start, partition_end))
-            current_start = partition_end
-
-        return partitions if partitions else [RangeInputPartition(0, self.start, self.end)]
-
-    def read(self, partition: InputPartition) -> Iterator[Any]:
-        """Generate RecordBatches for a partition."""
-        if not isinstance(partition, RangeInputPartition):
-            msg = f"Expected RangeInputPartition, got {type(partition)}"
-            raise TypeError(msg)
-
-        start = partition.start
-        end = partition.end
-
-        for f in self._filters:
-            if isinstance(f, EqualTo) and isinstance(f.value, int):
-                if start <= f.value < end:
-                    yield pa.RecordBatch.from_pydict({"id": [f.value]}, schema=pa.schema([("id", pa.int64())]))
-                return
-            elif isinstance(f, GreaterThan) and isinstance(f.value, int):
-                start = max(start, f.value + 1)
-            elif isinstance(f, GreaterThanOrEqual) and isinstance(f.value, int):
-                start = max(start, f.value)
-            elif isinstance(f, LessThan) and isinstance(f.value, int):
-                end = min(end, f.value)
-            elif isinstance(f, LessThanOrEqual) and isinstance(f.value, int):
-                end = min(end, f.value + 1)
-
-        schema = pa.schema([("id", pa.int64())])
-        batch_values: list[int] = []
-        for i in range(start, end, self.step):
-            batch_values.append(i)
-            if len(batch_values) >= self.BATCH_SIZE:
-                yield pa.RecordBatch.from_pydict({"id": batch_values}, schema=schema)
-                batch_values = []
-
-        if batch_values:
-            yield pa.RecordBatch.from_pydict({"id": batch_values}, schema=schema)
-
-
-class RangeDataSource(DataSource):
-    """
-    A data source that generates sequential integers.
-
-    This is useful for testing and demonstration. It supports:
-    - Parallel reading via partitions
-    - Filter pushdown for comparison operators
-    - Configurable range and step
-
-    Options:
-        start: Starting value (default: 0)
-        end: Ending value (exclusive, required)
-        step: Step between values (default: 1)
-        numPartitions: Number of partitions (default: 4)
-    """
-
-    @classmethod
-    def name(cls) -> str:
-        return "range"
-
-    def schema(self):
-        # Allow testing DDL string fallback via options
-        if self.options.get("use_ddl_schema", "false").lower() == "true":
-            return "id BIGINT"
-        # PyArrow Schema preferred; DDL string fallback also works for basic types
-        return pa.schema([("id", pa.int64())])
-
-    def reader(self, schema) -> DataSourceReader:  # noqa: ARG002
-        """Create a reader for this range."""
-        start = int(self.options.get("start", "0"))
-        end = int(self.options.get("end", "10"))
-        step = int(self.options.get("step", "1"))
-        num_partitions = int(self.options.get("numPartitions", "4"))
-
-        return RangeDataSourceReader(start, end, num_partitions, step)
-
-
-# ============================================================================
-# Basic API tests that don't require a Spark session
-# ============================================================================
-
-
 def test_python_range_datasource_api():
     """Test RangeDataSource API without server."""
+    from pysail.testing._dev.spark.datasource import RangeDataSource
+
     # Test with default PyArrow schema
     ds = RangeDataSource(options={"start": "0", "end": "10", "numPartitions": "2"})
     assert ds.name() == "range"
@@ -209,7 +64,7 @@ def test_python_range_datasource_api():
 
     reader = ds.reader(schema)
     partitions = reader.partitions()
-    assert len(partitions) == 2  # noqa: PLR2004
+    assert len(partitions) == 2
 
     # Read from first partition
     rows = list(reader.read(partitions[0]))
@@ -263,14 +118,14 @@ def test_python_arrow_datasource(spark):
     df = spark.read.format("arrow_range_test").load()
 
     rows = df.collect()
-    assert len(rows) == 100  # noqa: PLR2004
+    assert len(rows) == 100
     assert rows[0].id == 0
     assert rows[0].value == 0.0
 
     # Test filter query (filter is applied post-read by DataFusion in MVP)
     filtered = df.filter("value > 50.0").collect()
     # ids 34+ have value > 50 (34 * 1.5 = 51)
-    assert len(filtered) == 66  # noqa: PLR2004 - ids 34-99 have value > 50
+    assert len(filtered) == 66  # ids 34-99 have value > 50
 
 
 def test_python_tuple_datasource(spark):
@@ -311,13 +166,13 @@ def test_python_tuple_datasource(spark):
     df = spark.read.format("tuple_range_test").load()
 
     rows = df.collect()
-    assert len(rows) == 1000  # noqa: PLR2004
+    assert len(rows) == 1000
 
     # Verify data integrity: check that squares are correct
     # Find row with id=100, should have square=10000
     sample = df.filter("id = 100").collect()
     assert len(sample) == 1
-    assert sample[0].square == 10000  # noqa: PLR2004 - 100² = 10000
+    assert sample[0].square == 10000  # 100² = 10000
 
 
 def test_python_multi_partition(spark):
@@ -363,7 +218,7 @@ def test_python_multi_partition(spark):
 
     rows = df.collect()
     # 4 partitions * 25 rows each = 100 total
-    assert len(rows) == 100  # noqa: PLR2004
+    assert len(rows) == 100
 
 
 def test_python_partition_failure(spark):
@@ -390,8 +245,7 @@ def test_python_partition_failure(spark):
 
         def read(self, partition):
             pid = partition.value
-            failure_partition = 2
-            if pid == failure_partition:
+            if pid == 2:
                 msg = f"Deliberate failure in partition {pid}!"
                 raise ValueError(msg)
 
@@ -534,8 +388,7 @@ def test_python_schema_mismatch(spark):
     try:
         rows = df.collect()
         # If it succeeds, verify data is present
-        expected_rows = 3
-        assert len(rows) == expected_rows
+        assert len(rows) == 3
     except Exception as e:  # noqa: BLE001
         # If it fails, error should mention schema/type issue
         error_msg = str(e).lower()
@@ -624,7 +477,7 @@ def test_python_session_isolation(remote: str):
         # Verify Session A can read from it
         df_a = spark_a.read.format("session_isolation_test").load()
         rows_a = df_a.collect()
-        assert len(rows_a) == 3  # noqa: PLR2004
+        assert len(rows_a) == 3
 
         # Session B: Create a completely independent session
         spark_b = sessions.create()
@@ -633,6 +486,58 @@ def test_python_session_isolation(remote: str):
         # because datasources are registered per-session
         with pytest.raises(Exception, match=r"session_isolation_test|not found|unknown"):
             spark_b.read.format("session_isolation_test").load().collect()
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Starts a Sail server in a subprocess")
+def test_python_datasource_backpressure_with_python_udf():
+    """Test that a reader with a full output channel does not block a downstream Python UDF."""
+    # The query runs in a subprocess since a reader that holds the GIL while waiting
+    # for the channel would block all Python threads, including the pytest timeout.
+    code = """
+import runpy
+import sys
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+checks = runpy.run_path(sys.argv[1])
+with spark_connect_server() as server, spark_session_factory(server.remote) as sessions:
+    checks["_check_backpressure_with_python_udf"](sessions.create())
+"""
+    env = {**os.environ}
+    env.pop("SPARK_REMOTE", None)
+    result = subprocess.run(
+        [sys.executable, "-c", code, __file__],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _check_backpressure_with_python_udf(spark):
+    from pyspark.sql.datasource import DataSource, DataSourceReader
+
+    num_batches = 1000
+
+    class BackpressureDataSource(DataSource):
+        @classmethod
+        def name(cls):
+            return "backpressure_test"
+
+        def schema(self):
+            return "id long"
+
+        def reader(self, schema):  # noqa: ARG002
+            return BackpressureReader()
+
+    class BackpressureReader(DataSourceReader):
+        def read(self, partition):  # noqa: ARG002
+            for i in range(num_batches):
+                yield pa.RecordBatch.from_pydict({"id": [i]})
+
+    spark.dataSource.register(BackpressureDataSource)
+    df = spark.read.format("backpressure_test").load()
+    assert len(df.mapInArrow(lambda batches: batches, "id long").collect()) == num_batches
 
 
 # ============================================================================
@@ -714,15 +619,14 @@ def test_python_filter_pushdown_equality(spark):
 
     # Query without filter should return all 5 rows
     all_rows = df.collect()
-    expected_all_rows = 5
-    assert len(all_rows) == expected_all_rows, f"Expected 5 rows, got {len(all_rows)}"
+    assert len(all_rows) == 5, f"Expected 5 rows, got {len(all_rows)}"
 
     # Query WITH filter - if pushFilters works, Python reader applies it
     filtered_rows = df.filter("id = 3").collect()
 
     # Should get exactly 1 row
     assert len(filtered_rows) == 1, f"Expected 1 row, got {len(filtered_rows)}"
-    assert filtered_rows[0].id == 3  # noqa: PLR2004
+    assert filtered_rows[0].id == 3
 
 
 def test_python_filter_pushdown_reader_without_push_filters(spark):
@@ -769,12 +673,11 @@ def test_python_filter_pushdown_reader_without_push_filters(spark):
     spark.dataSource.register(NoPushFiltersDataSource)
     df = spark.read.format("no_push_filters_test").load()
 
-    expected_all_rows = 5
-    assert len(df.collect()) == expected_all_rows
+    assert len(df.collect()) == 5
 
     filtered_rows = df.filter("id = 3").collect()
     assert len(filtered_rows) == 1
-    assert filtered_rows[0].id == 3  # noqa: PLR2004
+    assert filtered_rows[0].id == 3
 
 
 def test_python_filter_pushdown_reader_with_non_callable_push_filters(spark):
@@ -818,16 +721,17 @@ def test_python_filter_pushdown_reader_with_non_callable_push_filters(spark):
     spark.dataSource.register(NonCallablePushFiltersDataSource)
     df = spark.read.format("non_callable_push_filters_test").load()
 
-    expected_all_rows = 5
-    assert len(df.collect()) == expected_all_rows
+    assert len(df.collect()) == 5
 
     filtered_rows = df.filter("id = 3").collect()
     assert len(filtered_rows) == 1
-    assert filtered_rows[0].id == 3  # noqa: PLR2004
+    assert filtered_rows[0].id == 3
 
 
 def test_python_ddl_schema_fallback(spark):
     """Test that DDL string schema is correctly parsed and used."""
+    from pysail.testing._dev.spark.datasource import RangeDataSource
+
     spark.dataSource.register(RangeDataSource)
 
     # This uses the option we added to RangeDataSource to force DDL schema return
@@ -842,13 +746,145 @@ def test_python_ddl_schema_fallback(spark):
 
     # Verify data read works
     rows = df.collect()
-    assert len(rows) == 10  # noqa: PLR2004
+    assert len(rows) == 10
     # Sort by ID to ensure deterministic check
     rows.sort(key=lambda r: r.id)
     assert rows[0].id == 0
 
 
+@pytest.mark.parametrize("struct_schema", [False, True])
+def test_python_ddl_schema_complex_types(spark, struct_schema):
+    from pyspark.sql import Row
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
+    ddl = "payload STRUCT<values: ARRAY<INT> NOT NULL, labels: MAP<STRING, STRING>> NOT NULL"
+    if struct_schema:
+        ddl = f"STRUCT<{ddl}>"
+    schema = pa.schema(
+        [
+            pa.field(
+                "payload",
+                pa.struct(
+                    [
+                        pa.field("values", pa.list_(pa.int32()), nullable=False),
+                        pa.field("labels", pa.map_(pa.string(), pa.string())),
+                    ]
+                ),
+                nullable=False,
+            )
+        ]
+    )
+
+    class ComplexDDLDataSource(DataSource):
+        @classmethod
+        def name(cls):
+            return "complex_ddl_test"
+
+        def schema(self):
+            return ddl
+
+        def reader(self, schema):  # noqa: ARG002
+            return ComplexDDLReader()
+
+    class ComplexDDLReader(DataSourceReader):
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            yield pa.RecordBatch.from_pydict(
+                {"payload": [{"values": [1, None], "labels": {"a": "b", "c": None}}]}, schema=schema
+            )
+
+    spark.dataSource.register(ComplexDDLDataSource)
+    df = spark.read.format("complex_ddl_test").load()
+    assert df.schema.simpleString() == "struct<payload:struct<values:array<int>,labels:map<string,string>>>"
+    assert not df.schema["payload"].nullable
+    assert not df.schema["payload"].dataType["values"].nullable
+    assert df.collect() == [Row(payload=Row(values=[1, None], labels={"a": "b", "c": None}))]
+
+
+@pytest.mark.parametrize(
+    "row_format",
+    [
+        "datetime",
+        pytest.param(
+            "microseconds",
+            marks=pytest.mark.spark(skip_if_jvm=True, reason="Sail accepts epoch microseconds in timestamp tuples"),
+        ),
+    ],
+)
+def test_python_ddl_schema_timestamp_types(spark, row_format):
+    from datetime import datetime, timedelta, timezone
+
+    from pyspark.sql import Row
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+    from pyspark.sql.types import StructField, StructType, TimestampNTZType, TimestampType
+
+    wall_time = datetime(2024, 1, 2, 3, 4, 5, 123456)  # noqa: DTZ001
+    before_epoch = datetime(1969, 12, 31, 23, 59, 59, 999999)  # noqa: DTZ001
+    expected = [
+        Row(default_time=None, local_time=None, wall_time=None),
+        Row(default_time=-1, local_time=-1, wall_time=before_epoch),
+        Row(default_time=1704144845123456, local_time=1704144845123456, wall_time=wall_time),
+    ]
+    if row_format == "microseconds":
+        epoch = datetime(1970, 1, 1)  # noqa: DTZ001
+        rows = [
+            (
+                row.default_time,
+                row.local_time,
+                (row.wall_time - epoch) // timedelta(microseconds=1) if row.wall_time else None,
+            )
+            for row in expected
+        ]
+    else:
+        offset_time = wall_time.replace(tzinfo=timezone(timedelta(hours=5, minutes=30)))
+        before_epoch_utc = before_epoch.replace(tzinfo=timezone.utc)
+        rows = [
+            (None, None, None),
+            (before_epoch_utc, before_epoch_utc, before_epoch),
+            (offset_time, offset_time, wall_time),
+        ]
+
+    class TimestampDDLDataSource(DataSource):
+        @classmethod
+        def name(cls):
+            return "timestamp_ddl_test"
+
+        def schema(self):
+            return "default_time TIMESTAMP, local_time TIMESTAMP_LTZ, wall_time TIMESTAMP_NTZ"
+
+        def reader(self, schema):  # noqa: ARG002
+            return TimestampDDLReader()
+
+    class TimestampDDLReader(DataSourceReader):
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            yield from rows
+
+    spark.dataSource.register(TimestampDDLDataSource)
+    df = spark.read.format("timestamp_ddl_test").load()
+    assert df.schema == StructType(
+        [
+            StructField("default_time", TimestampType()),
+            StructField("local_time", TimestampType()),
+            StructField("wall_time", TimestampNTZType()),
+        ]
+    )
+    # Compare instants independently of the client machine timezone used by collect().
+    assert (
+        df.selectExpr("unix_micros(default_time) AS default_time", "unix_micros(local_time) AS local_time", "wall_time")
+        .orderBy("wall_time")
+        .collect()
+        == expected
+    )
+
+
 def test_python_datasource_options_are_case_insensitive(spark):
+    from pysail.testing._dev.spark.datasource import RangeDataSource
+
     spark.dataSource.register(RangeDataSource)
 
     rows = spark.read.format("range").option("END", "2").load().collect()
@@ -896,10 +932,8 @@ def test_python_filter_pushdown_comparison(spark):
 
     # Test greater than
     rows = df.filter("id > 5").collect()
-    expected_rows = 4
-    assert len(rows) == expected_rows, f"Expected 4 rows (6,7,8,9), got {len(rows)}"
-    min_id = 5
-    assert all(r.id > min_id for r in rows)
+    assert len(rows) == 4, f"Expected 4 rows (6,7,8,9), got {len(rows)}"
+    assert all(r.id > 5 for r in rows)
 
 
 def test_python_filter_pushdown_rejection(spark):
@@ -937,7 +971,7 @@ def test_python_filter_pushdown_rejection(spark):
     # DataFusion will post-filter the results
     rows = df.filter("id = 3").collect()
     assert len(rows) == 1
-    assert rows[0].id == 3  # noqa: PLR2004
+    assert rows[0].id == 3
 
 
 def test_python_filter_pushdown_complex_and(spark):
@@ -1023,6 +1057,14 @@ def test_python_filter_pushdown_complex_and(spark):
 
 def _create_writable_test_datasource():
     """Create a writable datasource class with per-test local commit state."""
+    from pyspark.sql.datasource import (
+        DataSource,
+        DataSourceArrowWriter,
+        DataSourceReader,
+        DataSourceWriter,
+        InputPartition,
+    )
+
     datasource_name = f"writable_test_{uuid4().hex}"
 
     class InMemoryWriter(DataSourceWriter):
@@ -1168,6 +1210,8 @@ def test_python_arrow_write(spark, tmp_path):
 
 def test_python_write_overwrite_mode(spark, tmp_path):
     """Test that overwrite mode is passed correctly."""
+    from pyspark.sql.datasource import DataSource, DataSourceWriter
+
     state_path = tmp_path / "overwrite_state.json"
 
     class OverwriteCheckWriter(DataSourceWriter):
@@ -1209,6 +1253,8 @@ def test_python_write_overwrite_mode(spark, tmp_path):
 
 def test_python_write_append_mode(spark, tmp_path):
     """Test that append mode is passed correctly."""
+    from pyspark.sql.datasource import DataSource, DataSourceWriter
+
     state_path = tmp_path / "append_state.json"
 
     class AppendCheckWriter(DataSourceWriter):
@@ -1249,6 +1295,8 @@ def test_python_write_append_mode(spark, tmp_path):
 
 def test_python_write_commit(spark, tmp_path):
     """Test that commit is called with all partition messages."""
+    from pyspark.sql.datasource import DataSource, DataSourceWriter
+
     state_path = tmp_path / "commit_state.json"
 
     class CommitTrackingWriter(DataSourceWriter):
@@ -1307,6 +1355,7 @@ def test_python_write_empty_dataframe(spark, tmp_path):
 
 def test_python_write_no_writer_implemented(spark):
     """Test error when writer() is not implemented."""
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
 
     class ReadOnlyDataSource(DataSource):
         def __init__(self, options):
@@ -1345,6 +1394,8 @@ def test_python_write_no_writer_implemented(spark):
 
 def test_python_write_abort_on_failure(spark, tmp_path):
     """Test that abort is called when writer.write() raises an exception."""
+    from pyspark.sql.datasource import DataSource, DataSourceWriter
+
     state_path = tmp_path / "abort_on_failure_state.json"
 
     class FailingWriter(DataSourceWriter):
@@ -1391,6 +1442,8 @@ def test_python_write_abort_on_failure(spark, tmp_path):
 
 def test_python_write_save_path_passed(spark, tmp_path):
     """Test that .save("/my/path") passes the path to DataSource via options["path"]."""
+    from pyspark.sql.datasource import DataSource, DataSourceWriter
+
     state_path = tmp_path / "save_path_state.json"
 
     class PathCheckWriter(DataSourceWriter):
@@ -1470,6 +1523,8 @@ def test_python_read_load_path_passed(spark):
 
 def test_python_write_commit_failure_triggers_abort(spark, tmp_path):
     """Test that abort is called when commit() raises an exception."""
+    from pyspark.sql.datasource import DataSource, DataSourceWriter
+
     state_path = tmp_path / "commit_failure_state.json"
 
     class CommitFailWriter(DataSourceWriter):
@@ -1544,6 +1599,8 @@ def test_python_write_null_values(spark, tmp_path):
 
 def test_python_write_none_commit_message(spark, tmp_path):
     """Test that writer returning None as commit message is handled correctly."""
+    from pyspark.sql.datasource import DataSource, DataSourceWriter
+
     state_path = tmp_path / "none_commit_message_state.json"
 
     class NoneMessageWriter(DataSourceWriter):
@@ -1590,6 +1647,7 @@ def test_python_write_none_commit_message(spark, tmp_path):
 
 def test_python_sql_create_table_and_select(spark):
     """Test CREATE TABLE ... USING with a tuple-based Python data source."""
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
     from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
     table_name = f"sql_simple_{uuid4().hex[:8]}"
@@ -1620,7 +1678,7 @@ def test_python_sql_create_table_and_select(spark):
 
     try:
         rows = spark.sql(f"SELECT * FROM {table_name}").collect()  # noqa: S608
-        assert len(rows) == 2  # noqa: PLR2004
+        assert len(rows) == 2
         names = sorted(row.name for row in rows)
         ages = sorted(row.age for row in rows)
         assert names == ["Alice", "Bob"]
@@ -1631,6 +1689,7 @@ def test_python_sql_create_table_and_select(spark):
 
 def test_python_sql_create_table_and_select_with_filter(spark):
     """Test SQL queries with WHERE clause on a Python data source table."""
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
     from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
     table_name = f"sql_filter_{uuid4().hex[:8]}"
@@ -1670,6 +1729,8 @@ def test_python_sql_create_table_and_select_with_filter(spark):
 
 def test_python_sql_create_table_arrow_datasource(spark):
     """Test CREATE TABLE ... USING with an Arrow-based Python data source."""
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
     table_name = f"sql_arrow_{uuid4().hex[:8]}"
 
     class SQLArrowDataSource(DataSource):
@@ -1704,7 +1765,7 @@ def test_python_sql_create_table_arrow_datasource(spark):
 
     try:
         rows = spark.sql(f"SELECT * FROM {table_name} ORDER BY id").collect()  # noqa: S608
-        assert len(rows) == 3  # noqa: PLR2004
+        assert len(rows) == 3
         assert [(r.id, r.value) for r in rows] == [(1, "a"), (2, "b"), (3, "c")]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -1712,6 +1773,8 @@ def test_python_sql_create_table_arrow_datasource(spark):
 
 def test_python_sql_insert_into_python_datasource(spark, tmp_path):
     """Test INSERT INTO on a Python data source table."""
+    from pyspark.sql.datasource import DataSource, DataSourceReader, DataSourceWriter, InputPartition
+
     table_name = f"sql_insert_{uuid4().hex[:8]}"
     state_path = tmp_path / "sql_insert_state.json"
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// A location in the source code.
 /// Note that in the SQL lexer and parser, [`crate::token::TokenSpan`] uses the offset value
 /// to represent the position in the source code, and the location is not calculated.

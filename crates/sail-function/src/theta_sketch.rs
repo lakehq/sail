@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::datatypes::{
     DataType, Float32Type, Float64Type, Int32Type, Int64Type, UInt32Type, UInt64Type,

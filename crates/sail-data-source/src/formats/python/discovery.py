@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Entry point discovery for Python data sources."""
 
 import logging
