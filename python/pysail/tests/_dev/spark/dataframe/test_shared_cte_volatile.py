@@ -470,7 +470,7 @@ def test_tail_reads_the_same_evaluation_of_a_volatile_cte(spark):
     )
     assert [r.id for r in df.tail(5)] == [95, 96, 97, 98, 99]
     df = spark.sql("WITH c AS (SELECT id, uuid() AS u FROM range(10)) SELECT x.id FROM c x JOIN c y ON x.u <> y.u")
-    assert len(df.tail(3)) == 3
+    assert len(df.tail(3)) == 3  # noqa: PLR2004
 
 
 def test_tail_returns_the_last_rows_when_the_row_count_is_random(spark):
@@ -483,7 +483,7 @@ def test_tail_returns_the_last_rows_when_the_row_count_is_random(spark):
     )
     for _ in range(5):
         rows = df.tail(3)
-        assert len(rows) == 3, rows
+        assert len(rows) == 3, rows  # noqa: PLR2004
         total = rows[0].total
         assert [r.rn for r in rows] == [total - 2, total - 1, total], rows
 

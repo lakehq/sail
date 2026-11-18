@@ -288,6 +288,6 @@ def test_insert_from_volatile_cte_on_finite_cluster(small_cluster_spark, tmp_pat
         for row in small_cluster_spark.table("shared_cte_capacity_write").collect():
             values[row.id].append(row.r)
         assert set(values) == set(range(100))
-        assert all(len(items) == 2 and len(set(items)) == 1 for items in values.values())
+        assert all(len(items) == 2 and len(set(items)) == 1 for items in values.values())  # noqa: PLR2004
     finally:
         small_cluster_spark.sql("DROP TABLE IF EXISTS shared_cte_capacity_write")
