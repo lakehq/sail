@@ -26,8 +26,7 @@ if TYPE_CHECKING:
     from pysail.testing._dev.utils.proxy import EndpointProxy
 
 
-def _rpc_failure(request_id: int) -> CelebornFrame:
-    error = b"injected RPC failure"
+def _rpc_failure(request_id: int, error: bytes = b"injected RPC failure") -> CelebornFrame:
     return CelebornFrame(
         CelebornMessageType.RPC_FAILURE,
         struct.pack(">qi", request_id, len(error)) + error,
@@ -167,16 +166,28 @@ def test_push_skips_unrelated_replies(
     celeborn_push_proxies: dict[str, EndpointProxy],
     repeated_rpc_reply: FrameRule[CelebornFrame],
 ) -> None:
+    def fail_second_push(event: FrameReceived[CelebornFrame]) -> Replace[CelebornFrame]:
+        request_id = struct.unpack_from(">q", event.frame.metadata)[0]
+        return Replace(_rpc_failure(request_id, b"second push rejected"))
+
+    second_reply = FrameRule(
+        frame_type=CelebornFrame,
+        condition=lambda event: event.frame.message_type == CelebornMessageType.RPC_RESPONSE,
+        action=fail_second_push,
+    )
     for proxy in celeborn_push_proxies.values():
         proxy.rules.add(repeated_rpc_reply)
-    batches = [b"first push", b"second push"]
-    for batch in batches:
-        assert push_client.push_data(1, 0, 0, 0, batch) == len(batch) + 16
+        proxy.rules.add(second_reply)
+    first, second = b"first push", b"second push"
+    assert push_client.push_data(1, 0, 0, 0, first) == len(first) + 16
+    with pytest.raises(RuntimeError, match="second push rejected"):
+        push_client.push_data(1, 0, 0, 0, second)
     push_client.mapper_end(1, 0, 0, 1)
-    assert list(push_client.read_partition_stream(1, 0)) == batches
+    assert list(push_client.read_partition_stream(1, 0)) == [first, second]
     # Recovery on another worker must not mask a failure to skip the stale reply.
     assert sum(proxy.events.count(ConnectionOpened) for proxy in celeborn_push_proxies.values()) == 1
-    assert sum(proxy.events.count(RuleApplied) for proxy in celeborn_push_proxies.values()) == 1
+    expected_rules = 2  # Duplicate the first reply and replace the second.
+    assert sum(proxy.events.count(RuleApplied) for proxy in celeborn_push_proxies.values()) == expected_rules
 
 
 def test_push_reuses_connection_after_duplicate_failures(
@@ -365,20 +376,23 @@ def test_fetch_validates_chunk_failure(
     assert sum(proxy.events.count(ConnectionOpened) for proxy in celeborn_fetch_proxies.values()) == connections
 
 
-def test_fetch_preserves_partial_batch_header(
+@pytest.mark.parametrize("prefix_length", [4, 20], ids=["partial-header", "partial-payload"])
+def test_fetch_preserves_partial_batch(
     fetch_client: _native._celeborn.ShuffleClient,
     celeborn_fetch_proxies: dict[str, EndpointProxy],
+    prefix_length: int,
 ) -> None:
-    # Fill one worker chunk, then move the first four bytes of the second batch header
-    # across the chunk boundary. The concatenated shuffle data stays identical.
+    # Fill one worker chunk, then move part of the second batch into the first chunk.
+    # A 20-byte prefix includes the 16-byte header and the payload bytes b"NEXT".
     first = b"x" * (64 * 1024)
-    second = b"second batch"
+    second = b"NEXT batch"
     map_id = 1
+    prefix = (struct.pack("=4i", map_id, 0, 1, len(second)) + second)[:prefix_length]
 
-    def split_header(event: FrameReceived[CelebornFrame]) -> Replace[CelebornFrame]:
+    def split_batch(event: FrameReceived[CelebornFrame]) -> Replace[CelebornFrame]:
         frame = event.frame
         chunk_index = struct.unpack_from(">i", frame.metadata, 8)[0]
-        body = frame.body + struct.pack("=i", map_id) if chunk_index == 0 else frame.body[4:]
+        body = frame.body + prefix if chunk_index == 0 else frame.body[prefix_length:]
         return Replace(CelebornFrame(frame.message_type, frame.metadata, body))
 
     expected_chunks = 2
@@ -388,7 +402,7 @@ def test_fetch_preserves_partial_batch_header(
             event.direction == "server_to_client"
             and event.frame.message_type == CelebornMessageType.CHUNK_FETCH_SUCCESS
         ),
-        action=split_header,
+        action=split_batch,
         count=expected_chunks,
     )
     for proxy in celeborn_fetch_proxies.values():
