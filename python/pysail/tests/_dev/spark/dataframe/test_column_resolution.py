@@ -1,7 +1,5 @@
 """DataFrame column resolution, subquery, and set operation regressions."""
 
-# ruff: noqa: PLR2004
-
 from collections import Counter
 
 import pytest

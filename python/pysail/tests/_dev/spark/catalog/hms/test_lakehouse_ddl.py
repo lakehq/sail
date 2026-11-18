@@ -1,4 +1,4 @@
-# ruff: noqa: S608, PLR2004
+# ruff: noqa: S608
 """DDL interoperability for Delta and Iceberg tables registered in HMS."""
 
 import json

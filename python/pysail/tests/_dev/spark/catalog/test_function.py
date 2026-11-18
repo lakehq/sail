@@ -132,7 +132,7 @@ def test_list_functions_includes_user_registered_udfs(spark):
         assert _show_function_names(spark, f"SHOW USER FUNCTIONS LIKE '{function_name}'") == {function_name}
         assert _show_function_names(spark, f"SHOW SYSTEM FUNCTIONS LIKE '{function_name}'") == set()
         assert _show_function_names(spark, f"SHOW ALL FUNCTIONS LIKE '{function_name}'") == {function_name}
-        assert spark.sql(f"SELECT {function_name}(1) AS value").collect()[0].value == 2  # noqa PLR2004
+        assert spark.sql(f"SELECT {function_name}(1) AS value").collect()[0].value == 2
 
         rows = [row.function_desc for row in spark.sql(f"DESCRIBE FUNCTION {function_name}").collect()]
         assert rows[0] == f"Function: {function_name}"
@@ -297,7 +297,7 @@ def test_list_python_functions_in_namespaces(spark, python_function):
             assert "to_date" in {f.name for f in spark.catalog.listFunctions(namespace, "to*")}
             assert spark.catalog.listFunctions(namespace, "*missing_catalog_function*") == []
         spark.udf.register(python_function, lambda value: value + 2, "long")
-        assert spark.sql(f"SELECT {python_function}(1) AS v").first().v == 3  # noqa: PLR2004
+        assert spark.sql(f"SELECT {python_function}(1) AS v").first().v == 3
         spark.sql(f"DROP TEMPORARY FUNCTION {python_function}")
         assert spark.catalog.listFunctions(pattern=python_function) == []
         with pytest.raises(AnalysisException):

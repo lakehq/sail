@@ -24,7 +24,7 @@ def test_limit_read_by_every_task_of_a_join_keeps_the_same_rows(spark):
         selected = [set() for _ in range(4)]
         for row in spark.sql(query).collect():
             selected[row.probe_partition].add(row.id)
-        assert len(selected[0]) == 50  # noqa: PLR2004
+        assert len(selected[0]) == 50
         assert all(keys == selected[0] for keys in selected)
 
 

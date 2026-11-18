@@ -139,8 +139,7 @@ def test_scalar_iterator_in_relational_expressions(spark, arrow_batch_size, oper
         actual = df.select("id", (add_one(add_one("id")) + 1).alias("value")).collect()
         assert sorted((row.id, row.value) for row in actual) == [(i, i + 3) for i in range(2003)]
     elif operation == "filter":
-        threshold = 2000
-        assert sorted(row.id for row in df.filter(add_one("id") > threshold).collect()) == [2000, 2001, 2002]
+        assert sorted(row.id for row in df.filter(add_one("id") > 2000).collect()) == [2000, 2001, 2002]
     elif operation == "aggregate":
         assert df.agg(F.sum(add_one("id"))).first()[0] == sum(range(1, 2004))
     elif operation == "sort":

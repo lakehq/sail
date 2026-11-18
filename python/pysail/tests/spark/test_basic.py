@@ -527,4 +527,4 @@ def test_large_plan_no_proto_recursion_limit(spark):
     df = spark.range(0, 10)
     for i in range(50):
         df = df.withColumn(f"c{i}", F.lit("v"))
-    assert df.count() == 10  # noqa: PLR2004
+    assert df.count() == 10
