@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/94d178ebe9674669b32ecd7896b5597f49e90791/datafusion/functions-nested/src/utils.rs
+
 use std::sync::Arc;
 
 use arrow::array::{NullArray, UInt64Array};
-/// [Credit]: <https://github.com/apache/datafusion/blob/94d178ebe9674669b32ecd7896b5597f49e90791/datafusion/functions-nested/src/utils.rs>
 use datafusion::arrow::array::{Array, ArrayRef};
 use datafusion::arrow::compute::take_arrays;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err};

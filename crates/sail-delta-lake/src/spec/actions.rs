@@ -1,20 +1,8 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright 2025-2026 LakeSail, Inc.
-// Modified in 2026 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright 2025-2026 LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2026
 
 use std::borrow::Borrow;
 use std::collections::HashMap;
@@ -30,8 +18,9 @@ use serde::{Deserialize, Serialize};
 use crate::spec::statistics::Stats;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult, IsolationLevel, Metadata, Protocol};
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L694-L1065>
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/mod.rs#L18-L27>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L694-L1065
 #[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum StorageType {
     #[serde(rename = "u")]
@@ -104,6 +93,7 @@ impl DeletionVectorDescriptor {
         }
     }
 }
+// SPDX-SnippetEnd
 
 /// Primary key for a logical file in the Delta log: `(path, deletion_vector_unique_id)`.
 ///
@@ -123,6 +113,9 @@ pub(crate) fn logical_file_key(
     )
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/mod.rs#L18-L27
 /// Delta Lake action envelope.
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,6 +132,7 @@ pub enum Action {
     CheckpointMetadata(CheckpointMetadata),
     Sidecar(Sidecar),
 }
+// SPDX-SnippetEnd
 
 impl From<Add> for Action {
     fn from(value: Add) -> Self {
@@ -262,6 +256,10 @@ impl Borrow<str> for Remove {
         self.path.as_ref()
     }
 }
+
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L694-L1065
 /// File addition action.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -412,6 +410,7 @@ pub struct Sidecar {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<HashMap<String, Option<String>>>,
 }
+// SPDX-SnippetEnd
 
 /// Actions that are valid in JSON commit entries only.
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]

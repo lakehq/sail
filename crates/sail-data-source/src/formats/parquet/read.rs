@@ -110,6 +110,9 @@ impl ReadFormat for ParquetReadFormat {
         Ok(CompressionTypeVariant::UNCOMPRESSED)
     }
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-parquet/src/file_format.rs
     async fn infer_schema(
         &self,
         ctx: &dyn Session,
@@ -229,6 +232,7 @@ impl ReadFormat for ParquetReadFormat {
 
         Ok(Arc::new(merged))
     }
+    // SPDX-SnippetEnd
 
     async fn infer_file_meta(
         &self,
@@ -278,6 +282,9 @@ impl ReadFormat for ParquetReadFormat {
         })
     }
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-parquet/src/file_format.rs
     async fn scan(&self, ctx: &dyn Session, mut input: ListingScanInput) -> Result<FileScanConfig> {
         let options = self.options.clone().into_table_options();
         fail_for_encryption_factory(&options)?;
@@ -318,6 +325,7 @@ impl ReadFormat for ParquetReadFormat {
 
         Ok(config)
     }
+    // SPDX-SnippetEnd
 
     fn requires_explicit_schema_validation(&self) -> bool {
         true
@@ -511,6 +519,9 @@ fn normalize_widened_timestamp_timezones(
     }
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-parquet/src/file_format.rs
 /// Clears all metadata (Schema level and field level) for a schema.
 fn clear_metadata(schema: Schema) -> Schema {
     let fields = schema
@@ -522,6 +533,7 @@ fn clear_metadata(schema: Schema) -> Schema {
         .collect::<Fields>();
     Schema::new(fields)
 }
+// SPDX-SnippetEnd
 
 /// Parses `coerce_int96` setting into an Arrow [`TimeUnit`].
 ///

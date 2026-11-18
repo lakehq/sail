@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::catalog::Session;
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
@@ -7,7 +9,6 @@ use crate::options::ResolveOptions;
 use crate::options::r#gen::{ParquetReadOptions, ParquetWriteOptions};
 
 // Some of the code in the `read` and `write` modules is adapted from the DataFusion `ParquetFormat` implementation.
-// [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/datasource-parquet/src/file_format.rs
 
 mod options;
 mod read;

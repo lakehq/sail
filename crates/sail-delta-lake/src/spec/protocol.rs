@@ -1,29 +1,19 @@
-// https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
-//
-// Copyright 2023-2024 The Delta Kernel Rust Authors
-// Portions Copyright 2025-2026 LakeSail, Inc.
-// Ported and modified in 2026 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
+// SPDX-FileCopyrightText: Copyright 2023-2024 The Delta Kernel Rust Authors
+// SPDX-FileCopyrightText: Portions Copyright 2025-2026 LakeSail, Inc.
+// SPDX-FileContributor: Ported and modified by LakeSail, Inc. in 2026
 
 use serde::{Deserialize, Serialize};
 
 use crate::spec::properties::TableProperties;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_features/mod.rs#L44-L119
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_features/mod.rs#L44-L119>
 pub enum TableFeature {
     AppendOnly,
     Invariants,
@@ -66,6 +56,7 @@ pub enum TableFeature {
     #[serde(other)]
     Unknown,
 }
+// SPDX-SnippetEnd
 
 impl TableFeature {
     pub fn as_str(&self) -> &str {
@@ -328,9 +319,11 @@ mod tests {
     }
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/actions/mod.rs#L374-L466
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/actions/mod.rs#L374-L466>
 pub struct Protocol {
     min_reader_version: i32,
     min_writer_version: i32,
@@ -475,3 +468,4 @@ impl Protocol {
         )
     }
 }
+// SPDX-SnippetEnd

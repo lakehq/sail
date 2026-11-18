@@ -140,6 +140,8 @@ def test_dataframewriter_path_overwrite_schema_does_not_rewrite_old_generated_co
     ]
 
 
+# SPDX-SnippetBegin
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/GeneratedColumnSuite.scala#L815-L839
 @pytest.mark.parametrize("mode", ["append", "overwrite"])
 @pytest.mark.parametrize(
     ("source", "generated", "valid"),
@@ -148,7 +150,6 @@ def test_dataframewriter_path_overwrite_schema_does_not_rewrite_old_generated_co
 )
 def test_dataframewriter_path_validates_explicit_generated_nulls(spark, tmp_path, mode, source, generated, valid):
     # Semantic port of the NULL cases in Delta 4.4.0 GeneratedColumnSuite, via path writes.
-    # [CREDIT]: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/GeneratedColumnSuite.scala#L815-L839
     path = tmp_path / "generated_nulls"
     _create_empty_generated_column_table(path)
     before = {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()}
@@ -167,3 +168,6 @@ def test_dataframewriter_path_validates_explicit_generated_nulls(spark, tmp_path
             writer.save(str(path))
         assert {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()} == before
         assert spark.read.format("delta").load(str(path)).collect() == []
+
+
+# SPDX-SnippetEnd

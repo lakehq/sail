@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/db2d21e094b1be2ff27653ce58ba1317e2237b01/datafusion/functions-aggregate/src/regr.rs
+
 //! Spark-compatible linear regression aggregate functions.
 //!
 //! The UDAF skeleton is derived from the DataFusion implementation.
-//! [Credit]: <https://github.com/apache/datafusion/blob/db2d21e094b1be2ff27653ce58ba1317e2237b01/datafusion/functions-aggregate/src/regr.rs>
 //!
 //! The accumulator arithmetic intentionally mirrors, operation by operation, the
 //! aggregate buffers Spark uses for these functions, so that the results are
