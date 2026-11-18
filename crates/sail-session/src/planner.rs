@@ -116,13 +116,14 @@ impl QueryPlanner for ExtensionQueryPlanner {
         // pool, so with a memory limit only the CTEs that must be evaluated once are shared.
         // This is also the case in cluster mode, where the task streams keep the rows.
         let runtime = session.runtime_env();
-        let spill = runtime.disk_manager.tmp_files_enabled()
+        let spills_kept_rows = runtime.disk_manager.tmp_files_enabled()
             && session
                 .extension::<SharedCteConfig>()
-                .map(|x| x.spill())
+                .map(|x| x.spills_kept_rows())
                 .unwrap_or(true);
         let retains_within_limit =
-            !matches!(runtime.memory_pool.memory_limit(), MemoryLimit::Finite(_)) || spill;
+            !matches!(runtime.memory_pool.memory_limit(), MemoryLimit::Finite(_))
+                || spills_kept_rows;
         let mut bodies = vec![];
         for body in shared_cte_bodies(logical_plan)? {
             let plan = self.plan(body.plan(), session, &shared_ctes).await?;

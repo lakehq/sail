@@ -532,7 +532,9 @@ mod tests {
                 .state_ref()
                 .write()
                 .config_mut()
-                .set_extension(Arc::new(SharedCteConfig::new(true).with_spill(spill)));
+                .set_extension(Arc::new(
+                    SharedCteConfig::new(true).with_spills_kept_rows(spill),
+                ));
             let cte = |body: &str| {
                 format!("c AS (SELECT a, {body} AS b FROM VALUES (1), (2) AS t(a) GROUP BY a)")
             };

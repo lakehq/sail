@@ -127,12 +127,11 @@ impl ServerSessionFactory {
                 self.config.cluster.task_stream_buffer,
             )))
             .with_extension(Arc::new(
-                SharedCteConfig::new(self.config.optimizer.share_cte_definitions).with_spill(
-                    !matches!(
+                SharedCteConfig::new(self.config.optimizer.share_cte_definitions)
+                    .with_spills_kept_rows(!matches!(
                         self.config.mode,
                         ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
-                    ),
-                ),
+                    )),
             ))
             .with_extension(Arc::new(ShuffleWriteConfig::new(
                 self.config.cluster.shuffle_write_buffer_size,

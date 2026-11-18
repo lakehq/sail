@@ -4,21 +4,21 @@ use crate::extension::SessionExtension;
 #[derive(Debug)]
 pub struct SharedCteConfig {
     enabled: bool,
-    spill: bool,
+    spills_kept_rows: bool,
 }
 
 impl SharedCteConfig {
     pub fn new(enabled: bool) -> Self {
         Self {
             enabled,
-            spill: true,
+            spills_kept_rows: true,
         }
     }
 
     /// Sets whether the rows that a shared CTE keeps for its references can be written
     /// to temporary files. They cannot in cluster mode, where the task streams keep them.
-    pub fn with_spill(mut self, spill: bool) -> Self {
-        self.spill = spill;
+    pub fn with_spills_kept_rows(mut self, spills_kept_rows: bool) -> Self {
+        self.spills_kept_rows = spills_kept_rows;
         self
     }
 
@@ -26,8 +26,8 @@ impl SharedCteConfig {
         self.enabled
     }
 
-    pub fn spill(&self) -> bool {
-        self.spill
+    pub fn spills_kept_rows(&self) -> bool {
+        self.spills_kept_rows
     }
 }
 
