@@ -61,7 +61,7 @@ use crate::row_level_metadata::{
 use crate::spec::delete_index::{DeleteFileRef, EqualityDeleteFile, PositionDeleteFile};
 use crate::spec::transform::Transform;
 use crate::spec::types::values::{Datum, Literal};
-use crate::spec::{DataFile, ManifestContentType, PartitionSpec, Schema, Snapshot};
+use crate::spec::{DataFile, DataFileFormat, ManifestContentType, PartitionSpec, Schema, Snapshot};
 use crate::utils::conversions::{primitive_to_scalar_default, to_scalar};
 use crate::utils::get_object_store_from_session;
 
@@ -1220,15 +1220,29 @@ impl IcebergScan {
             )));
         }
         let (_, parquet_pushdown_filters) = self.separate_filters(&planned.residual_filters());
-        let mut clean_files = Vec::new();
+        let mut clean_parquet = Vec::new();
+        let mut clean_avro = Vec::new();
+        let mut clean_orc = Vec::new();
         let mut dirty_units = Vec::new();
         let mut all_data_files = Vec::new();
         for task in &planned.tasks {
             let file = task.data_file.clone();
             all_data_files.push(file.clone());
             if task.deletes.is_empty() {
-                clean_files.push(file);
+                match file.file_format {
+                    DataFileFormat::Parquet => clean_parquet.push(file),
+                    DataFileFormat::Avro => clean_avro.push(file),
+                    DataFileFormat::Orc => clean_orc.push(file),
+                    DataFileFormat::Puffin => {
+                        return plan_err!("Unsupported Iceberg data file format: Puffin");
+                    }
+                }
             } else {
+                if file.file_format != DataFileFormat::Parquet {
+                    return plan_err!(
+                        "Row-level operations on imported Avro/ORC files are not supported"
+                    );
+                }
                 dirty_units.push((
                     file,
                     task.deletes.positional.clone(),
@@ -1261,67 +1275,7 @@ impl IcebergScan {
                 .get_file_metadata_cache(),
         ));
 
-        if all_data_files
-            .iter()
-            .any(|file| file.file_format != crate::spec::DataFileFormat::Parquet)
-        {
-            if !dirty_units.is_empty()
-                || self.file_column_name.is_some()
-                || self.row_index_column_name.is_some()
-            {
-                return plan_err!(
-                    "Row-level operations on imported Avro/ORC files are not supported"
-                );
-            }
-            let mut branches = vec![];
-            for format in [
-                crate::spec::DataFileFormat::Parquet,
-                crate::spec::DataFileFormat::Avro,
-                crate::spec::DataFileFormat::Orc,
-            ] {
-                let files = all_data_files
-                    .iter()
-                    .filter(|file| file.file_format == format)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if files.is_empty() {
-                    continue;
-                }
-                let source = if format == crate::spec::DataFileFormat::Parquet {
-                    self.build_parquet_source(session, false, reader_factory.clone())
-                } else {
-                    Arc::new(super::imported_source::IcebergImportedFileSource::new(
-                        TableSchema::from(self.arrow_schema.clone()),
-                        format,
-                    ))
-                };
-                let groups =
-                    self.create_file_groups(self.create_partitioned_files(&store_ctx, files)?);
-                let config = FileScanConfigBuilder::new(object_store_url.clone(), source)
-                    .with_file_groups(groups)
-                    .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
-                    .build();
-                branches.push(create_data_scan(session, config).await?);
-            }
-            let mut plan = UnionExec::try_new(branches)?;
-            if let Some(predicate) = conjunction(parquet_pushdown_filters.clone()) {
-                let schema = plan.schema().to_dfschema()?;
-                plan = Arc::new(FilterExec::try_new(
-                    simplify_expr(session, &schema, predicate)?,
-                    plan,
-                )?);
-            }
-            if let Some(projection) = projection {
-                plan = self
-                    .project_scan_schema(plan, &self.projected_arrow_schema(Some(projection))?)?;
-            }
-            if let Some(limit) = limit {
-                plan = Arc::new(GlobalLimitExec::new(plan, 0, Some(limit)));
-            }
-            return Ok(plan);
-        }
-
-        if dirty_units.is_empty() {
+        if dirty_units.is_empty() && clean_avro.is_empty() && clean_orc.is_empty() {
             // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
             // is identical to the pre-delete-integration behavior.
             let nan_free = self.nan_free(&all_data_files);
@@ -1366,30 +1320,34 @@ impl IcebergScan {
             return Ok(plan);
         }
 
-        // Delete-aware path: build clean + per-dirty-file branches. We apply
-        // predicates, projection, and limit ABOVE the Union so that positional
-        // row offsets inside `IcebergDeleteApplyExec` remain aligned with the
-        // unfiltered Parquet read of each dirty file.
-
-        let mut branches: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
-
-        // Branch A: clean files scanned as one DataSourceExec. Neither projection nor
-        // predicate is pushed down at this level because the upper layers will apply
-        // them uniformly across branches.
-        if !clean_files.is_empty() {
-            let partitioned_files = self.create_partitioned_files(&store_ctx, clean_files)?;
-            let file_groups = self.create_file_groups(partitioned_files);
-            let parquet_source =
-                self.build_parquet_source(session, false, Arc::clone(&reader_factory));
-            let file_scan_config =
-                FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
-                    .with_file_groups(file_groups)
-                    .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
-                    .build();
-            branches.push(create_data_scan(session, file_scan_config).await?);
+        // Apply filters, projection, and limit above all branches to preserve
+        // the original row positions in files with positional deletes.
+        let mut branches = Vec::new();
+        for (format, files) in [
+            (DataFileFormat::Parquet, clean_parquet),
+            (DataFileFormat::Avro, clean_avro),
+            (DataFileFormat::Orc, clean_orc),
+        ] {
+            if files.is_empty() {
+                continue;
+            }
+            let source = if format == DataFileFormat::Parquet {
+                self.build_parquet_source(session, false, Arc::clone(&reader_factory))
+            } else {
+                Arc::new(super::imported_source::IcebergImportedFileSource::new(
+                    TableSchema::from(self.arrow_schema.clone()),
+                    format,
+                ))
+            };
+            let files = self.create_partitioned_files(&store_ctx, files)?;
+            let config = FileScanConfigBuilder::new(object_store_url.clone(), source)
+                .with_file_groups(self.create_file_groups(files))
+                .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
+                .build();
+            branches.push(create_data_scan(session, config).await?);
         }
 
-        // Branch B: one branch per dirty file.
+        // One branch per file with applicable deletes.
         for (df, pos_deletes, eq_deletes) in dirty_units {
             let delete_scan = self.equality_scan(&eq_deletes)?;
             let partitioned = delete_scan.create_partitioned_files(&store_ctx, vec![df.clone()])?;
@@ -1425,17 +1383,7 @@ impl IcebergScan {
             branches.push(self.project_scan_schema(apply, &self.arrow_schema)?);
         }
 
-        // Union the branches.
-        let unioned: Arc<dyn ExecutionPlan> = if branches.len() == 1 {
-            // SAFETY: length was just checked above.
-            branches.into_iter().next().ok_or_else(|| {
-                datafusion::common::DataFusionError::Internal(
-                    "unreachable: branches.len() == 1 but next() returned None".to_string(),
-                )
-            })?
-        } else {
-            UnionExec::try_new(branches)?
-        };
+        let unioned = UnionExec::try_new(branches)?;
 
         // Apply predicate above (covers both clean & dirty branches).
         let after_filter: Arc<dyn ExecutionPlan> = if !parquet_pushdown_filters.is_empty() {

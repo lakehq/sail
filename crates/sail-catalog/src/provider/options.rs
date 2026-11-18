@@ -312,6 +312,6 @@ impl From<&AlterTableOptions>
 #[derive(Debug, Clone)]
 pub struct CatalogFilePartition {
     pub values: Vec<String>,
-    pub location: String,
+    pub location: Option<String>,
     pub format: String,
 }

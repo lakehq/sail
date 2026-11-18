@@ -1165,28 +1165,16 @@ impl CatalogProvider for HmsCatalogProvider {
                 }
             })
             .await?;
-        partitions
-            .into_iter()
-            .map(|partition| {
-                let location = partition
-                    .sd
-                    .as_ref()
-                    .and_then(|sd| sd.location.clone())
-                    .ok_or_else(|| {
-                        CatalogError::InvalidArgument(
-                            "HMS partition is missing its storage location".into(),
-                        )
-                    })?;
-                let format =
-                    crate::convert::resolve_data_source_format(None, partition.sd.as_ref());
-                Ok(sail_catalog::provider::CatalogFilePartition {
+        Ok(Some(
+            partitions
+                .into_iter()
+                .map(|partition| sail_catalog::provider::CatalogFilePartition {
                     values: partition.values.unwrap_or_default(),
-                    location,
-                    format,
+                    format: crate::convert::resolve_data_source_format(None, partition.sd.as_ref()),
+                    location: partition.sd.and_then(|sd| sd.location),
                 })
-            })
-            .collect::<CatalogResult<Vec<_>>>()
-            .map(Some)
+                .collect(),
+        ))
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {

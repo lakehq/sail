@@ -209,6 +209,65 @@ def test_add_files_source_formats(spark, tmp_path, file_format, partitioned):
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
+def test_add_files_mixed_formats_with_parquet_position_deletes(spark, tmp_path):
+    name = "add_files_mixed_deletes"
+    spark.sql(
+        f"CREATE TABLE {name} (id BIGINT, value STRING) USING iceberg "
+        f"LOCATION '{escape_sql_string_literal(str(tmp_path / 'target'))}' "
+        "TBLPROPERTIES ('format-version'='2', 'write.delete.mode'='merge-on-read')"
+    )
+    try:
+        source = tmp_path / "parquet"
+        _write_source_file(source / "data.parquet", "parquet", [(1, "keep"), (2, "deleted")])
+        assert _add(spark, name, f"parquet.`{source}`") == (1, None)
+        spark.sql(f"DELETE FROM {name} WHERE id = 2")
+        metadata = _find_latest_metadata(tmp_path / "target")
+        assert metadata["snapshots"][-1]["summary"]["added-position-deletes"] == "1"
+        for i, file_format in enumerate(["avro", "orc"], 3):
+            source = tmp_path / file_format
+            _write_source_file(source / f"data.{file_format}", file_format, [(i, file_format)])
+            assert _add(spark, name, f"{file_format}.`{source}`") == (1, None)
+        rows = spark.table(name).orderBy("id").select("value").collect()
+        assert [row.value for row in rows] == ["keep", "avro", "orc"]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize("delete_applies_to_import", [False, True])
+def test_add_files_mixed_formats_with_equality_deletes(spark, tmp_path, sql_catalog, delete_applies_to_import):
+    from pyiceberg.schema import Schema
+    from pyiceberg.types import LongType as IcebergLongType
+    from pyiceberg.types import NestedField, StringType
+
+    from pysail.tests._dev.spark.iceberg.test_iceberg_equality_delete import _append_equality_delete_snapshot
+
+    name = "add_files_equality_deletes"
+    identifier = f"default.{name}"
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(NestedField(1, "id", IcebergLongType()), NestedField(2, "value", StringType())),
+        properties={"format-version": "2"},
+    )
+    try:
+        table.append(pa.table({"id": [1, 2], "value": ["keep", "deleted"]}))
+        key = pa.table({"id": [2]})
+        if not delete_applies_to_import:
+            _append_equality_delete_snapshot(table, key, [1])
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{escape_sql_string_literal(table.location())}'")
+        source = tmp_path / "orc"
+        _write_source_file(source / "data.orc", "orc", [(2, "imported")])
+        assert _add(spark, name, f"orc.`{source}`") == (1, None)
+        if delete_applies_to_import:
+            _append_equality_delete_snapshot(table, key, [1])
+            with pytest.raises(Exception, match="Row-level operations on imported Avro/ORC files are not supported"):
+                spark.read.format("iceberg").load(table.location()).collect()
+        else:
+            assert [row.value for row in spark.table(name).orderBy("id").collect()] == ["keep", "imported"]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+        sql_catalog.drop_table(identifier)
+
+
 def test_add_files_mixed_formats_lazy_read_and_rewrite(spark, tmp_path):
     path = tmp_path / "target"
     name = "add_files_mixed_formats"

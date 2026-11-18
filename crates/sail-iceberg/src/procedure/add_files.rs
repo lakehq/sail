@@ -102,33 +102,57 @@ impl AddFiles {
             return plan_err!("Unsupported add_files source format: {format}");
         }
         let catalog_source = declared_parts.is_some();
+        let declared_spec = declared_parts
+            .as_deref()
+            .map(|names| self.source_spec(metadata, names))
+            .transpose()?;
+        let filter = self
+            .filter
+            .iter()
+            .map(|(key, value)| (key.to_lowercase(), value))
+            .collect::<HashMap<_, _>>();
         let sources = match catalog_partitions {
             Some(partitions) => {
                 let names = declared_parts.as_deref().unwrap_or_default();
-                partitions
-                    .into_iter()
-                    .map(|partition| {
-                        if partition.values.len() != names.len() {
-                            return plan_err!(
-                                "Catalog partition value count does not match its columns"
-                            );
-                        }
-                        Ok((
-                            partition.location,
-                            partition.format,
-                            Some(
-                                names
-                                    .iter()
-                                    .cloned()
-                                    .zip(partition.values)
-                                    .collect::<Vec<_>>(),
-                            ),
-                        ))
-                    })
-                    .collect::<Result<Vec<_>>>()?
+                let mut sources = Vec::new();
+                for partition in partitions {
+                    if partition.values.len() != names.len() {
+                        return plan_err!(
+                            "Catalog partition value count does not match its columns"
+                        );
+                    }
+                    let values = names
+                        .iter()
+                        .cloned()
+                        .zip(partition.values)
+                        .collect::<Vec<_>>();
+                    if values.iter().any(|(key, value)| {
+                        filter
+                            .get(&key.to_lowercase())
+                            .is_some_and(|wanted| *wanted != value)
+                    }) {
+                        continue;
+                    }
+                    let location = partition.location.ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "Catalog partition is missing its storage location".into(),
+                        )
+                    })?;
+                    sources.push((location, partition.format, Some(values)));
+                }
+                sources
             }
             None => vec![(location, format, None)],
         };
+        // A path source has no declared columns. Preserve spec/filter validation when no
+        // historical spec accepts the supplied keys.
+        let prune_directories = !filter.is_empty()
+            && metadata.partition_specs.iter().any(|spec| {
+                self.filter
+                    .keys()
+                    .all(|key| spec.fields().iter().any(|field| &field.name == key))
+            });
+        let mut pruned_directory = false;
         let mut candidates = vec![];
         let mut inferred_names = declared_parts;
         for (location, format, registered_partition) in sources {
@@ -167,11 +191,25 @@ impl AddFiles {
                             .filter(|object| object.location != directory),
                     );
                     if registered_partition.is_none() {
-                        directories.extend(listing.common_prefixes.into_iter().filter(|child| {
-                            child.filename().is_some_and(|name| {
-                                name.contains('=') && !name.starts_with(['_', '.'])
-                            })
-                        }));
+                        for child in listing.common_prefixes {
+                            let Some(segment) =
+                                child.filename().filter(|s| !s.starts_with(['_', '.']))
+                            else {
+                                continue;
+                            };
+                            let Some((name, value)) = segment.split_once('=') else {
+                                continue;
+                            };
+                            if prune_directories
+                                && let Some(expected) =
+                                    filter.get(&decode_partition(name)?.to_lowercase())
+                                && **expected != decode_partition(value)?
+                            {
+                                pruned_directory = true;
+                                continue;
+                            }
+                            directories.push(child);
+                        }
                     }
                 }
                 files
@@ -236,36 +274,16 @@ impl AddFiles {
                 ));
             }
         }
-        let names = inferred_names.unwrap_or_default();
-        let spec = metadata.partition_specs.iter().find(|spec| {
-            spec.fields().iter().all(|f| f.transform == Transform::Identity)
-                && spec.fields().iter().map(|f| f.name.to_lowercase()).eq(names.iter().map(|n| n.to_lowercase()))
-        }).ok_or_else(|| DataFusionError::Plan(format!("Cannot find a partition spec that matches the partition columns {names:?} in input table")))?;
-        if self
-            .filter
-            .keys()
-            .any(|key| !spec.fields().iter().any(|f| &f.name == key))
-        {
-            return plan_err!("Partition filter refers to columns that are not partitioned");
+        if inferred_names.is_none() && pruned_directory {
+            return plan_err!("Cannot find any matching partitions in table");
         }
-        if spec.is_unpartitioned() && !self.filter.is_empty() {
-            return plan_err!("Cannot use partition filter with an unpartitioned table");
-        }
+        let spec = match declared_spec {
+            Some(spec) => spec,
+            None => self.source_spec(metadata, &inferred_names.unwrap_or_default())?,
+        };
         let schema = metadata
             .current_schema()
             .ok_or_else(|| DataFusionError::Plan("Missing current Iceberg schema".into()))?;
-        let candidates = candidates
-            .into_iter()
-            .filter(|(_, partition, _, _, _)| {
-                self.filter.iter().all(|(key, value)| {
-                    spec.fields()
-                        .iter()
-                        .position(|field| &field.name == key)
-                        .and_then(|index| partition.get(index))
-                        .is_some_and(|(_, part)| part == value)
-                })
-            })
-            .collect::<Vec<_>>();
         if !catalog_source && !spec.is_unpartitioned() && candidates.is_empty() {
             return plan_err!("Cannot find any matching partitions in table");
         }
@@ -336,20 +354,19 @@ impl AddFiles {
         .try_collect::<Vec<_>>()
         .await?;
         if self.check_duplicates {
-            let existing = collect_live_files(store, metadata, self.parallelism, |file| {
+            let mut seen_paths = collect_live_files(store, metadata, self.parallelism, |file| {
                 store.resolve_to_absolute_path(&file.file_path).map(Some)
             })
             .await?
             .into_iter()
             .collect::<HashSet<_>>();
             for file in &files {
-                if !existing.contains(&store.resolve_to_absolute_path(&file.file_path)?) {
-                    continue;
+                if !seen_paths.insert(store.resolve_to_absolute_path(&file.file_path)?) {
+                    return exec_err!(
+                        "Cannot add file already referenced by the table or repeated in this import: {}",
+                        file.file_path
+                    );
                 }
-                return exec_err!(
-                    "Cannot add files that are already referenced by table: {}",
-                    file.file_path
-                );
             }
         }
         let report_partitions = files.is_empty()
@@ -369,6 +386,27 @@ impl AddFiles {
             output_schema,
         )
         .await
+    }
+    fn source_spec<'a>(
+        &self,
+        metadata: &'a TableMetadata,
+        names: &[String],
+    ) -> Result<&'a PartitionSpec> {
+        let spec = metadata.partition_specs.iter().find(|spec| {
+            spec.fields().iter().all(|f| f.transform == Transform::Identity)
+                && spec.fields().iter().map(|f| f.name.to_lowercase()).eq(names.iter().map(|n| n.to_lowercase()))
+        }).ok_or_else(|| DataFusionError::Plan(format!("Cannot find a partition spec that matches the partition columns {names:?} in input table")))?;
+        if self
+            .filter
+            .keys()
+            .any(|key| !spec.fields().iter().any(|f| &f.name == key))
+        {
+            return plan_err!("Partition filter refers to columns that are not partitioned");
+        }
+        if spec.is_unpartitioned() && !self.filter.is_empty() {
+            return plan_err!("Cannot use partition filter with an unpartitioned table");
+        }
+        Ok(spec)
     }
 }
 

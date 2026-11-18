@@ -101,3 +101,29 @@ def test_first_import_after_v3_upgrade_assigns_parent_lineage(spark, tmp_path):
         assert _current_row_lineage(target)[4][0] == metadata["next-row-id"]
     finally:
         spark.sql("DROP TABLE upgraded_import")
+
+
+def test_add_files_prunes_directory_before_listing_children(spark, tmp_path):
+    source = tmp_path / "source"
+    for part in ["p=a/q=valid", "p=b/q=%ZZ"]:
+        directory = source / part
+        directory.mkdir(parents=True)
+        pq.write_table(pa.table({"id": [7]}), directory / "part.parquet")
+    spark.sql(
+        "CREATE TABLE prune_target (id BIGINT, p STRING, q STRING) USING iceberg PARTITIONED BY (p, q) "
+        f"LOCATION '{tmp_path / 'target'}'"
+    )
+    try:
+        excluded = source / "p=b"
+        mode = excluded.stat().st_mode
+        excluded.chmod(0)
+        try:
+            result = spark.sql(f"CALL system.add_files('prune_target', 'parquet.`{source}`', map('p','a'))").first()
+        finally:
+            excluded.chmod(mode)
+        assert tuple(result) == (1, None)
+        assert [tuple(r) for r in spark.table("prune_target").collect()] == [(7, "a", "valid")]
+        with pytest.raises(Exception, match="Invalid partition path escape"):
+            spark.sql(f"CALL system.add_files('prune_target', 'parquet.`{source}`', map('p','b'))").collect()
+    finally:
+        spark.sql("DROP TABLE prune_target")
