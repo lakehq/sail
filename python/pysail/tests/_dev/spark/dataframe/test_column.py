@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pyspark.sql.functions as F  # noqa: N812

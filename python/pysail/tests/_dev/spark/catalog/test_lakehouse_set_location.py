@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal

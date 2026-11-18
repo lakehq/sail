@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::error::{DataSourceError, DataSourceResult};
 use crate::options::ParseMode;
 

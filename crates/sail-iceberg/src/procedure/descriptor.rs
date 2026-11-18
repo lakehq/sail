@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common_datafusion::lakeprocedure::{
     LakeProcedure, LakeProcedureAccess, LakeProcedureDataType, LakeProcedureField,
     LakeProcedureParameter, LakeProcedureTarget,

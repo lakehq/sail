@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use chumsky::extra::ParserExtra;
 use chumsky::input::Input;
 use chumsky::{IterParser, Parser};

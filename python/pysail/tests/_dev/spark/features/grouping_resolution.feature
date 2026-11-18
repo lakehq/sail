@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Grouping and sort resolution
   Background:
     Given config spark.sql.caseSensitive = false

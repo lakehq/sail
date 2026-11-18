@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_function::scalar::variant::spark_is_variant_null::SparkIsVariantNullUdf;
 use sail_function::scalar::variant::spark_parse_json::SparkParseJson;
 use sail_function::scalar::variant::spark_schema_of_variant::SparkSchemaOfVariantUdf;

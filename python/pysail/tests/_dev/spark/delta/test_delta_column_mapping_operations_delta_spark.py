@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Sail queries over Delta tables written by Delta Spark, compared with Delta Spark.
 
 Delta Spark writes column-mapped tables, and both Sail and Delta Spark run the same

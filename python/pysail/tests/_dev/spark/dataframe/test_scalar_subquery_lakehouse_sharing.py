@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Repeated aggregate scalar subqueries over Delta and Iceberg tables.
 
 Each table has two versions (snapshots), and is partitioned by `p` or not. Count, min and max

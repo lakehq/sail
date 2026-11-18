@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::StringArray;
@@ -100,9 +102,11 @@ fn uuid_seed(value: &ScalarValue) -> Result<Option<i64>> {
     }
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/spark/blob/32f7299601108917fb01920a54e084595b7b3bf8/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/RandomUUIDGenerator.scala
 /// Port of Spark's `RandomUUIDGenerator`.
 ///
-/// [CREDIT]: https://github.com/apache/spark/blob/v4.2.0-rc6/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/RandomUUIDGenerator.scala
 pub struct RandomUuidGenerator {
     random: MersenneTwister,
 }
@@ -132,6 +136,7 @@ impl RandomUuidGenerator {
         StringArray::from_iter_values((0..num_rows).map(|_| self.next_uuid()))
     }
 }
+// SPDX-SnippetEnd
 
 #[cfg(test)]
 mod tests {

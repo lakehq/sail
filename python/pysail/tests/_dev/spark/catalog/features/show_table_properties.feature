@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Catalog SHOW TBLPROPERTIES compatibility
 
   Scenario Outline: Show properties applies options and global redaction to keys and values

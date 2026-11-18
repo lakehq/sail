@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::LazyLock;
 
 use icu_casemap::{CaseMapper, CaseMapperBorrowed};

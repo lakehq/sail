@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::pin::Pin;

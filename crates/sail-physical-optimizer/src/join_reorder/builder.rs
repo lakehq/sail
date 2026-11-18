@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;

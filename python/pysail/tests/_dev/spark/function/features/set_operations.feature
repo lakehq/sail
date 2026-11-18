@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Set operations (INTERSECT, EXCEPT)
 
   Rule: INTERSECT DISTINCT

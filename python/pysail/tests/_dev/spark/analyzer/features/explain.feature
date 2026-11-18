@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: EXPLAIN statement returns Spark-style plan text
 
   Scenario: Default EXPLAIN returns full physical plan

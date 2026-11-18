@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for the partitions of operators whose output depends on the partition of each row.
 
 Spark computes monotonically increasing IDs, partition IDs and random functions with a seed over

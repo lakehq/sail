@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: schema_of_csv infers a CSV schema from a literal row
 
     Scenario Outline: schema_of_csv infers <case>

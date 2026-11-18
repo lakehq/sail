@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
     #[error("I/O error: {0}")]

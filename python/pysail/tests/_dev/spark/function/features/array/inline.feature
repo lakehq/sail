@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: inline generator output names
 
   # TODO: Preserve the non-nullable struct field when the input cannot contain

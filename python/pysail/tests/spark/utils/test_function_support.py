@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from inspect import cleandoc
 
 from pysail.spark.utils._function_support import (

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """AWS Glue catalog container fixtures."""
 
 from __future__ import annotations

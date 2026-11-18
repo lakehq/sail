@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: concat() — simplify hook (single-argument identity)
 
   Rule: String, array, and binary inputs — identity, no coercion needed

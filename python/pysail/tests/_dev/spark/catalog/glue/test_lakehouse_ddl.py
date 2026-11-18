@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """Lakehouse DDL with Glue schema and metadata-pointer verification."""
 

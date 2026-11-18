@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """TRUNCATE contract from Delta 4.4 / Spark 4.2 TruncateTableSuite."""
 

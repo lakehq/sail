@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use datafusion::physical_plan::ExecutionPlanProperties;

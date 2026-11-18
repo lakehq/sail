@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::common::HashMap;
 
 use crate::error::{ExecutionError, ExecutionResult};

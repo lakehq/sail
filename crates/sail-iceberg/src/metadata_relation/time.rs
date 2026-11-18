@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion::common::{DataFusionError, Result};
 

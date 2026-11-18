@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Port of Spark's XORShiftRandom
 //!
 //! This is a Rust implementation of Apache Spark's XORShiftRandom class:
@@ -166,7 +168,9 @@ impl SparkXorShiftRandom {
     }
 }
 
-// [CREDIT]: https://netlib.org/fdlibm/e_log.c (fdlibm 5.3, "@(#)e_log.c 1.3 95/01/18")
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: SunPro
+// SPDX-SnippetComment: Credit: https://netlib.org/fdlibm/e_log.c fdlibm 5.3, "@(#)e_log.c 1.3 95/01/18".
 // ====================================================
 // Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
 //
@@ -305,6 +309,7 @@ fn strict_log(x: f64) -> f64 {
         dk * LN2_HI - ((s * (f - r) - dk * LN2_LO) - f)
     }
 }
+// SPDX-SnippetEnd
 
 #[cfg(test)]
 mod tests {

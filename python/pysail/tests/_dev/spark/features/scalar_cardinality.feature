@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 @spark-4
 Feature: Correlated scalar cardinality checks
   Background:

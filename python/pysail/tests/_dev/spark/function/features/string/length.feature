@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: length() returns character length for strings and byte length for binary
 
   Rule: Character length for string data

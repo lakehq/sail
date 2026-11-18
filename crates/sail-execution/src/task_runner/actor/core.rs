@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common::actor::{Actor, ActorAction, ActorContext};
 
 use crate::task_runner::{TaskRunnerActor, TaskRunnerComponents, TaskRunnerMessage};

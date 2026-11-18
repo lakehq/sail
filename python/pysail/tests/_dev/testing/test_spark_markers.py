@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Test support resolution and the collection order without starting Spark."""
 
 import pytest

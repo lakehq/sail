@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: xpath() extracts XML nodes with Spark-compatible semantics
 
   Rule: Node selection returns arrays of string-like values

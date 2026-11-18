@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::ops::BitAnd;
 use std::sync::Arc;
 

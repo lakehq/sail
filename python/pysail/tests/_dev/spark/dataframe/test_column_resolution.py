@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """DataFrame column resolution, subquery, and set operation regressions."""
 
 from collections import Counter

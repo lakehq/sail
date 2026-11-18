@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Pytest fixtures for Unity Catalog integration tests.
 
 Uses the Unity Catalog OSS Docker image with its embedded H2 backend.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use either::Either;
 use sail_common::spec;
 use sail_sql_parser::ast::expression::{AtomExpr, DuplicateTreatment, Expr, OrderByExpr};

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Write;
 use std::sync::Arc;
 
@@ -68,7 +70,9 @@ impl ScalarUDFImpl for SparkUnHex {
     }
 }
 
-// [Credit]: <https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/hex.rs>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/hex.rs
 
 fn hex_int64(num: i64) -> String {
     format!("{num:X}")
@@ -210,8 +214,11 @@ pub fn spark_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
         _ => exec_err!("native hex does not support scalar values at this time"),
     }
 }
+// SPDX-SnippetEnd
 
-// [Credit]: <https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/unhex.rs>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/unhex.rs
 
 /// Helper function to convert a hex digit to a binary value.
 fn unhex_digit(c: u8) -> Result<u8, DataFusionError> {
@@ -333,3 +340,4 @@ pub fn spark_unhex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionEr
         other => exec_err!("The first argument must be a Utf8, Utf8View, or LargeUtf8: {other:?}"),
     }
 }
+// SPDX-SnippetEnd

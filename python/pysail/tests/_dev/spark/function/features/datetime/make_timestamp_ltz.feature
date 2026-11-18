@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: make_timestamp_ltz
 
   Rule: Invalid time zone validation

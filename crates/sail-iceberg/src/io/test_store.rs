@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Object-store observations and fault injection for manifest/commit invariants.
 
 use std::collections::{HashMap, HashSet};

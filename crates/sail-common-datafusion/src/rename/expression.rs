@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion_common::plan_datafusion_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast::identifier::Ident;

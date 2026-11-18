@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
 use sail_catalog::command::CatalogCommand;
@@ -183,12 +185,6 @@ impl PlanResolver<'_> {
                 "BUCKET_BY in CREATE TABLE AS SELECT statement",
             ));
         }
-        if comment.is_some() {
-            return Err(PlanError::todo(
-                "COMMENT in CREATE TABLE AS SELECT statement",
-            ));
-        }
-
         if !constraints.is_empty() {
             return Err(PlanError::todo(
                 "CONSTRAINTS in CREATE TABLE AS SELECT statement",
@@ -245,6 +241,7 @@ impl PlanResolver<'_> {
             .with_format(format)
             .with_partition_by(partition_by)
             .with_table_properties(properties)
+            .with_table_comment(comment)
             .with_table_is_external(is_external)
             .with_options(write_options);
 

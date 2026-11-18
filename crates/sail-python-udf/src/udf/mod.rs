@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_common::Result;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::{AggregateUDF, Expr, WindowFunctionDefinition};

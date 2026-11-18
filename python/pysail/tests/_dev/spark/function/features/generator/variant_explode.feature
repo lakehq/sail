@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # `variant_explode` is a table-valued function: Spark accepts it in a `FROM` clause (and as a
 # `LATERAL` join), but not through `LATERAL VIEW`, which resolves generators against the
 # function registry and fails with `ROUTINE_NOT_FOUND`. Sail accepts both. Scenarios here use

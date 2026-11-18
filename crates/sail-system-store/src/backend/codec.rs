@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Shared codecs for ordered on-disk system store keys and serialized values.
 //!
 //! All disk KV backends use these codecs so that durable key layouts remain independent of the

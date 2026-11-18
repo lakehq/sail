@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use super::pattern::LocaleSpec;
 
 #[derive(Debug, Clone, Copy)]

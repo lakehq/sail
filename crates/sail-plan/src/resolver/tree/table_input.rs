@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::mem;
 
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};

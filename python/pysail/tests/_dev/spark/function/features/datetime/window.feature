@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: window() time-based windowing function
 
   Rule: Tumbling window

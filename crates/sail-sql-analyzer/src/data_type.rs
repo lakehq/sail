@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common::spec;
 use sail_common::spec::ARROW_DECIMAL128_MAX_PRECISION;
 use sail_sql_parser::ast::data_type::{

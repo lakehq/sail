@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// Utility macro to match string data types and create corresponding ScalarValue.
 ///
 /// This macro handles the three string type variants (Utf8View, LargeUtf8, Utf8)

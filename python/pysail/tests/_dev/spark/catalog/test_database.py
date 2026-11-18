@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+
+
 def test_list_databases_returns_name(spark):
     """listDatabases returns database with 'name' field."""
     databases = spark.catalog.listDatabases()

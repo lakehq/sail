@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """Named-table semantics follow Iceberg 1.11 / Spark 4.1 TestDeleteFrom.
 

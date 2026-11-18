@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common::error::{CommonError, CommonResult};
 use sail_common::spec;
 

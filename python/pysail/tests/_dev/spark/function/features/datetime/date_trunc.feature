@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: DATE_TRUNC output type
 
   Rule: date_trunc always returns TIMESTAMP

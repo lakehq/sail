@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: is_valid_utf8 output schema
 
   @function(nullability)

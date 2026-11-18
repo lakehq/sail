@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Semi join support
 
   Rule: LEFT SEMI JOIN with ON condition

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Discovery system for Python data sources.
 //!
 //! This module provides:

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -137,7 +139,9 @@ define_to_string_udf!(
     value_to_string_view,
 );
 
-// [Credit]: <https://github.com/apache/arrow-rs/blob/main/arrow-cast/src/cast/string.rs>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/arrow-rs/blob/9322547590ab32efeff8c0486e4a3a2cb5887a26/arrow-cast/src/cast/string.rs
 
 fn value_to_string<O: OffsetSizeTrait>(
     array: &dyn Array,
@@ -190,6 +194,7 @@ fn value_to_string_view(
     }
     Ok(Arc::new(builder.finish()))
 }
+// SPDX-SnippetEnd
 
 fn spark_interval_metadata(field: &Field) -> Result<Option<SparkIntervalMetadata>> {
     field

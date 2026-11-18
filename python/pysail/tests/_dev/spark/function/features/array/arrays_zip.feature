@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: arrays_zip comprehensive tests
 
   Rule: Basic usage

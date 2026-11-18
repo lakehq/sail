@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: COUNT(DISTINCT *) function
 
   Rule: COUNT(DISTINCT *) counts distinct rows

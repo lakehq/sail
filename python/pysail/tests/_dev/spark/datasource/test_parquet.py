@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import base64
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta

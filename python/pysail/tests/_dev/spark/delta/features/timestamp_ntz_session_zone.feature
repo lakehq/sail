@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake MERGE and UPDATE cast TIMESTAMP to TIMESTAMP_NTZ in the session time zone
 
   Background:

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::fmt::Display;

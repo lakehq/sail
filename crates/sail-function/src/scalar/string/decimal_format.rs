@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_common::{Result, exec_err};
 
 /// Spark's default pattern when an empty string is passed to format_number.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::net::{IpAddr, Ipv4Addr};
 
 use pyo3::prelude::PyAnyMethods;

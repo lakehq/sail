@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Test Delta Lake schema handling (mergeSchema, overwriteSchema, evolution) in Sail.
 """

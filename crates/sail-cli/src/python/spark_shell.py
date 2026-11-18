@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import code
 import platform
 import readline

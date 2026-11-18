@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 from contextlib import nullcontext
 from datetime import UTC, date, datetime
@@ -573,6 +575,8 @@ def test_delta_io_save_as_table_replace_where_completes_omitted_columns(
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
+# SPDX-SnippetBegin
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/GeneratedColumnSuite.scala#L815-L839
 @pytest.mark.parametrize("merge_schema", [None, "false", "true"], ids=["default-option", "no-merge", "merge"])
 @pytest.mark.parametrize("case_sensitive", ["false", "true"])
 @pytest.mark.parametrize(
@@ -596,7 +600,6 @@ def test_delta_io_replace_where_compatible_input(
     spark, tmp_path, merge_schema, case_sensitive, kind, row, input_schema, valid, expected_row
 ):
     # Generated-column NULL cases re-express Delta 4.4.0 GeneratedColumnSuite's null-safe check.
-    # [CREDIT]: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/GeneratedColumnSuite.scala#L815-L839
     previous = spark.conf.get("spark.sql.caseSensitive")
     path = tmp_path / "compatible_input"
     table = "delta_replace_where_compatible_input"
@@ -642,6 +645,9 @@ def test_delta_io_replace_where_compatible_input(
     finally:
         spark.conf.set("spark.sql.caseSensitive", previous)
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+# SPDX-SnippetEnd
 
 
 @pytest.mark.parametrize("merge_schema", [None, "false", "true"], ids=["default-option", "no-merge", "merge"])
@@ -884,6 +890,8 @@ def test_delta_io_replace_where_check_switch(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
+# SPDX-SnippetBegin
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/051aac5e0d4dee202e1a2172437337317b3180a1/spark/src/test/scala/org/apache/spark/sql/delta/schema/SchemaEnforcementSuite.scala#L555-L570
 @pytest.mark.parametrize("replace_where_check", [None, "false"], indirect=True)
 @pytest.mark.parametrize("not_null", [False, True], ids=["nullable", "not-null"])
 @pytest.mark.parametrize(
@@ -894,7 +902,6 @@ def test_delta_io_replace_where_check_switch(spark, tmp_path):
 @pytest.mark.usefixtures("replace_where_check")
 def test_delta_io_save_as_table_replace_where_rejects_extra_columns(spark, tmp_path, not_null, row, input_schema):
     # Semantic port of Delta 3.3.2's overwriteSchema/replaceWhere rejection, via saveAsTable.
-    # [CREDIT]: https://github.com/delta-io/delta/blob/051aac5e0d4dee202e1a2172437337317b3180a1/spark/src/test/scala/org/apache/spark/sql/delta/schema/SchemaEnforcementSuite.scala#L555-L570
     path = tmp_path / "extra_columns"
     table = "delta_replace_where_extra_columns"
     nullability = "NOT NULL" if not_null else ""
@@ -926,6 +933,9 @@ def test_delta_io_save_as_table_replace_where_rejects_extra_columns(spark, tmp_p
         assert _delta_metadata(path) == metadata
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+# SPDX-SnippetEnd
 
 
 @pytest.mark.parametrize("conditional", [False, True], ids=["ordinary-overwrite", "replace-where-merge-schema"])
@@ -961,12 +971,13 @@ def test_delta_io_save_as_table_overwrite_schema_evolution(spark, tmp_path, cond
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
+# SPDX-SnippetBegin
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/schema/SchemaUtilsSuite.scala#L2382-L2399
 @pytest.mark.parametrize("api", ["path", "table"])
 @pytest.mark.parametrize("overwrite_schema", [False, True], ids=["merge-only", "both-flags"])
 @pytest.mark.usefixtures("replace_where_check")
 def test_delta_io_replace_where_merge_preserves_field_metadata(spark, tmp_path, api, overwrite_schema):
     # Re-expresses the top-level nullable/metadata invariant from Delta 4.4.0 SchemaUtilsSuite.
-    # [CREDIT]: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/schema/SchemaUtilsSuite.scala#L2382-L2399
     path = tmp_path / "merge_field_metadata"
     table = "delta_merge_field_metadata"
     spark.sql(
@@ -1005,6 +1016,9 @@ def test_delta_io_replace_where_merge_preserves_field_metadata(spark, tmp_path, 
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
+# SPDX-SnippetEnd
+
+
 @pytest.mark.parametrize("api", ["path", "table"])
 @pytest.mark.usefixtures("replace_where_check")
 def test_delta_io_replace_where_late_failure_does_not_commit(spark, tmp_path, api):
@@ -1027,6 +1041,8 @@ def test_delta_io_replace_where_late_failure_does_not_commit(spark, tmp_path, ap
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
+# SPDX-SnippetBegin
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaSuite.scala#L469-L536
 @pytest.mark.parametrize("partitioned", [False, True], ids=["unpartitioned", "partitioned"])
 @pytest.mark.parametrize("mapping", ["none", "name"])
 @pytest.mark.parametrize(
@@ -1043,7 +1059,6 @@ def test_delta_io_replace_where_late_failure_does_not_commit(spark, tmp_path, ap
 @pytest.mark.usefixtures("replace_where_check")
 def test_delta_io_replace_where_change_data(spark, tmp_path, partitioned, mapping, predicate, incoming, deleted_values):
     # Re-expresses the replacement CDC assertions in Delta 4.4.0 DeltaSuite.testReplaceWhereWithCdf.
-    # [CREDIT]: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaSuite.scala#L469-L536
     path = tmp_path / "replace_where_cdf"
     table = "delta_replace_where_cdf"
     partition = "PARTITIONED BY (p)" if partitioned else ""
@@ -1096,6 +1111,9 @@ def test_delta_io_replace_where_change_data(spark, tmp_path, partitioned, mappin
         assert _delta_metadata(path) == metadata
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+# SPDX-SnippetEnd
 
 
 @pytest.mark.integration

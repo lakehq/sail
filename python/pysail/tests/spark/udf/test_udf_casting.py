@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 from pyspark import Row
 from pyspark.sql.functions import udf

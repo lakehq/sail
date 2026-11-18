@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::execution::context::TaskContext;
 use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStoreExt;

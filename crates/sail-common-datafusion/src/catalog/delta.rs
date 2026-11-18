@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use super::managed;
 
 pub const DELTA_TABLE_TYPE_VALUE: &str = "delta";

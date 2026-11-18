@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: TIMESTAMP and TIMESTAMP_NTZ subtraction uses the session wall clock
   Spark casts the TIMESTAMP side of a subtraction with a TIMESTAMP_NTZ value to TIMESTAMP_NTZ in the session time
   zone, so the result is the difference between the wall-clock times, even across a DST change.

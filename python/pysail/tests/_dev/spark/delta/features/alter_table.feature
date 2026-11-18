@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
 
   Rule: ALTER TABLE SET TBLPROPERTIES persists properties to the Delta log

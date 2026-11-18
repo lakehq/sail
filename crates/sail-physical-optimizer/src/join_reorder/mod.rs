@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{Debug, Formatter};
 use std::rc::Rc;
 use std::sync::Arc;

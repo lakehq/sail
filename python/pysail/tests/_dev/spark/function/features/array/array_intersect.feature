@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: array_intersect() returns common array elements without duplicates
 
   Rule: Source-of-truth examples
