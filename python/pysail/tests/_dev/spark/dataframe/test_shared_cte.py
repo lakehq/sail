@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """CTEs that are referenced more than once.
 
 Spark inlines a deterministic CTE at every reference. Sail evaluates the CTE once for

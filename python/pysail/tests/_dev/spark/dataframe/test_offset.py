@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """`OFFSET`, which skips the first rows of its input in the order of the input."""
 
 import pytest

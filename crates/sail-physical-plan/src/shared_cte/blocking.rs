@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Finds whether the plan of a shared CTE holds its whole output before it returns it,
 //! and whether the operators that read a shared CTE hold all the rows that they read.
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{HashMap, HashSet};
 use std::fmt::Formatter;
 use std::sync::atomic::{AtomicUsize, Ordering};

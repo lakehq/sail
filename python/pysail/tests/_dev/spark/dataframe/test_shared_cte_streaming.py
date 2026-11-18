@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """CTEs that are referenced more than once, at sizes where the references cannot all be
 served from a small buffer, and with references that stop early or never read.
 

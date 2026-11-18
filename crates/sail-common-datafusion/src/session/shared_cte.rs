@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::extension::SessionExtension;
 
 /// Whether the references to a CTE definition can share one evaluation of it.

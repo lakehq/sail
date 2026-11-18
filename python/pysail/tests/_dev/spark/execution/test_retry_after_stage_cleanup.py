@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """A task that fails after the streams of an earlier stage of its region are cleaned up
 retries the region, and the retry fails the query with the error of the task, rather than
 waiting for the streams of the cleaned stage forever."""

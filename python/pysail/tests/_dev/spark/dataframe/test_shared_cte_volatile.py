@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Non-deterministic CTEs that are referenced more than once.
 
 Spark does not inline a non-deterministic CTE definition that is referenced more than once

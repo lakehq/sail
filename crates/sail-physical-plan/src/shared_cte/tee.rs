@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! A stream that is read by a known set of readers, each at its own pace.
 //!
 //! The stream is polled only when a reader asks for a batch that no reader has read yet,
