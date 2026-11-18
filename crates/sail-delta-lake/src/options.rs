@@ -146,6 +146,13 @@ mod tests {
             }
             Ok(vec![self.value.lock().unwrap().clone()])
         }
+
+        fn get_options_with_prefix(
+            &self,
+            _prefix: &str,
+        ) -> Result<std::collections::BTreeMap<String, String>> {
+            Ok(Default::default())
+        }
     }
 
     fn state(provider: Arc<Provider>) -> SessionState {
