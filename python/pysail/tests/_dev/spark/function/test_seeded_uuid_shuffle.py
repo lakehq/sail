@@ -265,7 +265,7 @@ def test_null_seed_is_no_seed(spark):
     rows = spark.sql(
         "SELECT uuid(NULL) AS u, shuffle(array(1, 2, 3, 4, 5, 6, 7, 8), NULL) AS s FROM range(0, 20, 1, 1)"
     ).collect()
-    assert len({row.u for row in rows}) == 20  # noqa: PLR2004
+    assert len({row.u for row in rows}) == 20
     assert len({tuple(row.s) for row in rows}) > 1
 
 

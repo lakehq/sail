@@ -102,7 +102,7 @@ def test_float_extrema_include_nan(spark, tmp_path: Path, data_type, metadata_as
     ]:
         [row] = frame.selectExpr(*expressions).collect()
         assert math.isnan(row.maximum)
-        assert row.minimum == -2.0  # noqa: PLR2004
+        assert row.minimum == -2.0
 
 
 @pytest.mark.parametrize("data_type", ["DOUBLE", "FLOAT"])
@@ -225,4 +225,4 @@ def test_count_distinct_of_nan_values_read_back(spark, tmp_path: Path, data_type
     for f in (0, 1):
         source.where(f"f = {f}").coalesce(1).write.format("delta").mode("append").save(str(table_path))
     [row] = spark.read.format("delta").load(str(table_path)).selectExpr("count(DISTINCT x) AS n").collect()
-    assert row.n == 2  # noqa: PLR2004
+    assert row.n == 2

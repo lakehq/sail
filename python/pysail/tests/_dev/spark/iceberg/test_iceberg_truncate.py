@@ -93,7 +93,7 @@ def test_truncate_removes_position_deletes_and_deletion_vectors(spark, tmp_path,
         summary = _current_snapshot(_find_latest_metadata(path))["summary"]
         assert int(summary["removed-delete-files"]) > 0
         assert summary["total-position-deletes"] == "0"
-        if format_version == 3:  # noqa: PLR2004
+        if format_version == 3:
             assert int(summary["removed-dvs"]) > 0
         assert all(file.exists() for file in files)
         historical = (

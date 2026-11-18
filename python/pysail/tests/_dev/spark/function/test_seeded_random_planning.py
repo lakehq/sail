@@ -278,7 +278,7 @@ def test_equal_unaliased_expressions_with_unseeded_calls_are_independent(spark):
 def test_unused_seeded_random_column_does_not_keep_the_input_sort(spark):
     query = "SELECT sum({}) AS s FROM (SELECT id, rand(1) AS r FROM (SELECT * FROM range(0, 100, 1, 4) ORDER BY id DESC)) WHERE id > 5"
     df = spark.sql(query.format("id"))
-    assert df.collect()[0].s == 4935  # noqa: PLR2004
+    assert df.collect()[0].s == 4935
     assert "SortExec" not in df._explain_string()  # noqa: SLF001
     # The random values depend on the order of the input when the random column is used.
     assert "SortExec" in spark.sql(query.format("r"))._explain_string()  # noqa: SLF001
@@ -291,7 +291,7 @@ def test_seeded_random_case_with_uncorrelated_exists(spark):
         "FROM range(0, 40000, 1, {partitions}))"
     )
     assert tuple(spark.sql(query.format(partitions=4)).collect()[0]) == (20001, -10119.361678)
-    assert spark.sql(query.format(partitions=1)).collect()[0][0] == 20001  # noqa: PLR2004
+    assert spark.sql(query.format(partitions=1)).collect()[0][0] == 20001
 
 
 @pytest.mark.parametrize(
@@ -420,15 +420,15 @@ def test_seeded_random_with_input_file_name(spark, tmp_path):
     spark.range(0, 12, 1, 2).write.parquet(path)
     df = spark.read.parquet(path)
     files = {row.f for row in df.select(F.input_file_name().alias("f")).collect()}
-    assert len(files) == 2  # noqa: PLR2004
+    assert len(files) == 2
     for c in [
         F.input_file_name(),
         F.when(F.col("id") % 2 == 0, F.rand(42).cast("string")).otherwise(F.input_file_name()),
     ]:
         rows = df.select("id", F.rand(42).alias("r"), c.alias("c")).collect()
         assert {row.c for row in rows if row.id % 2 == 1} <= files
-        assert len({row.r for row in rows}) == 12  # noqa: PLR2004
-    rows = df.where(F.rand(42) < 2).select(F.input_file_name().alias("f")).collect()  # noqa: PLR2004
+        assert len({row.r for row in rows}) == 12
+    rows = df.where(F.rand(42) < 2).select(F.input_file_name().alias("f")).collect()
     assert {row.f for row in rows} == files
 
 
@@ -476,7 +476,7 @@ def _rows_by_partition(df, column):
         F.input_file_name().alias("f"),
         F.monotonically_increasing_id().alias("m"),
     ).collect()
-    assert len({row.f for row in rows}) == 2  # noqa: PLR2004
+    assert len({row.f for row in rows}) == 2
     # The rows of each file are in one partition.
     assert all(len({row.m >> 33 for row in rows if row.f == f}) == 1 for f in {row.f for row in rows})
     partitions = {}
@@ -710,4 +710,4 @@ def test_seeded_column_reuse_preserves_timestamp_types(spark, session_timezone, 
         FROM range(0, 3, 1, 1)"""  # noqa: S608
     )
     assert [field.dataType.simpleString() for field in df.schema] == ["timestamp_ntz", "timestamp"]
-    assert len(df.collect()) == 3  # noqa: PLR2004
+    assert len(df.collect()) == 3

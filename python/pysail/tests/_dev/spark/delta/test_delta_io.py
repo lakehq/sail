@@ -41,7 +41,7 @@ def test_delta_io_write_with_input_partitions(spark, tmp_path):
     assert spark.read.format("delta").load(f"{delta_path}").count() == 1
 
     spark.range(1, 101, 1, 10).write.format("delta").mode("overwrite").save(str(delta_path))
-    assert spark.read.format("delta").load(f"{delta_path}").count() == 100  # noqa: PLR2004
+    assert spark.read.format("delta").load(f"{delta_path}").count() == 100
 
 
 def test_delta_io_basic_overwrite_and_read(spark, delta_test_data, expected_pandas_df, tmp_path):
@@ -1258,8 +1258,8 @@ def test_delta_io_overwrite_partitions_with_v2_api(spark, tmp_path):
         result = result_df.collect()
 
         assert {row.id for row in result} == {2, 4, 5, 6, 8, 7}
-        assert {row.value for row in result if row.category == "A" and row.value < 50} == {10}  # noqa: PLR2004
-        assert {row.value for row in result if row.category == "A" and row.value >= 100} == {100, 200}  # noqa: PLR2004
+        assert {row.value for row in result if row.category == "A" and row.value < 50} == {10}
+        assert {row.value for row in result if row.category == "A" and row.value >= 100} == {100, 200}
         assert {row.value for row in result if row.category == "B"} == {20, 40, 999}
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -1296,8 +1296,8 @@ def test_delta_io_overwrite_partitions_with_sql_condition(spark, tmp_path):
         result = result_df.collect()
 
         assert {row.id for row in result} == {2, 4, 5, 6, 8, 7}
-        assert {row.value for row in result if row.category == "A" and row.value < 50} == {10}  # noqa: PLR2004
-        assert {row.value for row in result if row.category == "A" and row.value >= 100} == {100, 200}  # noqa: PLR2004
+        assert {row.value for row in result if row.category == "A" and row.value < 50} == {10}
+        assert {row.value for row in result if row.category == "A" and row.value >= 100} == {100, 200}
         assert {row.value for row in result if row.category == "B"} == {20, 40, 999}
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -1340,8 +1340,7 @@ def test_delta_io_all_data_types(spark, tmp_path):
 
     result_pandas = result_df.toPandas()
 
-    expected = 2
-    assert len(result_pandas) == expected
+    assert len(result_pandas) == 2
     assert result_pandas["id"].tolist() == [1, 2]
     assert result_pandas["name"].tolist() == ["Alice", "Bob"]
     assert result_pandas["age"].tolist() == [30, 25]
@@ -1360,7 +1359,7 @@ def test_delta_io_ignore_mode(spark, delta_test_data, tmp_path):
     # Read initial data
     initial_result = spark.read.format("delta").load(delta_table_path).sort("id")
     initial_data = initial_result.collect()
-    assert len(initial_data) == 3  # noqa: PLR2004
+    assert len(initial_data) == 3
     commit_files_before = sorted((delta_path / "_delta_log").glob("*.json"))
     files_before = {path.relative_to(delta_path): path.read_bytes() for path in delta_path.rglob("*") if path.is_file()}
 
@@ -1386,10 +1385,10 @@ def test_delta_io_ignore_mode(spark, delta_test_data, tmp_path):
 
     # Data should remain the same as initial data
     assert commit_files_after == commit_files_before
-    assert len(result_data) == 3  # noqa: PLR2004
-    assert result_data[0].id == 10  # noqa: PLR2004
-    assert result_data[1].id == 11  # noqa: PLR2004
-    assert result_data[2].id == 12  # noqa: PLR2004
+    assert len(result_data) == 3
+    assert result_data[0].id == 10
+    assert result_data[1].id == 11
+    assert result_data[2].id == 12
     assert result_data[0].event == "A"
     assert result_data[1].event == "B"
     assert result_data[2].event == "A"
@@ -1412,13 +1411,13 @@ def test_delta_io_ignore_mode_new_table(spark, tmp_path):
     result_df = spark.read.format("delta").load(delta_table_path).sort("id")
     result_data = result_df.collect()
 
-    assert len(result_data) == 2  # noqa: PLR2004
-    assert result_data[0].id == 30  # noqa: PLR2004
-    assert result_data[1].id == 31  # noqa: PLR2004
+    assert len(result_data) == 2
+    assert result_data[0].id == 30
+    assert result_data[1].id == 31
     assert result_data[0].event == "Z"
     assert result_data[1].event == "W"
-    assert result_data[0].score == 0.92  # noqa: PLR2004
-    assert result_data[1].score == 0.85  # noqa: PLR2004
+    assert result_data[0].score == 0.92
+    assert result_data[1].score == 0.85
 
 
 def test_delta_io_error_on_read_nonexistent_table(spark, tmp_path):

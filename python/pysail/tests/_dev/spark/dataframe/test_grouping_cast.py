@@ -34,7 +34,7 @@ def test_a_repeated_grouping_set_stays_a_grouping_set(spark):
         assert rows(df) == Counter({(1, 1): 3, (2, 1): 3, (None, 2): 1})
 
         df = spark.sql("SELECT k, v, count(*) AS c FROM repeated_sets GROUP BY rollup(k, v), rollup(k, v)")
-        assert sum(rows(df).values()) == 17  # noqa: PLR2004
+        assert sum(rows(df).values()) == 17
     finally:
         spark.sql("DROP VIEW repeated_sets")
 
@@ -61,7 +61,7 @@ def test_a_cast_key_is_one_key_in_every_grouping_set(spark):
             "SELECT k, count(*) AS c FROM cast_key_sets "
             "GROUP BY rollup(k, cast(k AS bigint)), rollup(k, cast(k AS bigint))"
         )
-        assert sum(rows(df).values()) == 17  # noqa: PLR2004
+        assert sum(rows(df).values()) == 17
     finally:
         spark.sql("DROP VIEW cast_key_sets")
 

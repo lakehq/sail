@@ -81,7 +81,7 @@ def _task_stop_times(spark):
         .toArrow()
         .to_pylist()
     )
-    job = max(stage["job_id"] for stage in stages if len(stage["inputs"]) >= 2)  # noqa: PLR2004
+    job = max(stage["job_id"] for stage in stages if len(stage["inputs"]) >= 2)
     stages = {stage["stage"]: stage for stage in stages if stage["job_id"] == job}
     tasks = [task for task in tasks if task["job_id"] == job]
     assert all(task["status"] == "SUCCEEDED" for task in tasks)
@@ -114,7 +114,7 @@ def test_shuffle_producers_finish_without_waiting_for_unread_channels(spark):
 
     assert rows == [Row(id=0)]
     stages, stopped = _task_stop_times(spark)
-    (join,) = [stage for stage in stages.values() if len(stage["inputs"]) == 2]  # noqa: PLR2004
+    (join,) = [stage for stage in stages.values() if len(stage["inputs"]) == 2]
     assert stopped[join["stage"]] >= delay
     for producer in join["inputs"]:
         assert stopped[producer["stage"]] < stopped[join["stage"]] - delay / 2
@@ -239,7 +239,7 @@ def test_hash_join_preserves_global_build_limit(spark):
     build = spark.range(16, numPartitions=4).limit(3)
     probe = spark.range(16, numPartitions=4)
 
-    assert len(build.join(probe, "id", "left").collect()) == 3  # noqa: PLR2004
+    assert len(build.join(probe, "id", "left").collect()) == 3
 
 
 @pytest.mark.timeout(30)

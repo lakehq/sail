@@ -32,11 +32,9 @@ def test_histogram_numeric_merging(spark):
     ).toPandas()
 
     hist = actual["hist"].iloc[0]
-    expected_bins = 2
-    expected_total = 4.0
-    assert len(hist) == expected_bins
+    assert len(hist) == 2
     total_count = sum(entry["y"] for entry in hist)
-    assert total_count == expected_total
+    assert total_count == 4.0
 
 
 def test_histogram_numeric_with_nulls(spark):
@@ -66,10 +64,9 @@ def test_histogram_numeric_negative_values(spark):
 
     hist = actual["hist"].iloc[0]
     xs = [entry["x"] for entry in hist]
-    expected_total = 5.0
     assert xs == sorted(xs)
     total_count = sum(entry["y"] for entry in hist)
-    assert total_count == expected_total
+    assert total_count == 5.0
 
 
 def test_histogram_numeric_float_values(spark):
@@ -97,11 +94,9 @@ def test_histogram_numeric_large_values(spark):
     ).toPandas()
 
     hist = actual["hist"].iloc[0]
-    expected_bins = 3
-    expected_total = 3.0
-    assert len(hist) == expected_bins
+    assert len(hist) == 3
     total_count = sum(entry["y"] for entry in hist)
-    assert total_count == expected_total
+    assert total_count == 3.0
 
 
 def test_histogram_numeric_bigint(spark):
@@ -112,11 +107,9 @@ def test_histogram_numeric_bigint(spark):
     ).toPandas()
 
     hist = actual["hist"].iloc[0]
-    expected_bins = 3
-    expected_total = 3.0
-    assert len(hist) == expected_bins
+    assert len(hist) == 3
     total_count = sum(entry["y"] for entry in hist)
-    assert total_count == expected_total
+    assert total_count == 3.0
 
 
 def test_histogram_numeric_decimal(spark):
@@ -128,8 +121,6 @@ def test_histogram_numeric_decimal(spark):
     ).toPandas()
 
     hist = actual["hist"].iloc[0]
-    expected_bins = 3
-    expected_total = 3.0
-    assert len(hist) == expected_bins
+    assert len(hist) == 3
     total_count = sum(entry["y"] for entry in hist)
-    assert total_count == expected_total
+    assert total_count == 3.0

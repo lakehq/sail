@@ -20,8 +20,8 @@ def test_non_arrow_array_udf_preserves_nulls_after_offset(spark):
     values = (
         F.when(F.col("id") == 0, F.array(F.lit(90), F.lit(91)))
         .when(F.col("id") == 1, F.lit(None).cast("array<long>"))
-        .when(F.col("id") == 2, F.array().cast("array<long>"))  # noqa: PLR2004
-        .when(F.col("id") == 3, F.array(F.lit(7), F.lit(None).cast("long")))  # noqa: PLR2004
+        .when(F.col("id") == 2, F.array().cast("array<long>"))
+        .when(F.col("id") == 3, F.array(F.lit(7), F.lit(None).cast("long")))
         .otherwise(F.array(F.lit(9)))
         .cast("array<long>")
     )
