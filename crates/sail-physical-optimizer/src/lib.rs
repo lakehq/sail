@@ -16,7 +16,6 @@ use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::physical_optimizer::topk_aggregation::TopKAggregation;
 use datafusion::physical_optimizer::topk_repartition::TopKRepartition;
 use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
-use datafusion::physical_optimizer::window_topn::WindowTopN;
 
 use crate::barrier::EnforceBarrierPartitioning;
 use crate::collect_left::RewriteCollectLeftHashJoin;
@@ -32,6 +31,7 @@ use crate::offset::OffsetSafeRequirements;
 use crate::partition_sensitive::KeepPartitionSensitiveInputs;
 use crate::projection_pushdown::ContextSafeProjectionPushdown;
 use crate::select_semi_join_build_side::SelectSemiJoinBuildSide;
+use crate::window_topn::WindowTopN;
 
 mod barrier;
 mod collect_left;
@@ -46,6 +46,7 @@ mod partition_sensitive;
 mod projection_pushdown;
 mod scan_partitions;
 mod select_semi_join_build_side;
+mod window_topn;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
