@@ -13,7 +13,7 @@ use datafusion_expr::{
 };
 use sail_common_datafusion::min_max::common::{MaxAccumulator, MinAccumulator};
 
-use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::utils::make_scalar_function;
 
 enum ArrayOp {
     Min,

@@ -28,9 +28,8 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
-use crate::scalar::array::lambda_utils::{
-    ListValuesResult, coerce_single_list_arg, extract_list_values, index_array, value_lambda_pair,
-};
+use super::utils::{ListValuesResult, coerce_single_list_arg, extract_list_values, index_array};
+use crate::scalar::utils::lambda::value_lambda_pair;
 
 /// Like [`super::spark_array_filter::SparkArrayFilter`], the physical lambda
 /// evaluation batch is laid out as `[captures..., params...]` with the body

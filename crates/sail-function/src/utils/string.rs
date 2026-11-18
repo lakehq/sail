@@ -3,7 +3,7 @@
 
 #![expect(
     dead_code,
-    reason = "Copied from DataFusion as-is; only some helpers are used by Sail so far."
+    reason = "Some helpers copied from DataFusion are currently unused."
 )]
 
 use std::marker::PhantomData;
@@ -32,7 +32,7 @@ use datafusion_common::{
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
-use crate::functions_utils::offset_span_len;
+use crate::utils::nested::offset_span_len;
 
 /// Trait abstracting concatenating string and binary collections.
 pub(crate) trait ConcatBuilder {
@@ -1547,6 +1547,65 @@ pub(crate) fn widest_string_type(types: &[DataType]) -> DataType {
         DataType::Utf8
     }
 }
+
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/utils.rs#L21-L67
+/// Creates a function to identify the optimal return type of a string function given
+/// the type of its first argument.
+///
+/// If the input type is `LargeUtf8` or `LargeBinary` the return type is
+/// `$largeUtf8Type`,
+///
+/// If the input type is `Utf8` or `Binary` the return type is `$utf8Type`,
+///
+/// If the input type is `Utf8View`, `BinaryView` or `FixedSizeBinary` the
+/// return type is `$utf8Type`,
+macro_rules! get_optimal_return_type {
+    ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
+        pub(crate) fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
+            Ok(match arg_type {
+                // LargeBinary inputs are automatically coerced to Utf8
+                DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
+                // Binary inputs are automatically coerced to Utf8
+                DataType::Utf8 | DataType::Binary => $utf8Type,
+                // Utf8View max offset size is u32::MAX, the same as UTF8
+                DataType::Utf8View | DataType::BinaryView => $utf8Type,
+                // FixedSizeBinary sizes are declared as i32
+                DataType::FixedSizeBinary(_) => $utf8Type,
+                DataType::Null => DataType::Null,
+                DataType::Dictionary(_, value_type) => match **value_type {
+                    DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
+                    DataType::Utf8 | DataType::Binary => $utf8Type,
+                    DataType::FixedSizeBinary(_) => $utf8Type,
+                    DataType::Null => DataType::Null,
+                    _ => {
+                        return datafusion_common::exec_err!(
+                            "The {} function can only accept strings, but got {:?}.",
+                            name.to_uppercase(),
+                            **value_type
+                        );
+                    }
+                },
+                data_type => {
+                    return datafusion_common::exec_err!(
+                        "The {} function can only accept strings, but got {:?}.",
+                        name.to_uppercase(),
+                        data_type
+                    );
+                }
+            })
+        }
+    };
+}
+// SPDX-SnippetEnd
+
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/utils.rs#L69-L70
+// `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.
+get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
+// SPDX-SnippetEnd
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::panic)]

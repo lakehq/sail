@@ -12,7 +12,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
-use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::utils::make_scalar_function;
 
 /// `array_compact` removes all null values from the array.
 /// This is the Spark-compatible implementation.

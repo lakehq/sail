@@ -10,7 +10,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::utils::make_scalar_function;
 
 /// Check a correlated scalar result only after it has matched an outer row.
 #[derive(Debug, PartialEq, Eq, Hash)]

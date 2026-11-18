@@ -3,7 +3,6 @@
 pub mod array_intersect;
 pub mod array_position;
 pub mod arrays_zip;
-pub mod lambda_utils;
 pub mod spark_array;
 pub mod spark_array_aggregate;
 pub mod spark_array_compact;
@@ -17,3 +16,4 @@ pub mod spark_array_transform;
 pub mod spark_array_zip_with;
 pub mod spark_sequence;
 pub mod spark_shuffle;
+mod utils;

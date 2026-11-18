@@ -13,13 +13,13 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
+use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{self, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use serde_json::Value;
 
-use crate::functions_nested_utils::*;
-use crate::functions_utils::make_scalar_function;
 use crate::scalar::datetime::format::DateTimeFormat;
+use crate::utils::nested::downcast_arg;
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0

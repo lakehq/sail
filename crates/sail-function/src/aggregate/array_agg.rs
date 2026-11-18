@@ -41,7 +41,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use hashbrown::hash_table::HashTable;
 use itertools::{Either, Itertools};
 
-use crate::functions_utils::offset_span;
+use crate::utils::nested::offset_span;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 /// ARRAY_AGG aggregate expression

@@ -31,7 +31,7 @@ use datafusion_functions::utils::make_scalar_function;
 use sail_common::utils::datetime::{MICROS_PER_SECOND, is_fixed_zero_offset_timezone};
 use sail_common_datafusion::utils::datetime::SparkZone;
 
-use crate::functions_nested_utils::{evaluate_lambdas_until_null, scatter_active_rows};
+use crate::scalar::utils::lambda::{evaluate_lambdas_until_null, scatter_active_rows};
 
 /// How [`ConvertTz`] converts values, which differs for Spark's casts between TIMESTAMP_NTZ and
 /// TIMESTAMP.
