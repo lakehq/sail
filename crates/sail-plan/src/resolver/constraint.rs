@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::Schema;
 use datafusion_common::{Constraint, Constraints};
 use sail_common_datafusion::catalog::CatalogTableConstraint;

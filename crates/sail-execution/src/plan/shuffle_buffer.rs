@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Holds the rows of a shuffle write until there are enough of them to write, and copies
 //! them into one batch per output channel.
 

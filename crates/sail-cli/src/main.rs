@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::ffi::NulError;
 
 use pyo3::Python;

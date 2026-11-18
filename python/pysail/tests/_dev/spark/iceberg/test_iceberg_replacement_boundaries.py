@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Replacement boundary contracts verified with Spark 4.1.3 / Iceberg 1.11.0."""
 
 # ruff: noqa: S608

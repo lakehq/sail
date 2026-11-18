@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pandas as pd
 from pyspark.sql.functions import pandas_udf
 

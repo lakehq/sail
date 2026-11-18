@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: TIMESTAMP_NTZ casts to TIMESTAMP in the session time zone
   Spark casts TIMESTAMP_NTZ values compared with TIMESTAMP values in the session time zone, moving a time in a
   DST gap forward and resolving a time in a DST overlap to the earlier offset.

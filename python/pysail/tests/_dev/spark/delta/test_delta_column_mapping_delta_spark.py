@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 
 from __future__ import annotations

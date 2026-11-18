@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Table names with digit-leading identifiers
 
   # `1m` is a single identifier token in both engines: Spark lexes IDENTIFIER

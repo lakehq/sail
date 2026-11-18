@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use chrono::{DateTime, Utc};
 use datafusion_common::{Result, plan_datafusion_err, plan_err};
 use prost::Message;

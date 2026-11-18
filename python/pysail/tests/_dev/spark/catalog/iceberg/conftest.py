@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Pytest fixtures for Iceberg REST catalog integration tests.
 
 Uses SeaweedFS for S3-compatible storage and Iceberg REST-compatible catalog

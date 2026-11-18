@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::iter::Peekable;
 use std::str::Chars;
 use std::sync::Arc;

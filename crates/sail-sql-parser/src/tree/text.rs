@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// A trait for converting AST nodes to their text representation.
 pub trait TreeText {
     /// Returns the corresponding text of the AST node.

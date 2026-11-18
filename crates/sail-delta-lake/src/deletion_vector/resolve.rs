@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Path resolution for Deletion Vector descriptors.
 
 use url::Url;

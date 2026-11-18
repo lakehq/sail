@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Async binary-message boundary detection. Typed decoding uses Apache Thrift.
 //!
 //! Wire layouts follow the [Thrift Binary protocol] and [framed transport] specifications.

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: make_dt_interval output schema
 
   @function(nullability) @spark-4

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """Delta SQL results report affected rows and remain stable across repeated collection."""
 

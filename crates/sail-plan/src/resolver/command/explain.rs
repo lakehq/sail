@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use async_recursion::async_recursion;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, col, lit};

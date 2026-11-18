@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from collections import Counter
 
 import pyspark.sql.functions as F  # noqa: N812

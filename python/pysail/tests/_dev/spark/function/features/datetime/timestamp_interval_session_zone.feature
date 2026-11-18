@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: TIMESTAMP interval arithmetic uses the session time zone
   Spark adds the months and days of an interval to a TIMESTAMP as a wall-clock time in the session time zone, keeping the
   UTC offset in a DST overlap when it is still valid and moving a time in a DST gap forward, and adds the rest of the

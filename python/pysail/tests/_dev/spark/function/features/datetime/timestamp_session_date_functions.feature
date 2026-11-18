@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Date functions read TIMESTAMP values in the session time zone
 
   Scenario: Date functions read TIMESTAMP values in the session time zone (America/Los_Angeles)

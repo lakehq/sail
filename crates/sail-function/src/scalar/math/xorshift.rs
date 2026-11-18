@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Port of Spark's XORShiftRandom
 //!
 //! This is a Rust implementation of Apache Spark's XORShiftRandom class:

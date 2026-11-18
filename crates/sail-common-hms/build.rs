@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     sail_build_scripts::thrift::generate_client(

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: to_timestamp_ntz
 
   Rule: Result values (migrated from test_to_timestamp_ntz.txt doctests)

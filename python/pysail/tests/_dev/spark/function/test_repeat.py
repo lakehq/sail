@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Exercise repeat on columns so constant folding cannot hide missing UDFs."""
 
 import pytest

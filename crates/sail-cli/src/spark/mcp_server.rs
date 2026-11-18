@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt;
 use std::fmt::Formatter;
 use std::net::{IpAddr, Ipv4Addr};

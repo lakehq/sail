@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Concurrent identity allocation must not publish a stale watermark."""
 
 import json

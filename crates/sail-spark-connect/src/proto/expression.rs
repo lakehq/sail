@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common::spec;
 use sail_sql_analyzer::data_type::parse_data_type;
 use sail_sql_analyzer::expression::{

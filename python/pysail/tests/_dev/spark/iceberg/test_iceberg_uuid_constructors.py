@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Constructor type identity and UUID cast names, including persisted output."""
 
 from pathlib import Path

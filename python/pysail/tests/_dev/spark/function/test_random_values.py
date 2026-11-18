@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests that seeded random values match Spark bit for bit.
 
 The expected values were verified on JVM Spark 4.2.0, for a single partition.

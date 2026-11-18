@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Spark-compatible `concat_ws` function that handles arrays.
 //!
 //! In Spark, `concat_ws(sep, a, b, ...)` joins strings with a separator. If any

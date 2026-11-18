@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """`array_agg` and its Spark aliases on cluster workers.
 
 The physical plan crosses the distributed codec, so these tests cover the paths that

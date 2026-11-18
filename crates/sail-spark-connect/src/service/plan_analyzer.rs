@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::logical_expr::InvariantLevel;
 use datafusion::optimizer::AnalyzerRule;
 use datafusion::optimizer::analyzer::function_rewrite::ApplyFunctionRewrites;

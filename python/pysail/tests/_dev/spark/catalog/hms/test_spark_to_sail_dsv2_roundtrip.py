@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """Spark -> Sail roundtrip tests for Spark datasource v2 (DSV2) formats and Iceberg.
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: to_number comprehensive tests
 
   Rule: Argument count validation

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+
+
 def test_noop_write_executes_without_path(spark):
     df = spark.range(10).selectExpr("id", "id + 1 AS value")
 

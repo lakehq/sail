@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared helpers for Sail tests.
 
 Helpers needed by the sanity tests in `pysail.tests` are included in release

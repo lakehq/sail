@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: unbase64 output schema
 
   @function(nullability)

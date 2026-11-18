@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
 use datafusion_common::{DataFusionError, Result, exec_datafusion_err, exec_err};

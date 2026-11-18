@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: is_variant_null output schema
 
   @function(nullability)

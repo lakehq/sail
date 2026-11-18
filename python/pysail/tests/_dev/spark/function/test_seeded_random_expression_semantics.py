@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Seeded-expression regressions, with Spark-compatible cases verified on JVM Spark 4.2.0."""
 
 import pyarrow as pa

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use chrono::format::Parsed;
 use chrono::{Datelike, FixedOffset, NaiveDate, NaiveDateTime, Weekday};
 use datafusion_common::{Result, exec_datafusion_err};

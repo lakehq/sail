@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """Expiration of legacy filesystem metadata without a table UUID."""
 

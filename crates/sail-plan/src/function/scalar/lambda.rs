@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::{Arc, LazyLock};
 
 use datafusion_common::arrow::compute::can_cast_types;

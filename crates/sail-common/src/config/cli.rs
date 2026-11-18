@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use figment::Figment;
 use figment::providers::{Env, Serialized};
 use serde::{Deserialize, Serialize};

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # Moved from features/timestampdiff.feature by the datetime/ layout reorganisation.
 Feature: timestampdiff calendar units
 

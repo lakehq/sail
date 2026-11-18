@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_common::DFSchemaRef;
 use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::datatype::FieldExt;

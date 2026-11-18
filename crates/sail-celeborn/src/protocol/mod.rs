@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Common Celeborn wire protocol types and transport-message decoding.
 
 #[expect(clippy::allow_attributes)]

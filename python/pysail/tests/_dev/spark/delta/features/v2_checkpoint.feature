@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
 
   Rule: v2Checkpoint feature support does not override the classic checkpoint policy

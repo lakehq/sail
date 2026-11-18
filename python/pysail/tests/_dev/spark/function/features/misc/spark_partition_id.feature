@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: spark_partition_id output schema
 
   @function(nullability)

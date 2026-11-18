@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: approx_count_distinct
 
   # Spark's `HyperLogLogPlusPlus` accepts any input type. A NULL struct is skipped, while a

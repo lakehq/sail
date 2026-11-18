@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: collect_list / collect_set
 
   collect_list gathers all values of a group into an array (order and duplicates preserved);

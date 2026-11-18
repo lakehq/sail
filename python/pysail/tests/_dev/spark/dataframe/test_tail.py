@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """`DataFrame.tail`, which returns the last rows of one evaluation of the input
 (Spark's `CollectTailExec`)."""
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::join_reorder::JoinReorderOptions;
 use crate::join_reorder::dp_plan::DPPlan;
 

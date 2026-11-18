@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_common::{DataFusionError, Result, plan_err};
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{LakehouseCommitOutcome, LakehouseCommitRequest};

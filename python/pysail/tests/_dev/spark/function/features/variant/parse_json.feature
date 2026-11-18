@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 @spark-4
 Feature: parse_json (strict version; errors on invalid JSON)
 

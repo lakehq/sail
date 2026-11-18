@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: TABLESAMPLE clause
 
   Rule: TABLESAMPLE with PERCENT

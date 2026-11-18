@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """DDL on managed Delta and external lakehouse registrations in Unity."""
 
 import json

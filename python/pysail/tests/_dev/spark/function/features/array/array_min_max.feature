@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: array_min and array_max functions
 
   Rule: Basic usage

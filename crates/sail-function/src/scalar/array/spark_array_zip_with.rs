@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// Spark-compatible `zip_with(left, right, lambda)` higher-order function.
 ///
 /// The lambda receives one element from each array. Missing elements in the

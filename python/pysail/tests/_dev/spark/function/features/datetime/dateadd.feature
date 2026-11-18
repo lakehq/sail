@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: dateadd function
 
   Scenario Outline: three-argument dateadd: <case>

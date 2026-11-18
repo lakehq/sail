@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Iceberg metadata aggregate results
 
   Rule: Aggregate results remain correct across metadata optimization boundaries
