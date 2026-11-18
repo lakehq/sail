@@ -35,24 +35,6 @@ Feature: CREATE TABLE AS SELECT error handling
       | 1  | Alice |
       | 2  | Bob   |
 
-  Scenario: CREATE TABLE AS SELECT fails with COMMENT clause
-    Given variable location for temporary directory ctas_error_comment
-    Given final statement
-      """
-      DROP TABLE IF EXISTS ctas_error_comment
-      """
-    Given statement template with error COMMENT in CREATE TABLE AS SELECT statement
-      """
-      CREATE TABLE ctas_error_comment
-      USING PARQUET
-      LOCATION {{ location.sql }}
-      COMMENT 'This is a comment'
-      AS SELECT * FROM VALUES
-        (1, 'Alice'),
-        (2, 'Bob')
-      AS t(id, name)
-      """
-
   Scenario: CREATE TABLE AS SELECT fails with SORT BY clause
     Given variable location for temporary directory ctas_error_sort_by
     Given final statement
