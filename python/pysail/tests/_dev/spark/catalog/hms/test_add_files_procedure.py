@@ -20,6 +20,7 @@ ROWS = [
     (4, "Will Doe", "facilities", "all"),
 ]
 NULL_ROW = (None, None, None, None)
+SOURCE_WRITES = 2
 
 
 @pytest.fixture(scope="module")
@@ -56,7 +57,7 @@ def source(jvm_spark, database):
         partition_by = f"PARTITIONED BY ({partition_ddl})" if partitions else ""
         jvm_spark.sql(f"CREATE TABLE {name} ({ddl}) {partition_by} STORED AS parquet LOCATION '{location}'")
         if not empty:
-            for _ in range(2):
+            for _ in range(SOURCE_WRITES):
                 frame.select(*columns, *partitions).write.insertInto(name)
         return name, f"parquet.`{location}`"
 
@@ -139,8 +140,8 @@ def metadata_table(catalog, tables, suffix):
 
 def assert_manifest_specs(catalog, tables, spec_id):
     reference = catalog.reference
-    iceberg = reference._jvm.org.apache.iceberg
-    table = iceberg.spark.Spark3Util.loadIcebergTable(reference._jsparkSession, tables[1])
+    iceberg = reference._jvm.org.apache.iceberg  # noqa: SLF001
+    table = iceberg.spark.Spark3Util.loadIcebergTable(reference._jsparkSession, tables[1])  # noqa: SLF001
     table.refresh()
     expected = table.specs().get(spec_id)
     manifests = table.currentSnapshot().allManifests(table.io())
@@ -159,7 +160,7 @@ def assert_rows(catalog, spark, tables, expected, columns="id, name, dept, subde
     reference = catalog.reference
     reference.catalog.refreshTable(upstream)
     for session, table in [(spark, name), (reference, upstream)]:
-        actual = session.sql(f"SELECT {columns} FROM {table}").collect()
+        actual = session.sql(f"SELECT {columns} FROM {table}").collect()  # noqa: S608
         assert Counter(map(tuple, actual)) == Counter(expected)
 
 
@@ -198,7 +199,8 @@ def test_partition_discovery(catalog, source, target, spark, parts, filter_sql, 
     _, path = source(parts, include_null=include_null)
     with target(parts) as tables:
         args = f", {filter_sql}" if filter_sql else ""
-        expected = [(ROWS + [NULL_ROW])[i] for i in indexes]
+        rows = [*ROWS, NULL_ROW]
+        expected = [rows[i] for i in indexes]
         partition_count = len(
             {tuple(row[("id", "name", "dept", "subdept").index(c)] for c in parts) for row in expected}
         )
@@ -220,7 +222,7 @@ def test_delete_then_add(catalog, source, target, spark, parts):
         rows = (ROWS[:1] if parts else ROWS) * 2
         call(spark, tables[0], path, argument)
         predicate = " WHERE id = 1" if parts else ""
-        spark.sql(f"DELETE FROM {tables[0]}{predicate}")
+        spark.sql(f"DELETE FROM {tables[0]}{predicate}")  # noqa: S608
         assert_rows(catalog, spark, tables, [])
         assert call(spark, tables[0], path, argument) == catalog.manifest_counts(2, 1)
         assert_rows(catalog, spark, tables, rows)
@@ -242,11 +244,11 @@ def test_snapshot_inheritance(catalog, source, target, spark, by_name):
     source_name, path = source(("id",))
     with target(("id",), inherit=True) as tables:
         if by_name:
-            assert call(spark, tables[0], source_name, ", parallelism => 2")[0] == 8
+            assert call(spark, tables[0], source_name, ", parallelism => 2")[0] == len(ROWS) * SOURCE_WRITES
             expected = ROWS
         else:
             for value in [1, 2]:
-                assert call(spark, tables[0], path, f", map('id', {value})")[0] == 2
+                assert call(spark, tables[0], path, f", map('id', {value})")[0] == SOURCE_WRITES
             expected = ROWS[:2]
         assert_rows(catalog, spark, tables, expected * 2)
         assert_manifest_specs(catalog, tables, 0)
@@ -336,7 +338,7 @@ def test_external_file_formats(catalog, jvm_spark, database, target, spark, part
     writer = jvm_spark.createDataFrame(ROWS, SCHEMA).coalesce(1).write.format(file_format).mode("append")
     if parts:
         writer = writer.partitionBy(*parts)
-    for _ in range(2):
+    for _ in range(SOURCE_WRITES):
         writer.save(uri)
     path = f"{file_format}.`{uri}`"
     with target(parts) as tables:
@@ -377,12 +379,12 @@ def test_mixed_case_hive_filter(catalog, jvm_spark, database, target, spark):
         f"CREATE TABLE {name} (id INT, subdept STRING, dept STRING) PARTITIONED BY (naMe STRING) STORED AS parquet"
     )
     df = jvm_spark.createDataFrame(ROWS, SCHEMA).select("id", "subdept", "dept", "name").coalesce(1)
-    for _ in range(2):
+    for _ in range(SOURCE_WRITES):
         df.write.insertInto(name)
     with target(("naMe",), schema="id INT, naMe STRING, dept STRING, subdept STRING") as tables:
         assert call(spark, tables[0], name, ", map('naMe','John Doe')") == catalog.manifest_counts(2, 1)
         assert_rows(catalog, spark, tables, ROWS[:1] * 2, "id, naMe, dept, subdept")
-        assert spark.table(tables[0]).where("naMe = 'John Doe'").count() == 2
+        assert spark.table(tables[0]).where("naMe = 'John Doe'").count() == SOURCE_WRITES
 
 
 def test_all_registered_partitions_with_parallelism(catalog, source, target, spark):

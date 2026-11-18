@@ -48,7 +48,7 @@ def test_add_files_source_directory(spark, tmp_path):
     pq.write_table(pa.table({"id": [2]}), staging / "extra.parquet")
     spark.sql(f"CREATE TABLE directory_target (id BIGINT) USING iceberg LOCATION '{tmp_path / 'target'}'")
     try:
-        with pytest.raises(Exception, match="No such file|not found|cannot find"):
+        with pytest.raises(Exception, match=r"No such file|not found|cannot find"):
             spark.sql(f"CALL system.add_files('directory_target', 'parquet.`{tmp_path / 'missing'}`')").collect()
         assert spark.table("directory_target.snapshots").count() == 0
         result = spark.sql(f"CALL system.add_files('directory_target', 'parquet.`{source}`')").first()
