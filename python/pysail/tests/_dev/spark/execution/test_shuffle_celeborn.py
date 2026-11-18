@@ -147,8 +147,8 @@ def test_cancelled_chunk_fetch_does_not_leave_its_reply(
             proxy for proxy in celeborn_fetch_proxies.values() if proxy.name == abandoned.attributes["endpoint"]
         )
         assert proxy.events.count(ConnectionClosed, connection_id=abandoned.connection_id) == 1
-        expected_connections = 2  # The canceled fetch and its replacement.
-        assert proxy.events.count(ConnectionOpened) == expected_connections
+        # The canceled fetch and its replacement.
+        assert proxy.events.count(ConnectionOpened) == 2
 
 
 def _server_session_id(spark: SparkSession) -> str:

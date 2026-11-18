@@ -186,8 +186,8 @@ def test_push_skips_unrelated_replies(
     assert list(push_client.read_partition_stream(1, 0)) == [first, second]
     # Recovery on another worker must not mask a failure to skip the stale reply.
     assert sum(proxy.events.count(ConnectionOpened) for proxy in celeborn_push_proxies.values()) == 1
-    expected_rules = 2  # Duplicate the first reply and replace the second.
-    assert sum(proxy.events.count(RuleApplied) for proxy in celeborn_push_proxies.values()) == expected_rules
+    # Duplicate the first reply and replace the second.
+    assert sum(proxy.events.count(RuleApplied) for proxy in celeborn_push_proxies.values()) == 2
 
 
 def test_push_reuses_connection_after_duplicate_failures(
@@ -337,10 +337,8 @@ def test_fetch_discards_connection_after_invalid_reply(
     with pytest.raises(RuntimeError, match=error):
         read_partition()
     assert read_partition() == [b"shuffle data"]
-    expected_connections = 2  # The invalid reply closes the original connection.
-    assert (
-        sum(proxy.events.count(ConnectionOpened) for proxy in celeborn_fetch_proxies.values()) == expected_connections
-    )
+    # The invalid reply closes the original connection.
+    assert sum(proxy.events.count(ConnectionOpened) for proxy in celeborn_fetch_proxies.values()) == 2
 
 
 @pytest.mark.parametrize(
@@ -395,7 +393,6 @@ def test_fetch_preserves_partial_batch(
         body = frame.body + prefix if chunk_index == 0 else frame.body[prefix_length:]
         return Replace(CelebornFrame(frame.message_type, frame.metadata, body))
 
-    expected_chunks = 2
     rule = FrameRule(
         frame_type=CelebornFrame,
         condition=lambda event: (
@@ -403,7 +400,7 @@ def test_fetch_preserves_partial_batch(
             and event.frame.message_type == CelebornMessageType.CHUNK_FETCH_SUCCESS
         ),
         action=split_batch,
-        count=expected_chunks,
+        count=2,
     )
     for proxy in celeborn_fetch_proxies.values():
         proxy.rules.add(rule)
@@ -412,4 +409,4 @@ def test_fetch_preserves_partial_batch(
     fetch_client.mapper_end(1, 0, 0, 2)
     fetch_client.mapper_end(1, map_id, 0, 2)
     assert list(fetch_client.read_partition_stream(1, 0)) == [first, second]
-    assert sum(proxy.events.count(RuleApplied) for proxy in celeborn_fetch_proxies.values()) == expected_chunks
+    assert sum(proxy.events.count(RuleApplied) for proxy in celeborn_fetch_proxies.values()) == 2
