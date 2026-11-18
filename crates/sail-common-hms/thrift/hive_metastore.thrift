@@ -1,7 +1,8 @@
 #!/usr/local/bin/thrift -java
 
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileNotice: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements.
+// SPDX-FileNotice: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE file distributed with this work for additional information regarding copyright ownership.
+// SPDX-FileAttributionText: Notice: https://github.com/apache/hive/blob/5160d3af392248255f68e41e1e0557eae4d95273/NOTICE
 
 #
 # Thrift Service that the MetaStore is built on

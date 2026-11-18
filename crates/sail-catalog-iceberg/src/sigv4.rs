@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileNotice: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements.
+// SPDX-FileNotice: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE file distributed with this work for additional information regarding copyright ownership.
+// SPDX-FileAttributionText: Notice: https://github.com/apache/iceberg-rust/blob/b8467510f8da71b8f180affdef7b1a2d3dd4cfa9/NOTICE
 // SPDX-FileComment: Credit: https://github.com/apache/iceberg-rust/blob/b8467510f8da71b8f180affdef7b1a2d3dd4cfa9/crates/catalog/rest/src/auth/sigv4.rs
 
 //! AWS SigV4 request signing for the REST catalog.
