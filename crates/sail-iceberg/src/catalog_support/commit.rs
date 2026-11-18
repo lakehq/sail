@@ -154,6 +154,40 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
         }
     }
 
+    pub(crate) async fn load_expiration_table(
+        context: &C,
+        catalog_table: &[String],
+    ) -> Result<sail_catalog::lakehouse::LakehouseResolvedTable> {
+        use sail_catalog::lakehouse::ResolveLakehouseTableRequest;
+        use sail_common_datafusion::catalog::{LakehouseFormat, LakehouseOperation};
+        let manager = context.extension::<CatalogManager>()?;
+        let resolved = manager
+            .resolve_lakehouse_table(
+                catalog_table,
+                ResolveLakehouseTableRequest {
+                    catalog_table: catalog_table.to_vec(),
+                    operation: LakehouseOperation::Maintenance,
+                    requested_format: Some(LakehouseFormat::Iceberg),
+                    options: vec![],
+                },
+            )
+            .await
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let supported = match resolved.execution.commit {
+            CommitAuthority::Filesystem => {
+                !catalog_managed_iceberg_from_properties(&resolved.status.display_properties)
+            }
+            CommitAuthority::IcebergRestCommit => true,
+            _ => false,
+        };
+        if !supported || resolved.execution.format != LakehouseFormat::Iceberg {
+            return plan_err!(
+                "expire_snapshots supports only filesystem-authoritative tables and Iceberg REST catalogs; pointer-authoritative registrations (including Glue and HMS) are unsupported"
+            );
+        }
+        Ok(resolved)
+    }
+
     pub(crate) async fn load_metadata_location(
         context: &C,
         catalog_table: &[String],

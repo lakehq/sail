@@ -56,11 +56,16 @@ impl<'a> OpenApiGenerator<'a> {
             .collect::<BuildResult<Vec<_>>>()?;
 
         Ok(quote! {
+            pub trait RequestSigner: std::fmt::Debug + Send + Sync {
+                fn sign(&self, request: &mut reqwest::Request) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+            }
+
             #[derive(Debug)]
             pub struct ApiClient {
                 pub base: String,
                 pub client: reqwest::Client,
                 pub headers: reqwest::header::HeaderMap,
+                pub signer: Option<std::sync::Arc<dyn RequestSigner>>,
             }
 
             #[derive(Debug)]
@@ -72,6 +77,8 @@ impl<'a> OpenApiGenerator<'a> {
 
             #[derive(Debug, thiserror::Error)]
             pub enum ApiError<E> {
+                #[error("request signing error: {0}")]
+                Sign(#[source] Box<dyn std::error::Error + Send + Sync>),
                 #[error("request error: {0}")]
                 Request(#[from] reqwest::Error),
                 #[error("response error: status code {}", .0.status)]
@@ -83,6 +90,7 @@ impl<'a> OpenApiGenerator<'a> {
             impl<E> ApiError<E> {
                 pub fn status(&self) -> Option<reqwest::StatusCode> {
                     match self {
+                        Self::Sign(_) => None,
                         Self::Request(error) => error.status(),
                         Self::Response(response) => Some(response.status),
                         Self::Unknown(response) => Some(response.status),
@@ -108,7 +116,13 @@ impl<'a> OpenApiGenerator<'a> {
                         base: base.into(),
                         client,
                         headers,
+                        signer: None,
                     }
+                }
+
+                pub fn with_signer(mut self, signer: std::sync::Arc<dyn RequestSigner>) -> Self {
+                    self.signer = Some(signer);
+                    self
                 }
 
                 #(#methods)*

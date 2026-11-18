@@ -224,6 +224,9 @@ pub struct ClusterConfig {
     pub worker_task_slots: usize,
     pub task_launch_timeout_secs: u64,
     pub task_stream_buffer: usize,
+    pub task_stream_memory_limit: usize,
+    pub shuffle_write_buffer_size: usize,
+    pub task_stream_stall_timeout_secs: u64,
     pub task_stream_creation_timeout_secs: u64,
     pub task_max_attempts: usize,
     pub rpc_retry_strategy: RetryStrategy,
@@ -907,6 +910,16 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         password: Option<SecretString>,
+        /// Signs every request with AWS Signature Version 4, for example for the
+        /// Amazon S3 Tables or RustFS Iceberg REST endpoints.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sigv4_enabled: Option<bool>,
+        /// The SigV4 signing region. Defaults to the AWS region provider chain.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signing_region: Option<String>,
+        /// The SigV4 signing name, such as `s3tables` or `s3`. Defaults to `execute-api`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signing_name: Option<String>,
         #[serde(flatten)]
         cache: CatalogCacheConfig,
     },
@@ -1062,6 +1075,9 @@ impl ClusterConfigEnv {
         WORKER_EXTERNAL_HOST,
         WORKER_HEARTBEAT_INTERVAL_SECS,
         TASK_STREAM_BUFFER,
+        TASK_STREAM_MEMORY_LIMIT,
+        SHUFFLE_WRITE_BUFFER_SIZE,
+        TASK_STREAM_STALL_TIMEOUT_SECS,
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
         SHUFFLE_BACKEND__TYPE,

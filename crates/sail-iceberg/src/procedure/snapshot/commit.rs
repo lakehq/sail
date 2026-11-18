@@ -18,6 +18,7 @@ use crate::operations::metadata_commit::{
     PreviousMetadataFile, apply_snapshot_updates,
 };
 use crate::operations::snapshot::CreatedPathCleanup;
+use crate::procedure::expire_snapshots::{Expiration, ExpireSnapshots};
 use crate::procedure::rewrite_manifests::RewriteManifests;
 use crate::spec::TableMetadata;
 use crate::table::metadata_loader::{
@@ -31,6 +32,13 @@ const MAX_PROCEDURE_COMMIT_RETRIES: usize = 5;
 pub(crate) enum ProcedureCommitOperation {
     Snapshot(SnapshotOperation),
     RewriteManifests(RewriteManifests),
+    ExpireSnapshots(ExpireSnapshots),
+}
+
+impl From<ExpireSnapshots> for ProcedureCommitOperation {
+    fn from(operation: ExpireSnapshots) -> Self {
+        Self::ExpireSnapshots(operation)
+    }
 }
 
 impl From<SnapshotOperation> for ProcedureCommitOperation {
@@ -54,6 +62,7 @@ pub(crate) async fn commit_snapshot_operation(
     output_schema: datafusion::arrow::datatypes::SchemaRef,
 ) -> Result<RecordBatch> {
     let operation = operation.into();
+    let is_expiration = matches!(&operation, ProcedureCommitOperation::ExpireSnapshots(_));
     let object_store = ctx
         .runtime_env()
         .object_store_registry
@@ -62,20 +71,80 @@ pub(crate) async fn commit_snapshot_operation(
     let store_context = StoreContext::new(object_store.clone(), table_url)?;
     let catalog_table = lakehouse_table.map(|context| context.catalog_table().to_vec());
 
+    let mut initial_catalog = None;
+    let mut initial_uuid = None;
     for attempt in 1..=MAX_PROCEDURE_COMMIT_RETRIES {
-        let catalog_info = match catalog_table.as_ref() {
-            Some(table) => IcebergCatalogCommitCoordinator::load_table_info(ctx, table).await?,
-            None => CatalogTableInfo::default(),
+        let strict_catalog = if is_expiration {
+            match catalog_table.as_ref() {
+                Some(table) => {
+                    Some(IcebergCatalogCommitCoordinator::load_expiration_table(ctx, table).await?)
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        if let Some(fresh) = strict_catalog.as_ref() {
+            if let Some(initial) = initial_catalog.as_ref() {
+                validate_expiration_binding(initial, fresh)?;
+            } else {
+                if let Some(planned) = lakehouse_table {
+                    validate_expiration_context(planned, &fresh.execution)?;
+                }
+                initial_catalog = Some(fresh.clone());
+            }
+        }
+        let active_context = strict_catalog
+            .as_ref()
+            .map(|table| &table.execution)
+            .or(lakehouse_table);
+        if let ProcedureCommitOperation::ExpireSnapshots(operation) = &operation
+            && operation.clean_expired_metadata()
+            && active_context.is_some_and(|context| {
+                matches!(
+                    context.commit,
+                    sail_common_datafusion::catalog::CommitAuthority::IcebergRestCommit
+                )
+            })
+        {
+            // REST schema/spec removal cannot protect concurrently staged snapshots.
+            return plan_err!("clean_expired_metadata=true is not supported for REST tables");
+        }
+        let catalog_info = match strict_catalog.as_ref() {
+            Some(table) => CatalogTableInfo {
+                metadata_location: metadata_location_from_properties(
+                    &table.status.display_properties,
+                ),
+                is_catalog_managed_iceberg_table: catalog_managed_iceberg_from_properties(
+                    &table.status.display_properties,
+                ) || !matches!(
+                    table.execution.commit,
+                    sail_common_datafusion::catalog::CommitAuthority::Filesystem
+                ),
+            },
+            None => match catalog_table.as_ref() {
+                Some(table) => IcebergCatalogCommitCoordinator::load_table_info(ctx, table).await?,
+                None => CatalogTableInfo::default(),
+            },
         };
         let commit_mode =
-            IcebergCatalogCommitMode::resolve(lakehouse_table, &catalog_info, table_properties)?;
-        let recorded_metadata_location = catalog_info
-            .metadata_location
-            .clone()
-            .or_else(|| metadata_location_from_properties(table_properties));
+            IcebergCatalogCommitMode::resolve(active_context, &catalog_info, table_properties)?;
+        if is_expiration
+            && matches!(
+                commit_mode,
+                IcebergCatalogCommitMode::CompatibilityCatalogCommit
+            )
+        {
+            return plan_err!("expire_snapshots requires an explicit publication capability");
+        }
+        let recorded_metadata_location = catalog_info.metadata_location.clone().or_else(|| {
+            (!is_expiration)
+                .then(|| metadata_location_from_properties(table_properties))
+                .flatten()
+        });
         let metadata_location = if commit_mode.uses_catalog_metadata() {
             resolve_iceberg_metadata_location(
-                lakehouse_table,
+                active_context,
                 recorded_metadata_location.clone(),
                 catalog_info.is_catalog_managed_iceberg_table
                     || catalog_managed_iceberg_from_properties(table_properties),
@@ -86,13 +155,67 @@ pub(crate) async fn commit_snapshot_operation(
             None
         };
         let metadata_file = match metadata_location.as_deref() {
+            Some(location) if is_expiration => crate::procedure::expire_snapshots::checked_path(
+                &store_context,
+                table_url,
+                location,
+            )?
+            .to_string(),
             Some(location) => metadata_location_to_object_path_string(location)?,
             None => crate::table::find_latest_metadata_file(&object_store, table_url).await?,
         };
         let bytes = load_metadata_file_bytes(&object_store, &metadata_file).await?;
         let mut metadata = TableMetadata::from_json(&bytes)
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        if is_expiration {
+            if let Some(uuid) = initial_uuid {
+                if metadata.table_uuid != uuid {
+                    return plan_err!("Iceberg table UUID changed during expiration retry");
+                }
+            } else {
+                initial_uuid = Some(metadata.table_uuid);
+            }
+            let location = crate::procedure::expire_snapshots::checked_path(
+                &store_context,
+                table_url,
+                &metadata.location,
+            )?;
+            if location.as_ref().trim_end_matches('/')
+                != store_context.prefix_path.as_ref().trim_end_matches('/')
+            {
+                return plan_err!("Iceberg table storage location changed before expiration");
+            }
+            if commit_mode.uses_catalog_metadata() && metadata.table_uuid.is_none() {
+                return plan_err!("Catalog expiration requires a table UUID");
+            }
+            if let Some(id) =
+                active_context.and_then(|context| context.table_identity.table_id.as_deref())
+                && metadata.table_uuid.map(|uuid| uuid.to_string()).as_deref() != Some(id)
+            {
+                return plan_err!("Catalog UUID does not match expiration metadata");
+            }
+            // Legacy filesystem metadata may lack a UUID. Capture the identity that will
+            // actually be published, rather than letting serialization initialize a clone.
+            metadata.ensure_required_format_fields();
+        }
+        let mut expiration: Option<Expiration> = None;
         let prepared = match &operation {
+            ProcedureCommitOperation::ExpireSnapshots(operation) => {
+                let prepared = operation
+                    .prepare(&store_context, table_url, &metadata)
+                    .await?;
+                expiration = Some(prepared.expiration);
+                PreparedSnapshotOperation {
+                    changed: !prepared.updates.is_empty(),
+                    requirements: prepared.requirements,
+                    updates: prepared.updates,
+                    manifests: vec![],
+                    output: crate::procedure::expire_snapshots::output(
+                        output_schema.clone(),
+                        [0; 6],
+                    )?,
+                }
+            }
             ProcedureCommitOperation::Snapshot(operation) => {
                 operation.prepare(&metadata, output_schema.clone())?
             }
@@ -121,7 +244,7 @@ pub(crate) async fn commit_snapshot_operation(
                     "missing catalog table for Iceberg procedure commit".to_string(),
                 )
             })?;
-            let context = lakehouse_table.ok_or_else(|| {
+            let context = active_context.ok_or_else(|| {
                 DataFusionError::Internal(
                     "missing lakehouse context for Iceberg procedure commit".to_string(),
                 )
@@ -138,9 +261,29 @@ pub(crate) async fn commit_snapshot_operation(
                 .commit(context, requirements, updates)
                 .await?
             {
-                CatalogCommitOutcome::Committed(_) => {
+                CatalogCommitOutcome::Committed(committed) => {
+                    if is_expiration {
+                        validate_expiration_response(
+                            &committed,
+                            &metadata,
+                            &prepared.updates,
+                            metadata_location.as_deref(),
+                            &store_context,
+                            table_url,
+                        )?;
+                    }
                     cleanup.disarm();
-                    return Ok(prepared.output);
+                    return finish_expiration(
+                        ctx,
+                        table_url,
+                        table_properties,
+                        lakehouse_table,
+                        &store_context,
+                        expiration,
+                        strict_catalog.as_ref(),
+                        prepared.output,
+                    )
+                    .await;
                 }
                 CatalogCommitOutcome::Conflict => {
                     cleanup.cleanup().await;
@@ -261,9 +404,194 @@ pub(crate) async fn commit_snapshot_operation(
         }
         cleanup.disarm();
         prepared_metadata.write_hint(&store_context).await;
-        return Ok(prepared.output);
+        return finish_expiration(
+            ctx,
+            table_url,
+            table_properties,
+            lakehouse_table,
+            &store_context,
+            expiration,
+            strict_catalog.as_ref(),
+            prepared.output,
+        )
+        .await;
     }
     Err(procedure_commit_conflict())
+}
+
+async fn finish_expiration(
+    ctx: &TaskContext,
+    url: &url::Url,
+    properties: &[(String, String)],
+    table: Option<&sail_common_datafusion::catalog::LakehouseExecutionContext>,
+    store: &StoreContext,
+    expiration: Option<Expiration>,
+    expected_catalog: Option<&sail_catalog::lakehouse::LakehouseResolvedTable>,
+    output: RecordBatch,
+) -> Result<RecordBatch> {
+    match expiration {
+        None => Ok(output),
+        Some(expiration) => {
+            let current = async {
+                let fresh_store = ctx
+                    .runtime_env()
+                    .object_store_registry
+                    .get_store(url)
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                if !std::sync::Arc::ptr_eq(&fresh_store, &store.base) {
+                    return plan_err!("Iceberg object-store access changed after expiration");
+                }
+                let file = if let Some(expected) = expected_catalog {
+                    let fresh = IcebergCatalogCommitCoordinator::load_expiration_table(
+                        ctx,
+                        &expected.execution.catalog_table,
+                    )
+                    .await?;
+                    validate_expiration_binding(expected, &fresh)?;
+                    if matches!(
+                        fresh.execution.commit,
+                        sail_common_datafusion::catalog::CommitAuthority::Filesystem
+                    ) {
+                        crate::table::find_latest_metadata_file(&store.base, url).await?
+                    } else {
+                        let pointer =
+                            metadata_location_from_properties(&fresh.status.display_properties)
+                                .ok_or_else(|| {
+                                    DataFusionError::Execution(
+                                "Missing authoritative Iceberg metadata pointer after expiration"
+                                    .into(),
+                            )
+                                })?;
+                        crate::procedure::expire_snapshots::checked_path(store, url, &pointer)?
+                            .to_string()
+                    }
+                } else {
+                    let mode = IcebergCatalogCommitMode::resolve(
+                        table,
+                        &CatalogTableInfo::default(),
+                        properties,
+                    )?;
+                    if !matches!(mode, IcebergCatalogCommitMode::Filesystem) {
+                        return plan_err!(
+                            "Iceberg expiration has no authoritative catalog binding"
+                        );
+                    }
+                    crate::table::find_latest_metadata_file(&store.base, url).await?
+                };
+                let bytes = load_metadata_file_bytes(&store.base, &file).await?;
+                TableMetadata::from_json(&bytes)
+                    .map_err(|error| DataFusionError::External(Box::new(error)))
+            }
+            .await;
+            expiration
+                .finish(store, url, current, output.schema())
+                .await
+        }
+    }
+}
+
+fn validate_expiration_context(
+    expected: &sail_common_datafusion::catalog::LakehouseExecutionContext,
+    fresh: &sail_common_datafusion::catalog::LakehouseExecutionContext,
+) -> Result<()> {
+    if expected.catalog_provider_id != fresh.catalog_provider_id
+        || expected.catalog_table != fresh.catalog_table
+        || expected.table_identity != fresh.table_identity
+        || expected.authority != fresh.authority
+        || expected.pointer != fresh.pointer
+        || expected.commit != fresh.commit
+        || expected.format != fresh.format
+        || expected.versioned_catalog != fresh.versioned_catalog
+        || expected.governance != fresh.governance
+    {
+        return plan_err!("Iceberg expiration catalog binding or authority changed");
+    }
+    Ok(())
+}
+
+fn validate_expiration_binding(
+    expected: &sail_catalog::lakehouse::LakehouseResolvedTable,
+    fresh: &sail_catalog::lakehouse::LakehouseResolvedTable,
+) -> Result<()> {
+    validate_expiration_context(&expected.execution, &fresh.execution)?;
+    if expected.status.location != fresh.status.location {
+        return plan_err!("Iceberg expiration catalog storage location changed");
+    }
+    Ok(())
+}
+
+fn validate_expiration_response(
+    committed: &crate::catalog_support::commit::CatalogCommittedTable,
+    base: &TableMetadata,
+    updates: &[crate::spec::TableUpdate],
+    previous: Option<&str>,
+    store: &StoreContext,
+    url: &url::Url,
+) -> Result<()> {
+    let validate = || -> Result<()> {
+        let pointer = committed
+            .metadata_location()
+            .filter(|pointer| !pointer.is_empty())
+            .ok_or_else(|| {
+                DataFusionError::Execution("Missing expiration commit pointer".into())
+            })?;
+        crate::procedure::expire_snapshots::checked_path(store, url, pointer)?;
+        if Some(pointer) == previous {
+            return plan_err!("Expiration response did not publish a new metadata pointer");
+        }
+        let value = committed
+            .payload()
+            .and_then(|payload| payload.get("metadata"))
+            .ok_or_else(|| {
+                DataFusionError::Execution("Missing expiration commit metadata".into())
+            })?;
+        let current = TableMetadata::from_json(
+            &serde_json::to_vec(value)
+                .map_err(|error| DataFusionError::External(Box::new(error)))?,
+        )
+        .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        if current.table_uuid != base.table_uuid || current.location != base.location {
+            return plan_err!("Expiration response changed the table identity");
+        }
+        use crate::spec::TableUpdate;
+        for update in updates {
+            let applied = match update {
+                TableUpdate::RemoveSnapshots { snapshot_ids } => !current
+                    .snapshots
+                    .iter()
+                    .any(|snapshot| snapshot_ids.contains(&snapshot.snapshot_id)),
+                TableUpdate::RemoveSnapshotRef { ref_name } => !current.refs.contains_key(ref_name),
+                TableUpdate::RemoveStatistics { snapshot_id } => !current
+                    .statistics
+                    .iter()
+                    .any(|file| file.snapshot_id == *snapshot_id),
+                TableUpdate::RemovePartitionStatistics { snapshot_id } => !current
+                    .partition_statistics
+                    .iter()
+                    .any(|file| file.snapshot_id == *snapshot_id),
+                TableUpdate::RemoveSchemas { schema_ids } => !current
+                    .schemas
+                    .iter()
+                    .any(|schema| schema_ids.contains(&schema.schema_id())),
+                TableUpdate::RemovePartitionSpecs { spec_ids } => !current
+                    .partition_specs
+                    .iter()
+                    .any(|spec| spec_ids.contains(&spec.spec_id())),
+                _ => false,
+            };
+            if !applied {
+                return plan_err!("Expiration response did not apply requested removals");
+            }
+        }
+        Ok(())
+    };
+    validate().map_err(|error| {
+        DataFusionError::External(Box::new(
+            sail_catalog::error::CatalogError::CommitStateUnknown(
+                format!("Unconfirmed expiration publication: {error}").into(),
+            ),
+        ))
+    })
 }
 
 fn is_catalog_conflict(error: &DataFusionError) -> bool {

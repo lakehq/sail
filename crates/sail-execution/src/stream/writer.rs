@@ -72,10 +72,8 @@ impl TaskStreamSink for MultiChannelTaskStreamSink {
     }
 
     async fn commit(self: Box<Self>) -> Result<()> {
-        // A consumer may finish without reading one channel (for example, an
-        // empty hash-join build partition). Do not let that channel's buffered
-        // data prevent other channels from reaching end-of-stream. Once the
-        // consumers finish, stage cleanup releases any unread channels.
+        // Commit the channels concurrently so that slow I/O on one channel
+        // does not delay the others.
         try_join_all(self.sinks.into_iter().flatten().map(|sink| sink.commit())).await?;
         Ok(())
     }
