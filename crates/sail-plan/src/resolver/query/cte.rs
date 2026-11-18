@@ -496,15 +496,17 @@ fn shareable_definition(plan: &Arc<LogicalPlan>, nested: bool) -> PlanResult<Opt
     if per_reference || trivial {
         return Ok(None);
     }
-    let (_, sorted, _) = PlanResolver::require_input_sort_inner(plan.as_ref().clone())?;
-    Ok((!sorted || returns_first_rows(plan)).then_some(false))
+    let (_, sorted, global) = PlanResolver::require_input_sort_inner(plan.as_ref().clone())?;
+    Ok((!sorted || (global && returns_first_rows(plan))).then_some(false))
 }
 
 /// Returns whether the definition returns a limited number of rows of its input. When
-/// the input is sorted, the sort decides which rows the definition returns, so each
-/// evaluation of the definition has to sort, and the references that do not depend on
-/// the order of the rows can share one evaluation. A reference that depends on the
+/// the input is sorted as a whole, the sort decides which rows the definition returns, so
+/// each evaluation of the definition has to sort, and the references that do not depend
+/// on the order of the rows can share one evaluation. A reference that depends on the
 /// order evaluates the definition itself (see `PlanResolver::require_input_sort_inner`).
+/// The query planner still lets each reference evaluate a definition whose plan does not
+/// end in the sort, as when the limit skips rows (see `SharedCteBody::inline`).
 fn returns_first_rows(plan: &LogicalPlan) -> bool {
     let mut input = plan;
     loop {
@@ -548,7 +550,10 @@ mod tests {
     use datafusion::arrow::datatypes::DataType;
     use datafusion::functions::math::expr_fn::random;
     use datafusion_common::Spans;
-    use datafusion_expr::{Expr, LogicalPlanBuilder, Subquery, col, lit, out_ref_col};
+    use datafusion_expr::{
+        Expr, Extension, LogicalPlan, LogicalPlanBuilder, Subquery, col, lit, out_ref_col,
+    };
+    use sail_logical_plan::sort::SortWithinPartitionsNode;
 
     use super::shareable_definition;
     use crate::error::PlanResult;
@@ -602,12 +607,25 @@ mod tests {
         // The sort decides which rows the definition returns.
         let plan = sorted()?.limit(0, Some(1))?.build()?;
         assert_eq!(shareable_definition(&Arc::new(plan), false)?, Some(false));
+        // The definition is shareable here, but the query planner lets each reference
+        // evaluate it, since the limit that skips rows is applied above the sort.
         let plan = sorted()?
             .project(vec![col("v.column1")])?
             .limit(1, Some(1))?
             .alias("c")?
             .build()?;
         assert_eq!(shareable_definition(&Arc::new(plan), false)?, Some(false));
+        // A sort of each partition does not decide which rows the limit returns.
+        let plan = LogicalPlanBuilder::from(LogicalPlan::Extension(Extension {
+            node: Arc::new(SortWithinPartitionsNode::new(
+                Arc::new(values("v")?.build()?),
+                vec![col("v.column1").sort(false, false)],
+                None,
+            )),
+        }))
+        .limit(0, Some(1))?
+        .build()?;
+        assert_eq!(shareable_definition(&Arc::new(plan), false)?, None);
         Ok(())
     }
 }

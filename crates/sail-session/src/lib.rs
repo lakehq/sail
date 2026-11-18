@@ -898,6 +898,25 @@ mod tests {
                 "(SELECT a FROM top LIMIT 1) UNION ALL (SELECT b FROM top LIMIT 1)",
                 (0, 0),
             ),
+            // The limit is applied above the sort that holds the rows when it skips rows,
+            // so each reference evaluates the CTE itself.
+            (
+                ", o AS (SELECT a FROM VALUES (1, 5), (2, 7), (3, 9) AS t(a, v) ORDER BY v DESC LIMIT 1 OFFSET 1) \
+                 SELECT x.a FROM o x JOIN o y ON x.a = y.a",
+                (0, 0),
+            ),
+            // Each reference computes the expressions of the projection above the limit.
+            (
+                ", p AS (SELECT a, a + 1 AS c FROM (SELECT a FROM VALUES (1, 5), (2, 7), (3, 9) AS t(a, v) ORDER BY v DESC LIMIT 2)) \
+                 SELECT x.a FROM p x JOIN p y ON x.c = y.c",
+                (2, 1),
+            ),
+            // A sort of each partition does not decide which rows the limit returns.
+            (
+                ", s AS (SELECT a FROM VALUES (1, 5), (2, 7), (3, 9) AS t(a, v) SORT BY v DESC LIMIT 2) \
+                 SELECT x.a FROM s x JOIN s y ON x.a = y.a",
+                (0, 0),
+            ),
         ] {
             let query = format!("{top} {query}");
             let plan = optimize(&query, true).await?;
