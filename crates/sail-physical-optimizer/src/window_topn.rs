@@ -266,7 +266,8 @@ impl WindowTopN {
             None
         };
 
-        let mut partitioned_topk = PartitionedTopKExec::try_new(
+        // TODO: make `mut` after DataFusion 56
+        let partitioned_topk = PartitionedTopKExec::try_new(
             Arc::clone(window_exec_typed.input()),
             expr,
             partition_prefix_len,
@@ -274,11 +275,13 @@ impl WindowTopN {
             fn_kind,
         )
         .ok()?;
-        if let Some(field) = &ranking_field {
-            partitioned_topk = partitioned_topk
-                .with_ranking_field(Arc::clone(field))
-                .ok()?;
-        }
+
+        // TODO: Uncomment after DataFusion 56
+        // if let Some(field) = &ranking_field {
+        //     partitioned_topk = partitioned_topk
+        //         .with_ranking_field(Arc::clone(field))
+        //         .ok()?;
+        // }
 
         // Step 7: Rebuild the pipeline above the operator.
         //
@@ -431,11 +434,13 @@ fn supported_window_fn(
         Some(WindowFnKind::RowNumber)
     } else if fun == &rank_udwf() {
         Some(WindowFnKind::Rank)
-    } else if fun == &dense_rank_udwf() {
-        Some(WindowFnKind::DenseRank)
     } else {
         None
     }
+    // TODO: Uncomment after DataFusion 56
+    // else if fun == &dense_rank_udwf() {
+    //     Some(WindowFnKind::DenseRank)
+    // }
 }
 
 type PlanAndIntermediates = (Arc<dyn ExecutionPlan>, Vec<Arc<dyn ExecutionPlan>>);
