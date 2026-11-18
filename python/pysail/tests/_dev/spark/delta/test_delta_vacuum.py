@@ -40,7 +40,7 @@ def test_vacuum_hidden_and_escaped_partitions(spark, tmp_path, partition, value)
 
 
 # [CREDIT]: https://github.com/delta-io/delta/blob/v4.4.1/spark/src/test/scala/org/apache/spark/sql/delta/DeltaVacuumSuite.scala#L816-L846
-@pytest.mark.skipif(os.name != "posix", reason="Safe local empty-directory cleanup requires Unix descriptor APIs")
+@pytest.mark.xfail(strict=True, reason="VACUUM empty-directory cleanup is not supported")
 @pytest.mark.parametrize("populated", [False, True], ids=["empty", "active"])
 def test_vacuum_directories_and_base_protection(spark, semantic_table, populated):
     name, path = semantic_table
@@ -197,9 +197,19 @@ def test_vacuum_logging_disabled_deletes_expired_orphan(spark, vacuum_safety_tab
 
 
 # [CREDIT]: https://github.com/delta-io/delta/blob/v4.4.1/spark/src/main/scala/org/apache/spark/sql/delta/commands/VacuumCommand.scala#L1021-L1065
-@pytest.mark.skipif(os.name != "posix", reason="Local directory candidate discovery requires Unix descriptor APIs")
+@pytest.mark.parametrize(
+    "directory_cleanup",
+    [
+        pytest.param(False, id="files-only"),
+        pytest.param(
+            True,
+            id="directory-cleanup",
+            marks=pytest.mark.xfail(strict=True, reason="VACUUM empty-directory cleanup is not supported"),
+        ),
+    ],
+)
 @pytest.mark.parametrize("child_name", ["recent.txt", ".hidden", "_hidden", "_hidden_dir/keep.txt"])
-def test_vacuum_visible_directory_preserves_protected_child(spark, vacuum_safety_table, child_name):
+def test_vacuum_visible_directory_preserves_protected_child(spark, vacuum_safety_table, child_name, directory_cleanup):
     path = vacuum_safety_table
     visible = path / "visible"
     child = visible / child_name
@@ -225,10 +235,10 @@ def test_vacuum_visible_directory_preserves_protected_child(spark, vacuum_safety
         assert _paths(spark.sql(command).collect()) == {str(path)}
         assert not orphan.exists()
         assert _vacuum_tree(path) == expected
-        # Recent/hidden children do not count as expired entries in directory discovery.
-        # Non-recursive removal must still refuse their nonempty parent on every attempt.
+        # File-only VACUUM leaves directories intact. Future directory cleanup must also
+        # preserve nonempty parents containing recent or hidden children.
         for _ in range(2):
-            assert _paths(spark.sql(f"{command} DRY RUN").collect()) == {str(visible)}
+            assert _paths(spark.sql(f"{command} DRY RUN").collect()) == ({str(visible)} if directory_cleanup else set())
             assert _vacuum_tree(path) == expected
             assert _paths(spark.sql(command).collect()) == {str(path)}
             assert visible.is_dir()
