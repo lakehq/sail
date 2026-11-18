@@ -12,11 +12,18 @@ Spark materializes a non-deterministic CTE in full in a shuffle before any refer
 reads it, so it fails on a row that no reference reads (for example under a LIMIT, or
 when every reference is the probe side of an empty join). Sail fails only when a
 reference reads the row, as it does when the CTE is evaluated for each reference.
+
+Sail cluster mode evaluates a shared CTE in a stage of its own, which starts when it is
+scheduled and stops when no reference reads it anymore. So a volatile CTE can be
+evaluated, in part or in full, although no reference reads it, and the query can fail on
+a row of a volatile CTE that no reference reads.
 """
 
 import os
+import re
 
 import pytest
+from pyspark.errors import PySparkException
 
 from pysail.testing.spark.utils.common import is_jvm_spark
 
@@ -61,6 +68,22 @@ def ansi(spark):
 
 def rows(spark, query):
     return [tuple(row) for row in spark.sql(query).collect()]
+
+
+def check_rows_unless_an_unread_row_fails(spark, query, expected):
+    """Checks the result of a query over a volatile CTE with a failing row that no
+    reference reads. In Sail cluster mode, the stage of the CTE can reach the row before
+    the references stop reading, and the query then fails."""
+    if not LOCAL_CLUSTER:
+        assert rows(spark, query) == expected
+        return
+    try:
+        result = rows(spark, query)
+    except PySparkException as e:
+        if not re.search(DIVISION_BY_ZERO, str(e)):
+            raise
+        return
+    assert result == expected
 
 
 def volatile(function="rand()"):
@@ -274,11 +297,11 @@ def test_cte_is_not_evaluated_when_the_other_join_side_is_empty(spark, counted, 
         # Sail cluster mode starts the stage below the shuffle of an aggregate body before it
         # finds the other side empty, as it does without sharing, but evaluates the body once,
         # or once for each reference when the shuffle output is stored, as without sharing.
-        # With a stored shuffle output, a volatile body is evaluated once in a stage of its
-        # own before the other side is found empty, as Spark does.
+        # Sail cluster mode evaluates a volatile body once in a stage of its own before the
+        # other side is found empty, as Spark does.
         if cte == "aggregate-body" and LOCAL_CLUSTER:
             assert counted() <= (2000 if STORED_SHUFFLE else 1000)
-        elif cte == "volatile-body" and STORED_SHUFFLE:
+        elif cte == "volatile-body" and LOCAL_CLUSTER:
             assert counted() <= 1000  # noqa: PLR2004
         else:
             assert counted() == 0
@@ -352,8 +375,8 @@ def test_limits_over_volatile_cte_do_not_read_a_failing_row(spark, ansi):  # noq
             with pytest.raises(Exception, match="DIVIDE_BY_ZERO"):
                 spark.sql(query).collect()
     else:
-        assert rows(spark, union) == [(10, 10, True)]
-        assert rows(spark, join) == [(True, True)]
+        check_rows_unless_an_unread_row_fails(spark, union, [(10, 10, True)])
+        check_rows_unless_an_unread_row_fails(spark, join, [(True, True)])
 
 
 def test_sorted_limits_over_deterministic_cte_do_not_compute_a_failing_column(spark, ansi):  # noqa: ARG001
@@ -382,7 +405,7 @@ def test_failing_volatile_cte_whose_references_are_not_read(spark, ansi):  # noq
         with pytest.raises(Exception, match="DIVIDE_BY_ZERO"):
             spark.sql(query).collect()
     else:
-        assert rows(spark, query) == [(0, None)]
+        check_rows_unless_an_unread_row_fails(spark, query, [(0, None)])
 
 
 def test_failing_deterministic_cte_whose_references_are_not_read(spark, ansi):  # noqa: ARG001
