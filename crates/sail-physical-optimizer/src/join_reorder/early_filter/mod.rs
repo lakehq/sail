@@ -11,11 +11,13 @@
 //! joins, enumeration can normally place the dimension next to a fact already, and a
 //! copy of its keys would only repeat the probe of the original join.
 
+use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use datafusion::common::NullEquality;
+use datafusion::common::config::{ConfigEntry, ConfigExtension, ExtensionOptions};
 use datafusion::common::tree_node::TreeNode;
+use datafusion::common::{NullEquality, plan_err};
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::datasource::source::DataSourceExec;
@@ -47,27 +49,69 @@ struct Context<'a> {
 }
 
 /// The restrictions of the references of a shared CTE (see [`SharedCteRestriction`]),
-/// for the rule that optimizes the plan of the CTE.
-#[derive(Debug)]
-pub(super) struct SharedCteRestrictions {
+/// for the rule that optimizes the plan of the CTE. The query planner adds them to the
+/// configuration options that it plans the CTE with, which each rule receives however
+/// the rules of the session are wrapped.
+#[derive(Debug, Clone)]
+pub struct SharedCteRestrictions {
     /// The restrictions of each reference.
-    pub(super) references: Vec<Vec<SharedCteRestriction>>,
+    references: Vec<Vec<SharedCteRestriction>>,
     /// Whether the rule added a reduction to the plan of the CTE for the restrictions.
-    pub(super) applied: Arc<AtomicBool>,
+    applied: Arc<AtomicBool>,
+}
+
+impl SharedCteRestrictions {
+    pub fn new(references: Vec<Vec<SharedCteRestriction>>) -> Self {
+        Self {
+            references,
+            applied: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Returns whether the rule restricted a plan to the keys of the references, for
+    /// these restrictions or a copy of them.
+    pub fn applied(&self) -> bool {
+        self.applied.load(Ordering::Relaxed)
+    }
+}
+
+impl ConfigExtension for SharedCteRestrictions {
+    const PREFIX: &'static str = "sail_shared_cte_restrictions";
+}
+
+impl ExtensionOptions for SharedCteRestrictions {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn cloned(&self) -> Box<dyn ExtensionOptions> {
+        Box::new(self.clone())
+    }
+
+    fn set(&mut self, key: &str, _value: &str) -> Result<()> {
+        plan_err!("the shared CTE restrictions have no option: {key}")
+    }
+
+    fn entries(&self) -> Vec<ConfigEntry> {
+        vec![]
+    }
 }
 
 pub(super) fn propagate(
     plan: Arc<dyn ExecutionPlan>,
     config: &ConfigOptions,
     options: &super::JoinReorderOptions,
-    restrictions: Option<&SharedCteRestrictions>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut context = Context {
         remaining: MAX_REDUCTIONS,
         options,
     };
     let plan = visit(plan, config, &mut context)?;
-    match restrictions {
+    match config.extensions.get::<SharedCteRestrictions>() {
         Some(restrictions) => restrict(plan, restrictions, config, &mut context),
         None => Ok(plan),
     }
@@ -862,17 +906,11 @@ mod tests {
             let distribution = Distribution::UnspecifiedDistribution;
             body = Arc::new(OutputRequirementExec::new(body, None, distribution, None));
         }
-        let restrictions = SharedCteRestrictions {
-            references,
-            applied: Arc::new(AtomicBool::new(false)),
-        };
-        let plan = propagate(
-            body,
-            &ConfigOptions::default(),
-            &super::super::JoinReorderOptions::default(),
-            Some(&restrictions),
-        )?;
-        Ok((plan, restrictions.applied.load(Ordering::Relaxed)))
+        let restrictions = SharedCteRestrictions::new(references);
+        let mut config = ConfigOptions::default();
+        config.extensions.insert(restrictions.clone());
+        let plan = propagate(body, &config, &super::super::JoinReorderOptions::default())?;
+        Ok((plan, restrictions.applied()))
     }
 
     fn restriction(column: usize, null_equality: NullEquality) -> Result<SharedCteRestriction> {

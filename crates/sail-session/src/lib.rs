@@ -1549,6 +1549,7 @@ mod tests {
         use sail_data_source::formats::parquet::ParquetDataSource;
         use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
         use sail_physical_plan::shared_cte::SharedCteExec;
+        use sail_plan::explain::{ExplainKind, ExplainOptions, explain_string};
 
         // A file of 100 rows for each of 1000 keys, and a file of one row for each key.
         let directory = tempfile::tempdir()?;
@@ -1682,6 +1683,31 @@ mod tests {
                 "{query}"
             );
             assert_eq!(actual.lines().count(), rows + 4, "{query}\n{actual}");
+
+            // The plan that `EXPLAIN` shows is the plan that runs.
+            let explained = explain_string(
+                &shared,
+                Arc::new(PlanConfig::default()),
+                from_ast_statement(parse_one_statement(&query)?)?,
+                ExplainOptions {
+                    kind: ExplainKind::Simple,
+                    verbose: false,
+                    analyze: false,
+                },
+            )
+            .await?
+            .output;
+            let count = |operator: &str, text: &str| {
+                let lines = explained.lines();
+                lines
+                    .filter(|x| x.contains(operator) && x.contains(text))
+                    .count()
+            };
+            let explained_reductions = (
+                count("HashJoinExec", "__early_join_key"),
+                count("UnionExec", ""),
+            );
+            assert_eq!(explained_reductions, reduced, "{query}\n{explained}");
         }
         Ok(())
     }

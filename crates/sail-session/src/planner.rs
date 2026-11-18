@@ -1,7 +1,5 @@
-use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
@@ -11,13 +9,12 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::execution::memory_pool::MemoryLimit;
-use datafusion::execution::session_state::{SessionState, SessionStateBuilder};
+use datafusion::execution::session_state::SessionState;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{
     LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
 };
-use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -68,7 +65,7 @@ use sail_logical_plan::streaming::limit::StreamLimitNode;
 use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_logical_plan::tail::TailNode;
-use sail_physical_optimizer::JoinReorder;
+use sail_physical_optimizer::SharedCteRestrictions;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
@@ -219,9 +216,9 @@ impl ExtensionQueryPlanner {
         Ok(())
     }
 
-    /// Plans the shared CTE with the join reorder rule that restricts it to the keys of
-    /// all its references, which have the given restrictions. Returns the plan if the
-    /// rule restricted it.
+    /// Plans the shared CTE with the restrictions of its references in the configuration
+    /// options, for the join reorder rule to restrict it to the keys of all the
+    /// references. Returns the plan if the rule restricted it.
     async fn plan_restricted(
         &self,
         body: &SharedCteBody,
@@ -232,34 +229,15 @@ impl ExtensionQueryPlanner {
         let Some(state) = session.as_any().downcast_ref::<SessionState>() else {
             return Ok(None);
         };
-        let mut applied = None;
-        let mut references = Some(references);
-        let rules = state
-            .physical_optimizers()
-            .iter()
-            .map(|rule| {
-                let join_reorder = (rule.as_ref() as &dyn Any).downcast_ref::<JoinReorder>();
-                match (join_reorder, references.take()) {
-                    (Some(join_reorder), Some(references)) => {
-                        let (rule, flag) = join_reorder.with_shared_cte_restrictions(references);
-                        applied = Some(flag);
-                        Arc::new(rule) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
-                    }
-                    (_, taken) => {
-                        references = taken;
-                        Arc::clone(rule)
-                    }
-                }
-            })
-            .collect();
-        let Some(applied) = applied else {
-            return Ok(None);
-        };
-        let state = SessionStateBuilder::new_from_existing(state.clone())
-            .with_physical_optimizer_rules(rules)
-            .build();
+        let restrictions = SharedCteRestrictions::new(references);
+        let mut state = state.clone();
+        state
+            .config_mut()
+            .options_mut()
+            .extensions
+            .insert(restrictions.clone());
         let plan = self.plan(body.plan(), &state, shared_ctes).await?;
-        Ok(applied.load(Ordering::Relaxed).then_some(plan))
+        Ok(restrictions.applied().then_some(plan))
     }
 
     async fn plan(
