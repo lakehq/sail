@@ -127,85 +127,88 @@ impl TransportFrame<'static> {
     }
 }
 
+/// A fully validated reply. A remote failure completes the exchange on the socket.
+enum TransportReply {
+    Success(Vec<u8>),
+    Failure(String),
+}
+
+impl TransportReply {
+    /// Both RPC and chunk failures encode a length-prefixed error string in the header.
+    fn failure(header: &[u8], body: &TransportBody<'_>) -> CelebornResult<Self> {
+        let (length, message) = header
+            .split_first_chunk::<4>()
+            .ok_or_else(|| CelebornError::Protocol("missing failure message length".to_string()))?;
+        if body.len() != 0
+            || usize::try_from(i32::from_be_bytes(*length)).ok() != Some(message.len())
+        {
+            return Err(CelebornError::Protocol(
+                "invalid failure message length".to_string(),
+            ));
+        }
+        Ok(Self::Failure(String::from_utf8_lossy(message).into_owned()))
+    }
+}
+
 impl TransportFrame<'_> {
-    /// Returns the request ID of an RPC response or failure.
-    pub fn rpc_id(&self) -> Option<i64> {
+    /// Returns a matching reply, or skips a well-formed RPC reply to a different request.
+    fn reply_to(self, request: &TransportFrame<'_>) -> CelebornResult<Option<TransportReply>> {
         match self.frame_type {
             TransportFrameType::RpcResponse | TransportFrameType::RpcFailure => {
-                Some(i64::from_be_bytes(self.header.get(..8)?.try_into().ok()?))
+                self.rpc_reply_to(request)
             }
-            _ => None,
+            TransportFrameType::ChunkFetchSuccess | TransportFrameType::ChunkFetchFailure
+                if request.frame_type == TransportFrameType::ChunkFetchRequest =>
+            {
+                // Celeborn echoes the requested StreamChunkSlice, including the requested
+                // length when the last chunk contains fewer bytes.
+                let header = self
+                    .header
+                    .strip_prefix(request.header.as_slice())
+                    .ok_or_else(|| {
+                        CelebornError::Protocol("chunk response does not match request".to_string())
+                    })?;
+                let reply = if self.frame_type == TransportFrameType::ChunkFetchFailure {
+                    TransportReply::failure(header, &self.body)?
+                } else if header.is_empty() {
+                    TransportReply::Success(self.body.into_owned())
+                } else {
+                    return Err(CelebornError::Protocol(
+                        "invalid chunk response header length".to_string(),
+                    ));
+                };
+                Ok(Some(reply))
+            }
+            frame_type => Err(CelebornError::Protocol(format!(
+                "unexpected {frame_type:?} reply to {:?}",
+                request.frame_type
+            ))),
         }
     }
 
-    pub fn into_rpc_response(self, request_id: i64) -> CelebornResult<Vec<u8>> {
-        let body = self.body.into_owned();
-        match self.frame_type {
-            TransportFrameType::RpcResponse => {
-                if self.header.len() != 12 {
-                    return Err(CelebornError::Protocol(format!(
-                        "invalid RPC response header length: {}",
-                        self.header.len()
-                    )));
-                }
-                let response_id =
-                    i64::from_be_bytes(self.header[..8].try_into().map_err(|_| {
-                        CelebornError::Protocol("invalid RPC response ID".to_string())
-                    })?);
-                if response_id != request_id {
-                    return Err(CelebornError::Protocol(
-                        "RPC response ID does not match request".to_string(),
-                    ));
-                }
-                let declared_body_length =
-                    i32::from_be_bytes(self.header[8..].try_into().map_err(|_| {
-                        CelebornError::Protocol("invalid RPC response body length".to_string())
-                    })?);
-                if usize::try_from(declared_body_length).ok() != Some(body.len()) {
-                    return Err(CelebornError::Protocol(
-                        "invalid RPC response body length".to_string(),
-                    ));
-                }
-                Ok(body)
+    fn rpc_reply_to(self, request: &TransportFrame<'_>) -> CelebornResult<Option<TransportReply>> {
+        let (request_id, header) = self
+            .header
+            .split_first_chunk::<8>()
+            .ok_or_else(|| CelebornError::Protocol("invalid RPC reply ID".to_string()))?;
+        let reply = if self.frame_type == TransportFrameType::RpcFailure {
+            TransportReply::failure(header, &self.body)?
+        } else {
+            let length: [u8; 4] = header.try_into().map_err(|_| {
+                CelebornError::Protocol("invalid RPC response header length".to_string())
+            })?;
+            if usize::try_from(i32::from_be_bytes(length)).ok() != Some(self.body.len()) {
+                return Err(CelebornError::Protocol(
+                    "invalid RPC response length".to_string(),
+                ));
             }
-            TransportFrameType::RpcFailure => {
-                if !body.is_empty() || self.header.len() < 12 {
-                    return Err(CelebornError::Protocol(
-                        "invalid RPC failure frame".to_string(),
-                    ));
-                }
-                let response_id =
-                    i64::from_be_bytes(self.header[..8].try_into().map_err(|_| {
-                        CelebornError::Protocol("invalid RPC failure ID".to_string())
-                    })?);
-                if response_id != request_id {
-                    return Err(CelebornError::Protocol(
-                        "RPC failure ID does not match request".to_string(),
-                    ));
-                }
-                let error_length =
-                    i32::from_be_bytes(self.header[8..12].try_into().map_err(|_| {
-                        CelebornError::Protocol("invalid RPC failure length".to_string())
-                    })?);
-                let error_length = usize::try_from(error_length).map_err(|_| {
-                    CelebornError::Protocol("invalid RPC failure length".to_string())
-                })?;
-                if self.header.len() != 12 + error_length {
-                    return Err(CelebornError::Protocol(
-                        "invalid RPC failure length".to_string(),
-                    ));
-                }
-                Err(CelebornError::Protocol(
-                    String::from_utf8_lossy(&self.header[12..]).into_owned(),
-                ))
-            }
-            frame_type => Err(CelebornError::Protocol(format!(
-                "invalid RPC response frame message type: expected {} or {} but got {}",
-                TransportFrameType::RpcResponse as u8,
-                TransportFrameType::RpcFailure as u8,
-                frame_type as u8,
-            ))),
-        }
+            TransportReply::Success(self.body.into_owned())
+        };
+
+        // RPC and push requests both start with their ID. A chunk fetch has no RPC ID.
+        let matches = request.frame_type != TransportFrameType::ChunkFetchRequest
+            && request.header.starts_with(request_id);
+        Ok(matches.then_some(reply))
     }
 
     pub async fn write<W>(&self, writer: &mut W) -> CelebornResult<()>
@@ -233,7 +236,7 @@ impl TransportFrame<'_> {
 /// ordering. A transaction that does not complete (an I/O, timeout, or framing error, or a
 /// caller that stops waiting for the reply) invalidates the connection before it is reused.
 #[derive(Debug, Clone)]
-pub(crate) struct TransportConnection {
+pub struct TransportConnection {
     host: String,
     port: u16,
     timeout: Duration,
@@ -242,7 +245,7 @@ pub(crate) struct TransportConnection {
 }
 
 impl TransportConnection {
-    pub(crate) fn new(host: impl Into<String>, port: u16, timeout: Duration) -> Self {
+    pub fn new(host: impl Into<String>, port: u16, timeout: Duration) -> Self {
         Self {
             host: host.into(),
             port,
@@ -266,15 +269,14 @@ impl TransportConnection {
         self.send_rpc_with_id(self.next_request_id(), body).await
     }
 
-    async fn send_rpc_with_id(&self, request_id: i64, body: Vec<u8>) -> CelebornResult<Vec<u8>> {
-        // A reply to another request on this connection, which arrives after that request
-        // has failed, is not the reply to this request. The requests that share the
-        // connection are not sent in the order of their IDs.
-        self.request_until(TransportFrame::rpc_request(request_id, body)?, |response| {
-            response.rpc_id().is_none_or(|id| id == request_id)
-        })
-        .await?
-        .into_rpc_response(request_id)
+    /// Send an RPC with a caller-assigned ID unique to this connection.
+    pub async fn send_rpc_with_id(
+        &self,
+        request_id: i64,
+        body: Vec<u8>,
+    ) -> CelebornResult<Vec<u8>> {
+        self.request(TransportFrame::rpc_request(request_id, body)?)
+            .await
     }
 
     /// Push one map-data batch using Celeborn's `PushData` transport frame.
@@ -307,12 +309,7 @@ impl TransportConnection {
             header,
             body: TransportBody::PrefixAndData { prefix, data },
         };
-        let response = self
-            .request_until(frame, |response| {
-                response.rpc_id().is_none_or(|id| id == request_id)
-            })
-            .await?
-            .into_rpc_response(request_id)?;
+        let response = self.request(frame).await?;
         match response.first().copied() {
             None => Ok(()),
             Some(status)
@@ -342,68 +339,22 @@ impl TransportConnection {
         header.extend_from_slice(&chunk_index.to_be_bytes());
         header.extend_from_slice(&offset.to_be_bytes());
         header.extend_from_slice(&length.to_be_bytes());
-        // A late reply to an RPC on this connection is not the reply to this request.
-        let response = self
-            .request_until(
-                TransportFrame::new(TransportFrameType::ChunkFetchRequest, header, Vec::new()),
-                |response| response.rpc_id().is_none(),
-            )
-            .await?;
-        if response.frame_type != TransportFrameType::ChunkFetchSuccess
-            || response.header.len() != 20
-        {
-            return Err(CelebornError::Protocol(
-                "invalid chunk fetch response".to_string(),
-            ));
-        }
-        let response_stream_id =
-            i64::from_be_bytes(response.header[..8].try_into().map_err(|_| {
-                CelebornError::Protocol("invalid chunk response stream ID".to_string())
-            })?);
-        let response_chunk_index =
-            i32::from_be_bytes(response.header[8..12].try_into().map_err(|_| {
-                CelebornError::Protocol("invalid chunk response index".to_string())
-            })?);
-        let response_offset =
-            i32::from_be_bytes(response.header[12..16].try_into().map_err(|_| {
-                CelebornError::Protocol("invalid chunk response slice".to_string())
-            })?);
-        let response_length =
-            i32::from_be_bytes(response.header[16..].try_into().map_err(|_| {
-                CelebornError::Protocol("invalid chunk response slice".to_string())
-            })?);
-        if response_stream_id != stream_id || response_chunk_index != chunk_index {
-            return Err(CelebornError::Protocol(
-                "chunk response does not match request".to_string(),
-            ));
-        }
-        if response_offset != offset {
-            return Err(CelebornError::Protocol(format!(
-                "invalid chunk response slice: expected offset {offset} but got {response_offset}"
-            )));
-        }
-        if response_length < 0 {
-            return Err(CelebornError::Protocol(format!(
-                "invalid chunk response slice: negative length {response_length}"
-            )));
-        }
-        Ok(response.body.into_owned())
+        self.request(TransportFrame::new(
+            TransportFrameType::ChunkFetchRequest,
+            header,
+            Vec::new(),
+        ))
+        .await
     }
 
-    /// Sends the frame and returns the first response frame that is accepted, skipping
-    /// the frames before it.
-    async fn request_until(
-        &self,
-        frame: TransportFrame<'_>,
-        accept: impl Fn(&TransportFrame<'static>) -> bool + Send,
-    ) -> CelebornResult<TransportFrame<'static>> {
+    async fn request(&self, frame: TransportFrame<'_>) -> CelebornResult<Vec<u8>> {
         // Keep the lock outside the I/O timeout. A caller queued behind another transaction must
         // not time out and clear the connection that the active transaction is using.
         let mut transaction = Transaction {
             stream: self.stream.lock().await,
             completed: false,
         };
-        let result = tokio::time::timeout(self.timeout, async {
+        let reply = tokio::time::timeout(self.timeout, async {
             let stream = &mut *transaction.stream;
             if stream.is_none() {
                 *stream = Some(TcpStream::connect((&*self.host, self.port)).await?);
@@ -414,19 +365,17 @@ impl TransportConnection {
             frame.write(stream).await?;
             loop {
                 let response = TransportFrame::read(stream).await?;
-                if accept(&response) {
-                    return Ok(response);
+                if let Some(reply) = response.reply_to(&frame)? {
+                    return Ok::<_, CelebornError>(reply);
                 }
             }
         })
-        .await;
-        match result {
-            Ok(Ok(response)) => {
-                transaction.completed = true;
-                Ok(response)
-            }
-            Ok(Err(error)) => Err(error),
-            Err(_) => Err(CelebornError::Timeout),
+        .await
+        .map_err(|_| CelebornError::Timeout)??;
+        transaction.completed = true;
+        match reply {
+            TransportReply::Success(data) => Ok(data),
+            TransportReply::Failure(message) => Err(CelebornError::Protocol(message)),
         }
     }
 }
