@@ -7647,6 +7647,7 @@ mod tests {
                         ("custom".into(), "retained".into()),
                     ]))],
                 location: "file:///tmp/replacement-codec/".into(),
+                format: "iceberg".into(),
                 partition_by: vec![CatalogPartitionField { column: "id".into(), transform: Some(PartitionTransform::Identity) }],
                 sort_by: vec![], properties: vec![("owner".into(), "test".into())],
                 property_updates: vec![("owner".into(), "requested".into())], is_external: true,

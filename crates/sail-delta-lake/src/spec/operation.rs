@@ -63,6 +63,12 @@ impl std::str::FromStr for SaveMode {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum DeltaOperation {
+    #[serde(rename_all = "camelCase")]
+    Clone {
+        source: String,
+        source_version: i64,
+        is_shallow: bool,
+    },
     Optimize {
         predicate: Option<String>,
     },
@@ -155,6 +161,7 @@ pub enum DeltaOperation {
 impl DeltaOperation {
     pub fn name(&self) -> &str {
         match self {
+            Self::Clone { .. } => "CLONE",
             Self::Optimize { .. } => "OPTIMIZE",
             Self::VacuumStart { .. } => "VACUUM START",
             Self::VacuumEnd { .. } => "VACUUM END",
@@ -203,6 +210,15 @@ impl DeltaOperation {
 
         let mut parameters = HashMap::new();
         match self {
+            Self::Clone {
+                source,
+                source_version,
+                is_shallow,
+            } => {
+                insert_opt(&mut parameters, "source", Some(source));
+                insert_opt(&mut parameters, "sourceVersion", Some(source_version));
+                insert_opt(&mut parameters, "isShallow", Some(is_shallow));
+            }
             Self::Optimize { predicate } => {
                 insert_json(
                     &mut parameters,
@@ -378,7 +394,7 @@ impl DeltaOperation {
 
     pub fn read_whole_table(&self) -> bool {
         match self {
-            Self::Truncate {} | Self::DynamicPartitionOverwrite { .. } => true,
+            Self::Clone { .. } | Self::Truncate {} | Self::DynamicPartitionOverwrite { .. } => true,
             // UPDATE predicates are not yet evaluated against concurrent file additions, so
             // conservatively retain the full read set until predicate conflict checks are wired.
             Self::Update { .. } => true,

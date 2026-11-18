@@ -384,6 +384,12 @@ pub enum CommandNode {
         #[serde(flatten)]
         definition: TableDefinition,
     },
+    CloneTable {
+        table: ObjectName,
+        source: ObjectName,
+        #[serde(flatten)]
+        definition: TableDefinition,
+    },
     CreateTableAsSelect {
         table: ObjectName,
         #[serde(flatten)]

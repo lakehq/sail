@@ -59,6 +59,14 @@ pub enum CatalogCommand {
         table: Vec<String>,
         options: CreateTableOptions,
     },
+    CloneTable {
+        table: Vec<String>,
+        source: Vec<String>,
+        location: Option<String>,
+        default_location: String,
+        mode: sail_common::spec::CreateTableMode,
+        is_external: bool,
+    },
     TableExists {
         table: Vec<String>,
     },
@@ -187,6 +195,7 @@ impl CatalogCommand {
             CatalogCommand::ListDatabases { .. } => "ListDatabases",
             CatalogCommand::DropDatabase { .. } => "DropDatabase",
             CatalogCommand::CreateTable { .. } => "CreateTable",
+            CatalogCommand::CloneTable { .. } => "CloneTable",
             CatalogCommand::TableExists { .. } => "TableExists",
             CatalogCommand::GetTable { .. } => "GetTable",
             CatalogCommand::ShowTables { .. } => "ShowTables",
@@ -260,6 +269,7 @@ impl CatalogCommand {
             | CatalogCommand::FunctionExists { .. }
             | CatalogCommand::CreateDatabase { .. }
             | CatalogCommand::CreateTable { .. }
+            | CatalogCommand::CloneTable { .. }
             | CatalogCommand::CreateTemporaryView { .. }
             | CatalogCommand::CreateView { .. }
             | CatalogCommand::DropDatabase { .. }
@@ -366,6 +376,27 @@ impl CatalogCommand {
                     )
                     .await?;
                 }
+                display.bools().to_record_batch(vec![true])?
+            }
+            CatalogCommand::CloneTable {
+                table,
+                source,
+                location,
+                default_location,
+                mode,
+                is_external,
+            } => {
+                super::clone::clone_table(
+                    ctx,
+                    manager,
+                    table,
+                    source,
+                    location,
+                    default_location,
+                    mode,
+                    is_external,
+                )
+                .await?;
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::TableExists { table } => {

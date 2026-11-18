@@ -169,6 +169,14 @@ impl PlanResolver<'_> {
                 self.resolve_catalog_create_table(table, definition, state)
                     .await
             }
+            CommandNode::CloneTable {
+                table,
+                source,
+                definition,
+            } => {
+                self.resolve_catalog_clone_table(table, source, definition)
+                    .await
+            }
             CommandNode::CreateTableAsSelect {
                 table,
                 definition,

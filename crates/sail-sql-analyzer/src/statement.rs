@@ -298,19 +298,25 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         Statement::CreateTable {
             create: _,
             or_replace,
-            temporary: _, // TODO: handle temporary tables
+            temporary,
             external,
             table: _,
             if_not_exists,
             name,
             columns,
             like,
+            clone,
             using,
             clauses,
             r#as,
         } => {
             if like.is_some() {
                 return Err(SqlError::todo("LIKE in CREATE TABLE"));
+            }
+            if clone.is_some() && temporary.is_some() {
+                return Err(SqlError::invalid(
+                    "SHALLOW CLONE cannot create a temporary table",
+                ));
             }
             let definition = TableDefinition {
                 external: external.is_some(),
@@ -324,7 +330,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             let table = from_ast_object_name(name)?;
             let (definition, query) = from_ast_table_definition(definition)?;
-            let node = if let Some(query) = query {
+            let node = if let Some((_, _, source)) = clone {
+                if query.is_some() {
+                    return Err(SqlError::invalid("SHALLOW CLONE cannot have AS SELECT"));
+                }
+                spec::CommandNode::CloneTable {
+                    table,
+                    source: from_ast_object_name(source)?,
+                    definition,
+                }
+            } else if let Some(query) = query {
                 spec::CommandNode::CreateTableAsSelect {
                     table,
                     definition,
@@ -340,6 +355,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             external,
             table: _,
             name,
+            clone,
             columns,
             using,
             clauses,
@@ -357,7 +373,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             let table = from_ast_object_name(name)?;
             let (definition, query) = from_ast_table_definition(definition)?;
-            let node = if let Some(query) = query {
+            let node = if let Some((_, _, source)) = clone {
+                if query.is_some() {
+                    return Err(SqlError::invalid("SHALLOW CLONE cannot have AS SELECT"));
+                }
+                spec::CommandNode::CloneTable {
+                    table,
+                    source: from_ast_object_name(source)?,
+                    definition,
+                }
+            } else if let Some(query) = query {
                 spec::CommandNode::CreateTableAsSelect {
                     table,
                     definition,

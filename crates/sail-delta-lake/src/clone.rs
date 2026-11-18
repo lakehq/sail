@@ -1,0 +1,273 @@
+use datafusion::execution::TaskContext;
+use datafusion_common::{DataFusionError, Result, not_impl_err, plan_err};
+use futures::TryStreamExt;
+use object_store::path::Path;
+use sail_common::spec::CreateTableMode;
+use sail_common_datafusion::catalog::delta::is_delta_coordinated_property;
+use sail_common_datafusion::catalog::identity_partition_fields;
+use sail_common_datafusion::lakesource::{LakeSourceClone, LakeSourceMetadata};
+use sail_data_source::resolve_table_url;
+use url::Url;
+
+use crate::DeltaTableError;
+use crate::datasource::actions::adds_to_remove_actions;
+use crate::snapshot::{DeltaSnapshot, DeltaSnapshotConfig};
+use crate::spec::utils::{decode_path, encode_path};
+use crate::spec::{CommitAction, DeltaOperation, Metadata};
+use crate::table::{
+    create_logstore_with_object_store, open_table_with_object_store_and_table_config,
+};
+use crate::transaction::{CommitBuilder, CommitProperties};
+
+fn external(error: impl std::error::Error + Send + Sync + 'static) -> DataFusionError {
+    DataFusionError::External(Box::new(error))
+}
+
+/// Add paths are decoded by serde_path. Re-encode once before URI resolution.
+pub(crate) fn data_file_url(root: &Url, path: &str) -> Result<Url> {
+    let encoded = encode_path(path);
+    let url = if path.split_once(':').is_some_and(|(scheme, rest)| {
+        let mut chars = scheme.chars();
+        chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+            && rest.starts_with('/')
+    }) {
+        Url::parse(&encoded).map_err(external)?
+    } else {
+        root.join(&if path.starts_with('/') {
+            encoded
+        } else {
+            format!("./{encoded}")
+        })
+        .map_err(external)?
+    };
+    if url.scheme() != root.scheme() || url.authority() != root.authority() {
+        return not_impl_err!(
+            "Delta absolute data paths across object-store authorities are not supported"
+        );
+    }
+    Ok(url)
+}
+
+fn table_url(path: &str) -> Result<Url> {
+    let mut url = resolve_table_url(path.to_string())?;
+    if url.query().is_some() || url.fragment().is_some() {
+        return plan_err!("Delta table locations cannot contain query strings or fragments");
+    }
+    // Resolve existing local ancestors as well as symlink aliases of the table itself.
+    if url.scheme() == "file" {
+        let path = url
+            .to_file_path()
+            .map_err(|_| DataFusionError::Plan("invalid local Delta path".into()))?;
+        let mut ancestor = path.as_path();
+        let mut suffix = Vec::new();
+        while !ancestor.exists() {
+            suffix.push(
+                ancestor
+                    .file_name()
+                    .ok_or_else(|| DataFusionError::Plan("invalid Delta path".into()))?
+                    .to_owned(),
+            );
+            ancestor = ancestor
+                .parent()
+                .ok_or_else(|| DataFusionError::Plan("invalid Delta path".into()))?;
+        }
+        let mut canonical = ancestor.canonicalize().map_err(external)?;
+        for part in suffix.into_iter().rev() {
+            canonical.push(part);
+        }
+        url = Url::from_directory_path(canonical)
+            .map_err(|_| DataFusionError::Plan("invalid local Delta path".into()))?;
+    } else if !url.path().ends_with('/') {
+        url.set_path(&format!("{}/", url.path()));
+    }
+    Ok(url)
+}
+
+fn validate_snapshot(snapshot: &DeltaSnapshot) -> Result<()> {
+    let protocol = snapshot.protocol();
+    if protocol.min_reader_version() > 1
+        || protocol.min_writer_version() > 2
+        || protocol.reader_features().is_some()
+        || protocol.writer_features().is_some()
+    {
+        return not_impl_err!(
+            "SHALLOW CLONE currently supports Delta reader version 1 and writer versions 1-2 without table features"
+        );
+    }
+    if snapshot.metadata().configuration().keys().any(|key| {
+        is_delta_coordinated_property(key) || key.to_ascii_lowercase().starts_with("delta.feature.")
+    }) {
+        return not_impl_err!(
+            "SHALLOW CLONE of catalog-coordinated or feature-enabled Delta tables"
+        );
+    }
+    if snapshot.adds().iter().any(|add| {
+        add.deletion_vector.is_some()
+            || add.base_row_id.is_some()
+            || add.default_row_commit_version.is_some()
+            || add.clustering_provider.is_some()
+    }) {
+        return not_impl_err!(
+            "SHALLOW CLONE does not support deletion vectors, row tracking or clustering"
+        );
+    }
+    Ok(())
+}
+
+pub(crate) async fn prepare(
+    ctx: &TaskContext,
+    source: &str,
+    destination: &str,
+    mode: CreateTableMode,
+) -> Result<LakeSourceClone> {
+    let source_url = table_url(source)?;
+    let destination_url = table_url(destination)?;
+    if source_url.scheme() != destination_url.scheme()
+        || source_url.authority() != destination_url.authority()
+    {
+        return not_impl_err!("SHALLOW CLONE across object-store authorities is not supported");
+    }
+    // Match the decoded, segment-aware prefixes used by StorageConfig::decorate_store.
+    let source_root = Path::from_url_path(source_url.path())?;
+    let destination_root = Path::from_url_path(destination_url.path())?;
+    if source_root.prefix_matches(&destination_root)
+        || destination_root.prefix_matches(&source_root)
+    {
+        return plan_err!(
+            "SHALLOW CLONE source and destination must be distinct, non-overlapping locations"
+        );
+    }
+    let runtime = ctx.runtime_env();
+    let store = runtime
+        .object_store_registry
+        .get_store(&source_url)
+        .map_err(external)?;
+    let source_table = open_table_with_object_store_and_table_config(
+        source_url.clone(),
+        store.clone(),
+        Default::default(),
+        DeltaSnapshotConfig::default(),
+    )
+    .await?;
+    let source = source_table.snapshot()?;
+    validate_snapshot(source)?;
+    let destination_table = match open_table_with_object_store_and_table_config(
+        destination_url.clone(),
+        store.clone(),
+        Default::default(),
+        DeltaSnapshotConfig::default(),
+    )
+    .await
+    {
+        Ok(table) => Some(table),
+        Err(DeltaTableError::InvalidTableLocation(_) | DeltaTableError::FileNotFound(_)) => None,
+        Err(error) => return Err(error.into()),
+    };
+    let old = destination_table
+        .as_ref()
+        .map(|table| table.snapshot().cloned())
+        .transpose()?;
+    if let Some(old) = &old {
+        if mode.ignore_if_exists() {
+            return Ok(LakeSourceClone {
+                metadata: LakeSourceMetadata {
+                    schema: old.logical_arrow_schema()?,
+                    properties: old
+                        .metadata()
+                        .configuration()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                    partition_by: Some(identity_partition_fields(
+                        old.metadata().partition_columns(),
+                    )),
+                },
+                publish: Box::pin(async { Ok(()) }),
+            });
+        }
+        if !mode.is_replace() {
+            return plan_err!("SHALLOW CLONE destination already exists");
+        }
+        validate_snapshot(old)?;
+    } else {
+        if mode.replace_requires_existing() {
+            return plan_err!("REPLACE TABLE SHALLOW CLONE destination does not exist");
+        }
+        if store
+            .list(Some(&destination_root))
+            .try_next()
+            .await?
+            .is_some()
+        {
+            return plan_err!("SHALLOW CLONE destination is not empty and is not a Delta table");
+        }
+    }
+    let source_metadata = source.metadata();
+    let mut metadata = Metadata::try_new(
+        None,
+        old.as_ref()
+            .and_then(|s| s.metadata().description())
+            .map(str::to_string),
+        source_metadata.parse_schema()?,
+        source_metadata.partition_columns().clone(),
+        chrono::Utc::now().timestamp_millis(),
+        source_metadata.configuration().clone(),
+    )?;
+    if let Some(old) = &old {
+        metadata = metadata.with_table_id(old.metadata().id().to_string());
+    }
+    let protocol = old
+        .as_ref()
+        .map(|old| old.protocol().merge_upgrade_requirements(source.protocol()))
+        .unwrap_or_else(|| source.protocol().clone());
+    let result_metadata = LakeSourceMetadata {
+        schema: source.logical_arrow_schema()?,
+        properties: metadata
+            .configuration()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        partition_by: Some(identity_partition_fields(metadata.partition_columns())),
+    };
+    let mut actions = vec![
+        CommitAction::Protocol(protocol),
+        CommitAction::Metadata(metadata),
+    ];
+    if let Some(old) = &old {
+        actions.extend(
+            adds_to_remove_actions(old.adds().to_vec())
+                .into_iter()
+                .map(CommitAction::Remove),
+        );
+    }
+    for add in source.adds() {
+        let mut add = add.clone();
+        let absolute = data_file_url(&source_url, &add.path)?;
+        // A replacement must not reference files owned by its own destination.
+        if Path::from_url_path(absolute.path())?.prefix_matches(&destination_root) {
+            return plan_err!("SHALLOW CLONE cannot reference files inside its destination");
+        }
+        add.path = decode_path(absolute.as_str()).map_err(external)?;
+        add.data_change = true;
+        actions.push(CommitAction::Add(add));
+    }
+    let operation = DeltaOperation::Clone {
+        source: source_url.to_string(),
+        source_version: source.version(),
+        is_shallow: true,
+    };
+    let log_store = create_logstore_with_object_store(store, destination_url, Default::default())?;
+    let commit = CommitBuilder::from(CommitProperties::from_session_config(ctx.session_config())?)
+        .with_actions(actions)
+        .build(old, log_store, operation);
+    // Protocol/append-only validation is still preparation, before catalog publication.
+    let prepared = commit.into_prepared_commit_future().await?;
+    Ok(LakeSourceClone {
+        metadata: result_metadata,
+        publish: Box::pin(async move {
+            prepared.await?.await?;
+            Ok(())
+        }),
+    })
+}

@@ -1,3 +1,4 @@
+mod clone;
 pub mod command;
 pub mod credentials;
 pub mod error;

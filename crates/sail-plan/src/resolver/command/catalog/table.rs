@@ -60,6 +60,45 @@ impl PlanResolver<'_> {
         }
     }
 
+    pub(in super::super) async fn resolve_catalog_clone_table(
+        &self,
+        table: spec::ObjectName,
+        source: spec::ObjectName,
+        definition: spec::TableDefinition,
+    ) -> PlanResult<LogicalPlan> {
+        if !definition.columns.is_empty()
+            || definition.comment.is_some()
+            || !definition.constraints.is_empty()
+            || definition.file_format.is_some()
+            || definition.row_format.is_some()
+            || !definition.partition_by.is_empty()
+            || !definition.sort_by.is_empty()
+            || definition.bucket_by.is_some()
+            || !definition.cluster_by.is_empty()
+            || !definition.options.is_empty()
+            || !definition.properties.is_empty()
+        {
+            return Err(PlanError::unsupported(
+                "SHALLOW CLONE supports only LOCATION; schema, properties and layout are inherited from the source",
+            ));
+        }
+        let default_location = if table.parts().len() == 2
+            && table.parts()[0].as_ref().eq_ignore_ascii_case("delta")
+        {
+            table.parts()[1].as_ref().to_string()
+        } else {
+            self.resolve_default_table_location(&table).await?
+        };
+        self.resolve_catalog_command(CatalogCommand::CloneTable {
+            table: table.into(),
+            source: source.into(),
+            location: definition.location,
+            default_location,
+            mode: definition.mode,
+            is_external: definition.external,
+        })
+    }
+
     pub(in super::super) async fn resolve_catalog_create_table(
         &self,
         table: spec::ObjectName,

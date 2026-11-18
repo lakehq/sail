@@ -439,6 +439,7 @@ mod tests {
                 Default::default(),
             )],
             location: "memory:///table".into(),
+            format: "iceberg".into(),
             partition_by: vec![],
             sort_by: vec![],
             properties: vec![("owner".into(), "old".into())],

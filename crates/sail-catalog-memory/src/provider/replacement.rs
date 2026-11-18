@@ -11,16 +11,18 @@ impl MemoryCatalogProvider {
     ) -> CatalogResult<TableReplacement> {
         let _access = self.publication_gate.read().await;
         validate_create_table_options(&options.format, &options.partition_by)?;
-        if !options.format.eq_ignore_ascii_case("iceberg")
-            || !matches!(
-                options.mode,
-                CreateTableMode::Replace | CreateTableMode::CreateOrReplace
-            )
+        let is_delta = options.format.eq_ignore_ascii_case("delta");
+        if !(is_delta || options.format.eq_ignore_ascii_case("iceberg"))
+            || (!is_delta
+                && !matches!(
+                    options.mode,
+                    CreateTableMode::Replace | CreateTableMode::CreateOrReplace
+                ))
             || options.bucket_by.is_some()
             || !options.constraints.is_empty()
         {
             return Err(CatalogError::NotSupported(
-                "staged Iceberg table replacement options".into(),
+                "staged lakehouse table publication options".into(),
             ));
         }
         let db = self.databases.get(database).ok_or_else(|| {
@@ -34,6 +36,12 @@ impl MemoryCatalogProvider {
             ));
         }
         let existing = db.tables.get(table);
+        if existing.is_some() && !options.mode.is_replace() {
+            return Err(CatalogError::AlreadyExists(
+                CatalogObject::Table,
+                table.into(),
+            ));
+        }
         if options.mode.replace_requires_existing() && existing.is_none() {
             return Err(CatalogError::NotFound(CatalogObject::Table, table.into()));
         }
@@ -48,17 +56,17 @@ impl MemoryCatalogProvider {
                     location: old_location,
                     properties: old_properties,
                     ..
-                } if format.eq_ignore_ascii_case("iceberg") => {
+                } if format.eq_ignore_ascii_case(&options.format) => {
                     if old_location.as_deref() != Some(location.as_str()) {
                         return Err(CatalogError::NotSupported(
-                            "relocating an Iceberg table during replacement".into(),
+                            "relocating a lakehouse table during replacement".into(),
                         ));
                     }
                     properties = old_properties.clone();
                 }
                 _ => {
                     return Err(CatalogError::NotSupported(
-                        "replacing a non-Iceberg table with Iceberg".into(),
+                        "replacement requires the same lakehouse table format".into(),
                     ));
                 }
             }
@@ -101,6 +109,7 @@ impl MemoryCatalogProvider {
                 })
                 .collect(),
             location,
+            format: options.format,
             partition_by: options.partition_by,
             sort_by: options.sort_by,
             properties,
@@ -203,7 +212,7 @@ fn prepared_status(
             comment: None,
             constraints: vec![],
             location: Some(replacement.location.clone()),
-            format: "iceberg".into(),
+            format: replacement.format.clone(),
             partition_by: replacement.partition_by.clone(),
             sort_by: replacement.sort_by.clone(),
             bucket_by: None,

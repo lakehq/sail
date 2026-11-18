@@ -14,6 +14,7 @@ mod catalog;
 mod catalog_managed;
 mod change_data_feed;
 mod checkpoint;
+mod clone;
 pub mod conversion;
 pub mod datasource;
 mod ddl;

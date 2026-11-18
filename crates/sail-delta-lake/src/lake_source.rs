@@ -202,6 +202,16 @@ fn replace_where_constraints(condition: &ExprWithSource) -> Vec<DeltaCheckConstr
 
 #[async_trait]
 impl LakeSource for DeltaLakeSource {
+    async fn prepare_shallow_clone(
+        &self,
+        ctx: &datafusion::execution::TaskContext,
+        source: &str,
+        destination: &str,
+        mode: sail_common::spec::CreateTableMode,
+    ) -> Result<sail_common_datafusion::lakesource::LakeSourceClone> {
+        crate::clone::prepare(ctx, source, destination, mode).await
+    }
+
     fn procedure_provider(
         self: Arc<Self>,
     ) -> Option<Arc<dyn sail_common_datafusion::lakeprocedure::LakeProcedureProvider>> {

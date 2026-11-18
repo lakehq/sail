@@ -25,6 +25,13 @@ pub struct LakeSourceMetadata {
     pub partition_by: Option<Vec<CatalogPartitionField>>,
 }
 
+/// A validated zero-copy snapshot and its deferred storage publication.
+/// Preparation must not mutate storage. Publication must never delete shared data.
+pub struct LakeSourceClone {
+    pub metadata: LakeSourceMetadata,
+    pub publish: futures::future::BoxFuture<'static, Result<()>>,
+}
+
 /// A column definition used when catalog DDL asks a lake source to create
 /// storage metadata before registering the catalog object.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,6 +212,18 @@ pub trait LakeSource: DataSource {
     ) -> Result<LakeSourceCreateTableResult> {
         let _ = (runtime_env, config, info);
         Ok(LakeSourceCreateTableResult::default())
+    }
+
+    /// Prepares an independent log referencing the source snapshot's existing files.
+    async fn prepare_shallow_clone(
+        &self,
+        ctx: &TaskContext,
+        source: &str,
+        destination: &str,
+        mode: sail_common::spec::CreateTableMode,
+    ) -> Result<LakeSourceClone> {
+        let _ = (ctx, source, destination, mode);
+        not_impl_err!("SHALLOW CLONE is not supported for '{}'", self.name())
     }
 
     /// Creates a logical plan for a row-level operation.

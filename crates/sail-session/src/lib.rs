@@ -10,6 +10,8 @@ pub mod session_manager;
 
 #[cfg(test)]
 mod tests {
+    mod clone;
+
     use std::collections::HashMap;
     use std::sync::Arc;
 
