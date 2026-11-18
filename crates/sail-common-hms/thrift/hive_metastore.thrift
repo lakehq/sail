@@ -2,7 +2,9 @@
 
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileNotice: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE file distributed with this work for additional information regarding copyright ownership.
+// SPDX-FileComment: Credit: https://github.com/apache/hive/blob/5160d3af392248255f68e41e1e0557eae4d95273/metastore/if/hive_metastore.thrift
 // SPDX-FileAttributionText: Notice: https://github.com/apache/hive/blob/5160d3af392248255f68e41e1e0557eae4d95273/NOTICE
+// SPDX-FileAttributionText: Minor edits were applied to remove the dependency on fb303.
 
 #
 # Thrift Service that the MetaStore is built on

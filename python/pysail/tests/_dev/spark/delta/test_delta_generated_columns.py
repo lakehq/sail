@@ -141,7 +141,7 @@ def test_dataframewriter_path_overwrite_schema_does_not_rewrite_old_generated_co
 
 
 # SPDX-SnippetBegin
-# SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/GeneratedColumnSuite.scala#L815-L839
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/GeneratedColumnSuite.scala#L815-L839
 @pytest.mark.parametrize("mode", ["append", "overwrite"])
 @pytest.mark.parametrize(
     ("source", "generated", "valid"),

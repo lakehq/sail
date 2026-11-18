@@ -43,8 +43,8 @@ const BUF: usize = 256;
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/AbstractWell.java
-// SPDX-SnippetAttributionText: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java
+// SPDX-SnippetAttributionText: Adapted from https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/AbstractWell.java
+// SPDX-SnippetAttributionText: Adapted from https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java
 /// The `Well19937c` generator of Commons Math, with the `BitsStreamGenerator` methods.
 ///
 /// The `nextDouble` values are generated ahead into a buffer, which gives the same sequence

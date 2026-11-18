@@ -1,4 +1,4 @@
-# SPDX-FileComment: Credit: https://github.com/apache/iceberg/blob/6976e020b894f6a6777704df2b8c4458cb291ae9/core/src/test/java/org/apache/iceberg/hadoop/TestHadoopCommits.java#L394-L417
+# SPDX-FileAttributionText: Adapted from https://github.com/apache/iceberg/blob/6976e020b894f6a6777704df2b8c4458cb291ae9/core/src/test/java/org/apache/iceberg/hadoop/TestHadoopCommits.java#L394-L417
 
 # ruff: noqa: S608
 # Historical gzip-suffix reads re-express part of Iceberg 1.11.0

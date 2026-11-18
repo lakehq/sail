@@ -574,7 +574,7 @@ def test_delta_io_save_as_table_replace_where_completes_omitted_columns(
 
 
 # SPDX-SnippetBegin
-# SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/GeneratedColumnSuite.scala#L815-L839
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/GeneratedColumnSuite.scala#L815-L839
 @pytest.mark.parametrize("merge_schema", [None, "false", "true"], ids=["default-option", "no-merge", "merge"])
 @pytest.mark.parametrize("case_sensitive", ["false", "true"])
 @pytest.mark.parametrize(
@@ -889,7 +889,7 @@ def test_delta_io_replace_where_check_switch(spark, tmp_path):
 
 
 # SPDX-SnippetBegin
-# SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/051aac5e0d4dee202e1a2172437337317b3180a1/spark/src/test/scala/org/apache/spark/sql/delta/schema/SchemaEnforcementSuite.scala#L555-L570
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/051aac5e0d4dee202e1a2172437337317b3180a1/spark/src/test/scala/org/apache/spark/sql/delta/schema/SchemaEnforcementSuite.scala#L555-L570
 @pytest.mark.parametrize("replace_where_check", [None, "false"], indirect=True)
 @pytest.mark.parametrize("not_null", [False, True], ids=["nullable", "not-null"])
 @pytest.mark.parametrize(
@@ -970,7 +970,7 @@ def test_delta_io_save_as_table_overwrite_schema_evolution(spark, tmp_path, cond
 
 
 # SPDX-SnippetBegin
-# SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/schema/SchemaUtilsSuite.scala#L2382-L2399
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/schema/SchemaUtilsSuite.scala#L2382-L2399
 @pytest.mark.parametrize("api", ["path", "table"])
 @pytest.mark.parametrize("overwrite_schema", [False, True], ids=["merge-only", "both-flags"])
 @pytest.mark.usefixtures("replace_where_check")
@@ -1040,7 +1040,7 @@ def test_delta_io_replace_where_late_failure_does_not_commit(spark, tmp_path, ap
 
 
 # SPDX-SnippetBegin
-# SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaSuite.scala#L469-L536
+# SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaSuite.scala#L469-L536
 @pytest.mark.parametrize("partitioned", [False, True], ids=["unpartitioned", "partitioned"])
 @pytest.mark.parametrize("mapping", ["none", "name"])
 @pytest.mark.parametrize(

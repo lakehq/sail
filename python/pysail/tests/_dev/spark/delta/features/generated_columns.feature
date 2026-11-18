@@ -335,7 +335,7 @@ Feature: Delta Lake Generated Columns
         """
       # Semantic port of the NULL cases in Delta 4.4.0 GeneratedColumnSuite.
       # SPDX-SnippetBegin
-      # SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/GeneratedColumnSuite.scala#L815-L839
+      # SPDX-SnippetAttributionText: Adapted from https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/GeneratedColumnSuite.scala#L815-L839
       Given statement
         """
         INSERT INTO delta_gen_col_enforce
