@@ -1,5 +1,5 @@
 -- SPDX-FileComment: SQLBench-H query 10 derived from TPC-H query 10 under the terms of the TPC Fair Use Policy.
--- SPDX-FileCopyrightText: 1993-2022 Transaction Processing Performance Council.
+-- SPDX-FileCopyrightText: Copyright 1993-2022 Transaction Processing Performance Council.
 
 select
   c_custkey,

@@ -25,6 +25,9 @@ impl ReadFormat for AvroReadFormat {
         Ok(CompressionTypeVariant::UNCOMPRESSED)
     }
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-avro/src/file_format.rs
     async fn infer_schema(
         &self,
         _ctx: &dyn Session,
@@ -53,6 +56,7 @@ impl ReadFormat for AvroReadFormat {
             NanosecondTimestamps::Report,
         )?))
     }
+    // SPDX-SnippetEnd
 
     async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
         let source = AvroSource::new(input.schema);

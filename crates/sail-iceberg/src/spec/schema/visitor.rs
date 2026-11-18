@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileComment: Credit: <https://github.com/apache/iceberg-rust/blob/ddbcae46d4b6739b0d21fbf44de85b140b3d272a/crates/iceberg/src/spec/schema/visitor.rs> Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE file distributed with this work for additional information regarding copyright ownership.
+// SPDX-FileNotice: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements.
+// SPDX-FileComment: Credit: https://github.com/apache/iceberg-rust/blob/ddbcae46d4b6739b0d21fbf44de85b140b3d272a/crates/iceberg/src/spec/schema/visitor.rs
 
 use crate::{
     ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, Schema, StructType, Type,

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileComment: License: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt> License: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE>
-// SPDX-FileCopyrightText: Copyright 2023-2024 The Delta Kernel Rust Authors. Portions Copyright 2025-2026 LakeSail, Inc.
-// SPDX-FileContributor: Ported and modified by LakeSail, Inc. in 2026.
+// SPDX-FileComment: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt License: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
+// SPDX-FileCopyrightText: Copyright 2023-2024 The Delta Kernel Rust Authors
+// SPDX-FileCopyrightText: Portions Copyright 2025-2026 LakeSail, Inc.
+// SPDX-FileContributor: Ported and modified by LakeSail, Inc. in 2026
 
 use std::collections::HashMap;
 use std::io::Cursor;

@@ -335,7 +335,7 @@ def test_checkpoint_compacted_tail_uses_original_commit_timestamps(
 ):
     # SPDX-SnippetBegin
     # SPDX-License-Identifier: Apache-2.0
-    # SPDX-SnippetComment: Credit: <https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaTimeTravelSuite.scala> Credit: <https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/InCommitTimestampSuite.scala>
+    # SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaTimeTravelSuite.scala Credit: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/InCommitTimestampSuite.scala
     # Exact and between-commit timestamps use ICT rather than mtime, including the enablement boundary.
     _write_checkpoint_with_compacted_tail(tmp_path, tail, ict_enablement_version=ict_enablement_version)
     names = ["old", "first", "middle", "new"]

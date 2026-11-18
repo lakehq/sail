@@ -279,10 +279,10 @@ def test_invalid_procedure_arguments_do_not_mutate_table(spark, history, argumen
     assert {file: file.read_bytes() for file in path.rglob("*") if file.is_file()} == before
 
 
-# SPDX-SnippetBegin
-# SPDX-License-Identifier: Apache-2.0
-# SPDX-SnippetComment: Credit: https://github.com/apache/iceberg/blob/212aa894e919ff9fdf89160da4aadcbe6858ac01/spark/v4.1/spark-extensions/src/test/java/org/apache/iceberg/spark/extensions/TestExpireSnapshotsProcedure.java#L196-L217
 def test_cross_catalog_expiration_rejection_preserves_both_tables(tmp_path):
+    # SPDX-SnippetBegin
+    # SPDX-License-Identifier: Apache-2.0
+    # SPDX-SnippetComment: Credit: https://github.com/apache/iceberg/blob/212aa894e919ff9fdf89160da4aadcbe6858ac01/spark/v4.1/spark-extensions/src/test/java/org/apache/iceberg/spark/extensions/TestExpireSnapshotsProcedure.java#L196-L217
     catalogs = '[{name="left", type="memory", initial_database=["default"]}, {name="right", type="memory", initial_database=["default"]}]'
     with (
         spark_connect_server(envs={"SAIL_CATALOG__LIST": catalogs, "SAIL_CATALOG__DEFAULT_CATALOG": "left"}) as server,
@@ -309,6 +309,4 @@ def test_cross_catalog_expiration_rejection_preserves_both_tables(tmp_path):
             ).first()
             assert result.deleted_data_files_count == 1
             assert len(_find_latest_metadata(tmp_path / catalog)["snapshots"]) == 1
-
-
-# SPDX-SnippetEnd
+    # SPDX-SnippetEnd

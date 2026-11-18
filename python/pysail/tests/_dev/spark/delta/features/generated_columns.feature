@@ -359,9 +359,9 @@ Feature: Delta Lake Generated Columns
       Then query result ordered
         | id | event_date |
         | 1  | NULL       |
+      # SPDX-SnippetEnd
 
     Scenario: Insert with incorrect explicit generated column value fails
-      # SPDX-SnippetEnd
       Given statement template
         """
         CREATE TABLE delta_gen_col_enforce (

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileComment: Credit: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/mod.rs> Credit: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/default_logstore.rs> License: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt>
-// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors. Portions Copyright (2025) LakeSail, Inc.
-// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025.
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/mod.rs  License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 //! Local log store abstraction backed by `object_store`.
 
@@ -150,6 +151,9 @@ pub trait LogStore: Send + Sync {
     }
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/default_logstore.rs
 #[derive(Debug, Clone)]
 struct DefaultLogStore {
     prefixed_store: ObjectStoreRef,
@@ -263,7 +267,11 @@ impl LogStore for DefaultLogStore {
         &self.config
     }
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/default_logstore.rs
 fn put_options() -> &'static PutOptions {
     static PUT_OPTS: LazyLock<PutOptions> = LazyLock::new(|| PutOptions {
         mode: PutMode::Create,
@@ -271,6 +279,7 @@ fn put_options() -> &'static PutOptions {
     });
     &PUT_OPTS
 }
+// SPDX-SnippetEnd
 
 async fn read_commit_entry(storage: &dyn ObjectStore, version: i64) -> DeltaResult<Option<Bytes>> {
     let commit_uri = commit_path(version);

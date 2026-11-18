@@ -325,7 +325,6 @@ impl ShuffleBuffer {
             .collect::<Result<_>>()?;
         self.push(batch.schema(), columns, own, batch.num_rows(), false, flush)
     }
-
     // SPDX-SnippetEnd
 
     fn push(

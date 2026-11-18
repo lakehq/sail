@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileComment: Credit: <https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/AbstractWell.java> Credit: <https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/Well19937c.java> Credit: <https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java> Credit: <https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/distribution/ExponentialDistribution.java> Credit: <https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/util/CombinatoricsUtils.java> Credit: <https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/distribution/PoissonDistribution.java>
+// SPDX-FileComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/distribution/PoissonDistribution.java
 
 //! Port of the Poisson sampler that Spark uses for sampling with replacement.
 //!
@@ -22,11 +22,15 @@
 
 use std::f64::consts::PI;
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/Well19937c.java
 const K: usize = 19937;
 const M1: usize = 70;
 const M2: usize = 179;
 const M3: usize = 449;
 const R: usize = K.div_ceil(32);
+// SPDX-SnippetEnd
 
 /// Returns `index % R` for an index below `2 * R`.
 #[inline(always)]
@@ -37,6 +41,9 @@ fn wrap_index(index: usize) -> usize {
 /// The number of `nextDouble` values that are generated at a time.
 const BUF: usize = 256;
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/AbstractWell.java Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java
 /// The `Well19937c` generator of Commons Math, with the `BitsStreamGenerator` methods.
 ///
 /// The `nextDouble` values are generated ahead into a buffer, which gives the same sequence
@@ -49,8 +56,12 @@ pub struct Well19937c {
     buffer: Box<[f64; BUF]>,
     pos: usize,
 }
+// SPDX-SnippetEnd
 
 impl Well19937c {
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/AbstractWell.java
     /// Creates a generator in the state of `Well19937c.setSeed(long)`.
     pub fn new(seed: i64) -> Self {
         let mut v = Box::new([0u32; R]);
@@ -71,7 +82,11 @@ impl Well19937c {
             pos: BUF,
         }
     }
+    // SPDX-SnippetEnd
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/Well19937c.java
     #[inline(always)]
     fn next(&mut self, bits: u32) -> u32 {
         let index = self.index;
@@ -102,6 +117,7 @@ impl Well19937c {
 
         z4 >> (32 - bits)
     }
+    // SPDX-SnippetEnd
 
     #[inline(always)]
     pub fn next_double(&mut self) -> f64 {
@@ -121,13 +137,20 @@ impl Well19937c {
         self.pos = 0;
     }
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java
     #[inline(always)]
     fn raw_next_double(&mut self) -> f64 {
         let high = (self.next(26) as u64) << 26;
         let low = self.next(26) as u64;
         (high | low) as f64 * f64::from_bits(0x3CB0000000000000) // 0x1.0p-52
     }
+    // SPDX-SnippetEnd
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java
     pub fn next_gaussian(&mut self) -> f64 {
         if self.next_gaussian.is_nan() {
             // generate a new pair of gaussian numbers
@@ -144,8 +167,12 @@ impl Well19937c {
             random
         }
     }
+    // SPDX-SnippetEnd
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/distribution/ExponentialDistribution.java
 /// `ExponentialDistribution.EXPONENTIAL_SA_QI`: `qi = sum(ln(2)^i / i!)` for `i >= 1`
 /// while `qi < 1`.
 fn exponential_sa_qi() -> Vec<f64> {
@@ -162,7 +189,11 @@ fn exponential_sa_qi() -> Vec<f64> {
     }
     result
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/util/CombinatoricsUtils.java
 /// The factorials up to 20, as in `CombinatoricsUtils.FACTORIALS`.
 fn factorial(n: usize) -> f64 {
     (1..=n as u64).product::<u64>() as f64
@@ -180,6 +211,7 @@ fn factorial_log(n: i32) -> f64 {
     }
     log_sum
 }
+// SPDX-SnippetEnd
 
 /// The `PoissonDistribution` of Commons Math with its own `Well19937c` generator.
 ///
@@ -364,6 +396,9 @@ impl SparkPoisson {
         y2 + y as i64
     }
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/distribution/ExponentialDistribution.java
     /// `ExponentialDistribution.sample` with mean 1.
     fn exponential(&mut self) -> f64 {
         let qi = &self.exponential_sa_qi;
@@ -405,6 +440,7 @@ impl SparkPoisson {
 
         a + umin * qi[0]
     }
+    // SPDX-SnippetEnd
 }
 
 #[cfg(test)]

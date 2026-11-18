@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileComment: Credit: <https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/MersenneTwister.java> Credit: <https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java>
+// SPDX-FileComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/MersenneTwister.java
 
 //! Port of the Mersenne Twister of Apache Commons Math, which Spark uses for `uuid` and
 //! `shuffle` (`RandomUUIDGenerator` and `RandomIndicesGenerator`).
@@ -96,13 +96,20 @@ impl MersenneTwister {
         y >> (32 - bits)
     }
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java
     /// Returns the next random 64-bit integer, as `nextLong()`.
     pub fn next_i64(&mut self) -> i64 {
         let high = (self.next(32) as u64) << 32;
         let low = self.next(32) as u64;
         (high | low) as i64
     }
+    // SPDX-SnippetEnd
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java
     /// Returns a random integer in `[0, n)` for a positive `n`, as `nextInt(n)`.
     pub fn next_int_bounded(&mut self, n: i32) -> i32 {
         debug_assert!(n > 0);
@@ -117,6 +124,7 @@ impl MersenneTwister {
             }
         }
     }
+    // SPDX-SnippetEnd
 }
 
 #[cfg(test)]

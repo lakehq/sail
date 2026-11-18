@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-json/src/file_format.rs
 
 use datafusion::catalog::Session;
 use datafusion_common::{DataFusionError, Result};

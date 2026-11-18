@@ -1,5 +1,5 @@
 -- SPDX-FileComment: SQLBench-H query 15 derived from TPC-H query 15 under the terms of the TPC Fair Use Policy.
--- SPDX-FileCopyrightText: 1993-2022 Transaction Processing Performance Council.
+-- SPDX-FileCopyrightText: Copyright 1993-2022 Transaction Processing Performance Council.
 
 create view revenue0 (supplier_no, total_revenue) as
 select
