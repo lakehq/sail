@@ -5,7 +5,7 @@ use std::time::Duration;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::error::{CelebornError, CelebornResult};
 use crate::protocol::StatusCode;
@@ -127,75 +127,88 @@ impl TransportFrame<'static> {
     }
 }
 
+/// A fully validated reply. A remote failure completes the exchange on the socket.
+enum TransportReply {
+    Success(Vec<u8>),
+    Failure(String),
+}
+
+impl TransportReply {
+    /// Both RPC and chunk failures encode a length-prefixed error string in the header.
+    fn failure(header: &[u8], body: &TransportBody<'_>) -> CelebornResult<Self> {
+        let (length, message) = header
+            .split_first_chunk::<4>()
+            .ok_or_else(|| CelebornError::Protocol("missing failure message length".to_string()))?;
+        if body.len() != 0
+            || usize::try_from(i32::from_be_bytes(*length)).ok() != Some(message.len())
+        {
+            return Err(CelebornError::Protocol(
+                "invalid failure message length".to_string(),
+            ));
+        }
+        Ok(Self::Failure(String::from_utf8_lossy(message).into_owned()))
+    }
+}
+
 impl TransportFrame<'_> {
-    pub fn into_rpc_response(self, request_id: i64) -> CelebornResult<Vec<u8>> {
-        let body = self.body.into_owned();
+    /// Returns a matching reply, or skips a well-formed RPC reply to a different request.
+    fn reply_to(self, request: &TransportFrame<'_>) -> CelebornResult<Option<TransportReply>> {
         match self.frame_type {
-            TransportFrameType::RpcResponse => {
-                if self.header.len() != 12 {
-                    return Err(CelebornError::Protocol(format!(
-                        "invalid RPC response header length: {}",
-                        self.header.len()
-                    )));
-                }
-                let response_id =
-                    i64::from_be_bytes(self.header[..8].try_into().map_err(|_| {
-                        CelebornError::Protocol("invalid RPC response ID".to_string())
-                    })?);
-                if response_id != request_id {
-                    return Err(CelebornError::Protocol(
-                        "RPC response ID does not match request".to_string(),
-                    ));
-                }
-                let declared_body_length =
-                    i32::from_be_bytes(self.header[8..].try_into().map_err(|_| {
-                        CelebornError::Protocol("invalid RPC response body length".to_string())
-                    })?);
-                if usize::try_from(declared_body_length).ok() != Some(body.len()) {
-                    return Err(CelebornError::Protocol(
-                        "invalid RPC response body length".to_string(),
-                    ));
-                }
-                Ok(body)
+            TransportFrameType::RpcResponse | TransportFrameType::RpcFailure => {
+                self.rpc_reply_to(request)
             }
-            TransportFrameType::RpcFailure => {
-                if !body.is_empty() || self.header.len() < 12 {
+            TransportFrameType::ChunkFetchSuccess | TransportFrameType::ChunkFetchFailure
+                if request.frame_type == TransportFrameType::ChunkFetchRequest =>
+            {
+                // Celeborn echoes the requested StreamChunkSlice, including the requested
+                // length when the last chunk contains fewer bytes.
+                let header = self
+                    .header
+                    .strip_prefix(request.header.as_slice())
+                    .ok_or_else(|| {
+                        CelebornError::Protocol("chunk response does not match request".to_string())
+                    })?;
+                let reply = if self.frame_type == TransportFrameType::ChunkFetchFailure {
+                    TransportReply::failure(header, &self.body)?
+                } else if header.is_empty() {
+                    TransportReply::Success(self.body.into_owned())
+                } else {
                     return Err(CelebornError::Protocol(
-                        "invalid RPC failure frame".to_string(),
+                        "invalid chunk response header length".to_string(),
                     ));
-                }
-                let response_id =
-                    i64::from_be_bytes(self.header[..8].try_into().map_err(|_| {
-                        CelebornError::Protocol("invalid RPC failure ID".to_string())
-                    })?);
-                if response_id != request_id {
-                    return Err(CelebornError::Protocol(
-                        "RPC failure ID does not match request".to_string(),
-                    ));
-                }
-                let error_length =
-                    i32::from_be_bytes(self.header[8..12].try_into().map_err(|_| {
-                        CelebornError::Protocol("invalid RPC failure length".to_string())
-                    })?);
-                let error_length = usize::try_from(error_length).map_err(|_| {
-                    CelebornError::Protocol("invalid RPC failure length".to_string())
-                })?;
-                if self.header.len() != 12 + error_length {
-                    return Err(CelebornError::Protocol(
-                        "invalid RPC failure length".to_string(),
-                    ));
-                }
-                Err(CelebornError::Protocol(
-                    String::from_utf8_lossy(&self.header[12..]).into_owned(),
-                ))
+                };
+                Ok(Some(reply))
             }
             frame_type => Err(CelebornError::Protocol(format!(
-                "invalid RPC response frame message type: expected {} or {} but got {}",
-                TransportFrameType::RpcResponse as u8,
-                TransportFrameType::RpcFailure as u8,
-                frame_type as u8,
+                "unexpected {frame_type:?} reply to {:?}",
+                request.frame_type
             ))),
         }
+    }
+
+    fn rpc_reply_to(self, request: &TransportFrame<'_>) -> CelebornResult<Option<TransportReply>> {
+        let (request_id, header) = self
+            .header
+            .split_first_chunk::<8>()
+            .ok_or_else(|| CelebornError::Protocol("invalid RPC reply ID".to_string()))?;
+        let reply = if self.frame_type == TransportFrameType::RpcFailure {
+            TransportReply::failure(header, &self.body)?
+        } else {
+            let length: [u8; 4] = header.try_into().map_err(|_| {
+                CelebornError::Protocol("invalid RPC response header length".to_string())
+            })?;
+            if usize::try_from(i32::from_be_bytes(length)).ok() != Some(self.body.len()) {
+                return Err(CelebornError::Protocol(
+                    "invalid RPC response length".to_string(),
+                ));
+            }
+            TransportReply::Success(self.body.into_owned())
+        };
+
+        // RPC and push requests both start with their ID. A chunk fetch has no RPC ID.
+        let matches = request.frame_type != TransportFrameType::ChunkFetchRequest
+            && request.header.starts_with(request_id);
+        Ok(matches.then_some(reply))
     }
 
     pub async fn write<W>(&self, writer: &mut W) -> CelebornResult<()>
@@ -220,9 +233,10 @@ impl TransportFrame<'_> {
 ///
 /// Netty permits multiple outstanding RPCs, but a small client only needs one transaction at a
 /// time. The mutex gives clones a single reusable connection while retaining exact request/reply
-/// ordering. I/O, timeout, and framing errors invalidate the connection before it is reused.
+/// ordering. A transaction that does not complete (an I/O, timeout, or framing error, or a
+/// caller that stops waiting for the reply) invalidates the connection before it is reused.
 #[derive(Debug, Clone)]
-pub(crate) struct TransportConnection {
+pub struct TransportConnection {
     host: String,
     port: u16,
     timeout: Duration,
@@ -231,7 +245,7 @@ pub(crate) struct TransportConnection {
 }
 
 impl TransportConnection {
-    pub(crate) fn new(host: impl Into<String>, port: u16, timeout: Duration) -> Self {
+    pub fn new(host: impl Into<String>, port: u16, timeout: Duration) -> Self {
         Self {
             host: host.into(),
             port,
@@ -252,10 +266,17 @@ impl TransportConnection {
 
     /// Send a Netty RPC request and return its response payload.
     pub(crate) async fn send_rpc(&self, body: Vec<u8>) -> CelebornResult<Vec<u8>> {
-        let request_id = self.next_request_id();
+        self.send_rpc_with_id(self.next_request_id(), body).await
+    }
+
+    /// Send an RPC with a caller-assigned ID unique to this connection.
+    pub async fn send_rpc_with_id(
+        &self,
+        request_id: i64,
+        body: Vec<u8>,
+    ) -> CelebornResult<Vec<u8>> {
         self.request(TransportFrame::rpc_request(request_id, body)?)
-            .await?
-            .into_rpc_response(request_id)
+            .await
     }
 
     /// Push one map-data batch using Celeborn's `PushData` transport frame.
@@ -281,20 +302,14 @@ impl TransportConnection {
         header.push(0);
         write_bytes(&mut header, shuffle_key)?;
         write_bytes(&mut header, partition_unique_id)?;
-        let mut prefix = Vec::with_capacity(16);
-        prefix.extend_from_slice(&map_id.to_be_bytes());
-        prefix.extend_from_slice(&attempt_id.to_be_bytes());
-        prefix.extend_from_slice(&batch_id.to_be_bytes());
-        prefix.extend_from_slice(&data_length.to_be_bytes());
+        let prefix = batch_header(map_id, attempt_id, batch_id, data_length);
 
-        let response = self
-            .request(TransportFrame {
-                frame_type: TransportFrameType::PushData,
-                header,
-                body: TransportBody::PrefixAndData { prefix, data },
-            })
-            .await?
-            .into_rpc_response(request_id)?;
+        let frame = TransportFrame {
+            frame_type: TransportFrameType::PushData,
+            header,
+            body: TransportBody::PrefixAndData { prefix, data },
+        };
+        let response = self.request(frame).await?;
         match response.first().copied() {
             None => Ok(()),
             Some(status)
@@ -324,59 +339,23 @@ impl TransportConnection {
         header.extend_from_slice(&chunk_index.to_be_bytes());
         header.extend_from_slice(&offset.to_be_bytes());
         header.extend_from_slice(&length.to_be_bytes());
-        let response = self
-            .request(TransportFrame::new(
-                TransportFrameType::ChunkFetchRequest,
-                header,
-                Vec::new(),
-            ))
-            .await?;
-        if response.frame_type != TransportFrameType::ChunkFetchSuccess
-            || response.header.len() != 20
-        {
-            return Err(CelebornError::Protocol(
-                "invalid chunk fetch response".to_string(),
-            ));
-        }
-        let response_stream_id =
-            i64::from_be_bytes(response.header[..8].try_into().map_err(|_| {
-                CelebornError::Protocol("invalid chunk response stream ID".to_string())
-            })?);
-        let response_chunk_index =
-            i32::from_be_bytes(response.header[8..12].try_into().map_err(|_| {
-                CelebornError::Protocol("invalid chunk response index".to_string())
-            })?);
-        let response_offset =
-            i32::from_be_bytes(response.header[12..16].try_into().map_err(|_| {
-                CelebornError::Protocol("invalid chunk response slice".to_string())
-            })?);
-        let response_length =
-            i32::from_be_bytes(response.header[16..].try_into().map_err(|_| {
-                CelebornError::Protocol("invalid chunk response slice".to_string())
-            })?);
-        if response_stream_id != stream_id || response_chunk_index != chunk_index {
-            return Err(CelebornError::Protocol(
-                "chunk response does not match request".to_string(),
-            ));
-        }
-        if response_offset != offset {
-            return Err(CelebornError::Protocol(format!(
-                "invalid chunk response slice: expected offset {offset} but got {response_offset}"
-            )));
-        }
-        if response_length < 0 {
-            return Err(CelebornError::Protocol(format!(
-                "invalid chunk response slice: negative length {response_length}"
-            )));
-        }
-        Ok(response.body.into_owned())
+        self.request(TransportFrame::new(
+            TransportFrameType::ChunkFetchRequest,
+            header,
+            Vec::new(),
+        ))
+        .await
     }
 
-    async fn request(&self, frame: TransportFrame<'_>) -> CelebornResult<TransportFrame<'static>> {
+    async fn request(&self, frame: TransportFrame<'_>) -> CelebornResult<Vec<u8>> {
         // Keep the lock outside the I/O timeout. A caller queued behind another transaction must
         // not time out and clear the connection that the active transaction is using.
-        let mut stream = self.stream.lock().await;
-        let result = tokio::time::timeout(self.timeout, async {
+        let mut transaction = Transaction {
+            stream: self.stream.lock().await,
+            completed: false,
+        };
+        let reply = tokio::time::timeout(self.timeout, async {
+            let stream = &mut *transaction.stream;
             if stream.is_none() {
                 *stream = Some(TcpStream::connect((&*self.host, self.port)).await?);
             }
@@ -384,25 +363,52 @@ impl TransportConnection {
                 CelebornError::Protocol("connection was not initialized".to_string())
             })?;
             frame.write(stream).await?;
-            TransportFrame::read(stream).await
+            loop {
+                let response = TransportFrame::read(stream).await?;
+                if let Some(reply) = response.reply_to(&frame)? {
+                    return Ok::<_, CelebornError>(reply);
+                }
+            }
         })
-        .await;
-        match result {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(error)) => {
-                // A failed transaction can leave unread bytes in the socket. Starting fresh is
-                // safer than allowing the next request to interpret those bytes as its reply.
-                *stream = None;
-                Err(error)
-            }
-            Err(_) => {
-                // `timeout` cancels its future before it can run error cleanup. Discard the
-                // socket here, otherwise a late response can be mistaken for the next request.
-                *stream = None;
-                Err(CelebornError::Timeout)
-            }
+        .await
+        .map_err(|_| CelebornError::Timeout)??;
+        transaction.completed = true;
+        match reply {
+            TransportReply::Success(data) => Ok(data),
+            TransportReply::Failure(message) => Err(CelebornError::Protocol(message)),
         }
     }
+}
+
+/// A transaction on a connection, which discards the connection unless it completes.
+///
+/// A transaction that fails, times out, or is dropped by its caller after its request is
+/// written can leave unread bytes in the socket. Starting fresh is safer than allowing the
+/// next request to interpret those bytes as its reply.
+struct Transaction<'a> {
+    stream: MutexGuard<'a, Option<TcpStream>>,
+    completed: bool,
+}
+
+impl Drop for Transaction<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            *self.stream = None;
+        }
+    }
+}
+
+/// Returns the header of a batch of pushed data, which the shuffle service reads when it
+/// sorts a shuffle file by map index. The fields use native byte order to match
+/// `Platform.putInt` and `Platform.getInt` in Celeborn. Clients and workers must have
+/// the same endianness.
+pub(crate) fn batch_header(map_id: i32, attempt_id: i32, batch_id: i32, length: i32) -> Vec<u8> {
+    let mut header = Vec::with_capacity(16);
+    header.extend_from_slice(&map_id.to_ne_bytes());
+    header.extend_from_slice(&attempt_id.to_ne_bytes());
+    header.extend_from_slice(&batch_id.to_ne_bytes());
+    header.extend_from_slice(&length.to_ne_bytes());
+    header
 }
 
 fn write_bytes(buffer: &mut Vec<u8>, bytes: &[u8]) -> CelebornResult<()> {

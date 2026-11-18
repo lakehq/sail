@@ -515,7 +515,7 @@ fn take_batch(buffered: &mut BytesMut) -> CelebornResult<Option<Bytes>> {
     if buffered.len() < HEADER_LENGTH {
         return Ok(None);
     }
-    let length = i32::from_be_bytes(
+    let length = i32::from_ne_bytes(
         buffered[12..HEADER_LENGTH]
             .try_into()
             .map_err(|_| CelebornError::Protocol("invalid batch header".to_string()))?,
