@@ -145,6 +145,7 @@ pub(super) struct WritePlanBuilder {
     cluster_by: Vec<spec::ObjectName>,
     options: Vec<Vec<(String, String)>>,
     table_properties: Vec<(String, String)>,
+    table_comment: Option<String>,
     table_is_external: bool,
     sql_insert: bool,
     identity_columns_to_track: Vec<String>,
@@ -164,6 +165,7 @@ impl WritePlanBuilder {
             cluster_by: vec![],
             options: vec![],
             table_properties: vec![],
+            table_comment: None,
             table_is_external: false,
             sql_insert: false,
             identity_columns_to_track: Vec::new(),
@@ -237,6 +239,11 @@ impl WritePlanBuilder {
         self
     }
 
+    pub fn with_table_comment(mut self, comment: Option<String>) -> Self {
+        self.table_comment = comment;
+        self
+    }
+
     pub fn with_table_is_external(mut self, is_external: bool) -> Self {
         self.table_is_external = is_external;
         self
@@ -262,6 +269,7 @@ impl PlanResolver<'_> {
             cluster_by,
             options,
             table_properties,
+            table_comment,
             table_is_external,
             sql_insert,
             identity_columns_to_track,
@@ -619,9 +627,16 @@ impl PlanResolver<'_> {
                         .iter()
                         .map(|part| part.as_ref().to_string())
                         .collect::<Vec<_>>();
+                    if let Some(comment) = &table_comment
+                        && (is_iceberg || write_format.eq_ignore_ascii_case("delta"))
+                    {
+                        sink_info.options.push(OptionLayer::TablePropertyList {
+                            items: vec![("comment".to_string(), comment.clone())],
+                        });
+                    }
                     let mut create_options = CreateTableOptions {
                         columns,
-                        comment: None,
+                        comment: table_comment,
                         constraints: vec![],
                         location: table_location,
                         format: write_format.clone(),

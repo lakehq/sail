@@ -235,12 +235,12 @@ pub fn metadata_for_create_with_struct_type(
     schema: StructType,
     partition_columns: Vec<String>,
     created_time: i64,
-    configuration: HashMap<String, String>,
+    mut configuration: HashMap<String, String>,
 ) -> DeltaResult<Metadata> {
     let resolved_partition_columns = canonicalize_partition_columns(&schema, partition_columns)?;
     Metadata::try_new(
         None,
-        None,
+        configuration.remove("comment"),
         schema,
         resolved_partition_columns,
         created_time,
