@@ -1709,6 +1709,65 @@ mod tests {
             );
             assert_eq!(explained_reductions, reduced, "{query}\n{explained}");
         }
+
+        // Each reference takes its keys from a scan of all the rows of a dimension of
+        // the size of the TPC-DS date dimension, which the CTE reads as well.
+        let dates = {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("sk", DataType::Int64, false),
+                Field::new("week", DataType::Int64, false),
+                Field::new("month", DataType::Int64, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from_iter_values(0..73_049)),
+                    Arc::new(Int64Array::from_iter_values((0..73_049).map(|x| x / 7))),
+                    Arc::new(Int64Array::from_iter_values((0..73_049).map(|x| x / 30))),
+                ],
+            )?;
+            let path = directory.path().join("dates.parquet");
+            let mut writer = ArrowWriter::try_new(std::fs::File::create(&path)?, schema, None)?;
+            writer.write(&batch)?;
+            writer.close()?;
+            format!("parquet.`{}`", path.display())
+        };
+        let reference = |months: &str| {
+            format!(
+                "(SELECT c.w, c.g, c.s FROM c JOIN {dates} d ON c.w = d.week \
+                 WHERE d.month BETWEEN {months})"
+            )
+        };
+        let query = format!(
+            "WITH c AS (SELECT d.week AS w, f.v % 7 AS g, sum(f.v) AS s \
+             FROM {facts} f JOIN {dates} d ON f.v = d.sk GROUP BY d.week, f.v % 7) \
+             SELECT x.w, x.g, x.s, y.s FROM {} x JOIN {} y ON x.w = y.w - 52 AND x.g = y.g \
+             ORDER BY 1, 2, 3, 4",
+            reference("1206 AND 1217"),
+            reference("1218 AND 1229"),
+        );
+        let shared = session(true)?;
+        let plan = plan_with_shared_ctes(&shared, &query).await?;
+        let text = displayable(plan.as_ref()).indent(false).to_string();
+        let inlined = session(false)?;
+        let expected = plan_with_shared_ctes(&inlined, &query).await?;
+        assert_eq!(reductions(&expected)?, (2, 0), "{query}");
+        let Some(exec) = plan.downcast_ref::<SharedCteExec>() else {
+            return Err(format!("the CTE is not shared: {query}\n{text}").into());
+        };
+        let [(_, body)] = exec.ctes() else {
+            return Err(format!("the query does not share one CTE: {query}").into());
+        };
+        assert_eq!(reductions(body)?, (1, 1), "{query}\n{text}");
+        let actual = collect(plan, shared.task_ctx()).await?;
+        let expected = collect(expected, inlined.task_ctx()).await?;
+        let actual = pretty_format_batches(&actual)?.to_string();
+        assert_eq!(
+            actual,
+            pretty_format_batches(&expected)?.to_string(),
+            "{query}"
+        );
+        assert!(actual.lines().count() > 4, "{query}\n{actual}");
         Ok(())
     }
 }
