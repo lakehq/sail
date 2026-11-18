@@ -299,6 +299,7 @@ impl WindowTopN {
         // if ranking_field.is_none() {
         //     result = replace_children_if_necessary(window_exec, vec![result]).ok()?;
         // }
+        // TODO: Remove this line after DataFusion 56
         let mut result =
             replace_children_if_necessary(window_exec, vec![Arc::new(partitioned_topk)]).ok()?;
 
