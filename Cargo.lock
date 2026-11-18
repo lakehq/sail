@@ -7430,6 +7430,9 @@ dependencies = [
  "url",
  "uuid",
  "xee-xpath",
+ "xee-xpath-ast",
+ "xee-xpath-compiler",
+ "xee-xpath-lexer",
  "xot",
 ]
 

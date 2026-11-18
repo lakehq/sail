@@ -12,7 +12,6 @@ use datafusion_expr::{
 use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
 use quick_xml::Reader;
-use quick_xml::escape::resolve_predefined_entity;
 use quick_xml::events::{BytesStart, Event};
 
 use crate::scalar::datetime::format::DateTimeFormat;
@@ -116,7 +115,7 @@ struct XmlInferenceOptions {
     timestamp_ntz_format: Option<DateTimeFormat>,
 }
 
-type XmlResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+use super::reader::{XmlResult, attribute_value, local_name, reference_value, validate_name};
 
 impl XmlInferenceOptions {
     fn new(arg: Option<&ArrayRef>, case_sensitive: bool, timestamp_ntz: bool) -> Result<Self> {
@@ -269,7 +268,7 @@ impl XmlInferenceOptions {
 
     fn name<'a>(&self, name: &'a str) -> &'a str {
         if self.ignore_namespace {
-            name.rsplit_once(':').map_or(name, |(_, local)| local)
+            local_name(name)
         } else {
             name
         }
@@ -305,7 +304,7 @@ impl XmlInferenceOptions {
                 }
                 Event::Text(text)
                     if text
-                        .xml_content()?
+                        .xml10_content()?
                         .trim_matches([' ', '\t', '\n', '\r'])
                         .is_empty() => {}
                 Event::Decl(_) | Event::DocType(_) | Event::Comment(_) | Event::PI(_) => {}
@@ -328,16 +327,17 @@ impl XmlInferenceOptions {
         element: BytesStart<'_>,
         root: bool,
     ) -> XmlResult<InferredType> {
-        let mut attributes = Vec::new();
+        validate_name(std::str::from_utf8(element.name().as_ref())?)?;
+        let mut attributes = BTreeMap::new();
         for attribute in element.attributes() {
             let attribute = attribute?;
             let name = reader.decoder().decode(attribute.key.as_ref())?;
-            let value = attribute.decode_and_unescape_value(reader.decoder())?;
+            let value = attribute_value(&attribute)?;
             if !self.exclude_attribute {
-                attributes.push((
+                attributes.insert(
                     format!("{}{}", self.attribute_prefix, self.name(&name)),
                     self.infer_value(&value),
-                ));
+                );
             }
         }
         let mut fields = Vec::new();
@@ -345,17 +345,10 @@ impl XmlInferenceOptions {
         let mut text = String::new();
         loop {
             match reader.read_event()? {
-                Event::Text(value) => text.push_str(&value.xml_content()?),
-                Event::CData(value) => text.push_str(&value.xml_content()?),
+                Event::Text(value) => text.push_str(&value.xml10_content()?),
+                Event::CData(value) => text.push_str(&value.xml10_content()?),
                 Event::GeneralRef(reference) => {
-                    if let Some(character) = reference.resolve_char_ref()? {
-                        text.push(character);
-                    } else {
-                        let name = reference.decode()?;
-                        text.push_str(
-                            resolve_predefined_entity(&name).ok_or("Unknown XML entity")?,
-                        );
-                    }
+                    text.push_str(&reference_value(&reference)?);
                 }
                 Event::Start(element) => {
                     self.add_text(&mut fields, &mut text);
