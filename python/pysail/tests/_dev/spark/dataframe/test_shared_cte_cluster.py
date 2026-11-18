@@ -1,3 +1,4 @@
+import os
 import random
 from collections import defaultdict
 
@@ -260,13 +261,23 @@ def test_union_of_volatile_cte_with_sufficient_capacity(small_cluster_spark, fun
 @pytest.mark.timeout(60)
 def test_union_of_volatile_cte_rejects_insufficient_capacity(small_cluster_spark):
     query = "WITH c AS (SELECT id, uuid() AS r FROM range(0, 100, 1, 10)) SELECT * FROM c UNION ALL SELECT * FROM c"
-    # Insufficient capacity must report the existing error, rather than evaluating
-    # the volatile producer independently for each reference.
-    with pytest.raises(
-        PySparkException,
-        match=r"task region requires 20 worker task slots, but the configured maximum is 10",
-    ):
-        small_cluster_spark.sql(query).collect()
+    if os.environ.get("SAIL_CLUSTER__SHUFFLE_BACKEND__TYPE", "flight") == "flight":
+        # The pipelined stages of the CTE and of the union are scheduled together.
+        # Insufficient capacity must report the existing error, rather than evaluating
+        # the volatile producer independently for each reference.
+        with pytest.raises(
+            PySparkException,
+            match=r"task region requires 20 worker task slots, but the configured maximum is 10",
+        ):
+            small_cluster_spark.sql(query).collect()
+    else:
+        # Storage and Celeborn shuffle separate the stages by blocking outputs, so each
+        # stage fits in the slots, and both references read the one evaluation.
+        values = defaultdict(list)
+        for row in small_cluster_spark.sql(query).collect():
+            values[row.id].append(row.r)
+        assert set(values) == set(range(100))
+        assert all(len(items) == 2 and len(set(items)) == 1 for items in values.values())
     assert small_cluster_spark.range(1).collect() == [(0,)]
 
 
