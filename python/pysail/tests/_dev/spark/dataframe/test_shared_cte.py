@@ -5,8 +5,6 @@ the references that read the same rows of it, and inlines it for the other refer
 These tests check the results on every engine, and on Sail they also check the plans.
 """
 
-import os
-
 import pytest
 from pyspark.errors import PySparkException
 
@@ -318,22 +316,16 @@ def test_sorted_cte_with_limit_is_inlined_for_a_reference_that_depends_on_its_or
 
 
 def test_sorted_cte_with_limit_is_inlined_for_a_reference_that_the_query_returns(spark):
-    """The query returns the rows of the CTE in the order of its sort, as it does when
-    the CTE is in the place of the reference. The CTE has more rows than a batch."""
+    """A reference whose rows the query returns in their order evaluates the CTE itself,
+    as it does when the CTE is in its place, and the other references share one
+    evaluation. The CTE has more rows than a batch."""
     rows = 20000
-    query = f"""
-        WITH c AS (SELECT id, id % 7 AS k FROM range(0, 1000000, 1, 8) ORDER BY id DESC LIMIT {rows})
-        SELECT c.id, c.k + 1 AS k1, (SELECT max(id) FROM c) AS m FROM c
-    """  # noqa: S608
-    if not is_jvm_spark():
-        assert "SharedCteExec" not in plan(spark, query)
-    result = [tuple(row) for row in spark.sql(query).collect()]
-    expected = [(i, i % 7 + 1, 999999) for i in range(999999, 999999 - rows, -1)]
-    if os.environ.get("SAIL_MODE") in ("local-cluster", "kubernetes-cluster"):
-        # The tasks of a cluster return their rows in any order.
-        assert sorted(result, reverse=True) == expected
-    else:
-        assert result == expected
+    cte = f"c AS (SELECT id, id % 7 AS k FROM range(0, 1000000, 1, 8) ORDER BY id DESC LIMIT {rows})"  # noqa: S608
+    ids = range(999999, 999999 - rows, -1)
+    query = f"WITH {cte} SELECT c.id, c.k + 1 AS k1, (SELECT max(id) FROM c) AS m FROM c"  # noqa: S608
+    check(spark, query, [(i, i % 7 + 1, 999999) for i in ids], shared=False, scans=2)
+    query = f"WITH {cte} SELECT c.id, (SELECT max(id) FROM c) AS m, (SELECT min(k) FROM c) AS n FROM c"  # noqa: S608
+    check(spark, query, [(i, 999999, 0) for i in ids], shared=True, scans=2)
 
 
 @pytest.mark.parametrize("order", ["i.score DESC NULLS LAST, i.item_id DESC", "i.score % 3 DESC"])
