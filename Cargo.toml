@@ -144,6 +144,7 @@ bitflags = "2.12.1"
 libloading = "0.9.0"
 thrift = { version = "0.25.0", default-features = false }
 insta = { version = "1.49.0", features = ["glob", "filters"] }
+libc = "0.2.189"
 
 ######
 # The versions of the following dependencies are managed manually.
