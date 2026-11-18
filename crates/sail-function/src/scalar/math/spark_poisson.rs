@@ -1,3 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/AbstractWell.java
+// SPDX-FileComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/Well19937c.java
+// SPDX-FileComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java
+// SPDX-FileComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/distribution/ExponentialDistribution.java
+// SPDX-FileComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/util/CombinatoricsUtils.java
+// SPDX-FileComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/distribution/PoissonDistribution.java
+
 //! Port of the Poisson sampler that Spark uses for sampling with replacement.
 //!
 //! Spark's `PoissonSampler` draws from Apache Commons Math 3.6.1 `PoissonDistribution`,
@@ -16,13 +24,6 @@
 //! Commons Math uses `FastMath` for `exp`, `log`, `sqrt`, `sin` and `cos`, while this port
 //! uses the Rust standard library. `FastMath` is accurate to about one ulp, so a count may
 //! differ from Spark only when a random value falls within an ulp of a decision threshold.
-
-// [CREDIT]: https://github.com/apache/commons-math/blob/MATH_3_6_1/src/main/java/org/apache/commons/math3/random/AbstractWell.java
-// [CREDIT]: https://github.com/apache/commons-math/blob/MATH_3_6_1/src/main/java/org/apache/commons/math3/random/Well19937c.java
-// [CREDIT]: https://github.com/apache/commons-math/blob/MATH_3_6_1/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java
-// [CREDIT]: https://github.com/apache/commons-math/blob/MATH_3_6_1/src/main/java/org/apache/commons/math3/distribution/ExponentialDistribution.java
-// [CREDIT]: https://github.com/apache/commons-math/blob/MATH_3_6_1/src/main/java/org/apache/commons/math3/util/CombinatoricsUtils.java
-// [CREDIT]: https://github.com/apache/commons-math/blob/MATH_3_6_1/src/main/java/org/apache/commons/math3/distribution/PoissonDistribution.java
 
 use std::f64::consts::PI;
 

@@ -189,7 +189,9 @@ def test_merge_identity_star_omission_requires_evolution(spark, identity_table, 
     assert _state(spark, name, path) == before
 
 
-# [CREDIT]: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/test/scala/org/apache/spark/sql/delta/IdentityColumnDMLSuite.scala#L130-L205
+# SPDX-SnippetBegin
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/test/scala/org/apache/spark/sql/delta/IdentityColumnDMLSuite.scala#L130-L205
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
 @pytest.mark.parametrize(
     ("api", "update_action"),
@@ -258,6 +260,9 @@ def test_merge_identity_star_evolution_lifecycle(spark, identity_table, mode, ap
     assert _watermark(path) == appended[2].id
 
 
+# SPDX-SnippetEnd
+
+
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
 def test_merge_identity_evolution_update_only_preserves_watermark(spark, identity_table, mode):
     name, path = identity_table(mode=mode)
@@ -270,7 +275,9 @@ def test_merge_identity_evolution_update_only_preserves_watermark(spark, identit
     assert _watermark(path) == before
 
 
-# [CREDIT]: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/test/scala/org/apache/spark/sql/delta/MergeIntoSchemaEvolutionSuite.scala#L387-L499
+# SPDX-SnippetBegin
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/test/scala/org/apache/spark/sql/delta/MergeIntoSchemaEvolutionSuite.scala#L387-L499
 @pytest.mark.parametrize("matched", [False, True], ids=["fast-append", "copy-on-write"])
 def test_merge_identity_evolution_mixed_insert_first_match(spark, identity_table, matched):
     name, path = identity_table(mode="BY DEFAULT")
@@ -301,6 +308,9 @@ def test_merge_identity_evolution_mixed_insert_first_match(spark, identity_table
     assert spark.table(name).where("k=5").first().id > before
 
 
+# SPDX-SnippetEnd
+
+
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
 @pytest.mark.parametrize("value", ["100L", "CAST(NULL AS BIGINT)"])
 def test_merge_identity_evolution_star_supplied_value(spark, identity_table, mode, value):
@@ -319,7 +329,9 @@ def test_merge_identity_evolution_star_supplied_value(spark, identity_table, mod
         assert _watermark(path) is None
 
 
-# [CREDIT]: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/main/scala/org/apache/spark/sql/delta/ColumnWithDefaultExprUtils.scala#L172-L180
+# SPDX-SnippetBegin
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/bb1057f4367f555b01e299fd1690d85aafc0ac4c/spark/src/main/scala/org/apache/spark/sql/delta/ColumnWithDefaultExprUtils.scala#L172-L180
 # Spark 4.2 / Delta 4.4: explicit DEFAULT becomes NULL, not an omitted identity.
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
 @pytest.mark.parametrize("values", ["(DEFAULT,2,22)", "(DEFAULT,2,22),(99,3,33)", "(NULL,2,22)"])
@@ -340,6 +352,9 @@ def test_insert_identity_default_is_explicit(spark, identity_table, mode, values
         assert _watermark(path) == watermark
         spark.sql(f"INSERT INTO {name} (k,v) VALUES (4,44)").collect()  # noqa: S608
         assert spark.table(name).where("k=4").first().id == watermark + 3
+
+
+# SPDX-SnippetEnd
 
 
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])

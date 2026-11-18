@@ -104,7 +104,9 @@ def merge_gate(tmp_path):
         thread.join(timeout=5)
 
 
-# [CREDIT]: https://github.com/delta-io/delta/blob/v4.0.0/spark/src/test/scala/org/apache/spark/sql/delta/IdentityColumnConflictSuite.scala#L280-L300
+# SPDX-SnippetBegin
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/6d055c5c8a2e16bbf4458268a1bc271c7afcc4d2/spark/src/test/scala/org/apache/spark/sql/delta/IdentityColumnConflictSuite.scala#L280-L300
 @pytest.mark.parametrize("isolation", ["SnapshotIsolation", "WriteSerializable", "Serializable"])
 def test_concurrent_identity_merge_rejects_stale_allocation(remote, tmp_path, merge_gate, isolation):
     source, release_second, arrivals = merge_gate
@@ -167,3 +169,6 @@ def test_concurrent_identity_merge_rejects_stale_allocation(remote, tmp_path, me
         finally:
             for spark in (first, second):
                 spark.sql("DROP TABLE IF EXISTS identity_concurrency").collect()
+
+
+# SPDX-SnippetEnd

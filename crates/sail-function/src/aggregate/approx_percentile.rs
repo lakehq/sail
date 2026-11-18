@@ -1,4 +1,5 @@
-// [CREDIT]: https://github.com/apache/datafusion/blob/70f2ed01b8392127fa0eb4f1fb5e57869c42ecfa/datafusion/functions-aggregate/src/approx_percentile_cont.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/70f2ed01b8392127fa0eb4f1fb5e57869c42ecfa/datafusion/functions-aggregate/src/approx_percentile_cont.rs
 
 use std::fmt::Debug;
 use std::mem::size_of_val;

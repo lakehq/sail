@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/MersenneTwister.java
+// SPDX-FileComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java
+
 //! Port of the Mersenne Twister of Apache Commons Math, which Spark uses for `uuid` and
 //! `shuffle` (`RandomUUIDGenerator` and `RandomIndicesGenerator`).
 //!
-//! [CREDIT]: https://github.com/apache/commons-math/blob/MATH_3_6_1/src/main/java/org/apache/commons/math3/random/MersenneTwister.java
-//! [CREDIT]: https://github.com/apache/commons-math/blob/MATH_3_6_1/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java
 
 const N: usize = 624;
 const M: usize = 397;

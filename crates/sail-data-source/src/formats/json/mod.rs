@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-json/src/file_format.rs
+
 use datafusion::catalog::Session;
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
@@ -7,7 +10,6 @@ use crate::options::ResolveOptions;
 use crate::options::r#gen::{JsonReadOptions, JsonWriteOptions};
 
 // Some of the code in the `read` and `write` modules is adapted from the DataFusion `JsonFormat` implementation.
-// [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/datasource-json/src/file_format.rs
 
 mod options;
 mod read;

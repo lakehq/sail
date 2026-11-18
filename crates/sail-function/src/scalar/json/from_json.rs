@@ -19,6 +19,10 @@ use crate::functions_nested_utils::*;
 use crate::functions_utils::make_scalar_function;
 use crate::scalar::datetime::format::DateTimeFormat;
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/6211315511b12905fcce48c24b3f849d16e49fcd/native/spark-expr/src/json_funcs/from_json.rs
+// SPDX-SnippetComment: The core JSON-to-Arrow parsing logic is inspired by DataFusion Comet.
 /// UDF implementation of `from_json`, similar to Spark's `from_json`.
 /// This function parses a column of JSON strings using a specified schema
 /// and returns a structured Arrow array (Struct, Array, or Map) with the parsed fields.
@@ -30,9 +34,6 @@ use crate::scalar::datetime::format::DateTimeFormat;
 /// - Optionally, a third input as a `MapArray` containing parsing options
 ///   (e.g., timestampFormat, dateFormat, mode).
 ///
-/// [Credit] The core JSON-to-Arrow parsing logic is inspired by
-/// [DataFusion Comet](https://github.com/apache/datafusion-comet/blob/main/native/spark-expr/src/json_funcs/from_json.rs),
-/// licensed under the Apache License, Version 2.0.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkFromJson {
     session_timezone: Arc<str>,
@@ -289,10 +290,12 @@ fn is_arr_and_obj_match(builder: &FieldBuilder, value: &Value) -> bool {
         (FieldBuilder::List { .. }, Value::Object(_))
     )
 }
+// SPDX-SnippetEnd
 
-/// [Credit] The core field builder logic is inspired by
-/// [DataFusion Comet](https://github.com/apache/datafusion-comet/blob/main/native/spark-expr/src/json_funcs/from_json.rs),
-/// licensed under the Apache License, Version 2.0.
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/6211315511b12905fcce48c24b3f849d16e49fcd/native/spark-expr/src/json_funcs/from_json.rs
+// SPDX-SnippetComment: The core field builder logic is inspired by DataFusion Comet.
 #[derive(Debug)]
 enum FieldBuilder {
     Boolean(BooleanBuilder),
@@ -810,6 +813,7 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
         FieldBuilder::Unsupported { data_type, count } => Ok(new_null_array(&data_type, count)),
     }
 }
+// SPDX-SnippetEnd
 
 /// Parse a decimal string into an unscaled `i128` value for `Decimal128(precision, scale)`.
 ///

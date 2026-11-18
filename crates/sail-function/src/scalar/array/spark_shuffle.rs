@@ -1,21 +1,7 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
-
-// [CREDIT]: https://github.com/apache/datafusion/blob/55.2.0/datafusion/spark/src/function/array/shuffle.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileContributor: The Apache Software Foundation (ASF)
+// SPDX-FileComment: See the NOTICE file distributed with this work for additional information regarding copyright ownership.
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/500744d5c25499055e3b2ca46b022bc425989203/datafusion/spark/src/function/array/shuffle.rs
 
 use std::sync::Arc;
 
@@ -128,9 +114,11 @@ fn extract_seed(seed_arg: &ColumnarValue) -> Result<Option<i64>> {
     }
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/spark/blob/32f7299601108917fb01920a54e084595b7b3bf8/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/RandomIndicesGenerator.scala
 /// Port of Spark's `RandomIndicesGenerator`.
 ///
-/// [CREDIT]: https://github.com/apache/spark/blob/v4.2.0-rc6/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/RandomIndicesGenerator.scala
 pub struct RandomIndicesGenerator {
     random: MersenneTwister,
 }
@@ -154,6 +142,7 @@ impl RandomIndicesGenerator {
         indices
     }
 }
+// SPDX-SnippetEnd
 
 /// Returns a random permutation of each array, where each non-null array advances the
 /// generator as in Spark.

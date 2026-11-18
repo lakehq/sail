@@ -1,5 +1,6 @@
--- SQLBench-DS query 67 derived from TPC-DS query 67 under the terms of the TPC Fair Use Policy.
--- TPC-DS queries are Copyright 2021 Transaction Processing Performance Council.
+-- SPDX-FileComment: SQLBench-DS query 67 derived from TPC-DS query 67 under the terms of the TPC Fair Use Policy.
+-- SPDX-FileCopyrightText: 2021 Transaction Processing Performance Council.
+
 -- This query was generated at scale factor 1.
 select
   *

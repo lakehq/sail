@@ -1,20 +1,9 @@
-// https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
-//
-// Copyright 2023-2024 The Delta Kernel Rust Authors
-// Portions Copyright 2025-2026 LakeSail, Inc.
-// Ported and modified in 2026 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
+// SPDX-FileCopyrightText: 2023-2024 The Delta Kernel Rust Authors
+// SPDX-FileCopyrightText: 2025-2026 LakeSail, Inc.
+// SPDX-FileContributor: LakeSail, Inc.
+// SPDX-FileComment: Ported and modified in 2026 by LakeSail, Inc.
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
@@ -26,8 +15,10 @@ use serde::{Deserialize, Serialize};
 use crate::spec::schema::{ColumnMappingMode, ColumnName};
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L183-L204
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L183-L204>
 pub enum DataSkippingNumIndexedCols {
     AllColumns,
     NumColumns(u64),
@@ -49,9 +40,12 @@ impl TryFrom<&str> for DataSkippingNumIndexedCols {
         }
     }
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L206-L229
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Default)]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L206-L229>
 pub enum IsolationLevel {
     #[default]
     Serializable,
@@ -83,6 +77,7 @@ impl FromStr for IsolationLevel {
         }
     }
 }
+// SPDX-SnippetEnd
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum CheckpointPolicy {
@@ -105,8 +100,10 @@ impl FromStr for CheckpointPolicy {
     }
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L31-L180
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L31-L180>
 pub struct TableProperties {
     pub append_only: Option<bool>,
     pub checkpoint_interval: Option<NonZeroU64>,
@@ -129,6 +126,7 @@ pub struct TableProperties {
     pub log_compaction_interval: Option<NonZeroU64>,
     pub unknown_properties: HashMap<String, String>,
 }
+// SPDX-SnippetEnd
 
 impl<K, V, I> From<I> for TableProperties
 where
@@ -136,7 +134,9 @@ where
     K: AsRef<str> + Into<String>,
     V: AsRef<str> + Into<String>,
 {
-    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L20-L35>
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L20-L35
     fn from(unparsed: I) -> Self {
         let mut props = TableProperties::default();
         let unparsed = unparsed.into_iter().filter(|(k, v)| {
@@ -145,6 +145,7 @@ where
         props.unknown_properties = unparsed.map(|(k, v)| (k.into(), v.into())).collect();
         props
     }
+    // SPDX-SnippetEnd
 }
 
 const DEFAULT_LOG_RETENTION_SECS: u64 = 30 * 24 * 60 * 60;
@@ -378,8 +379,10 @@ fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
     }
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L37-L104
 fn try_parse_table_property(props: &mut TableProperties, key: &str, value: &str) -> Option<()> {
-    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L37-L104>
     match key {
         "delta.appendOnly" => props.append_only = Some(parse_bool(value)?),
         "delta.checkpointInterval" => props.checkpoint_interval = Some(parse_positive_int(value)?),
@@ -432,24 +435,31 @@ fn try_parse_table_property(props: &mut TableProperties, key: &str, value: &str)
     }
     Some(())
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L106-L122
 fn parse_positive_int(s: &str) -> Option<NonZeroU64> {
-    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L106-L122>
     let n: i64 = s.parse().ok()?;
     if n <= 0 {
         return None;
     }
     NonZeroU64::new(n as u64)
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L124-L132
 fn parse_bool(s: &str) -> Option<bool> {
-    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L124-L132>
     match s {
         "true" => Some(true),
         "false" => Some(false),
         _ => None,
     }
 }
+// SPDX-SnippetEnd
 
 fn parse_i64(s: &str) -> Option<i64> {
     s.parse().ok()
@@ -460,8 +470,10 @@ fn parse_non_negative_i64(s: &str) -> Option<i64> {
     (value >= 0).then_some(value)
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L142-L146
 fn parse_interval(s: &str) -> Option<Duration> {
-    // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L142-L146>
     const SECONDS_PER_HOUR: u64 = 60 * 60;
     const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
     const SECONDS_PER_WEEK: u64 = 7 * SECONDS_PER_DAY;
@@ -491,6 +503,7 @@ fn parse_interval(s: &str) -> Option<Duration> {
         _ => None,
     }
 }
+// SPDX-SnippetEnd
 
 /// Resolve the effective `DataSkippingNumIndexedCols` for a given table configuration.
 pub fn resolve_data_skipping_num_indexed_cols(

@@ -1,20 +1,9 @@
-// https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
-//
-// Copyright 2023-2024 The Delta Kernel Rust Authors
-// Portions Copyright 2025-2026 LakeSail, Inc.
-// Ported and modified in 2026 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
+// SPDX-FileCopyrightText: 2023-2024 The Delta Kernel Rust Authors
+// SPDX-FileCopyrightText: 2025-2026 LakeSail, Inc.
+// SPDX-FileContributor: LakeSail, Inc.
+// SPDX-FileComment: Ported and modified in 2026 by LakeSail, Inc.
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
@@ -29,9 +18,11 @@ use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 
 pub type Schema = StructType;
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L42-L92
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
 #[serde(untagged)]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L42-L92>
 pub enum MetadataValue {
     Number(i64),
     String(String),
@@ -79,9 +70,12 @@ impl From<bool> for MetadataValue {
         Self::Boolean(value)
     }
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L95-L125
 #[derive(Debug)]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L95-L125>
 pub enum ColumnMetadataKey {
     ColumnMappingId,
     ColumnMappingPhysicalName,
@@ -117,10 +111,13 @@ impl AsRef<str> for ColumnMetadataKey {
         }
     }
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_features/column_mapping.rs#L15-L26
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_features/column_mapping.rs#L15-L26>
 pub enum ColumnMappingMode {
     #[default]
     None,
@@ -152,9 +149,12 @@ impl TryFrom<&str> for ColumnMappingMode {
         }
     }
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/expressions/column_names.rs#L9-L134
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/expressions/column_names.rs#L9-L134>
 pub struct ColumnName {
     path: Vec<String>,
 }
@@ -315,9 +315,12 @@ impl Deref for ColumnName {
         &self.path
     }
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1231-L1262
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1231-L1262>
 pub struct DecimalType {
     precision: u8,
     scale: u8,
@@ -346,10 +349,13 @@ impl DecimalType {
         self.scale
     }
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1265-L1380
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
 #[serde(rename_all = "camelCase")]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1265-L1380>
 pub enum PrimitiveType {
     String,
     Long,
@@ -410,10 +416,13 @@ where
         .ok_or_else(|| serde::de::Error::custom(format!("Invalid scale in decimal: {value}")))?;
     DecimalType::try_new(precision, scale).map_err(serde::de::Error::custom)
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L180-L536
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
 #[serde(rename_all = "camelCase")]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L180-L536>
 pub struct StructField {
     pub name: std::string::String,
     #[serde(rename = "type")]
@@ -525,6 +534,7 @@ impl Display for StructField {
         )
     }
 }
+// SPDX-SnippetEnd
 
 fn make_physical_field(field: &StructField, column_mapping_mode: ColumnMappingMode) -> StructField {
     let data_type = make_physical_data_type(&field.data_type, column_mapping_mode);
@@ -586,8 +596,10 @@ fn make_physical_data_type(
     }
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L537-L1141
 #[derive(Debug, PartialEq, Clone, Eq)]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L537-L1141>
 pub struct StructType {
     type_name: std::string::String,
     fields: IndexMap<std::string::String, StructField>,
@@ -685,10 +697,13 @@ impl<'de> Deserialize<'de> for StructType {
         StructType::try_new(helper.fields).map_err(serde::de::Error::custom)
     }
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1145-L1173
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
 #[serde(rename_all = "camelCase")]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1145-L1173>
 pub struct ArrayType {
     #[serde(rename = "type")]
     pub type_name: std::string::String,
@@ -715,10 +730,13 @@ impl ArrayType {
         self.contains_null
     }
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1176-L1224
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
 #[serde(rename_all = "camelCase")]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1176-L1224>
 pub struct MapType {
     #[serde(rename = "type")]
     pub type_name: std::string::String,
@@ -761,7 +779,11 @@ impl MapType {
 fn default_true() -> bool {
     true
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1265-L1380
 fn serialize_variant<S: serde::Serializer>(
     _: &StructType,
     serializer: S,
@@ -786,10 +808,13 @@ where
         )),
     }
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1384-L1465
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Eq)]
 #[serde(untagged, rename_all = "camelCase")]
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1384-L1465>
 pub enum DataType {
     Primitive(PrimitiveType),
     Array(Box<ArrayType>),
@@ -841,7 +866,11 @@ impl DataType {
         ])))
     }
 }
+// SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1265-L1380
 impl Display for PrimitiveType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -861,6 +890,7 @@ impl Display for PrimitiveType {
         }
     }
 }
+// SPDX-SnippetEnd
 
 impl Display for DataType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -883,6 +913,9 @@ impl Display for DataType {
     }
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/schema/mod.rs#L1384-L1465
 impl From<DecimalType> for PrimitiveType {
     fn from(dtype: DecimalType) -> Self {
         Self::Decimal(dtype)
@@ -918,6 +951,7 @@ impl From<ArrayType> for DataType {
         Self::Array(Box::new(array_type))
     }
 }
+// SPDX-SnippetEnd
 
 impl FromStr for ColumnMappingMode {
     type Err = DeltaTableError;
