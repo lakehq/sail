@@ -326,7 +326,8 @@ def test_checkpoint_replays_compacted_and_ordinary_tail(spark, tmp_path: Path, t
 
 
 # SPDX-SnippetBegin
-# SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaTimeTravelSuite.scala Credit: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/InCommitTimestampSuite.scala
+# SPDX-SnippetComment: Credit: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/DeltaTimeTravelSuite.scala
+# SPDX-SnippetAttributionText: Credit: https://github.com/delta-io/delta/blob/88c008d55b38fb8f49a9a80982004cb5b06a2b59/spark/src/test/scala/org/apache/spark/sql/delta/InCommitTimestampSuite.scala
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
 @pytest.mark.parametrize("tail", ["compaction-then-commit", "commit-then-compaction"])
 @pytest.mark.parametrize(
