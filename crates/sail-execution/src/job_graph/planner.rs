@@ -9,7 +9,6 @@ use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::projection::ProjectionExpr;
-use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_expr::{EquivalenceProperties, LexOrdering, Partitioning, PhysicalExpr};
 use datafusion::physical_expr_common::physical_expr::is_volatile;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -42,6 +41,7 @@ use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
+use sail_physical_plan::scalar_subquery::reads_scalar_subquery;
 use sail_physical_plan::shared_cte::{SharedCte, SharedCteExec, SharedCteScanExec};
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -662,7 +662,7 @@ fn plan_job_graph_stages(
             }
             None => plan,
         };
-        let has_pending_scalar_subquery_expr = plan_node_has_scalar_subquery_expr(&plan)?;
+        let has_pending_scalar_subquery_expr = reads_scalar_subquery(&plan)?;
         PlannedSubtree::new(plan, has_pending_scalar_subquery_expr)
     } else if let Some(repartition) = subtree.plan.downcast_ref::<ExplicitRepartitionExec>() {
         let properties = repartition.properties().clone();
@@ -754,7 +754,7 @@ fn rebuild_subtree(
         .map(|child| child.plan)
         .collect::<Vec<_>>();
     let plan = replace_children_if_necessary(plan, children)?;
-    let node_has_scalar_subquery_expr = plan_node_has_scalar_subquery_expr(&plan)?;
+    let node_has_scalar_subquery_expr = reads_scalar_subquery(&plan)?;
     let subtree_has_pending_scalar_subquery_expr =
         node_has_scalar_subquery_expr || child_has_pending_scalar_subquery_expr.iter().any(|x| *x);
     Ok(RebuiltSubtree {
@@ -1074,30 +1074,6 @@ fn wrap_pending_scalar_subqueries(
         scalar_context.links.to_vec(),
         scalar_context.results.clone(),
     ))
-}
-
-fn plan_node_has_scalar_subquery_expr(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
-    // Include expressions pushed into data sources, not just expressions on
-    // filters and projections. Every stage using a scalar result needs its own
-    // ScalarSubqueryExec, even if predicate pushdown removed the FilterExec.
-    let mut found = false;
-    plan.apply_expressions(&mut |expr| {
-        if physical_expr_has_scalar_subquery(expr) {
-            found = true;
-            Ok(TreeNodeRecursion::Stop)
-        } else {
-            Ok(TreeNodeRecursion::Continue)
-        }
-    })?;
-    Ok(found)
-}
-
-fn physical_expr_has_scalar_subquery(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    expr.downcast_ref::<ScalarSubqueryExpr>().is_some()
-        || expr
-            .children()
-            .iter()
-            .any(|child| physical_expr_has_scalar_subquery(child))
 }
 
 /// Materializes a complete single-partition build relation for all of its consumers.

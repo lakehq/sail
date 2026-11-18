@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use datafusion::common::NullEquality;
-use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion::common::tree_node::TreeNode;
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::datasource::source::DataSourceExec;
@@ -23,7 +23,6 @@ use datafusion::error::Result;
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::{BinaryExpr, Column, InListExpr};
-use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use datafusion::physical_plan::execution_plan::reset_plan_states;
@@ -33,6 +32,7 @@ use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, replace_children_if_necessary};
+use sail_physical_plan::scalar_subquery::reads_scalar_subquery;
 use sail_physical_plan::shared_cte::{SharedCteRestriction, SharedCteScanExec};
 
 // Bound plan growth: each reduction duplicates a small, filtered scan. This is a
@@ -448,7 +448,7 @@ fn push(
     } else if plan.is::<DataSourceExec>() {
         return insert(plan, keys, restriction, downstream_work, context);
     } else if let Some(scan) = plan.downcast_ref::<SharedCteScanExec>()
-        && !reads_scalar_subquery(&restriction.keys)?
+        && !restriction.keys.exists(reads_scalar_subquery)?
     {
         // The plan of a shared CTE is not in the place of its references, so the keys
         // cannot be copied into it for one of them. The reference records that it reads
@@ -605,23 +605,6 @@ fn volatile(expr: &Arc<dyn PhysicalExpr>) -> Result<bool> {
     expr.exists(|expr| Ok(expr.is_volatile_node()))
 }
 
-/// Returns whether an expression of the plan, or one that is pushed into its source,
-/// reads the result of a scalar subquery.
-fn reads_scalar_subquery(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
-    plan.exists(|plan| {
-        let mut found = false;
-        plan.apply_expressions(&mut |expr| {
-            found = expr.exists(|expr| Ok(expr.is::<ScalarSubqueryExpr>()))?;
-            Ok(if found {
-                TreeNodeRecursion::Stop
-            } else {
-                TreeNodeRecursion::Continue
-            })
-        })?;
-        Ok(found)
-    })
-}
-
 fn row_count(plan: &Arc<dyn ExecutionPlan>) -> Result<Option<usize>> {
     let stats = StatisticsContext::new().compute(plan.as_ref(), &StatisticsArgs::new())?;
     Ok(stats.num_rows.get_value().copied())
@@ -631,7 +614,7 @@ fn row_count(plan: &Arc<dyn ExecutionPlan>) -> Result<Option<usize>> {
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::internal_err;
-    use datafusion::common::tree_node::Transformed;
+    use datafusion::common::tree_node::{Transformed, TreeNodeRecursion};
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::physical_plan::empty::EmptyExec;
 
