@@ -1038,9 +1038,10 @@
     another CTE that is referenced more than once (so that nested CTEs are not evaluated
     repeatedly), or when it holds its output before returning it (for example, an
     aggregation or a sort), so that the rows kept for a reference that reads it later are
-    no more than what evaluating it holds anyway. Any other CTE is evaluated for each
-    reference. With a memory limit, only the first two kinds are shared if temporary
-    files are disabled or in cluster mode.
+    no more than what evaluating it holds anyway. A CTE of another kind is shared only
+    if every reference is the build side of a hash join, which holds the rows that it
+    reads, and is evaluated for each reference otherwise. With a memory limit, only the
+    first two kinds are shared if temporary files are disabled or in cluster mode.
     If the value is `false`, the CTE is planned and evaluated for each reference.
   experimental: true
 

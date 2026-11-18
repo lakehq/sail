@@ -1,5 +1,7 @@
-//! Finds whether the plan of a shared CTE holds its whole output before it returns it.
+//! Finds whether the plan of a shared CTE holds its whole output before it returns it,
+//! and whether the operators that read a shared CTE hold all the rows that they read.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::physical_expr::expressions::Column;
@@ -16,6 +18,8 @@ use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMerge
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{ExecutionPlan, InputOrderMode};
 use datafusion_common::JoinType;
+
+use crate::shared_cte::SharedCteScanExec;
 
 /// Returns whether the plan holds its whole output before it returns any row of it, in
 /// memory that the plan itself takes, so that the rows that a shared CTE keeps for a
@@ -80,27 +84,61 @@ fn holds_semi_join(
     }
 }
 
+/// Returns the identifiers of the shared CTEs that the plan reads into an operator that
+/// does not hold all the rows that it reads. The other shared CTEs are read only by the
+/// build sides of hash joins, through operators that only move the rows or select their
+/// columns. A build side holds all its rows until its join ends, so the rows that such a
+/// shared CTE keeps for a reference that reads it late are no more than what the
+/// reference that has read them holds, and than what each reference holds in the end,
+/// whether the plan of the shared CTE holds its output or not.
+pub fn ctes_read_without_holding(plan: &Arc<dyn ExecutionPlan>) -> HashSet<usize> {
+    fn visit(plan: &Arc<dyn ExecutionPlan>, held: bool, ids: &mut HashSet<usize>) {
+        if let Some(scan) = plan.downcast_ref::<SharedCteScanExec>() {
+            if !held {
+                ids.insert(scan.cte().id());
+            }
+        } else if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
+            visit(join.left(), true, ids);
+            visit(join.right(), false, ids);
+        } else {
+            // An operator that moves rows moves the rows of its first input.
+            let held = held && moves(plan);
+            for (index, input) in plan.children().into_iter().enumerate() {
+                visit(input, held && index == 0, ids);
+            }
+        }
+    }
+    let mut ids = HashSet::new();
+    visit(plan, false, &mut ids);
+    ids
+}
+
+/// Returns whether the operator only moves the rows of its first input or selects their
+/// columns.
+fn moves(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.is::<RepartitionExec>()
+        || plan.is::<CoalescePartitionsExec>()
+        || plan.is::<SortPreservingMergeExec>()
+        // The subqueries return one value each, which the input reads.
+        || plan.is::<ScalarSubqueryExec>()
+        || plan
+            .downcast_ref::<ProjectionExec>()
+            .is_some_and(|projection| {
+                // A computed column can be larger than the columns that it is computed from.
+                projection
+                    .expr()
+                    .iter()
+                    .all(|expr| expr.expr.is::<Column>())
+            })
+}
+
 /// Returns the input of the operators that only move the rows of their input or select
 /// their columns, and of the operators that filter them as well if `filters` is set.
 fn through(plan: &Arc<dyn ExecutionPlan>, filters: bool) -> &Arc<dyn ExecutionPlan> {
     let mut plan = plan;
     loop {
-        let moves = plan.is::<RepartitionExec>()
-            || plan.is::<CoalescePartitionsExec>()
-            || plan.is::<SortPreservingMergeExec>()
-            // The subqueries return one value each, which the input reads.
-            || plan.is::<ScalarSubqueryExec>()
-            || plan
-                .downcast_ref::<ProjectionExec>()
-                .is_some_and(|projection| {
-                    // A computed column can be larger than what the plan holds.
-                    projection
-                        .expr()
-                        .iter()
-                        .all(|expr| expr.expr.is::<Column>())
-                });
         match plan.children().first() {
-            Some(input) if moves || (filters && plan.is::<FilterExec>()) => plan = input,
+            Some(input) if moves(plan) || (filters && plan.is::<FilterExec>()) => plan = input,
             _ => return plan,
         }
     }
@@ -117,13 +155,19 @@ mod tests {
     use datafusion::functions_aggregate::expr_fn::{count, sum};
     use datafusion::functions_window::expr_fn::row_number;
     use datafusion::logical_expr::expr::WindowFunction;
-    use datafusion::logical_expr::{Expr, ExprFunctionExt, WindowFunctionDefinition, col, lit};
-    use datafusion::physical_expr::expressions::col as physical_col;
-    use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion::logical_expr::{
+        Expr, ExprFunctionExt, Operator, WindowFunctionDefinition, col, lit,
+    };
+    use datafusion::physical_expr::expressions::{BinaryExpr, Literal, col as physical_col};
+    use datafusion::physical_expr::{LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr};
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
+    use datafusion::physical_plan::joins::PartitionMode;
+    use datafusion::physical_plan::projection::ProjectionExpr;
     use datafusion::prelude::{SessionConfig, SessionContext};
+    use datafusion_common::{NullEquality, ScalarValue, Statistics};
 
     use super::*;
+    use crate::shared_cte::SharedCte;
 
     fn table(ctx: &SessionContext, names: [&str; 2]) -> DataFrame {
         let schema = Arc::new(Schema::new(
@@ -291,5 +335,97 @@ mod tests {
         assert!(!holds_output(
             &(Arc::new(aggregate) as Arc<dyn ExecutionPlan>)
         ));
+    }
+
+    #[tokio::test]
+    async fn references_that_hold_the_rows_that_they_read() {
+        let ctx = SessionContext::new();
+        let table = table(&ctx, ["k", "v"])
+            .create_physical_plan()
+            .await
+            .unwrap();
+        let schema = table.schema();
+        let key = physical_col("k", &schema).unwrap();
+        let reference = |id: usize| {
+            let cte = Arc::new(SharedCte::new(
+                id,
+                "c".to_string(),
+                Partitioning::UnknownPartitioning(1),
+            ));
+            let statistics = Statistics::new_unknown(&schema);
+            Arc::new(SharedCteScanExec::new(
+                cte,
+                Arc::clone(&schema),
+                &statistics,
+                None,
+            )) as Arc<dyn ExecutionPlan>
+        };
+        let join = |build: Arc<dyn ExecutionPlan>, probe: Arc<dyn ExecutionPlan>| {
+            let join = HashJoinExec::try_new(
+                build,
+                probe,
+                vec![(Arc::clone(&key), Arc::clone(&key))],
+                None,
+                &JoinType::RightSemi,
+                None,
+                PartitionMode::Partitioned,
+                NullEquality::NullEqualsNothing,
+                false,
+            )
+            .unwrap();
+            Arc::new(join) as Arc<dyn ExecutionPlan>
+        };
+        let select = |expr: Arc<dyn PhysicalExpr>, input: Arc<dyn ExecutionPlan>| {
+            let expr = vec![ProjectionExpr::new(expr, "k".to_string())];
+            Arc::new(ProjectionExec::try_new(expr, input).unwrap()) as Arc<dyn ExecutionPlan>
+        };
+        let repartition = |input: Arc<dyn ExecutionPlan>| {
+            let partitioning = Partitioning::Hash(vec![Arc::clone(&key)], 4);
+            Arc::new(RepartitionExec::try_new(input, partitioning).unwrap())
+                as Arc<dyn ExecutionPlan>
+        };
+        let positive = || {
+            let zero = Arc::new(Literal::new(ScalarValue::Int64(Some(0))));
+            Arc::new(BinaryExpr::new(Arc::clone(&key), Operator::Gt, zero)) as Arc<dyn PhysicalExpr>
+        };
+        let streamed = |plan: Arc<dyn ExecutionPlan>| {
+            let mut ids = ctes_read_without_holding(&plan)
+                .into_iter()
+                .collect::<Vec<_>>();
+            ids.sort();
+            ids
+        };
+
+        // The build side of a hash join holds its rows, also when they are selected and
+        // repartitioned on the way, and when the join is the build side of another join.
+        let build = repartition(select(Arc::clone(&key), reference(0)));
+        assert!(streamed(join(build, Arc::clone(&table))).is_empty());
+        let inner = join(reference(0), Arc::clone(&table));
+        assert!(streamed(join(inner, Arc::clone(&table))).is_empty());
+
+        // The other readers return or drop rows as they read them.
+        assert_eq!(streamed(reference(0)), vec![0]);
+        assert_eq!(streamed(join(Arc::clone(&table), reference(0))), vec![0]);
+        assert_eq!(streamed(join(reference(0), reference(0))), vec![0]);
+        assert_eq!(streamed(join(reference(0), reference(1))), vec![1]);
+        let inner = join(Arc::clone(&table), reference(0));
+        assert_eq!(streamed(join(inner, Arc::clone(&table))), vec![0]);
+        let filtered = Arc::new(FilterExec::try_new(positive(), reference(0)).unwrap());
+        assert_eq!(streamed(join(filtered, Arc::clone(&table))), vec![0]);
+        let computed = select(positive(), reference(0));
+        assert_eq!(streamed(join(computed, Arc::clone(&table))), vec![0]);
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![(Arc::clone(&key), "k".to_string())]),
+            vec![],
+            vec![],
+            reference(0),
+            Arc::clone(&schema),
+        )
+        .unwrap();
+        assert_eq!(
+            streamed(join(Arc::new(aggregate), Arc::clone(&table))),
+            vec![0]
+        );
     }
 }

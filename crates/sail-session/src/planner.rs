@@ -77,7 +77,7 @@ use sail_physical_plan::remote_checkpoint::{
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::seeded_random::{SeededRandomExec, SeededRandomExprColumn};
-use sail_physical_plan::shared_cte::blocking::holds_output;
+use sail_physical_plan::shared_cte::blocking::{ctes_read_without_holding, holds_output};
 use sail_physical_plan::shared_cte::ctes_read_again;
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
@@ -156,14 +156,19 @@ fn decline_shared_ctes(
     } else {
         HashSet::new()
     };
+    let streamed = std::iter::once(plan)
+        .chain(bodies.iter().map(|(_, plan)| plan))
+        .flat_map(ctes_read_without_holding)
+        .collect::<HashSet<_>>();
     for (id, (body, plan)) in bodies.iter().enumerate() {
         if body.must_share() {
             continue;
         }
         // A body that returns rows before its input ends would keep up to all its rows
         // for a reference that reads it late, while each reference that evaluates the
-        // body itself keeps little.
-        let keeps_little = retains_within_limit && holds_output(plan);
+        // body itself keeps little, unless every reference holds all the rows that it
+        // reads.
+        let keeps_little = retains_within_limit && (holds_output(plan) || !streamed.contains(&id));
         if !keeps_little || read_again.contains(&id) {
             body.inline();
         }

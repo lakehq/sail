@@ -691,6 +691,95 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_cte_references_in_hash_join_build_sides() -> Result<(), String> {
+        // The plan resolver futures need more than the default test thread stack in debug builds.
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| e.to_string())?
+                    .block_on(cte_references_in_hash_join_build_sides())
+                    .map_err(|e| e.to_string())
+            })
+            .map_err(|e| e.to_string())?
+            .join()
+            .unwrap_or_else(|e| std::panic::resume_unwind(e))
+    }
+
+    async fn cte_references_in_hash_join_build_sides() -> Result<(), Box<dyn std::error::Error>> {
+        use datafusion::physical_plan::displayable;
+        use sail_common_datafusion::session::shared_cte::SharedCteConfig;
+
+        let session = create_session()?;
+        session
+            .state_ref()
+            .write()
+            .config_mut()
+            .set_extension(Arc::new(SharedCteConfig::new(true)));
+        // The CTE is a semi join, which returns rows before its input ends.
+        let cte = "WITH c AS (SELECT a, a + 1 AS b FROM VALUES (1), (2), (3) AS t(a) WHERE a IN \
+                   (SELECT a FROM VALUES (1), (2) AS u(a) INTERSECT SELECT a FROM VALUES (2), (3) AS v(a)))";
+        let large = |name: &str| {
+            let rows = (0..64).map(|x| format!("({x})")).collect::<Vec<_>>();
+            format!("(VALUES {}) AS {name}(k)", rows.join(", "))
+        };
+        let (f, g, h) = (large("f"), large("g"), large("h"));
+        for (query, expected) in [
+            // Each reference is the build side of a hash join, which holds its rows.
+            (
+                format!(
+                    "SELECT k FROM {f} WHERE k IN (SELECT a FROM c) UNION ALL \
+                     SELECT k FROM {g} WHERE k IN (SELECT a FROM c) UNION ALL \
+                     SELECT k FROM {h} WHERE k IN (SELECT a FROM c)"
+                ),
+                3,
+            ),
+            (
+                format!(
+                    "SELECT f.k, c.a FROM {f} JOIN c ON f.k = c.a UNION ALL \
+                     SELECT g.k, c.a FROM {g} JOIN c ON g.k = c.a"
+                ),
+                2,
+            ),
+            // A reference is the probe side of a hash join.
+            (
+                "SELECT x.a, y.b FROM c x JOIN c y ON x.a = y.a".to_string(),
+                0,
+            ),
+            // A reference is aggregated as it is read.
+            (
+                format!("SELECT f.k FROM {f} JOIN c ON f.k = c.a UNION ALL SELECT max(b) FROM c"),
+                0,
+            ),
+            // A reference is returned as it is read.
+            (
+                format!("SELECT f.k FROM {f} JOIN c ON f.k = c.a UNION ALL SELECT b FROM c"),
+                0,
+            ),
+            // The build sides hold a column that is computed from the rows of the references.
+            (
+                format!(
+                    "SELECT f.k FROM {f} JOIN c ON f.k = c.b UNION ALL \
+                     SELECT g.k FROM {g} JOIN c ON g.k = c.b"
+                ),
+                0,
+            ),
+        ] {
+            let query = format!("{cte} {query}");
+            let plan = plan_with_shared_ctes(&session, &query).await?;
+            let plan = displayable(plan.as_ref()).indent(false).to_string();
+            assert_eq!(
+                plan.matches("SharedCteScanExec").count(),
+                expected,
+                "{query}\n{plan}"
+            );
+        }
+        Ok(())
+    }
+
     /// Plans a query whose CTE definitions are shared, as the session does.
     async fn plan_with_shared_ctes(
         session: &SessionContext,
