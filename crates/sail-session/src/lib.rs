@@ -856,6 +856,66 @@ mod tests {
     }
 
     #[test]
+    fn test_sort_above_offset_with_limit_keeps_the_rows() -> Result<(), String> {
+        // The plan resolver futures need more than the default test thread stack in debug builds.
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| e.to_string())?
+                    .block_on(sort_above_offset_with_limit_keeps_the_rows())
+                    .map_err(|e| e.to_string())
+            })
+            .map_err(|e| e.to_string())?
+            .join()
+            .unwrap_or_else(|e| std::panic::resume_unwind(e))
+    }
+
+    async fn sort_above_offset_with_limit_keeps_the_rows() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use datafusion::arrow::array::AsArray;
+        use datafusion::arrow::datatypes::Int64Type;
+        use sail_physical_optimizer::get_physical_optimizers;
+
+        let state = SessionStateBuilder::new_from_existing(create_session()?.state())
+            .with_physical_optimizer_rules(get_physical_optimizers(Default::default()))
+            .build();
+        let session = SessionContext::new_with_state(state);
+        let resolver = PlanResolver::new(&session, Arc::new(PlanConfig::default()));
+        // The input of the offset has one partition and reports no ordering, so the sort
+        // above it must not be pushed below it.
+        for (query, expected) in [
+            (
+                "SELECT k FROM ((SELECT id AS k FROM range(0, 100000, 1, 1) LIMIT 2 OFFSET 3) \
+                 UNION ALL (SELECT id + 1 FROM range(0, 10, 1, 1) LIMIT 4)) ORDER BY k DESC",
+                vec![4, 4, 3, 3, 2, 1],
+            ),
+            (
+                "SELECT k FROM (SELECT id AS k FROM range(0, 100000, 1, 1) LIMIT 2 OFFSET 3) \
+                 ORDER BY k DESC",
+                vec![4, 3],
+            ),
+            (
+                "SELECT k FROM (SELECT id AS k FROM range(0, 100000, 1, 1) OFFSET 99997) \
+                 ORDER BY k DESC",
+                vec![99999, 99998, 99997],
+            ),
+        ] {
+            let plan = from_ast_statement(parse_one_statement(query)?)?;
+            let plan = resolver.resolve_named_plan(plan).await?.plan;
+            let batches = session.execute_logical_plan(plan).await?.collect().await?;
+            let rows = batches
+                .iter()
+                .flat_map(|x| x.column(0).as_primitive::<Int64Type>().values().to_vec())
+                .collect::<Vec<_>>();
+            assert_eq!(rows, expected, "{query}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_cte_references_share_or_inline() -> Result<(), String> {
         // The plan resolver futures need more than the default test thread stack in debug builds.
         std::thread::Builder::new()
