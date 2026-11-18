@@ -691,13 +691,46 @@ mod tests {
         Ok(())
     }
 
+    /// Plans a query whose CTE definitions are shared, as the session does.
+    async fn plan_with_shared_ctes(
+        session: &SessionContext,
+        query: &str,
+    ) -> Result<Arc<dyn ExecutionPlan>, Box<dyn std::error::Error>> {
+        use sail_plan::shared_cte::{optimize_and_plan_shared_ctes, session_state_for_restart};
+
+        let resolver =
+            PlanResolver::new(session, Arc::new(PlanConfig::default())).with_shared_ctes();
+        let plan = from_ast_statement(parse_one_statement(query)?)?;
+        let plan = resolver.resolve_named_plan(plan).await?.plan;
+        let state = session.state();
+        let state = &state;
+        let mut restart = false;
+        let plan = optimize_and_plan_shared_ctes(
+            plan,
+            &mut |plan, query| {
+                if query && std::mem::replace(&mut restart, true) {
+                    session_state_for_restart(state).optimize(&plan)
+                } else {
+                    state.optimize(&plan)
+                }
+            },
+            move |plan| async move {
+                state
+                    .query_planner()
+                    .create_physical_plan(&plan, state)
+                    .await
+            },
+        )
+        .await?;
+        Ok(plan)
+    }
+
     #[tokio::test]
     async fn test_limited_cte_references_limit_a_shared_volatile_body()
     -> Result<(), Box<dyn std::error::Error>> {
         use datafusion::physical_plan::collect;
         use sail_common_datafusion::session::shared_cte::SharedCteConfig;
         use sail_physical_plan::shared_cte::SharedCteExec;
-        use sail_plan::shared_cte::{optimize_and_plan_shared_ctes, session_state_for_restart};
 
         let session = create_session()?;
         session
@@ -735,30 +768,7 @@ mod tests {
             ),
         ] {
             let query = format!("{cte} {query}");
-            let resolver =
-                PlanResolver::new(&session, Arc::new(PlanConfig::default())).with_shared_ctes();
-            let plan = from_ast_statement(parse_one_statement(&query)?)?;
-            let plan = resolver.resolve_named_plan(plan).await?.plan;
-            let state = session.state();
-            let state = &state;
-            let mut restart = false;
-            let plan = optimize_and_plan_shared_ctes(
-                plan,
-                &mut |plan, query| {
-                    if query && std::mem::replace(&mut restart, true) {
-                        session_state_for_restart(state).optimize(&plan)
-                    } else {
-                        state.optimize(&plan)
-                    }
-                },
-                move |plan| async move {
-                    state
-                        .query_planner()
-                        .create_physical_plan(&plan, state)
-                        .await
-                },
-            )
-            .await?;
+            let plan = plan_with_shared_ctes(&session, &query).await?;
             let batches = collect(Arc::clone(&plan), session.task_ctx()).await?;
             let rows = batches.iter().map(|x| x.num_rows()).sum::<usize>();
             let Some(shared) = plan.downcast_ref::<SharedCteExec>() else {
@@ -769,6 +779,78 @@ mod tests {
             };
             let produced = body.metrics().and_then(|x| x.output_rows());
             assert_eq!((rows, produced), (expected.0, Some(expected.1)), "{query}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_limited_cte_references_of_a_sorted_volatile_body()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::collections::HashSet;
+
+        use datafusion::arrow::array::{Float64Array, Int64Array};
+        use datafusion::physical_plan::collect;
+        use sail_common_datafusion::session::shared_cte::SharedCteConfig;
+        use sail_physical_plan::shared_cte::SharedCteExec;
+
+        let session = create_session()?;
+        session
+            .state_ref()
+            .write()
+            .config_mut()
+            .set_extension(Arc::new(SharedCteConfig::new(true)));
+        let cte = "WITH c AS (SELECT id AS k, rand() AS r FROM range(0, 100000, 1, 4) \
+                   ORDER BY k DESC)";
+        // The references read 3 and 5 rows, and 5 and 4 rows with the offset, so the body
+        // returns its first 5 rows in both queries. Which of these rows a reference with
+        // a smaller limit returns is not promised, since its limit has no order.
+        for (query, expected) in [
+            (
+                "SELECT k, r FROM ((SELECT k, r FROM c LIMIT 3) UNION ALL \
+                 (SELECT k, r FROM c LIMIT 5)) ORDER BY k",
+                Some(8),
+            ),
+            (
+                "SELECT k, r FROM ((SELECT k, r FROM c LIMIT 2 OFFSET 3) UNION ALL \
+                 (SELECT k, r FROM c LIMIT 4)) ORDER BY k",
+                None,
+            ),
+        ] {
+            let query = format!("{cte} {query}");
+            let plan = plan_with_shared_ctes(&session, &query).await?;
+            let batches = collect(Arc::clone(&plan), session.task_ctx()).await?;
+            let mut rows = vec![];
+            for batch in &batches {
+                let (Some(k), Some(r)) = (
+                    batch.column(0).as_any().downcast_ref::<Int64Array>(),
+                    batch.column(1).as_any().downcast_ref::<Float64Array>(),
+                ) else {
+                    return Err(format!("unexpected columns: {query}").into());
+                };
+                rows.extend((0..batch.num_rows()).map(|i| (k.value(i), r.value(i).to_bits())));
+            }
+            let Some(shared) = plan.downcast_ref::<SharedCteExec>() else {
+                return Err(format!("the CTE is not shared: {query}").into());
+            };
+            let [(_, body)] = shared.ctes() else {
+                return Err(format!("the query does not share one CTE: {query}").into());
+            };
+            let produced = body.metrics().and_then(|x| x.output_rows());
+            assert_eq!(produced, Some(5), "{query}");
+            if let Some(expected) = expected {
+                assert_eq!(rows.len(), expected, "{query}");
+            }
+            // The query returns its rows in the order of the keys.
+            assert!(rows.is_sorted_by_key(|(k, _)| *k), "{query}: {rows:?}");
+            // Each reference returns rows of the one evaluation of the body, so the rows
+            // of the reference that reads fewer rows are among the rows of the other one.
+            let keys = rows.iter().map(|(k, _)| *k).collect::<HashSet<_>>();
+            assert!(
+                keys.iter().all(|k| (99995..100000).contains(k)),
+                "{query}: {rows:?}"
+            );
+            let distinct = rows.iter().collect::<HashSet<_>>();
+            assert_eq!(distinct.len(), keys.len(), "{query}: {rows:?}");
         }
         Ok(())
     }
