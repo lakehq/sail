@@ -1,4 +1,5 @@
-// [CREDIT]: https://github.com/apache/datafusion/blob/ad8578a9df4593265b416cace5d1d2a78be1cdd3/datafusion/functions-aggregate/src/first_last.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/ad8578a9df4593265b416cace5d1d2a78be1cdd3/datafusion/functions-aggregate/src/first_last.rs
 
 //! Defines the FIRST_VALUE/LAST_VALUE aggregations.
 
@@ -43,7 +44,9 @@ use sail_common_datafusion::metadata::type_metadata;
 use state::{BytesValueState, GenericValueState, PrimitiveValueState, ValueState};
 
 // TODO: Remove after DataFusion 56, which has `datafusion_expr::utils::ordering_state_fields`.
-// [CREDIT]: https://github.com/apache/datafusion/blob/ad8578a9df4593265b416cace5d1d2a78be1cdd3/datafusion/expr/src/utils.rs#L1577-L1589
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/ad8578a9df4593265b416cace5d1d2a78be1cdd3/datafusion/expr/src/utils.rs#L1577-L1589
 fn ordering_state_fields(
     name: &str,
     ordering_fields: &[FieldRef],
@@ -57,6 +60,7 @@ fn ordering_state_fields(
         )
     })
 }
+// SPDX-SnippetEnd
 
 /// Returns the first value in a group of values.
 pub fn first_value(expression: Expr, order_by: Vec<SortExpr>) -> Result<Expr> {

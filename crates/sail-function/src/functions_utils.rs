@@ -1,4 +1,6 @@
-/// [Credit]: <https://github.com/apache/datafusion/blob/e6e1eb229440591263c82bb2b913a4d5a16f9b70/datafusion/functions/src/utils.rs>
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/e6e1eb229440591263c82bb2b913a4d5a16f9b70/datafusion/functions/src/utils.rs
+
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
@@ -124,7 +126,9 @@ where
     }
 }
 
-// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/common/src/utils/mod.rs#L1226-L1235
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/common/src/utils/mod.rs#L1226-L1235
 /// Returns the number of values covered by an offset buffer.
 ///
 /// Slicing a variable-length array narrows its offsets but retains its entire
@@ -135,8 +139,11 @@ where
 pub fn offset_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> usize {
     offset_span(offsets).1
 }
+// SPDX-SnippetEnd
 
-// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/common/src/utils/mod.rs#L1237-L1254
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/common/src/utils/mod.rs#L1237-L1254
 /// Returns the start and length of the values covered by an offset buffer.
 ///
 /// The returned pair can be passed to [`Array::slice`] to select the visible
@@ -151,8 +158,11 @@ pub fn offset_span<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> (usize, usi
     let start = offsets[0].as_usize();
     (start, offsets[offsets.len() - 1].as_usize() - start)
 }
+// SPDX-SnippetEnd
 
-// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/utils.rs#L21-L67
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/utils.rs#L21-L67
 /// Creates a function to identify the optimal return type of a string function given
 /// the type of its first argument.
 ///
@@ -200,10 +210,14 @@ macro_rules! get_optimal_return_type {
         }
     };
 }
+// SPDX-SnippetEnd
 
-// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/utils.rs#L69-L70
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/utils.rs#L69-L70
 // `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.
 get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
+// SPDX-SnippetEnd
 
 #[cfg(test)]
 pub(crate) mod tests {

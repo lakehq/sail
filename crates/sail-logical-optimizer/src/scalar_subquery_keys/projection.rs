@@ -28,7 +28,9 @@ pub(super) fn project_with_keys(input: Arc<LogicalPlan>, keys: Vec<Expr>) -> Res
 /// When no two fields share a name and a table, or a display name, each column resolves to
 /// its own field, so only the keys need deriving.
 // The key schema follows DataFusion's `projection_schema` and `calc_func_dependencies_for_project`.
-// [CREDIT]: https://github.com/apache/datafusion/blob/55.2.0/datafusion/expr/src/logical_plan/plan.rs
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/500744d5c25499055e3b2ca46b022bc425989203/datafusion/expr/src/logical_plan/plan.rs
 fn key_schema(input: &LogicalPlan, expressions: &[Expr]) -> Result<Option<DFSchema>> {
     let schema = input.schema();
     let names = schema.field_names();
@@ -74,6 +76,7 @@ fn key_schema(input: &LogicalPlan, expressions: &[Expr]) -> Result<Option<DFSche
     );
     Ok(Some(projected))
 }
+// SPDX-SnippetEnd
 
 #[cfg(test)]
 mod tests {

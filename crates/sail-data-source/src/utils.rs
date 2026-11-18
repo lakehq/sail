@@ -8,7 +8,9 @@ pub fn char_to_u8(c: char, option: &str) -> datafusion_common::Result<u8> {
     }
 }
 
-// [CREDIT]: https://github.com/apache/datafusion/blob/92d516cc9b1bb8912f7b9c4f122903491c0c9a85/datafusion/common/src/file_options/parquet_writer.rs#L308-L325
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/92d516cc9b1bb8912f7b9c4f122903491c0c9a85/datafusion/common/src/file_options/parquet_writer.rs#L308-L325
 pub fn split_parquet_compression_string(
     str_setting: &str,
 ) -> datafusion_common::Result<(String, Option<u32>)> {
@@ -28,3 +30,4 @@ pub fn split_parquet_compression_string(
         None => Ok((str_setting.to_owned(), None)),
     }
 }
+// SPDX-SnippetEnd

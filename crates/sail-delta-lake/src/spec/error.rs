@@ -1,22 +1,10 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-// https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Copyright 2023-2024 The Delta Kernel Rust Authors
-// Portions Copyright 2025-2026 LakeSail, Inc.
-// Ported and modified in 2026 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/LICENSE
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Copyright 2023-2024 The Delta Kernel Rust Authors
+// SPDX-FileCopyrightText: Portions Copyright 2025-2026 LakeSail, Inc.
+// SPDX-FileContributor: Ported and modified by LakeSail, Inc. in 2026
 
 use datafusion_common::{Column, DataFusionError, SchemaError};
 use object_store::Error as ObjectStoreError;
@@ -27,7 +15,9 @@ use crate::spec::protocol::TableFeature;
 pub type DeltaResult<T> = Result<T, DeltaError>;
 
 /// Conflict during commit due to concurrent changes.
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/transaction/conflict_checker.rs#L21-L85>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/transaction/conflict_checker.rs#L21-L85
 #[derive(Error, Debug)]
 pub enum CommitConflictError {
     #[error(
@@ -76,8 +66,11 @@ pub enum CommitConflictError {
     #[error("No metadata found, please make sure table is loaded.")]
     NoMetadata,
 }
+// SPDX-SnippetEnd
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/transaction/mod.rs#L150-L203>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/transaction/mod.rs#L150-L203
 #[derive(Error, Debug)]
 pub enum TransactionError {
     #[error("Tried committing existing table version: {0}")]
@@ -119,8 +112,11 @@ pub enum TransactionError {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 }
+// SPDX-SnippetEnd
 
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/error.rs#L21-L180>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/error.rs#L21-L180
 #[derive(Debug, Error)]
 pub enum DeltaError {
     #[error("No table version found.")]
@@ -192,8 +188,11 @@ pub enum DeltaError {
     #[error("Delta transaction error: {0}")]
     Transaction(#[from] TransactionError),
 }
+// SPDX-SnippetEnd
 
-// [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/error.rs#L216-L279>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/error.rs#L216-L279
 impl DeltaError {
     pub fn generic(msg: impl ToString) -> Self {
         Self::Generic(msg.to_string())
@@ -217,6 +216,7 @@ impl DeltaError {
         Self::MissingColumn(name.to_string())
     }
 }
+// SPDX-SnippetEnd
 
 impl From<DeltaError> for DataFusionError {
     fn from(err: DeltaError) -> Self {

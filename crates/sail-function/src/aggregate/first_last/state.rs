@@ -1,4 +1,5 @@
-// [CREDIT]: https://github.com/apache/datafusion/blob/ad8578a9df4593265b416cace5d1d2a78be1cdd3/datafusion/functions-aggregate/src/first_last/state.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/ad8578a9df4593265b416cace5d1d2a78be1cdd3/datafusion/functions-aggregate/src/first_last/state.rs
 
 use std::mem::size_of;
 use std::sync::Arc;

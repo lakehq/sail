@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion_common::{DataFusionError, Result};
@@ -8,8 +10,6 @@ use crate::options::ResolveOptions;
 use crate::options::r#gen::{CsvReadOptions, CsvWriteOptions};
 
 // Some of the CSV implementation is adapted from DataFusion's `CsvFormat` and `CsvSource`.
-// [CREDIT]: https://github.com/apache/datafusion/blob/54.1.0/datafusion/datasource-csv/src/file_format.rs
-// [CREDIT]: https://github.com/apache/datafusion/blob/54.1.0/datafusion/datasource-csv/src/source.rs
 
 mod decoder;
 mod options;
