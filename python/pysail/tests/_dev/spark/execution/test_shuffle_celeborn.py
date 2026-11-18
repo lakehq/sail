@@ -13,7 +13,6 @@ from pyspark.sql.types import Row
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.common import shares_deterministic_ctes
-from pysail.tests._dev.spark.execution.test_shuffle_storage import check_retried_cte_query_fails
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -181,10 +180,6 @@ def test_shared_cte_error_with_celeborn_shuffle(spark):
     query = f"WITH {cte} SELECT sum(a.q + b.q) FROM c a JOIN c b ON a.k = b.k"  # noqa: S608
     with pytest.raises(PySparkException, match=r"(?i)divi"):
         spark.sql(query).collect()
-
-
-def test_retried_region_reads_the_output_of_a_blocking_stage(spark):
-    check_retried_cte_query_fails(spark)
 
 
 def test_celeborn_shuffle_is_usable_after_a_shared_cte_without_output(spark):
