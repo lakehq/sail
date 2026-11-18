@@ -94,6 +94,7 @@ def _task_stop_times(spark):
 
 
 @pytest.mark.timeout(30)
+@pytest.mark.spark(version=">=4", reason="DataFrame.toArrow")
 def test_shuffle_producers_finish_without_waiting_for_unread_channels(spark):
     # Only one build partition contains a row, so the other join partitions finish
     # without opening their probe inputs, while the remaining one is still busy.
