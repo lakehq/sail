@@ -10,6 +10,7 @@ import pytest
 
 from pysail.testing._dev.containers.celeborn import CelebornFrame, CelebornMessageType
 from pysail.testing._dev.utils.proxy import (
+    Close,
     ConnectionOpened,
     FrameReceived,
     FrameRule,
@@ -386,11 +387,17 @@ def test_fetch_preserves_partial_batch(
     second = b"NEXT batch"
     map_id = 1
     prefix = (struct.pack("=4i", map_id, 0, 1, len(second)) + second)[:prefix_length]
+    release_second_chunk = threading.Event()
 
-    def split_batch(event: FrameReceived[CelebornFrame]) -> Replace[CelebornFrame]:
+    def split_batch(event: FrameReceived[CelebornFrame]) -> Replace[CelebornFrame] | Close:
         frame = event.frame
         chunk_index = struct.unpack_from(">i", frame.metadata, 8)[0]
-        body = frame.body + prefix if chunk_index == 0 else frame.body[prefix_length:]
+        if chunk_index == 0:
+            body = frame.body + prefix
+        else:
+            if not release_second_chunk.wait(timeout=5):
+                return Close("the reader did not yield the first batch while the second chunk was held")
+            body = frame.body[prefix_length:]
         return Replace(CelebornFrame(frame.message_type, frame.metadata, body))
 
     rule = FrameRule(
@@ -408,5 +415,10 @@ def test_fetch_preserves_partial_batch(
         fetch_client.push_data(1, 0, map_id, 0, batch)
     fetch_client.mapper_end(1, 0, 0, 2)
     fetch_client.mapper_end(1, map_id, 0, 2)
-    assert list(fetch_client.read_partition_stream(1, 0)) == [first, second]
+    stream = fetch_client.read_partition_stream(1, 0)
+    try:
+        assert next(stream) == first
+    finally:
+        release_second_chunk.set()
+    assert list(stream) == [second]
     assert sum(proxy.events.count(RuleApplied) for proxy in celeborn_fetch_proxies.values()) == 2
