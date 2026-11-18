@@ -179,6 +179,10 @@ fn union(
         };
         let (mut keys, mut rows, mut scan_rows) = (vec![], 0usize, 0usize);
         for source in std::iter::once(candidate).chain(sources) {
+            // References that have the keys of the same join input need them once.
+            if keys.iter().any(|x| Arc::ptr_eq(x, &source.keys)) {
+                continue;
+            }
             let (Some(source_scan_rows), Some(source_rows)) = (
                 filtered_scan_rows(&source.keys, false)?,
                 row_count(&source.keys)?,
@@ -190,10 +194,12 @@ fn union(
             scan_rows = scan_rows.saturating_add(source_scan_rows);
         }
         // The keys of all the references are collected together, so the limits of a
-        // collected join input apply to all of them. The scan of each source is within
-        // the limit of the rows that a reduction scans, which it met before its keys
-        // reached the reference, and it is executed once here, as it is by a reference
-        // that evaluates the CTE itself.
+        // collected join input apply to all of them, and so does the estimate of the
+        // benefit, which has the rows and the statistics of all the keys. The rows are
+        // at most the sum of the rows of the sources. The scan of each source is
+        // within the limit of the rows that a reduction scans, which it met before its
+        // keys reached the reference, and it is executed once here, as it is by a
+        // reference that evaluates the CTE itself.
         let max_rows = config.optimizer.hash_join_single_partition_threshold_rows;
         let keys = UnionExec::try_new(keys)?;
         if rows > max_rows || !can_collect(&keys, rows, config)? {
@@ -1020,43 +1026,77 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn the_keys_of_two_scans_of_a_dimension_restrict_the_plan_of_a_shared_cte() -> Result<()> {
+    /// Returns a reference that is restricted on the second column of the CTE to the
+    /// first column of the rows of a file whose values in that column, which are from 0
+    /// to 999, compare in the given way with the given value.
+    fn reference(rows: usize, operator: Operator, value: i64) -> Result<Vec<SharedCteRestriction>> {
         use datafusion::common::ScalarValue;
         use datafusion::physical_expr::expressions::Literal;
 
-        // The keys of each reference are the rows of a scan whose values are less than 10.
-        let keys = |rows: usize| -> Result<Arc<dyn ExecutionPlan>> {
-            let scan = file_scan(rows, (0, 999));
-            let predicate = Arc::new(BinaryExpr::new(
-                column(&scan, 0),
-                Operator::Lt,
-                Arc::new(Literal::new(ScalarValue::Int64(Some(10)))),
-            ));
-            let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(predicate, scan)?);
-            Ok(Arc::new(ProjectionExec::try_new(
-                vec![ProjectionExpr {
-                    expr: column(&filter, 0),
-                    alias: "__early_join_key_0".to_string(),
-                }],
-                filter,
-            )?))
-        };
-        // 60,000 rows: the scans of both references are below the row threshold of a
+        let scan = file_scan(rows, (0, 999));
+        let predicate = Arc::new(BinaryExpr::new(
+            column(&scan, 0),
+            operator,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(value)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(predicate, scan)?);
+        let keys = Arc::new(ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: column(&filter, 0),
+                alias: "__early_join_key_0".to_string(),
+            }],
+            filter,
+        )?);
+        Ok(vec![SharedCteRestriction {
+            keys,
+            columns: vec![1],
+            null_equality: NullEquality::NullEqualsNothing,
+        }])
+    }
+
+    #[test]
+    fn the_scan_of_each_key_source_is_limited_on_its_own() -> Result<()> {
+        // 60,000 rows: the scans of two references are below the row threshold of a
         // collected join input together. 73,049 rows (the TPC-DS date dimension): each
-        // scan is below the threshold, and both together are not.
-        for rows in [60_000, 73_049] {
-            let reference = || -> Result<Vec<SharedCteRestriction>> {
-                Ok(vec![SharedCteRestriction {
-                    keys: keys(rows)?,
-                    columns: vec![1],
-                    null_equality: NullEquality::NullEqualsNothing,
-                }])
-            };
-            let (plan, applied) = restrict_grouped_facts(vec![reference()?, reference()?], false)?;
-            assert!(applied, "two key scans of {rows} rows each");
+        // scan is below the threshold, and two or more together are not.
+        for (rows, references) in [(60_000, 2), (73_049, 2), (73_049, 5)] {
+            let references = (0..references)
+                .map(|_| reference(rows, Operator::Lt, 10))
+                .collect::<Result<Vec<_>>>()?;
+            let sources = references.len();
+            let (plan, applied) = restrict_grouped_facts(references, false)?;
+            assert!(applied, "{sources} key scans of {rows} rows each");
             assert_eq!(count::<HashJoinExec>(&plan)?, 1);
+            // The source of each reference is scanned once, apart from the file of the CTE.
+            assert_eq!(count::<DataSourceExec>(&plan)?, sources + 1);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn references_with_the_keys_of_one_join_input_read_the_keys_once() -> Result<()> {
+        let first = reference(73_049, Operator::Lt, 10)?;
+        let second = first.clone();
+        let (plan, applied) = restrict_grouped_facts(vec![first, second], false)?;
+        assert!(applied);
+        assert_eq!(count::<HashJoinExec>(&plan)?, 1);
+        assert_eq!(count::<UnionExec>(&plan)?, 0);
+        assert_eq!(count::<DataSourceExec>(&plan)?, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn the_keys_of_all_references_together_pay_for_the_reduction() -> Result<()> {
+        // Each reference reads the rows of half of the keys of the CTE, which pays for a
+        // reduction to its keys, and the references together read the rows of all keys.
+        let low = || reference(1000, Operator::Lt, 500);
+        let high = || reference(1000, Operator::GtEq, 500);
+        let (plan, applied) = restrict_grouped_facts(vec![low()?, low()?], false)?;
+        assert!(applied);
+        assert_eq!(count::<HashJoinExec>(&plan)?, 1);
+        let (plan, applied) = restrict_grouped_facts(vec![low()?, high()?], false)?;
+        assert!(!applied);
+        assert_eq!(count::<HashJoinExec>(&plan)?, 0);
         Ok(())
     }
 
