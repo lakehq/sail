@@ -26,27 +26,25 @@ use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::approx_percentile::ApproxPercentileCont;
 use sail_function::aggregate::array_agg::ArrayAgg;
-use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
-use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
-use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
-use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
+use sail_function::aggregate::bitmap_and_agg::BitmapAndAgg;
+use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAgg;
+use sail_function::aggregate::bitmap_or_agg::BitmapOrAgg;
+use sail_function::aggregate::count_min_sketch::CountMinSketch;
 use sail_function::aggregate::first_last::{FirstValue, LastValue};
-use sail_function::aggregate::grouping_id::GroupingIdFunction;
-use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
-use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
-use sail_function::aggregate::kurtosis::KurtosisFunction;
-use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
-use sail_function::aggregate::mode::ModeFunction;
-use sail_function::aggregate::percentile::PercentileFunction;
+use sail_function::aggregate::grouping_id::GroupingId;
+use sail_function::aggregate::histogram_numeric::HistogramNumeric;
+use sail_function::aggregate::hll_sketch::{HllSketchAgg, HllUnionAgg};
+use sail_function::aggregate::kurtosis::Kurtosis;
+use sail_function::aggregate::max_min_by::{MaxBy, MinBy};
+use sail_function::aggregate::mode::Mode;
+use sail_function::aggregate::percentile::Percentile;
 use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
-use sail_function::aggregate::product::ProductFunction;
+use sail_function::aggregate::product::Product;
 use sail_function::aggregate::regr::{Regr, RegrType};
-use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
+use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAgg;
 use sail_function::aggregate::skewness::SkewnessFunc;
-use sail_function::aggregate::theta_sketch::{
-    ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
-};
-use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::aggregate::theta_sketch::{ThetaIntersectionAgg, ThetaSketchAgg, ThetaUnionAgg};
+use sail_function::aggregate::try_avg::TryAvg;
 use sail_function::aggregate::vector_avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::array::array_transform::ArrayTransform;
@@ -280,7 +278,7 @@ fn grouping_id(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         return Err(PlanError::invalid("invalid grouping_id function clause"));
     }
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(GroupingIdFunction::new())),
+        func: Arc::new(AggregateUDF::from(GroupingId::new())),
         params: AggregateFunctionParams {
             args: arguments,
             distinct: false,
@@ -330,7 +328,7 @@ fn kurtosis(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(KurtosisFunction::new())),
+        func: Arc::new(AggregateUDF::from(Kurtosis::new())),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -348,7 +346,7 @@ fn product(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(ProductFunction::new())),
+        func: Arc::new(AggregateUDF::from(Product::new())),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -361,7 +359,7 @@ fn product(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 
 fn max_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(MaxByFunction::new())),
+        func: Arc::new(AggregateUDF::from(MaxBy::new())),
         params: AggregateFunctionParams {
             args: input.arguments,
             distinct: input.distinct,
@@ -374,7 +372,7 @@ fn max_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 
 fn min_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(MinByFunction::new())),
+        func: Arc::new(AggregateUDF::from(MinBy::new())),
         params: AggregateFunctionParams {
             args: input.arguments,
             distinct: input.distinct,
@@ -387,7 +385,7 @@ fn min_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 
 fn mode(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(ModeFunction::new())),
+        func: Arc::new(AggregateUDF::from(Mode::new())),
         params: AggregateFunctionParams {
             args: input.arguments,
             distinct: input.distinct,
@@ -400,7 +398,7 @@ fn mode(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 
 fn schema_of_variant_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(SchemaOfVariantAggFunction::new())),
+        func: Arc::new(AggregateUDF::from(SchemaOfVariantAgg::new())),
         params: AggregateFunctionParams {
             args: input.arguments,
             distinct: input.distinct,
@@ -496,7 +494,7 @@ fn try_avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = input.arguments;
 
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(TryAvgFunction::new())),
+        func: Arc::new(AggregateUDF::from(TryAvg::new())),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -890,7 +888,7 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 
 fn histogram_numeric(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(HistogramNumericFunction::new())),
+        func: Arc::new(AggregateUDF::from(HistogramNumeric::new())),
         params: AggregateFunctionParams {
             args: input.arguments,
             distinct: input.distinct,
@@ -905,7 +903,7 @@ fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let mut args = input.arguments.clone();
     args.push(lit(0.5_f64));
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(PercentileFunction::new())),
+        func: Arc::new(AggregateUDF::from(Percentile::new())),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -918,7 +916,7 @@ fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 
 fn percentile_exact(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(PercentileFunction::new())),
+        func: Arc::new(AggregateUDF::from(Percentile::new())),
         params: AggregateFunctionParams {
             args: input.arguments,
             distinct: input.distinct,
@@ -948,7 +946,7 @@ fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 fn hll_sketch_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = hll_args_with_default_lg(input.arguments, "hll_sketch_agg")?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(HllSketchAggFunction::new())),
+        func: Arc::new(AggregateUDF::from(HllSketchAgg::new())),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -962,7 +960,7 @@ fn hll_sketch_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 fn hll_union_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = hll_union_args_with_default_allow_different_lg(input.arguments)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(HllUnionAggFunction::new())),
+        func: Arc::new(AggregateUDF::from(HllUnionAgg::new())),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -976,7 +974,7 @@ fn hll_union_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 fn count_min_sketch(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = count_min_sketch_args(input.arguments)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(CountMinSketchFunction::new())),
+        func: Arc::new(AggregateUDF::from(CountMinSketch::new())),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -990,7 +988,7 @@ fn count_min_sketch(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 fn theta_sketch_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = theta_args_with_default_lg(input.arguments, "theta_sketch_agg")?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(ThetaSketchAggFunction::new())),
+        func: Arc::new(AggregateUDF::from(ThetaSketchAgg::new())),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -1004,7 +1002,7 @@ fn theta_sketch_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 fn theta_union_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = theta_args_with_default_lg(input.arguments, "theta_union_agg")?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(ThetaUnionAggFunction::new())),
+        func: Arc::new(AggregateUDF::from(ThetaUnionAgg::new())),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -1036,15 +1034,15 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("bit_xor", F::default(bit_and_or_xor::bit_xor_udaf)),
         (
             "bitmap_and_agg",
-            F::default(|| Arc::new(AggregateUDF::from(BitmapAndAggFunction::new()))),
+            F::default(|| Arc::new(AggregateUDF::from(BitmapAndAgg::new()))),
         ),
         (
             "bitmap_construct_agg",
-            F::default(|| Arc::new(AggregateUDF::from(BitmapConstructAggFunction::new()))),
+            F::default(|| Arc::new(AggregateUDF::from(BitmapConstructAgg::new()))),
         ),
         (
             "bitmap_or_agg",
-            F::default(|| Arc::new(AggregateUDF::from(BitmapOrAggFunction::new()))),
+            F::default(|| Arc::new(AggregateUDF::from(BitmapOrAgg::new()))),
         ),
         ("bool_and", F::default(bool_and_or::bool_and_udaf)),
         ("bool_or", F::default(bool_and_or::bool_or_udaf)),
@@ -1069,7 +1067,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("kll_merge_agg_float", F::unknown("kll_merge_agg_float")),
         (
             "theta_intersection_agg",
-            F::default(|| Arc::new(AggregateUDF::from(ThetaIntersectionAggFunction::new()))),
+            F::default(|| Arc::new(AggregateUDF::from(ThetaIntersectionAgg::new()))),
         ),
         ("theta_sketch_agg", F::custom(theta_sketch_agg)),
         ("theta_union_agg", F::custom(theta_union_agg)),

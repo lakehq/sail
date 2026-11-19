@@ -17,25 +17,25 @@ use datafusion_common::types::{
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 
 #[derive(PartialEq, Eq, Hash)]
-pub struct ProductFunction {
+pub struct Product {
     signature: Signature,
 }
 
-impl Debug for ProductFunction {
+impl Debug for Product {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProductFunction")
+        f.debug_struct("Product")
             .field("signature", &self.signature)
             .finish()
     }
 }
 
-impl Default for ProductFunction {
+impl Default for Product {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ProductFunction {
+impl Product {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
@@ -62,7 +62,7 @@ impl ProductFunction {
     }
 }
 
-impl AggregateUDFImpl for ProductFunction {
+impl AggregateUDFImpl for Product {
     fn name(&self) -> &str {
         "product"
     }

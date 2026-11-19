@@ -142,27 +142,25 @@ use sail_delta_lake::spec::{
 };
 use sail_function::aggregate::approx_percentile::ApproxPercentileCont;
 use sail_function::aggregate::array_agg::ArrayAgg;
-use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
-use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
-use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
-use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
+use sail_function::aggregate::bitmap_and_agg::BitmapAndAgg;
+use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAgg;
+use sail_function::aggregate::bitmap_or_agg::BitmapOrAgg;
+use sail_function::aggregate::count_min_sketch::CountMinSketch;
 use sail_function::aggregate::first_last::{FirstValue, LastValue};
-use sail_function::aggregate::grouping_id::GroupingIdFunction;
-use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
-use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
-use sail_function::aggregate::kurtosis::KurtosisFunction;
-use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
-use sail_function::aggregate::mode::ModeFunction;
-use sail_function::aggregate::percentile::PercentileFunction;
+use sail_function::aggregate::grouping_id::GroupingId;
+use sail_function::aggregate::histogram_numeric::HistogramNumeric;
+use sail_function::aggregate::hll_sketch::{HllSketchAgg, HllUnionAgg};
+use sail_function::aggregate::kurtosis::Kurtosis;
+use sail_function::aggregate::max_min_by::{MaxBy, MinBy};
+use sail_function::aggregate::mode::Mode;
+use sail_function::aggregate::percentile::Percentile;
 use sail_function::aggregate::percentile_disc::PercentileDisc;
-use sail_function::aggregate::product::ProductFunction;
+use sail_function::aggregate::product::Product;
 use sail_function::aggregate::regr::{Regr, RegrType};
-use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
+use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAgg;
 use sail_function::aggregate::skewness::SkewnessFunc;
-use sail_function::aggregate::theta_sketch::{
-    ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
-};
-use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::aggregate::theta_sketch::{ThetaIntersectionAgg, ThetaSketchAgg, ThetaUnionAgg};
+use sail_function::aggregate::try_avg::TryAvg;
 use sail_function::aggregate::vector_avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::array::array_compact::ArrayCompact;
@@ -241,12 +239,11 @@ use sail_function::scalar::math::unhex::UnHex;
 use sail_function::scalar::math::uniform::Uniform;
 use sail_function::scalar::math::utils::partition_random::PartitionSeed;
 use sail_function::scalar::misc::aes::{AESDecrypt, AESEncrypt, TryAESDecrypt, TryAESEncrypt};
-use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
+use sail_function::scalar::misc::hll_sketch::{HllSketchEstimate, HllUnion};
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
 use sail_function::scalar::misc::theta_sketch::{
-    ThetaDifferenceFunction, ThetaIntersectionFunction, ThetaSketchEstimateFunction,
-    ThetaUnionFunction,
+    ThetaDifference, ThetaIntersection, ThetaSketchEstimate, ThetaUnion,
 };
 use sail_function::scalar::misc::uuid::Uuid;
 use sail_function::scalar::misc::version::Version;
@@ -4092,10 +4089,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_murmur3_hash" | "hash" => Ok(Arc::new(ScalarUDF::from(Murmur3Hash::new()))),
             "spark_reverse" | "reverse" => Ok(Arc::new(ScalarUDF::from(Reverse::new()))),
             "spark_xxhash64" | "xxhash64" => Ok(Arc::new(ScalarUDF::from(SparkXxhash64::new()))),
-            "hll_sketch_estimate" => {
-                Ok(Arc::new(ScalarUDF::from(HllSketchEstimateFunction::new())))
-            }
-            "hll_union" => Ok(Arc::new(ScalarUDF::from(HllUnionFunction::new()))),
+            "hll_sketch_estimate" => Ok(Arc::new(ScalarUDF::from(HllSketchEstimate::new()))),
+            "hll_union" => Ok(Arc::new(ScalarUDF::from(HllUnion::new()))),
             "input_file_block_length" => {
                 Ok(Arc::new(ScalarUDF::from(InputFileBlockLengthFunc::new())))
             }
@@ -4103,12 +4098,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(InputFileBlockStartFunc::new())))
             }
             "input_file_name" => Ok(Arc::new(ScalarUDF::from(InputFileNameFunc::new()))),
-            "theta_difference" => Ok(Arc::new(ScalarUDF::from(ThetaDifferenceFunction::new()))),
-            "theta_intersection" => Ok(Arc::new(ScalarUDF::from(ThetaIntersectionFunction::new()))),
-            "theta_sketch_estimate" => Ok(Arc::new(ScalarUDF::from(
-                ThetaSketchEstimateFunction::new(),
-            ))),
-            "theta_union" => Ok(Arc::new(ScalarUDF::from(ThetaUnionFunction::new()))),
+            "theta_difference" => Ok(Arc::new(ScalarUDF::from(ThetaDifference::new()))),
+            "theta_intersection" => Ok(Arc::new(ScalarUDF::from(ThetaIntersection::new()))),
+            "theta_sketch_estimate" => Ok(Arc::new(ScalarUDF::from(ThetaSketchEstimate::new()))),
+            "theta_union" => Ok(Arc::new(ScalarUDF::from(ThetaUnion::new()))),
             "spark_sha1" | "sha" | "sha1" => Ok(Arc::new(ScalarUDF::from(SparkSha1::new()))),
             "crc32" => Ok(Arc::new(ScalarUDF::from(SparkCrc32::new()))),
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
@@ -4353,15 +4346,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<TryParseUrl>()
             || node_inner.is::<TrySubtract>()
             || node_inner.is::<TryToBinary>()
-            || node_inner.is::<HllSketchEstimateFunction>()
-            || node_inner.is::<HllUnionFunction>()
+            || node_inner.is::<HllSketchEstimate>()
+            || node_inner.is::<HllUnion>()
             || node_inner.is::<InputFileBlockLengthFunc>()
             || node_inner.is::<InputFileBlockStartFunc>()
             || node_inner.is::<InputFileNameFunc>()
-            || node_inner.is::<ThetaDifferenceFunction>()
-            || node_inner.is::<ThetaIntersectionFunction>()
-            || node_inner.is::<ThetaSketchEstimateFunction>()
-            || node_inner.is::<ThetaUnionFunction>()
+            || node_inner.is::<ThetaDifference>()
+            || node_inner.is::<ThetaIntersection>()
+            || node_inner.is::<ThetaSketchEstimate>()
+            || node_inner.is::<ThetaUnion>()
             || node_inner.is::<Unbase64>()
             || node_inner.is::<Uniform>()
             || node_inner.is::<UnHex>()
@@ -4653,31 +4646,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let ExtendedAggregateUdf { udaf_kind } = udaf;
         match udaf_kind {
             Some(UdafKind::Standard(r#gen::StandardUdaf {})) => match name {
-                "bitmap_and_agg" => Ok(Arc::new(AggregateUDF::from(BitmapAndAggFunction::new()))),
-                "bitmap_construct_agg" => Ok(Arc::new(AggregateUDF::from(
-                    BitmapConstructAggFunction::new(),
-                ))),
-                "bitmap_or_agg" => Ok(Arc::new(AggregateUDF::from(BitmapOrAggFunction::new()))),
-                "count_min_sketch" => {
-                    Ok(Arc::new(AggregateUDF::from(CountMinSketchFunction::new())))
+                "bitmap_and_agg" => Ok(Arc::new(AggregateUDF::from(BitmapAndAgg::new()))),
+                "bitmap_construct_agg" => {
+                    Ok(Arc::new(AggregateUDF::from(BitmapConstructAgg::new())))
                 }
-                "grouping_id" => Ok(Arc::new(AggregateUDF::from(GroupingIdFunction::new()))),
-                "histogram_numeric" => Ok(Arc::new(AggregateUDF::from(
-                    HistogramNumericFunction::new(),
-                ))),
-                "hll_sketch_agg" => Ok(Arc::new(AggregateUDF::from(HllSketchAggFunction::new()))),
-                "hll_union_agg" => Ok(Arc::new(AggregateUDF::from(HllUnionAggFunction::new()))),
-                "kurtosis" => Ok(Arc::new(AggregateUDF::from(KurtosisFunction::new()))),
+                "bitmap_or_agg" => Ok(Arc::new(AggregateUDF::from(BitmapOrAgg::new()))),
+                "count_min_sketch" => Ok(Arc::new(AggregateUDF::from(CountMinSketch::new()))),
+                "grouping_id" => Ok(Arc::new(AggregateUDF::from(GroupingId::new()))),
+                "histogram_numeric" => Ok(Arc::new(AggregateUDF::from(HistogramNumeric::new()))),
+                "hll_sketch_agg" => Ok(Arc::new(AggregateUDF::from(HllSketchAgg::new()))),
+                "hll_union_agg" => Ok(Arc::new(AggregateUDF::from(HllUnionAgg::new()))),
+                "kurtosis" => Ok(Arc::new(AggregateUDF::from(Kurtosis::new()))),
                 "max" => Ok(Arc::new(AggregateUDF::from(Max::new()))),
                 "min" => Ok(Arc::new(AggregateUDF::from(Min::new()))),
-                "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),
-                "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
-                "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
-                "percentile" => Ok(Arc::new(AggregateUDF::from(PercentileFunction::new()))),
+                "max_by" => Ok(Arc::new(AggregateUDF::from(MaxBy::new()))),
+                "min_by" => Ok(Arc::new(AggregateUDF::from(MinBy::new()))),
+                "mode" => Ok(Arc::new(AggregateUDF::from(Mode::new()))),
+                "percentile" => Ok(Arc::new(AggregateUDF::from(Percentile::new()))),
                 "percentile_approx" | "approx_percentile" => {
                     Ok(Arc::new(AggregateUDF::from(ApproxPercentileCont::new())))
                 }
-                "product" => Ok(Arc::new(AggregateUDF::from(ProductFunction::new()))),
+                "product" => Ok(Arc::new(AggregateUDF::from(Product::new()))),
                 "regr_avgx" => Ok(Arc::new(AggregateUDF::from(Regr::new(
                     RegrType::AvgX,
                     "regr_avgx",
@@ -4714,18 +4703,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     RegrType::Syy,
                     "regr_syy",
                 )))),
-                "schema_of_variant_agg" => Ok(Arc::new(AggregateUDF::from(
-                    SchemaOfVariantAggFunction::new(),
-                ))),
-                "skewness" => Ok(Arc::new(AggregateUDF::from(SkewnessFunc::new()))),
-                "theta_intersection_agg" => Ok(Arc::new(AggregateUDF::from(
-                    ThetaIntersectionAggFunction::new(),
-                ))),
-                "theta_sketch_agg" => {
-                    Ok(Arc::new(AggregateUDF::from(ThetaSketchAggFunction::new())))
+                "schema_of_variant_agg" => {
+                    Ok(Arc::new(AggregateUDF::from(SchemaOfVariantAgg::new())))
                 }
-                "theta_union_agg" => Ok(Arc::new(AggregateUDF::from(ThetaUnionAggFunction::new()))),
-                "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
+                "skewness" => Ok(Arc::new(AggregateUDF::from(SkewnessFunc::new()))),
+                "theta_intersection_agg" => {
+                    Ok(Arc::new(AggregateUDF::from(ThetaIntersectionAgg::new())))
+                }
+                "theta_sketch_agg" => Ok(Arc::new(AggregateUDF::from(ThetaSketchAgg::new()))),
+                "theta_union_agg" => Ok(Arc::new(AggregateUDF::from(ThetaUnionAgg::new()))),
+                "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvg::new()))),
                 "try_sum" => Ok(Arc::new(AggregateUDF::from(SparkTrySum::new()))),
                 "vector_avg" => Ok(Arc::new(AggregateUDF::from(VectorAvg::new()))),
                 "vector_sum" => Ok(Arc::new(AggregateUDF::from(VectorSum::new()))),
@@ -4844,28 +4831,28 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
         let udaf_kind = if node.inner().is::<Max>()
             || node.inner().is::<Min>()
-            || node.inner().is::<BitmapAndAggFunction>()
-            || node.inner().is::<BitmapConstructAggFunction>()
-            || node.inner().is::<BitmapOrAggFunction>()
-            || node.inner().is::<CountMinSketchFunction>()
-            || node.inner().is::<GroupingIdFunction>()
-            || node.inner().is::<HistogramNumericFunction>()
-            || node.inner().is::<HllSketchAggFunction>()
-            || node.inner().is::<HllUnionAggFunction>()
-            || node.inner().is::<KurtosisFunction>()
-            || node.inner().is::<MaxByFunction>()
-            || node.inner().is::<MinByFunction>()
-            || node.inner().is::<ModeFunction>()
-            || node.inner().is::<PercentileFunction>()
+            || node.inner().is::<BitmapAndAgg>()
+            || node.inner().is::<BitmapConstructAgg>()
+            || node.inner().is::<BitmapOrAgg>()
+            || node.inner().is::<CountMinSketch>()
+            || node.inner().is::<GroupingId>()
+            || node.inner().is::<HistogramNumeric>()
+            || node.inner().is::<HllSketchAgg>()
+            || node.inner().is::<HllUnionAgg>()
+            || node.inner().is::<Kurtosis>()
+            || node.inner().is::<MaxBy>()
+            || node.inner().is::<MinBy>()
+            || node.inner().is::<Mode>()
+            || node.inner().is::<Percentile>()
             || node.inner().is::<ApproxPercentileCont>()
-            || node.inner().is::<ProductFunction>()
+            || node.inner().is::<Product>()
             || node.inner().is::<Regr>()
-            || node.inner().is::<SchemaOfVariantAggFunction>()
+            || node.inner().is::<SchemaOfVariantAgg>()
             || node.inner().is::<SkewnessFunc>()
-            || node.inner().is::<ThetaIntersectionAggFunction>()
-            || node.inner().is::<ThetaSketchAggFunction>()
-            || node.inner().is::<ThetaUnionAggFunction>()
-            || node.inner().is::<TryAvgFunction>()
+            || node.inner().is::<ThetaIntersectionAgg>()
+            || node.inner().is::<ThetaSketchAgg>()
+            || node.inner().is::<ThetaUnionAgg>()
+            || node.inner().is::<TryAvg>()
             || node.inner().is::<SparkTrySum>()
             || node.inner().is::<VectorAvg>()
             || node.inner().is::<VectorSum>()

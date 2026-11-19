@@ -15,13 +15,12 @@ use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::scalar::misc::aes::{AESDecrypt, AESEncrypt, TryAESDecrypt, TryAESEncrypt};
-use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
+use sail_function::scalar::misc::hll_sketch::{HllSketchEstimate, HllUnion};
 use sail_function::scalar::misc::monotonically_increasing_id::MonotonicallyIncreasingId;
 use sail_function::scalar::misc::partition_id::PartitionId;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::theta_sketch::{
-    ThetaDifferenceFunction, ThetaIntersectionFunction, ThetaSketchEstimateFunction,
-    ThetaUnionFunction,
+    ThetaDifference, ThetaIntersection, ThetaSketchEstimate, ThetaUnion,
 };
 use sail_function::scalar::misc::uuid::Uuid;
 use sail_function::scalar::misc::version::Version;
@@ -165,7 +164,7 @@ fn theta_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             )));
         }
     };
-    Ok(ScalarUDF::from(ThetaUnionFunction::new()).call(arguments))
+    Ok(ScalarUDF::from(ThetaUnion::new()).call(arguments))
 }
 
 fn hll_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -189,7 +188,7 @@ fn hll_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             )));
         }
     };
-    Ok(ScalarUDF::from(HllUnionFunction::new()).call(arguments))
+    Ok(ScalarUDF::from(HllUnion::new()).call(arguments))
 }
 
 pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunction)> {
@@ -210,20 +209,11 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("from_avro", F::unknown("from_avro")),
         ("from_protobuf", F::unknown("from_protobuf")),
         ("equal_null", F::binary_op(Operator::IsNotDistinctFrom)),
-        (
-            "hll_sketch_estimate",
-            F::udf(HllSketchEstimateFunction::new()),
-        ),
+        ("hll_sketch_estimate", F::udf(HllSketchEstimate::new())),
         ("hll_union", F::custom(hll_union)),
-        ("theta_difference", F::udf(ThetaDifferenceFunction::new())),
-        (
-            "theta_intersection",
-            F::udf(ThetaIntersectionFunction::new()),
-        ),
-        (
-            "theta_sketch_estimate",
-            F::udf(ThetaSketchEstimateFunction::new()),
-        ),
+        ("theta_difference", F::udf(ThetaDifference::new())),
+        ("theta_intersection", F::udf(ThetaIntersection::new())),
+        ("theta_sketch_estimate", F::udf(ThetaSketchEstimate::new())),
         ("theta_union", F::custom(theta_union)),
         (
             "tuple_difference_double",

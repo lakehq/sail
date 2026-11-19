@@ -13,20 +13,20 @@ use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 
 use super::utils::get_scalar_value;
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
-use crate::utils::count_min_sketch::CountMinSketch;
+use crate::utils::count_min_sketch::CountMinSketchState;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct CountMinSketchFunction {
+pub struct CountMinSketch {
     signature: Signature,
 }
 
-impl Default for CountMinSketchFunction {
+impl Default for CountMinSketch {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CountMinSketchFunction {
+impl CountMinSketch {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(vec![TypeSignature::Any(4)], Volatility::Immutable),
@@ -34,7 +34,7 @@ impl CountMinSketchFunction {
     }
 }
 
-impl AggregateUDFImpl for CountMinSketchFunction {
+impl AggregateUDFImpl for CountMinSketch {
     fn name(&self) -> &str {
         "count_min_sketch"
     }
@@ -71,13 +71,13 @@ impl AggregateUDFImpl for CountMinSketchFunction {
 
 #[derive(Debug)]
 struct CountMinSketchAccumulator {
-    sketch: CountMinSketch,
+    sketch: CountMinSketchState,
 }
 
 impl CountMinSketchAccumulator {
     fn new(eps: f64, confidence: f64, seed: i32) -> Result<Self> {
         Ok(Self {
-            sketch: CountMinSketch::new(eps, confidence, seed)?,
+            sketch: CountMinSketchState::new(eps, confidence, seed)?,
         })
     }
 }
@@ -105,7 +105,7 @@ impl Accumulator for CountMinSketchAccumulator {
         };
         for row in 0..states.len() {
             if !states.is_null(row) {
-                let other = CountMinSketch::deserialize(states.value(row))?;
+                let other = CountMinSketchState::deserialize(states.value(row))?;
                 self.sketch.merge(&other)?;
             }
         }
