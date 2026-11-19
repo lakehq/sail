@@ -499,6 +499,7 @@ pub(crate) fn unity_type_to_data_type(
             }
             r#gen::ColumnTypeName::String | r#gen::ColumnTypeName::Char => Ok(DataType::Utf8),
             r#gen::ColumnTypeName::Binary => Ok(DataType::Binary),
+            r#gen::ColumnTypeName::Variant => parse_simple_type_from_string("variant"),
             r#gen::ColumnTypeName::Null => Ok(DataType::Null),
             r#gen::ColumnTypeName::Decimal => {
                 if let (Some(precision), Some(scale)) = (type_precision, type_scale) {
@@ -547,11 +548,9 @@ pub(crate) fn unity_type_to_data_type(
                     )
                 })?)
             }
-            r#gen::ColumnTypeName::Variant
-            | r#gen::ColumnTypeName::UserDefinedType
-            | r#gen::ColumnTypeName::TableType => Err(CatalogError::InvalidArgument(format!(
-                "{type_name:?} type is not supported yet",
-            ))),
+            r#gen::ColumnTypeName::UserDefinedType | r#gen::ColumnTypeName::TableType => Err(
+                CatalogError::InvalidArgument(format!("{type_name:?} type is not supported yet",)),
+            ),
         }
     } else {
         parse_from_text_or_json(type_text, type_json)
@@ -1104,6 +1103,48 @@ mod tests {
                 if message == "Unsupported complex type: unknown"),
             "{error:?}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn variant_type() -> CatalogResult<()> {
+        let field = json!({"name": "v", "type": "variant", "nullable": true, "metadata": {}});
+        let data_type = unity_type_to_data_type(
+            Some(r#gen::ColumnTypeName::Variant),
+            Some(field.to_string()),
+            Some("variant".to_string()),
+            None,
+            None,
+            None,
+        )?;
+        assert!(
+            sail_common_datafusion::variant::is_marked_variant_storage_type(&data_type),
+            "{data_type:?}"
+        );
+        assert_eq!(parse_unity_type_json(&field.to_string())?, data_type);
+        let type_name: r#gen::ColumnTypeName = serde_json::from_value(json!("VARIANT"))
+            .map_err(|e| CatalogError::Internal(e.to_string()))?;
+        assert!(matches!(type_name, r#gen::ColumnTypeName::Variant));
+
+        // The variant type is parsed when it is nested in complex types.
+        let field = json!({
+            "name": "a",
+            "type": {"type": "array", "elementType": "variant", "containsNull": true},
+            "nullable": true,
+            "metadata": {}
+        });
+        let DataType::List(element) = parse_unity_type_json(&field.to_string())? else {
+            return Err(CatalogError::Internal("expected a list".to_string()));
+        };
+        assert_eq!(element.data_type(), &data_type);
+
+        // The variant type is a struct of its storage fields when a table is created
+        // with the table API, which has no variant type in older servers.
+        let unity_type = data_type_to_unity_type(&data_type)?;
+        assert!(matches!(
+            unity_type.type_name,
+            r#gen::ColumnTypeName::Struct
+        ));
         Ok(())
     }
 }

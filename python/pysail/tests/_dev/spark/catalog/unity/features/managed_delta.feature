@@ -52,7 +52,7 @@ Feature: Unity Catalog managed Delta table operations
     Then Unity Catalog table unity_table_test.managed_sql_empty_read_t table id matches Delta metadata in location
     Then Delta commit for version 0 exists in location
     Then Delta commit for version 0 in location has catalog-managed commit info
-    Then delta log first commit protocol and metadata contains
+    Then Unity Catalog legacy API delta log first commit protocol and metadata contains
       | path                                                   | value                                  |
       | protocol.minReaderVersion                              | 3                                      |
       | protocol.minWriterVersion                              | 7                                      |
@@ -60,6 +60,15 @@ Feature: Unity Catalog managed Delta table operations
       | protocol.writerFeatures                                | ["appendOnly","invariants","catalogManaged","inCommitTimestamp","vacuumProtocolCheck"] |
       | metaData.configuration["delta.feature.catalogManaged"]  | "supported"                            |
       | metaData.configuration["delta.enableInCommitTimestamps"] | "true"                                |
+    Then Unity Catalog Delta API delta log first commit protocol and metadata contains
+      | path                                                      | value |
+      | protocol.minReaderVersion                                 | 3     |
+      | protocol.minWriterVersion                                 | 7     |
+      | protocol.readerFeatures                                   | ["deletionVectors","v2Checkpoint","catalogManaged","vacuumProtocolCheck"] |
+      | protocol.writerFeatures                                   | ["inCommitTimestamp","deletionVectors","v2Checkpoint","appendOnly","invariants","catalogManaged","vacuumProtocolCheck"] |
+      | metaData.configuration["delta.enableInCommitTimestamps"]  | "true" |
+      | metaData.configuration["delta.enableDeletionVectors"]     | "true" |
+      | metaData.configuration["delta.checkpointPolicy"]          | "v2"   |
 
   Scenario: CTAS managed Delta table without LOCATION writes through Unity staging
     Given statement
@@ -176,7 +185,7 @@ Feature: Unity Catalog managed Delta table operations
     Then Unity Catalog table unity_table_test.managed_delta_t table id matches Delta metadata in location
     Then Delta commit for version 0 in location has catalog-managed commit info
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_t version 1 references staged Delta commit in location
-    Then delta log first commit protocol and metadata contains
+    Then Unity Catalog legacy API delta log first commit protocol and metadata contains
       | path                                                   | value                                      |
       | protocol.minReaderVersion                              | 3                                          |
       | protocol.minWriterVersion                              | 7                                          |
@@ -184,6 +193,15 @@ Feature: Unity Catalog managed Delta table operations
       | protocol.writerFeatures                                | ["catalogManaged","inCommitTimestamp","vacuumProtocolCheck"] |
       | metaData.configuration["delta.feature.catalogManaged"]  | "supported"                                |
       | metaData.configuration["delta.enableInCommitTimestamps"] | "true"                                    |
+    Then Unity Catalog Delta API delta log first commit protocol and metadata contains
+      | path                                                      | value |
+      | protocol.minReaderVersion                                 | 3     |
+      | protocol.minWriterVersion                                 | 7     |
+      | protocol.readerFeatures                                   | ["deletionVectors","v2Checkpoint","catalogManaged","vacuumProtocolCheck"] |
+      | protocol.writerFeatures                                   | ["inCommitTimestamp","deletionVectors","v2Checkpoint","appendOnly","invariants","catalogManaged","vacuumProtocolCheck"] |
+      | metaData.configuration["delta.enableInCommitTimestamps"]  | "true" |
+      | metaData.configuration["delta.enableDeletionVectors"]     | "true" |
+      | metaData.configuration["delta.checkpointPolicy"]          | "v2"   |
 
   Scenario: Managed Delta table reads latest Unity coordinated commits
     Given statement
@@ -716,7 +734,12 @@ Feature: Unity Catalog managed Delta table operations
       | path                                | value     |
       | metaData.partitionColumns           | ["bucket"] |
       | metaData.configuration["my.tag"]    | "managed" |
+    Then Unity Catalog legacy API delta log first commit protocol and metadata contains
+      | path                                                   | value       |
       | metaData.configuration["delta.feature.catalogManaged"] | "supported" |
+    Then Unity Catalog Delta API delta log first commit protocol and metadata contains
+      | path                                             | value |
+      | metaData.configuration["delta.checkpointPolicy"] | "v2"  |
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_partitioned_t version 1 references staged Delta commit in location
 
   Scenario: Show catalog table properties reads Unity managed Delta tables before and after writes
@@ -759,3 +782,187 @@ Feature: Unity Catalog managed Delta table operations
     Then query result
       | key | value |
       | custom.show | initial |
+
+  Scenario: Managed Delta table reads are correct after each DML statement and many commits
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_delta_dml_history_t (
+        id INT,
+        name STRING
+      )
+      USING delta
+      """
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_dml_history_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_dml_history_t VALUES
+        (1, 'one'),
+        (2, 'two'),
+        (3, 'three'),
+        (4, 'four')
+      """
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_dml_history_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 1 | one |
+      | 2 | two |
+      | 3 | three |
+      | 4 | four |
+    Given statement
+      """
+      DELETE FROM unity_table_test.managed_delta_dml_history_t WHERE id = 2
+      """
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_dml_history_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 1 | one |
+      | 3 | three |
+      | 4 | four |
+    Given statement
+      """
+      UPDATE unity_table_test.managed_delta_dml_history_t SET name = 'three updated' WHERE id = 3
+      """
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_dml_history_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 1 | one |
+      | 3 | three updated |
+      | 4 | four |
+    Given statement
+      """
+      CREATE OR REPLACE TEMP VIEW managed_delta_dml_history_src AS
+      SELECT * FROM VALUES
+        (4, 'four merged'),
+        (5, 'five')
+      AS t(id, name)
+      """
+    Given statement
+      """
+      MERGE INTO unity_table_test.managed_delta_dml_history_t AS t
+      USING managed_delta_dml_history_src AS s
+      ON t.id = s.id
+      WHEN MATCHED THEN
+        UPDATE SET name = s.name
+      WHEN NOT MATCHED THEN
+        INSERT *
+      """
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_dml_history_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 1 | one |
+      | 3 | three updated |
+      | 4 | four merged |
+      | 5 | five |
+    # The table has enough commits after the following statements for a checkpoint,
+    # where the default checkpoint interval is 10 commits.
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_dml_history_t VALUES (10, 'row 10')
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_dml_history_t VALUES (11, 'row 11')
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_dml_history_t VALUES (12, 'row 12')
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_dml_history_t VALUES (13, 'row 13')
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_dml_history_t VALUES (14, 'row 14')
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_dml_history_t VALUES (15, 'row 15')
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_dml_history_t VALUES (16, 'row 16')
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_dml_history_t VALUES (17, 'row 17')
+      """
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_dml_history_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 1 | one |
+      | 3 | three updated |
+      | 4 | four merged |
+      | 5 | five |
+      | 10 | row 10 |
+      | 11 | row 11 |
+      | 12 | row 12 |
+      | 13 | row 13 |
+      | 14 | row 14 |
+      | 15 | row 15 |
+      | 16 | row 16 |
+      | 17 | row 17 |
+    Given statement
+      """
+      DELETE FROM unity_table_test.managed_delta_dml_history_t WHERE id >= 14
+      """
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_dml_history_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 1 | one |
+      | 3 | three updated |
+      | 4 | four merged |
+      | 5 | five |
+      | 10 | row 10 |
+      | 11 | row 11 |
+      | 12 | row 12 |
+      | 13 | row 13 |
+    Given statement
+      """
+      UPDATE unity_table_test.managed_delta_dml_history_t SET name = 'one updated' WHERE id = 1
+      """
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_dml_history_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 1 | one updated |
+      | 3 | three updated |
+      | 4 | four merged |
+      | 5 | five |
+      | 10 | row 10 |
+      | 11 | row 11 |
+      | 12 | row 12 |
+      | 13 | row 13 |
+    When query
+      """
+      SELECT count(*) AS count FROM unity_table_test.managed_delta_dml_history_t
+      """
+    Then query result
+      | count |
+      | 8 |
+    Then Unity Catalog table unity_table_test.managed_delta_dml_history_t is a managed Delta table

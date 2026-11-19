@@ -19,6 +19,7 @@ import requests
 from pytest_bdd import given, parsers, then
 
 from pysail.testing._dev.containers.unity_defaults import DEFAULT_CATALOG
+from pysail.testing._dev.spark.steps.delta import delta_log_assert
 from pysail.testing._dev.spark.steps.sql import PathWrapper
 from pysail.testing.spark.session import spark_connect_server
 
@@ -55,6 +56,43 @@ def _configure_unity_catalog_spark(
         "spark.sql.warehouse.dir",
         str(unity_storage_root / "warehouse"),
     )
+
+
+@pytest.fixture(scope="module")
+def unity_uses_delta_api(unity_rest_url: str, unity_catalog_initialized: None) -> bool:
+    """Whether the server has the Unity Catalog Delta REST API, which Sail then uses for managed Delta tables."""
+    del unity_catalog_initialized
+    response = requests.get(
+        f"{unity_rest_url}/delta/v1/config",
+        params={"catalog": DEFAULT_CATALOG, "protocol-versions": "1.0"},
+        timeout=10,
+    )
+    return response.ok
+
+
+@then(
+    parsers.re(
+        r"Unity Catalog (?P<api>legacy|Delta) API delta log "
+        r"(?P<which>first commit protocol and metadata|latest effective protocol and metadata) contains"
+    )
+)
+def unity_api_delta_log_contains(
+    api: str,
+    which: str,
+    unity_uses_delta_api: bool,  # noqa: FBT001
+    variables,
+    delta_log_cache: dict[str, dict],
+    snapshot,
+    datatable,
+) -> None:
+    """Assert Delta log paths that depend on the API Sail uses to create managed Delta tables.
+
+    The server decides the protocol and the properties of the table with the Delta REST API,
+    where the table features are not kept in the table configuration.
+    """
+    if (api == "Delta") != unity_uses_delta_api:
+        return
+    delta_log_assert(which, "contains", variables, delta_log_cache, snapshot, datatable)
 
 
 def _qualified_table_name(table_name: str) -> str:
