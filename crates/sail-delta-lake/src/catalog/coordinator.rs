@@ -158,8 +158,12 @@ fn delta_catalog_managed_commit_update(
     if let Some(latest_backfilled_version) = latest_backfilled_version {
         update["latest_backfilled_version"] = serde_json::json!(latest_backfilled_version);
     }
-    if let Some(metadata) = unity_commit_metadata(actions)? {
-        update["metadata"] = metadata;
+    match unity_commit_metadata(actions) {
+        Ok(Some(metadata)) => update["metadata"] = metadata,
+        Ok(None) => {}
+        // The metadata of the legacy commit API is not used by a catalog with the Delta
+        // REST API, so the catalog reports the error when it needs the metadata.
+        Err(error) => update["metadata_error"] = serde_json::json!(error.to_string()),
     }
     if let Some(changes) = delta_log_changes(base, actions)? {
         update["delta_log"] = changes;
@@ -561,6 +565,55 @@ mod tests {
                 "protocol": protocol,
             }))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn commit_update_defers_legacy_metadata_errors() -> Result<()> {
+        let external = |e| DataFusionError::External(Box::new(e));
+        let metadata = |data_type: DeltaDataType| {
+            Metadata::try_new(
+                None,
+                None,
+                StructType::try_new([StructField::nullable("value", data_type)])?,
+                vec![],
+                0,
+                Default::default(),
+            )
+        };
+        let table = DeltaCatalogManagedTable {
+            table_id: "id".to_string(),
+            table_uri: "memory:///t".to_string(),
+        };
+        let staged = CatalogManagedStagedCommit {
+            version: 1,
+            file_name: "00000000000000000001.uuid.json".to_string(),
+            file_size: 1,
+            file_modification_timestamp: 1,
+            in_commit_timestamp: 1,
+            staged_path: object_store::path::Path::from("t/_delta_log/_staged_commits/1.json"),
+            metrics: Default::default(),
+        };
+        let base_metadata = metadata(DeltaDataType::LONG).map_err(external)?;
+        let base_protocol = Protocol::new(3, 7, Some(vec![]), Some(vec![]));
+        let base = Some((&base_metadata, &base_protocol));
+
+        let variant = metadata(DeltaDataType::unshredded_variant()).map_err(external)?;
+        let actions = vec![CommitAction::Metadata(variant.clone())];
+        let update = delta_catalog_managed_commit_update(&table, base, &staged, &actions, None)?;
+        assert_eq!(update.get("metadata"), None);
+        assert!(
+            update["metadata_error"]
+                .as_str()
+                .is_some_and(|error| error.contains("variant columns")),
+            "{update}"
+        );
+        assert_eq!(update["delta_log"]["metaData"], serde_json::json!(variant));
+
+        let actions = vec![CommitAction::Metadata(base_metadata.clone())];
+        let update = delta_catalog_managed_commit_update(&table, base, &staged, &actions, None)?;
+        assert!(update["metadata"].is_object(), "{update}");
+        assert_eq!(update.get("metadata_error"), None);
         Ok(())
     }
 

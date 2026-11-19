@@ -1256,6 +1256,11 @@ impl CatalogProvider for UnityCatalogProvider {
                 }
             }
             DeltaCommitApi::Preview => {
+                if let Some(error) = update.get("metadata_error").and_then(|x| x.as_str()) {
+                    return Err(CatalogError::NotSupported(format!(
+                        "Unity Catalog Delta commit metadata: {error}"
+                    )));
+                }
                 let client = self
                     .get_client()
                     .await
@@ -1625,14 +1630,14 @@ fn delta_metadata_updates(
             comment: comment.unwrap_or_default().to_string(),
         });
     }
-    // The properties that the catalog derives from the protocol are not table properties.
+    // The properties that the catalog derives are not table properties.
     let properties = |metadata: &serde_json::Value| {
         metadata["configuration"]
             .as_object()
             .map(|configuration| {
                 configuration
                     .iter()
-                    .filter(|(key, _)| !is_delta_protocol_property(key))
+                    .filter(|(key, _)| !is_delta_derived_property(key))
                     .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_string())))
                     .collect::<HashMap<_, _>>()
             })
@@ -1658,12 +1663,20 @@ fn delta_metadata_updates(
     Ok(())
 }
 
-/// Whether the catalog derives the table property from the protocol of the Delta table.
-fn is_delta_protocol_property(key: &str) -> bool {
+/// Whether the catalog derives the table property from the protocol, the domain metadata,
+/// or the commits of the Delta table, so that it is never set or removed by a commit.
+fn is_delta_derived_property(key: &str) -> bool {
     let key = key.to_ascii_lowercase();
     key.starts_with("delta.feature.")
-        || key == "delta.minreaderversion"
-        || key == "delta.minwriterversion"
+        || matches!(
+            key.as_str(),
+            "delta.minreaderversion"
+                | "delta.minwriterversion"
+                | "delta.clusteringcolumns"
+                | "delta.rowtracking.rowidhighwatermark"
+                | "delta.lastupdateversion"
+                | "delta.lastcommittimestamp"
+        )
 }
 
 fn delta_strings(value: &serde_json::Value) -> Option<Vec<String>> {
@@ -3176,6 +3189,7 @@ mod tests {
                     ("team", "x"),
                     ("added", "2"),
                     ("delta.minWriterVersion", "7"),
+                    ("delta.lastUpdateVersion", "4"),
                 ],
             ),
             "baseMetaData": base,
@@ -3220,6 +3234,64 @@ mod tests {
                     ]
                 }),
             ]
+        );
+    }
+
+    /// A commit whose metadata has no form in the legacy commit API, such as the metadata
+    /// of a table with a variant column, succeeds with the Delta REST API.
+    #[tokio::test]
+    async fn test_delta_commit_without_legacy_metadata() {
+        let variant = |columns: &[&str]| {
+            let mut metadata = delta_log_metadata(columns, &[], None, &[]);
+            let schema = serde_json::json!({
+                "type": "struct",
+                "fields": columns
+                    .iter()
+                    .map(|column| {
+                        serde_json::json!({
+                            "name": column,
+                            "type": "variant",
+                            "nullable": true,
+                            "metadata": {}
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            });
+            metadata["schemaString"] = serde_json::json!(schema.to_string());
+            (metadata, schema)
+        };
+        let (base, _) = variant(&["a"]);
+        let (metadata, columns) = variant(&["a", "b"]);
+        let mut commit = legacy_delta_commit(5);
+        commit["metadata_error"] = serde_json::json!("variant columns");
+        commit["delta_log"] = serde_json::json!({"metaData": metadata, "baseMetaData": base});
+
+        assert_eq!(
+            delta_api_commit_bodies(vec![commit.clone()]).await,
+            vec![serde_json::json!({
+                "requirements": [{"type": "assert-table-uuid", "uuid": DELTA_TABLE_ID}],
+                "updates": [
+                    {"action": "add-commit", "commit": delta_commit_json(5)},
+                    {"action": "set-columns", "columns": columns}
+                ]
+            })]
+        );
+
+        let server = MockServer::start().await;
+        mount_delta_config(&server, ResponseTemplate::new(404)).await;
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let error = provider
+            .commit_lakehouse_table(&database, "events", delta_commit_request(commit))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, CatalogError::NotSupported(message) if message.contains("variant columns")),
+            "{error}"
+        );
+        assert_eq!(
+            received_targets(&server).await,
+            vec!["GET /delta/v1/config?catalog=main&protocol-versions=1.0"]
         );
     }
 
