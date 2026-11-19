@@ -904,9 +904,9 @@ impl CatalogProvider for UnityCatalogProvider {
             catalog_name: catalog_name.clone(),
             schema_name: schema_name.clone(),
             table_type: Box::new(table_type),
-            data_source_format: Box::new(data_source_format),
+            data_source_format: Some(Box::new(data_source_format)),
             columns: unity_columns,
-            storage_location,
+            storage_location: Some(storage_location),
             comment,
             properties: if props.is_empty() {
                 None
@@ -915,6 +915,8 @@ impl CatalogProvider for UnityCatalogProvider {
                     props.into_iter().collect(),
                 )))
             },
+            view_definition: None,
+            view_dependencies: None,
         };
 
         let result = client.create_table(request).await;

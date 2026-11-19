@@ -547,9 +547,11 @@ pub(crate) fn unity_type_to_data_type(
                     )
                 })?)
             }
-            r#gen::ColumnTypeName::UserDefinedType | r#gen::ColumnTypeName::TableType => Err(
-                CatalogError::InvalidArgument(format!("{type_name:?} type is not supported yet",)),
-            ),
+            r#gen::ColumnTypeName::Variant
+            | r#gen::ColumnTypeName::UserDefinedType
+            | r#gen::ColumnTypeName::TableType => Err(CatalogError::InvalidArgument(format!(
+                "{type_name:?} type is not supported yet",
+            ))),
         }
     } else {
         parse_from_text_or_json(type_text, type_json)

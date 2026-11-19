@@ -49,6 +49,8 @@ pub mod r#gen {
         Struct,
         #[serde(rename = "MAP", alias = "map")]
         Map,
+        #[serde(rename = "VARIANT", alias = "variant")]
+        Variant,
         #[serde(rename = "CHAR", alias = "char")]
         Char,
         #[serde(rename = "NULL", alias = "null")]
@@ -79,6 +81,7 @@ pub mod r#gen {
                 Self::Array => "ARRAY",
                 Self::Struct => "STRUCT",
                 Self::Map => "MAP",
+                Self::Variant => "VARIANT",
                 Self::Char => "CHAR",
                 Self::Null => "NULL",
                 Self::UserDefinedType => "USER_DEFINED_TYPE",
