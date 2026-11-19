@@ -15,15 +15,12 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#6@0 as id1, #7@1 as id2]
       RepartitionExec: partitioning=Hash([#6@0, #7@1], 3), input_partitions=1
-        ProjectionExec: expr=[#1@0 as #6, #3@1 as #7]
-          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#1@0, #5@0)], projection=[#1@0, #3@1]
-            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#1@0, #3@0)]
-              ProjectionExec: expr=[id@0 as #1]
-                RangeExec: start=0, end=6, step=1, num_partitions=1, projection=[0]
-              ProjectionExec: expr=[id@0 as #3]
-                RangeExec: start=0, end=6, step=1, num_partitions=1, projection=[0]
-            ProjectionExec: expr=[id@0 as #5]
+        ProjectionExec: expr=[id@0 as #6, id@1 as #7]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[id@0, id@1]
+            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)]
               RangeExec: start=0, end=6, step=1, num_partitions=1, projection=[0]
+              RangeExec: start=0, end=6, step=1, num_partitions=1, projection=[0]
+            RangeExec: start=0, end=6, step=1, num_partitions=1, projection=[0]
 ---
 name: "test_explicit_repartition_pushes_column_projection_down_plan"
 data:
@@ -31,15 +28,12 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#6@0 as id1, #7@1 as id2]
       ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
-        ProjectionExec: expr=[#1@0 as #6, #3@1 as #7]
-          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#1@0, #5@0)], projection=[#1@0, #3@1]
-            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#1@0, #3@0)]
-              ProjectionExec: expr=[id@0 as #1]
-                RangeExec: start=0, end=6, step=1, num_partitions=1, projection=[0]
-              ProjectionExec: expr=[id@0 as #3]
-                RangeExec: start=0, end=6, step=1, num_partitions=1, projection=[0]
-            ProjectionExec: expr=[id@0 as #5]
+        ProjectionExec: expr=[id@0 as #6, id@1 as #7]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], projection=[id@0, id@1]
+            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)]
               RangeExec: start=0, end=6, step=1, num_partitions=1, projection=[0]
+              RangeExec: start=0, end=6, step=1, num_partitions=1, projection=[0]
+            RangeExec: start=0, end=6, step=1, num_partitions=1, projection=[0]
 ---
 name: "test_repartition_column_hint_plan"
 data:

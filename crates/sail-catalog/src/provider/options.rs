@@ -309,3 +309,11 @@ impl From<&AlterTableOptions>
         }
     }
 }
+
+/// A registered file-table partition. Values follow the table's partition-column order.
+#[derive(Debug, Clone)]
+pub struct CatalogFilePartition {
+    pub values: Vec<String>,
+    pub location: Option<String>,
+    pub format: String,
+}

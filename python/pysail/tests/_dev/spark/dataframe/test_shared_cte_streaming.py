@@ -268,18 +268,18 @@ UNREAD = {
 
 @pytest.mark.parametrize("cte", list(UNREAD))
 def test_cte_is_not_evaluated_when_the_other_join_side_is_empty(spark, counted, cte):
+    # Use separate two-input joins so each reference stays behind an empty build side
+    # even when join reordering is enabled.
     query = (
-        f"WITH {UNREAD[cte]} SELECT count(*), sum(x.v + y.v + e.k) FROM {EMPTY} e "  # noqa: S608
-        "JOIN c x ON e.k = x.k JOIN c y ON x.k = y.k"
+        f"WITH {UNREAD[cte]} SELECT count(*), sum(v) FROM ("  # noqa: S608
+        f"SELECT c.v FROM {EMPTY} e JOIN c ON e.k = c.k "
+        f"UNION ALL SELECT c.v FROM {EMPTY} e JOIN c ON e.k = c.k)"
     )
     assert rows(spark, query) == [(0, None)]
     if not is_jvm_spark():
         # Spark may evaluate a CTE in a stage of its own before it finds the other side empty.
         # Sail cluster mode evaluates an aggregate body or a volatile body in a stage of its
         # own, at most once, before it finds the other side empty, as Spark does.
-        # Measured in local-cluster mode: each of the two bodies counted 1000 in every run
-        # with Flight, storage and Celeborn shuffle. Without sharing, the same queries count
-        # 2000 and 0 with Flight shuffle.
         if cte in ("aggregate-body", "volatile-body") and LOCAL_CLUSTER:
             assert counted() <= 1000
         else:

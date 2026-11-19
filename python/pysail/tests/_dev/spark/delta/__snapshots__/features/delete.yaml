@@ -247,6 +247,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
@@ -687,7 +690,7 @@ data:
   operation: DELETE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1837
+    numAddedBytes: 1830
     numAddedChangeFiles: 0
     numAddedFiles: 1
     numCopiedRows: 5
@@ -696,10 +699,10 @@ data:
     numDeletionVectorsRemoved: 0
     numDeletionVectorsUpdated: 0
     numFiles: 1
-    numOutputBytes: 1837
+    numOutputBytes: 1830
     numOutputFiles: 1
     numOutputRows: 5
-    numRemovedBytes: 1941
+    numRemovedBytes: 1934
     numRemovedFiles: 1
     numTouchedRows: 8
     rewriteTimeMs: <time_ms>

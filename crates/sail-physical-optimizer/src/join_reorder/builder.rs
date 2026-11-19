@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -30,7 +30,7 @@ use crate::join_reorder::join_set::JoinSet;
 type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 type EquiPair = (StableColumn, StableColumn);
 type PhysicalExprWithEquiPairs = (PhysicalExprRef, Vec<EquiPair>);
-type GroupedPredicates = HashMap<(JoinSet, JoinSet), Vec<PhysicalExprWithEquiPairs>>;
+type GroupedPredicates = BTreeMap<(JoinSet, JoinSet), Vec<PhysicalExprWithEquiPairs>>;
 /// Whether the walk over the plan that a reference to a shared CTE stands for succeeds, by
 /// the CTE, the columns that the reference reads, and the number of relations before the
 /// reference, which is all that the walk depends on.
@@ -273,11 +273,12 @@ impl GraphBuilder {
             }
         }
 
-        // Group conjuncts by their base-relation dependency set and add one edge per group.
+        // Group conjuncts by their base-relation dependency set and add one edge per group
+        // in a stable order. Reconstruction uses edge order to assemble join conditions.
         //
         // This avoids generating hyperedges for join nodes where each conjunct is actually
         // a binary predicate between two base relations.
-        let mut grouped: GroupedPredicates = HashMap::new();
+        let mut grouped = GroupedPredicates::new();
         let left_relations = self.relations_in_map(&left_map)?;
         let right_relations = self.relations_in_map(&right_map)?;
 

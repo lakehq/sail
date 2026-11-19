@@ -12,21 +12,19 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
-use sail_function::scalar::conversion::spark_cast_string_to_int32::SparkCastStringToInt32;
-use sail_function::scalar::conversion::spark_to_string::{
-    SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View,
+use sail_function::scalar::conversion::cast_string_to_int32::CastStringToInt32;
+use sail_function::scalar::conversion::to_string::{ToLargeUtf8, ToUtf8, ToUtf8View};
+use sail_function::scalar::datetime::date::Date;
+use sail_function::scalar::datetime::interval::{
+    CalendarInterval, DayTimeInterval, YearMonthInterval, YearMonthIntervalMonths,
 };
-use sail_function::scalar::datetime::spark_date::SparkDate;
-use sail_function::scalar::datetime::spark_interval::{
-    SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval, YearMonthIntervalMonths,
-};
-use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::timestamp::Timestamp;
 use sail_function::scalar::datetime::timestamp_cast::{
     cast_timestamp_ltz_to_ntz, cast_timestamp_ntz_to_ltz,
 };
-use sail_function::scalar::r#struct::spark_struct_rename::SparkStructRename;
-use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
-use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
+use sail_function::scalar::r#struct::struct_rename::StructRename;
+use sail_function::scalar::variant::cast_to_variant::CastToVariant;
+use sail_function::scalar::variant::variant_get::VariantGet;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -39,7 +37,7 @@ impl PlanResolver<'_> {
         &self,
         expr: spec::Expr,
         cast_to_type: spec::DataType,
-        _rename: bool,
+        naming: spec::CastNaming,
         is_try: bool,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
@@ -89,7 +87,7 @@ impl PlanResolver<'_> {
         if sail_common_datafusion::uuid::contains_uuid(&target) {
             let NamedExpr { expr, name, .. } =
                 self.resolve_named_expression(expr, schema, state).await?;
-            let name = if need_rename_cast(&expr) {
+            let name = if need_rename_cast(naming, &expr) {
                 let service = self.ctx.extension::<PlanService>()?;
                 let target_name = service.plan_formatter().field_to_simple_string(&target)?;
                 vec![format!(
@@ -112,7 +110,7 @@ impl PlanResolver<'_> {
             let source_type = expr.get_type(schema)?;
             let renamed_type = build_rename_target_type(&source_type, &data_type);
             let expr = if renamed_type != source_type {
-                ScalarUDF::new_from_impl(SparkStructRename::new(renamed_type)).call(vec![expr])
+                ScalarUDF::new_from_impl(StructRename::new(renamed_type)).call(vec![expr])
             } else {
                 expr
             };
@@ -132,18 +130,18 @@ impl PlanResolver<'_> {
             return Ok(NamedExpr::new(name, expr).with_metadata(metadata));
         }
 
-        // CAST(expr AS VARIANT) → rewrite to SparkCastToVariant UDF
+        // CAST(expr AS VARIANT) → rewrite to CastToVariant UDF
         // Must intercept before resolve_data_type converts Variant to Struct.
         if matches!(cast_to_type, spec::DataType::Variant) {
             let NamedExpr { expr, name, .. } =
                 self.resolve_named_expression(expr, schema, state).await?;
-            let name = if need_rename_cast(&expr) {
+            let name = if need_rename_cast(naming, &expr) {
                 let prefix = if is_try { "TRY_" } else { "" };
                 vec![format!("{}CAST({} AS VARIANT)", prefix, name.one()?)]
             } else {
                 name
             };
-            let expr = ScalarUDF::new_from_impl(SparkCastToVariant::new()).call(vec![expr]);
+            let expr = ScalarUDF::new_from_impl(CastToVariant::new()).call(vec![expr]);
             return Ok(NamedExpr::new(name, expr));
         }
 
@@ -174,7 +172,7 @@ impl PlanResolver<'_> {
         let expr_field = expr.to_field(schema)?.1;
         let expr_type = expr_field.data_type().clone();
         let expr_is_variant = is_variant_storage_field(expr_field.as_ref());
-        let name = if need_rename_cast(&expr) {
+        let name = if need_rename_cast(naming, &expr) {
             let service = self.ctx.extension::<PlanService>()?;
             let data_type_string = service
                 .plan_formatter()
@@ -234,7 +232,7 @@ impl PlanResolver<'_> {
             (_, to, is_try) if expr_is_variant => {
                 let service = self.ctx.extension::<PlanService>()?;
                 let data_type_string = service.plan_formatter().data_type_to_simple_string(&to)?;
-                ScalarUDF::new_from_impl(SparkVariantGet::new(is_try, session_timezone)).call(vec![
+                ScalarUDF::new_from_impl(VariantGet::new(is_try, session_timezone)).call(vec![
                     expr,
                     lit("$"),
                     lit(data_type_string),
@@ -243,7 +241,7 @@ impl PlanResolver<'_> {
             (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Int32, false)
                 if !self.config.ansi_mode =>
             {
-                ScalarUDF::new_from_impl(SparkCastStringToInt32::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(CastStringToInt32::new()).call(vec![expr])
             }
             (from, DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), _)
                 if from.is_numeric() =>
@@ -292,52 +290,47 @@ impl PlanResolver<'_> {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Interval(IntervalUnit::YearMonth),
                 _,
-            ) => ScalarUDF::new_from_impl(SparkYearMonthInterval::new(
-                spark_interval_metadata,
-                is_try,
-            ))
-            .call(vec![expr]),
+            ) => ScalarUDF::new_from_impl(YearMonthInterval::new(spark_interval_metadata, is_try))
+                .call(vec![expr]),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Duration(TimeUnit::Microsecond),
                 _,
-            ) => {
-                ScalarUDF::new_from_impl(SparkDayTimeInterval::new(spark_interval_metadata, is_try))
-                    .call(vec![expr])
-            }
+            ) => ScalarUDF::new_from_impl(DayTimeInterval::new(spark_interval_metadata, is_try))
+                .call(vec![expr]),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Interval(IntervalUnit::MonthDayNano),
                 _,
-            ) => ScalarUDF::new_from_impl(SparkCalendarInterval::default()).call(vec![expr]),
+            ) => ScalarUDF::new_from_impl(CalendarInterval::default()).call(vec![expr]),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Date32,
                 is_try,
-            ) => ScalarUDF::new_from_impl(SparkDate::new(is_try || !self.config.ansi_mode))
+            ) => ScalarUDF::new_from_impl(Date::new(is_try || !self.config.ansi_mode))
                 .call(vec![expr]),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Timestamp(TimeUnit::Microsecond, tz),
                 is_try,
-            ) => Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(
+            ) => Arc::new(ScalarUDF::new_from_impl(Timestamp::try_new(
                 tz,
                 self.config.ansi_mode,
                 is_try,
             )?))
             .call(vec![expr]),
             (_, DataType::Utf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8::new().with_timezone(Some(session_timezone)))
+                ScalarUDF::new_from_impl(ToUtf8::new().with_timezone(Some(session_timezone)))
                     .call(spark_string_cast_arguments(expr, schema)?)
             }
-            (_, DataType::LargeUtf8, _) if override_string_cast => ScalarUDF::new_from_impl(
-                SparkToLargeUtf8::new().with_timezone(Some(session_timezone)),
-            )
-            .call(spark_string_cast_arguments(expr, schema)?),
-            (_, DataType::Utf8View, _) if override_string_cast => ScalarUDF::new_from_impl(
-                SparkToUtf8View::new().with_timezone(Some(session_timezone)),
-            )
-            .call(spark_string_cast_arguments(expr, schema)?),
+            (_, DataType::LargeUtf8, _) if override_string_cast => {
+                ScalarUDF::new_from_impl(ToLargeUtf8::new().with_timezone(Some(session_timezone)))
+                    .call(spark_string_cast_arguments(expr, schema)?)
+            }
+            (_, DataType::Utf8View, _) if override_string_cast => {
+                ScalarUDF::new_from_impl(ToUtf8View::new().with_timezone(Some(session_timezone)))
+                    .call(spark_string_cast_arguments(expr, schema)?)
+            }
             (from, to, _)
                 if needs_struct_field_rename(&from, &to)
                     || unique_struct_field_names(&to) != to =>
@@ -410,7 +403,7 @@ fn cast_struct_positionally(
         } else {
             vec![expr]
         };
-        ScalarUDF::new_from_impl(SparkStructRename::new(renamed_type.clone())).call(arguments)
+        ScalarUDF::new_from_impl(StructRename::new(renamed_type.clone())).call(arguments)
     } else {
         expr
     };
@@ -422,7 +415,7 @@ fn cast_struct_positionally(
         cast(renamed, target.clone())
     };
     if &target != to {
-        ScalarUDF::new_from_impl(SparkStructRename::new(to.clone())).call(vec![converted])
+        ScalarUDF::new_from_impl(StructRename::new(to.clone())).call(vec![converted])
     } else {
         converted
     }
@@ -525,7 +518,7 @@ fn needs_struct_field_rename(from: &DataType, to: &DataType) -> bool {
 }
 
 /// Build a target type that has the names from `to` but the data types from
-/// `from`. The result is what `SparkStructRename` produces; the subsequent
+/// `from`. The result is what `StructRename` produces; the subsequent
 /// regular CAST then handles any leaf-type conversion.
 fn build_rename_target_type(from: &DataType, to: &DataType) -> DataType {
     match (from, to) {
@@ -603,29 +596,45 @@ fn day_time_field_to_microseconds(field: spec::IntervalFieldType) -> i64 {
     }
 }
 
-fn need_rename_cast(expr: &expr::Expr) -> bool {
-    match expr {
-        expr::Expr::Alias(_) | expr::Expr::Column(_) | expr::Expr::OuterReferenceColumn(..) => {
-            false
-        }
-        expr::Expr::Cast(cast) => need_rename_cast(cast.expr.as_ref()),
-        expr::Expr::TryCast(try_cast) => need_rename_cast(try_cast.expr.as_ref()),
-        expr::Expr::ScalarFunction(function)
-            if function
-                .func
-                .inner()
-                .is::<sail_common_datafusion::uuid::UuidCast>() =>
-        {
-            function.args.first().is_none_or(|argument| {
-                if let expr::Expr::ScalarFunction(rename) = argument
-                    && rename.func.inner().is::<SparkStructRename>()
-                {
-                    rename.args.first().is_none_or(need_rename_cast)
-                } else {
-                    need_rename_cast(argument)
-                }
-            })
-        }
-        _ => true,
+/// Whether the cast is named `CAST(... AS ...)` rather than after its child expression.
+///
+/// Spark keeps the name of the child only for a cast at the top of a projection item, and
+/// the DataFrame API looks through a whole chain of casts for the named expression while
+/// SQL looks through a single cast.
+fn need_rename_cast(naming: spec::CastNaming, expr: &expr::Expr) -> bool {
+    match naming {
+        spec::CastNaming::Cast => true,
+        spec::CastNaming::SqlProjectionItem => !is_named_expression(expr),
+        spec::CastNaming::DataFrameProjectionItem => match expr {
+            expr::Expr::Cast(cast) => need_rename_cast(naming, cast.expr.as_ref()),
+            expr::Expr::TryCast(try_cast) => need_rename_cast(naming, try_cast.expr.as_ref()),
+            expr::Expr::ScalarFunction(function)
+                if function
+                    .func
+                    .inner()
+                    .is::<sail_common_datafusion::uuid::UuidCast>() =>
+            {
+                function.args.first().is_none_or(|argument| {
+                    if let expr::Expr::ScalarFunction(rename) = argument
+                        && rename.func.inner().is::<StructRename>()
+                    {
+                        rename
+                            .args
+                            .first()
+                            .is_none_or(|x| need_rename_cast(naming, x))
+                    } else {
+                        need_rename_cast(naming, argument)
+                    }
+                })
+            }
+            _ => !is_named_expression(expr),
+        },
     }
+}
+
+fn is_named_expression(expr: &expr::Expr) -> bool {
+    matches!(
+        expr,
+        expr::Expr::Alias(_) | expr::Expr::Column(_) | expr::Expr::OuterReferenceColumn(..)
+    )
 }

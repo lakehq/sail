@@ -15,17 +15,17 @@ use datafusion_functions::utils::make_scalar_function;
 use crate::utils::hll_sketch::{estimate_hll_sketch, union_hll_sketch_bytes};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct HllSketchEstimateFunction {
+pub struct HllSketchEstimate {
     signature: Signature,
 }
 
-impl Default for HllSketchEstimateFunction {
+impl Default for HllSketchEstimate {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl HllSketchEstimateFunction {
+impl HllSketchEstimate {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -39,7 +39,7 @@ impl HllSketchEstimateFunction {
     }
 }
 
-impl ScalarUDFImpl for HllSketchEstimateFunction {
+impl ScalarUDFImpl for HllSketchEstimate {
     fn name(&self) -> &str {
         "hll_sketch_estimate"
     }
@@ -76,17 +76,17 @@ impl ScalarUDFImpl for HllSketchEstimateFunction {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct HllUnionFunction {
+pub struct HllUnion {
     signature: Signature,
 }
 
-impl Default for HllUnionFunction {
+impl Default for HllUnion {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl HllUnionFunction {
+impl HllUnion {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -97,7 +97,7 @@ impl HllUnionFunction {
     }
 }
 
-impl ScalarUDFImpl for HllUnionFunction {
+impl ScalarUDFImpl for HllUnion {
     fn name(&self) -> &str {
         "hll_union"
     }

@@ -8,17 +8,17 @@ use datafusion::logical_expr::{
 };
 
 #[derive(PartialEq, Eq, Hash, Debug)]
-pub struct GroupingIdFunction {
+pub struct GroupingId {
     signature: Signature,
 }
 
-impl Default for GroupingIdFunction {
+impl Default for GroupingId {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl GroupingIdFunction {
+impl GroupingId {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -29,7 +29,7 @@ impl GroupingIdFunction {
     }
 }
 
-impl AggregateUDFImpl for GroupingIdFunction {
+impl AggregateUDFImpl for GroupingId {
     fn name(&self) -> &str {
         "grouping_id"
     }

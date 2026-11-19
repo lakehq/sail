@@ -11,14 +11,12 @@ data:
             AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #0], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#8@0, #0@0)]
                 ProjectionExec: expr=[#2@0 as #8]
-                  FilterExec: rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 <= 5, projection=[#2@0]
-                    ProjectionExec: expr=[#2@0 as #2, rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
-                      BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        SortExec: expr=[#2@0 ASC NULLS LAST, count(Int64(1))@1 DESC NULLS LAST], preserve_partitioning=[true]
-                          AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
-                              AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                                DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                  BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                    PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
+                      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                        RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+                          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
@@ -33,14 +31,12 @@ data:
             AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #0], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#8@0, #0@0)], NullsEqual: true
                 ProjectionExec: expr=[#2@0 as #8]
-                  FilterExec: rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 <= 5, projection=[#2@0]
-                    ProjectionExec: expr=[#2@0 as #2, rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
-                      BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        SortExec: expr=[#2@0 ASC NULLS LAST, count(Int64(1))@1 DESC NULLS LAST], preserve_partitioning=[true]
-                          AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
-                              AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                                DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                  BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                    PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
+                      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                        RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+                          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
@@ -55,13 +51,12 @@ data:
             AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #0], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#8@0, #0@0)], filter=#1@0 < #9@1, projection=[#0@0]
                 ProjectionExec: expr=[#2@0 as #8, count(Int64(1))@1 as #9]
-                  FilterExec: rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 <= 5, projection=[#2@0, count(Int64(1))@1]
-                    BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                      SortExec: expr=[#2@0 ASC NULLS LAST, count(Int64(1))@1 DESC NULLS LAST], preserve_partitioning=[true]
-                        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
-                            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                              DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                  BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                    PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
+                      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                        RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+                          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
@@ -76,13 +71,12 @@ data:
             AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #0], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#8@0, #0@0)], filter=#1@0 < #9@1, projection=[#0@0], NullsEqual: true
                 ProjectionExec: expr=[#2@0 as #8, count(Int64(1))@1 as #9]
-                  FilterExec: rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 <= 5, projection=[#2@0, count(Int64(1))@1]
-                    BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                      SortExec: expr=[#2@0 ASC NULLS LAST, count(Int64(1))@1 DESC NULLS LAST], preserve_partitioning=[true]
-                        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
-                            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                              DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                  BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                    PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
+                      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                        RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+                          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
@@ -99,14 +93,12 @@ data:
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 ProjectionExec: expr=[#2@0 as #8]
-                  FilterExec: rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 <= 5, projection=[#2@0]
-                    ProjectionExec: expr=[#2@0 as #2, rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
-                      BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        SortExec: expr=[#2@0 ASC NULLS LAST, count(Int64(1))@1 DESC NULLS LAST], preserve_partitioning=[true]
-                          AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
-                              AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                                DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                  BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                    PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
+                      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                        RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+                          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-off-False-True]"
 data:
@@ -121,14 +113,12 @@ data:
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
                 ProjectionExec: expr=[#2@0 as #8]
-                  FilterExec: rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 <= 5, projection=[#2@0]
-                    ProjectionExec: expr=[#2@0 as #2, rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
-                      BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        SortExec: expr=[#2@0 ASC NULLS LAST, count(Int64(1))@1 DESC NULLS LAST], preserve_partitioning=[true]
-                          AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
-                              AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                                DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                  BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                    PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
+                      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                        RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+                          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-off-True-False]"
 data:
@@ -143,13 +133,12 @@ data:
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet
                 ProjectionExec: expr=[#2@0 as #8, count(Int64(1))@1 as #9]
-                  FilterExec: rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 <= 5, projection=[#2@0, count(Int64(1))@1]
-                    BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                      SortExec: expr=[#2@0 ASC NULLS LAST, count(Int64(1))@1 DESC NULLS LAST], preserve_partitioning=[true]
-                        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
-                            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                              DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                  BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                    PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
+                      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                        RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+                          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-off-True-True]"
 data:
@@ -164,13 +153,12 @@ data:
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet
                 ProjectionExec: expr=[#2@0 as #8, count(Int64(1))@1 as #9]
-                  FilterExec: rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 <= 5, projection=[#2@0, count(Int64(1))@1]
-                    BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                      SortExec: expr=[#2@0 ASC NULLS LAST, count(Int64(1))@1 DESC NULLS LAST], preserve_partitioning=[true]
-                        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
-                            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                              DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                  BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                    PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
+                      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                        RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+                          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-on-False-False]"
 data:
@@ -183,14 +171,12 @@ data:
             AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #0], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#8@0, #0@0)]
                 ProjectionExec: expr=[#2@0 as #8]
-                  FilterExec: rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 <= 5, projection=[#2@0]
-                    ProjectionExec: expr=[#2@0 as #2, rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
-                      BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        SortExec: expr=[#2@0 ASC NULLS LAST, count(Int64(1))@1 DESC NULLS LAST], preserve_partitioning=[true]
-                          AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
-                              AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                                DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                  BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                    PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
+                      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                        RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+                          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
@@ -205,14 +191,12 @@ data:
             AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #0], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#8@0, #0@0)], NullsEqual: true
                 ProjectionExec: expr=[#2@0 as #8]
-                  FilterExec: rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 <= 5, projection=[#2@0]
-                    ProjectionExec: expr=[#2@0 as #2, rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
-                      BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        SortExec: expr=[#2@0 ASC NULLS LAST, count(Int64(1))@1 DESC NULLS LAST], preserve_partitioning=[true]
-                          AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                            RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
-                              AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                                DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                  BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                    PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
+                      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                        RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+                          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
@@ -227,13 +211,12 @@ data:
             AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #0], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#8@0, #0@0)], filter=#1@0 < #9@1, projection=[#0@0]
                 ProjectionExec: expr=[#2@0 as #8, count(Int64(1))@1 as #9]
-                  FilterExec: rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 <= 5, projection=[#2@0, count(Int64(1))@1]
-                    BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                      SortExec: expr=[#2@0 ASC NULLS LAST, count(Int64(1))@1 DESC NULLS LAST], preserve_partitioning=[true]
-                        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
-                            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                              DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                  BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                    PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
+                      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                        RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+                          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
@@ -248,13 +231,12 @@ data:
             AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #0], aggr=[count(Int64(1))]
               HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#8@0, #0@0)], filter=#1@0 < #9@1, projection=[#0@0], NullsEqual: true
                 ProjectionExec: expr=[#2@0 as #8, count(Int64(1))@1 as #9]
-                  FilterExec: rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 <= 5, projection=[#2@0, count(Int64(1))@1]
-                    BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                      SortExec: expr=[#2@0 ASC NULLS LAST, count(Int64(1))@1 DESC NULLS LAST], preserve_partitioning=[true]
-                        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
-                            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-                              DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                  BoundedWindowAggExec: wdw=[rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [semi_join_facts.#2] ORDER BY [count(Int64(1)) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                    PartitionedTopKExec: fn=rank, fetch=5, partition=[#2@0], order=[count(Int64(1))@1 DESC NULLS LAST]
+                      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                        RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+                          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
                 RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---

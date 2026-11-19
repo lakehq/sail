@@ -16,21 +16,21 @@ use datafusion_functions::utils::make_scalar_function;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
-use crate::scalar::datetime::format::DateTimeFormat;
-use crate::scalar::datetime::timestamp_parser::parse_timestamp_string;
+use crate::scalar::datetime::utils::format::DateTimeFormat;
+use crate::scalar::datetime::utils::parser::parse_timestamp_string;
 use crate::utils::schema_inference::timestamp::is_timestamp_string;
 use crate::utils::schema_inference::{
     InferredType, TypeMerger, merge_decimals, type_coercion, validation,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkSchemaOfXml {
+pub struct SchemaOfXml {
     signature: Signature,
     case_sensitive: bool,
     timestamp_ntz: bool,
 }
 
-impl SparkSchemaOfXml {
+impl SchemaOfXml {
     pub fn new(case_sensitive: bool, timestamp_ntz: bool) -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
@@ -48,7 +48,7 @@ impl SparkSchemaOfXml {
     }
 }
 
-impl ScalarUDFImpl for SparkSchemaOfXml {
+impl ScalarUDFImpl for SchemaOfXml {
     fn name(&self) -> &str {
         "schema_of_xml"
     }

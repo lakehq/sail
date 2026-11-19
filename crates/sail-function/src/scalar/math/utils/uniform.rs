@@ -9,7 +9,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::Result;
 
-use super::xorshift::SparkXorShiftRandom;
+use super::xorshift::XorShiftRandom;
 use crate::error::{generic_exec_err, unsupported_data_type_exec_err};
 
 /// Generates the uniform values for one batch, as Spark replaces `uniform` with
@@ -20,7 +20,7 @@ pub(crate) fn uniform_with_rng(
     max_array: &ArrayRef,
     number_rows: usize,
     output_type: &DataType,
-    rng: &mut SparkXorShiftRandom,
+    rng: &mut XorShiftRandom,
 ) -> Result<ArrayRef> {
     // Fast path: if either bound is fully null, the result is all-null and the RNG
     // does not advance, as Spark does not evaluate `rand` for a null bound.
@@ -240,7 +240,7 @@ mod tests {
         ];
         let min: ArrayRef = Arc::new(Int64Array::from_value(-5_000_000_000, expected.len()));
         let max: ArrayRef = Arc::new(Int64Array::from_value(5_000_000_000, expected.len()));
-        let mut rng = SparkXorShiftRandom::new(42);
+        let mut rng = XorShiftRandom::new(42);
         let actual = uniform_with_rng(&min, &max, expected.len(), &DataType::Int64, &mut rng)?;
         assert_eq!(
             actual.as_ref(),
@@ -256,7 +256,7 @@ mod tests {
         let min: ArrayRef = Arc::new(Int32Array::from_value(16777217, 8));
         // `CAST(16777219 AS FLOAT)` rounds to 16777220.
         let max: ArrayRef = Arc::new(Float32Array::from_value(16777220.0, 8));
-        let mut rng = SparkXorShiftRandom::new(0);
+        let mut rng = XorShiftRandom::new(0);
         let actual = uniform_with_rng(&min, &max, 8, &DataType::Float32, &mut rng)?;
         let expected = Float32Array::from(vec![
             16777220.0, 16777218.0, 16777218.0, 16777218.0, 16777220.0, 16777218.0, 16777218.0,

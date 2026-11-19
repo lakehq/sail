@@ -11,6 +11,7 @@ use datafusion_common::{DataFusionError, Result};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use roaring::RoaringTreemap;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use url::Url;
 
 use crate::io::StoreContext;
@@ -357,9 +358,11 @@ async fn write_position_delete_file(
         ],
     )?;
 
-    let mut writer =
-        ArrowParquetWriter::try_new(&delete_schema, WriterProperties::default(), Vec::new())
-            .map_err(DataFusionError::Execution)?;
+    let properties = WriterProperties::builder()
+        .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
+        .build();
+    let mut writer = ArrowParquetWriter::try_new(&delete_schema, properties, Vec::new())
+        .map_err(DataFusionError::Execution)?;
     writer
         .write_batch(&batch)
         .await
