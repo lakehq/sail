@@ -9,7 +9,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::compute::concat_batches;
 use datafusion::common::stats::Precision;
-use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{JoinType, Result, Statistics};
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -152,9 +152,11 @@ pub(crate) async fn select_joins(
     runner: &dyn SideRunner,
     handoffs: &Handoffs,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let prefetched = prefetch(&plan, options, runner, handoffs).await?;
     // Joins that stay partitioned are kept as the same node, so their address identifies them.
     let mut settled = HashSet::new();
     while let Some((node, candidate)) = find_candidate(&plan, &settled)? {
+        prefetched.retain_reachable(&plan);
         settled.insert(address(&node));
         let Some(join) = node.downcast_ref::<HashJoinExec>() else {
             continue;
@@ -167,7 +169,8 @@ pub(crate) async fn select_joins(
         let (replacement, decision) = match candidate {
             Candidate::Partitioned { build, probe } => {
                 let (build, probe) =
-                    materialize_sides(join, build, probe, options, runner, handoffs).await?;
+                    materialize_sides(join, build, probe, options, runner, handoffs, &prefetched)
+                        .await?;
                 match (build, probe) {
                     (Materialized::Small(build), probe) => {
                         handoffs.discard(&probe, runner);
@@ -223,7 +226,7 @@ pub(crate) async fn select_joins(
             }
             Candidate::Reduction => {
                 let (input, distinct) = split_distinct_keys(join.left());
-                match materialize(&input, options, runner, handoffs).await? {
+                match materialize(&input, options, runner, handoffs, &prefetched).await? {
                     Materialized::Small(build) => {
                         let actual = statistics(build.as_ref())?;
                         let decision = format!(
@@ -352,6 +355,11 @@ fn find_candidate(
     let Some(join) = plan.downcast_ref::<HashJoinExec>() else {
         return Ok(None);
     };
+    Ok(candidate(join)?.map(|candidate| (Arc::clone(plan), candidate)))
+}
+
+/// The decision `join` is a candidate for, if any.
+fn candidate(join: &HashJoinExec) -> Result<Option<Candidate>> {
     let estimated = |side: &Arc<dyn ExecutionPlan>| -> Result<bool> {
         Ok(!matches!(
             statistics(side.as_ref())?.total_byte_size,
@@ -378,7 +386,7 @@ fn find_candidate(
         }
         _ => return Ok(None),
     };
-    Ok(Some((Arc::clone(plan), candidate)))
+    Ok(Some(candidate))
 }
 
 /// The distributed planner partitions broadcast joins that emit unmatched build rows.
@@ -479,16 +487,31 @@ async fn materialize_sides(
     options: &AdaptiveJoinOptions,
     runner: &dyn SideRunner,
     handoffs: &Handoffs,
+    prefetched: &Prefetched,
 ) -> Result<(Materialized, Materialized)> {
     match (build, probe) {
         (true, true) => {
-            let build = pin!(materialize(join.left(), options, runner, handoffs));
-            let probe = pin!(materialize(join.right(), options, runner, handoffs));
+            let build = pin!(materialize(
+                join.left(),
+                options,
+                runner,
+                handoffs,
+                prefetched
+            ));
+            let probe = pin!(materialize(
+                join.right(),
+                options,
+                runner,
+                handoffs,
+                prefetched
+            ));
             match select(build, probe).await {
                 Either::Left((build, probe)) => {
                     let build = build?;
-                    // Dropping the future cancels the probe side's job.
+                    // Dropping the future, or the stream it has not taken, cancels the probe
+                    // side's job.
                     if matches!(build, Materialized::Small(_)) {
+                        drop(prefetched.take(join.right()));
                         return Ok((build, Materialized::Skipped));
                     }
                     Ok((build, probe.await?))
@@ -497,12 +520,12 @@ async fn materialize_sides(
             }
         }
         (true, false) => Ok((
-            materialize(join.left(), options, runner, handoffs).await?,
+            materialize(join.left(), options, runner, handoffs, prefetched).await?,
             Materialized::Skipped,
         )),
         (false, true) => Ok((
             Materialized::Skipped,
-            materialize(join.right(), options, runner, handoffs).await?,
+            materialize(join.right(), options, runner, handoffs, prefetched).await?,
         )),
         (false, false) => Ok((Materialized::Skipped, Materialized::Skipped)),
     }
@@ -534,6 +557,115 @@ fn split_side(side: &Arc<dyn ExecutionPlan>) -> (Arc<dyn ExecutionPlan>, OutputD
     (input, distribution)
 }
 
+/// The job of a side, started but not yet read.
+type Started = Result<(SendableRecordBatchStream, Option<ExternalStageInput>)>;
+
+/// Starts the job that runs `side` without the exchanges above it.
+async fn start(
+    side: &Arc<dyn ExecutionPlan>,
+    options: &AdaptiveJoinOptions,
+    runner: &dyn SideRunner,
+    handoffs: &Handoffs,
+) -> Result<Started> {
+    let (input, distribution) = split_side(side);
+    let input = handoffs.resolve(input)?;
+    // Stream memory counts whole arrays, up to twice the sliced bytes of the threshold, so
+    // a side below the threshold always ends within the budget and gets decided.
+    let handoff = HandoffOutput {
+        distribution,
+        budget: options.broadcast_threshold.saturating_mul(4),
+    };
+    Ok(runner.run(input, Some(handoff)).await)
+}
+
+/// Jobs started for the sides of later decisions, so that independent sides do not wait
+/// for each other's decisions. A job that is not taken is canceled when it is dropped.
+#[derive(Default)]
+struct Prefetched {
+    started: Mutex<Vec<(Arc<dyn ExecutionPlan>, Started)>>,
+}
+
+impl Prefetched {
+    fn started(&self) -> MutexGuard<'_, Vec<(Arc<dyn ExecutionPlan>, Started)>> {
+        self.started.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn take(&self, side: &Arc<dyn ExecutionPlan>) -> Option<Started> {
+        let mut started = self.started();
+        let index = started.iter().position(|(x, _)| Arc::ptr_eq(x, side))?;
+        Some(started.swap_remove(index).1)
+    }
+
+    /// Cancels the jobs of sides that are no longer in `plan`.
+    fn retain_reachable(&self, plan: &Arc<dyn ExecutionPlan>) {
+        let mut reachable = HashSet::new();
+        let _ = plan.apply(|node| {
+            reachable.insert(address(node));
+            Ok(TreeNodeRecursion::Continue)
+        });
+        self.started()
+            .retain(|(side, _)| reachable.contains(&address(side)));
+    }
+}
+
+/// At most this many jobs are started ahead of their decisions.
+const MAX_PREFETCHED: usize = 8;
+
+/// Starts the jobs of the sides that decisions will run, as far as those sides are final:
+/// a side with a candidate below it changes before its turn.
+async fn prefetch(
+    plan: &Arc<dyn ExecutionPlan>,
+    options: &AdaptiveJoinOptions,
+    runner: &dyn SideRunner,
+    handoffs: &Handoffs,
+) -> Result<Prefetched> {
+    let mut sides = vec![];
+    collect_final_sides(plan, &mut sides)?;
+    sides.truncate(MAX_PREFETCHED);
+    let started = futures::future::try_join_all(
+        sides
+            .iter()
+            .map(|side| start(side, options, runner, handoffs)),
+    )
+    .await?;
+    Ok(Prefetched {
+        started: Mutex::new(sides.into_iter().zip(started).collect()),
+    })
+}
+
+/// Collects, in post-order, the sides that decisions on candidate joins will run and that
+/// have no candidate below them.
+fn collect_final_sides(
+    plan: &Arc<dyn ExecutionPlan>,
+    sides: &mut Vec<Arc<dyn ExecutionPlan>>,
+) -> Result<()> {
+    if plan.is::<ScalarSubqueryExec>() || plan.is::<RecursiveQueryExec>() {
+        return Ok(());
+    }
+    for child in plan.children() {
+        collect_final_sides(child, sides)?;
+    }
+    let Some(join) = plan.downcast_ref::<HashJoinExec>() else {
+        return Ok(());
+    };
+    let candidates = match candidate(join)? {
+        Some(Candidate::Partitioned { build, probe }) => vec![
+            build.then(|| Arc::clone(join.left())),
+            probe.then(|| Arc::clone(join.right())),
+        ],
+        Some(Candidate::Reduction) => vec![Some(split_distinct_keys(join.left()).0)],
+        None => vec![],
+    };
+    for side in candidates.into_iter().flatten() {
+        if find_candidate(&side, &HashSet::new())?.is_none()
+            && !sides.iter().any(|x| Arc::ptr_eq(x, &side))
+        {
+            sides.push(side);
+        }
+    }
+    Ok(())
+}
+
 /// Runs `side` without the exchanges above it, keeping its result if it is small enough
 /// to broadcast, and handing its job off if not.
 async fn materialize(
@@ -541,24 +673,21 @@ async fn materialize(
     options: &AdaptiveJoinOptions,
     runner: &dyn SideRunner,
     handoffs: &Handoffs,
+    prefetched: &Prefetched,
 ) -> Result<Materialized> {
-    let (input, distribution) = split_side(side);
-    let input = handoffs.resolve(input)?;
-    let schema = input.schema();
-    // A failure here would recur in the main job, which reports it with the full plan.
-    // Stream memory counts whole arrays, up to twice the sliced bytes of the threshold, so
-    // a side below the threshold always ends within the budget and gets decided.
-    let handoff = HandoffOutput {
-        distribution,
-        budget: options.broadcast_threshold.saturating_mul(4),
+    let started = match prefetched.take(side) {
+        Some(started) => started,
+        None => start(side, options, runner, handoffs).await?,
     };
-    let (mut stream, handoff) = match runner.run(input, Some(handoff)).await {
+    // A failure here would recur in the main job, which reports it with the full plan.
+    let (mut stream, handoff) = match started {
         Ok(x) => x,
         Err(error) => {
             warn!("adaptive join selection: failed to run a join input: {error}");
             return Ok(Materialized::Failed);
         }
     };
+    let schema = stream.schema();
     let mut batches = vec![];
     let (mut rows, mut bytes) = (0, 0);
     while let Some(batch) = stream.next().await {
@@ -1283,8 +1412,9 @@ mod tests {
     #[tokio::test]
     async fn small_reduction_is_kept() {
         let (adapted, jobs) = select(&reduced_join(990), &options(1024)).await;
-        // The reduction's keys, then both sides of the outer join at once.
-        assert_eq!(jobs, 3);
+        // The reduction's keys and the outer build side, started at once. The build side is
+        // small by the outer join's turn, so its probe side is not run.
+        assert_eq!(jobs, 2);
         let found = reductions(&adapted);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].num_rows.get_value(), Some(&10));
