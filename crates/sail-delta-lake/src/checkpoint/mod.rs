@@ -53,7 +53,7 @@ mod action_fields;
 #[derive(Debug, Clone, Copy)]
 struct CheckpointRetentionTimestamps {
     deleted_file_retention_timestamp: i64,
-    transaction_expiration_timestamp: i64,
+    transaction_expiration_timestamp: Option<i64>,
 }
 
 impl CheckpointRetentionTimestamps {
@@ -65,11 +65,16 @@ impl CheckpointRetentionTimestamps {
                 table_properties.deleted_file_retention_duration(),
                 "delta.deletedFileRetentionDuration",
             )?,
-            transaction_expiration_timestamp: retention_cutoff_timestamp(
-                reference_timestamp,
-                table_properties.log_retention_duration(),
-                "delta.logRetentionDuration",
-            )?,
+            transaction_expiration_timestamp: table_properties
+                .set_transaction_retention_duration
+                .map(|duration| {
+                    retention_cutoff_timestamp(
+                        reference_timestamp,
+                        duration,
+                        "delta.setTransactionRetentionDuration",
+                    )
+                })
+                .transpose()?,
         })
     }
 }
@@ -174,11 +179,10 @@ impl ReconciledCheckpointState {
         let retention = CheckpointRetentionTimestamps::try_new(metadata, reference_timestamp)?;
 
         let txns_before = self.txns.len();
-        self.txns.retain(|_, txn| {
-            txn.last_updated
-                .map(|last_updated| last_updated > retention.transaction_expiration_timestamp)
-                .unwrap_or(true)
-        });
+        if let Some(cutoff) = retention.transaction_expiration_timestamp {
+            self.txns
+                .retain(|_, txn| txn.last_updated.is_some_and(|updated| updated > cutoff));
+        }
 
         let removes_before = self.removes.len();
         self.removes.retain(|_, remove| {
@@ -3078,7 +3082,7 @@ mod tests {
         let mut state = ReconciledCheckpointState::default();
         state.apply_action(Action::Metadata(test_metadata([
             ("delta.deletedFileRetentionDuration", "interval 7 days"),
-            ("delta.logRetentionDuration", "interval 30 days"),
+            ("delta.setTransactionRetentionDuration", "interval 30 days"),
         ])?));
         state.apply_action(Action::Remove(Remove {
             path: "expired.parquet".to_string(),
@@ -3154,7 +3158,7 @@ mod tests {
         );
         assert!(!state.txns.contains_key("expired-app"));
         assert!(state.txns.contains_key("fresh-app"));
-        assert!(state.txns.contains_key("legacy-app"));
+        assert!(!state.txns.contains_key("legacy-app"));
         Ok(())
     }
 

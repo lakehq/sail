@@ -37,22 +37,25 @@ def test_property_canonicalization_and_unset_restores_checkpoint_default(spark, 
     name, path = lifecycle_table
     retention = "dEltA.lOgrEteNtiOndURaTion" if mixed_case else "delta.logRetentionDuration"
     interval = "DelTa.ChEckPoiNtinTervAl" if mixed_case else "delta.checkpointInterval"
+    txn_retention = "DELTA.SETTRANSACTIONRETENTIONDURATION" if mixed_case else "delta.setTransactionRetentionDuration"
     baseline = _effective(path, "metaData")["configuration"]
     for weeks, checkpoint_interval, key, value in [(1, 5, "key", "value1"), (2, 20, "kEy", "value2")]:
         spark.sql(
             f"ALTER TABLE {name} SET TBLPROPERTIES "
-            f"('{retention}' = '{weeks} weeks', '{interval}' = '{checkpoint_interval}', '{key}' = '{value}')"
+            f"('{retention}' = '{weeks} weeks', '{interval}' = '{checkpoint_interval}', "
+            f"'{txn_retention}' = 'interval 1 day', '{key}' = '{value}')"
         ).collect()
         expected = {
             **baseline,
             "delta.logRetentionDuration": f"{weeks} weeks",
             "delta.checkpointInterval": str(checkpoint_interval),
+            "delta.setTransactionRetentionDuration": "interval 1 day",
             "key": "value1",
         }
         if key == "kEy":
             expected["kEy"] = "value2"
         assert _effective(path, "metaData")["configuration"] == expected
-    spark.sql(f"ALTER TABLE {name} UNSET TBLPROPERTIES ('{interval}', 'kEy')").collect()
+    spark.sql(f"ALTER TABLE {name} UNSET TBLPROPERTIES ('{interval}', '{txn_retention}', 'kEy')").collect()
     assert _effective(path, "metaData")["configuration"] == {
         **baseline,
         "delta.logRetentionDuration": "2 weeks",
@@ -73,6 +76,7 @@ def test_property_canonicalization_and_unset_restores_checkpoint_default(spark, 
 @pytest.mark.parametrize(
     ("key", "value", "error"),
     [
+        ("delta.setTransactionRetentionDuration", "1 month", "(?i)interval"),
         ("delta.key", "value", r"(?i)(unknown.*config|config.*unknown)"),
         ("delta.randomPrefixLength", "-1", r"(?i)randomPrefixLength.*(greater|positive|invalid|integer)"),
         ("delta.randomPrefixLength", "value", r"(?i)randomPrefixLength.*(greater|positive|invalid|integer)"),

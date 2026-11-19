@@ -119,6 +119,7 @@ pub struct TableProperties {
     pub data_skipping_num_indexed_cols: Option<DataSkippingNumIndexedCols>,
     pub data_skipping_stats_columns: Option<Vec<ColumnName>>,
     pub deleted_file_retention_duration: Option<Duration>,
+    pub set_transaction_retention_duration: Option<Duration>,
     pub isolation_level: Option<IsolationLevel>,
     pub log_retention_duration: Option<Duration>,
     pub enable_expired_log_cleanup: Option<bool>,
@@ -337,6 +338,7 @@ fn canonicalize_table_property_key(key: &str) -> Option<&'static str> {
         "delta.dataskippingstatscolumns"
         | "data_skipping_stats_columns"
         | "dataskippingstatscolumns" => Some("delta.dataSkippingStatsColumns"),
+        "delta.settransactionretentionduration" => Some("delta.setTransactionRetentionDuration"),
         "delta.deletedfileretentionduration"
         | "deleted_file_retention_duration"
         | "deletedfileretentionduration" => Some("delta.deletedFileRetentionDuration"),
@@ -446,7 +448,9 @@ fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
             DataSkippingNumIndexedCols::try_from(value).map(|_| ())
         }
         "delta.dataSkippingStatsColumns" => ColumnName::parse_column_name_list(value).map(|_| ()),
-        "delta.deletedFileRetentionDuration" | "delta.logRetentionDuration" => {
+        "delta.deletedFileRetentionDuration"
+        | "delta.logRetentionDuration"
+        | "delta.setTransactionRetentionDuration" => {
             parse_interval(value).map(|_| ()).ok_or_else(|| {
                 DeltaTableError::generic(format!(
                     "invalid value for {key}: expected Delta interval literal"
@@ -502,6 +506,9 @@ fn try_parse_table_property(props: &mut TableProperties, key: &str, value: &str)
         }
         "delta.isolationLevel" => {
             props.isolation_level = IsolationLevel::from_str(value).ok();
+        }
+        "delta.setTransactionRetentionDuration" => {
+            props.set_transaction_retention_duration = parse_interval(value)
         }
         "delta.logRetentionDuration" => props.log_retention_duration = parse_interval(value),
         "delta.enableExpiredLogCleanup" => {

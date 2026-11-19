@@ -891,13 +891,16 @@ def _reopen_both(spark, delta_jvm_spark, path, destination, expected):
 
 # [CREDIT]: https://github.com/delta-io/delta/blob/v4.4.1/spark/src/test/scala/org/apache/spark/sql/delta/DeltaRetentionSuite.scala#L305-L408
 @pytest.mark.integration
-@pytest.mark.parametrize("action_kind", ["remove", "txn"])
-def test_checkpoint_retention_filters_expired_actions(spark, delta_jvm_spark, tmp_path, action_kind):
+@pytest.mark.parametrize(
+    ("action_kind", "property_name"),
+    [("remove", "deletedFileRetentionDuration"), ("txn", "setTransactionRetentionDuration"), ("txn", None)],
+)
+def test_checkpoint_retention_filters_expired_actions(spark, delta_jvm_spark, tmp_path, action_kind, property_name):
     path = tmp_path / "retention"
-    property_name = "deletedFileRetentionDuration" if action_kind == "remove" else "setTransactionRetentionDuration"
-    spark.range(1).coalesce(1).write.format("delta").option("delta.checkpointInterval", "4").option(
-        f"delta.{property_name}", "interval 1 day"
-    ).save(str(path))
+    writer = spark.range(1).coalesce(1).write.format("delta").option("delta.checkpointInterval", "4")
+    if property_name:
+        writer = writer.option(f"delta.{property_name}", "interval 1 day")
+    writer.save(str(path))
     spark.range(1, 2).coalesce(1).write.format("delta").mode("append").save(str(path))
     files = _active_files(path)
     expected_file_count = 2
@@ -913,15 +916,21 @@ def test_checkpoint_retention_filters_expired_actions(spark, delta_jvm_spark, tm
     else:
         actions = [
             {"txn": {"appId": app, "version": 1, "lastUpdated": timestamp}}
-            for app, timestamp in [("expired", 0), ("live", now)]
+            for app, timestamp in [("ancient", 0), ("two-days-old", now - 2 * 86_400_000), ("live", now)]
         ]
-        expected_actions = [{"appId": "live", "version": 1, "lastUpdated": now}]
+        actions.append({"txn": {"appId": "undated", "version": 1}})
+        expected_actions = [
+            action["txn"] for action in actions if not property_name or action["txn"]["appId"] == "live"
+        ]
         expected_rows = [Row(id=i) for i in range(4)]
     _write_commit(path, 2, actions)
     for value in [2, 3]:
         spark.range(value, value + 1).coalesce(1).write.format("delta").mode("append").save(str(path))
     checkpoint = pq.read_table(_checkpoint_file(path, 4))
     actual = [row for row in checkpoint.column(action_kind).to_pylist() if row is not None]
+    if action_kind == "txn":
+        actual.sort(key=lambda txn: txn["appId"])
+        expected_actions.sort(key=lambda txn: txn["appId"])
     # Checkpoint replay may normalize dataChange; retention depends on identity and time.
     assert [
         {key: value for key, value in row.items() if value is not None and key != "dataChange"} for row in actual
