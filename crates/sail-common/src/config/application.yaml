@@ -1019,11 +1019,9 @@
   type: boolean
   default: "true"
   description: |
-    Whether to optimize partitioned `ROW_NUMBER` and `RANK` windows with an upper-bound
-    filter using a per-partition top-k operator instead of sorting all input rows.
-    This can improve performance when the partition keys have low cardinality.
-    High-cardinality partition keys, large limits, or large rank tie groups can increase
-    memory usage and runtime. The top-k operator does not support spilling to disk.
+    Whether to optimize partitioned `ROW_NUMBER`, `RANK`, and `DENSE_RANK` windows with an
+    upper-bound filter using a per-partition top-k operator instead of sorting all input rows.
+    The top-k operator does not support spilling to disk.
   experimental: true
 
 - key: optimizer.share_cte_definitions
