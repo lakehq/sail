@@ -102,6 +102,9 @@ def test_vacuum_audit_metrics(spark, semantic_table, dry_run, logging, expired):
     spark.sql(f"INSERT INTO {name} VALUES (1, 'a')").collect()  # noqa: S608
     orphan = path / "orphan.txt"
     orphan.write_bytes(b"123456789")
+    recent = path / "nested" / "recent" / "keep.txt"
+    recent.parent.mkdir(parents=True)
+    recent.write_bytes(b"keep")
     if expired:
         old = time.time() - 8 * 24 * 3600
         os.utime(orphan, (old, old))
@@ -117,6 +120,7 @@ def test_vacuum_audit_metrics(spark, semantic_table, dry_run, logging, expired):
     expected_paths = ({str(orphan)} if expired else set()) if dry_run else {str(path)}
     assert _paths(result) == expected_paths
     assert orphan.exists() == (dry_run or not expired)
+    assert recent.read_bytes() == b"keep"
     if dry_run or not logging:
         assert _commits(path) == before
     else:
@@ -133,7 +137,7 @@ def test_vacuum_audit_metrics(spark, semantic_table, dry_run, logging, expired):
         }
         assert end.operationParameters == {"status": "COMPLETED"}
         assert (path / "part=a").is_dir()
-        assert end.operationMetrics == {"numDeletedFiles": str(int(expired)), "numVacuumedDirectories": "2"}
+        assert end.operationMetrics == {"numDeletedFiles": str(int(expired)), "numVacuumedDirectories": "4"}
         assert max(_commits(path)) == max(before) + 2
     assert spark.table(name).collect() == [Row(id=1, part="a")]
 

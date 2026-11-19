@@ -97,20 +97,25 @@ pub(super) async fn execute(
         })
         .collect::<Result<Vec<_>>>()?;
     let store = log_store.object_store(None);
-    let files = store
-        .list(None)
-        .try_filter(|meta| futures::future::ready(!hidden(&meta.location, &partition_names)))
-        .try_collect::<Vec<_>>()
-        .await?;
     let root = snapshot.table_url();
-    // Object prefixes provide directory metrics without accessing the host filesystem.
-    let directory_count = directory_ancestors(files.iter().map(|file| &file.location)).len() + 1;
-    let candidates = files
-        .into_iter()
-        .filter(|meta| {
-            meta.last_modified.timestamp_millis() < cutoff && !protected.contains(&meta.location)
-        })
-        .collect::<Vec<_>>();
+    let mut candidates = Vec::new();
+    let directory_count = {
+        let mut directories = HashSet::new();
+        let mut listing = store.list(None);
+        while let Some(meta) = listing.try_next().await? {
+            if hidden(&meta.location, &partition_names) {
+                continue;
+            }
+            if logging && !dry_run {
+                record_parent_directories(&mut directories, &meta.location);
+            }
+            if meta.last_modified.timestamp_millis() < cutoff && !protected.contains(&meta.location)
+            {
+                candidates.push(meta);
+            }
+        }
+        directories.len() + 1 // Include the table root.
+    };
     if dry_run {
         let mut paths = candidates
             .iter()
@@ -173,11 +178,11 @@ pub(super) async fn execute(
         session.config().target_partitions(),
     )
     .await?;
-    let end_metrics = HashMap::from([
-        ("numDeletedFiles".to_string(), json!(deleted)),
-        ("numVacuumedDirectories".to_string(), json!(directory_count)),
-    ]);
     if logging {
+        let end_metrics = HashMap::from([
+            ("numDeletedFiles".to_string(), json!(deleted)),
+            ("numVacuumedDirectories".to_string(), json!(directory_count)),
+        ]);
         CommitBuilder::from(CommitProperties::default().with_operation_metrics(end_metrics))
             .build(Some(latest), log_store, DeltaOperation::VacuumEnd {})
             .await?;
@@ -188,19 +193,15 @@ pub(super) async fn execute(
     )
 }
 
-fn directory_ancestors<'a>(paths: impl Iterator<Item = &'a Path>) -> HashSet<Path> {
-    let mut directories = HashSet::new();
-    for path in paths {
-        let mut parent = path.parent();
-        while let Some(path) = parent {
-            if path == Path::ROOT {
-                break;
-            }
-            parent = path.parent();
-            directories.insert(path);
+fn record_parent_directories(directories: &mut HashSet<Path>, file: &Path) {
+    let mut parent = file.parent();
+    while let Some(path) = parent {
+        if path == Path::ROOT || directories.contains(&path) {
+            break;
         }
+        parent = path.parent();
+        directories.insert(path);
     }
-    directories
 }
 
 async fn delete_candidates(
@@ -629,7 +630,11 @@ mod tests {
             Path::from("part=a/two"),
             Path::from("part=b/nested/three"),
         ];
-        assert_eq!(directory_ancestors(files.iter()).len() + 1, 4);
+        let mut directories = HashSet::new();
+        for file in files {
+            record_parent_directories(&mut directories, &file);
+        }
+        assert_eq!(directories.len() + 1, 4);
     }
 
     #[tokio::test]
