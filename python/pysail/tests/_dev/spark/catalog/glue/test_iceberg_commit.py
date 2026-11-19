@@ -453,3 +453,55 @@ def test_copy_on_write_advances_glue_metadata_pointer(spark, moto_endpoint, tmp_
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
         spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+
+
+def test_add_files_uses_registered_glue_partitions(spark, moto_endpoint, tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from pyarrow import orc
+
+    database = "test_db"
+    source = "glue_import_source"
+    target = f"{database}.glue_import_target"
+    root = tmp_path / "source"
+    unregistered = root / "area=zone" / "p=unregistered"
+    unregistered.mkdir(parents=True)
+    pq.write_table(pa.table({"id": [99]}), unregistered / "part.parquet")
+    spark.sql(
+        f"CREATE TABLE {database}.{source} (id BIGINT, area STRING, p STRING) USING parquet PARTITIONED BY (area, p) "
+        f"LOCATION '{escape_sql_string_literal(str(root))}'"
+    )
+    spark.sql(
+        f"CREATE TABLE {target} (id BIGINT, area STRING, p STRING) USING iceberg PARTITIONED BY (area, p) "
+        f"LOCATION '{escape_sql_string_literal(str(tmp_path / 'target'))}'"
+    )
+    try:
+        call = f"CALL system.add_files('{target}', '{database}.{source}'"
+        assert tuple(spark.sql(f"{call})").first()) == (0, 0)
+        client = _glue_client(moto_endpoint)
+        for value, row_id in [("a", 1), ("b", 2)]:
+            location = tmp_path / f"part%20{value}"
+            location.mkdir()
+            orc.write_table(pa.table({"id": [row_id]}), location / "part.orc")
+            client.create_partition(
+                DatabaseName=database,
+                TableName=source,
+                PartitionInput={
+                    "Values": ["zone", value],
+                    "StorageDescriptor": {
+                        "Location": location.as_uri().replace("%2520", "%20"),
+                        "InputFormat": "org.apache.hadoop.hive.ql.io.orc.OrcInputFormat",
+                        "SerdeInfo": {"SerializationLibrary": "org.apache.hadoop.hive.ql.io.orc.OrcSerde"},
+                    },
+                },
+            )
+        assert tuple(spark.sql(f"{call}, partition_filter => map('p', 'b'))").first()) == (1, None)
+        assert [tuple(row) for row in spark.table(target).collect()] == [(2, "zone", "b")]
+        assert tuple(spark.sql(f"{call}, partition_filter => map('p', 'a', 'area', 'zone'))").first()) == (1, None)
+        assert [tuple(row) for row in spark.table(target).orderBy("id").collect()] == [
+            (1, "zone", "a"),
+            (2, "zone", "b"),
+        ]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {target}")
+        spark.sql(f"DROP TABLE IF EXISTS {database}.{source}")
