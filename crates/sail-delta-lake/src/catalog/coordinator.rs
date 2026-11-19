@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use datafusion_common::{DataFusionError, Result};
+use log::warn;
+use object_store::ObjectStoreExt;
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::lakehouse::{
     DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse, LakehouseCommitOutcome,
@@ -11,6 +13,7 @@ use sail_common::spec::{SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY};
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
+use crate::delta_log::LogStoreRef;
 use crate::spec::{
     CommitAction, DataType as DeltaDataType, Metadata, MetadataValue, PrimitiveType, Protocol,
     StructField,
@@ -82,24 +85,32 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
     }
 
     /// Commits the staged commit to the catalog. The `base` is the snapshot of the table
-    /// that the commit is based on.
+    /// that the commit is based on. The staged commit file is deleted when the catalog
+    /// rejects the commit, and kept when the outcome is not known.
     pub(crate) async fn commit_staged(
         &self,
         lakehouse_table: &LakehouseExecutionContext,
         table: &DeltaCatalogManagedTable,
+        log_store: &LogStoreRef,
         base: Option<&DeltaSnapshot>,
         staged: &CatalogManagedStagedCommit,
         actions: &[CommitAction],
         latest_backfilled_version: Option<i64>,
     ) -> Result<()> {
         let manager = self.context.extension::<CatalogManager>()?;
-        let update = delta_catalog_managed_commit_update(
+        let update = match delta_catalog_managed_commit_update(
             table,
             base.map(|base| (base.metadata(), base.protocol())),
             staged,
             actions,
             latest_backfilled_version,
-        )?;
+        ) {
+            Ok(update) => update,
+            Err(error) => {
+                delete_staged_commit(log_store, staged).await;
+                return Err(error);
+            }
+        };
         let outcome = manager
             .commit_lakehouse_table(
                 self.catalog_table,
@@ -112,7 +123,54 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                 },
             )
             .await;
+        if commit_is_rejected(&outcome) {
+            delete_staged_commit(log_store, staged).await;
+        }
         map_commit_outcome(outcome)
+    }
+}
+
+/// Whether the catalog has answered that the commit is not ratified. A failure without such
+/// an answer (a server error, a timeout, or a network error) may follow a ratified commit.
+fn commit_is_rejected(outcome: &CatalogResult<LakehouseCommitOutcome>) -> bool {
+    match outcome {
+        Ok(
+            LakehouseCommitOutcome::RetryableConflict { .. }
+            | LakehouseCommitOutcome::Rejected { .. },
+        ) => true,
+        Ok(_) => false,
+        Err(
+            CatalogError::InvalidArgument(_)
+            | CatalogError::NotFound(_, _)
+            | CatalogError::AlreadyExists(_, _)
+            | CatalogError::Conflict(_)
+            | CatalogError::NotSupported(_)
+            | CatalogError::Unauthorized(_)
+            | CatalogError::Forbidden(_)
+            | CatalogError::AuthExpired(_)
+            | CatalogError::RateLimited(_)
+            | CatalogError::ResourceExhausted(_)
+            | CatalogError::ReadOnly(_)
+            | CatalogError::UnsupportedCapability(_)
+            | CatalogError::StaleMetadata(_)
+            | CatalogError::CommitRejected(_),
+        ) => true,
+        Err(_) => false,
+    }
+}
+
+/// Deletes a staged commit that is not ratified, so that it is never read as a commit of the
+/// table. A failure to delete does not change the outcome of the commit.
+async fn delete_staged_commit(log_store: &LogStoreRef, staged: &CatalogManagedStagedCommit) {
+    if let Err(error) = log_store
+        .object_store(None)
+        .delete(&staged.staged_path)
+        .await
+    {
+        warn!(
+            "Failed to delete the rejected staged Delta commit `{}`: {error}",
+            staged.staged_path
+        );
     }
 }
 

@@ -8,6 +8,8 @@
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
+use crate::spec::parse_commit_version;
+
 /// Configuration options for loading Delta table snapshots.
 ///
 /// Controls how the log-replay reads the `_delta_log`.
@@ -29,9 +31,14 @@ impl CatalogManagedCommitSet {
     }
 }
 
+/// Returns the path of a commit file returned by the catalog. The catalog may return a commit
+/// after it is published, so a published file name (`<version>.json`) is a file of the Delta
+/// log directory, and any other file name is a staged commit.
 pub(crate) fn catalog_managed_commit_path(file_name: &str) -> Path {
     let file_name = file_name.trim_start_matches('/');
-    if let Some(index) = file_name.find("_delta_log/") {
+    if parse_commit_version(file_name).is_some() {
+        Path::from(format!("_delta_log/{file_name}"))
+    } else if let Some(index) = file_name.find("_delta_log/") {
         Path::from(&file_name[index..])
     } else if let Some(index) = file_name.find("_staged_commits/") {
         Path::from(format!("_delta_log/{}", &file_name[index..]))

@@ -195,6 +195,30 @@ def test_history_optional_fields(spark, tmp_path):
 
 
 @pytest.mark.parametrize(
+    "statement",
+    [
+        "INSERT INTO raw_unsupported_writer VALUES (1)",
+        "UPDATE raw_unsupported_writer SET id = 2 WHERE id = 1",
+        "DELETE FROM raw_unsupported_writer WHERE id = 1",
+    ],
+)
+def test_unsupported_writer_features_are_rejected_before_data_files_are_written(spark, tmp_path, statement):
+    path = tmp_path / "raw"
+    features = ["rowTracking", "domainMetadata", "futureFeature"]
+    _write_log(path, [[]], protocol={"minReaderVersion": 1, "minWriterVersion": 7, "writerFeatures": features})
+    spark.sql(f"CREATE TABLE raw_unsupported_writer USING delta LOCATION '{escape_sql_string_literal(path.as_uri())}'")
+    try:
+        with pytest.raises(Exception, match="Unsupported table features required") as error:
+            spark.sql(statement).collect()
+        for feature in features:
+            assert feature in str(error.value)
+        assert sorted(os.listdir(path)) == ["_delta_log"]
+        assert sorted(os.listdir(path / "_delta_log")) == [f"{0:020d}.json"]
+    finally:
+        spark.sql("DROP TABLE raw_unsupported_writer")
+
+
+@pytest.mark.parametrize(
     "relation",
     [
         "detail",

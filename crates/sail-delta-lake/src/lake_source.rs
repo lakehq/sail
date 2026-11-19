@@ -924,6 +924,12 @@ pub(crate) async fn plan_delta_write(
         }
         _ => {}
     }
+    // The table is rejected here, before the write produces any data file.
+    if let Some(snapshot) = &table_snapshot {
+        crate::transaction::PROTOCOL
+            .can_write_to_protocol(snapshot.protocol())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    }
 
     let partition_by = if requested_partition_columns.is_empty() {
         requested_partition_columns

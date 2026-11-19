@@ -171,6 +171,11 @@ pub struct DeltaRatifiedCommitRequest {
 pub struct DeltaRatifiedCommitResponse {
     pub latest_table_version: i64,
     pub commits: Vec<DeltaRatifiedCommit>,
+    /// Whether the catalog registers a table only after version 0 of the table is published.
+    /// A table of such a catalog always has a Delta log, so a client never creates the log
+    /// of a registered table.
+    #[serde(default)]
+    pub requires_published_log: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]

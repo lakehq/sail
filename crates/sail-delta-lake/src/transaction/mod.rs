@@ -1729,7 +1729,7 @@ impl PostCommit {
             .into_iter()
             .flatten()
             .chain(protocol.writer_features().into_iter().flatten())
-            .any(|feature| matches!(feature, TableFeature::Unknown))
+            .any(|feature| matches!(feature, TableFeature::Unknown(_)))
         {
             debug!(
                 "Skipping incremental CRC for version {}: unknown table features",
@@ -3739,8 +3739,8 @@ mod tests {
             ),
             (
                 "unknown reader feature",
-                TableFeature::Unknown,
-                Some(TableFeature::Unknown),
+                TableFeature::Unknown("mystery".to_string()),
+                Some(TableFeature::Unknown("mystery".to_string())),
             ),
         ];
 

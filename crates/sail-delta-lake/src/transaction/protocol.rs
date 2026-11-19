@@ -155,7 +155,7 @@ impl ProtocolChecker {
         let writer_features = protocol.writer_features().unwrap_or(&[]);
 
         for feature in reader_features {
-            if !feature.is_reader_feature() && !matches!(feature, TableFeature::Unknown) {
+            if !feature.is_reader_feature() && !matches!(feature, TableFeature::Unknown(_)) {
                 return Err(TransactionError::InvalidProtocol(format!(
                     "writer-only feature {} must not be listed in readerFeatures",
                     feature.as_str()
@@ -653,16 +653,63 @@ mod tests {
         let protocol = Protocol::new(
             3,
             7,
-            Some(vec![TableFeature::Unknown]),
-            Some(vec![TableFeature::AppendOnly, TableFeature::Unknown]),
+            Some(vec![TableFeature::Unknown("mystery".to_string())]),
+            Some(vec![
+                TableFeature::AppendOnly,
+                TableFeature::Unknown("mystery".to_string()),
+            ]),
         );
 
         let err = INSTANCE.can_read_from_protocol(&protocol).unwrap_err();
         assert!(matches!(
             err,
             TransactionError::UnsupportedTableFeatures(features)
-                if features.contains(&TableFeature::Unknown)
+                if features.contains(&TableFeature::Unknown("mystery".to_string()))
         ));
+    }
+
+    #[test]
+    fn global_checker_names_unsupported_writer_features() {
+        // The features of a table that Databricks creates, with a feature that is not known.
+        let protocol: Protocol = serde_json::from_value(serde_json::json!({
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": ["catalogManaged", "vacuumProtocolCheck"],
+            "writerFeatures": [
+                "catalogManaged", "vacuumProtocolCheck", "inCommitTimestamp", "rowTracking",
+                "domainMetadata", "clustering", "icebergCompatV2", "futureFeature"
+            ]
+        }))
+        .unwrap();
+
+        // The name of the feature that is not known is kept when the protocol is written.
+        assert_eq!(
+            serde_json::to_value(&protocol).unwrap()["writerFeatures"][7],
+            "futureFeature"
+        );
+        INSTANCE.can_read_from_protocol(&protocol).unwrap();
+        let error = INSTANCE.can_write_to_protocol(&protocol).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.starts_with("Unsupported table features required: ["),
+            "{message}"
+        );
+        let mut features = message
+            .trim_start_matches("Unsupported table features required: [")
+            .trim_end_matches(']')
+            .split(", ")
+            .collect::<Vec<_>>();
+        features.sort_unstable();
+        assert_eq!(
+            features,
+            [
+                "clustering",
+                "domainMetadata",
+                "futureFeature",
+                "icebergCompatV2",
+                "rowTracking"
+            ]
+        );
     }
 
     #[test]

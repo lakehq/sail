@@ -818,14 +818,19 @@ pub(crate) async fn commit(
         .into_staged_commit_future_with_catalog_latest_version(latest)
         .await
         .map_err(|error| DataFusionError::External(Box::new(error)))?;
-    let backfilled =
-        DeltaCommitExec::latest_published_backfilled_version(&log_store, staged.version - 1)
-            .await?;
-    // An uncertain catalog response must retain the staged file for reconciliation.
+    let backfilled = DeltaCommitExec::latest_published_backfilled_version(
+        &log_store,
+        Some(snapshot.as_ref()),
+        staged.version - 1,
+    )
+    .await?;
+    // The coordinator deletes the staged file when the catalog rejects the commit. An
+    // uncertain catalog response must retain the staged file for reconciliation.
     coordinator
         .commit_staged(
             lakehouse,
             &table,
+            &log_store,
             Some(snapshot.as_ref()),
             &staged,
             &actions,

@@ -1459,6 +1459,7 @@ impl CatalogProvider for UnityCatalogProvider {
                                     file_modification_timestamp: commit.file_modification_timestamp,
                                 })
                                 .collect(),
+                            requires_published_log: false,
                         });
                     }
                     Err(e) => {
@@ -1587,6 +1588,8 @@ fn delta_ratified_commits_from_load_table(
     Ok(DeltaRatifiedCommitResponse {
         latest_table_version,
         commits,
+        // A table is created by the Delta API with version 0 published.
+        requires_published_log: true,
     })
 }
 

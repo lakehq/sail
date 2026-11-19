@@ -747,6 +747,7 @@ mod tests {
             Ok(DeltaRatifiedCommitResponse {
                 latest_table_version: request.start_version,
                 commits: vec![],
+                requires_published_log: false,
             })
         }
 

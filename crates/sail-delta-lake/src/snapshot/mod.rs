@@ -498,7 +498,7 @@ impl DeltaSnapshot {
             .into_iter()
             .flatten()
             .chain(self.protocol().writer_features().into_iter().flatten())
-            .any(|feature| matches!(feature, TableFeature::Unknown))
+            .any(|feature| matches!(feature, TableFeature::Unknown(_)))
         {
             return true;
         }
@@ -1891,8 +1891,11 @@ mod tests {
         let protocol = Protocol::new(
             3,
             7,
-            Some(vec![TableFeature::Unknown]),
-            Some(vec![TableFeature::AppendOnly, TableFeature::Unknown]),
+            Some(vec![TableFeature::Unknown("mystery".to_string())]),
+            Some(vec![
+                TableFeature::AppendOnly,
+                TableFeature::Unknown("mystery".to_string()),
+            ]),
         );
         let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
 
@@ -1909,7 +1912,7 @@ mod tests {
 
         assert!(matches!(
             err,
-            crate::spec::DeltaError::Unsupported(message) if message.contains("Unknown")
+            crate::spec::DeltaError::Unsupported(message) if message.contains("mystery")
         ));
     }
 

@@ -941,6 +941,15 @@ mod tests {
 
     #[test]
     fn catalog_managed_commit_path_normalizes_uc_filenames() {
+        // The catalog may return a commit that is published.
+        assert_eq!(
+            catalog_managed_commit_path("00000000000000000001.json").as_ref(),
+            "_delta_log/00000000000000000001.json"
+        );
+        assert_eq!(
+            catalog_managed_commit_path("/tmp/table/_delta_log/00000000000000000001.json").as_ref(),
+            "_delta_log/00000000000000000001.json"
+        );
         assert_eq!(
             catalog_managed_commit_path("00000000000000000001.uuid.json").as_ref(),
             "_delta_log/_staged_commits/00000000000000000001.uuid.json"

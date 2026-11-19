@@ -53,8 +53,9 @@ pub enum TableFeature {
     TypeWideningPreview,
     TypeWidening,
     CatalogManaged,
-    #[serde(other)]
-    Unknown,
+    /// A feature that is not known, with the name that the table protocol declares.
+    #[serde(untagged)]
+    Unknown(String),
 }
 // SPDX-SnippetEnd
 
@@ -86,7 +87,7 @@ impl TableFeature {
             Self::TypeWideningPreview => "typeWidening-preview",
             Self::TypeWidening => "typeWidening",
             Self::CatalogManaged => "catalogManaged",
-            Self::Unknown => "unknown",
+            Self::Unknown(name) => name,
         }
     }
 

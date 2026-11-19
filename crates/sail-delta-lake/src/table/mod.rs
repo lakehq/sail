@@ -14,10 +14,10 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result};
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use log::warn;
-use object_store::ObjectStore;
 use object_store::path::Path;
+use object_store::{ObjectStore, ObjectStoreExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
@@ -41,7 +41,10 @@ pub use features::{
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
 
-use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore, resolve_version_timestamp};
+use crate::delta_log::{
+    LogStoreRef, StorageConfig, default_logstore, read_last_checkpoint_version_from_store,
+    resolve_version_timestamp,
+};
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::r#gen::DeltaReadOptions;
 use crate::schema::{
@@ -557,18 +560,34 @@ fn catalog_managed_bootstrap_actions(
     ))
 }
 
+/// Writes version 0 of a table that the catalog registers before the table has a Delta log.
+/// A catalog that registers a table only after version 0 is published has no such table, so
+/// a missing Delta log is an error there, and nothing is written.
 async fn bootstrap_catalog_managed_delta_table<C>(
     ctx: &C,
-    catalog_table: &[String],
+    lakehouse_table: &LakehouseExecutionContext,
     table_url: &Url,
     log_store: LogStoreRef,
 ) -> Result<bool>
 where
     C: SessionExtensionAccessor + ?Sized,
 {
+    let catalog_table = lakehouse_table.catalog_table();
     let Some(info) = load_catalog_managed_delta_bootstrap_info(ctx, catalog_table).await? else {
         return Ok(false);
     };
+    let response = DeltaCatalogCommitCoordinator::new(ctx, catalog_table)
+        .get_ratified_commits(lakehouse_table, table_url.to_string(), 1, None)
+        .await?;
+    if response.requires_published_log {
+        return Err(DataFusionError::External(Box::new(
+            DeltaTableError::generic(format!(
+                "Delta log not found at `{table_url}` for the catalog-managed table `{}`; \
+                 check the table location and the storage credentials",
+                catalog_table.join(".")
+            )),
+        )));
+    }
     let (actions, operation) = catalog_managed_bootstrap_actions(info, table_url)?;
     let commit_properties = CommitProperties::from_session_config(&ctx.session_config())?;
     CommitBuilder::from(commit_properties)
@@ -640,17 +659,37 @@ where
 
     // The catalog returns the ratified commits that are not published yet, and the log segment
     // resolver reads every other version from the published log and rejects a missing version.
-    // A version dropped by the catalog after backfill is read from its staged commit when the
-    // staged commit is unambiguous.
+    // A staged commit of a version that the catalog does not return may have lost the commit
+    // race, so it is used only when the published commit is missing or unreadable.
     if (1..=effective_end_version).any(|version| !by_version.contains_key(&version)) {
-        for (version, file_name) in
-            unambiguous_staged_catalog_managed_commit_files(&log_store).await?
-        {
-            if version >= 1 && version <= effective_end_version {
-                by_version
-                    .entry(version)
-                    .or_insert(CatalogManagedCommitFile { version, file_name });
-            }
+        // The versions that the latest checkpoint covers are not replayed from commits. A
+        // snapshot of a version before the checkpoint replays the commits before it.
+        let checkpoint_version =
+            read_last_checkpoint_version_from_store(log_store.object_store(None))
+                .await
+                .filter(|version| *version <= effective_end_version)
+                .unwrap_or(0);
+        let staged = unambiguous_staged_catalog_managed_commit_files(&log_store)
+            .await?
+            .into_iter()
+            .filter(|(version, _)| {
+                *version > checkpoint_version
+                    && *version <= effective_end_version
+                    && !by_version.contains_key(version)
+            });
+        let unpublished = futures::stream::iter(staged)
+            .map(|(version, file_name)| {
+                let log_store = &log_store;
+                async move {
+                    let readable = published_commit_is_readable(log_store, version).await?;
+                    Ok::<_, DataFusionError>((!readable).then_some((version, file_name)))
+                }
+            })
+            .buffer_unordered(PUBLISHED_COMMIT_CHECK_CONCURRENCY)
+            .try_collect::<Vec<_>>()
+            .await?;
+        for (version, file_name) in unpublished.into_iter().flatten() {
+            by_version.insert(version, CatalogManagedCommitFile { version, file_name });
         }
     }
 
@@ -659,6 +698,10 @@ where
         commits: by_version.into_values().collect(),
     })
 }
+
+/// The number of published commits that are checked at the same time when the staged commits
+/// of a catalog-managed table are resolved.
+const PUBLISHED_COMMIT_CHECK_CONCURRENCY: usize = 16;
 
 /// Lists the staged commits once and returns the versions that have exactly one staged commit.
 async fn unambiguous_staged_catalog_managed_commit_files(
@@ -693,6 +736,24 @@ async fn unambiguous_staged_catalog_managed_commit_files(
         .collect())
 }
 
+/// Whether the published commit of the version exists and is a sequence of JSON documents.
+async fn published_commit_is_readable(log_store: &LogStoreRef, version: i64) -> Result<bool> {
+    let path = Path::from(format!("_delta_log/{version:020}.json"));
+    let result = match log_store.object_store(None).get(&path).await {
+        Ok(result) => result,
+        Err(object_store::Error::NotFound { .. }) => return Ok(false),
+        Err(e) => return Err(DataFusionError::External(Box::new(e))),
+    };
+    let bytes = result
+        .bytes()
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    Ok(bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.trim_ascii().is_empty())
+        .all(|line| serde_json::from_slice::<serde_json::Value>(line).is_ok()))
+}
+
 pub(crate) async fn load_catalog_managed_commits_for_snapshot<C>(
     ctx: &C,
     lakehouse_table: &LakehouseExecutionContext,
@@ -725,7 +786,7 @@ where
             Err(DeltaError::MissingVersion) => {
                 bootstrap_catalog_managed_delta_table(
                     ctx,
-                    catalog_table,
+                    lakehouse_table,
                     table_url,
                     log_store.clone(),
                 )
@@ -754,7 +815,7 @@ where
         Err(err) if is_missing_delta_log_error(&err) => {
             if bootstrap_catalog_managed_delta_table(
                 ctx,
-                catalog_table,
+                lakehouse_table,
                 table_url,
                 log_store.clone(),
             )
@@ -1359,12 +1420,14 @@ mod catalog_managed_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use datafusion::prelude::{SessionConfig, SessionContext};
+    use futures::TryStreamExt;
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::{ObjectStore, ObjectStoreExt};
     use sail_catalog::error::{CatalogError, CatalogResult};
     use sail_catalog::lakehouse::{
         DeltaRatifiedCommit, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
+        LakehouseCommitOutcome, LakehouseCommitRequest,
     };
     use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
     use sail_catalog::provider::*;
@@ -1379,6 +1442,7 @@ mod catalog_managed_tests {
         catalog_managed_property: bool,
         ratified: Option<DeltaRatifiedCommitResponse>,
         commit_requests: AtomicUsize,
+        commit_error: Option<fn() -> CatalogError>,
     }
 
     fn unsupported<T>() -> CatalogResult<T> {
@@ -1420,6 +1484,20 @@ mod catalog_managed_tests {
                     is_external: false,
                 },
             })
+        }
+        async fn commit_lakehouse_table(
+            &self,
+            _: &Namespace,
+            _: &str,
+            request: LakehouseCommitRequest,
+        ) -> CatalogResult<LakehouseCommitOutcome> {
+            match self.commit_error {
+                Some(error) => Err(error()),
+                None => Ok(LakehouseCommitOutcome::Committed {
+                    context: request.context,
+                    payload: None,
+                }),
+            }
         }
         async fn get_delta_ratified_commits(
             &self,
@@ -1523,6 +1601,7 @@ mod catalog_managed_tests {
     fn ratified(latest_table_version: i64, commits: &[(i64, &str)]) -> DeltaRatifiedCommitResponse {
         DeltaRatifiedCommitResponse {
             latest_table_version,
+            requires_published_log: false,
             commits: commits
                 .iter()
                 .map(|(version, id)| DeltaRatifiedCommit {
@@ -1542,23 +1621,6 @@ mod catalog_managed_tests {
         catalog_managed_property: bool,
         ratified: Option<DeltaRatifiedCommitResponse>,
     ) -> (usize, datafusion_common::Result<i64>) {
-        let catalog = Arc::new(UnityManagedCatalog {
-            catalog_managed_property,
-            ratified,
-            commit_requests: AtomicUsize::new(0),
-        });
-        let manager = CatalogManager::try_new(CatalogManagerOptions {
-            catalogs: HashMap::from([(
-                "unity".into(),
-                catalog.clone() as Arc<dyn CatalogProvider>,
-            )]),
-            default_catalog: "unity".into(),
-            default_database: vec!["default".into()],
-            global_temporary_database: vec!["global_temp".into()],
-        })
-        .unwrap();
-        let session =
-            SessionContext::new_with_config(SessionConfig::new().with_extension(Arc::new(manager)));
         let store = Arc::new(InMemory::new());
         let commit = format!(
             concat!(
@@ -1588,6 +1650,32 @@ mod catalog_managed_tests {
                 .await
                 .unwrap();
         }
+        read_unity_managed_table_in_store(store, catalog_managed_property, ratified).await
+    }
+
+    async fn read_unity_managed_table_in_store(
+        store: Arc<InMemory>,
+        catalog_managed_property: bool,
+        ratified: Option<DeltaRatifiedCommitResponse>,
+    ) -> (usize, datafusion_common::Result<i64>) {
+        let catalog = Arc::new(UnityManagedCatalog {
+            catalog_managed_property,
+            ratified,
+            commit_requests: AtomicUsize::new(0),
+            commit_error: None,
+        });
+        let manager = CatalogManager::try_new(CatalogManagerOptions {
+            catalogs: HashMap::from([(
+                "unity".into(),
+                catalog.clone() as Arc<dyn CatalogProvider>,
+            )]),
+            default_catalog: "unity".into(),
+            default_database: vec!["default".into()],
+            global_temporary_database: vec!["global_temp".into()],
+        })
+        .unwrap();
+        let session =
+            SessionContext::new_with_config(SessionConfig::new().with_extension(Arc::new(manager)));
         let table_url = Url::parse("memory:///items/").unwrap();
         session
             .runtime_env()
@@ -1750,5 +1838,202 @@ mod catalog_managed_tests {
         .await;
         let error = result.unwrap_err().to_string();
         assert!(error.contains("version 2"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn catalog_managed_table_ignores_staged_commit_that_lost_the_commit_race() {
+        // The catalog rejected the staged commit of version 1, and the commit of another
+        // writer is published as version 1. The second staged commit has the size of the
+        // published commit.
+        let same_size = EMPTY_COMMIT.replacen('{', "x", 1);
+        for orphan in [CORRUPTED_COMMIT, same_size.as_str()] {
+            let files = vec![
+                (published_commit(1), EMPTY_COMMIT),
+                (staged_commit(1, "a"), orphan),
+            ];
+            let (_, result) = read_unity_managed_table_with_log(
+                CATALOG_MANAGED_PROTOCOL,
+                files,
+                true,
+                Some(ratified(1, &[])),
+            )
+            .await;
+            assert_eq!(result.unwrap(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn catalog_managed_table_reads_staged_commit_without_published_commit() {
+        let files = vec![
+            (staged_commit(1, "a"), EMPTY_COMMIT),
+            (staged_commit(2, "b"), EMPTY_COMMIT),
+        ];
+        let (_, result) = read_unity_managed_table_with_log(
+            CATALOG_MANAGED_PROTOCOL,
+            files,
+            true,
+            Some(ratified(2, &[(2, "b")])),
+        )
+        .await;
+        assert_eq!(result.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn catalog_managed_table_with_many_staged_commits_reads_published_commits() {
+        // Every version has a staged commit. The staged commits of the versions 1 to 39 are
+        // unreadable and must not be used, the published commit of version 40 is unreadable,
+        // and the published commit of version 41 is missing.
+        let mut files = Vec::new();
+        for version in 1..=41 {
+            match version {
+                40 => {
+                    files.push((published_commit(version), CORRUPTED_COMMIT));
+                    files.push((staged_commit(version, "a"), EMPTY_COMMIT));
+                }
+                41 => files.push((staged_commit(version, "a"), EMPTY_COMMIT)),
+                _ => {
+                    files.push((published_commit(version), EMPTY_COMMIT));
+                    files.push((staged_commit(version, "a"), CORRUPTED_COMMIT));
+                }
+            }
+        }
+        files.push((staged_commit(42, "a"), EMPTY_COMMIT));
+        let (commit_requests, result) = read_unity_managed_table_with_log(
+            CATALOG_MANAGED_PROTOCOL,
+            files,
+            true,
+            Some(ratified(42, &[(42, "a")])),
+        )
+        .await;
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(commit_requests, 1);
+    }
+
+    async fn staged_commit_exists_after_catalog_error(error: fn() -> CatalogError) -> bool {
+        use crate::catalog::coordinator::{
+            DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable,
+        };
+        use crate::delta_log::{StorageConfig, default_logstore};
+        use crate::transaction::CatalogManagedStagedCommit;
+
+        let catalog = Arc::new(UnityManagedCatalog {
+            catalog_managed_property: true,
+            ratified: None,
+            commit_requests: AtomicUsize::new(0),
+            commit_error: Some(error),
+        });
+        let manager = CatalogManager::try_new(CatalogManagerOptions {
+            catalogs: HashMap::from([("unity".into(), catalog as Arc<dyn CatalogProvider>)]),
+            default_catalog: "unity".into(),
+            default_database: vec!["default".into()],
+            global_temporary_database: vec!["global_temp".into()],
+        })
+        .unwrap();
+        let session =
+            SessionContext::new_with_config(SessionConfig::new().with_extension(Arc::new(manager)));
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let staged_path = Path::from(format!("_delta_log/{}", staged_commit(1, "a")));
+        store
+            .put(&staged_path, EMPTY_COMMIT.to_string().into())
+            .await
+            .unwrap();
+        let table_url = Url::parse("memory:///").unwrap();
+        let log_store = default_logstore(store.clone(), store.clone(), &table_url, &StorageConfig);
+        let catalog_table = vec!["unity".to_string(), "default".into(), "items".into()];
+        let mut context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("unity".into()),
+            catalog_table.clone(),
+            CatalogTableIdentity {
+                table_id: Some("table-id".into()),
+                table_uri: Some(table_url.to_string()),
+            },
+            LakehouseOperation::Write,
+            LakehouseFormat::Delta,
+            LakehouseAuthority::PathManaged,
+            ScanAuthority::ClientLakeSource,
+        );
+        context.commit = CommitAuthority::DeltaRatifiedCommit;
+        let staged = CatalogManagedStagedCommit {
+            version: 1,
+            file_name: format!("{:020}.a.json", 1),
+            file_size: EMPTY_COMMIT.len() as i64,
+            file_modification_timestamp: 1,
+            in_commit_timestamp: 1,
+            staged_path: staged_path.clone(),
+            metrics: Default::default(),
+        };
+        let state = session.state();
+        let result = DeltaCatalogCommitCoordinator::new(&state, &catalog_table)
+            .commit_staged(
+                &context,
+                &DeltaCatalogManagedTable {
+                    table_id: "table-id".into(),
+                    table_uri: table_url.to_string(),
+                },
+                &log_store,
+                None,
+                &staged,
+                &[],
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+        store.head(&staged_path).await.is_ok()
+    }
+
+    #[tokio::test]
+    async fn rejected_catalog_commit_deletes_staged_commit() {
+        for error in [
+            (|| CatalogError::Conflict("409".into())) as fn() -> CatalogError,
+            || CatalogError::InvalidArgument("400".into()),
+            || CatalogError::Forbidden("403".into()),
+            || CatalogError::RateLimited("429".into()),
+        ] {
+            assert!(!staged_commit_exists_after_catalog_error(error).await);
+        }
+    }
+
+    async fn read_unity_managed_table_without_log(
+        requires_published_log: bool,
+    ) -> (datafusion_common::Result<i64>, Vec<String>) {
+        let store = Arc::new(InMemory::new());
+        let ratified = DeltaRatifiedCommitResponse {
+            requires_published_log,
+            ..ratified(0, &[])
+        };
+        let (_, result) =
+            read_unity_managed_table_in_store(store.clone(), true, Some(ratified)).await;
+        let files = store.list(None).try_collect::<Vec<_>>().await.unwrap();
+        let files = files.into_iter().map(|meta| meta.location.to_string());
+        (result, files.collect())
+    }
+
+    #[tokio::test]
+    async fn read_of_table_without_log_writes_nothing_when_catalog_publishes_version_0() {
+        let (result, files) = read_unity_managed_table_without_log(true).await;
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("Delta log not found at `memory:///items/`"),
+            "{error}"
+        );
+        assert_eq!(files, Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn read_of_table_without_log_creates_version_0_for_legacy_catalog() {
+        let (result, files) = read_unity_managed_table_without_log(false).await;
+        assert_eq!(result.unwrap(), 0);
+        assert!(
+            files.contains(&"items/_delta_log/00000000000000000000.json".to_string()),
+            "{files:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_commit_with_unknown_outcome_keeps_staged_commit() {
+        // A server error, a timeout, or a network error may follow a ratified commit.
+        assert!(
+            staged_commit_exists_after_catalog_error(|| CatalogError::External("503".into())).await
+        );
     }
 }
