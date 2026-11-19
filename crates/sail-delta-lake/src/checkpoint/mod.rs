@@ -55,7 +55,7 @@ mod action_fields;
 #[derive(Debug, Clone, Copy)]
 struct CheckpointRetentionTimestamps {
     deleted_file_retention_timestamp: i64,
-    transaction_expiration_timestamp: i64,
+    transaction_expiration_timestamp: Option<i64>,
 }
 
 impl CheckpointRetentionTimestamps {
@@ -67,11 +67,16 @@ impl CheckpointRetentionTimestamps {
                 table_properties.deleted_file_retention_duration(),
                 "delta.deletedFileRetentionDuration",
             )?,
-            transaction_expiration_timestamp: retention_cutoff_timestamp(
-                reference_timestamp,
-                table_properties.log_retention_duration(),
-                "delta.logRetentionDuration",
-            )?,
+            transaction_expiration_timestamp: table_properties
+                .set_transaction_retention_duration
+                .map(|duration| {
+                    retention_cutoff_timestamp(
+                        reference_timestamp,
+                        duration,
+                        "delta.setTransactionRetentionDuration",
+                    )
+                })
+                .transpose()?,
         })
     }
 }
@@ -176,11 +181,10 @@ impl ReconciledCheckpointState {
         let retention = CheckpointRetentionTimestamps::try_new(metadata, reference_timestamp)?;
 
         let txns_before = self.txns.len();
-        self.txns.retain(|_, txn| {
-            txn.last_updated
-                .map(|last_updated| last_updated > retention.transaction_expiration_timestamp)
-                .unwrap_or(true)
-        });
+        if let Some(cutoff) = retention.transaction_expiration_timestamp {
+            self.txns
+                .retain(|_, txn| txn.last_updated.is_some_and(|updated| updated > cutoff));
+        }
 
         let removes_before = self.removes.len();
         self.removes.retain(|_, remove| {
@@ -2976,6 +2980,67 @@ mod tests {
     }
 
     #[test]
+    fn reconciled_state_uses_uri_keys_without_changing_checkpoint_payloads() -> DeltaResult<()> {
+        let vector = DeletionVectorDescriptor {
+            storage_type: StorageType::Inline,
+            path_or_inline_dv: "dv-identity".to_string(),
+            cardinality: 1,
+            size_in_bytes: 1,
+            offset: None,
+        };
+        for deletion_vector in [None, Some(vector)] {
+            let mut state = ReconciledCheckpointState::default();
+            let encoded = Add {
+                path: "caf%C3%A9.parquet".to_string(),
+                deletion_vector: deletion_vector.clone(),
+                ..Default::default()
+            };
+            let literal = Add {
+                path: "café.parquet".to_string(),
+                ..encoded.clone()
+            };
+            for add in [encoded.clone(), literal.clone()] {
+                state.apply_action(Action::Add(add));
+            }
+            let mut remove = encoded.into_remove(1);
+            remove.path = "caf%c3%a9.parquet".to_string();
+            state.apply_action(Action::Remove(remove.clone()));
+            assert_eq!(state.adds.len(), 1);
+            assert_eq!(state.adds.values().next(), Some(&literal));
+            assert_eq!(state.removes.values().next(), Some(&remove));
+            let rows = vec![
+                CheckpointActionRow {
+                    add: Some(literal.clone()),
+                    ..Default::default()
+                },
+                CheckpointActionRow {
+                    remove: Some(remove.clone()),
+                    ..Default::default()
+                },
+            ];
+            let decoded = decode_checkpoint_rows(&encode_rows_for_test(&rows)?)?;
+            assert_eq!(decoded[0].add.as_ref(), Some(&literal));
+            assert_eq!(decoded[1].remove.as_ref(), Some(&remove));
+            // A re-add with yet another hex spelling replaces the same tombstone.
+            let readded = Add {
+                path: "caf%c3%A9.parquet".to_string(),
+                ..literal.clone()
+            };
+            state.apply_action(Action::Add(readded.clone()));
+            assert!(state.removes.is_empty());
+            assert_eq!(state.adds.len(), 2);
+            assert_eq!(
+                state.adds.get(&crate::spec::logical_file_key(
+                    &readded.path,
+                    deletion_vector.as_ref()
+                )),
+                Some(&readded)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn reconciled_state_remove_masks_old_add() {
         let mut state = ReconciledCheckpointState::default();
         state.apply_action(Action::Add(Add {
@@ -3018,7 +3083,7 @@ mod tests {
         let mut state = ReconciledCheckpointState::default();
         state.apply_action(Action::Metadata(test_metadata([
             ("delta.deletedFileRetentionDuration", "interval 7 days"),
-            ("delta.logRetentionDuration", "interval 30 days"),
+            ("delta.setTransactionRetentionDuration", "interval 30 days"),
         ])?));
         state.apply_action(Action::Remove(Remove {
             path: "expired.parquet".to_string(),
@@ -3094,7 +3159,7 @@ mod tests {
         );
         assert!(!state.txns.contains_key("expired-app"));
         assert!(state.txns.contains_key("fresh-app"));
-        assert!(state.txns.contains_key("legacy-app"));
+        assert!(!state.txns.contains_key("legacy-app"));
         Ok(())
     }
 

@@ -14,7 +14,6 @@ use datafusion_common::{DataFusionError, Result};
 use crate::datasource::{COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN};
 use crate::schema::PhysicalPartitionColumn;
 use crate::spec::fields::FIELD_NAME_STATS_PARSED;
-use crate::spec::utils::decode_path;
 use crate::spec::{Add, DeletionVectorDescriptor, StorageType};
 
 const COL_SIZE_BYTES: &str = "size_bytes";
@@ -141,8 +140,8 @@ pub fn decode_adds_from_meta_batch_with_partition_value_columns(
             )));
         }
 
-        let raw_path = path_arr.value(row);
-        let path = decode_path(raw_path).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        // Metadata carries the original log URI, not the decoded scan-routing key.
+        let path = path_arr.value(row).to_string();
 
         let size = size_arr
             .map(|a| if a.is_null(row) { 0 } else { a.value(row) })

@@ -464,6 +464,7 @@ message SparkDateUdf {
 
 message SparkVariantGetUdf {
   bool safe = 1;
+  optional string timezone = 2;
 }
 
 message SparkCeilUdf {

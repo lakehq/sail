@@ -11,6 +11,7 @@ from pyspark.sql import SparkSession
 
 from pysail.testing._dev.spark.utils.jvm import classic_spark_mode, delta_spark_maven_coordinate
 from pysail.testing.resources import resource
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -51,3 +52,17 @@ def delta_jvm_spark(tmp_path_factory: pytest.TempPathFactory) -> Generator[Spark
     yield spark
 
     spark.stop()
+
+
+@pytest.fixture
+def semantic_table(spark, tmp_path):
+    name = "maintenance_semantics"
+    path = tmp_path / "table"
+    spark.sql(
+        f"CREATE TABLE {name} (id BIGINT, part STRING) USING delta PARTITIONED BY (part) "
+        f"LOCATION '{escape_sql_string_literal(str(path))}'"
+    ).collect()
+    try:
+        yield name, path
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}").collect()

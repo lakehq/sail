@@ -26,9 +26,9 @@ fn external(error: impl std::error::Error + Send + Sync + 'static) -> DataFusion
     DataFusionError::External(Box::new(error))
 }
 
-/// Add paths are decoded by serde_path. Re-encode once before URI resolution.
+/// Classify the stored URI before decoding so an escaped colon stays relative.
 pub(crate) fn data_file_url(root: &Url, path: &str) -> Result<Url> {
-    let encoded = encode_path(path);
+    let encoded = encode_path(&decode_path(path).map_err(external)?);
     let url = if absolute_uri_parts(path).is_some() {
         Url::parse(&encoded).map_err(external)?
     } else {
@@ -275,7 +275,7 @@ pub(crate) async fn prepare(
             }
             add.data_change = add.partition_values != previous.partition_values;
         } else {
-            add.path = decode_path(absolute.as_str()).map_err(external)?;
+            add.path = absolute.to_string();
             add.data_change = true;
         }
         actions.push(CommitAction::Add(add));

@@ -40,6 +40,7 @@ use crate::datasource::pruning::{arrow_type_contains_timestamp, widen_timestamp_
 use crate::datasource::{DeltaScanConfig, create_object_store_url, partitioned_file_from_action};
 use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
+use crate::spec::utils::decode_path;
 use crate::spec::{Add, ColumnMappingMode};
 use crate::table::DeltaSnapshot;
 
@@ -255,11 +256,10 @@ pub async fn build_file_scan_config(
     let mut per_file_stats: Vec<Arc<Statistics>> = Vec::new();
 
     for action in files.iter() {
-        let mut resolved_action = action.clone();
-        resolved_action.path =
-            rewrite_data_file_location(&log_store.config().location, &action.path)?.to_string();
+        let location = rewrite_data_file_location(&log_store.config().location, &action.path)?;
         let mut part = partitioned_file_from_action(
-            &resolved_action,
+            action,
+            location,
             &partition_columns_mapped,
             &complete_schema,
         )?;
@@ -284,12 +284,14 @@ pub async fn build_file_scan_config(
 
         // Add file column if configured
         if config.file_column_name.is_some() {
+            let path = decode_path(&action.path)
+                .map_err(|error| DataFusionError::External(Box::new(error)))?;
             let partition_value = if config.wrap_partition_values {
                 wrap_partition_value_in_dict(datafusion::common::scalar::ScalarValue::Utf8(Some(
-                    action.path.clone(),
+                    path,
                 )))
             } else {
-                datafusion::common::scalar::ScalarValue::Utf8(Some(action.path.clone()))
+                datafusion::common::scalar::ScalarValue::Utf8(Some(path))
             };
             part.partition_values.push(partition_value);
         }
@@ -1034,11 +1036,11 @@ mod tests {
             ("1x:/part.parquet", "table/1x:/part.parquet"),
             ("s3://bucket/source/a.parquet", "source/a.parquet"),
             (
-                "part=space # %20/a.parquet",
+                "part=space%20%23%20%2520/a.parquet",
                 "table/part=space # %20/a.parquet",
             ),
             (
-                "s3://bucket/source/space # %20/a.parquet",
+                "s3://bucket/source/space%20%23%20%2520/a.parquet",
                 "source/space # %20/a.parquet",
             ),
         ] {

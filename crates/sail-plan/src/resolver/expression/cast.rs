@@ -25,7 +25,6 @@ use sail_function::scalar::datetime::timestamp_cast::{
 use sail_function::scalar::r#struct::struct_rename::StructRename;
 use sail_function::scalar::variant::cast_to_variant::CastToVariant;
 use sail_function::scalar::variant::variant_get::VariantGet;
-use sail_function::scalar::variant::variant_to_json::VariantToJsonUdf;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -230,21 +229,10 @@ impl PlanResolver<'_> {
                 ),
                 DataType::Date32,
             ),
-            (_, DataType::Utf8, _) if expr_is_variant => cast(
-                ScalarUDF::new_from_impl(VariantToJsonUdf::new()).call(vec![expr]),
-                DataType::Utf8,
-            ),
-            (_, DataType::LargeUtf8, _) if expr_is_variant => cast(
-                ScalarUDF::new_from_impl(VariantToJsonUdf::new()).call(vec![expr]),
-                DataType::LargeUtf8,
-            ),
-            (_, DataType::Utf8View, _) if expr_is_variant => {
-                ScalarUDF::new_from_impl(VariantToJsonUdf::new()).call(vec![expr])
-            }
             (_, to, is_try) if expr_is_variant => {
                 let service = self.ctx.extension::<PlanService>()?;
                 let data_type_string = service.plan_formatter().data_type_to_simple_string(&to)?;
-                ScalarUDF::new_from_impl(VariantGet::new(is_try)).call(vec![
+                ScalarUDF::new_from_impl(VariantGet::new(is_try, session_timezone)).call(vec![
                     expr,
                     lit("$"),
                     lit(data_type_string),
