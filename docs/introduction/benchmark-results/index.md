@@ -27,7 +27,7 @@ The data was generated using [`tpchgen-cli`](https://pypi.org/project/tpchgen-cl
 
 ::: info
 
-- Sail ran with `optimizer.enable_join_reorder` enabled, which is now the default.
+- The `optimizer.enable_join_reorder` configuration option is turned on for Sail.
 - The Sail server is built from source as a [standalone binary](/development/recipes/standalone-binary).
 - Previously, the TPC-H data was generated using the `dbgen` tool followed by conversion to Parquet. We now use the `tpchgen-cli` tool, and we noticed that the dataset size in Parquet format is different. This is a reason why the baseline Spark query times are different from the previous benchmark results.
 
@@ -94,7 +94,7 @@ Each time is measured at the client from submission until the results arrive wit
 
 ::: info
 
-- Sail ran with `optimizer.enable_join_reorder` and `optimizer.enable_window_topn` enabled. Join reordering is now enabled by default.
+- The `optimizer.enable_join_reorder` and `optimizer.enable_window_topn` configuration options are turned on for Sail.
 - Shuffle data is streamed between workers over Arrow Flight without being written to disk, as described in the [blog post](https://lakesail.com/blog/tpcds-benchmark-2026/).
 - Directory listings, Parquet metadata, and Parquet statistics are cached between queries. Table data is read from S3 for every query.
 - The results are from the best complete run at each scale. Only query time was measured, with no memory, disk, or network metrics.
@@ -119,6 +119,7 @@ These settings differ from the defaults, and the shuffle backend is the default 
 | `execution.file_listing_cache.max_entries`                      | 0        | 10000   |
 | `execution.file_listing_cache.ttl`                              | 7200     | 1800    |
 | `execution.file_listing_cache.type`                             | `global` | `none`  |
+| `optimizer.enable_join_reorder`                                 | `true`   | `false` |
 | `optimizer.enable_window_topn`                                  | `true`   | `false` |
 | `parquet.file_metadata_cache.ttl`                               | 7200     | 1800    |
 | `parquet.file_statistics_cache.max_entries`                     | 0        | 10000   |
