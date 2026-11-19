@@ -993,7 +993,7 @@
 
 - key: optimizer.enable_join_reorder
   type: boolean
-  default: "false"
+  default: "true"
   description: |
     Whether to enable cost-based join reorder in the query optimizer.
   experimental: true
@@ -1002,10 +1002,9 @@
   type: boolean
   default: "true"
   description: |
-    Whether to allow swapping join inputs using available statistics.
-    Disable this to preserve the SQL join input order for hash joins. This is distinct from
-    `optimizer.enable_join_reorder` that enables a more sophisticated cost-based join reorder
-    algorithm that can reorder multiple joins.
+    Whether to allow swapping the inputs of an individual join using available statistics.
+    To preserve the SQL join input order for hash joins, disable both this option and
+    `optimizer.enable_join_reorder`, which can change the order of multiple joins.
   experimental: true
 
 - key: optimizer.prefer_hash_join
@@ -1018,13 +1017,31 @@
 
 - key: optimizer.enable_window_topn
   type: boolean
-  default: "false"
+  default: "true"
   description: |
-    Whether to optimize partitioned `ROW_NUMBER` and `RANK` windows with an upper-bound
-    filter using a per-partition top-k operator instead of sorting all input rows.
-    This can improve performance when the partition keys have low cardinality.
-    High-cardinality partition keys, large limits, or large rank tie groups can increase
-    memory usage and runtime. The top-k operator does not support spilling to disk.
+    Whether to optimize partitioned `ROW_NUMBER`, `RANK`, and `DENSE_RANK` windows with an
+    upper-bound filter using a per-partition top-k operator instead of sorting all input rows.
+    The top-k operator does not support spilling to disk.
+  experimental: true
+
+- key: optimizer.share_cte_definitions
+  type: boolean
+  default: "true"
+  description: |
+    Whether the references to a CTE can share one evaluation of the CTE.
+    If the value is `true`, a CTE that is referenced more than once is planned and
+    evaluated once for the references that read the same rows of it, when the CTE is
+    non-deterministic (so that every reference sees the same values), when it refers to
+    another CTE that is referenced more than once (so that nested CTEs are not evaluated
+    repeatedly), or when it holds its output before returning it (for example, an
+    aggregation or a sort), so that the rows kept for a reference that reads it later are
+    no more than what evaluating it holds anyway. A CTE of another kind is shared only
+    if every reference is the build side of a hash join, which holds the rows that it
+    reads, and is evaluated for each reference otherwise. Sharing a CTE of the last two
+    kinds can keep one more copy of the output of the CTE in memory than evaluating it
+    for each reference. With a memory limit, only the first two kinds are shared if
+    temporary files are disabled or in cluster mode.
+    If the value is `false`, the CTE is planned and evaluated for each reference.
   experimental: true
 
 - key: optimizer.expand_views_at_output

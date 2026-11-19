@@ -3,62 +3,94 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, BooleanArray, RecordBatch,
-    RecordBatchOptions,
+    Array, ArrowNativeTypeOp, ArrowNumericType, RecordBatch, RecordBatchOptions,
 };
-use datafusion::arrow::buffer::NullBuffer;
-use datafusion::arrow::compute::CastOptions;
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::datatypes::{Field, Schema};
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::ColumnarValue;
 use datafusion::physical_expr::PhysicalExpr;
 use sail_common_datafusion::literal::LiteralValue;
 
-/// This is part of the shared contract for bitmap aggregate functions that
-/// interoperate on the same binary bitmap representation.
-pub(crate) const BITMAP_NUM_BYTES: usize = 4 * 1024;
+use super::get_scalar_value;
 
-pub fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
-    let empty_schema = Arc::new(Schema::empty());
-    let batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
-    match expr.evaluate(&batch)? {
-        ColumnarValue::Scalar(s) => Ok(s),
-        _ => Err(DataFusionError::Internal(
-            "Didn't expect ColumnarValue::Array".to_string(),
-        )),
-    }
-}
-
-/// Casts an array to the target type if it doesn't already match.
+/// Utility macro to match string data types and create corresponding ScalarValue.
 ///
-/// Uses a safe cast (invalid values become NULL).
-pub fn cast_to_type(array: &ArrayRef, target_type: &DataType) -> Result<ArrayRef> {
-    cast_to_type_with_safe(array, target_type, true)
+/// This macro handles the three string type variants (Utf8View, LargeUtf8, Utf8)
+/// and creates the appropriate ScalarValue variant.
+///
+/// # Arguments
+/// * `$data_type` - The DataType enum to match against
+/// * `$value` - The Option<String> value to wrap in the ScalarValue
+///
+/// # Returns
+/// * `Result<ScalarValue>` - The corresponding string ScalarValue variant
+///
+/// # Example
+/// ```ignore
+/// let scalar = match_string_type!(DataType::Utf8View, Some("hello".to_string()))?;
+/// ```
+macro_rules! match_string_type {
+    ($data_type:expr_2021, $value:expr_2021) => {
+        match $data_type {
+            DataType::Utf8View => Ok(ScalarValue::Utf8View($value)),
+            DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8($value)),
+            _ => Ok(ScalarValue::Utf8($value)),
+        }
+    };
 }
 
-/// Casts an array to the target type if it doesn't already match, choosing
-/// between a safe cast (`safe = true`, invalid values become NULL) and a strict
-/// cast (`safe = false`, invalid values raise an error).
+/// Utility macro to create a None ScalarValue for interval types.
 ///
-/// This drives the ANSI-mode behavior of percentile aggregates: under
-/// `spark.sql.ansi.enabled = false` a non-numeric string is coerced to NULL and
-/// ignored, while under ANSI mode an invalid cast surfaces an error.
-pub fn cast_to_type_with_safe(
-    array: &ArrayRef,
-    target_type: &DataType,
-    safe: bool,
-) -> Result<ArrayRef> {
-    if array.data_type() != target_type {
-        let options = CastOptions {
-            safe,
-            ..Default::default()
-        };
-        arrow::compute::cast_with_options(array, target_type, &options)
-            .map_err(DataFusionError::from)
-    } else {
-        Ok(Arc::clone(array))
-    }
+/// This macro handles the three interval unit variants (YearMonth, DayTime, MonthDayNano)
+/// and creates the appropriate ScalarValue::Interval* variant with None value.
+///
+/// # Arguments
+/// * `$unit` - The IntervalUnit enum to match against
+///
+/// # Returns
+/// * `Result<ScalarValue>` - The corresponding interval ScalarValue variant with None
+///
+/// # Example
+/// ```ignore
+/// let scalar = interval_none!(IntervalUnit::YearMonth)?;
+/// ```
+macro_rules! interval_none {
+    ($unit:expr_2021) => {
+        match $unit {
+            datafusion::arrow::datatypes::IntervalUnit::YearMonth => {
+                Ok(ScalarValue::IntervalYearMonth(None))
+            }
+            datafusion::arrow::datatypes::IntervalUnit::DayTime => {
+                Ok(ScalarValue::IntervalDayTime(None))
+            }
+            datafusion::arrow::datatypes::IntervalUnit::MonthDayNano => {
+                Ok(ScalarValue::IntervalMonthDayNano(None))
+            }
+        }
+    };
 }
+
+/// Macro to handle Duration type matching for None values
+macro_rules! duration_none {
+    ($unit:expr_2021) => {
+        match $unit {
+            datafusion::arrow::datatypes::TimeUnit::Second => Ok(ScalarValue::DurationSecond(None)),
+            datafusion::arrow::datatypes::TimeUnit::Millisecond => {
+                Ok(ScalarValue::DurationMillisecond(None))
+            }
+            datafusion::arrow::datatypes::TimeUnit::Microsecond => {
+                Ok(ScalarValue::DurationMicrosecond(None))
+            }
+            datafusion::arrow::datatypes::TimeUnit::Nanosecond => {
+                Ok(ScalarValue::DurationNanosecond(None))
+            }
+        }
+    };
+}
+
+pub(in crate::aggregate) use duration_none;
+pub(in crate::aggregate) use interval_none;
+pub(in crate::aggregate) use match_string_type;
 
 pub fn validate_percentile(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
     let scalar_value = get_scalar_value(expr).map_err(|_e| {
@@ -86,24 +118,12 @@ pub fn validate_percentile(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
     Ok(percentile)
 }
 
-pub fn filtered_null_mask(
-    opt_filter: Option<&BooleanArray>,
-    input: &dyn Array,
-) -> Option<NullBuffer> {
-    let opt_filter = opt_filter.and_then(|f| {
-        let (filter_bools, filter_nulls) = f.clone().into_parts();
-        let filter_bools = NullBuffer::from(filter_bools);
-        NullBuffer::union(Some(&filter_bools), filter_nulls.as_ref())
-    });
-    NullBuffer::union(opt_filter.as_ref(), input.nulls())
-}
-
 /// Convert a `ScalarValue` to `f64`, supporting floats, integers, and decimals
 /// (`Decimal32`/`Decimal64`/`Decimal128`).
 ///
 /// Used for extracting percentile literals from physical expressions where the
 /// literal may arrive as any numeric scalar.
-pub(crate) fn scalar_to_f64(scalar: &ScalarValue) -> Result<f64> {
+fn scalar_to_f64(scalar: &ScalarValue) -> Result<f64> {
     let percentile: f64 = match scalar {
         ScalarValue::Float64(Some(v)) => *v,
         ScalarValue::Float32(Some(v)) => *v as f64,

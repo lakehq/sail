@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use datafusion::common::stats::Precision;
@@ -19,6 +21,7 @@ use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::{AnalysisContext, analyze};
 use log::trace;
+use sail_physical_plan::shared_cte::SharedCteScanExec;
 
 use crate::join_reorder::JoinReorderOptions;
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode, StableColumn};
@@ -27,7 +30,11 @@ use crate::join_reorder::join_set::JoinSet;
 type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 type EquiPair = (StableColumn, StableColumn);
 type PhysicalExprWithEquiPairs = (PhysicalExprRef, Vec<EquiPair>);
-type GroupedPredicates = HashMap<(JoinSet, JoinSet), Vec<PhysicalExprWithEquiPairs>>;
+type GroupedPredicates = BTreeMap<(JoinSet, JoinSet), Vec<PhysicalExprWithEquiPairs>>;
+/// Whether the walk over the plan that a reference to a shared CTE stands for succeeds, by
+/// the CTE, the columns that the reference reads, and the number of relations before the
+/// reference, which is all that the walk depends on.
+pub type InlinedWalks = Rc<RefCell<HashMap<(usize, Option<Vec<usize>>, usize), bool>>>;
 
 /// Maps an output column from an ExecutionPlan back to a stable identifier.
 /// The vector is indexed by the column index in the plan's output schema.
@@ -51,6 +58,7 @@ pub enum ColumnMapEntry {
 }
 
 /// Builder for constructing query graph from ExecutionPlan.
+#[derive(Clone)]
 pub struct GraphBuilder {
     /// The query graph being built.
     graph: QueryGraph,
@@ -61,6 +69,9 @@ pub struct GraphBuilder {
     /// Key: A Column expression (which is hashable). Value: Stable ID.
     expr_to_stable_id: HashMap<Column, (usize, usize)>,
     options: JoinReorderOptions,
+    /// Shared by the copies of the builder that walk the plans of shared CTEs, and by the
+    /// builders of one run of the rule, so that each such plan is walked once.
+    inlined_walks: InlinedWalks,
 }
 
 impl GraphBuilder {
@@ -70,6 +81,14 @@ impl GraphBuilder {
             relation_counter: 0,
             expr_to_stable_id: HashMap::new(),
             options,
+            inlined_walks: Rc::default(),
+        }
+    }
+
+    pub fn with_inlined_walks(self, inlined_walks: InlinedWalks) -> Self {
+        Self {
+            inlined_walks,
+            ..self
         }
     }
 
@@ -151,6 +170,32 @@ impl GraphBuilder {
         // it's either a boundary (leaf of our graph) or not part of a reorderable region.
         // AggregateExec and other transformation nodes are not part of reorderable regions.
 
+        if let Some(scan) = plan.downcast_ref::<SharedCteScanExec>()
+            && let Some(inlined) = scan.inlined()?
+        {
+            // The reference is a leaf, but no region is formed where none would be formed
+            // with the plan that takes the place of the reference when the CTE is not shared.
+            let key = (
+                scan.cte().id(),
+                scan.projection().map(<[usize]>::to_vec),
+                self.graph.relation_count(),
+            );
+            let known = self.inlined_walks.borrow().get(&key).copied();
+            let walked = match known {
+                Some(walked) => walked,
+                None => {
+                    let walked = self.clone().visit_plan(inlined).is_ok();
+                    self.inlined_walks.borrow_mut().insert(key, walked);
+                    walked
+                }
+            };
+            if !walked {
+                return Err(DataFusionError::Internal(
+                    "the plan of a shared CTE is not part of a reorderable join region".to_string(),
+                ));
+            }
+        }
+
         if plan.is::<AggregateExec>() {
             trace!("AggregateExec encountered - not part of reorderable region");
             return Err(DataFusionError::Internal(
@@ -228,11 +273,12 @@ impl GraphBuilder {
             }
         }
 
-        // Group conjuncts by their base-relation dependency set and add one edge per group.
+        // Group conjuncts by their base-relation dependency set and add one edge per group
+        // in a stable order. Reconstruction uses edge order to assemble join conditions.
         //
         // This avoids generating hyperedges for join nodes where each conjunct is actually
         // a binary predicate between two base relations.
-        let mut grouped: GroupedPredicates = HashMap::new();
+        let mut grouped = GroupedPredicates::new();
         let left_relations = self.relations_in_map(&left_map)?;
         let right_relations = self.relations_in_map(&right_map)?;
 
@@ -1083,6 +1129,128 @@ mod tests {
         // Check that two relations were created (left and right)
         assert_eq!(builder.graph.relation_count(), 2);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_shared_cte_reference_ends_the_region_where_its_plan_ends_it() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_plan::aggregates::{AggregateMode, PhysicalGroupBy};
+        use datafusion::physical_plan::joins::PartitionMode;
+        use datafusion::physical_plan::{Partitioning, Statistics};
+        use sail_physical_plan::shared_cte::SharedCte;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let key = || Arc::new(Column::new("k", 0)) as Arc<dyn PhysicalExpr>;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let aggregate: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![(key(), "k".to_string())]),
+            vec![],
+            vec![],
+            Arc::clone(&input),
+            Arc::clone(&schema),
+        )?);
+        let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(true)))),
+            Arc::clone(&input),
+        )?);
+        let reference = |body: &Arc<dyn ExecutionPlan>| -> Arc<SharedCteScanExec> {
+            let cte = SharedCte::new(0, "c".to_string(), Partitioning::UnknownPartitioning(1))
+                .with_plan(Arc::clone(body));
+            Arc::new(SharedCteScanExec::new(
+                Arc::new(cte),
+                Arc::clone(&schema),
+                &Statistics::new_unknown(&schema),
+                Some(vec![0]),
+            ))
+        };
+        let relations = |left: Arc<dyn ExecutionPlan>| -> Result<Option<usize>> {
+            let join = Arc::new(HashJoinExec::try_new(
+                left,
+                Arc::new(EmptyExec::new(Arc::clone(&schema))),
+                vec![(key(), key())],
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::Auto,
+                NullEquality::NullEqualsNothing,
+                false,
+            )?);
+            let region = GraphBuilder::default().build(join)?;
+            Ok(region.map(|(graph, _)| graph.relation_count()))
+        };
+        for (body, expected) in [(aggregate, None), (filter, Some(2))] {
+            let reference = reference(&body);
+            let Some(inlined) = reference.inlined()? else {
+                unreachable!("the plan of the CTE is known");
+            };
+            // The plan that takes the place of the reference is a projection of plain
+            // columns over the body, which is seen through.
+            assert_eq!(relations(inlined)?, expected);
+            assert_eq!(relations(reference)?, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_shared_cte_plans_are_walked_once() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_plan::joins::PartitionMode;
+        use datafusion::physical_plan::{Partitioning, Statistics};
+        use sail_physical_plan::shared_cte::SharedCte;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let key = || Arc::new(Column::new("k", 0)) as Arc<dyn PhysicalExpr>;
+        let join = |left, right| -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(Arc::new(HashJoinExec::try_new(
+                left,
+                right,
+                vec![(key(), key())],
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::Auto,
+                NullEquality::NullEqualsNothing,
+                false,
+            )?))
+        };
+        // Each CTE is `SELECT a.k FROM c a JOIN c b ON a.k = b.k` of the CTE before it, so
+        // its plan has two references to the plan before it.
+        let depth = 20;
+        let mut body: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let mut reference = Arc::clone(&body);
+        for level in 0..depth {
+            let cte = SharedCte::new(
+                level,
+                format!("c{level}"),
+                Partitioning::UnknownPartitioning(1),
+            )
+            .with_plan(body);
+            reference = Arc::new(SharedCteScanExec::new(
+                Arc::new(cte),
+                Arc::clone(&schema),
+                &Statistics::new_unknown(&schema),
+                Some(vec![0]),
+            ));
+            body = Arc::new(ProjectionExec::try_new(
+                vec![ProjectionExpr::new(key(), "k".to_string())],
+                join(Arc::clone(&reference), Arc::clone(&reference))?,
+            )?);
+        }
+        // The limit of relations, which would end each walk early, is not reached.
+        let options = JoinReorderOptions {
+            max_relations: 4 * depth,
+            ..Default::default()
+        };
+        let mut builder = GraphBuilder::new(options);
+        let plan = join(reference, Arc::new(EmptyExec::new(Arc::clone(&schema))))?;
+        let start = std::time::Instant::now();
+        assert!(builder.build(plan)?.is_some());
+        // The plan of each CTE is walked once for each number of relations before a
+        // reference to it, and not once for each path to it, of which the first CTE has 2^20.
+        assert!(builder.inlined_walks.borrow().len() <= depth * (depth + 1) / 2);
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
         Ok(())
     }
 

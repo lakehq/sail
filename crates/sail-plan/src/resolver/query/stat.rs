@@ -21,8 +21,8 @@ use rand::{RngExt, rng};
 use sail_common::spec;
 use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::math::partition_random::PartitionSeed;
 use sail_function::scalar::math::random::Random;
+use sail_function::scalar::math::utils::partition_random::PartitionSeed;
 use sail_logical_plan::seeded_random::{SeededRandomColumn, SeededRandomNode};
 
 use crate::error::{PlanError, PlanResult};
@@ -386,12 +386,7 @@ impl PlanResolver<'_> {
             .distinct()?
             .build()?;
         // TODO: This can be expensive for large input datasets
-        let distinct_values_batches = self
-            .ctx
-            .execute_logical_plan(distinct_values)
-            .await?
-            .collect()
-            .await?;
+        let distinct_values_batches = self.execute_auxiliary_plan(distinct_values).await?;
 
         let mut unique_values: Vec<(String, String)> = vec![];
         for batch in distinct_values_batches {

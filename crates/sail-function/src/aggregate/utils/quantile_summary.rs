@@ -11,14 +11,14 @@ use datafusion_common::ScalarValue;
 const HEAD_SIZE: usize = 50000;
 
 #[derive(Debug)]
-pub(super) struct Sample {
+pub(in crate::aggregate) struct Sample {
     pub value: ScalarValue,
     pub g: u64,
     pub delta: u64,
 }
 
 #[derive(Debug)]
-pub(super) struct QuantileSummary {
+pub(in crate::aggregate) struct QuantileSummary {
     pub sampled: Vec<Sample>,
     pub count: u64,
     head: Vec<ScalarValue>,

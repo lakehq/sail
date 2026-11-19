@@ -1,65 +1,32 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/94d178ebe9674669b32ecd7896b5597f49e90791/datafusion/functions-nested/src/utils.rs
 
 use std::sync::Arc;
 
-use arrow::array::{NullArray, UInt64Array};
-use datafusion::arrow::array::{Array, ArrayRef};
+use datafusion::arrow::array::{Array, ArrayRef, NullArray, UInt64Array};
 use datafusion::arrow::compute::take_arrays;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
-use datafusion_expr::{ColumnarValue, LambdaArgument};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, exec_datafusion_err, plan_err};
+use datafusion_expr::{LambdaArgument, ValueOrLambda};
 
-macro_rules! downcast_arg {
-    ($ARG:expr_2021, $ARRAY_TYPE:ident) => {{
-        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
-            ::datafusion_common::DataFusionError::Internal(format!(
-                "could not cast to {}",
-                ::std::any::type_name::<$ARRAY_TYPE>()
-            ))
-        })?
-    }};
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/f911d529a57b211eb44a98b253f97d839f60019f/datafusion/functions-nested/src/lambda_utils.rs#L29-L44
+/// Extracts a `(value, lambda)` pair from a [`ValueOrLambda`] slice.
+pub(crate) fn value_lambda_pair<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
+    name: &str,
+    args: &'a [ValueOrLambda<V, L>],
+) -> Result<(&'a V, &'a L)> {
+    let [value, lambda] = take_function_args(name, args)?;
+
+    let (ValueOrLambda::Value(value), ValueOrLambda::Lambda(lambda)) = (value, lambda) else {
+        return plan_err!(
+            "{name} expects a value followed by a lambda, got {value:?} and {lambda:?}"
+        );
+    };
+
+    Ok((value, lambda))
 }
-
-macro_rules! opt_downcast_arg {
-    ($ARG:expr_2021, $ARRAY_TYPE:ident) => {{ $ARG.as_any().downcast_ref::<$ARRAY_TYPE>() }};
-}
-
-pub(crate) use downcast_arg;
-pub(crate) use opt_downcast_arg;
-
-// TODO: Remove all usage of `make_scalar_function` and implement `ScalarUDFImpl` directly.
-/// array function wrapper that differentiates between scalar (length 1) and array.
-pub(crate) fn make_scalar_function<F>(
-    inner: F,
-) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue>
-where
-    F: Fn(&[ArrayRef]) -> Result<ArrayRef>,
-{
-    move |args: &[ColumnarValue]| {
-        // first, identify if any of the arguments is an Array. If yes, store its `len`,
-        // as any scalar will need to be converted to an array of len `len`.
-        let len = args
-            .iter()
-            .fold(Option::<usize>::None, |acc, arg| match arg {
-                ColumnarValue::Scalar(_) => acc,
-                ColumnarValue::Array(a) => Some(a.len()),
-            });
-
-        let is_scalar = len.is_none();
-
-        let args = ColumnarValue::values_to_arrays(args)?;
-
-        let result = (inner)(&args);
-
-        if is_scalar {
-            // If all inputs are scalar, keeps output as scalar
-            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
-            result.map(ColumnarValue::Scalar)
-        } else {
-            result.map(ColumnarValue::Array)
-        }
-    }
-}
+// SPDX-SnippetEnd
 
 pub(crate) fn evaluate_lambda_rows(lambda: &LambdaArgument, rows: &[u64]) -> Result<ArrayRef> {
     let indices = UInt64Array::from(rows.to_vec());

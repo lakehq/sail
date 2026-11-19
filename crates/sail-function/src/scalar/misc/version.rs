@@ -8,8 +8,7 @@ use datafusion::common::Result;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
-
-use crate::functions_utils::make_scalar_function;
+use datafusion_functions::utils::make_scalar_function;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#version>
 #[derive(Debug, PartialEq, Eq, Hash)]

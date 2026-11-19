@@ -23,6 +23,7 @@ pub mod string;
 pub mod r#struct;
 pub mod table_input;
 pub mod url;
+mod utils;
 pub mod variant;
 pub mod vector;
 pub mod xml;

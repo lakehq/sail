@@ -13,18 +13,14 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
+use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{self, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use serde_json::Value;
 
-use crate::functions_nested_utils::*;
-use crate::functions_utils::make_scalar_function;
 use crate::scalar::datetime::format::DateTimeFormat;
+use crate::utils::nested::downcast_arg;
 
-// SPDX-SnippetBegin
-// SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetName: JSON-to-Arrow parsing logic inspired by DataFusion Comet
-// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/6211315511b12905fcce48c24b3f849d16e49fcd/native/spark-expr/src/json_funcs/from_json.rs
 /// UDF implementation of `from_json`, similar to Spark's `from_json`.
 /// This function parses a column of JSON strings using a specified schema
 /// and returns a structured Arrow array (Struct, Array, or Map) with the parsed fields.
@@ -239,6 +235,10 @@ fn from_json_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef
     parse_rows(rows, &schema_data_type, &options)
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetName: JSON-to-Arrow parsing logic inspired by DataFusion Comet
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/6211315511b12905fcce48c24b3f849d16e49fcd/native/spark-expr/src/json_funcs/from_json.rs#L132-L192
 fn parse_rows(
     rows: &StringArray,
     schema: &DataType,
@@ -270,6 +270,7 @@ fn parse_rows(
     }
     finish_builder(builder)
 }
+// SPDX-SnippetEnd
 
 /// Returns true when the parsed JSON value matches the shape of the top-level
 /// builder. The top-level kind guard in `from_json_inner` restricts builder kind
@@ -292,12 +293,11 @@ fn is_arr_and_obj_match(builder: &FieldBuilder, value: &Value) -> bool {
         (FieldBuilder::List { .. }, Value::Object(_))
     )
 }
-// SPDX-SnippetEnd
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-SnippetName: Field builder logic inspired by DataFusion Comet
-// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/6211315511b12905fcce48c24b3f849d16e49fcd/native/spark-expr/src/json_funcs/from_json.rs
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion-comet/blob/6211315511b12905fcce48c24b3f849d16e49fcd/native/spark-expr/src/json_funcs/from_json.rs#L195-L403
 #[derive(Debug)]
 enum FieldBuilder {
     Boolean(BooleanBuilder),

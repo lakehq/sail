@@ -170,7 +170,7 @@ impl SparkXorShiftRandom {
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: SunPro
-// SPDX-SnippetComment: Credit: https://netlib.org/fdlibm/e_log.c fdlibm 5.3, "@(#)e_log.c 1.3 95/01/18".
+// SPDX-SnippetComment: Credit: https://netlib.org/fdlibm/e_log.c (lines 2–132), fdlibm 5.3, "@(#)e_log.c 1.3 95/01/18".
 // ====================================================
 // Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
 //

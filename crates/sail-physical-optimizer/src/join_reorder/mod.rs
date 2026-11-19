@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fmt::{Debug, Formatter};
+use std::rc::Rc;
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::Mutex;
@@ -14,7 +15,7 @@ use datafusion::physical_plan::{ExecutionPlan, displayable, replace_children_if_
 use log::{trace, warn};
 
 use crate::PhysicalOptimizerRule;
-use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry, GraphBuilder};
+use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry, GraphBuilder, InlinedWalks};
 use crate::join_reorder::enumerator::{
     JoinReorderFallbackReason, JoinReorderStatus, PlanEnumerator,
 };
@@ -26,6 +27,7 @@ mod cardinality_estimator;
 mod cost_model;
 mod dp_plan;
 mod early_filter;
+pub use early_filter::SharedCteRestrictions;
 mod enumerator;
 mod graph;
 mod join_set;
@@ -169,6 +171,14 @@ impl JoinReorder {
         &self,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.optimize_regions(plan, &InlinedWalks::default())
+    }
+
+    fn optimize_regions(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        inlined_walks: &InlinedWalks,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         trace!("find_and_optimize_regions: Processing {}", plan.name());
 
         // Optimize children first so any nested reorderable regions inside "leaf" plans
@@ -176,7 +186,7 @@ impl JoinReorder {
         let optimized_children = plan
             .children()
             .into_iter()
-            .map(|child| self.find_and_optimize_regions(Arc::clone(child)))
+            .map(|child| self.optimize_regions(Arc::clone(child), inlined_walks))
             .collect::<Result<Vec<_>>>()?;
 
         let plan = if optimized_children.is_empty() {
@@ -188,7 +198,7 @@ impl JoinReorder {
         // Attempt to optimize a reorderable region rooted at this node.
         // Soft fallback: if join reordering fails for any reason, log a warning and return
         // the plan with optimized children.
-        match self.try_optimize_region(Arc::clone(&plan)) {
+        match self.try_optimize_region(Arc::clone(&plan), inlined_walks) {
             Ok(Some(new_plan)) => Ok(new_plan),
             Ok(None) => Ok(plan),
             Err(e) => {
@@ -208,10 +218,12 @@ impl JoinReorder {
     fn try_optimize_region(
         &self,
         plan: Arc<dyn ExecutionPlan>,
+        inlined_walks: &InlinedWalks,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // Attempt to build a query graph starting from the current node.
         // The GraphBuilder will traverse downwards to find a complete reorderable region.
-        let mut graph_builder = GraphBuilder::new(self.options.clone());
+        let mut graph_builder =
+            GraphBuilder::new(self.options.clone()).with_inlined_walks(Rc::clone(inlined_walks));
         let Some((query_graph, target_column_map)) = graph_builder.build(plan.clone())? else {
             return Ok(None);
         };

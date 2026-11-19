@@ -240,7 +240,7 @@ fn resolve_tie_break(args: &AccumulatorArgs) -> Result<TieBreak> {
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/native.rs
+// SPDX-SnippetComment: Credit: https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/native.rs#L31-L256
 #[derive(Debug)]
 pub struct PrimitiveModeAccumulator<T>
 where
@@ -518,7 +518,7 @@ where
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/bytes.rs
+// SPDX-SnippetComment: Credit: https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/bytes.rs#L31-L155
 #[derive(Debug)]
 pub struct BytesModeAccumulator {
     value_counts: HashMap<String, i64>,
@@ -660,6 +660,9 @@ impl Accumulator for BytesModeAccumulator {
 }
 // SPDX-SnippetEnd
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/bytes.rs#L157-L302
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -812,3 +815,4 @@ mod tests {
         Ok(())
     }
 }
+// SPDX-SnippetEnd

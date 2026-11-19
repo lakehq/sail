@@ -98,7 +98,7 @@ impl MersenneTwister {
 
     // SPDX-SnippetBegin
     // SPDX-License-Identifier: Apache-2.0
-    // SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java
+    // SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java#L140-L144
     /// Returns the next random 64-bit integer, as `nextLong()`.
     pub fn next_i64(&mut self) -> i64 {
         let high = (self.next(32) as u64) << 32;
@@ -109,7 +109,7 @@ impl MersenneTwister {
 
     // SPDX-SnippetBegin
     // SPDX-License-Identifier: Apache-2.0
-    // SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java
+    // SPDX-SnippetComment: Credit: https://github.com/apache/commons-math/blob/16abfe5de688cc52fb0396e0609cb33044b15653/src/main/java/org/apache/commons/math3/random/BitsStreamGenerator.java#L123-L137
     /// Returns a random integer in `[0, n)` for a positive `n`, as `nextInt(n)`.
     pub fn next_int_bounded(&mut self, n: i32) -> i32 {
         debug_assert!(n > 0);

@@ -14,7 +14,7 @@ use datafusion_expr::{
 };
 use jiter::Peek;
 
-use crate::scalar::json::common::{
+use super::utils::path::{
     GetError, InvokeResult, JsonPath, get_err, invoke, jiter_json_find, return_type_check,
 };
 

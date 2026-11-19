@@ -10,7 +10,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-use crate::scalar::math::xorshift::SparkXorShiftRandom;
+use crate::scalar::math::utils::xorshift::SparkXorShiftRandom;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Randstr {

@@ -12,6 +12,7 @@ use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
+use datafusion_functions::utils::make_scalar_function;
 use parquet_variant_compute::{VariantArrayBuilder, VariantType};
 use parquet_variant_json::append_json;
 use sail_common_datafusion::variant::{
@@ -19,7 +20,6 @@ use sail_common_datafusion::variant::{
 };
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
-use crate::functions_utils::make_scalar_function;
 
 /// Returns a Variant from a JSON string.
 ///

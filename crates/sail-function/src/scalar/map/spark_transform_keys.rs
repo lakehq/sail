@@ -16,8 +16,8 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
-use crate::scalar::array::lambda_utils::value_lambda_pair;
 use crate::scalar::map::utils::map_deduplicate_keys;
+use crate::scalar::utils::lambda::value_lambda_pair;
 
 /// Splits a map's entries struct into its key and value fields.
 fn entry_fields(name: &str, entries: &FieldRef) -> Result<(FieldRef, FieldRef)> {

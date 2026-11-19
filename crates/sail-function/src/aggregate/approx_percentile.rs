@@ -19,7 +19,7 @@ use datafusion_expr::{Accumulator, AggregateUDFImpl, ColumnarValue, Signature, V
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
 
-use crate::aggregate::quantile_summary::{QuantileSummary, Sample};
+use crate::aggregate::utils::quantile_summary::{QuantileSummary, Sample};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ApproxPercentileCont {

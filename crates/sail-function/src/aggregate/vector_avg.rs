@@ -17,8 +17,8 @@ use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{AggregateUDFImpl, Signature, Volatility};
 use datafusion_expr_common::accumulator::Accumulator;
 
-use super::normalize;
-use crate::scalar::vector::is_float_vector;
+use crate::aggregate::utils::vector::normalize;
+use crate::scalar::vector::utils::is_float_vector;
 
 fn float_vector_field() -> FieldRef {
     Arc::new(Field::new_list_field(DataType::Float32, false))

@@ -13,10 +13,13 @@
 //! joins, enumeration can normally place the dimension next to a fact already, and a
 //! copy of its keys would only repeat the probe of the original join.
 
+use std::any::Any;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use datafusion::common::NullEquality;
+use datafusion::common::config::{ConfigEntry, ConfigExtension, ExtensionOptions};
 use datafusion::common::tree_node::TreeNode;
+use datafusion::common::{NullEquality, plan_err};
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::datasource::source::DataSourceExec;
@@ -24,13 +27,17 @@ use datafusion::error::Result;
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::{BinaryExpr, Column, InListExpr};
+use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use datafusion::physical_plan::execution_plan::reset_plan_states;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, replace_children_if_necessary};
+use sail_physical_plan::scalar_subquery::reads_scalar_subquery;
+use sail_physical_plan::shared_cte::{SharedCteRestriction, SharedCteScanExec};
 
 // Bound plan growth: each reduction duplicates a small, filtered scan. This is a
 // single pass over the original tree, never a fixed point over the added joins.
@@ -43,6 +50,59 @@ struct Context<'a> {
     options: &'a super::JoinReorderOptions,
 }
 
+/// The restrictions of the references of a shared CTE (see [`SharedCteRestriction`]),
+/// for the rule that optimizes the plan of the CTE. The query planner adds them to the
+/// configuration options that it plans the CTE with, which each rule receives however
+/// the rules of the session are wrapped.
+#[derive(Debug, Clone)]
+pub struct SharedCteRestrictions {
+    /// The restrictions of each reference.
+    references: Vec<Vec<SharedCteRestriction>>,
+    /// Whether the rule added a reduction to the plan of the CTE for the restrictions.
+    applied: Arc<AtomicBool>,
+}
+
+impl SharedCteRestrictions {
+    pub fn new(references: Vec<Vec<SharedCteRestriction>>) -> Self {
+        Self {
+            references,
+            applied: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Returns whether the rule restricted a plan to the keys of the references, for
+    /// these restrictions or a copy of them.
+    pub fn applied(&self) -> bool {
+        self.applied.load(Ordering::Relaxed)
+    }
+}
+
+impl ConfigExtension for SharedCteRestrictions {
+    const PREFIX: &'static str = "sail_shared_cte_restrictions";
+}
+
+impl ExtensionOptions for SharedCteRestrictions {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn cloned(&self) -> Box<dyn ExtensionOptions> {
+        Box::new(self.clone())
+    }
+
+    fn set(&mut self, key: &str, _value: &str) -> Result<()> {
+        plan_err!("the shared CTE restrictions have no option: {key}")
+    }
+
+    fn entries(&self) -> Vec<ConfigEntry> {
+        vec![]
+    }
+}
+
 pub(super) fn propagate(
     plan: Arc<dyn ExecutionPlan>,
     config: &ConfigOptions,
@@ -52,7 +112,117 @@ pub(super) fn propagate(
         remaining: MAX_REDUCTIONS,
         options,
     };
-    visit(plan, config, &mut context)
+    let plan = visit(plan, config, &mut context)?;
+    match config.extensions.get::<SharedCteRestrictions>() {
+        Some(restrictions) => restrict(plan, restrictions, config, &mut context),
+        None => Ok(plan),
+    }
+}
+
+/// Copies the keys of all the references of a shared CTE into the plan of the CTE, as
+/// the keys of each reference are copied into a CTE that is in the place of its
+/// reference. Each reference reads the rows of the keys of all the references, which
+/// include the rows of its own keys, and the join that has its keys remains above it.
+fn restrict(
+    plan: Arc<dyn ExecutionPlan>,
+    restrictions: &SharedCteRestrictions,
+    config: &ConfigOptions,
+    context: &mut Context<'_>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let Some((columns, restriction)) = union(&restrictions.references, config)? else {
+        return Ok(plan);
+    };
+    // The requirements of the output are above the plan of the CTE.
+    let body = match plan.downcast_ref::<OutputRequirementExec>() {
+        Some(requirements) => requirements.input(),
+        None => Arc::clone(&plan),
+    };
+    let remaining = context.remaining;
+    let body = push(body, &columns, &restriction, 0.0, context)?;
+    if context.remaining == remaining {
+        return Ok(plan);
+    }
+    restrictions.applied.store(true, Ordering::Relaxed);
+    if plan.is::<OutputRequirementExec>() {
+        replace_children_if_necessary(plan, vec![body])
+    } else {
+        Ok(body)
+    }
+}
+
+/// Returns the columns of a shared CTE that every reference is restricted on, and the
+/// restriction of these columns to the keys of all the references. A reference with
+/// several restrictions reads no more than the rows of any one of them, so the first
+/// columns whose keys are within the limits are taken.
+fn union(
+    references: &[Vec<SharedCteRestriction>],
+    config: &ConfigOptions,
+) -> Result<Option<(Vec<usize>, Restriction)>> {
+    let Some((first, others)) = references.split_first() else {
+        return Ok(None);
+    };
+    let types = |keys: &Arc<dyn ExecutionPlan>| {
+        let schema = keys.schema();
+        let types = schema.fields().iter().map(|x| x.data_type().clone());
+        types.collect::<Vec<_>>()
+    };
+    'candidates: for candidate in first {
+        let sources = others
+            .iter()
+            .map(|reference| {
+                reference.iter().find(|x| {
+                    x.columns == candidate.columns
+                        && x.null_equality == candidate.null_equality
+                        && types(&x.keys) == types(&candidate.keys)
+                })
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(sources) = sources else {
+            continue;
+        };
+        let (mut keys, mut rows, mut scan_rows) = (vec![], 0usize, 0usize);
+        for source in std::iter::once(candidate).chain(sources) {
+            let (Some(source_scan_rows), Some(source_rows)) = (
+                filtered_scan_rows(&source.keys, false)?,
+                row_count(&source.keys)?,
+            ) else {
+                continue 'candidates;
+            };
+            keys.push(Arc::clone(&source.keys));
+            rows = rows.saturating_add(source_rows);
+            scan_rows = scan_rows.saturating_add(source_scan_rows);
+        }
+        // The keys of all the references are collected together, so the limits of a
+        // collected join input apply to all of them, and so does the estimate of the
+        // benefit, which has the rows and the statistics of all the keys. The rows are
+        // at most the sum of the rows of the sources. The scan of each source is
+        // within the limit of the rows that a reduction scans, which it met before its
+        // keys reached the reference, and it is executed once here, as it is by a
+        // reference that evaluates the CTE itself.
+        let max_rows = config.optimizer.hash_join_single_partition_threshold_rows;
+        let keys = UnionExec::try_new(keys)?;
+        if rows > max_rows || !can_collect(&keys, rows, config)? {
+            continue;
+        }
+        let restriction = Restriction {
+            keys,
+            rows,
+            scan_rows,
+            null_equality: candidate.null_equality,
+        };
+        return Ok(Some((candidate.columns.clone(), restriction)));
+    }
+    Ok(None)
+}
+
+/// Match JoinSelection's byte-first collection threshold: the benefit
+/// estimate does not account for hash-repartitioning the target scan.
+fn can_collect(keys: &Arc<dyn ExecutionPlan>, rows: usize, config: &ConfigOptions) -> Result<bool> {
+    let key_stats = StatisticsContext::new().compute(keys.as_ref(), &StatisticsArgs::new())?;
+    Ok(match key_stats.total_byte_size.get_value() {
+        Some(&bytes) => bytes < config.optimizer.hash_join_single_partition_threshold,
+        None => rows < config.optimizer.hash_join_single_partition_threshold_rows,
+    })
 }
 
 fn visit(
@@ -127,15 +297,9 @@ fn visit(
                 alias: format!("__early_join_key_{i}"),
             })
             .collect();
-        let keys = Arc::new(ProjectionExec::try_new(expr, Arc::clone(source))?);
-        let key_stats = StatisticsContext::new().compute(keys.as_ref(), &StatisticsArgs::new())?;
-        // Match JoinSelection's byte-first collection threshold: the benefit
-        // estimate does not account for hash-repartitioning the target scan.
-        let can_collect = match key_stats.total_byte_size.get_value() {
-            Some(&bytes) => bytes < config.optimizer.hash_join_single_partition_threshold,
-            None => rows < max_rows,
-        };
-        if !can_collect {
+        let keys: Arc<dyn ExecutionPlan> =
+            Arc::new(ProjectionExec::try_new(expr, Arc::clone(source))?);
+        if !can_collect(&keys, rows, config)? {
             continue;
         }
         let restriction = Restriction {
@@ -336,6 +500,25 @@ fn push(
         }
     } else if plan.is::<DataSourceExec>() {
         return insert(plan, keys, restriction, downstream_work, context);
+    } else if let Some(scan) = plan.downcast_ref::<SharedCteScanExec>()
+        && !restriction.keys.exists(reads_scalar_subquery)?
+    {
+        // The plan of a shared CTE is not in the place of its references, so the keys
+        // cannot be copied into it for one of them. The reference records that it reads
+        // only the rows of these keys, and when each reference is restricted, the query
+        // planner has the keys of all of them copied into the plan of the CTE.
+        // The plan of the CTE is not below the operator that provides the result of a
+        // scalar subquery of the plan of the references, so keys that depend on such a
+        // result are not recorded.
+        let columns = keys
+            .iter()
+            .map(|&i| scan.projection().map_or(i, |projection| projection[i]))
+            .collect();
+        return Ok(Arc::new(scan.with_restriction(SharedCteRestriction {
+            keys: Arc::clone(&restriction.keys),
+            columns,
+            null_equality: restriction.null_equality,
+        })));
     }
     // Outer/anti/mark joins, limits, windows, computed keys and unknown operators
     // are boundaries. Never infer equality through casts or aggregate results.
@@ -483,6 +666,8 @@ fn row_count(plan: &Arc<dyn ExecutionPlan>) -> Result<Option<usize>> {
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::internal_err;
+    use datafusion::common::tree_node::{Transformed, TreeNodeRecursion};
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::physical_plan::empty::EmptyExec;
 
@@ -548,6 +733,401 @@ mod tests {
         assert!(boundary(&computed, &scan, JoinType::RightSemi)?);
         assert!(!boundary(&scan, &computed, JoinType::RightSemi)?);
         assert!(!boundary(&computed, &computed, JoinType::Inner)?);
+        Ok(())
+    }
+
+    #[test]
+    fn a_shared_cte_reference_records_the_restriction() -> Result<()> {
+        use datafusion::physical_plan::{Partitioning, Statistics};
+        use sail_physical_plan::shared_cte::{SharedCte, shared_cte_restrictions};
+
+        let schema = |names: [&str; 2]| {
+            Arc::new(Schema::new(vec![
+                Field::new(names[0], DataType::Int64, true),
+                Field::new(names[1], DataType::Int64, true),
+            ]))
+        };
+        let cte = Arc::new(SharedCte::new(
+            3,
+            "c".to_string(),
+            Partitioning::UnknownPartitioning(1),
+        ));
+        // The reference reads the columns of the CTE in the other order.
+        let scan: Arc<dyn ExecutionPlan> = Arc::new(SharedCteScanExec::new(
+            cte,
+            schema(["key", "value"]),
+            &Statistics::new_unknown(&schema(["value", "key"])),
+            Some(vec![1, 0]),
+        ));
+        let reference = |scan: &Arc<dyn ExecutionPlan>, key: usize| -> Result<_> {
+            Ok(Arc::new(ProjectionExec::try_new(
+                vec![ProjectionExpr {
+                    expr: column(scan, key),
+                    alias: "k".to_string(),
+                }],
+                Arc::clone(scan),
+            )?) as Arc<dyn ExecutionPlan>)
+        };
+        let keys: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new(
+                "__early_join_key_0",
+                DataType::Int64,
+                true,
+            )]))));
+        let restriction = Restriction {
+            keys: Arc::clone(&keys),
+            rows: 1,
+            scan_rows: 1,
+            null_equality: NullEquality::NullEqualsNull,
+        };
+        let options = super::super::JoinReorderOptions::default();
+        let mut context = Context {
+            remaining: MAX_REDUCTIONS,
+            options: &options,
+        };
+        assert!(shared_cte_restrictions([&reference(&scan, 0)?]).is_empty());
+        // The keys reach the reference through a projection of its columns, and no join
+        // is added, since the plan of the CTE is not there.
+        let plan = push(reference(&scan, 0)?, &[0], &restriction, 0.0, &mut context)?;
+        // The keys of a second join input reach the other column of the reference.
+        let plan = plan.transform_up(|plan| match plan.is::<SharedCteScanExec>() {
+            true => push(plan, &[1], &restriction, 0.0, &mut context).map(Transformed::yes),
+            false => Ok(Transformed::no(plan)),
+        })?;
+        let restrictions = shared_cte_restrictions([&plan.data]);
+        let [reference] = restrictions[&3].as_slice() else {
+            return internal_err!("the CTE has one reference: {restrictions:?}");
+        };
+        let [first, second] = reference.as_slice() else {
+            return internal_err!("the reference has two restrictions: {reference:?}");
+        };
+        // The restrictions are on the columns of the CTE.
+        assert_eq!((&first.columns, &second.columns), (&vec![1], &vec![0]));
+        assert!(Arc::ptr_eq(&first.keys, &keys));
+        assert_eq!(first.null_equality, NullEquality::NullEqualsNull);
+        assert_eq!(context.remaining, MAX_REDUCTIONS);
+        assert!(plan.data.is::<ProjectionExec>());
+        Ok(())
+    }
+
+    /// Returns the scan of a file with the given number of rows and two columns whose
+    /// values are in the given range.
+    fn file_scan(rows: usize, range: (i64, i64)) -> Arc<dyn ExecutionPlan> {
+        use datafusion::common::stats::Precision;
+        use datafusion::common::{ColumnStatistics, ScalarValue, Statistics};
+        use datafusion::datasource::listing::PartitionedFile;
+        use datafusion::datasource::object_store::ObjectStoreUrl;
+        use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int64, true),
+            Field::new("value", DataType::Int64, true),
+        ]));
+        let column = ColumnStatistics {
+            min_value: Precision::Exact(ScalarValue::Int64(Some(range.0))),
+            max_value: Precision::Exact(ScalarValue::Int64(Some(range.1))),
+            null_count: Precision::Exact(0),
+            ..ColumnStatistics::new_unknown()
+        };
+        let statistics = Statistics {
+            num_rows: Precision::Exact(rows),
+            total_byte_size: Precision::Exact(rows * 16),
+            column_statistics: vec![column.clone(), column],
+        };
+        let source = Arc::new(ParquetSource::new(Arc::clone(&schema)));
+        let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+            .with_file(PartitionedFile::new("file.parquet", 1024))
+            .with_statistics(statistics)
+            .build();
+        DataSourceExec::from_data_source(config)
+    }
+
+    /// Returns the keys of a join input that reach a reference of a shared CTE: the
+    /// given column of the rows of a file whose values in that column are less than 10.
+    fn selected_keys(key: usize) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion::common::ScalarValue;
+        use datafusion::physical_expr::expressions::Literal;
+
+        let scan = file_scan(1000, (0, 999));
+        let predicate = Arc::new(BinaryExpr::new(
+            column(&scan, key),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(10)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(predicate, scan)?);
+        Ok(Arc::new(ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: column(&filter, key),
+                alias: "__early_join_key_0".to_string(),
+            }],
+            filter,
+        )?))
+    }
+
+    /// Returns the plan of a shared CTE that groups the rows of a large file by both
+    /// columns, and returns the columns in the other order.
+    fn grouped_facts() -> Result<Arc<dyn ExecutionPlan>> {
+        let scan = file_scan(1_000_000, (0, 999));
+        let group_by = PhysicalGroupBy::new_single(vec![
+            (column(&scan, 0), "key".to_string()),
+            (column(&scan, 1), "value".to_string()),
+        ]);
+        let aggregate: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            group_by,
+            vec![],
+            vec![],
+            Arc::clone(&scan),
+            scan.schema(),
+        )?);
+        Ok(Arc::new(ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: column(&aggregate, 1),
+                    alias: "v".to_string(),
+                },
+                ProjectionExpr {
+                    expr: column(&aggregate, 0),
+                    alias: "k".to_string(),
+                },
+            ],
+            aggregate,
+        )?))
+    }
+
+    fn count<T: ExecutionPlan>(plan: &Arc<dyn ExecutionPlan>) -> Result<usize> {
+        let mut count = 0;
+        plan.apply(|plan| {
+            count += usize::from(plan.is::<T>());
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(count)
+    }
+
+    fn restrict_grouped_facts(
+        references: Vec<Vec<SharedCteRestriction>>,
+        requirements: bool,
+    ) -> Result<(Arc<dyn ExecutionPlan>, bool)> {
+        use datafusion::physical_plan::Distribution;
+
+        let mut body = grouped_facts()?;
+        if requirements {
+            let distribution = Distribution::UnspecifiedDistribution;
+            body = Arc::new(OutputRequirementExec::new(body, None, distribution, None));
+        }
+        let restrictions = SharedCteRestrictions::new(references);
+        let mut config = ConfigOptions::default();
+        config.extensions.insert(restrictions.clone());
+        let plan = propagate(body, &config, &super::super::JoinReorderOptions::default())?;
+        Ok((plan, restrictions.applied()))
+    }
+
+    fn restriction(column: usize, null_equality: NullEquality) -> Result<SharedCteRestriction> {
+        Ok(SharedCteRestriction {
+            keys: selected_keys(0)?,
+            columns: vec![column],
+            null_equality,
+        })
+    }
+
+    #[test]
+    fn the_keys_of_all_references_restrict_the_plan_of_a_shared_cte() -> Result<()> {
+        let equal = NullEquality::NullEqualsNothing;
+        // Both references are restricted on the second column of the CTE, which is the
+        // first grouping key, and the second reference also on the other column.
+        let references = vec![
+            vec![restriction(1, equal)?],
+            vec![restriction(0, equal)?, restriction(1, equal)?],
+        ];
+        for requirements in [false, true] {
+            let (plan, applied) = restrict_grouped_facts(references.clone(), requirements)?;
+            assert!(applied);
+            assert_eq!(plan.is::<OutputRequirementExec>(), requirements);
+            // The scan of the file is reduced to the keys of both references, below the
+            // aggregate, and the keys are those of the two filtered scans.
+            let mut reductions = vec![];
+            plan.apply(|plan| {
+                if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
+                    reductions.push((
+                        *join.join_type(),
+                        join.on().to_vec(),
+                        join.right().is::<DataSourceExec>(),
+                        count::<UnionExec>(join.left())?,
+                        count::<FilterExec>(join.left())?,
+                    ));
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            let [(join_type, on, scan, unions, filters)] = reductions.as_slice() else {
+                return internal_err!("the plan has one reduction: {reductions:?}");
+            };
+            assert_eq!(*join_type, JoinType::RightSemi);
+            let [(_, target)] = on.as_slice() else {
+                return internal_err!("the reduction has one key: {on:?}");
+            };
+            assert_eq!(target.downcast_ref::<Column>().map(Column::index), Some(0));
+            assert_eq!((*scan, *unions, *filters), (true, 1, 2));
+            assert_eq!(count::<AggregateExec>(&plan)?, 2);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_shared_cte_is_not_restricted_without_common_keys() -> Result<()> {
+        let equal = NullEquality::NullEqualsNothing;
+        let unchanged = |references| -> Result<()> {
+            let (plan, applied) = restrict_grouped_facts(references, true)?;
+            assert!(!applied);
+            assert_eq!(count::<HashJoinExec>(&plan)?, 0);
+            Ok(())
+        };
+        // The references are restricted on different columns.
+        unchanged(vec![
+            vec![restriction(1, equal)?],
+            vec![restriction(0, equal)?],
+        ])?;
+        // The keys are compared in different ways.
+        unchanged(vec![
+            vec![restriction(1, equal)?],
+            vec![restriction(1, NullEquality::NullEqualsNull)?],
+        ])?;
+        // The keys have different types.
+        let mut other = restriction(1, equal)?;
+        other.keys = Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new(
+            "__early_join_key_0",
+            DataType::Int32,
+            true,
+        )]))));
+        unchanged(vec![vec![restriction(1, equal)?], vec![other]])?;
+        // The keys are not those of a filtered scan.
+        let mut other = restriction(1, equal)?;
+        other.keys = Arc::new(EmptyExec::new(other.keys.schema()));
+        unchanged(vec![vec![restriction(1, equal)?], vec![other]])?;
+        // The CTE has no reference.
+        unchanged(vec![])?;
+        // The keys are too many to pay for the reduction.
+        let mut many = restriction(1, equal)?;
+        many.keys = Arc::new(ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: column(&file_scan(1, (0, 0)), 0),
+                alias: "__early_join_key_0".to_string(),
+            }],
+            Arc::new(FilterExec::try_new(
+                Arc::new(BinaryExpr::new(
+                    column(&file_scan(1, (0, 0)), 0),
+                    Operator::Lt,
+                    column(&file_scan(1, (0, 0)), 1),
+                )),
+                file_scan(900_000, (0, 999)),
+            )?),
+        )?);
+        unchanged(vec![vec![restriction(1, equal)?], vec![many]])?;
+        Ok(())
+    }
+
+    /// Returns the restriction of the given column of the CTE to the first column of the
+    /// rows of a file whose values in that column, which are in the given range, compare
+    /// in the given way with the given value.
+    fn compared(
+        column_of_cte: usize,
+        (rows, range): (usize, (i64, i64)),
+        operator: Operator,
+        value: i64,
+    ) -> Result<SharedCteRestriction> {
+        use datafusion::common::ScalarValue;
+        use datafusion::physical_expr::expressions::Literal;
+
+        let scan = file_scan(rows, range);
+        let predicate = Arc::new(BinaryExpr::new(
+            column(&scan, 0),
+            operator,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(value)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(predicate, scan)?);
+        let keys = Arc::new(ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: column(&filter, 0),
+                alias: "__early_join_key_0".to_string(),
+            }],
+            filter,
+        )?);
+        Ok(SharedCteRestriction {
+            keys,
+            columns: vec![column_of_cte],
+            null_equality: NullEquality::NullEqualsNothing,
+        })
+    }
+
+    /// Returns a reference that is restricted on the second column of the CTE to the
+    /// first column of the rows of a file whose values in that column, which are from 0
+    /// to 999, compare in the given way with the given value.
+    fn reference(rows: usize, operator: Operator, value: i64) -> Result<Vec<SharedCteRestriction>> {
+        Ok(vec![compared(1, (rows, (0, 999)), operator, value)?])
+    }
+
+    #[test]
+    fn the_scan_of_each_key_source_is_limited_on_its_own() -> Result<()> {
+        // 60,000 rows: the scans of two references are below the row threshold of a
+        // collected join input together. 73,049 rows (the TPC-DS date dimension): each
+        // scan is below the threshold, and two or more together are not.
+        for (rows, references) in [(60_000, 2), (73_049, 2), (73_049, 5)] {
+            let references = (0..references)
+                .map(|_| reference(rows, Operator::Lt, 10))
+                .collect::<Result<Vec<_>>>()?;
+            let sources = references.len();
+            let (plan, applied) = restrict_grouped_facts(references, false)?;
+            assert!(applied, "{sources} key scans of {rows} rows each");
+            assert_eq!(count::<HashJoinExec>(&plan)?, 1);
+            // The source of each reference is scanned once, apart from the file of the CTE.
+            assert_eq!(count::<DataSourceExec>(&plan)?, sources + 1);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_keys_of_all_references_together_are_limited() -> Result<()> {
+        // Every row of each source has one of ten keys, so the keys pay for a reduction,
+        // and the rows of all the sources are collected together.
+        let all = |column: usize| compared(column, (40_000, (0, 9)), Operator::Lt, 10);
+        let references = |count: usize| {
+            let references = (0..count).map(|_| Ok(vec![all(1)?]));
+            references.collect::<Result<Vec<_>>>()
+        };
+        // 120,000 rows are below the row threshold of a collected join input.
+        let (plan, applied) = restrict_grouped_facts(references(3)?, false)?;
+        assert!(applied);
+        assert_eq!(count::<HashJoinExec>(&plan)?, 1);
+        // 160,000 rows are not.
+        let (plan, applied) = restrict_grouped_facts(references(4)?, false)?;
+        assert!(!applied);
+        assert_eq!(count::<HashJoinExec>(&plan)?, 0);
+        // The references are restricted on the other column as well, with few keys.
+        let both = || {
+            Ok(vec![
+                all(1)?,
+                compared(0, (1000, (0, 999)), Operator::Lt, 10)?,
+            ])
+        };
+        let references = (0..4).map(|_| both()).collect::<Result<Vec<_>>>()?;
+        let (plan, applied) = restrict_grouped_facts(references, false)?;
+        assert!(applied);
+        assert_eq!(count::<HashJoinExec>(&plan)?, 1);
+        assert_eq!(count::<DataSourceExec>(&plan)?, 5);
+        Ok(())
+    }
+
+    #[test]
+    fn the_keys_of_all_references_together_pay_for_the_reduction() -> Result<()> {
+        // Each reference reads the rows of half of the keys of the CTE, which pays for a
+        // reduction to its keys, and the references together read the rows of all keys.
+        let low = || reference(1000, Operator::Lt, 500);
+        let high = || reference(1000, Operator::GtEq, 500);
+        let (plan, applied) = restrict_grouped_facts(vec![low()?, low()?], false)?;
+        assert!(applied);
+        assert_eq!(count::<HashJoinExec>(&plan)?, 1);
+        let (plan, applied) = restrict_grouped_facts(vec![low()?, high()?], false)?;
+        assert!(!applied);
+        assert_eq!(count::<HashJoinExec>(&plan)?, 0);
         Ok(())
     }
 

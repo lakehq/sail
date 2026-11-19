@@ -28,7 +28,7 @@ use crate::input_file_name::{
     RewriteInputFileMetadataFallback, WrapInputFileMetadataSource,
 };
 use crate::join_reorder::JoinReorder;
-pub use crate::join_reorder::JoinReorderOptions;
+pub use crate::join_reorder::{JoinReorderOptions, SharedCteRestrictions};
 use crate::offset::OffsetSafeRequirements;
 use crate::partition_sensitive::KeepPartitionSensitiveInputs;
 use crate::projection_pushdown::ContextSafeProjectionPushdown;
@@ -73,9 +73,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
     rules.push(Arc::new(correlation_cast::OptimizeCorrelationCasts));
     rules.push(Arc::new(FilterPushdown::new()));
-    // WindowTopN checks DataFusion's `enable_window_topn`, which defaults to false because
-    // PartitionedTopKExec can regress memory and runtime for high-cardinality partition keys.
-    // Revisit the opt-in default when that trade-off is addressed.
+    // WindowTopN checks DataFusion's `enable_window_topn` option.
     rules.push(Arc::new(WindowTopN::new()));
     rules.push(Arc::new(WrapInputFileMetadataSource::new()));
     rules.push(Arc::new(PushDownInputFileMetadata::new()));
