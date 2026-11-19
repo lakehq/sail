@@ -9,7 +9,7 @@ use datafusion_expr::{
     ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 
-use crate::scalar::string::common::to_upper;
+use crate::scalar::string::utils::kernels::to_upper;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UpperFunc {

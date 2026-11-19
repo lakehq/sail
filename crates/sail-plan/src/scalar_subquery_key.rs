@@ -16,7 +16,7 @@ use sail_data_source::reuse::is_reusable_source;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
-use sail_function::scalar::math::spark_uniform::SparkUniform;
+use sail_function::scalar::math::uniform::Uniform;
 use sail_function::scalar::string::randstr::Randstr;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
@@ -536,7 +536,7 @@ fn is_reusable_volatile_scalar(function: &ScalarUDF, args: &[Expr]) -> bool {
         || func.is::<PySparkCoGroupMapUDF>()
         || ((func.is::<Random>() || func.is::<Randn>()) && seeded(0))
         || ((func.is::<Randstr>() || func.is::<RandPoisson>()) && seeded(1))
-        || (func.is::<SparkUniform>() && seeded(2))
+        || (func.is::<Uniform>() && seeded(2))
 }
 
 /// Returns whether calls to the volatile aggregate function may be reused, which holds for

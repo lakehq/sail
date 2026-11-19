@@ -12,9 +12,9 @@ use datafusion_expr::{
     Coercion, ColumnarValue, EncodingPreservation, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
+use datafusion_functions::utils::make_scalar_function;
 
-use crate::functions_utils::make_scalar_function;
-use crate::scalar::string::common::{TrimLeft, general_trim};
+use crate::scalar::string::utils::kernels::{TrimLeft, general_trim};
 
 /// Returns the longest string with leading characters removed. If the characters are not specified, spaces are removed.
 /// ltrim('zzzytest', 'xyz') = 'test'
@@ -108,8 +108,8 @@ mod tests {
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
-    use crate::functions_utils::tests::test_function;
     use crate::scalar::string::ltrim::LtrimFunc;
+    use crate::scalar::string::utils::tests::test_function;
 
     #[test]
     fn test_functions() {

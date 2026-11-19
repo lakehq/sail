@@ -11,7 +11,7 @@ use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 
 use crate::aggregate::utils::{cast_to_type, get_scalar_value};
-use crate::scalar::math::java_random::JavaRandom;
+use crate::scalar::math::utils::java_random::JavaRandom;
 
 /// A histogram bin represented as a (center, count) pair.
 #[derive(Debug, Clone)]
@@ -127,18 +127,18 @@ impl NumericHistogram {
 
 /// Computes an approximate equi-height histogram on numeric data.
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct HistogramNumericFunction {
+pub struct HistogramNumeric {
     signature: Signature,
 }
 
-impl Default for HistogramNumericFunction {
+impl Default for HistogramNumeric {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl HistogramNumericFunction {
-    /// Creates a new `HistogramNumericFunction`.
+impl HistogramNumeric {
+    /// Creates a new `HistogramNumeric`.
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
@@ -184,7 +184,7 @@ impl HistogramNumericFunction {
     }
 }
 
-impl AggregateUDFImpl for HistogramNumericFunction {
+impl AggregateUDFImpl for HistogramNumeric {
     fn name(&self) -> &str {
         "histogram_numeric"
     }

@@ -17,7 +17,7 @@ use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use crate::scalar::map::utils::{
     map_from_keys_values_offsets_nulls, map_type_from_key_value_types,
 };
-use crate::scalar::string::spark_split::{SparkSplit, parse_regex, split_to_array};
+use crate::scalar::string::split::{Split, parse_regex, split_to_array};
 
 /// Spark-compatible `str_to_map` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#str_to_map>
@@ -65,7 +65,7 @@ impl ScalarUDFImpl for StrToMap {
 
     fn invoke_with_args(&self, args: datafusion_expr::ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [strs, pair_delims, key_value_delims] = take_function_args("str_to_map", args.args)?;
-        let split_func = SparkSplit::new();
+        let split_func = Split::new();
 
         let args_for_split = vec![strs, pair_delims];
         let fields_for_split = vec![args.arg_fields[0].clone(), args.arg_fields[1].clone()];

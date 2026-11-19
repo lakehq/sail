@@ -1,28 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
+pub mod base64;
 pub mod btrim;
-pub mod common;
-pub mod decimal_format;
+pub mod concat_ws;
+pub mod encode_decode;
 pub mod format_number;
+pub mod length;
 pub mod levenshtein;
 pub mod lower;
 pub mod ltrim;
 pub mod make_valid_utf8;
+pub mod mask;
+pub mod quote;
 pub mod randstr;
+pub mod regexp_extract_all;
+pub mod regexp_instr;
 pub mod replace;
 pub mod rtrim;
+pub mod sentences;
 pub mod soundex;
-pub mod spark_base64;
-pub mod spark_concat_ws;
-pub mod spark_encode_decode;
-pub mod spark_length;
-pub mod spark_mask;
-pub mod spark_quote;
-pub mod spark_regexp_extract_all;
-pub mod spark_regexp_instr;
-pub mod spark_sentences;
-pub mod spark_split;
-pub mod spark_to_binary;
-pub mod spark_to_char;
-pub mod spark_to_number;
+pub mod split;
+pub mod to_binary;
+pub mod to_char;
+pub mod to_number;
 pub mod upper;
+mod utils;
+
+pub use utils::decimal_format;

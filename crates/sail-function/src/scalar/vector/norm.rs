@@ -12,8 +12,8 @@ use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 
-use super::is_float_vector;
-use crate::functions_nested_utils::make_scalar_function;
+use super::utils::is_float_vector;
+use crate::scalar::utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct VectorNorm {

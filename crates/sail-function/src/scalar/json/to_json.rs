@@ -18,12 +18,12 @@ use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
 };
+use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use serde_json::{Map, Value};
 
-use crate::functions_nested_utils::opt_downcast_arg;
-use crate::functions_utils::make_scalar_function;
-use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::utils::format::DateTimeFormat;
+use crate::utils::nested::opt_downcast_arg;
 
 /// Macro to simplify downcasting arrays and extracting values as JSON
 macro_rules! downcast_and_convert {
@@ -108,18 +108,18 @@ impl Default for ToJsonOptions {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkToJson {
+pub struct ToJson {
     signature: Signature,
     aliases: [String; 1],
 }
 
-impl Default for SparkToJson {
+impl Default for ToJson {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkToJson {
+impl ToJson {
     pub fn new() -> Self {
         Self {
             signature: Signature::new(
@@ -131,7 +131,7 @@ impl SparkToJson {
     }
 }
 
-impl ScalarUDFImpl for SparkToJson {
+impl ScalarUDFImpl for ToJson {
     fn name(&self) -> &str {
         self.aliases[0].as_str()
     }
@@ -155,9 +155,8 @@ impl ScalarUDFImpl for SparkToJson {
             && matches!(field.data_type(), DataType::Struct(_))
             && crate::scalar::variant::utils::helper::try_field_as_variant_array(field).is_ok()
         {
-            let result = crate::scalar::variant::spark_variant_to_json::variant_to_json_columnar(
-                &args.args[0],
-            )?;
+            let result =
+                crate::scalar::variant::variant_to_json::variant_to_json_columnar(&args.args[0])?;
             // variant_to_json_columnar returns Utf8View, but to_json promises Utf8
             return match result {
                 ColumnarValue::Scalar(ScalarValue::Utf8View(v)) => {
@@ -177,7 +176,7 @@ impl ScalarUDFImpl for SparkToJson {
 pub fn to_json_udf() -> Arc<ScalarUDF> {
     static STATIC_TO_JSON: OnceLock<Arc<ScalarUDF>> = OnceLock::new();
     STATIC_TO_JSON
-        .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(SparkToJson::new())))
+        .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(ToJson::new())))
         .clone()
 }
 
@@ -544,7 +543,7 @@ fn struct_to_values_array(
 fn format_timestamp(value: i64, tz: Option<&str>, format: &DateTimeFormat) -> String {
     use chrono::Offset;
 
-    use crate::scalar::datetime::format::{
+    use crate::scalar::datetime::utils::format::{
         DateTimeFormatInput, TimePrecision, TimeZoneDisplay, TimestampKind,
     };
 
@@ -582,7 +581,9 @@ fn format_timestamp(value: i64, tz: Option<&str>, format: &DateTimeFormat) -> St
 }
 
 fn format_date(days: i32, format: &DateTimeFormat) -> String {
-    use crate::scalar::datetime::format::{DateTimeFormatInput, TimePrecision, TimestampKind};
+    use crate::scalar::datetime::utils::format::{
+        DateTimeFormatInput, TimePrecision, TimestampKind,
+    };
 
     chrono::DateTime::from_timestamp(days as i64 * 24 * 3600, 0)
         .map(|date| {

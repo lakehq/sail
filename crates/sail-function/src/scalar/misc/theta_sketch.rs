@@ -10,25 +10,25 @@ use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, TypeSignature, Volatility};
+use datafusion_functions::utils::make_scalar_function;
 
-use crate::functions_utils::make_scalar_function;
-use crate::theta_sketch::{
+use crate::utils::theta_sketch::{
     DEFAULT_LG_NOM_ENTRIES, difference_sketch_bytes, estimate_sketch, intersect_sketch_bytes,
     union_sketch_bytes, validate_lg_nom_entries,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ThetaSketchEstimateFunction {
+pub struct ThetaSketchEstimate {
     signature: Signature,
 }
 
-impl Default for ThetaSketchEstimateFunction {
+impl Default for ThetaSketchEstimate {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ThetaSketchEstimateFunction {
+impl ThetaSketchEstimate {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -42,7 +42,7 @@ impl ThetaSketchEstimateFunction {
     }
 }
 
-impl ScalarUDFImpl for ThetaSketchEstimateFunction {
+impl ScalarUDFImpl for ThetaSketchEstimate {
     fn name(&self) -> &str {
         "theta_sketch_estimate"
     }
@@ -79,17 +79,17 @@ impl ScalarUDFImpl for ThetaSketchEstimateFunction {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ThetaUnionFunction {
+pub struct ThetaUnion {
     signature: Signature,
 }
 
-impl Default for ThetaUnionFunction {
+impl Default for ThetaUnion {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ThetaUnionFunction {
+impl ThetaUnion {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -100,7 +100,7 @@ impl ThetaUnionFunction {
     }
 }
 
-impl ScalarUDFImpl for ThetaUnionFunction {
+impl ScalarUDFImpl for ThetaUnion {
     fn name(&self) -> &str {
         "theta_union"
     }
@@ -129,17 +129,17 @@ impl ScalarUDFImpl for ThetaUnionFunction {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ThetaIntersectionFunction {
+pub struct ThetaIntersection {
     signature: Signature,
 }
 
-impl Default for ThetaIntersectionFunction {
+impl Default for ThetaIntersection {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ThetaIntersectionFunction {
+impl ThetaIntersection {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -155,7 +155,7 @@ impl ThetaIntersectionFunction {
     }
 }
 
-impl ScalarUDFImpl for ThetaIntersectionFunction {
+impl ScalarUDFImpl for ThetaIntersection {
     fn name(&self) -> &str {
         "theta_intersection"
     }
@@ -182,17 +182,17 @@ impl ScalarUDFImpl for ThetaIntersectionFunction {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ThetaDifferenceFunction {
+pub struct ThetaDifference {
     signature: Signature,
 }
 
-impl Default for ThetaDifferenceFunction {
+impl Default for ThetaDifference {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ThetaDifferenceFunction {
+impl ThetaDifference {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -208,7 +208,7 @@ impl ThetaDifferenceFunction {
     }
 }
 
-impl ScalarUDFImpl for ThetaDifferenceFunction {
+impl ScalarUDFImpl for ThetaDifference {
     fn name(&self) -> &str {
         "theta_difference"
     }

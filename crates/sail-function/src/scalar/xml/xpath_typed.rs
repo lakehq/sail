@@ -12,10 +12,10 @@ use datafusion_common::{DataFusionError, Result, internal_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_functions::utils::make_scalar_function;
 use xee_xpath::{Documents, Query};
 
 use super::{reader, xpath_query};
-use crate::functions_utils::make_scalar_function;
 
 pub fn xpath_typed_name_to_kind(name: &str) -> Result<XpathTypedKind> {
     match name {
