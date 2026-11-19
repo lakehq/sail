@@ -993,7 +993,7 @@
 
 - key: optimizer.enable_join_reorder
   type: boolean
-  default: "false"
+  default: "true"
   description: |
     Whether to enable cost-based join reorder in the query optimizer.
   experimental: true
@@ -1002,10 +1002,9 @@
   type: boolean
   default: "true"
   description: |
-    Whether to allow swapping join inputs using available statistics.
-    Disable this to preserve the SQL join input order for hash joins. This is distinct from
-    `optimizer.enable_join_reorder` that enables a more sophisticated cost-based join reorder
-    algorithm that can reorder multiple joins.
+    Whether to allow swapping the inputs of an individual join using available statistics.
+    To preserve the SQL join input order for hash joins, disable both this option and
+    `optimizer.enable_join_reorder`, which can change the order of multiple joins.
   experimental: true
 
 - key: optimizer.prefer_hash_join

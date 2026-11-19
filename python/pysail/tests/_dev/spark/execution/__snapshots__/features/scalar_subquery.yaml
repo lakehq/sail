@@ -541,6 +541,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     OutputRequirementExec: order_by=[(#9@0, asc)], dist_by=SinglePartition
       SortExec: expr=[#9@0 ASC], preserve_partitioning=[false]
@@ -1131,6 +1134,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -1736,6 +1742,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -2599,6 +2608,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#12@0, asc)], dist_by=SinglePartition
@@ -3320,6 +3332,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#12@0, asc), (#13@1, asc)], dist_by=SinglePartition
@@ -3925,6 +3940,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
@@ -4423,6 +4441,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -4977,6 +4998,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -5562,6 +5586,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
@@ -6110,6 +6137,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
@@ -6610,6 +6640,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -7184,6 +7217,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
@@ -7738,6 +7774,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
@@ -8284,6 +8323,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
@@ -8809,6 +8851,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -9358,6 +9403,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -9941,6 +9989,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -10550,6 +10601,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
@@ -11090,6 +11144,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -11641,6 +11698,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
@@ -12143,6 +12203,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
@@ -12641,6 +12704,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -13171,6 +13237,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -13714,6 +13783,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
