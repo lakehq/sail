@@ -12,8 +12,10 @@ use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::spec::{
-    CommitAction, DataType as DeltaDataType, Metadata, MetadataValue, PrimitiveType, StructField,
+    CommitAction, DataType as DeltaDataType, Metadata, MetadataValue, PrimitiveType, Protocol,
+    StructField,
 };
+use crate::table::DeltaSnapshot;
 use crate::transaction::CatalogManagedStagedCommit;
 
 #[derive(Debug, Clone)]
@@ -79,17 +81,25 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
             .map(|response| response.latest_table_version)
     }
 
+    /// Commits the staged commit to the catalog. The `base` is the snapshot of the table
+    /// that the commit is based on.
     pub(crate) async fn commit_staged(
         &self,
         lakehouse_table: &LakehouseExecutionContext,
         table: &DeltaCatalogManagedTable,
+        base: Option<&DeltaSnapshot>,
         staged: &CatalogManagedStagedCommit,
         actions: &[CommitAction],
         latest_backfilled_version: Option<i64>,
     ) -> Result<()> {
         let manager = self.context.extension::<CatalogManager>()?;
-        let update =
-            delta_catalog_managed_commit_update(table, staged, actions, latest_backfilled_version)?;
+        let update = delta_catalog_managed_commit_update(
+            table,
+            base.map(|base| (base.metadata(), base.protocol())),
+            staged,
+            actions,
+            latest_backfilled_version,
+        )?;
         let outcome = manager
             .commit_lakehouse_table(
                 self.catalog_table,
@@ -129,6 +139,7 @@ fn map_commit_outcome(outcome: CatalogResult<LakehouseCommitOutcome>) -> Result<
 
 fn delta_catalog_managed_commit_update(
     table: &DeltaCatalogManagedTable,
+    base: Option<(&Metadata, &Protocol)>,
     staged: &CatalogManagedStagedCommit,
     actions: &[CommitAction],
     latest_backfilled_version: Option<i64>,
@@ -150,7 +161,51 @@ fn delta_catalog_managed_commit_update(
     if let Some(metadata) = unity_commit_metadata(actions)? {
         update["metadata"] = metadata;
     }
+    if let Some(changes) = delta_log_changes(base, actions)? {
+        update["delta_log"] = changes;
+    }
     Ok(update)
+}
+
+/// Returns the metadata action and the protocol action of the commit that differ from
+/// the metadata and the protocol of the base snapshot, in the form of the Delta log.
+/// The metadata action comes with the metadata of the base snapshot, so that the catalog
+/// can tell what the commit changes.
+fn delta_log_changes(
+    base: Option<(&Metadata, &Protocol)>,
+    actions: &[CommitAction],
+) -> Result<Option<serde_json::Value>> {
+    let json = |value: serde_json::Result<serde_json::Value>| {
+        value.map_err(|e| DataFusionError::External(Box::new(e)))
+    };
+    let mut changes = serde_json::Map::new();
+    let metadata = actions.iter().rev().find_map(|action| match action {
+        CommitAction::Metadata(metadata) => Some(metadata),
+        _ => None,
+    });
+    if let Some(metadata) = metadata.filter(|x| base.map(|(metadata, _)| metadata) != Some(x)) {
+        changes.insert(
+            "metaData".to_string(),
+            json(serde_json::to_value(metadata))?,
+        );
+        if let Some((base, _)) = base {
+            changes.insert(
+                "baseMetaData".to_string(),
+                json(serde_json::to_value(base))?,
+            );
+        }
+    }
+    let protocol = actions.iter().rev().find_map(|action| match action {
+        CommitAction::Protocol(protocol) => Some(protocol),
+        _ => None,
+    });
+    if let Some(protocol) = protocol.filter(|x| base.map(|(_, protocol)| protocol) != Some(x)) {
+        changes.insert(
+            "protocol".to_string(),
+            json(serde_json::to_value(protocol))?,
+        );
+    }
+    Ok((!changes.is_empty()).then_some(serde_json::Value::Object(changes)))
 }
 
 fn unity_commit_metadata(actions: &[CommitAction]) -> Result<Option<serde_json::Value>> {
@@ -450,6 +505,64 @@ fn metadata_value_json(value: &MetadataValue) -> Result<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::StructType;
+
+    #[test]
+    fn delta_log_changes_are_relative_to_the_base_snapshot() -> Result<()> {
+        let external = |e| DataFusionError::External(Box::new(e));
+        let schema = |columns: &[&str]| {
+            StructType::try_new(
+                columns
+                    .iter()
+                    .map(|column| StructField::nullable(*column, DeltaDataType::LONG)),
+            )
+        };
+        let base_metadata = Metadata::try_new(
+            None,
+            None,
+            schema(&["id"]).map_err(external)?,
+            vec![],
+            0,
+            [("owner".to_string(), "a".to_string())].into(),
+        )
+        .map_err(external)?;
+        let base_protocol = Protocol::new(3, 7, Some(vec![]), Some(vec![]));
+        let base = Some((&base_metadata, &base_protocol));
+
+        // The actions of the base snapshot written again are not changes.
+        let actions = vec![
+            CommitAction::Protocol(base_protocol.clone()),
+            CommitAction::Metadata(base_metadata.clone()),
+        ];
+        assert_eq!(delta_log_changes(base, &actions)?, None);
+        assert_eq!(delta_log_changes(base, &[])?, None);
+
+        let metadata = base_metadata
+            .clone()
+            .with_schema(&schema(&["id", "value"]).map_err(external)?)
+            .map_err(external)?;
+        let protocol = Protocol::new(3, 7, Some(vec![]), None);
+        let actions = vec![
+            CommitAction::Protocol(protocol.clone()),
+            CommitAction::Metadata(metadata.clone()),
+        ];
+        assert_eq!(
+            delta_log_changes(base, &actions)?,
+            Some(serde_json::json!({
+                "metaData": metadata,
+                "baseMetaData": base_metadata,
+                "protocol": protocol,
+            }))
+        );
+        assert_eq!(
+            delta_log_changes(None, &actions)?,
+            Some(serde_json::json!({
+                "metaData": metadata,
+                "protocol": protocol,
+            }))
+        );
+        Ok(())
+    }
 
     #[test]
     fn definite_commit_rejection_preserves_its_typed_outcome() -> Result<()> {

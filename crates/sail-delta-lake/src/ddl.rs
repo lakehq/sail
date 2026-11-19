@@ -814,7 +814,7 @@ pub(crate) async fn commit(
     let latest = coordinator.latest_table_version(lakehouse, &table).await?;
     let staged = CommitBuilder::from(commit_properties)
         .with_actions(actions.clone())
-        .build(Some(snapshot), log_store.clone(), operation)
+        .build(Some(snapshot.clone()), log_store.clone(), operation)
         .into_staged_commit_future_with_catalog_latest_version(latest)
         .await
         .map_err(|error| DataFusionError::External(Box::new(error)))?;
@@ -823,7 +823,14 @@ pub(crate) async fn commit(
             .await?;
     // An uncertain catalog response must retain the staged file for reconciliation.
     coordinator
-        .commit_staged(lakehouse, &table, &staged, &actions, backfilled)
+        .commit_staged(
+            lakehouse,
+            &table,
+            Some(snapshot.as_ref()),
+            &staged,
+            &actions,
+            backfilled,
+        )
         .await?;
     if let Err(error) = DeltaCommitExec::publish_staged_commit(&log_store, &staged).await {
         log::warn!(

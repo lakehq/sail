@@ -493,6 +493,7 @@ impl DeltaCommitExec {
         catalog_table: &[String],
         lakehouse_table: &LakehouseExecutionContext,
         table: &DeltaCatalogManagedTable,
+        base: Option<&crate::table::DeltaSnapshot>,
         staged: &CatalogManagedStagedCommit,
         actions: &[CommitAction],
         latest_backfilled_version: Option<i64>,
@@ -501,6 +502,7 @@ impl DeltaCommitExec {
             .commit_staged(
                 lakehouse_table,
                 table,
+                base,
                 staged,
                 actions,
                 latest_backfilled_version,
@@ -1138,7 +1140,7 @@ impl ExecutionPlan for DeltaCommitExec {
                             .with_user_metadata(user_metadata),
                     )
                     .with_actions(final_actions.clone())
-                    .build(reference, log_store.clone(), operation);
+                    .build(reference.clone(), log_store.clone(), operation);
                     let staged = pre_commit
                         .into_staged_commit_future_with_catalog_latest_version(
                             latest_catalog_version,
@@ -1153,6 +1155,7 @@ impl ExecutionPlan for DeltaCommitExec {
                         catalog_table,
                         lakehouse_context,
                         table,
+                        reference.as_deref(),
                         &staged,
                         &final_actions,
                         latest_backfilled_version,

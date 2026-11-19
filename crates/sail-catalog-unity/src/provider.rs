@@ -1224,26 +1224,27 @@ impl CatalogProvider for UnityCatalogProvider {
                 "Unity Catalog Delta commit expects exactly one update payload".to_string(),
             ));
         };
-        let commit: r#gen::DeltaCommit = serde_json::from_value(update.clone()).map_err(|e| {
-            CatalogError::InvalidArgument(format!("Invalid Delta commit payload: {e}"))
-        })?;
+        let invalid =
+            |e| CatalogError::InvalidArgument(format!("Invalid Delta commit payload: {e}"));
+        let commit: r#gen::DeltaCommit = serde_json::from_value(update.clone()).map_err(invalid)?;
+        let changes: DeltaLogChanges = update
+            .get("delta_log")
+            .map(|changes| serde_json::from_value(changes.clone()))
+            .transpose()
+            .map_err(invalid)?
+            .unwrap_or_default();
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         let delta_client = self
             .get_delta_client()
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
-        // The Delta REST API commit carries no table metadata, so a commit that changes
-        // the table metadata uses the legacy API.
-        let api = if commit.metadata.is_some() {
-            DeltaCommitApi::Preview
-        } else {
-            self.get_delta_commit_api(&delta_client, &catalog_name)
-                .await?
-        };
-        let (status, error) = match api {
+        let (status, error) = match self
+            .get_delta_commit_api(&delta_client, &catalog_name)
+            .await?
+        {
             DeltaCommitApi::V1 => {
-                let request = delta_update_table_request(commit)?;
+                let request = delta_update_table_request(commit, changes)?;
                 match delta_client
                     .update_table(catalog_name, schema_name, table.to_string(), request)
                     .await
@@ -1494,9 +1495,25 @@ fn delta_ratified_commits_from_load_table(
     })
 }
 
+/// The metadata action and the protocol action of a Delta commit that differ from the table
+/// that the commit is based on, in the form of the Delta log.
+#[derive(Default, serde::Deserialize)]
+struct DeltaLogChanges {
+    #[serde(rename = "metaData", default)]
+    metadata: Option<serde_json::Value>,
+    /// The metadata of the table that the commit is based on.
+    #[serde(rename = "baseMetaData", default)]
+    base_metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    protocol: Option<serde_json::Value>,
+}
+
 /// Converts the legacy Delta commit payload to an update table request of the Delta REST API.
+/// The changes of the commit to the metadata and the protocol of the table are sent with
+/// the commit, so that the table in the catalog stays consistent with the Delta log.
 fn delta_update_table_request(
     commit: r#gen::DeltaCommit,
+    changes: DeltaLogChanges,
 ) -> CatalogResult<delta_gen::DeltaUpdateTableRequest> {
     let r#gen::DeltaCommit {
         commit_info,
@@ -1533,6 +1550,29 @@ fn delta_update_table_request(
             latest_published_version,
         });
     }
+    let DeltaLogChanges {
+        metadata,
+        base_metadata,
+        protocol,
+    } = changes;
+    match (metadata, base_metadata) {
+        (Some(metadata), Some(base)) => delta_metadata_updates(&base, &metadata, &mut updates)?,
+        (Some(_), None) => {
+            return Err(CatalogError::InvalidArgument(
+                "Unity Catalog Delta commit that changes the table metadata expects the current table metadata"
+                    .to_string(),
+            ));
+        }
+        (None, _) => {}
+    }
+    if let Some(protocol) = protocol {
+        let protocol = delta_protocol(&protocol).map_err(|message| {
+            CatalogError::InvalidArgument(format!("Invalid Delta commit payload: {message}"))
+        })?;
+        updates.push(delta_gen::DeltaTableUpdate::SetProtocol {
+            protocol: Box::new(protocol),
+        });
+    }
     if updates.is_empty() {
         return Err(CatalogError::InvalidArgument(
             "Unity Catalog Delta commit expects commit info or the latest backfilled version"
@@ -1542,6 +1582,110 @@ fn delta_update_table_request(
     Ok(delta_gen::DeltaUpdateTableRequest {
         requirements: vec![delta_gen::DeltaTableRequirement::AssertTableUuid { uuid: table_id }],
         updates,
+    })
+}
+
+/// Adds the updates of the Delta REST API for the differences between two metadata actions
+/// of the Delta log.
+fn delta_metadata_updates(
+    base: &serde_json::Value,
+    metadata: &serde_json::Value,
+    updates: &mut Vec<delta_gen::DeltaTableUpdate>,
+) -> CatalogResult<()> {
+    let schema = |metadata: &serde_json::Value| {
+        metadata["schemaString"]
+            .as_str()
+            .and_then(|schema| serde_json::from_str::<serde_json::Value>(schema).ok())
+            .ok_or_else(|| {
+                CatalogError::InvalidArgument(
+                    "Invalid Delta commit payload: missing schema".to_string(),
+                )
+            })
+    };
+    let new_schema = schema(metadata)?;
+    if schema(base)? != new_schema {
+        updates.push(delta_gen::DeltaTableUpdate::SetColumns {
+            columns: Box::new(delta_schema_to_wire_type(&new_schema)),
+        });
+    }
+    let partition_columns = |metadata: &serde_json::Value| {
+        delta_strings(&metadata["partitionColumns"]).unwrap_or_default()
+    };
+    let new_partition_columns = partition_columns(metadata);
+    if partition_columns(base) != new_partition_columns {
+        updates.push(delta_gen::DeltaTableUpdate::SetPartitionColumns {
+            partition_columns: new_partition_columns,
+        });
+    }
+    let comment = metadata["description"].as_str();
+    if base["description"].as_str() != comment {
+        updates.push(delta_gen::DeltaTableUpdate::SetTableComment {
+            comment: comment.unwrap_or_default().to_string(),
+        });
+    }
+    // The properties that the catalog derives from the protocol are not table properties.
+    let properties = |metadata: &serde_json::Value| {
+        metadata["configuration"]
+            .as_object()
+            .map(|configuration| {
+                configuration
+                    .iter()
+                    .filter(|(key, _)| !is_delta_protocol_property(key))
+                    .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_string())))
+                    .collect::<HashMap<_, _>>()
+            })
+            .unwrap_or_default()
+    };
+    let base_properties = properties(base);
+    let mut new_properties = properties(metadata);
+    let mut removals = base_properties
+        .keys()
+        .filter(|key| !new_properties.contains_key(*key))
+        .cloned()
+        .collect::<Vec<_>>();
+    removals.sort();
+    new_properties.retain(|key, value| base_properties.get(key) != Some(value));
+    if !new_properties.is_empty() {
+        updates.push(delta_gen::DeltaTableUpdate::SetProperties {
+            updates: new_properties,
+        });
+    }
+    if !removals.is_empty() {
+        updates.push(delta_gen::DeltaTableUpdate::RemoveProperties { removals });
+    }
+    Ok(())
+}
+
+/// Whether the catalog derives the table property from the protocol of the Delta table.
+fn is_delta_protocol_property(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    key.starts_with("delta.feature.")
+        || key == "delta.minreaderversion"
+        || key == "delta.minwriterversion"
+}
+
+fn delta_strings(value: &serde_json::Value) -> Option<Vec<String>> {
+    value.as_array().map(|values| {
+        values
+            .iter()
+            .filter_map(|value| value.as_str().map(str::to_string))
+            .collect()
+    })
+}
+
+/// Converts a protocol action of the Delta log to its form in the Delta REST API.
+fn delta_protocol(protocol: &serde_json::Value) -> Result<delta_gen::DeltaProtocol, String> {
+    let version = |key: &str| {
+        protocol[key]
+            .as_i64()
+            .and_then(|version| i32::try_from(version).ok())
+            .ok_or_else(|| format!("missing protocol {key}"))
+    };
+    Ok(delta_gen::DeltaProtocol {
+        min_reader_version: version("minReaderVersion")?,
+        min_writer_version: version("minWriterVersion")?,
+        reader_features: delta_strings(&protocol["readerFeatures"]),
+        writer_features: delta_strings(&protocol["writerFeatures"]),
     })
 }
 
@@ -1583,22 +1727,7 @@ fn delta_create_table_request(
     };
     let commit: serde_json::Value =
         serde_json::from_str(create_commit).map_err(|e| invalid(&e.to_string()))?;
-    let protocol = &commit["protocol"];
     let metadata = &commit["metaData"];
-    let version = |key: &str| {
-        protocol[key]
-            .as_i64()
-            .and_then(|version| i32::try_from(version).ok())
-            .ok_or_else(|| invalid(&format!("missing protocol {key}")))
-    };
-    let strings = |value: &serde_json::Value| {
-        value.as_array().map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.as_str().map(str::to_string))
-                .collect::<Vec<_>>()
-        })
-    };
     let schema: serde_json::Value = metadata["schemaString"]
         .as_str()
         .and_then(|schema| serde_json::from_str(schema).ok())
@@ -1624,15 +1753,10 @@ fn delta_create_table_request(
             .ok_or_else(|| invalid("missing in-commit timestamp"))?,
         location,
         name: table.to_string(),
-        partition_columns: strings(&metadata["partitionColumns"])
+        partition_columns: delta_strings(&metadata["partitionColumns"])
             .filter(|columns| !columns.is_empty()),
         properties,
-        protocol: Box::new(delta_gen::DeltaProtocol {
-            min_reader_version: version("minReaderVersion")?,
-            min_writer_version: version("minWriterVersion")?,
-            reader_features: strings(&protocol["readerFeatures"]),
-            writer_features: strings(&protocol["writerFeatures"]),
-        }),
+        protocol: Box::new(delta_protocol(&commit["protocol"]).map_err(|e| invalid(&e))?),
         table_type: Box::new(delta_gen::DeltaTableType::Managed),
         uniform: None,
     })
@@ -2657,10 +2781,17 @@ mod tests {
             assert_eq!(response.commits.len(), 1);
             assert_eq!(response.commits[0].version, 2);
 
+            // A commit that changes the table metadata sends the legacy metadata only.
             let mut commit = legacy_delta_commit(3);
             commit["metadata"] = serde_json::json!({"description": "events"});
+            let mut request = commit.clone();
+            request["delta_log"] = serde_json::json!({
+                "metaData": delta_log_metadata(&["id"], &[], Some("events"), &[]),
+                "baseMetaData": delta_log_metadata(&["id"], &[], None, &[]),
+                "protocol": delta_log_protocol(&["catalogManaged"]),
+            });
             let outcome = provider
-                .commit_lakehouse_table(&database, "events", delta_commit_request(commit.clone()))
+                .commit_lakehouse_table(&database, "events", delta_commit_request(request))
                 .await
                 .unwrap();
             assert!(matches!(outcome, LakehouseCommitOutcome::Committed { .. }));
@@ -2830,32 +2961,287 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_delta_commit_with_metadata_uses_legacy_api() {
+    /// Returns a metadata action in the form of the Delta log.
+    fn delta_log_metadata(
+        columns: &[&str],
+        partition_columns: &[&str],
+        description: Option<&str>,
+        configuration: &[(&str, &str)],
+    ) -> serde_json::Value {
+        let mut fields = columns
+            .iter()
+            .map(|column| {
+                serde_json::json!({
+                    "name": column,
+                    "type": "long",
+                    "nullable": true,
+                    "metadata": {}
+                })
+            })
+            .collect::<Vec<_>>();
+        fields.push(serde_json::json!({
+            "name": "tags",
+            "type": {"type": "array", "elementType": "string", "containsNull": true},
+            "nullable": true,
+            "metadata": {"comment": "tags"}
+        }));
+        let schema = serde_json::json!({"type": "struct", "fields": fields});
+        let mut metadata = serde_json::json!({
+            "id": "metadata-id",
+            "name": null,
+            "description": description,
+            "format": {"provider": "parquet", "options": {}},
+            "schemaString": schema.to_string(),
+            "partitionColumns": partition_columns,
+            "createdTime": 1700000000000i64,
+            "configuration": {"io.unitycatalog.tableId": DELTA_TABLE_ID}
+        });
+        for (key, value) in configuration {
+            metadata["configuration"][*key] = serde_json::json!(value);
+        }
+        metadata
+    }
+
+    fn delta_log_protocol(features: &[&str]) -> serde_json::Value {
+        serde_json::json!({
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": features,
+            "writerFeatures": features,
+        })
+    }
+
+    /// Returns the columns of [`delta_log_metadata`] in the form of the Delta REST API.
+    fn delta_columns_json(columns: &[&str]) -> serde_json::Value {
+        let mut fields = columns
+            .iter()
+            .map(|column| {
+                serde_json::json!({
+                    "name": column,
+                    "type": "long",
+                    "nullable": true,
+                    "metadata": {}
+                })
+            })
+            .collect::<Vec<_>>();
+        fields.push(serde_json::json!({
+            "name": "tags",
+            "type": {"type": "array", "element-type": "string", "contains-null": true},
+            "nullable": true,
+            "metadata": {"comment": "tags"}
+        }));
+        serde_json::json!({"type": "struct", "fields": fields})
+    }
+
+    /// Commits to a server with the Delta REST API and returns the bodies of the update
+    /// table requests.
+    async fn delta_api_commit_bodies(commits: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
         let server = MockServer::start().await;
         mount_delta_config_ok(&server).await;
         Mock::given(method("POST"))
-            .and(path("/delta/preview/commits"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .and(path(DELTA_TABLE_PATH))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(delta_load_table_json(
+                    DELTA_TABLE_ID,
+                    Some(vec![5]),
+                    Some(5),
+                )),
+            )
             .mount(&server)
             .await;
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let count = commits.len();
+        for commit in commits {
+            let outcome = provider
+                .commit_lakehouse_table(&database, "events", delta_commit_request(commit))
+                .await
+                .unwrap();
+            assert!(matches!(outcome, LakehouseCommitOutcome::Committed { .. }));
+        }
+        let mut targets =
+            vec!["GET /delta/v1/config?catalog=main&protocol-versions=1.0".to_string()];
+        targets.extend(std::iter::repeat_n(
+            format!("POST {DELTA_TABLE_PATH}"),
+            count,
+        ));
+        assert_eq!(received_targets(&server).await, targets);
+        received_json_bodies(&server, DELTA_TABLE_PATH).await
+    }
 
+    #[tokio::test]
+    async fn test_delta_commit_with_schema_change_uses_delta_api() {
+        let base = delta_log_metadata(&["id"], &[], None, &[]);
+        // ALTER TABLE ADD COLUMNS.
+        let mut add_column = legacy_delta_commit(5);
+        add_column["metadata"] = serde_json::json!({"schema": {"columns": []}});
+        add_column["delta_log"] = serde_json::json!({
+            "metaData": delta_log_metadata(&["id", "value"], &[], None, &[]),
+            "baseMetaData": base,
+        });
+        // A write that evolves the schema.
+        let mut append = legacy_delta_commit(6);
+        append["latest_backfilled_version"] = serde_json::json!(5);
+        append["delta_log"] = serde_json::json!({
+            "metaData": delta_log_metadata(&["id", "value", "extra"], &[], None, &[]),
+            "baseMetaData": delta_log_metadata(&["id", "value"], &[], None, &[]),
+        });
+        // A write that replaces the schema, the partition columns, and the protocol.
+        let mut replace = legacy_delta_commit(7);
+        replace["delta_log"] = serde_json::json!({
+            "metaData": delta_log_metadata(&["day"], &["day"], None, &[]),
+            "baseMetaData": delta_log_metadata(&["id", "value", "extra"], &[], None, &[]),
+            "protocol": delta_log_protocol(&["catalogManaged", "deletionVectors"]),
+        });
+        // The metadata action of a commit that is the same as the metadata of the table.
+        let mut unchanged = legacy_delta_commit(8);
+        unchanged["metadata"] = serde_json::json!({"schema": {"columns": []}});
+
+        let requirements = serde_json::json!([
+            {"type": "assert-table-uuid", "uuid": DELTA_TABLE_ID}
+        ]);
+        assert_eq!(
+            delta_api_commit_bodies(vec![add_column, append, replace, unchanged]).await,
+            vec![
+                serde_json::json!({
+                    "requirements": requirements,
+                    "updates": [
+                        {"action": "add-commit", "commit": delta_commit_json(5)},
+                        {"action": "set-columns", "columns": delta_columns_json(&["id", "value"])}
+                    ]
+                }),
+                serde_json::json!({
+                    "requirements": requirements,
+                    "updates": [
+                        {"action": "add-commit", "commit": delta_commit_json(6)},
+                        {"action": "set-latest-backfilled-version", "latest-published-version": 5},
+                        {
+                            "action": "set-columns",
+                            "columns": delta_columns_json(&["id", "value", "extra"])
+                        }
+                    ]
+                }),
+                serde_json::json!({
+                    "requirements": requirements,
+                    "updates": [
+                        {"action": "add-commit", "commit": delta_commit_json(7)},
+                        {"action": "set-columns", "columns": delta_columns_json(&["day"])},
+                        {"action": "set-partition-columns", "partition-columns": ["day"]},
+                        {
+                            "action": "set-protocol",
+                            "protocol": {
+                                "min-reader-version": 3,
+                                "min-writer-version": 7,
+                                "reader-features": ["catalogManaged", "deletionVectors"],
+                                "writer-features": ["catalogManaged", "deletionVectors"]
+                            }
+                        }
+                    ]
+                }),
+                serde_json::json!({
+                    "requirements": requirements,
+                    "updates": [
+                        {"action": "add-commit", "commit": delta_commit_json(8)}
+                    ]
+                }),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delta_commit_with_property_and_comment_changes_uses_delta_api() {
+        let base = delta_log_metadata(
+            &["id"],
+            &["id"],
+            Some("events"),
+            &[
+                ("owner", "a"),
+                ("team", "x"),
+                ("stale", "1"),
+                ("delta.feature.catalogManaged", "supported"),
+            ],
+        );
+        // ALTER TABLE SET TBLPROPERTIES and ALTER TABLE UNSET TBLPROPERTIES. The properties
+        // that the catalog derives from the protocol are not sent.
+        let mut properties = legacy_delta_commit(5);
+        properties["delta_log"] = serde_json::json!({
+            "metaData": delta_log_metadata(
+                &["id"],
+                &["id"],
+                Some("events"),
+                &[
+                    ("owner", "b"),
+                    ("team", "x"),
+                    ("added", "2"),
+                    ("delta.minWriterVersion", "7"),
+                ],
+            ),
+            "baseMetaData": base,
+        });
+        let mut comment = legacy_delta_commit(6);
+        comment["delta_log"] = serde_json::json!({
+            "metaData": delta_log_metadata(&["id"], &["id"], Some("all events"), &[]),
+            "baseMetaData": delta_log_metadata(&["id"], &["id"], Some("events"), &[]),
+        });
+        let mut no_comment = legacy_delta_commit(7);
+        no_comment["delta_log"] = serde_json::json!({
+            "metaData": delta_log_metadata(&["id"], &["id"], None, &[]),
+            "baseMetaData": delta_log_metadata(&["id"], &["id"], Some("all events"), &[]),
+        });
+
+        let requirements = serde_json::json!([
+            {"type": "assert-table-uuid", "uuid": DELTA_TABLE_ID}
+        ]);
+        assert_eq!(
+            delta_api_commit_bodies(vec![properties, comment, no_comment]).await,
+            vec![
+                serde_json::json!({
+                    "requirements": requirements,
+                    "updates": [
+                        {"action": "add-commit", "commit": delta_commit_json(5)},
+                        {"action": "set-properties", "updates": {"owner": "b", "added": "2"}},
+                        {"action": "remove-properties", "removals": ["stale"]}
+                    ]
+                }),
+                serde_json::json!({
+                    "requirements": requirements,
+                    "updates": [
+                        {"action": "add-commit", "commit": delta_commit_json(6)},
+                        {"action": "set-table-comment", "comment": "all events"}
+                    ]
+                }),
+                serde_json::json!({
+                    "requirements": requirements,
+                    "updates": [
+                        {"action": "add-commit", "commit": delta_commit_json(7)},
+                        {"action": "set-table-comment", "comment": ""}
+                    ]
+                }),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delta_commit_with_metadata_change_expects_current_metadata() {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
         let provider = mock_provider(&server, "main");
         let database = Namespace::try_from(vec!["default"]).unwrap();
         let mut commit = legacy_delta_commit(5);
-        commit["metadata"] = serde_json::json!({"description": "events"});
-        let outcome = provider
-            .commit_lakehouse_table(&database, "events", delta_commit_request(commit.clone()))
+        commit["delta_log"] = serde_json::json!({
+            "metaData": delta_log_metadata(&["id"], &[], None, &[]),
+        });
+        let error = provider
+            .commit_lakehouse_table(&database, "events", delta_commit_request(commit))
             .await
-            .unwrap();
-        assert!(matches!(outcome, LakehouseCommitOutcome::Committed { .. }));
-        assert_eq!(
-            received_json_bodies(&server, "/delta/preview/commits").await,
-            vec![commit]
+            .unwrap_err();
+        assert!(
+            matches!(&error, CatalogError::InvalidArgument(message) if message.contains("expects the current table metadata")),
+            "{error}"
         );
         assert_eq!(
             received_targets(&server).await,
-            vec!["POST /delta/preview/commits"]
+            vec!["GET /delta/v1/config?catalog=main&protocol-versions=1.0"]
         );
     }
 
