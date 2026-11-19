@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Iceberg REST catalog namespace (database) operations
 
   Scenario: Create a namespace with metadata

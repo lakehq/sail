@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: coalesce returns the first non-null argument
 
   Rule: Spark-compatible coercion for mixed string and temporal arguments

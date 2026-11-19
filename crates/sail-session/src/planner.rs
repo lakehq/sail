@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -7,12 +10,15 @@ use datafusion::common::config::TableParquetOptions;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::execution::context::QueryPlanner;
+use datafusion::execution::memory_pool::MemoryLimit;
+use datafusion::execution::session_state::SessionState;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{
     LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
+use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
@@ -31,6 +37,7 @@ use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
+use sail_common_datafusion::session::shared_cte::SharedCteConfig;
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
@@ -49,7 +56,6 @@ use sail_logical_plan::remote_checkpoint::{
     RemoteCheckpointCommandNode, RemoteCheckpointRelationNode,
 };
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
-use sail_logical_plan::replay::ReplayNode;
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
 use sail_logical_plan::seeded_random::SeededRandomNode;
 use sail_logical_plan::show_string::ShowStringNode;
@@ -60,6 +66,8 @@ use sail_logical_plan::streaming::filter::StreamFilterNode;
 use sail_logical_plan::streaming::limit::StreamLimitNode;
 use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
+use sail_logical_plan::tail::TailNode;
+use sail_physical_optimizer::SharedCteRestrictions;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
@@ -71,21 +79,27 @@ use sail_physical_plan::remote_checkpoint::{
     checkpoint_storage_schema,
 };
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
-use sail_physical_plan::replay::ReplayExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::seeded_random::{SeededRandomExec, SeededRandomExprColumn};
+use sail_physical_plan::shared_cte::blocking::{ctes_read_without_holding, holds_output};
+use sail_physical_plan::shared_cte::{
+    SharedCteRestriction, ctes_read_again, shared_cte_restrictions,
+};
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
+use sail_physical_plan::tail::TailExec;
 use sail_plan::catalog::CatalogCommandNode;
 use sail_plan::procedure::LakeProcedureNode;
+use sail_plan::shared_cte::SharedCteBody;
 
 use crate::scalar_subquery::{
     ensure_scalar_subquery_nullability, share_equivalent_scalar_subqueries,
 };
+use crate::shared_cte::{SharedCtePlanner, shared_cte_bodies};
 
 #[derive(Debug)]
 pub struct ExtensionQueryPlanner {}
@@ -102,6 +116,138 @@ impl QueryPlanner for ExtensionQueryPlanner {
         &self,
         logical_plan: &LogicalPlan,
         session: &dyn Session,
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        // A shared CTE body is planned before the plans that refer to it.
+        let mut shared_ctes = SharedCtePlanner::default();
+        let mut bodies = vec![];
+        let logical_plan = sail_plan::shared_cte::share_merge_inputs(logical_plan.clone())?;
+        for body in shared_cte_bodies(&logical_plan)? {
+            let plan = self.plan(body.plan(), session, &shared_ctes).await?;
+            shared_ctes.add(&body, body.name().to_string(), Arc::clone(&plan))?;
+            bodies.push((body, plan));
+        }
+        let plan = self.plan(&logical_plan, session, &shared_ctes).await?;
+        // The query is planned again when a reference is to evaluate its CTE itself.
+        if !decline_shared_ctes(session, &plan, &bodies) {
+            self.restrict_shared_ctes(session, &plan, &mut bodies, &mut shared_ctes)
+                .await?;
+        }
+        shared_ctes.finish(plan)
+    }
+}
+
+/// Lets each reference evaluate a shared CTE itself (see [`SharedCteBody::inline`]) where
+/// that is better than one evaluation for the plan of the query and the plans of the
+/// bodies, which are planned by now. A CTE that must be evaluated once remains shared.
+/// Returns whether the references of a CTE are to evaluate it themselves.
+fn decline_shared_ctes(
+    session: &dyn Session,
+    plan: &Arc<dyn ExecutionPlan>,
+    bodies: &[(Arc<SharedCteBody>, Arc<dyn ExecutionPlan>)],
+) -> bool {
+    let runtime = session.runtime_env();
+    let limited = matches!(runtime.memory_pool.memory_limit(), MemoryLimit::Finite(_));
+    let spills = runtime.disk_manager.tmp_files_enabled();
+    // Without temporary files, a shared CTE keeps its rows in memory outside the memory
+    // pool, so with a memory limit only the CTEs that must be evaluated once are shared.
+    // This is also the case in cluster mode, where the task streams keep the rows.
+    let spills_kept_rows = spills
+        && session
+            .extension::<SharedCteConfig>()
+            .map(|x| x.spills_kept_rows())
+            .unwrap_or(true);
+    let retains_within_limit = !limited || spills_kept_rows;
+    // With a memory limit and temporary files, a nested loop join executes its build
+    // side again to spill it, and a shared CTE that it reads keeps all its rows and
+    // its evaluation for that.
+    let plans = || std::iter::once(plan).chain(bodies.iter().map(|(_, plan)| plan));
+    let read_again = if limited && spills {
+        plans().flat_map(ctes_read_again).collect::<HashSet<_>>()
+    } else {
+        HashSet::new()
+    };
+    let streamed = plans()
+        .flat_map(ctes_read_without_holding)
+        .collect::<HashSet<_>>();
+    let mut declined = false;
+    for (id, (body, plan)) in bodies.iter().enumerate() {
+        // A body that returns rows before its input ends would keep up to all its rows
+        // for a reference that reads it late, while each reference that evaluates the
+        // body itself keeps little, unless every reference holds all the rows that it
+        // reads.
+        let covered = holds_output(plan) || !streamed.contains(&id);
+        let share =
+            body.must_share() || (retains_within_limit && covered && !read_again.contains(&id));
+        if !share {
+            body.inline();
+            declined = true;
+        }
+    }
+    declined
+}
+
+impl ExtensionQueryPlanner {
+    /// Plans again each shared CTE whose references all read only the rows of the keys
+    /// of filtered join inputs (see [`SharedCteRestriction`]), so that it computes only
+    /// the rows of the keys of all its references. The plan of a CTE remains as it is
+    /// when the optimizer adds no such restriction to it, and when the CTE must be
+    /// evaluated once.
+    async fn restrict_shared_ctes(
+        &self,
+        session: &dyn Session,
+        plan: &Arc<dyn ExecutionPlan>,
+        bodies: &mut [(Arc<SharedCteBody>, Arc<dyn ExecutionPlan>)],
+        shared_ctes: &mut SharedCtePlanner,
+    ) -> datafusion::common::Result<()> {
+        let mut restrictions =
+            shared_cte_restrictions(std::iter::once(plan).chain(bodies.iter().map(|(_, x)| x)));
+        for (id, (body, plan)) in bodies.iter_mut().enumerate() {
+            let Some(references) = restrictions.remove(&id) else {
+                continue;
+            };
+            if body.must_share() {
+                continue;
+            }
+            if let Some(restricted) = self
+                .plan_restricted(body, references, session, shared_ctes)
+                .await?
+            {
+                shared_ctes.replace(id, Arc::clone(&restricted));
+                *plan = restricted;
+            }
+        }
+        Ok(())
+    }
+
+    /// Plans the shared CTE with the restrictions of its references in the configuration
+    /// options, for the join reorder rule to restrict it to the keys of all the
+    /// references. Returns the plan if the rule restricted it.
+    async fn plan_restricted(
+        &self,
+        body: &SharedCteBody,
+        references: Vec<Vec<SharedCteRestriction>>,
+        session: &dyn Session,
+        shared_ctes: &SharedCtePlanner,
+    ) -> datafusion::common::Result<Option<Arc<dyn ExecutionPlan>>> {
+        let Some(state) = session.as_any().downcast_ref::<SessionState>() else {
+            return Ok(None);
+        };
+        let restrictions = SharedCteRestrictions::new(references);
+        let mut state = state.clone();
+        state
+            .config_mut()
+            .options_mut()
+            .extensions
+            .insert(restrictions.clone());
+        let plan = self.plan(body.plan(), &state, shared_ctes).await?;
+        Ok(restrictions.applied().then_some(plan))
+    }
+
+    async fn plan(
+        &self,
+        logical_plan: &LogicalPlan,
+        session: &dyn Session,
+        shared_ctes: &SharedCtePlanner,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         // TODO: show rewriters and the final logical plan in `EXPLAIN`.
         let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![
@@ -125,6 +271,7 @@ impl QueryPlanner for ExtensionQueryPlanner {
             Arc::new(NoopPhysicalPlanner),
             Arc::new(PythonPhysicalPlanner),
             Arc::new(ExtensionPhysicalPlanner),
+            Arc::new(shared_ctes.clone()),
         ];
         let planner = DefaultPhysicalPlanner::with_extension_planners(extension_planners);
         let plan = planner.create_physical_plan(&logical_plan, session).await?;
@@ -144,15 +291,8 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         planning_ctx: &PhysicalPlanningContext,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         let plan: Arc<dyn ExecutionPlan> = if let Some(node) =
-            node.as_any().downcast_ref::<ReplayNode>()
-        {
-            let [input] = physical_inputs else {
-                return internal_err!("Replay requires exactly one physical input");
-            };
-            Arc::new(ReplayExec::try_new(node.id(), input.clone())?)
-        } else if let Some(node) = node
-            .as_any()
-            .downcast_ref::<sail_logical_plan::merge_evaluate::EvaluateOnceNode>()
+            node.as_any()
+                .downcast_ref::<sail_logical_plan::merge_evaluate::EvaluateOnceNode>()
         {
             let [input] = physical_inputs else {
                 return internal_err!("EvaluateOnce requires one physical input");
@@ -519,6 +659,16 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 distribution,
                 node.fetch(),
             ))
+        } else if let Some(node) = node.as_any().downcast_ref::<TailNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!("TailExec requires exactly one physical input");
+            };
+            if node.fetch() == 0 {
+                // Remove producers before distributed job planning, not just at execution.
+                Arc::new(EmptyExec::new(input.schema()))
+            } else {
+                Arc::new(TailExec::new(input.clone(), node.fetch()))
+            }
         } else if let Some(node) = node.as_any().downcast_ref::<SchemaPivotNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("SchemaPivotExec requires exactly one physical input");
@@ -772,6 +922,7 @@ mod tests {
     use sail_common::spec;
     use sail_common_datafusion::min_max::min_max_agg::Max;
     use sail_function::scalar::math::random::Random;
+    use sail_logical_plan::replay::ReplayNode;
     use sail_plan::config::PlanConfig;
 
     use super::*;
@@ -786,9 +937,9 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         use futures::TryStreamExt;
-        use sail_common_datafusion::replay::ReplayId;
         use sail_common_datafusion::session::job::JobRunner;
         use sail_execution::job_runner::LocalJobRunner;
+        use sail_logical_plan::replay::ReplayId;
 
         for keep in [false, true] {
             for filtered_first in [false, true] {
@@ -943,9 +1094,9 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         use futures::TryStreamExt;
-        use sail_common_datafusion::replay::ReplayId;
         use sail_common_datafusion::session::job::JobRunner;
         use sail_execution::job_runner::LocalJobRunner;
+        use sail_logical_plan::replay::ReplayId;
 
         let calls = Arc::new(AtomicUsize::new(0));
         let rows = Arc::new(AtomicUsize::new(0));
@@ -1003,24 +1154,20 @@ mod tests {
             .query_planner()
             .create_physical_plan(&optimized, &state)
             .await?;
-        let mut replay_count = 0;
-        physical.apply(|node| {
-            if let Some(replay) = node.downcast_ref::<ReplayExec>() {
-                replay_count += 1;
-                assert_eq!(replay.id(), id);
-                assert_eq!(replay.schema().fields().len(), 2);
-            }
-            Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
-        })?;
-        assert!(replay_count >= 1);
+        let shared = physical
+            .downcast_ref::<sail_physical_plan::shared_cte::SharedCteExec>()
+            .unwrap();
+        assert_eq!(shared.ctes().len(), 1);
+        assert_eq!(shared.ctes()[0].1.schema().fields().len(), 2);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         let runner = LocalJobRunner::default();
-        for epoch in 1..=2 {
-            let batches = runner
-                .execute(&context, physical.clone())
-                .await?
-                .try_collect::<Vec<_>>()
-                .await?;
+        let first = runner.execute(&context, physical.clone()).await?;
+        let second = runner.execute(&context, physical.clone()).await?;
+        let (first, second) = futures::try_join!(
+            first.try_collect::<Vec<_>>(),
+            second.try_collect::<Vec<_>>()
+        )?;
+        for batches in [first, second] {
             let batch = concat_batches(&physical.schema(), &batches)?;
             assert_eq!(
                 batch
@@ -1030,11 +1177,11 @@ mod tests {
                     .as_ref(),
                 &[20, 20]
             );
-            assert_eq!(calls.load(Ordering::SeqCst), epoch);
-            // Filter/projection/limit on either consumer must not specialize the source.
-            assert_eq!(rows.load(Ordering::SeqCst), epoch * 2);
-            assert_eq!(context.runtime_env().disk_manager.used_disk_space(), 0);
         }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        // Neither consumer can specialize its producer or reuse the other job's rows.
+        assert_eq!(rows.load(Ordering::SeqCst), 4);
+        assert_eq!(context.runtime_env().disk_manager.used_disk_space(), 0);
         Ok(())
     }
 
@@ -1434,6 +1581,56 @@ mod tests {
         LogicalPlanBuilder::scan("range", provider_as_source(provider), None)?
             .project(vec![col("id").alias(name)])?
             .build()
+    }
+
+    #[tokio::test]
+    async fn zero_tail_removes_input_before_distributed_planning() -> datafusion_common::Result<()>
+    {
+        let fail = create_udf(
+            "tail_input_error",
+            vec![DataType::Int64],
+            DataType::Int64,
+            Volatility::Volatile,
+            Arc::new(|_| datafusion_common::exec_err!("tail input evaluated")),
+        );
+        let input = LogicalPlanBuilder::from(range_table_scan("id", &[0, 10, 1, 4])?)
+            .project(vec![fail.call(vec![col("id")]).alias("value")])?
+            .build()?;
+        let state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_query_planner(new_query_planner())
+            .build();
+        let context = SessionContext::new_with_state(state);
+        let state = context.state();
+        let physical_input = state
+            .query_planner()
+            .create_physical_plan(&input, &state)
+            .await?;
+        assert_eq!(physical_input.output_partitioning().partition_count(), 4);
+        for fetch in [0, 1] {
+            let logical = LogicalPlan::Extension(datafusion_expr::Extension {
+                node: Arc::new(TailNode::new(Arc::new(input.clone()), fetch)),
+            });
+            let physical = state
+                .query_planner()
+                .create_physical_plan(&logical, &state)
+                .await?;
+            assert_eq!(physical.schema(), input.schema().inner().clone());
+            if fetch == 0 {
+                // A local execute() shortcut is insufficient: the cluster scheduler
+                // must not see any upstream producer stages in the physical plan.
+                assert!(physical.is::<EmptyExec>());
+                assert!(physical.children().is_empty());
+                assert!(collect(physical, context.task_ctx()).await?.is_empty());
+            } else {
+                let error = collect(physical, context.task_ctx()).await.unwrap_err();
+                assert!(
+                    error.to_string().contains("tail input evaluated"),
+                    "{error}"
+                );
+            }
+        }
+        Ok(())
     }
 
     #[tokio::test]

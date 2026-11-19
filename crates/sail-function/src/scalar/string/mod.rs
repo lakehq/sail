@@ -1,6 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod btrim;
-pub mod common;
-pub mod decimal_format;
 pub mod format_number;
 pub mod levenshtein;
 pub mod lower;
@@ -24,3 +24,6 @@ pub mod spark_to_binary;
 pub mod spark_to_char;
 pub mod spark_to_number;
 pub mod upper;
+mod utils;
+
+pub use utils::decimal_format;

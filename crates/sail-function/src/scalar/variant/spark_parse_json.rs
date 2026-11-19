@@ -1,6 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/json_to_variant.rs
+
 use std::sync::Arc;
 
-/// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/json_to_variant.rs>
 use arrow::array::{Array, ArrayRef, StringViewArray, StructArray, new_null_array};
 use arrow::compute::cast;
 use arrow_schema::{DataType, Field, Fields};
@@ -10,6 +12,7 @@ use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
+use datafusion_functions::utils::make_scalar_function;
 use parquet_variant_compute::{VariantArrayBuilder, VariantType};
 use parquet_variant_json::append_json;
 use sail_common_datafusion::variant::{
@@ -17,7 +20,6 @@ use sail_common_datafusion::variant::{
 };
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
-use crate::functions_utils::make_scalar_function;
 
 /// Returns a Variant from a JSON string.
 ///

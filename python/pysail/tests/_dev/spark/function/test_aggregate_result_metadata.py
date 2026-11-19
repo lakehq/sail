@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Column metadata of expression results.
 
 Like Spark, the result of an expression that does not refer to a column directly (an aggregate

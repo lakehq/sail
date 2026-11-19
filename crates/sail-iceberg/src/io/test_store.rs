@@ -1,6 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Object-store observations and fault injection for manifest/commit invariants.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -65,6 +67,11 @@ pub(crate) struct TestStore {
     pub fault: Option<(String, PutFault)>,
     pub reject_put_number: Option<usize>,
     pub reject_delete: Option<String>,
+    pub delete_failures: Arc<Mutex<HashMap<Path, usize>>>,
+    pub delete_not_found: Arc<HashSet<Path>>,
+    pub yield_deletes: bool,
+    pub active_deletes: Arc<AtomicUsize>,
+    pub max_active_deletes: Arc<AtomicUsize>,
     pub reject_list_after_put: bool,
     pub reject_list: AtomicBool,
     pub paused: tokio::sync::Notify,
@@ -81,6 +88,11 @@ impl TestStore {
             fault: None,
             reject_put_number: None,
             reject_delete: None,
+            delete_failures: Arc::new(Mutex::new(HashMap::new())),
+            delete_not_found: Arc::new(HashSet::new()),
+            yield_deletes: false,
+            active_deletes: Arc::new(AtomicUsize::new(0)),
+            max_active_deletes: Arc::new(AtomicUsize::new(0)),
             reject_list_after_put: false,
             reject_list: AtomicBool::new(false),
             paused: tokio::sync::Notify::new(),
@@ -179,22 +191,61 @@ impl ObjectStore for TestStore {
         let inner = self.inner.clone();
         let deletes = self.deletes.clone();
         let reject = self.reject_delete.clone();
+        let failures = self.delete_failures.clone();
+        let active = self.active_deletes.clone();
+        let maximum = self.max_active_deletes.clone();
+        let yield_deletes = self.yield_deletes;
+        let missing = self.delete_not_found.clone();
         locations
             .then(move |location| {
                 let inner = inner.clone();
                 let deletes = deletes.clone();
                 let reject = reject.clone();
+                let failures = failures.clone();
+                let active = active.clone();
+                let maximum = maximum.clone();
+                let missing = missing.clone();
                 async move {
                     let location = location?;
                     deletes
                         .lock()
                         .expect("delete observations")
                         .push(location.clone());
-                    if reject
-                        .as_ref()
-                        .is_some_and(|pattern| location.as_ref().contains(pattern))
+                    struct ActiveDelete(Arc<AtomicUsize>);
+                    impl Drop for ActiveDelete {
+                        fn drop(&mut self) {
+                            self.0.fetch_sub(1, Ordering::SeqCst);
+                        }
+                    }
+                    maximum.fetch_max(active.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                    let _active = ActiveDelete(active);
+                    if yield_deletes {
+                        tokio::task::yield_now().await;
+                    }
+                    let fail = failures
+                        .lock()
+                        .expect("delete faults")
+                        .get_mut(&location)
+                        .is_some_and(|remaining| {
+                            if *remaining == 0 {
+                                false
+                            } else {
+                                *remaining -= 1;
+                                true
+                            }
+                        });
+                    if fail
+                        || reject
+                            .as_ref()
+                            .is_some_and(|pattern| location.as_ref().contains(pattern))
                     {
                         return Err(injected_error("injected cleanup failure"));
+                    }
+                    if missing.contains(&location) {
+                        return Err(object_store::Error::NotFound {
+                            path: location.to_string(),
+                            source: Box::new(std::io::Error::other("injected missing object")),
+                        });
                     }
                     inner.delete(&location).await?;
                     Ok(location)

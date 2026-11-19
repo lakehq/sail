@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::convert::TryInto;
@@ -161,7 +163,7 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
-use sail_function::aggregate::vector::avg::VectorAvg;
+use sail_function::aggregate::vector_avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::array_position::SparkArrayPosition;
@@ -219,7 +221,6 @@ use sail_function::scalar::json::{
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
-use sail_function::scalar::math::partition_random::PartitionSeed;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
@@ -240,6 +241,7 @@ use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
+use sail_function::scalar::math::utils::partition_random::PartitionSeed;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
@@ -302,6 +304,7 @@ use sail_function::scalar::vector::l2_distance::VectorL2Distance;
 use sail_function::scalar::vector::norm::VectorNorm;
 use sail_function::scalar::vector::normalize::VectorNormalize;
 use sail_function::scalar::xml::from_xml::SparkFromXml;
+use sail_function::scalar::xml::schema_of_xml::SparkSchemaOfXml;
 use sail_function::scalar::xml::to_xml::SparkToXml;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{XpathTyped, xpath_typed_name_to_kind};
@@ -337,6 +340,7 @@ use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
+use sail_physical_plan::tail::TailExec;
 use sail_python_udf::config::PySparkUdfConfig;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
@@ -501,6 +505,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let node = SystemTableExec::try_new(table, projection, filters, fetch)?;
                 Ok(Arc::new(node))
             }
+            NodeKind::Tail(r#gen::TailExecNode { input, fetch }) => Ok(Arc::new(TailExec::new(
+                try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
+                fetch as usize,
+            ))),
             NodeKind::SchemaPivot(r#gen::SchemaPivotExecNode {
                 input,
                 names,
@@ -2410,6 +2418,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 filters,
                 fetch,
             })
+        } else if let Some(tail) = node.downcast_ref::<TailExec>() {
+            NodeKind::Tail(r#gen::TailExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    tail.input().clone(),
+                )?,
+                fetch: tail.fetch() as u64,
+            })
         } else if let Some(schema_pivot) = node.downcast_ref::<SchemaPivotExec>() {
             let schema = try_encode_schema(schema_pivot.schema().as_ref())?;
             NodeKind::SchemaPivot(r#gen::SchemaPivotExecNode {
@@ -3809,6 +3826,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkToXml::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkSchemaOfXml(r#gen::SparkSchemaOfXmlUdf {
+                case_sensitive,
+                timestamp_ntz,
+            }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkSchemaOfXml::new(
+                    case_sensitive,
+                    timestamp_ntz,
+                ))));
+            }
             UdfKind::SparkFromXml(r#gen::SparkFromXmlUdf { session_timezone }) => {
                 let udf = SparkFromXml::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -4476,6 +4502,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkToXml>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkToXml(r#gen::SparkToXmlUdf { session_timezone })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkSchemaOfXml>() {
+            UdfKind::SparkSchemaOfXml(r#gen::SparkSchemaOfXmlUdf {
+                case_sensitive: func.case_sensitive(),
+                timestamp_ntz: func.timestamp_ntz(),
+            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkFromXml>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromXml(r#gen::SparkFromXmlUdf { session_timezone })
@@ -7110,6 +7141,26 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_tail() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_physical_plan::tail::TailExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(TailExec::new(Arc::new(EmptyExec::new(schema.clone())), 3));
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<TailExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a TailExec"))?;
+        assert_eq!(decoded.fetch(), 3);
+        assert_eq!(decoded.schema(), schema);
+        assert!(decoded.input().is::<EmptyExec>());
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_lake_procedure_preserves_bound_call() -> Result<()> {
         use sail_common_datafusion::lakeprocedure::{
             LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureInvocation,
@@ -8871,6 +8922,383 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_distributed_zip_with_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
+
+        let left = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::<i32>::from_lengths(vec![2]),
+            Arc::new(Int32Array::from(vec![1, 2])),
+            None,
+        );
+        let right = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::<i32>::from_lengths(vec![2]),
+            Arc::new(Int32Array::from(vec![10, 20])),
+            None,
+        );
+        let fields = vec![
+            Field::new("left", left.data_type().clone(), true),
+            Field::new("right", right.data_type().clone(), true),
+        ];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let left_value = Expr::LambdaVariable(LambdaVariable::new(
+            "l".to_string(),
+            Some(Arc::new(Field::new("l", DataType::Int32, true))),
+        ));
+        let right_value = Expr::LambdaVariable(LambdaVariable::new(
+            "r".to_string(),
+            Some(Arc::new(Field::new("r", DataType::Int32, true))),
+        ));
+        let right_lambda = lambda(["__zip_right"], col("right"));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new())),
+            vec![
+                col("left"),
+                right_lambda,
+                lambda(["l", "r"], left_value + right_value),
+            ],
+        ));
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, &schema)?;
+
+        assert_eq!(as_hof(&decoded)?.name(), "zip_with");
+        assert_same_result(
+            &physical,
+            &decoded,
+            schema,
+            vec![Arc::new(left), Arc::new(right)],
+        )
+    }
+
+    #[test]
+    fn test_round_trip_distributed_map_zip_with_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Int32Builder, MapBuilder};
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
+
+        let mut left_builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
+        left_builder.keys().append_value(1);
+        left_builder.values().append_value(10);
+        left_builder.append(true)?;
+        let left = left_builder.finish();
+        let mut right_builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
+        right_builder.keys().append_value(1);
+        right_builder.values().append_value(20);
+        right_builder.append(true)?;
+        let right = right_builder.finish();
+        let fields = vec![
+            Field::new("left", left.data_type().clone(), true),
+            Field::new("right", right.data_type().clone(), true),
+        ];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let right_value = Expr::LambdaVariable(LambdaVariable::new(
+            "v2".to_string(),
+            Some(Arc::new(Field::new("v2", DataType::Int32, true))),
+        ));
+        let right_lambda = lambda(["__map_zip_right"], col("right"));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkMapZipWith::new(
+                false,
+                Arc::from("America/Los_Angeles"),
+            ))),
+            vec![
+                col("left"),
+                right_lambda,
+                lambda(["k", "v1", "v2"], right_value),
+            ],
+        ));
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, &schema)?;
+
+        assert_eq!(as_hof(&decoded)?.name(), "map_zip_with");
+        let encoded_udf = super::super::encode::try_encode_higher_order_udf(as_hof(&physical)?)?;
+        let decoded_udf = super::super::decode::try_decode_higher_order_udf(&encoded_udf)?;
+        let decoded_udf_inner = decoded_udf.inner();
+        let Some(decoded_map_zip_with) =
+            (decoded_udf_inner.as_ref() as &dyn Any).downcast_ref::<SparkMapZipWith>()
+        else {
+            return plan_err!("decoded UDF is not map_zip_with");
+        };
+        assert!(!decoded_map_zip_with.ansi_mode());
+        assert_eq!(
+            decoded_map_zip_with.session_timezone(),
+            "America/Los_Angeles"
+        );
+        assert_same_result(
+            &physical,
+            &decoded,
+            schema,
+            vec![Arc::new(left), Arc::new(right)],
+        )
+    }
+
+    #[test]
+    fn test_round_trip_distributed_zip_with_null_unequal_multi_row_struct_result() -> Result<()> {
+        use datafusion::arrow::array::{Int32Array, ListArray};
+        use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable, ScalarFunction};
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, ScalarUDF, col, lambda};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
+
+        let left = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::<i32>::from_lengths(vec![2, 1, 0]),
+            Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        let right = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::<i32>::from_lengths(vec![1, 3, 0]),
+            Arc::new(Int32Array::from(vec![
+                Some(10),
+                Some(20),
+                Some(30),
+                Some(40),
+            ])),
+            Some(NullBuffer::from(vec![true, true, true])),
+        );
+        let fields = vec![
+            Field::new("left", left.data_type().clone(), true),
+            Field::new("right", right.data_type().clone(), true),
+        ];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let left_value = Expr::LambdaVariable(LambdaVariable::new(
+            "l".to_owned(),
+            Some(Arc::new(Field::new("l", DataType::Int32, true))),
+        ));
+        let right_value = Expr::LambdaVariable(LambdaVariable::new(
+            "r".to_owned(),
+            Some(Arc::new(Field::new("r", DataType::Int32, true))),
+        ));
+        let body = Expr::ScalarFunction(ScalarFunction::new_udf(
+            Arc::new(ScalarUDF::from(
+                datafusion::functions::core::r#struct::StructFunc::new(),
+            )),
+            vec![left_value, right_value],
+        ));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new())),
+            vec![col("left"), col("right"), lambda(["l", "r"], body)],
+        ));
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, &schema)?;
+
+        assert_same_result(
+            &physical,
+            &decoded,
+            schema,
+            vec![Arc::new(left), Arc::new(right)],
+        )
+    }
+
+    #[test]
+    fn test_round_trip_distributed_zip_with_ordinary_expression_and_large_list() -> Result<()> {
+        use datafusion::arrow::array::{Int32Array, LargeListArray};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::HigherOrderFunction;
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda, lit};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
+
+        let left = LargeListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::<i64>::from_lengths(vec![2, 1]),
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            None,
+        );
+        let right = LargeListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::<i64>::from_lengths(vec![1, 2]),
+            Arc::new(Int32Array::from(vec![10, 20, 30])),
+            None,
+        );
+        let fields = vec![
+            Field::new("left", left.data_type().clone(), true),
+            Field::new("right", right.data_type().clone(), true),
+        ];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new())),
+            vec![col("left"), col("right"), lambda(["l", "r"], lit(5i32))],
+        ));
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, &schema)?;
+
+        assert_same_result(
+            &physical,
+            &decoded,
+            schema,
+            vec![Arc::new(left), Arc::new(right)],
+        )
+    }
+
+    #[test]
+    fn test_round_trip_distributed_zip_with_list_view_inputs() -> Result<()> {
+        use datafusion::arrow::array::{Int32Array, ListViewArray};
+        use datafusion::arrow::buffer::ScalarBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::HigherOrderFunction;
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda, lit};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
+
+        let left = ListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            ScalarBuffer::from(vec![0i32, 2]),
+            ScalarBuffer::from(vec![2i32, 1]),
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            None,
+        );
+        let right = ListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            ScalarBuffer::from(vec![0i32, 1]),
+            ScalarBuffer::from(vec![1i32, 2]),
+            Arc::new(Int32Array::from(vec![10, 20, 30])),
+            None,
+        );
+        let fields = vec![
+            Field::new("left", left.data_type().clone(), true),
+            Field::new("right", right.data_type().clone(), true),
+        ];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new())),
+            vec![col("left"), col("right"), lambda(["l", "r"], lit(5i32))],
+        ));
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, &schema)?;
+
+        assert_same_result(
+            &physical,
+            &decoded,
+            schema,
+            vec![Arc::new(left), Arc::new(right)],
+        )
+    }
+
+    #[test]
+    fn test_round_trip_distributed_map_zip_with_duplicates_and_temporal_keys() -> Result<()> {
+        use datafusion::arrow::array::{Int32Builder, MapBuilder, StringBuilder};
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
+
+        let mut left_builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        left_builder.keys().append_value("2024-01-01");
+        left_builder.values().append_value(1);
+        left_builder.keys().append_value("2024-01-01 00:00:00");
+        left_builder.values().append_value(2);
+        left_builder.append(true)?;
+        let left = left_builder.finish();
+        let mut right_builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        right_builder.keys().append_value("2024-01-01 00:00:00");
+        right_builder.values().append_value(3);
+        right_builder.append(true)?;
+        let right = right_builder.finish();
+        let fields = vec![
+            Field::new("left", left.data_type().clone(), true),
+            Field::new("right", right.data_type().clone(), true),
+        ];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let v1 = Expr::LambdaVariable(LambdaVariable::new(
+            "v1".to_owned(),
+            Some(Arc::new(Field::new("v1", DataType::Int32, true))),
+        ));
+        let v2 = Expr::LambdaVariable(LambdaVariable::new(
+            "v2".to_owned(),
+            Some(Arc::new(Field::new("v2", DataType::Int32, true))),
+        ));
+        let body = Expr::Case(datafusion::logical_expr::expr::Case {
+            expr: None,
+            when_then_expr: vec![(Box::new(v1.clone().is_not_null()), Box::new(v1.clone()))],
+            else_expr: Some(Box::new(v2)),
+        });
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkMapZipWith::new(
+                true,
+                Arc::from("UTC"),
+            ))),
+            vec![col("left"), col("right"), lambda(["k", "v1", "v2"], body)],
+        ));
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, &schema)?;
+
+        assert_same_result(
+            &physical,
+            &decoded,
+            schema,
+            vec![Arc::new(left), Arc::new(right)],
+        )
+    }
+
+    #[test]
     fn test_round_trip_distributed_map_filter_value_only() -> Result<()> {
         use std::collections::HashMap;
 
@@ -8977,7 +9405,8 @@ mod tests {
         use datafusion::physical_expr::create_physical_expr;
         use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 
-        for last_value_wins in [false, true] {
+        for (last_value_wins, preserve_duplicates) in [(false, false), (true, false), (false, true)]
+        {
             let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
             builder.keys().append_value(1);
             builder.values().append_value(10);
@@ -8993,10 +9422,13 @@ mod tests {
                 "k".to_string(),
                 Some(Arc::new(Field::new("k", DataType::Int32, false))),
             ));
+            let udf = if preserve_duplicates {
+                SparkTransformKeys::new_preserving_duplicates()
+            } else {
+                SparkTransformKeys::new(last_value_wins)
+            };
             let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
-                Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
-                    last_value_wins,
-                ))),
+                Arc::new(HigherOrderUDF::new_from_impl(udf)),
                 vec![col("m"), lambda(["k", "v"], key + lit(1i32))],
             ));
             let physical = create_physical_expr(
@@ -9007,9 +9439,33 @@ mod tests {
             )?;
             let decoded = round_trip_expr(&physical, &schema)?;
             assert_eq!(as_hof(&decoded)?.name(), "transform_keys");
+            let decoded_udf = as_hof(&decoded)?.fun().inner();
+            let decoded_transform_keys = (decoded_udf.as_ref() as &dyn Any)
+                .downcast_ref::<SparkTransformKeys>()
+                .ok_or_else(|| plan_datafusion_err!("decoded UDF is not transform_keys"))?;
+            assert_eq!(decoded_transform_keys.is_last_value_wins(), last_value_wins);
+            assert_eq!(
+                decoded_transform_keys.preserves_duplicates(),
+                preserve_duplicates
+            );
             assert_same_result(&physical, &decoded, schema, vec![Arc::new(map)])?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_reject_conflicting_transform_keys_policies() {
+        let udf = r#gen::HigherOrderUdf {
+            higher_order_udf_kind: Some(
+                r#gen::higher_order_udf::HigherOrderUdfKind::TransformKeys(
+                    r#gen::SparkTransformKeysUdf {
+                        last_value_wins: true,
+                        preserve_duplicates: true,
+                    },
+                ),
+            ),
+        };
+        assert!(super::super::decode::try_decode_higher_order_udf(&udf).is_err());
     }
 
     /// Distributed round-trip for `exists(arr, v -> v > 2)` over `[[1, 2, 3]]`.
@@ -9431,7 +9887,10 @@ mod tests {
                 keys: vec![Arc::from(key)],
                 channels: 4,
             },
-            locator: TaskOutputLocator::Pipelined { replicas: 1 },
+            locator: TaskOutputLocator::Pipelined {
+                replicas: 1,
+                bounded: false,
+            },
         };
 
         let ctx = TaskContext::default();
@@ -9482,7 +9941,10 @@ mod tests {
             .map_err(|error| plan_datafusion_err!("failed to decode task output: {error}"))?;
         let output = TaskOutput {
             distribution,
-            locator: TaskOutputLocator::Pipelined { replicas: 1 },
+            locator: TaskOutputLocator::Pipelined {
+                replicas: 1,
+                bounded: false,
+            },
         };
 
         let actual = output

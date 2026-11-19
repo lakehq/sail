@@ -1,5 +1,4 @@
-#[cfg(test)]
-mod tests;
+// SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
 
@@ -7,7 +6,6 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::Partitioning;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use sail_common_datafusion::replay::ReplayId;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskStreamKey, WorkerId};
@@ -24,9 +22,11 @@ pub struct TaskDefinition {
 
 #[derive(Debug, Clone)]
 pub struct TaskInput {
-    pub replay: Option<ReplayId>,
     pub stage: usize,
     pub locator: Arc<TaskInputLocator>,
+    /// Whether each consumer task reads its own replica of the input streams,
+    /// as for merge and broadcast inputs, rather than one consumer partition per stream.
+    pub replicated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -90,27 +90,13 @@ pub enum TaskOutputDistribution {
 
 #[derive(Debug, Clone)]
 pub enum TaskOutputLocator {
-    Pipelined { replicas: usize },
+    Pipelined {
+        replicas: usize,
+        /// Whether the task waits for the readers of its output when they fall behind.
+        /// The task queues its output in memory without any limit otherwise.
+        bounded: bool,
+    },
     Blocking,
-    ReplayLocal { id: ReplayId },
-    ReplayStorage { id: ReplayId },
-}
-
-fn encode_replay_id(id: ReplayId) -> r#gen::ReplayId {
-    r#gen::ReplayId {
-        scope: id.scope.to_string(),
-        ordinal: id.ordinal,
-    }
-}
-
-fn decode_replay_id(id: r#gen::ReplayId) -> ExecutionResult<ReplayId> {
-    Ok(ReplayId {
-        scope: id
-            .scope
-            .parse()
-            .map_err(|e| ExecutionError::InvalidArgument(format!("invalid replay scope: {e}")))?,
-        ordinal: id.ordinal,
-    })
 }
 
 impl From<TaskDefinition> for r#gen::TaskDefinition {
@@ -156,14 +142,14 @@ impl TryFrom<r#gen::TaskDefinition> for TaskDefinition {
 impl From<TaskInput> for r#gen::TaskInput {
     fn from(value: TaskInput) -> Self {
         let TaskInput {
-            replay,
             stage,
             locator,
+            replicated,
         } = value;
         r#gen::TaskInput {
-            replay: replay.map(encode_replay_id),
             stage: stage as u64,
             locator: Some(locator.as_ref().clone().into()),
+            replicated,
         }
     }
 }
@@ -181,9 +167,9 @@ impl TryFrom<r#gen::TaskInput> for TaskInput {
             }
         };
         Ok(TaskInput {
-            replay: value.replay.map(decode_replay_id).transpose()?,
             stage: value.stage as usize,
             locator: Arc::new(locator),
+            replicated: value.replicated,
         })
     }
 }
@@ -533,19 +519,14 @@ impl TryFrom<r#gen::TaskOutputDistribution> for TaskOutputDistribution {
 impl From<TaskOutputLocator> for r#gen::TaskOutputLocator {
     fn from(value: TaskOutputLocator) -> Self {
         let kind = match value {
-            TaskOutputLocator::Pipelined { replicas } => {
+            TaskOutputLocator::Pipelined { replicas, bounded } => {
                 r#gen::task_output_locator::Kind::Pipelined(r#gen::TaskOutputPipelinedLocator {
                     replicas: replicas as u64,
+                    bounded,
                 })
             }
             TaskOutputLocator::Blocking => {
                 r#gen::task_output_locator::Kind::Blocking(r#gen::TaskOutputBlockingLocator {})
-            }
-            TaskOutputLocator::ReplayLocal { id } => {
-                r#gen::task_output_locator::Kind::ReplayLocal(encode_replay_id(id))
-            }
-            TaskOutputLocator::ReplayStorage { id } => {
-                r#gen::task_output_locator::Kind::ReplayStorage(encode_replay_id(id))
             }
         };
         r#gen::TaskOutputLocator { kind: Some(kind) }
@@ -558,21 +539,12 @@ impl TryFrom<r#gen::TaskOutputLocator> for TaskOutputLocator {
     fn try_from(value: r#gen::TaskOutputLocator) -> Result<Self, Self::Error> {
         match value.kind {
             Some(r#gen::task_output_locator::Kind::Pipelined(
-                r#gen::TaskOutputPipelinedLocator { replicas },
+                r#gen::TaskOutputPipelinedLocator { replicas, bounded },
             )) => Ok(TaskOutputLocator::Pipelined {
                 replicas: replicas as usize,
+                bounded,
             }),
             Some(r#gen::task_output_locator::Kind::Blocking(_)) => Ok(TaskOutputLocator::Blocking),
-            Some(r#gen::task_output_locator::Kind::ReplayLocal(id)) => {
-                Ok(TaskOutputLocator::ReplayLocal {
-                    id: decode_replay_id(id)?,
-                })
-            }
-            Some(r#gen::task_output_locator::Kind::ReplayStorage(id)) => {
-                Ok(TaskOutputLocator::ReplayStorage {
-                    id: decode_replay_id(id)?,
-                })
-            }
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task output locator".to_string(),
             )),
@@ -637,5 +609,36 @@ impl TaskOutput {
                 Ok(ShufflePartitioning::RoundRobinRow(*channels))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pipelined_output_locator_keeps_bounded() -> Result<(), ExecutionError> {
+        for bounded in [false, true] {
+            let locator = TaskOutputLocator::Pipelined {
+                replicas: 3,
+                bounded,
+            };
+            let locator = TaskOutputLocator::try_from(r#gen::TaskOutputLocator::from(locator))?;
+            assert!(matches!(
+                locator,
+                TaskOutputLocator::Pipelined { replicas: 3, bounded: decoded } if decoded == bounded
+            ));
+        }
+        // A locator that does not say anything never makes the task wait.
+        let locator = r#gen::TaskOutputLocator {
+            kind: Some(r#gen::task_output_locator::Kind::Pipelined(
+                r#gen::TaskOutputPipelinedLocator::default(),
+            )),
+        };
+        assert!(matches!(
+            TaskOutputLocator::try_from(locator)?,
+            TaskOutputLocator::Pipelined { bounded: false, .. }
+        ));
+        Ok(())
     }
 }

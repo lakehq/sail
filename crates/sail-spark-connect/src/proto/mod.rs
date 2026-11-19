@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub(crate) mod analyzer;
 pub(crate) mod common;
 pub(crate) mod data_type;

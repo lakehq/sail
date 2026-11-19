@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 
 pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Tests Sail streaming query behavior")

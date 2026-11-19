@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! File selection shared by logical metadata evaluation and physical scans.
 use std::collections::HashMap;
 

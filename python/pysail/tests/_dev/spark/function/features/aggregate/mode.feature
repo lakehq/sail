@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: mode
 
   Rule: Result values (migrated from test_mode.txt doctests)

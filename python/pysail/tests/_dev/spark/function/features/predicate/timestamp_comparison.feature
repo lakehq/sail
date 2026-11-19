@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Timestamp and string predicate coercion
 
   Rule: Timestamp comparisons use Spark coercion semantics

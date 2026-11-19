@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -8,8 +10,8 @@ use datafusion::arrow::datatypes::{DataType, Float32Type};
 use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
-use super::is_float_vector;
-use crate::functions_nested_utils::make_scalar_function;
+use super::utils::is_float_vector;
+use crate::scalar::utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct VectorCosineSimilarity {

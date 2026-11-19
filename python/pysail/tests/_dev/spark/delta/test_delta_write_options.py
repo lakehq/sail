@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Test Delta Lake write options (write_batch_size, target_file_size) in Sail.
 """
@@ -34,9 +36,9 @@ def test_delta_write_option_write_batch_size(spark, tmp_path):
         result_data = result_df.collect()
 
         # Verify all data is present and correct
-        assert len(result_data) == 100  # noqa: PLR2004
+        assert len(result_data) == 100
         assert result_data[0].id == 1
-        assert result_data[-1].id == 100  # noqa: PLR2004
+        assert result_data[-1].id == 100
         assert result_data[0].name == "user_1"
         assert result_data[-1].name == "user_100"
 
@@ -66,9 +68,9 @@ def test_delta_write_option_target_file_size(spark, tmp_path):
         result_df = spark.read.format("delta").load(f"{size_path}").sort("id")
         result_data = result_df.collect()
 
-        assert len(result_data) == 1000  # noqa: PLR2004
+        assert len(result_data) == 1000
         assert result_data[0].id == 1
-        assert result_data[-1].id == 1000  # noqa: PLR2004
+        assert result_data[-1].id == 1000
         assert "user_with_very_long_name_1" in result_data[0].name
         assert "user_with_very_long_name_1000" in result_data[-1].name
 
@@ -94,16 +96,16 @@ def test_delta_write_options_combined(spark, tmp_path):
     result_data = result_df.collect()
 
     # Verify all data is present and correct
-    assert len(result_data) == 150  # noqa: PLR2004
+    assert len(result_data) == 150
     assert result_data[0].id == 1
-    assert result_data[-1].id == 150  # noqa: PLR2004
+    assert result_data[-1].id == 150
     assert result_data[0].name == "user_1"
     assert result_data[-1].name == "user_150"
 
     # Verify data types are preserved
     assert isinstance(result_data[0].score, float)
-    assert result_data[0].score == 0.01  # noqa: PLR2004
-    assert result_data[-1].score == 1.5  # noqa: PLR2004
+    assert result_data[0].score == 0.01
+    assert result_data[-1].score == 1.5
 
 
 def test_delta_write_options_with_partitioning(spark, tmp_path):
@@ -127,9 +129,9 @@ def test_delta_write_options_with_partitioning(spark, tmp_path):
     result_data = result_df.collect()
 
     # Verify all data is present and correct
-    assert len(result_data) == 60  # noqa: PLR2004
+    assert len(result_data) == 60
     assert result_data[0].id == 1
-    assert result_data[-1].id == 60  # noqa: PLR2004
+    assert result_data[-1].id == 60
 
     # Verify partitioning worked
     categories = {row.category for row in result_data}
@@ -138,7 +140,7 @@ def test_delta_write_options_with_partitioning(spark, tmp_path):
     # Test partition filtering
     filtered_df = spark.read.format("delta").load(f"{delta_path}").filter("category = 'cat_0'")
     filtered_data = filtered_df.collect()
-    assert len(filtered_data) == 20  # 60 rows / 3 categories = 20 rows per category  # noqa: PLR2004
+    assert len(filtered_data) == 20  # 60 rows / 3 categories = 20 rows per category
 
 
 def test_delta_rotated_files_match_log_sizes_and_statistics(spark, tmp_path):

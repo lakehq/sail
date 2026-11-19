@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Lakehouse commits in distributed execution
 
   Rule: Delta Lake commit execution

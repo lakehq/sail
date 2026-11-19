@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """A correlated EXISTS whose body has an OFFSET tests whether the body returns more rows than
 the offset for each outer row, whatever the correlation.
 

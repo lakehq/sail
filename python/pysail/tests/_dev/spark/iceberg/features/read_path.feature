@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Iceberg read path (driver vs metadata-as-data)
 
   Rule: EXPLAIN shows standard driver path when table has no metadataAsDataRead option

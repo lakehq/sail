@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: luhn_check output schema
 
   @function(nullability)

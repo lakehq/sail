@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_common::arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{ToDFSchema, internal_datafusion_err};
 use datafusion_expr::EmptyRelation;

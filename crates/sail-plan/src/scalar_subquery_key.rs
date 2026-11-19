@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::any::Any;
 use std::sync::Arc;
 
@@ -486,6 +488,20 @@ impl NameNormalizer {
             ..subquery
         })
     }
+}
+
+/// Returns whether the expression is a call of a volatile function.
+pub(crate) fn is_volatile_call(expr: &Expr) -> bool {
+    let volatility = match expr {
+        Expr::ScalarFunction(function) => function.func.signature().volatility,
+        Expr::AggregateFunction(function) => function.func.signature().volatility,
+        Expr::WindowFunction(function) => match &function.fun {
+            WindowFunctionDefinition::AggregateUDF(udaf) => udaf.signature().volatility,
+            WindowFunctionDefinition::WindowUDF(udwf) => udwf.signature().volatility,
+        },
+        _ => return false,
+    };
+    volatility == Volatility::Volatile
 }
 
 /// Returns whether the extension node holds no source or state, and its equality compares

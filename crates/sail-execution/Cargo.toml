@@ -49,6 +49,7 @@ datafusion-proto = { workspace = true }
 datafusion-spark = { workspace = true }
 object_store = { workspace = true }
 arrow-flight = { workspace = true }
+arrow-select = { workspace = true }
 log = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
@@ -62,7 +63,7 @@ readonly = { workspace = true }
 indexmap = { workspace = true }
 chrono = { workspace = true }
 bytes = { workspace = true }
-crc32fast = { workspace = true }
+libc = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
@@ -70,5 +71,3 @@ tonic-prost-build = { workspace = true }
 
 [dev-dependencies]
 h2 = { workspace = true }
-opentelemetry = { workspace = true }
-opentelemetry_sdk = { workspace = true }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::any::Any;
 
 use datafusion::execution::SendableRecordBatchStream;
@@ -148,14 +150,9 @@ impl TaskMonitor {
                 break Self::status(key, TaskStatus::Succeeded, None, None);
             };
             if let Err(error) = batch {
-                let status = if crate::error::is_replay_read_error(&error) {
-                    TaskStatus::ReplayLost
-                } else {
-                    TaskStatus::Failed
-                };
                 break Self::status(
                     key,
-                    status,
+                    TaskStatus::Failed,
                     Some(format!("task error: {error}")),
                     Some(CommonErrorCause::new::<PyErrExtractor>(&error)),
                 );

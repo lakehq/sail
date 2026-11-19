@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Query result display
   These tests ensure the BDD steps are implemented correctly.
 

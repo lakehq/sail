@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 @spark-4.1
 Feature: try_to_time
   Safe variant of to_time that returns NULL on parse failure

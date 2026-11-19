@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::StringArray;
@@ -8,7 +10,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-use crate::scalar::math::xorshift::SparkXorShiftRandom;
+use crate::scalar::math::utils::xorshift::SparkXorShiftRandom;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Randstr {

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use opentelemetry_otlp::ExporterBuildError;
 use thiserror::Error;
 

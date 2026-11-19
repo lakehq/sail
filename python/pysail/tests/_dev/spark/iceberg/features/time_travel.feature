@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Iceberg SQL time travel
 
   Rule: SQL time travel works for named and direct Iceberg reads

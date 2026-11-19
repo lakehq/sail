@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod config;
 mod debug;
 pub mod entrypoint;
@@ -12,7 +14,7 @@ pub mod session_manager;
 mod streaming;
 
 pub use error::{SparkError, SparkResult};
-pub use proto::data_type_json::JsonDataType;
+pub use sail_common_spark::data_type::JsonDataType;
 
 pub mod spark {
     #[expect(clippy::all, clippy::allow_attributes)]

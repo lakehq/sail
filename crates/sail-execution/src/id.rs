@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt;
 use std::marker::PhantomData;
 
@@ -159,6 +161,46 @@ pub struct TaskStreamKey {
     pub partition: usize,
     pub attempt: usize,
     pub channel: usize,
+}
+
+/// The streams of the given channels of the given tasks of a stage.
+/// A reader fetches all these streams in one request and reads them in arbitrary order.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct TaskStreamKeySet {
+    pub job_id: JobId,
+    pub stage: usize,
+    /// The partition and the attempt of each task.
+    pub tasks: Vec<(usize, usize)>,
+    pub channels: Vec<usize>,
+    /// Whether the reader releases the streams, which it will not read.
+    /// The tasks that write the streams learn so, and the reader gets no data.
+    pub release: bool,
+}
+
+impl TaskStreamKeySet {
+    pub fn keys(&self) -> impl Iterator<Item = TaskStreamKey> + '_ {
+        self.tasks.iter().flat_map(move |&(partition, attempt)| {
+            self.channels.iter().map(move |&channel| TaskStreamKey {
+                job_id: self.job_id,
+                stage: self.stage,
+                partition,
+                attempt,
+                channel,
+            })
+        })
+    }
+}
+
+impl From<TaskStreamKey> for TaskStreamKeySet {
+    fn from(key: TaskStreamKey) -> Self {
+        Self {
+            job_id: key.job_id,
+            stage: key.stage,
+            tasks: vec![(key.partition, key.attempt)],
+            channels: vec![key.channel],
+            release: false,
+        }
+    }
 }
 
 pub struct TaskStreamKeyDisplay<'a>(pub &'a TaskStreamKey);

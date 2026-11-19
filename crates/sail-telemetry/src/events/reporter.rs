@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use opentelemetry::logs::{AnyValue, LogRecord, Logger};
 use opentelemetry_sdk::logs::SdkLogger;
 use sail_system_store::SystemEvent;

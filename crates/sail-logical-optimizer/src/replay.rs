@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::optimizer::push_down_filter::PushDownFilter;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
@@ -52,7 +54,7 @@ mod tests {
     use datafusion::optimizer::OptimizerContext;
     use datafusion_common::tree_node::TreeNode;
     use datafusion_expr::{Extension, LogicalPlanBuilder, col, lit};
-    use sail_common_datafusion::replay::ReplayId;
+    use sail_logical_plan::replay::ReplayId;
 
     use super::*;
 

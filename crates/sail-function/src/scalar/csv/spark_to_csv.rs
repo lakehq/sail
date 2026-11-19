@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use chrono::prelude::*;
@@ -10,9 +12,9 @@ use datafusion_expr::{
     ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
+use datafusion_functions::utils::make_scalar_function;
 use lazy_static::lazy_static;
 
-use crate::functions_utils::make_scalar_function;
 use crate::scalar::csv::options::{
     CsvFunction, find_option, find_option_with_alias, parse_bool_option, reject_null_entries,
     validate_options,

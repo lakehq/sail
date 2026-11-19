@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 
 import uuid
@@ -191,7 +193,6 @@ def test_cow_prunes_unrelated_files_without_filtering_survivors(spark, tmp_path,
     name = "cow_pruned_files"
     path = tmp_path / name
     moved = []
-    untouched_id = 3
     try:
         spark.sql(f"""CREATE TABLE {name} (id INT, value INT, part STRING) USING iceberg
             PARTITIONED BY (part) LOCATION '{path.as_uri()}'
@@ -200,7 +201,7 @@ def test_cow_prunes_unrelated_files_without_filtering_survivors(spark, tmp_path,
         spark.sql(f"INSERT INTO {name} VALUES (3,30,'B'),(4,40,'B')")
         for index, entry in enumerate(_current_manifest_entries(path, ManifestContent.DATA)):
             file = _local_file_path(entry.data_file.file_path)
-            if untouched_id in pq.ParquetFile(file).read(columns=["id"]).column("id").to_pylist():
+            if 3 in pq.ParquetFile(file).read(columns=["id"]).column("id").to_pylist():
                 backup = tmp_path / f"saved-{index}.parquet"
                 file.rename(backup)
                 moved.append((file, backup))
@@ -286,7 +287,7 @@ def test_cow_rewrites_only_affected_files_and_preserves_history(spark, tmp_path,
         for file_path in set(before_by_path) & set(after_by_path):
             assert after_by_path[file_path].sequence_number == before_by_path[file_path].sequence_number
             assert after_by_path[file_path].file_sequence_number == before_by_path[file_path].file_sequence_number
-        if format_version >= 2:  # noqa: PLR2004
+        if format_version >= 2:
             assert after["last-sequence-number"] == before["last-sequence-number"] + 1
             assert after["refs"]["main"]["snapshot-id"] == snapshot["snapshot-id"]
             for file_path in set(after_by_path) - set(before_by_path):
@@ -352,7 +353,7 @@ def test_cow_applies_existing_equality_and_position_deletes(spark, tmp_path):
         deletes_before = {
             entry.data_file.file_path for entry in _current_manifest_entries(path, ManifestContent.DELETES)
         }
-        assert len(deletes_before) == 2  # noqa: PLR2004
+        assert len(deletes_before) == 2
         assert [tuple(row) for row in spark.sql(f"SELECT * FROM {name} ORDER BY id").collect()] == [
             (1, 10),
             (5, 50),
@@ -556,7 +557,7 @@ def test_cow_after_dropping_partition_source(spark, sql_catalog, format_version,
             update.delete_column("p")
         path = _local_file_path(table.location())
         spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{path.as_uri()}'")
-        if format_version == 3:  # noqa: PLR2004
+        if format_version == 3:
             spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('format-version' = '3')")
         before = _find_latest_metadata(path)
         before_paths = {entry.data_file.file_path for entry in _current_manifest_entries(path, ManifestContent.DATA)}
@@ -615,8 +616,8 @@ def test_cow_commit_preserves_main_reference_retention(spark, tmp_path):
         spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{path.as_uri()}'")
         spark.sql(f"UPDATE {name} SET value = 100 WHERE id = 1")
         reference = _find_latest_metadata(path)["refs"]["main"]
-        assert reference["min-snapshots-to-keep"] == 5  # noqa: PLR2004
-        assert reference["max-snapshot-age-ms"] == 86400000  # noqa: PLR2004
+        assert reference["min-snapshots-to-keep"] == 5
+        assert reference["max-snapshot-age-ms"] == 86400000
         assert reference["snapshot-id"] != metadata["current-snapshot-id"]
         assert [tuple(row) for row in spark.table(name).collect()] == [(1, 100)]
     finally:

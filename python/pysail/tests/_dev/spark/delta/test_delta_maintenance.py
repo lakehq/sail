@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import json
@@ -167,7 +169,7 @@ def test_optimize_partition_compaction_and_idempotence(spark, maintenance_table,
     assert max(_commits(path)) == max(commits)
     # All remaining partitions are compacted independently, including the null partition.
     spark.sql(f"OPTIMIZE delta.`{path}`").collect()
-    assert len(_active_files(path)) == 3  # noqa: PLR2004
+    assert len(_active_files(path)) == 3
     assert spark.table(name).orderBy("id", "part").collect() == rows
     with pytest.raises(Exception, match="only partition columns"):
         spark.sql(f"OPTIMIZE {name} WHERE id = 0").collect()
@@ -241,7 +243,7 @@ def test_optimize_constant_predicates_without_partitions(spark, tmp_path):
             assert metrics.totalConsideredFiles == metrics.numFilesRemoved == metrics.numFilesAdded == 0
             assert _commits(path) == before
         metrics = spark.sql(f"OPTIMIZE {name} WHERE TRUE").first().metrics
-        assert metrics.totalConsideredFiles == metrics.numFilesRemoved == 2  # noqa: PLR2004
+        assert metrics.totalConsideredFiles == metrics.numFilesRemoved == 2
         assert metrics.numFilesAdded == 1
         assert spark.table(name).orderBy("value").collect() == [Row(value=0), Row(value=1)]
     finally:
@@ -314,7 +316,7 @@ def test_optimize_multiple_bins_commit_atomically(spark, maintenance_table):
     expected = spark.table(name).orderBy("part", "id").collect()
     before = max(_commits(path))
     result = spark.sql(f"OPTIMIZE {name}").first().metrics
-    assert result.numBins == 4  # noqa: PLR2004
+    assert result.numBins == 4
     assert result.totalScheduledTasks == result.numBins
     assert result.totalClusterParallelism > 1
     assert result.numFilesAdded == result.numBins
@@ -390,7 +392,7 @@ def test_vacuum_preserves_read_mode_table_files(spark, read_mode_table, dry_run)
     spark.range(2).coalesce(1).write.format("delta").mode("append").save(str(path))
     spark.range(2, 4).coalesce(1).write.format("delta").mode("overwrite").save(str(path))
     retained = {file: file.read_bytes() for file in path.glob("*.parquet")}
-    assert len(retained) == 2  # noqa: PLR2004
+    assert len(retained) == 2
     orphan = path / "unreferenced.parquet"
     orphan.write_bytes(next(iter(retained.values())))
     old = time.time() - 8 * 24 * 3600
@@ -416,7 +418,7 @@ def test_optimize_compacts_read_mode_table_files(spark, read_mode_table):
     spark.range(2, 4).coalesce(1).write.format("delta").mode("append").save(str(path))
     before = max(_commits(path))
     result = spark.sql(f"OPTIMIZE {name}").first()
-    assert result.metrics.numFilesRemoved == 2  # noqa: PLR2004
+    assert result.metrics.numFilesRemoved == 2
     assert result.metrics.numFilesAdded == 1
     assert max(_commits(path)) == before + 1
     assert len(_active_files(path)) == 1
@@ -596,7 +598,7 @@ def test_vacuum_retention_dry_run_and_audit(spark, delta_jvm_spark, maintenance_
     assert not removed.exists()
     assert active.exists()
     assert hidden.exists()
-    assert spark.table(name).first().id == 2  # noqa: PLR2004
+    assert spark.table(name).first().id == 2
 
 
 def test_maintenance_errors_and_explain_do_not_mutate(spark, maintenance_table):

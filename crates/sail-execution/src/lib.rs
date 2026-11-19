@@ -1,5 +1,4 @@
-#[cfg(test)]
-mod replay_integration_tests;
+// SPDX-License-Identifier: Apache-2.0
 
 pub mod driver;
 pub mod error;

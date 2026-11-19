@@ -1,4 +1,5 @@
-// [CREDIT]: https://github.com/apache/datafusion/blob/70f2ed01b8392127fa0eb4f1fb5e57869c42ecfa/datafusion/functions-aggregate/src/approx_percentile_cont.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/70f2ed01b8392127fa0eb4f1fb5e57869c42ecfa/datafusion/functions-aggregate/src/approx_percentile_cont.rs
 
 use std::fmt::Debug;
 use std::mem::size_of_val;
@@ -18,7 +19,7 @@ use datafusion_expr::{Accumulator, AggregateUDFImpl, ColumnarValue, Signature, V
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
 
-use crate::aggregate::quantile_summary::{QuantileSummary, Sample};
+use crate::aggregate::utils::quantile_summary::{QuantileSummary, Sample};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ApproxPercentileCont {

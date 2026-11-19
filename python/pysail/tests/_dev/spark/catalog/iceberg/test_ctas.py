@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Nested CTAS schemas must agree with catalog metadata and Parquet field IDs."""
 
 from collections import Counter

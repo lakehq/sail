@@ -13,7 +13,7 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
-sail-spark-connect = { path = "../sail-spark-connect" }
+sail-common-spark = { path = "../sail-common-spark" }
 
 clap = { workspace = true }
 serde = { workspace = true }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -90,12 +92,6 @@ pub(super) fn build_change_data_writer(
 
 pub(super) fn validate_change_data_input(input: &Arc<dyn ExecutionPlan>) -> Result<()> {
     input.apply(|node| {
-        if node
-            .downcast_ref::<sail_physical_plan::replay::ReplayExec>()
-            .is_some()
-        {
-            return Ok(TreeNodeRecursion::Jump);
-        }
         node.apply_expressions(&mut |root| {
             root.apply(|expression| {
                 if expression.is_volatile_node() {

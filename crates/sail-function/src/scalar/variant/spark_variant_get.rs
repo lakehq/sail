@@ -1,6 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/variant_get.rs
+
 use std::sync::Arc;
 
-/// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/main/src/variant_get.rs>
 use arrow_schema::{ArrowError, DataType, Field, FieldRef};
 use chumsky::prelude::*;
 use datafusion::arrow::datatypes::TimeUnit;
@@ -333,8 +335,8 @@ impl ScalarUDFImpl for SparkVariantGet {
 ///
 /// Supports Spark-compatible names first, then falls back to Arrow's `DataType::parse()`
 /// for full type coverage (e.g. `"Int64"`, `"Decimal128(10,2)"`).
-fn spark_type_to_arrow(type_str: &str) -> Result<DataType> {
-    let lower = type_str.to_lowercase();
+fn spark_type_to_arrow(raw: &str) -> Result<DataType> {
+    let lower = raw.to_lowercase();
     let trimmed = lower.trim();
 
     // Handle parameterized types: decimal(p,s)
@@ -358,7 +360,7 @@ fn spark_type_to_arrow(type_str: &str) -> Result<DataType> {
             }
             _ => Err(generic_exec_err(
                 "spark_type_to_arrow",
-                &format!("invalid decimal type: '{type_str}'. Expected: decimal(precision, scale)"),
+                &format!("invalid decimal type: '{raw}'. Expected: decimal(precision, scale)"),
             )),
         };
     }
@@ -384,7 +386,7 @@ fn spark_type_to_arrow(type_str: &str) -> Result<DataType> {
 
     // Fallback to Arrow's DataType::parse() for full type coverage.
     // Use original (non-lowercased) string since Arrow type names are case-sensitive.
-    match type_str.trim().parse::<DataType>() {
+    match raw.trim().parse::<DataType>() {
         Ok(data_type) => Ok(data_type),
         Err(ArrowError::ParseError(e)) => Err(exec_datafusion_err!("{e}")),
         Err(e) => Err(arrow_datafusion_err!(e)),

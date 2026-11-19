@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import datetime as dt
 import platform
 import uuid
@@ -153,7 +155,6 @@ def test_logical_identity_partitions_use_jvm_manifest_values_and_paths(spark, tm
     table = catalog.create_table(identifier=table_name, schema=schema, partition_spec=spec)
     expected_uuid = uuid.UUID("00112233-4455-6677-8899-aabbccddeeff")
     expected_time = dt.time(10, 12, 55, 38_194)
-    expected_time_micros = 36_775_038_194
     try:
         # PySpark clients before 4.1 cannot deserialize Spark Connect TIME schemas.
         frame = spark.createDataFrame(
@@ -174,7 +175,7 @@ def test_logical_identity_partitions_use_jvm_manifest_values_and_paths(spark, tm
         manifest_partition = next(iter(reloaded.scan().plan_files())).file.partition
         assert manifest_partition[0] == Decimal("12.34")
         assert manifest_partition[1] == expected_uuid
-        assert manifest_partition[2] == expected_time_micros
+        assert manifest_partition[2] == 36_775_038_194
 
         table_path = Path(table.location().removeprefix("file://"))
         data_files = list(
@@ -350,7 +351,7 @@ def test_partitioned_write_then_pyiceberg_read_all(spark, tmp_path, table_name, 
             "k",
             "l",
         ]
-        assert len(actual) == 12  # noqa: PLR2004
+        assert len(actual) == 12
         assert list(actual["number"]) == list(range(1, 13))
         assert list(actual["letter"]) == expected_letters
     finally:
@@ -441,7 +442,7 @@ def test_identity_partition_distinguishes_null_from_null_string(spark, tmp_path)
         assert string_rows == [2]
 
         partition_files = list((table_path / "data" / "part=null").glob("*.parquet"))
-        assert len(partition_files) == 2  # noqa: PLR2004
+        assert len(partition_files) == 2
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake Compacted JSON (Log Compaction)
 
   Rule: Automatic log compaction creates compacted JSON files at the configured interval

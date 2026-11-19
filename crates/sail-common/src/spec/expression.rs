@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 

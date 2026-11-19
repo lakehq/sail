@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Queries over column-mapped Delta tables managed by Unity Catalog.
 
 Each query runs against a column-mapped Delta table and a Delta table without column

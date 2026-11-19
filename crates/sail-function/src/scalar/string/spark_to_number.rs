@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::ops::Deref;
@@ -12,12 +14,12 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
+use datafusion_functions::utils::make_scalar_function;
 use lazy_static::lazy_static;
 use regex::{Captures, Regex};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
-use crate::functions_nested_utils::downcast_arg;
-use crate::functions_utils::make_scalar_function;
+use crate::utils::nested::downcast_arg;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkToNumber {

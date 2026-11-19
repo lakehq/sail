@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::execution::TaskContext;
@@ -129,12 +131,10 @@ impl WorkerService for WorkerServer {
         let job_id = job_id.into();
         let stage = stage.map(|x| x as usize);
         if stage.is_none() {
-            let (result, stopped) = tokio::sync::oneshot::channel();
             self.task_runner
-                .send(TaskRunnerMessage::CloseJob { job_id, result })
+                .send(TaskRunnerMessage::CloseJob { job_id })
                 .await
                 .map_err(ExecutionError::from)?;
-            stopped.await.map_err(ExecutionError::from)??;
         }
         self.task_runner
             .send(TaskRunnerMessage::CleanUpLocalStreams { job_id, stage })

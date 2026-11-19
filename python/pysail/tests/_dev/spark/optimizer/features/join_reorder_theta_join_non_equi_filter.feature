@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Join reorder supports theta joins (non-equi filter without equi keys)
 
   Scenario: Complex join key prevents equi-pair reconstruction but query should still run

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_expr::{Expr, ScalarUDF, expr};
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_function::scalar::csv::SparkSchemaOfCsv;

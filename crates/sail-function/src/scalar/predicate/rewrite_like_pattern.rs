@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
@@ -9,8 +11,7 @@ use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass,
     Volatility,
 };
-
-use crate::functions_utils::make_scalar_function;
+use datafusion_functions::utils::make_scalar_function;
 
 /// Rewrites a SQL LIKE pattern so that `\` becomes the effective escape
 /// character, translating any user-supplied escape character into

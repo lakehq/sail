@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Glue catalog database operations
 
   Scenario: Create a database with metadata

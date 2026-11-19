@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub const TABLE_TYPE_KEY: &str = "table_type";
 pub const CLASSIFICATION_KEY: &str = "classification";
 pub const METADATA_LOCATION_KEY: &str = "metadata-location";

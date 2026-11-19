@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::array::types::{Decimal128Type, Int32Type, Time64MicrosecondType};
 use datafusion::arrow::array::{Array, AsArray, Int32Array, PrimitiveArray};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};

@@ -1,10 +1,23 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion_common::{DFSchemaRef, Result, internal_err};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-use sail_common_datafusion::replay::ReplayId;
 use sail_common_datafusion::utils::items::ItemTaker;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct ReplayId {
+    pub scope: uuid::Uuid,
+    pub ordinal: u32,
+}
+
+impl std::fmt::Display for ReplayId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.scope, self.ordinal)
+    }
+}
 
 /// A named evaluation boundary, not common-subexpression elimination. Clones keep
 /// the name; independent relation references must be assigned different names.

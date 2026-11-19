@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use chrono::{Datelike, FixedOffset, NaiveDateTime, Timelike};
 use datafusion_common::Result;
 

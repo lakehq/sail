@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -390,7 +392,9 @@ fn flatten_nested_concats(args: Vec<Expr>, info: &SimplifyContext) -> Result<Vec
 /// Spark `concat` output type: array concat (list dim/element merge), all-binary,
 /// or string (widest of Utf8View / LargeUtf8 / Utf8).
 ///
-/// [Credit]: <https://github.com/apache/datafusion/blob/7ccc6d7c55ae9dbcb7dee031f394bf11a03000ba/datafusion/functions-nested/src/concat.rs#L276-L310>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/7ccc6d7c55ae9dbcb7dee031f394bf11a03000ba/datafusion/functions-nested/src/concat.rs#L276-L310
 fn concat_return_type(arg_types: &[DataType]) -> Result<DataType> {
     if arg_types.is_empty() {
         return Ok(DataType::Utf8);
@@ -458,6 +462,7 @@ fn concat_return_type(arg_types: &[DataType]) -> Result<DataType> {
             .clone())
     }
 }
+// SPDX-SnippetEnd
 
 fn merge_list_types(left: &DataType, right: &DataType) -> Option<DataType> {
     match (left, right) {

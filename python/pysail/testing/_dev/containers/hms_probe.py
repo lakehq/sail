@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Subprocess probe for Kerberos Hive Metastore integration tests."""
 
 from __future__ import annotations

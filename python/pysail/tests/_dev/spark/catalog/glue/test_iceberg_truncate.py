@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """TRUNCATE publishes Iceberg metadata through the catalog commit authority."""
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod hll_sketch;
 pub mod monotonically_increasing_id;
 pub mod raise_error;

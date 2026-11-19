@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake operationMetrics in commitInfo
 
   Rule: Delta DDL result collection

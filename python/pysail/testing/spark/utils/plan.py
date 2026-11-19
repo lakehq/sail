@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import re
 import textwrap
 
@@ -27,7 +29,7 @@ def normalize_plan_text(plan_text: str) -> str:
     text = re.sub(r", metrics=\[([^\]]*)\]", _normalize_metrics_block, text)
 
     # Replay scope is generated per statement; retain distinct scopes and ordinals
-    # across logical, physical, and distributed representations of that statement.
+    # throughout the logical plan.
     replay_scopes: dict[str, int] = {}
 
     def normalize_replay_scope(match: re.Match[str]) -> str:
@@ -36,7 +38,7 @@ def normalize_plan_text(plan_text: str) -> str:
         return f"{match.group(1)}<replay_scope_{index}>{match.group(3)}"
 
     text = re.sub(
-        r"(Replay(?:Exec)?: |replay=)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(:\d+)",
+        r"(Replay: )([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(:\d+)",
         normalize_replay_scope,
         text,
         flags=re.IGNORECASE,

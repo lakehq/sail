@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::BTreeMap;
 
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};

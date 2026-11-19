@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Correlated EXISTS / NOT EXISTS / IN / NOT IN / scalar subqueries whose body has an ORDER BY
 plan and return the same rows as without the ORDER BY.
 

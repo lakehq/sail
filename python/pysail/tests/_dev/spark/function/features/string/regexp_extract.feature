@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: regexp_extract() extracts regex capture groups from strings
 
   Rule: Basic extraction

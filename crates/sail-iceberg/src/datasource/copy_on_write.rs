@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_expr::Expr;
 
 use crate::datasource::predicate::Predicate;

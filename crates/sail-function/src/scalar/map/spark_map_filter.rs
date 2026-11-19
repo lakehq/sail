@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, BooleanArray, ListArray, MapArray};
@@ -12,8 +14,8 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
-use crate::scalar::array::lambda_utils::value_lambda_pair;
 use crate::scalar::array::spark_array_filter::filter_list_values;
+use crate::scalar::utils::lambda::value_lambda_pair;
 
 /// Spark's MapFilter (higherOrderFunctions.scala): retain entries whose
 /// predicate is true, preserving the input map type and nullability.

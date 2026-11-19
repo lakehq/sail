@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common::tests::test_gold_set;
 use sail_sql_parser::ast::statement::Statement;
 use sail_sql_parser::tree::SyntaxGraph;

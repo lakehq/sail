@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: CAST date to numeric types follows Arrow cast rules
 
   Sail follows Arrow's cast rules for explicit casts, in both legacy and ANSI mode.

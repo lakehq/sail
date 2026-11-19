@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod array;
 pub mod catalog;
 pub mod column_change;
@@ -22,7 +24,6 @@ pub mod metadata;
 pub mod metadata_aggregate;
 pub mod min_max;
 pub mod rename;
-pub mod replay;
 pub mod scan;
 pub mod schema;
 pub mod schema_evolution;

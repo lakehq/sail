@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Anonymous Union alias resolution
 
   Scenario: Anonymous Union aliases preserve column values

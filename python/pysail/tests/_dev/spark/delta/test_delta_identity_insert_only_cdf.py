@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Insert-only identity MERGE must not rewrite untouched target files."""
 
 import json

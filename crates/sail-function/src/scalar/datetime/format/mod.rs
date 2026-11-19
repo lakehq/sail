@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod formatting;
 mod locale;
 mod parser;

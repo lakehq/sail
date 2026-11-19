@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Result types of `coalesce`, `nvl2` and `nullif`, as in Spark."""
 
 import datetime

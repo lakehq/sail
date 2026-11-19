@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Retained coalesce must not invent UUID identity for ordinary fixed[16]."""
 
 from pathlib import Path

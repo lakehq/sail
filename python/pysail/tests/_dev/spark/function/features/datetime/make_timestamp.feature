@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: make_timestamp_ntz and try_make_timestamp_ntz functions
 
   Rule: Basic timestamp creation with 6 arguments

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::hash::Hash;
@@ -5,14 +7,6 @@ use std::sync::Arc;
 
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions_aggregate::count::count_udaf;
-use sail_common_datafusion::replay::ReplayId;
-
-use crate::merge_evaluate::evaluate_once;
-use crate::replay::ReplayNode;
-
-mod intent;
-#[cfg(test)]
-mod tests;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{
@@ -38,10 +32,16 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
+use crate::merge_evaluate::evaluate_once;
 use crate::monotonic_id::MonotonicIdNode;
+use crate::replay::{ReplayId, ReplayNode};
 use crate::row_level::{
     RowLevelEffectRequirements, StructFieldAlignment, align_row_level_value, evolve_row_level_field,
 };
+
+mod intent;
+#[cfg(test)]
+mod tests;
 
 pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";

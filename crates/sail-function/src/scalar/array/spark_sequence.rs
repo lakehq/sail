@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -29,9 +31,10 @@ use sail_common::utils::datetime::{
 use sail_common_datafusion::formatter::IntervalMonthDayNanoFormatter;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
-use crate::functions_nested_utils::{
-    evaluate_lambda_rows, evaluate_lambdas_until_null, make_scalar_function, scatter_active_rows,
+use crate::scalar::utils::lambda::{
+    evaluate_lambda_rows, evaluate_lambdas_until_null, scatter_active_rows,
 };
+use crate::scalar::utils::make_scalar_function;
 
 const MAX_ROUNDED_ARRAY_LENGTH: i64 = i32::MAX as i64 - 15;
 const MICROS_PER_MONTH: i64 = 28 * MICROS_PER_DAY;

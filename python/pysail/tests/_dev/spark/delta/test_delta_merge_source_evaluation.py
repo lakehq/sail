@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """MERGE consumers must agree on one source evaluation and its file effects.
 
 Related upstream contracts: delta-io/delta v3.3.2,
@@ -27,7 +29,7 @@ def remote(request):
             "SAIL_CLUSTER__WORKER_INITIAL_COUNT": "2",
             "SAIL_CLUSTER__WORKER_MAX_COUNT": "2",
             "SAIL_CLUSTER__WORKER_TASK_SLOTS": "16",
-            "SAIL_CLUSTER__TASK_MAX_ATTEMPTS": "1",
+            "SAIL_CLUSTER__TASK_MAX_ATTEMPTS": "3",
         }
     ) as server:
         yield server.remote
@@ -145,13 +147,44 @@ def test_merge_source_is_evaluated_once(spark, merge_target, tmp_path, source_ki
         spark.catalog.dropTempView(source_name)
 
 
-def test_merge_source_failure_does_not_commit(spark, merge_target):
+def test_merge_with_shared_cte_source(spark, merge_target):
+    name, path = merge_target
+    before = _log(path)
+    # Both SQL references must see the same random value. MERGE also shares
+    # the resulting row between the write, touched files, and metrics.
+    source = """
+        WITH c AS (SELECT id, rand() AS token FROM range(1, 2))
+        SELECT a.id, 'new' AS msg FROM c a JOIN c b ON a.id = b.id AND a.token = b.token
+    """
+    _merge(spark, name, source)
+    _assert_update(spark, name, path, before, 1)
+
+
+def test_merge_source_failure_does_not_commit(spark, merge_target, tmp_path):
     name, path = merge_target
     before = _log(path)
     schema = spark.table(name).schema
     files = {file: (path / file).read_bytes() for file in _active_files(before)}
-    with pytest.raises(Exception, match="merge source failed"):
-        _merge(spark, name, "SELECT CAST(raise_error('merge source failed') AS INT) id, 'new' msg")
+    attempts = tmp_path / "attempts"
+    attempts.mkdir()
+
+    @sf.udf("int")
+    def fail_once(value):
+        (attempts / uuid.uuid4().hex).touch()
+        if len(list(attempts.iterdir())) == 1:
+            msg = "merge source failed"
+            raise RuntimeError(msg)
+        return int(value) + 1
+
+    source = spark.range(1).select(fail_once.asNondeterministic()("id").alias("id"), sf.lit("new").alias("msg"))
+    view = name + "_failed_source"
+    source.createOrReplaceTempView(view)
+    try:
+        with pytest.raises(Exception, match="merge source failed"):
+            _merge(spark, name, f"SELECT * FROM {view}")  # noqa: S608
+    finally:
+        spark.catalog.dropTempView(view)
+    assert len(list(attempts.iterdir())) == 1
     assert _log(path) == before
     assert spark.table(name).schema == schema
     assert spark.read.format("delta").load(str(path)).orderBy("id").collect() == [(1, "old"), (2, "old")]

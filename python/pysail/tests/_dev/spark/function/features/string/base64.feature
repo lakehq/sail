@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: base64 functions encode and decode binary strings
 
   Rule: Null propagation

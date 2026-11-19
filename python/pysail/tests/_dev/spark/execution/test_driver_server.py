@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import socket
 
 import pytest
@@ -26,7 +28,7 @@ def test_multiple_sessions_share_driver_server(spark, remote):
         other = registry.create()
 
         assert spark.sql("SELECT 1 AS value").first().value == 1
-        assert other.sql("SELECT 2 AS value").first().value == 2  # noqa: PLR2004
+        assert other.sql("SELECT 2 AS value").first().value == 2
 
 
 def test_driver_gateway_startup_failure(monkeypatch):

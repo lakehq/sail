@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// The parsed pieces of a timestamp string: nine integer segments
 /// (year, month, day, hour, minute, second, microsecond, and two spare zone
 /// segments), an optional timezone string, and whether only a time was given.

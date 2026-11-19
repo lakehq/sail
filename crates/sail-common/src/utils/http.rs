@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// User agent for Sail requests to remote services.
 ///
 /// References:

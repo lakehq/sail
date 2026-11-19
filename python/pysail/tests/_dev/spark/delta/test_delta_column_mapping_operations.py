@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Query and DML operations on Delta tables with column mapping.
 
 Each query and DML operation runs against a column-mapped Delta table and

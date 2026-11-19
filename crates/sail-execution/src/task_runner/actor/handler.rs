@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
@@ -12,7 +14,7 @@ use tokio::sync::oneshot;
 
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskAttempt, TaskKey, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskAttempt, TaskKey, TaskStreamKey, TaskStreamKeySet, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
@@ -78,13 +80,7 @@ impl TaskRunnerActor {
             );
             let (tx, rx) = oneshot::channel();
             self.signals.insert(key.clone(), tx);
-            let (done, completion) = oneshot::channel();
-            self.completions.insert(key.clone(), completion);
-            let monitor = TaskMonitor::new(ctx.handle().clone(), key, stream, rx);
-            ctx.spawn(async move {
-                monitor.supervise().await;
-                let _ = done.send(());
-            });
+            ctx.spawn(TaskMonitor::new(ctx.handle().clone(), key, stream, rx).supervise());
         }
         Ok(())
     }
@@ -97,67 +93,10 @@ impl TaskRunnerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_close_job(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        job_id: JobId,
-        result: oneshot::Sender<ExecutionResult<()>>,
-    ) -> ActorAction {
-        let mut closed = if let Some(closed) = self.closing.get(&job_id) {
-            closed.clone()
-        } else {
-            // Close admission/publication before cancellation. Do not wait inside
-            // receive(): monitors must still be able to report their completion.
-            self.tasks.close_job(job_id);
-            self.extensions.local_streams.retire_replays(job_id);
-            let uploads = self
-                .extensions
-                .storage_streams
-                .as_ref()
-                .map(|streams| streams.close_replays(job_id));
-            self.signals.retain(|key, _| key.job_id != job_id);
-            let keys = self
-                .completions
-                .keys()
-                .filter(|key| key.job_id == job_id)
-                .cloned()
-                .collect::<Vec<_>>();
-            let completions = keys
-                .into_iter()
-                .filter_map(|key| self.completions.remove(&key))
-                .collect::<Vec<_>>();
-            let (done, closed) = tokio::sync::watch::channel(false);
-            self.closing.insert(job_id, closed.clone());
-            let handle = ctx.handle().clone();
-            ctx.spawn(async move {
-                for completion in completions {
-                    if completion.await.is_err() {
-                        warn!("task completion lost while closing job {job_id}");
-                        return;
-                    }
-                }
-                if let Some(uploads) = uploads {
-                    uploads.await;
-                }
-                let _ = handle
-                    .send(crate::task_runner::TaskRunnerMessage::FinishCloseJob { job_id, done })
-                    .await;
-            });
-            closed
-        };
-        ctx.spawn(async move {
-            let output = async {
-                while !*closed.borrow_and_update() {
-                    closed
-                        .changed()
-                        .await
-                        .map_err(|e| ExecutionError::InternalError(e.to_string()))?;
-                }
-                Ok(())
-            }
-            .await;
-            let _ = result.send(output);
-        });
+    pub(super) fn handle_close_job(&mut self, job_id: JobId) -> ActorAction {
+        self.tasks.close_job(job_id);
+        self.extensions.local_streams.remove_streams(job_id, None);
+        self.signals.retain(|key, _| key.job_id != job_id);
         ActorAction::Continue
     }
 
@@ -229,21 +168,27 @@ impl TaskRunnerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_probe_pending_local_stream(&mut self, key: TaskStreamKey) -> ActorAction {
-        self.extensions.local_streams.fail_stream_if_pending(&key);
+    pub(super) fn handle_probe_pending_local_stream(
+        &mut self,
+        key: TaskStreamKey,
+        probe: usize,
+    ) -> ActorAction {
+        self.extensions
+            .local_streams
+            .fail_stream_if_pending(&key, probe);
         ActorAction::Continue
     }
 
     pub(super) fn handle_create_local_stream(
         &mut self,
-        key: TaskStreamKey,
+        key: TaskKey,
+        channels: usize,
         replicas: usize,
+        bounded: bool,
         schema: Arc<Schema>,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
-        if self.tasks.is_job_closed(key.job_id)
-            || self.tasks.is_canceled(&TaskKey::from(key.clone()))
-        {
+        if self.tasks.is_job_closed(key.job_id) || self.tasks.is_canceled(&key) {
             let _ = result.send(Err(ExecutionError::InvalidArgument(
                 "task or job has been canceled".into(),
             )));
@@ -252,36 +197,8 @@ impl TaskRunnerActor {
         let _ = result.send(
             self.extensions
                 .local_streams
-                .create_stream(key, replicas, schema),
+                .create_stream(&key, channels, replicas, bounded, schema),
         );
-        ActorAction::Continue
-    }
-
-    pub(super) fn handle_create_replay_stream(
-        &mut self,
-        key: TaskStreamKey,
-        id: sail_common_datafusion::replay::ReplayId,
-        storage: bool,
-        schema: Arc<Schema>,
-        context: Arc<TaskContext>,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
-    ) -> ActorAction {
-        let output = if self.tasks.is_job_closed(key.job_id)
-            || self.tasks.is_canceled(&TaskKey::from(key.clone()))
-        {
-            Err(ExecutionError::InvalidArgument(
-                "task or job has been canceled".into(),
-            ))
-        } else if storage {
-            self.extensions
-                .storage_streams()
-                .and_then(|streams| streams.create_replay_stream(key, id, schema, &context))
-        } else {
-            self.extensions
-                .local_streams
-                .create_replay_stream(key, id, schema, &context)
-        };
-        let _ = result.send(output);
         ActorAction::Continue
     }
 
@@ -359,22 +276,22 @@ impl TaskRunnerActor {
             TaskRunnerPlacement::Worker { driver, .. } => {
                 let client = driver.flight.clone();
                 ctx.spawn(async move {
-                    let _ = result.send(client.fetch_task_stream(key, schema).await);
+                    let _ = result.send(client.fetch_task_streams(key.into(), schema).await);
                 });
             }
         }
         ActorAction::Continue
     }
 
-    pub(super) fn handle_fetch_worker_stream(
+    pub(super) fn handle_fetch_worker_streams(
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        if self.tasks.is_job_closed(key.job_id) {
+        if self.tasks.is_job_closed(keys.job_id) {
             let _ = result.send(Err(ExecutionError::InvalidArgument(
                 "task or job has been canceled".into(),
             )));
@@ -385,9 +302,9 @@ impl TaskRunnerActor {
                 let driver = driver.clone();
                 ctx.spawn(async move {
                     let _ = driver
-                        .send(DriverMessage::FetchWorkerStream {
+                        .send(DriverMessage::FetchWorkerStreams {
                             worker_id,
-                            key,
+                            keys,
                             schema,
                             result,
                         })
@@ -398,12 +315,12 @@ impl TaskRunnerActor {
                 worker_id: this_worker_id,
                 ..
             } if worker_id == *this_worker_id => {
-                let _ = result.send(self.extensions.local_streams.fetch_stream(ctx, &key));
+                let _ = result.send(self.extensions.local_streams.fetch_streams(ctx, &keys));
             }
             TaskRunnerPlacement::Worker { peers, .. } => match peers.get_client_set(worker_id) {
                 Ok(client) => {
                     ctx.spawn(async move {
-                        let _ = result.send(client.flight.fetch_task_stream(key, schema).await);
+                        let _ = result.send(client.flight.fetch_task_streams(keys, schema).await);
                     });
                 }
                 Err(error) => {
@@ -415,26 +332,25 @@ impl TaskRunnerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_fetch_local_stream(
+    pub(super) fn handle_fetch_local_streams(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        if self.tasks.is_job_closed(key.job_id) {
+        if self.tasks.is_job_closed(keys.job_id) {
             let _ = result.send(Err(ExecutionError::InvalidArgument(
                 "task or job has been canceled".into(),
             )));
             return ActorAction::Continue;
         }
-        let _ = result.send(self.extensions.local_streams.fetch_stream(ctx, &key));
+        let _ = result.send(self.extensions.local_streams.fetch_streams(ctx, &keys));
         ActorAction::Continue
     }
 
     pub(super) fn handle_fetch_storage_stream(
         &mut self,
         key: TaskStreamKey,
-        replay: Option<sail_common_datafusion::replay::ReplayId>,
         schema: Arc<Schema>,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
@@ -448,10 +364,7 @@ impl TaskRunnerActor {
         let output = self
             .extensions
             .storage_streams()
-            .and_then(|streams| match replay {
-                Some(id) => streams.fetch_replay_stream(key, id, schema, &context),
-                None => streams.fetch_stream(key, schema, &context),
-            });
+            .and_then(|streams| streams.fetch_stream(key, schema, &context));
         let _ = result.send(output);
         ActorAction::Continue
     }

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import json
@@ -183,8 +185,7 @@ def test_is_empty_uses_current_snapshot_after_deletion_vectors(spark, tmp_path):
             for line in (table_path / "_delta_log" / "00000000000000000002.json").read_text().splitlines()
         ]
         add = next(action["add"] for action in actions if action.get("add", {}).get("deletionVector"))
-        expected_physical_rows = 3
-        assert json.loads(add["stats"])["numRecords"] == expected_physical_rows
+        assert json.loads(add["stats"])["numRecords"] == 3
         assert add["deletionVector"]["cardinality"] == 1
 
         df = spark.table(table_name)

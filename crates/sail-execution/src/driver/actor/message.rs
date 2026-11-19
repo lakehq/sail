@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::borrow::Cow;
 use std::fmt;
 use std::fmt::Formatter;
@@ -17,7 +19,7 @@ use crate::driver::r#gen;
 use crate::driver::output::JobOutputOutcome;
 use crate::driver::worker_scaler::WorkerRetryRequest;
 use crate::error::ExecutionResult;
-use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskKey, TaskStreamKey, TaskStreamKeySet, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 
 pub enum DriverMessage {
@@ -64,11 +66,6 @@ pub enum DriverMessage {
         job_id: JobId,
         outcome: JobOutputOutcome,
     },
-    CompleteJobCleanup {
-        job_id: JobId,
-        context: Arc<TaskContext>,
-        result: ExecutionResult<()>,
-    },
     UpdateTask {
         key: TaskKey,
         status: TaskStatus,
@@ -85,9 +82,9 @@ pub enum DriverMessage {
         key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
-    FetchWorkerStream {
+    FetchWorkerStreams {
         worker_id: WorkerId,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
@@ -106,7 +103,6 @@ pub enum TaskStatus {
     Succeeded,
     Failed,
     Canceled,
-    ReplayLost,
 }
 
 impl fmt::Display for TaskStatus {
@@ -116,7 +112,6 @@ impl fmt::Display for TaskStatus {
             TaskStatus::Succeeded => write!(f, "SUCCEEDED"),
             TaskStatus::Failed => write!(f, "FAILED"),
             TaskStatus::Canceled => write!(f, "CANCELED"),
-            TaskStatus::ReplayLost => write!(f, "REPLAY_LOST"),
         }
     }
 }
@@ -128,7 +123,6 @@ impl From<r#gen::TaskStatus> for TaskStatus {
             r#gen::TaskStatus::Succeeded => Self::Succeeded,
             r#gen::TaskStatus::Failed => Self::Failed,
             r#gen::TaskStatus::Canceled => Self::Canceled,
-            r#gen::TaskStatus::ReplayLost => Self::ReplayLost,
         }
     }
 }
@@ -140,7 +134,6 @@ impl From<TaskStatus> for r#gen::TaskStatus {
             TaskStatus::Succeeded => r#gen::TaskStatus::Succeeded,
             TaskStatus::Failed => r#gen::TaskStatus::Failed,
             TaskStatus::Canceled => r#gen::TaskStatus::Canceled,
-            TaskStatus::ReplayLost => r#gen::TaskStatus::ReplayLost,
         }
     }
 }
@@ -159,11 +152,10 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::ProbeLostWorker { .. } => "ProbeLostWorker",
             DriverMessage::ExecuteJob { .. } => "ExecuteJob",
             DriverMessage::CleanUpJob { .. } => "CleanUpJob",
-            DriverMessage::CompleteJobCleanup { .. } => "CompleteJobCleanup",
             DriverMessage::UpdateTask { .. } => "UpdateTask",
             DriverMessage::ProbePendingTask { .. } => "ProbePendingTask",
             DriverMessage::FetchDriverStream { .. } => "FetchDriverStream",
-            DriverMessage::FetchWorkerStream { .. } => "FetchWorkerStream",
+            DriverMessage::FetchWorkerStreams { .. } => "FetchWorkerStreams",
             DriverMessage::CelebornGetLifecycleManager { .. } => "CelebornGetLifecycleManager",
             DriverMessage::Shutdown { .. } => "Shutdown",
         };
@@ -212,8 +204,7 @@ impl SpanAssociation for DriverMessage {
                 context: _,
                 result: _,
             } => {}
-            DriverMessage::CleanUpJob { job_id, .. }
-            | DriverMessage::CompleteJobCleanup { job_id, .. } => {
+            DriverMessage::CleanUpJob { job_id, .. } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }
             DriverMessage::UpdateTask {
@@ -275,25 +266,15 @@ impl SpanAssociation for DriverMessage {
                 p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
-            DriverMessage::FetchWorkerStream {
+            DriverMessage::FetchWorkerStreams {
                 worker_id,
-                key:
-                    TaskStreamKey {
-                        job_id,
-                        stage,
-                        partition,
-                        attempt,
-                        channel,
-                    },
+                keys: TaskStreamKeySet { job_id, stage, .. },
                 schema: _,
                 result: _,
             } => {
                 p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
-                p.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
-                p.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
-                p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
             DriverMessage::CelebornGetLifecycleManager { result: _ } => {}
             DriverMessage::Shutdown { .. } => {}

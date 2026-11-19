@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 syntax = "proto3";
 
 package sail.task;
@@ -11,12 +13,8 @@ message TaskDefinition {
 message TaskInput {
   uint64 stage = 1;
   TaskInputLocator locator = 2;
-  ReplayId replay = 3;
-}
-
-message ReplayId {
-  string scope = 1;
-  uint32 ordinal = 2;
+  // Whether each consumer task reads its own replica of the input streams.
+  bool replicated = 3;
 }
 
 message TaskInputLocator {
@@ -115,13 +113,12 @@ message TaskOutputLocator {
   oneof Kind {
     TaskOutputPipelinedLocator pipelined = 1;
     TaskOutputBlockingLocator blocking = 2;
-    ReplayId replay_local = 3;
-    ReplayId replay_storage = 4;
   }
 }
 
 message TaskOutputPipelinedLocator {
   uint64 replicas = 1;
+  bool bounded = 2;
 }
 
 message TaskOutputBlockingLocator {

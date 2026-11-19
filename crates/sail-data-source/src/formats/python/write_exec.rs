@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Distributed write execution plan for Python data sources.
 //!
 //! This execution plan runs `writer.write(iterator)` per input partition and

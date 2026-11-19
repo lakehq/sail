@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Join reorder propagates selective dimension keys before fact joins
 
   Background:

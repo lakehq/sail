@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -20,7 +22,8 @@ use crate::driver::worker_scaler::{WorkerLaunchRequest, WorkerRetryRequest};
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{
-    JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId,
+    JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay,
+    TaskStreamKeySet, WorkerId,
 };
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
@@ -185,13 +188,7 @@ impl DriverActor {
             );
 
             let message = "task failed for lost worker".to_string();
-            let mut keys = self.task_assigner.find_worker_tasks(worker_id);
-            for key in self.task_assigner.find_worker_output_tasks(worker_id) {
-                self.job_scheduler.lose_replay_output(&key);
-                if !keys.contains(&key) {
-                    keys.push(key);
-                }
-            }
+            let keys = self.task_assigner.find_worker_tasks(worker_id);
             self.task_assigner.deactivate_worker(worker_id);
             for key in keys.iter() {
                 self.job_scheduler.update_task(
@@ -276,15 +273,7 @@ impl DriverActor {
                 self.run_tasks(ctx);
                 self.reconcile_worker_demands(ctx);
             }
-            TaskStatus::Failed | TaskStatus::ReplayLost => {
-                if matches!(status, TaskStatus::ReplayLost) {
-                    self.job_scheduler.fail_replay(
-                        key.job_id,
-                        cause.clone().unwrap_or_else(|| {
-                            CommonErrorCause::Execution("sealed replay data unavailable".into())
-                        }),
-                    );
-                }
+            TaskStatus::Failed => {
                 // Some canceled tasks may report failed status due to closed streams,
                 // but it is fine to handle them as failed tasks again.
                 self.job_scheduler
@@ -375,17 +364,17 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_fetch_worker_stream(
+    pub(super) fn handle_fetch_worker_streams(
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
         let _ = result.send(
             self.worker_pool
-                .fetch_task_stream(ctx, worker_id, &key, schema),
+                .fetch_task_streams(ctx, worker_id, keys, schema),
         );
         ActorAction::Continue
     }
@@ -470,6 +459,7 @@ impl DriverActor {
                 handle,
                 key,
                 schema,
+                retry_cause,
             } => {
                 let assignment =
                     TaskAssignmentGetter::get(&self.task_assigner, &TaskKey::from(key.clone()));
@@ -502,10 +492,12 @@ impl DriverActor {
                         }
                     }
                     Some(TaskAssignment::Worker { worker_id, slot: _ }) => {
-                        let _ = result.send(
-                            self.worker_pool
-                                .fetch_task_stream(ctx, *worker_id, &key, schema),
-                        );
+                        let _ = result.send(self.worker_pool.fetch_task_streams(
+                            ctx,
+                            *worker_id,
+                            key.clone().into(),
+                            schema,
+                        ));
                     }
                 }
                 let stream = futures::stream::once(async move {
@@ -520,6 +512,7 @@ impl DriverActor {
                         .send(JobOutputItem::Stream {
                             key,
                             stream: Box::pin(stream),
+                            retry_cause,
                         })
                         .await;
                 });
@@ -534,39 +527,19 @@ impl DriverActor {
                 stage,
                 context,
             } => {
+                // Job closure is a lifecycle operation, independent of shuffle ownership.
+                // Keep a closed-job record even on workers whose streams were cleaned earlier.
                 if stage.is_none() {
-                    let mut stops = self
-                        .task_assigner
-                        .job_worker_ids(job_id)
-                        .into_iter()
-                        .map(|worker_id| self.worker_pool.close_job_confirmed(worker_id, job_id))
-                        .collect::<Vec<_>>();
                     if let Some(task_runner) = self.task_runner.clone() {
-                        stops.push(Box::pin(async move {
-                            let (result, stopped) = oneshot::channel();
-                            task_runner
-                                .send(TaskRunnerMessage::CloseJob { job_id, result })
-                                .await?;
-                            stopped.await?
-                        }));
+                        ctx.spawn(async move {
+                            let _ = task_runner
+                                .send(TaskRunnerMessage::CloseJob { job_id })
+                                .await;
+                        });
                     }
-                    let driver = ctx.handle().clone();
-                    ctx.spawn(async move {
-                        // Join all confirmations, even if one worker is unavailable.
-                        let result = futures::future::join_all(stops)
-                            .await
-                            .into_iter()
-                            .collect::<ExecutionResult<Vec<_>>>()
-                            .map(|_| ());
-                        let _ = driver
-                            .send(DriverMessage::CompleteJobCleanup {
-                                job_id,
-                                context,
-                                result,
-                            })
-                            .await;
-                    });
-                    return;
+                    for worker_id in self.task_assigner.active_worker_ids() {
+                        self.worker_pool.clean_up_job(ctx, worker_id, job_id, None);
+                    }
                 }
                 if self.task_assigner.untrack_storage_streams(job_id, stage)
                     && let Some(task_runner) = self.task_runner.clone()
@@ -618,52 +591,6 @@ impl DriverActor {
                 }
             }
         }
-    }
-
-    pub(super) fn handle_complete_job_cleanup(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        job_id: JobId,
-        context: Arc<TaskContext>,
-        result: ExecutionResult<()>,
-    ) -> ActorAction {
-        if let Err(error) = result {
-            // Never delete a prefix while an unconfirmed writer may still use it.
-            warn!("job {job_id} cleanup awaits stop confirmation: {error}");
-            return ActorAction::Continue;
-        }
-        let storage = self.task_assigner.untrack_storage_streams(job_id, None);
-        let external = self.task_assigner.untrack_external_streams(job_id, None);
-        let owners = self.task_assigner.untrack_local_streams(job_id, None);
-        for owner in owners {
-            if let TaskStreamAssignment::Worker { worker_id } = owner
-                && self.task_assigner.is_worker_idle(worker_id)
-            {
-                self.worker_pool.mark_worker_idle(ctx, worker_id);
-            }
-        }
-        if let Some(task_runner) = self.task_runner.clone() {
-            ctx.spawn(async move {
-                if storage {
-                    let _ = task_runner
-                        .send(TaskRunnerMessage::CleanUpStorageStreams {
-                            job_id,
-                            stage: None,
-                            context,
-                        })
-                        .await;
-                }
-                if external {
-                    let _ = task_runner
-                        .send(TaskRunnerMessage::CleanUpCelebornStreams {
-                            job_id,
-                            stage: None,
-                        })
-                        .await;
-                }
-            });
-        }
-        ActorAction::Continue
     }
 
     fn unassign_task(
