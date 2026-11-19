@@ -127,18 +127,18 @@ impl NumericHistogram {
 
 /// Computes an approximate equi-height histogram on numeric data.
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct HistogramNumericFunction {
+pub struct HistogramNumeric {
     signature: Signature,
 }
 
-impl Default for HistogramNumericFunction {
+impl Default for HistogramNumeric {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl HistogramNumericFunction {
-    /// Creates a new `HistogramNumericFunction`.
+impl HistogramNumeric {
+    /// Creates a new `HistogramNumeric`.
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
@@ -184,7 +184,7 @@ impl HistogramNumericFunction {
     }
 }
 
-impl AggregateUDFImpl for HistogramNumericFunction {
+impl AggregateUDFImpl for HistogramNumeric {
     fn name(&self) -> &str {
         "histogram_numeric"
     }

@@ -14,20 +14,20 @@ use datafusion_expr::{
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::type_coercion::binary_type_coercion::set_operation_coercion;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
-use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
-use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
-use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
-use sail_function::scalar::array::spark_array_sort::SparkArraySort;
-use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
-use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
-use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
-use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::array::array_aggregate::ArrayAggregate;
+use sail_function::scalar::array::array_exists::ArrayExists;
+use sail_function::scalar::array::array_filter::ArrayFilter;
+use sail_function::scalar::array::array_forall::ArrayForall;
+use sail_function::scalar::array::array_sort::ArraySort;
+use sail_function::scalar::array::array_transform::ArrayTransform;
+use sail_function::scalar::array::array_zip_with::ArrayZipWith;
+use sail_function::scalar::conversion::to_string::ToUtf8;
+use sail_function::scalar::datetime::timestamp::Timestamp;
 use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ntz_to_ltz;
-use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
-use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
-use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
-use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
+use sail_function::scalar::map::map_filter::MapFilter;
+use sail_function::scalar::map::map_zip_with::MapZipWith;
+use sail_function::scalar::map::transform_keys::TransformKeys;
+use sail_function::scalar::map::transform_values::TransformValues;
 use sail_function::scalar::map::utils::map_type_from_key_value_types;
 use sail_logical_optimizer::type_coercion::TypeCoercionRewriter;
 
@@ -36,62 +36,56 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
 static SPARK_ARRAY_FILTER_UDF: LazyLock<Arc<HigherOrderUDF>> =
-    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new())));
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(ArrayFilter::new())));
 
 static SPARK_MAP_FILTER_UDF: LazyLock<Arc<HigherOrderUDF>> =
-    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkMapFilter::new())));
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(MapFilter::new())));
 
 static SPARK_TRANSFORM_VALUES_UDF: LazyLock<Arc<HigherOrderUDF>> =
-    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkTransformValues::new())));
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(TransformValues::new())));
 
 /// Only used to type lambda parameters, which do not depend on the duplicate-key
 /// policy. The instance that evaluates the function carries the policy resolved
 /// from the session config, so it is built per call in [`transform_keys`].
-static SPARK_TRANSFORM_KEYS_UDF: LazyLock<Arc<HigherOrderUDF>> = LazyLock::new(|| {
-    Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
-        false,
-    )))
-});
+static SPARK_TRANSFORM_KEYS_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(TransformKeys::new(false))));
 
 static SPARK_ARRAY_AGGREGATE_UDF: LazyLock<Arc<HigherOrderUDF>> =
-    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayAggregate::new())));
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(ArrayAggregate::new())));
 
 static SPARK_ARRAY_AGGREGATE_ELEMENT_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| {
         Arc::new(HigherOrderUDF::new_from_impl(
-            SparkArrayAggregate::new_element_first(),
+            ArrayAggregate::new_element_first(),
         ))
     });
 
-static SPARK_ARRAY_FILTER_INDEX_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> = LazyLock::new(|| {
-    Arc::new(HigherOrderUDF::new_from_impl(
-        SparkArrayFilter::new_index_first(),
-    ))
-});
+static SPARK_ARRAY_FILTER_INDEX_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(ArrayFilter::new_index_first())));
 
 static SPARK_ARRAY_EXISTS_UDF: LazyLock<Arc<HigherOrderUDF>> =
-    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayExists::new())));
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(ArrayExists::new())));
 
 static SPARK_ARRAY_FORALL_UDF: LazyLock<Arc<HigherOrderUDF>> =
-    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayForall::new())));
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(ArrayForall::new())));
 
 static SPARK_ARRAY_TRANSFORM_UDF: LazyLock<Arc<HigherOrderUDF>> =
-    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new())));
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(ArrayTransform::new())));
 
 static SPARK_ARRAY_TRANSFORM_INDEX_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> = LazyLock::new(|| {
     Arc::new(HigherOrderUDF::new_from_impl(
-        SparkArrayTransform::new_index_first(),
+        ArrayTransform::new_index_first(),
     ))
 });
 
 static SPARK_ARRAY_SORT_UDF: LazyLock<Arc<HigherOrderUDF>> =
-    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new())));
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(ArraySort::new())));
 
 static SPARK_ARRAY_SORT_SWAPPED_UDF: LazyLock<Arc<HigherOrderUDF>> =
-    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped())));
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(ArraySort::new_swapped())));
 
 static SPARK_ARRAY_ZIP_WITH_UDF: LazyLock<Arc<HigherOrderUDF>> =
-    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new())));
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(ArrayZipWith::new())));
 
 pub(crate) fn is_higher_order_function(name: &str) -> bool {
     matches!(
@@ -122,7 +116,7 @@ pub(crate) fn get_lambda_parameters(
     session_timezone: &str,
 ) -> PlanResult<Vec<Vec<FieldRef>>> {
     let normalized_function_name = function_name.trim().to_lowercase();
-    let map_zip_with_udf = Arc::new(HigherOrderUDF::new_from_impl(SparkMapZipWith::new(
+    let map_zip_with_udf = Arc::new(HigherOrderUDF::new_from_impl(MapZipWith::new(
         ansi_mode,
         Arc::from(session_timezone),
     )));
@@ -351,7 +345,7 @@ fn transform_keys(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         input.function_context.schema,
     )?;
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
-        Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
+        Arc::new(HigherOrderUDF::new_from_impl(TransformKeys::new(
             last_value_wins,
         ))),
         vec![map, function],
@@ -696,12 +690,13 @@ fn rewrite_map_zip_with_temporal_key(
         (
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
             DataType::Timestamp(TimeUnit::Microsecond, timezone),
-        ) => ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
-            .call(vec![key]),
+        ) => {
+            ScalarUDF::from(Timestamp::try_new(timezone.clone(), ansi_mode, false)?).call(vec![key])
+        }
         (
             DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
-        ) => ScalarUDF::from(SparkToUtf8::new().with_timezone(Some(Arc::clone(session_timezone))))
+        ) => ScalarUDF::from(ToUtf8::new().with_timezone(Some(Arc::clone(session_timezone))))
             .call(vec![key]),
         _ => return Ok(map),
     };
@@ -710,7 +705,7 @@ fn rewrite_map_zip_with_temporal_key(
         body,
     ));
     let udf = Arc::new(HigherOrderUDF::new_from_impl(
-        SparkTransformKeys::new_preserving_duplicates(),
+        TransformKeys::new_preserving_duplicates(),
     ));
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         udf,
@@ -762,7 +757,7 @@ fn map_zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         )?;
     }
     let right = lambda_with_fresh_parameter(right, "__map_zip_right")?;
-    let udf = SparkMapZipWith::new(plan_config.ansi_mode, plan_config.session_timezone_label());
+    let udf = MapZipWith::new(plan_config.ansi_mode, plan_config.session_timezone_label());
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         Arc::new(HigherOrderUDF::new_from_impl(udf)),
         vec![left, right, function],

@@ -18,7 +18,7 @@ use sail_common::spec::{self, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use serde_json::Value;
 
-use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::utils::format::DateTimeFormat;
 use crate::utils::nested::downcast_arg;
 
 /// UDF implementation of `from_json`, similar to Spark's `from_json`.
@@ -33,19 +33,19 @@ use crate::utils::nested::downcast_arg;
 ///   (e.g., timestampFormat, dateFormat, mode).
 ///
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkFromJson {
+pub struct FromJson {
     session_timezone: Arc<str>,
     signature: Signature,
 }
 
 /// Configuration options for the `from_json` function.
 #[derive(Debug)]
-struct SparkFromJsonOptions {
+struct FromJsonOptions {
     timestamp_format: DateTimeFormat,
     date_format: DateTimeFormat,
 }
 
-impl SparkFromJsonOptions {
+impl FromJsonOptions {
     pub const TIMESTAMP_FORMAT_OPTION: &'static str = "timestampFormat";
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
     // Default formats matching Spark's behavior (Java DateTimeFormatter patterns)
@@ -80,7 +80,7 @@ impl SparkFromJsonOptions {
     }
 }
 
-impl Default for SparkFromJsonOptions {
+impl Default for FromJsonOptions {
     #[expect(clippy::expect_used)]
     fn default() -> Self {
         Self {
@@ -92,7 +92,7 @@ impl Default for SparkFromJsonOptions {
     }
 }
 
-impl SparkFromJson {
+impl FromJson {
     pub const FROM_JSON_NAME: &'static str = "from_json";
 
     pub fn new(session_timezone: Arc<str>) -> Self {
@@ -107,7 +107,7 @@ impl SparkFromJson {
     }
 }
 
-impl ScalarUDFImpl for SparkFromJson {
+impl ScalarUDFImpl for FromJson {
     fn name(&self) -> &str {
         Self::FROM_JSON_NAME
     }
@@ -190,7 +190,7 @@ fn from_json_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef
     if args.len() < 2 || args.len() > 3 {
         return exec_err!(
             "`{}` function requires 2 or 3 arguments, got {}",
-            SparkFromJson::FROM_JSON_NAME,
+            FromJson::FROM_JSON_NAME,
             args.len()
         );
     };
@@ -200,23 +200,23 @@ fn from_json_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef
     let schema_str: &str = if schema_str.is_empty() || schema_str.is_null(0) {
         return exec_err!(
             "`{}` function requires a schema string, got an empty or null string",
-            SparkFromJson::FROM_JSON_NAME
+            FromJson::FROM_JSON_NAME
         );
     } else {
         let s = schema_str.value(0);
         if s.trim().is_empty() {
             return exec_err!(
                 "`{}` function requires a schema string, got an empty string",
-                SparkFromJson::FROM_JSON_NAME
+                FromJson::FROM_JSON_NAME
             );
         }
         s
     };
 
-    let options: SparkFromJsonOptions = if let Some(options) = args.get(2) {
-        SparkFromJsonOptions::from_map(downcast_arg!(options, MapArray))?
+    let options: FromJsonOptions = if let Some(options) = args.get(2) {
+        FromJsonOptions::from_map(downcast_arg!(options, MapArray))?
     } else {
-        SparkFromJsonOptions::default()
+        FromJsonOptions::default()
     };
 
     let schema_data_type = parse_json_schema(schema_str, session_timezone)?;
@@ -226,7 +226,7 @@ fn from_json_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef
         other => {
             return exec_err!(
                 "`{}` function doesn't support target schema type {}",
-                SparkFromJson::FROM_JSON_NAME,
+                FromJson::FROM_JSON_NAME,
                 other
             );
         }
@@ -242,7 +242,7 @@ fn from_json_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef
 fn parse_rows(
     rows: &StringArray,
     schema: &DataType,
-    options: &SparkFromJsonOptions,
+    options: &FromJsonOptions,
 ) -> Result<ArrayRef> {
     let mut builder = create_builder(schema, rows.len())?;
     for i in 0..rows.len() {
@@ -401,7 +401,7 @@ fn create_builder(data_type: &DataType, capacity: usize) -> Result<FieldBuilder>
                 DataType::Struct(fields) => Ok((fields[0].clone(), fields[1].clone())),
                 other => exec_err!(
                     "Unreachable: `{}` function handled map field that should be a struct but is {:#?}",
-                    SparkFromJson::FROM_JSON_NAME,
+                    FromJson::FROM_JSON_NAME,
                     other
                 ),
             }?;
@@ -468,7 +468,7 @@ fn create_builder(data_type: &DataType, capacity: usize) -> Result<FieldBuilder>
 fn append_to_builder(
     builder: &mut FieldBuilder,
     value: &Value,
-    options: &SparkFromJsonOptions,
+    options: &FromJsonOptions,
 ) -> Result<()> {
     match builder {
         FieldBuilder::Boolean(b) => match value {
@@ -709,7 +709,7 @@ fn append_to_builder(
 /// - list: invalid, coerce to null
 fn append_permissive_parse_error(
     builder: &mut FieldBuilder,
-    options: &SparkFromJsonOptions,
+    options: &FromJsonOptions,
 ) -> Result<()> {
     match builder {
         FieldBuilder::Struct {
@@ -778,7 +778,7 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
                 DataType::Struct(fields) => Ok(fields),
                 other => exec_err!(
                     "Unreachable: `{}` function handled map field that should be a struct but is {:#?}",
-                    SparkFromJson::FROM_JSON_NAME,
+                    FromJson::FROM_JSON_NAME,
                     other
                 ),
             }?;
@@ -936,7 +936,7 @@ fn parse_decimal_to_i128(
 
 fn parse_date32(
     s: &str,
-    options: &SparkFromJsonOptions,
+    options: &FromJsonOptions,
 ) -> Result<<Date32Type as ArrowPrimitiveType>::Native> {
     let format = &options.date_format;
     let parsed = format.parse_datetime_value(s)?;
@@ -946,7 +946,7 @@ fn parse_date32(
 fn parse_timestamp(
     s: &str,
     timezone: Arc<str>,
-    options: &SparkFromJsonOptions,
+    options: &FromJsonOptions,
 ) -> Result<DateTime<Utc>> {
     let format = &options.timestamp_format;
     let parsed = format.parse_datetime_value(s)?;

@@ -13,7 +13,7 @@ use sail_common_datafusion::datasource::{DataSourceRegistry, UpdateAssignment, U
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::RowLevelOperation;
 use sail_common_datafusion::logical_expr::ExprWithSource;
-use sail_function::scalar::r#struct::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
 use sail_logical_plan::row_level::{StructFieldAlignment, align_row_level_value};
 
 use crate::config::StoreAssignmentPolicy;
@@ -280,7 +280,7 @@ impl PlanResolver<'_> {
                             .await?,
                     );
                 }
-                Ok(ScalarUDF::from(StructFunction::new(names)).call(expressions))
+                Ok(ScalarUDF::from(StructFromFields::new(names)).call(expressions))
             }
         }
     }

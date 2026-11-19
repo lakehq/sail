@@ -11,7 +11,7 @@ use datafusion::scalar::ScalarValue;
 use datafusion_common::cast::as_binary_array;
 use parquet_variant_compute::VariantArray;
 
-use crate::scalar::variant::spark_schema_of_variant::{
+use crate::scalar::variant::schema_of_variant::{
     merge_variant_types, variant_to_inferred_type, variant_type_to_spark_type,
 };
 use crate::utils::schema_inference::InferredType;
@@ -24,11 +24,11 @@ use crate::utils::schema_inference::InferredType;
 ///
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#schema_of_variant_agg>
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SchemaOfVariantAggFunction {
+pub struct SchemaOfVariantAgg {
     signature: Signature,
 }
 
-impl SchemaOfVariantAggFunction {
+impl SchemaOfVariantAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
@@ -36,13 +36,13 @@ impl SchemaOfVariantAggFunction {
     }
 }
 
-impl Default for SchemaOfVariantAggFunction {
+impl Default for SchemaOfVariantAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl AggregateUDFImpl for SchemaOfVariantAggFunction {
+impl AggregateUDFImpl for SchemaOfVariantAgg {
     fn name(&self) -> &str {
         "schema_of_variant_agg"
     }

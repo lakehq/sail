@@ -19,17 +19,17 @@ use num::Float;
 use sail_common_datafusion::type_coercion::binary_type_coercion::comparison_coercion;
 
 #[derive(Debug, Hash, Eq, PartialEq)]
-pub struct SparkArrayPosition {
+pub struct ArrayPosition {
     signature: Signature,
 }
 
-impl Default for SparkArrayPosition {
+impl Default for ArrayPosition {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkArrayPosition {
+impl ArrayPosition {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
@@ -37,7 +37,7 @@ impl SparkArrayPosition {
     }
 }
 
-impl ScalarUDFImpl for SparkArrayPosition {
+impl ScalarUDFImpl for ArrayPosition {
     fn name(&self) -> &str {
         "spark_array_position"
     }

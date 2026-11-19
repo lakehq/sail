@@ -6,7 +6,7 @@ use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDec
 use parquet_variant_compute::VariantArrayBuilder;
 
 use super::*;
-use crate::scalar::variant::spark_parse_json::convert_variant_binaryview_to_binary;
+use crate::scalar::variant::parse_json::convert_variant_binaryview_to_binary;
 
 fn map_field(name: &str, value: Field) -> Field {
     Field::new(
