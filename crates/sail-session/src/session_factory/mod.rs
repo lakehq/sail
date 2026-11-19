@@ -7,7 +7,7 @@ mod worker;
 use std::str::FromStr;
 
 use datafusion::common::Result;
-use datafusion::common::config::ParquetOptions;
+use datafusion::common::config::{MaxRowGroupBytes, ParquetOptions};
 use datafusion::common::parquet_config::DFParquetWriterVersion;
 use datafusion::prelude::SessionContext;
 pub use job_runner::{
@@ -45,9 +45,11 @@ fn apply_parquet_config(parquet: &mut ParquetOptions, config: &ParquetConfig) {
     parquet.metadata_size_hint = config.metadata_size_hint;
     parquet.pushdown_filters = config.pushdown_filters;
     parquet.reorder_filters = config.reorder_filters;
+    parquet.force_filter_selections = config.force_filter_selections;
     parquet.schema_force_view_types = config.schema_force_view_types;
     parquet.binary_as_string = config.binary_as_string;
     parquet.max_predicate_cache_size = Some(config.max_predicate_cache_size);
+    parquet.max_in_list_size = config.max_in_list_size;
     parquet.coerce_int96 = Some("us".to_string());
     parquet.data_pagesize_limit = config.data_page_size_limit;
     parquet.write_batch_size = config.write_batch_size;
@@ -59,6 +61,9 @@ fn apply_parquet_config(parquet: &mut ParquetOptions, config: &ParquetConfig) {
     parquet.dictionary_page_size_limit = config.dictionary_page_size_limit;
     parquet.statistics_enabled = Some(config.statistics_enabled.clone());
     parquet.max_row_group_size = config.max_row_group_size;
+    parquet.max_row_group_bytes = config
+        .max_row_group_bytes
+        .and_then(|v| MaxRowGroupBytes::try_new(v).ok());
     parquet.column_index_truncate_length = config.column_index_truncate_length;
     parquet.statistics_truncate_length = config.statistics_truncate_length;
     parquet.data_page_row_count_limit = config.data_page_row_count_limit;
@@ -66,7 +71,7 @@ fn apply_parquet_config(parquet: &mut ParquetOptions, config: &ParquetConfig) {
     parquet.bloom_filter_on_read = config.bloom_filter_on_read;
     parquet.bloom_filter_on_write = config.bloom_filter_on_write;
     parquet.bloom_filter_fpp = Some(config.bloom_filter_fpp);
-    parquet.bloom_filter_ndv = Some(config.bloom_filter_ndv);
+    parquet.bloom_filter_ndv = config.bloom_filter_ndv;
     parquet.allow_single_file_parallelism = config.allow_single_file_parallelism;
     parquet.maximum_parallel_row_group_writers = config.maximum_parallel_row_group_writers;
     parquet.maximum_buffered_record_batches_per_stream =
