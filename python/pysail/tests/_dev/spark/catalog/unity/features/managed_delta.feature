@@ -197,8 +197,8 @@ Feature: Unity Catalog managed Delta table operations
       | path                                                      | value |
       | protocol.minReaderVersion                                 | 3     |
       | protocol.minWriterVersion                                 | 7     |
-      | protocol.readerFeatures                                   | ["deletionVectors","v2Checkpoint","catalogManaged","vacuumProtocolCheck"] |
-      | protocol.writerFeatures                                   | ["inCommitTimestamp","deletionVectors","v2Checkpoint","appendOnly","invariants","catalogManaged","vacuumProtocolCheck"] |
+      | protocol.readerFeatures                                   | ["catalogManaged","deletionVectors","v2Checkpoint","vacuumProtocolCheck"] |
+      | protocol.writerFeatures                                   | ["catalogManaged","deletionVectors","inCommitTimestamp","v2Checkpoint","vacuumProtocolCheck"] |
       | metaData.configuration["delta.enableInCommitTimestamps"]  | "true" |
       | metaData.configuration["delta.enableDeletionVectors"]     | "true" |
       | metaData.configuration["delta.checkpointPolicy"]          | "v2"   |

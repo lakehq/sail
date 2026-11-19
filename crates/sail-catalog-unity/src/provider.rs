@@ -18,6 +18,7 @@ use sail_catalog::provider::{
     LakeSourceCreateMetadataMode, Namespace, PartitionTransform, StagedTableCreate,
 };
 use sail_catalog::utils::{get_property, quote_names_if_needed, quote_namespace_if_needed};
+use sail_common::spec::{SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY};
 use sail_common::utils::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
@@ -1889,9 +1890,10 @@ fn delta_schema_to_wire_type(data_type: &serde_json::Value) -> serde_json::Value
                                 if let Some(data_type) = field.get_mut("type") {
                                     *data_type = delta_schema_to_wire_type(data_type);
                                 }
-                                field
+                                let metadata = field
                                     .entry("metadata")
                                     .or_insert_with(|| serde_json::json!({}));
+                                delta_field_metadata_to_wire(metadata);
                             }
                             field
                         })
@@ -1912,6 +1914,32 @@ fn delta_schema_to_wire_type(data_type: &serde_json::Value) -> serde_json::Value
             "value-contains-null": data_type["valueContainsNull"],
         }),
         _ => data_type.clone(),
+    }
+}
+
+/// Converts the metadata of a field in the schema of the Delta log to the metadata of
+/// the field in the catalog, where the entries of the Spark field metadata are entries
+/// of the field metadata rather than the JSON object under a single key.
+/// This is how the metadata is sent to the servers without the Delta REST API as well.
+fn delta_field_metadata_to_wire(metadata: &mut serde_json::Value) {
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+    let spark = match object.get(SPARK_METADATA_JSON_KEY) {
+        Some(serde_json::Value::Object(spark)) => spark.clone(),
+        Some(serde_json::Value::String(spark)) => {
+            match serde_json::from_str::<serde_json::Value>(spark) {
+                Ok(serde_json::Value::Object(spark)) => spark,
+                _ => return,
+            }
+        }
+        Some(_) => return,
+        None => serde_json::Map::new(),
+    };
+    object.remove(SPARK_METADATA_JSON_KEY);
+    object.remove(SAIL_SPARK_UDT_METADATA_KEY);
+    for (key, value) in spark {
+        object.insert(key, value);
     }
 }
 
@@ -3197,6 +3225,77 @@ mod tests {
             "metadata": {"comment": "tags"}
         }));
         serde_json::json!({"type": "struct", "fields": fields})
+    }
+
+    /// A column written from a DataFrame has its Spark field metadata under a single key
+    /// in the schema of the Delta log, and the catalog has the entries of that metadata.
+    #[test]
+    fn test_delta_schema_to_wire_type_field_metadata() {
+        let schema = serde_json::json!({
+            "type": "struct",
+            "fields": [
+                {
+                    "name": "extra",
+                    "type": "string",
+                    "nullable": true,
+                    "metadata": {"SPARK::metadata::json": {}}
+                },
+                {
+                    "name": "items",
+                    "type": {
+                        "type": "array",
+                        "elementType": {
+                            "type": "struct",
+                            "fields": [{
+                                "name": "x",
+                                "type": "integer",
+                                "nullable": true,
+                                "metadata": {
+                                    "SPARK::metadata::json": "{\"comment\":\"x\",\"k\":1}",
+                                    "delta.columnMapping.id": 2
+                                }
+                            }]
+                        },
+                        "containsNull": true
+                    },
+                    "nullable": true,
+                    "metadata": {"delta.columnMapping.id": 1, "comment": "items"}
+                },
+                {"name": "plain", "type": "long", "nullable": false}
+            ]
+        });
+        assert_eq!(
+            delta_schema_to_wire_type(&schema),
+            serde_json::json!({
+                "type": "struct",
+                "fields": [
+                    {"name": "extra", "type": "string", "nullable": true, "metadata": {}},
+                    {
+                        "name": "items",
+                        "type": {
+                            "type": "array",
+                            "element-type": {
+                                "type": "struct",
+                                "fields": [{
+                                    "name": "x",
+                                    "type": "integer",
+                                    "nullable": true,
+                                    "metadata": {
+                                        "comment": "x",
+                                        "k": 1,
+                                        "delta.columnMapping.id": 2
+                                    }
+                                }]
+                            },
+                            "contains-null": true
+                        },
+                        "nullable": true,
+                        "metadata": {"delta.columnMapping.id": 1, "comment": "items"}
+                    },
+                    {"name": "plain", "type": "long", "nullable": false, "metadata": {}}
+                ]
+            })
+        );
     }
 
     /// Commits to a server with the Delta REST API and returns the bodies of the update

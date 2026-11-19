@@ -657,7 +657,14 @@ pub(crate) fn parse_complex_type_from_json_object(
     let type_field = serde_object.get("type").ok_or_else(|| {
         CatalogError::InvalidArgument("Complex type_json missing 'type' field".to_string())
     })?;
-    let metadata = get_field_metadata(serde_object);
+    // The metadata of a named field describes the field itself, such as a column with
+    // its column mapping, and not the element of an array or the entries of a map
+    // that the field has as its type.
+    let metadata = if serde_object.contains_key("name") {
+        HashMap::new()
+    } else {
+        get_field_metadata(serde_object)
+    };
 
     let (type_info, type_field, metadata) = match type_field {
         serde_json::Value::String(s) => Ok((serde_object, s.trim().to_lowercase(), metadata)),
@@ -978,6 +985,98 @@ mod tests {
             assert!(parse_from_text_or_json(Some(type_text.to_string()), None).is_err());
         }
 
+        Ok(())
+    }
+
+    /// The column mapping of an array column or a map column is in the metadata of
+    /// the column field, which is not the metadata of the element or the entries.
+    #[test]
+    fn column_field_metadata_is_not_nested_field_metadata() -> CatalogResult<()> {
+        let metadata = json!({
+            "delta.columnMapping.id": 3,
+            "delta.columnMapping.physicalName": "col-3",
+            "comment": "a column"
+        });
+        let item = json!({
+            "type": "struct",
+            "fields": [{
+                "name": "x",
+                "type": {"type": "array", "elementType": "integer", "containsNull": true},
+                "nullable": true,
+                "metadata": {"delta.columnMapping.physicalName": "col-1"}
+            }]
+        });
+        let item_type = DataType::Struct(Fields::from(vec![
+            Field::new(
+                "x",
+                DataType::List(Arc::new(Field::new(
+                    SAIL_LIST_FIELD_NAME,
+                    DataType::Int32,
+                    true,
+                ))),
+                true,
+            )
+            .with_metadata(HashMap::from([(
+                "delta.columnMapping.physicalName".to_string(),
+                "col-1".to_string(),
+            )])),
+        ]));
+        let cases = [
+            (
+                r#gen::ColumnTypeName::Array,
+                json!({"type": "array", "elementType": item, "containsNull": true}),
+                DataType::List(Arc::new(Field::new(
+                    SAIL_LIST_FIELD_NAME,
+                    item_type.clone(),
+                    true,
+                ))),
+            ),
+            (
+                r#gen::ColumnTypeName::Map,
+                json!({
+                    "type": "map",
+                    "keyType": "string",
+                    "valueType": item,
+                    "valueContainsNull": true
+                }),
+                DataType::Map(
+                    Arc::new(Field::new(
+                        SAIL_MAP_FIELD_NAME,
+                        DataType::Struct(Fields::from(vec![
+                            Field::new(SAIL_MAP_KEY_FIELD_NAME, DataType::Utf8, false),
+                            Field::new(SAIL_MAP_VALUE_FIELD_NAME, item_type.clone(), true),
+                        ])),
+                        false,
+                    )),
+                    false,
+                ),
+            ),
+            (
+                r#gen::ColumnTypeName::Struct,
+                item.clone(),
+                item_type.clone(),
+            ),
+        ];
+        for (type_name, data_type, expected) in cases {
+            let field = json!({
+                "name": "c",
+                "type": data_type,
+                "nullable": true,
+                "metadata": metadata
+            });
+            assert_eq!(
+                unity_type_to_data_type(
+                    Some(type_name),
+                    Some(field.to_string()),
+                    None,
+                    None,
+                    None,
+                    None,
+                )?,
+                expected,
+                "{field}"
+            );
+        }
         Ok(())
     }
 

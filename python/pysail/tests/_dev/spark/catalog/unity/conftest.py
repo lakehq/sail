@@ -129,8 +129,16 @@ def _location_to_path(location: str) -> Path:
     return Path(location)
 
 
-def _write_seed_delta_log(location: Path, table_id: str) -> None:
-    """Seed version 0 because OSS Unity Catalog registers metadata, not Delta log files."""
+def _write_seed_delta_log(
+    location: Path,
+    table_id: str,
+    protocol: dict | None = None,
+    configuration: dict | None = None,
+) -> int:
+    """Seed version 0 because OSS Unity Catalog registers metadata, not Delta log files.
+
+    Returns the in-commit timestamp of version 0.
+    """
     timestamp = int(time.time() * 1000)
     schema = {
         "type": "struct",
@@ -139,6 +147,19 @@ def _write_seed_delta_log(location: Path, table_id: str) -> None:
             {"name": "name", "type": "string", "nullable": True, "metadata": {}},
         ],
     }
+    if protocol is None:
+        protocol = {
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": ["catalogManaged", "vacuumProtocolCheck"],
+            "writerFeatures": ["catalogManaged", "inCommitTimestamp", "vacuumProtocolCheck"],
+        }
+    if configuration is None:
+        configuration = {
+            "delta.feature.catalogManaged": "supported",
+            "delta.enableInCommitTimestamps": "true",
+            "io.unitycatalog.tableId": table_id,
+        }
     actions = [
         {
             "commitInfo": {
@@ -152,25 +173,14 @@ def _write_seed_delta_log(location: Path, table_id: str) -> None:
                 "inCommitTimestamp": timestamp,
             }
         },
-        {
-            "protocol": {
-                "minReaderVersion": 3,
-                "minWriterVersion": 7,
-                "readerFeatures": ["catalogManaged", "vacuumProtocolCheck"],
-                "writerFeatures": ["catalogManaged", "inCommitTimestamp", "vacuumProtocolCheck"],
-            }
-        },
+        {"protocol": protocol},
         {
             "metaData": {
                 "id": str(uuid.uuid4()),
                 "format": {"provider": "parquet", "options": {}},
                 "schemaString": json.dumps(schema, separators=(",", ":")),
                 "partitionColumns": [],
-                "configuration": {
-                    "delta.feature.catalogManaged": "supported",
-                    "delta.enableInCommitTimestamps": "true",
-                    "io.unitycatalog.tableId": table_id,
-                },
+                "configuration": configuration,
                 "createdTime": timestamp,
             }
         },
@@ -182,6 +192,7 @@ def _write_seed_delta_log(location: Path, table_id: str) -> None:
         for action in actions:
             f.write(json.dumps(action, separators=(",", ":")))
             f.write("\n")
+    return timestamp
 
 
 def _unity_column(name: str, type_name: str, position: int) -> dict:
@@ -201,7 +212,12 @@ def _create_unity_managed_delta_table(
     table_name: str,
     unity_rest_url: str,
     columns: list[dict],
+    *,
+    delta_api: bool,
 ) -> None:
+    if delta_api:
+        _create_unity_managed_delta_table_with_delta_api(table_name, unity_rest_url, columns)
+        return
     catalog_name, schema_name, name = _unity_table_parts(table_name)
     staging_response = requests.post(
         f"{unity_rest_url}/staging-tables",
@@ -234,8 +250,100 @@ def _create_unity_managed_delta_table(
     create_response.raise_for_status()
 
 
+def _create_unity_managed_delta_table_with_delta_api(
+    table_name: str,
+    unity_rest_url: str,
+    columns: list[dict],
+) -> None:
+    """Create the table the way the servers with the Delta REST API expect.
+
+    The server names the protocol and the properties of the table when the table is staged,
+    and version 0 of the Delta log has them before the table is created in the catalog.
+    """
+    catalog_name, schema_name, name = _unity_table_parts(table_name)
+    schema_url = (
+        f"{unity_rest_url}/delta/v1/catalogs/{quote(catalog_name, safe='')}/schemas/{quote(schema_name, safe='')}"
+    )
+    staging_response = requests.post(f"{schema_url}/staging-tables", json={"name": name}, timeout=10)
+    staging_response.raise_for_status()
+    staging_table = staging_response.json()
+    table_id = staging_table["table-id"]
+    staging_location = staging_table["location"]
+    required_protocol = staging_table["required-protocol"]
+    reader_features = sorted(required_protocol.get("reader-features") or [])
+    writer_features = sorted(required_protocol.get("writer-features") or [])
+    properties = {
+        key: value for key, value in (staging_table.get("required-properties") or {}).items() if value is not None
+    }
+    properties["io.unitycatalog.tableId"] = table_id
+    timestamp = _write_seed_delta_log(
+        _location_to_path(staging_location),
+        table_id,
+        protocol={
+            "minReaderVersion": required_protocol["min-reader-version"],
+            "minWriterVersion": required_protocol["min-writer-version"],
+            "readerFeatures": reader_features,
+            "writerFeatures": writer_features,
+        },
+        configuration=properties,
+    )
+
+    if columns:
+        create_response = requests.post(
+            f"{schema_url}/tables",
+            json={
+                "name": name,
+                "location": staging_location,
+                "table-type": "MANAGED",
+                "columns": {
+                    "type": "struct",
+                    "fields": [
+                        {
+                            "name": column["name"],
+                            "type": json.loads(column["type_json"]),
+                            "nullable": column["nullable"],
+                            "metadata": {},
+                        }
+                        for column in columns
+                    ],
+                },
+                "protocol": {
+                    "min-reader-version": required_protocol["min-reader-version"],
+                    "min-writer-version": required_protocol["min-writer-version"],
+                    "reader-features": reader_features,
+                    "writer-features": writer_features,
+                },
+                "properties": properties,
+                "last-commit-timestamp-ms": timestamp,
+            },
+            timeout=10,
+        )
+    else:
+        # The Delta REST API does not create a table without columns, while the table API
+        # of the same server does when the table has the table ID as a property.
+        create_response = requests.post(
+            f"{unity_rest_url}/tables",
+            json={
+                "name": name,
+                "catalog_name": catalog_name,
+                "schema_name": schema_name,
+                "table_type": "MANAGED",
+                "data_source_format": "DELTA",
+                "storage_location": staging_location,
+                "columns": [],
+                "properties": properties,
+            },
+            timeout=10,
+        )
+    create_response.raise_for_status()
+
+
 @given(parsers.parse("Unity Catalog managed Delta table {table_name} exists with id and name columns"))
-def unity_managed_delta_table_exists(table_name: str, unity_rest_url: str) -> None:
+def unity_managed_delta_table_exists(
+    table_name: str,
+    unity_rest_url: str,
+    unity_uses_delta_api: bool,  # noqa: FBT001
+) -> None:
     _create_unity_managed_delta_table(
         table_name,
         unity_rest_url,
@@ -243,6 +351,7 @@ def unity_managed_delta_table_exists(table_name: str, unity_rest_url: str) -> No
             _unity_column("id", "INT", 0),
             _unity_column("name", "STRING", 1),
         ],
+        delta_api=unity_uses_delta_api,
     )
 
 
@@ -251,8 +360,12 @@ def unity_managed_delta_table_exists(table_name: str, unity_rest_url: str) -> No
         "Unity Catalog managed Delta table {table_name} exists with no catalog columns and id and name Delta schema"
     )
 )
-def unity_managed_delta_table_with_empty_catalog_schema_exists(table_name: str, unity_rest_url: str) -> None:
-    _create_unity_managed_delta_table(table_name, unity_rest_url, [])
+def unity_managed_delta_table_with_empty_catalog_schema_exists(
+    table_name: str,
+    unity_rest_url: str,
+    unity_uses_delta_api: bool,  # noqa: FBT001
+) -> None:
+    _create_unity_managed_delta_table(table_name, unity_rest_url, [], delta_api=unity_uses_delta_api)
 
 
 @given(parsers.parse("final Unity Catalog managed table cleanup for {table_name}"))
