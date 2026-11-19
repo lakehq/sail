@@ -17,6 +17,8 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use ordered_float::OrderedFloat;
 use sail_common_datafusion::literal::LiteralValue;
 
+use super::utils::percentile::{duration_none, interval_none, match_string_type};
+
 /// The `PercentileFunction` calculates the exact percentile (quantile) from a set of values.
 ///
 /// Unlike `approx_percentile_cont`, this function calculates the exact percentile by:

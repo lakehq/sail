@@ -22,7 +22,7 @@ use datafusion_expr::{
 use sail_common::spec::{SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::type_coercion::binary_type_coercion::set_operation_coercion;
 
-use crate::functions_nested_utils::{evaluate_lambda_rows, scatter_active_rows};
+use crate::scalar::utils::lambda::{evaluate_lambda_rows, scatter_active_rows};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkMapZipWith {

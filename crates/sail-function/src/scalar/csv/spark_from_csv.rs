@@ -12,12 +12,11 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
+use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec;
 use sail_common_datafusion::data_type::DataTypeResolver;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
-use crate::functions_nested_utils::*;
-use crate::functions_utils::make_scalar_function;
 use crate::scalar::csv::options::{
     CsvFunction, find_option, find_option_with_alias, reject_null_entries, validate_options,
 };
@@ -25,6 +24,7 @@ use crate::scalar::datetime::format::DateTimeFormat;
 use crate::scalar::datetime::spark_interval::{
     string_to_day_time_interval, string_to_year_month_interval,
 };
+use crate::utils::nested::downcast_arg;
 
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
 

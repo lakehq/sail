@@ -13,11 +13,11 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
+use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{self, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
 use super::reader;
-use crate::functions_utils::make_scalar_function;
 use crate::scalar::datetime::format::{DateTimeFormat, ParsedDateTime};
 use crate::scalar::datetime::spark_timestamp::TimestampParser;
 use crate::scalar::datetime::timestamp_parser::parse_timestamp_string;

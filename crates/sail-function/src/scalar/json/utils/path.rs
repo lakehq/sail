@@ -18,7 +18,7 @@ use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err
 use datafusion_expr::ColumnarValue;
 use jiter::{Jiter, JiterError, Peek};
 
-use crate::scalar::json::common_union::{
+use super::union::{
     TYPE_ID_NULL, is_json_union, json_from_union_scalar, nested_json_array, nested_json_array_ref,
 };
 

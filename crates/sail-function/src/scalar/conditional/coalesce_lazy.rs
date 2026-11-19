@@ -15,8 +15,8 @@ use datafusion_expr::{
     ValueOrLambda, Volatility,
 };
 
-use crate::functions_nested_utils::{evaluate_lambda_all_rows, evaluate_lambda_rows};
 use crate::scalar::conditional::coalesce::CoalesceFunc;
+use crate::scalar::utils::lambda::{evaluate_lambda_all_rows, evaluate_lambda_rows};
 
 /// `coalesce` that evaluates its arguments lazily, from left to right, and
 /// evaluates each argument at most once per row, like Spark's `Coalesce`.

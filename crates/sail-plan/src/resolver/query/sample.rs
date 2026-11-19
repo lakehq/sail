@@ -11,9 +11,9 @@ use datafusion_expr::{Expr, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUD
 use rand::{RngExt, rng};
 use sail_common::spec;
 use sail_common::spec::{NullOrdering, SortDirection, SortOrder};
-use sail_function::scalar::math::partition_random::PartitionSeed;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::random::Random;
+use sail_function::scalar::math::utils::partition_random::PartitionSeed;
 use sail_logical_plan::seeded_random::{SeededRandomColumn, SeededRandomNode};
 use sail_logical_plan::sort::SortWithinPartitionsNode;
 

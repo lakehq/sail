@@ -14,13 +14,14 @@ use datafusion_expr::{Operator, ScalarUDF};
 use rand::{RngExt, rng};
 
 use super::java_random::JavaRandom;
-use super::rand_poisson::RandPoisson;
-use super::randn::Randn;
-use super::random::Random;
 use super::spark_poisson::SparkPoisson;
-use super::spark_uniform::{SparkUniform, uniform_with_rng};
+use super::uniform::uniform_with_rng;
 use super::xorshift::SparkXorShiftRandom;
 use crate::scalar::array::spark_shuffle::{RandomIndicesGenerator, SparkShuffle, array_shuffle};
+use crate::scalar::math::rand_poisson::RandPoisson;
+use crate::scalar::math::randn::Randn;
+use crate::scalar::math::random::Random;
+use crate::scalar::math::spark_uniform::SparkUniform;
 use crate::scalar::misc::spark_uuid::{RandomUuidGenerator, SparkUuid};
 use crate::scalar::string::randstr::{Randstr, random_strings, randstr_length};
 

@@ -10,9 +10,9 @@ use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, TypeSignature, Volatility};
+use datafusion_functions::utils::make_scalar_function;
 
-use crate::functions_utils::make_scalar_function;
-use crate::theta_sketch::{
+use crate::utils::theta_sketch::{
     DEFAULT_LG_NOM_ENTRIES, difference_sketch_bytes, estimate_sketch, intersect_sketch_bytes,
     union_sketch_bytes, validate_lg_nom_entries,
 };
