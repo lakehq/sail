@@ -59,6 +59,37 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
         start_version: i64,
         end_version: Option<i64>,
     ) -> Result<DeltaRatifiedCommitResponse> {
+        self.request_ratified_commits(
+            lakehouse_table,
+            table_uri,
+            start_version,
+            end_version,
+            false,
+        )
+        .await
+    }
+
+    /// Asks the catalog whether a table that is not known to be catalog-managed is one.
+    /// The response of a catalog-managed table has its ratified commits as well.
+    pub(crate) async fn discover_ratified_commits(
+        &self,
+        lakehouse_table: &LakehouseExecutionContext,
+        table_uri: impl Into<String>,
+        start_version: i64,
+        end_version: Option<i64>,
+    ) -> Result<DeltaRatifiedCommitResponse> {
+        self.request_ratified_commits(lakehouse_table, table_uri, start_version, end_version, true)
+            .await
+    }
+
+    async fn request_ratified_commits(
+        &self,
+        lakehouse_table: &LakehouseExecutionContext,
+        table_uri: impl Into<String>,
+        start_version: i64,
+        end_version: Option<i64>,
+        discover: bool,
+    ) -> Result<DeltaRatifiedCommitResponse> {
         let manager = self.context.extension::<CatalogManager>()?;
         manager
             .get_delta_ratified_commits(
@@ -68,6 +99,7 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                     table_uri: table_uri.into(),
                     start_version,
                     end_version,
+                    discover,
                 },
             )
             .await

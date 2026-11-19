@@ -165,9 +165,15 @@ pub struct DeltaRatifiedCommitRequest {
     pub table_uri: String,
     pub start_version: i64,
     pub end_version: Option<i64>,
+    /// Whether the request is made to learn if the table is catalog-managed, when neither the
+    /// table properties nor the Delta log have shown that it is. The catalog answers such a
+    /// request only with an API that serves every Delta table, and the response states
+    /// whether the table is catalog-managed.
+    #[serde(default)]
+    pub discover: bool,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct DeltaRatifiedCommitResponse {
     pub latest_table_version: i64,
     pub commits: Vec<DeltaRatifiedCommit>,
@@ -176,6 +182,10 @@ pub struct DeltaRatifiedCommitResponse {
     /// of a registered table.
     #[serde(default)]
     pub requires_published_log: bool,
+    /// Whether the catalog states that the table is catalog-managed. A catalog that does not
+    /// state it leaves the decision to the table properties and the Delta log.
+    #[serde(default)]
+    pub catalog_managed: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]

@@ -748,6 +748,7 @@ mod tests {
                 latest_table_version: request.start_version,
                 commits: vec![],
                 requires_published_log: false,
+                catalog_managed: false,
             })
         }
 
@@ -1148,6 +1149,7 @@ mod tests {
                     table_uri: "file:///tmp/table".to_string(),
                     start_version: 7,
                     end_version: None,
+                    discover: false,
                 },
             )
             .await

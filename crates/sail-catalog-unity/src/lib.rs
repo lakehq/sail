@@ -141,6 +141,9 @@ pub mod delta_gen {
     pub struct DeltaLoadTableMetadata {
         #[serde(rename = "table-uuid")]
         pub table_uuid: String,
+        /// The property values are not validated.
+        #[serde(default)]
+        pub properties: Option<std::collections::HashMap<String, serde_json::Value>>,
     }
 
     #[derive(Clone, Debug, serde::Deserialize)]

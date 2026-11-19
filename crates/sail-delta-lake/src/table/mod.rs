@@ -18,6 +18,7 @@ use futures::{StreamExt, TryStreamExt};
 use log::warn;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
+use sail_catalog::lakehouse::DeltaRatifiedCommitResponse;
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
@@ -604,6 +605,7 @@ async fn load_catalog_managed_commits<C>(
     table_url: &Url,
     log_store: LogStoreRef,
     version_as_of: Option<i64>,
+    response: Option<DeltaRatifiedCommitResponse>,
 ) -> Result<CatalogManagedCommitSet>
 where
     C: SessionExtensionAccessor + ?Sized,
@@ -615,11 +617,14 @@ where
         });
     }
 
-    let catalog_table = lakehouse_table.catalog_table();
-    let coordinator = DeltaCatalogCommitCoordinator::new(ctx, catalog_table);
-    let response = coordinator
-        .get_ratified_commits(lakehouse_table, table_url.to_string(), 1, version_as_of)
-        .await?;
+    let response = match response {
+        Some(response) => response,
+        None => {
+            DeltaCatalogCommitCoordinator::new(ctx, lakehouse_table.catalog_table())
+                .get_ratified_commits(lakehouse_table, table_url.to_string(), 1, version_as_of)
+                .await?
+        }
+    };
 
     let latest_table_version = response.latest_table_version;
     if let Some(version) = version_as_of
@@ -766,21 +771,41 @@ where
 {
     let catalog_table = lakehouse_table.catalog_table();
     let bootstrap_info = load_catalog_managed_delta_bootstrap_info(ctx, catalog_table).await?;
-    let load_commits = || {
+    let load_commits = |response| {
         load_catalog_managed_commits(
             ctx,
             lakehouse_table,
             table_url,
             log_store.clone(),
             version_as_of,
+            response,
         )
     };
     // A Unity table id alone does not make a table catalog-managed. The catalog property
     // `delta.feature.catalogManaged` does, and otherwise the published Delta protocol decides.
-    if bootstrap_info
+    let catalog_managed_property = bootstrap_info
         .as_ref()
-        .is_some_and(|info| catalog_properties_are_catalog_managed(&info.properties))
-    {
+        .is_some_and(|info| catalog_properties_are_catalog_managed(&info.properties));
+    // The commit that enables the feature on an existing table may not be published yet, and
+    // the table properties may not have the catalog property. So the catalog is asked about
+    // a Unity managed table, and its answer has the ratified commits of the table as well.
+    let discovered = if bootstrap_info.is_some() && !catalog_managed_property {
+        match DeltaCatalogCommitCoordinator::new(ctx, catalog_table)
+            .discover_ratified_commits(lakehouse_table, table_url.to_string(), 1, version_as_of)
+            .await
+        {
+            Ok(response) => response.catalog_managed.then_some(response),
+            Err(err) => {
+                warn!(
+                    "Failed to ask the catalog whether {table_url} is catalog-managed, reading the published Delta protocol: {err}"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if catalog_managed_property || discovered.is_some() {
         match log_store.get_latest_version(-1).await {
             Ok(_) => {}
             Err(DeltaError::MissingVersion) => {
@@ -794,7 +819,7 @@ where
             }
             Err(err) => return Err(DataFusionError::from(err)),
         }
-        return Ok(Some(load_commits().await?));
+        return Ok(Some(load_commits(discovered).await?));
     }
 
     let mut detector = DeltaTable::new(
@@ -807,7 +832,7 @@ where
     match detector.load().await {
         Ok(()) => {
             if protocol_is_catalog_managed(detector.snapshot()?.protocol()) {
-                Ok(Some(load_commits().await?))
+                Ok(Some(load_commits(None).await?))
             } else {
                 Ok(None)
             }
@@ -821,7 +846,7 @@ where
             )
             .await?
             {
-                Ok(Some(load_commits().await?))
+                Ok(Some(load_commits(None).await?))
             } else {
                 Err(DataFusionError::from(err))
             }
@@ -834,7 +859,7 @@ where
             warn!(
                 "Failed to load the published Delta log of {table_url}, reading catalog commits: {err}"
             );
-            Ok(Some(load_commits().await?))
+            Ok(Some(load_commits(None).await?))
         }
         Err(err) => Err(DataFusionError::from(err)),
     }
@@ -1442,6 +1467,7 @@ mod catalog_managed_tests {
         catalog_managed_property: bool,
         ratified: Option<DeltaRatifiedCommitResponse>,
         commit_requests: AtomicUsize,
+        discover_requests: AtomicUsize,
         commit_error: Option<fn() -> CatalogError>,
     }
 
@@ -1503,8 +1529,16 @@ mod catalog_managed_tests {
             &self,
             _: &Namespace,
             _: &str,
-            _: DeltaRatifiedCommitRequest,
+            request: DeltaRatifiedCommitRequest,
         ) -> CatalogResult<DeltaRatifiedCommitResponse> {
+            if request.discover {
+                self.discover_requests.fetch_add(1, Ordering::SeqCst);
+                return match &self.ratified {
+                    Some(ratified) if ratified.catalog_managed => Ok(ratified.clone()),
+                    Some(_) => Ok(DeltaRatifiedCommitResponse::default()),
+                    None => Err(CatalogError::External("401 Unauthorized".into())),
+                };
+            }
             self.commit_requests.fetch_add(1, Ordering::SeqCst);
             self.ratified
                 .clone()
@@ -1602,6 +1636,7 @@ mod catalog_managed_tests {
         DeltaRatifiedCommitResponse {
             latest_table_version,
             requires_published_log: false,
+            catalog_managed: false,
             commits: commits
                 .iter()
                 .map(|(version, id)| DeltaRatifiedCommit {
@@ -1621,26 +1656,7 @@ mod catalog_managed_tests {
         catalog_managed_property: bool,
         ratified: Option<DeltaRatifiedCommitResponse>,
     ) -> (usize, datafusion_common::Result<i64>) {
-        let store = Arc::new(InMemory::new());
-        let commit = format!(
-            concat!(
-                "{{\"protocol\":{protocol}}}\n",
-                "{{\"metaData\":{{\"id\":\"table-id\",\"format\":{{\"provider\":\"parquet\",",
-                "\"options\":{{}}}},\"schemaString\":\"{{\\\"type\\\":\\\"struct\\\",",
-                "\\\"fields\\\":[{{\\\"name\\\":\\\"id\\\",\\\"type\\\":\\\"long\\\",",
-                "\\\"nullable\\\":true,\\\"metadata\\\":{{}}}}]}}\",\"partitionColumns\":[],",
-                "\"configuration\":{{\"io.unitycatalog.tableId\":\"table-id\"}},",
-                "\"createdTime\":0}}}}\n"
-            ),
-            protocol = protocol
-        );
-        store
-            .put(
-                &Path::from("items/_delta_log/00000000000000000000.json"),
-                commit.into(),
-            )
-            .await
-            .unwrap();
+        let store = store_with_published_version_0(protocol).await;
         for (file, content) in log_files {
             store
                 .put(
@@ -1658,10 +1674,23 @@ mod catalog_managed_tests {
         catalog_managed_property: bool,
         ratified: Option<DeltaRatifiedCommitResponse>,
     ) -> (usize, datafusion_common::Result<i64>) {
+        let (commit_requests, _, result) =
+            read_unity_managed_table_with_requests(store, catalog_managed_property, ratified).await;
+        (commit_requests, result)
+    }
+
+    /// Returns the number of the commit requests and of the discovery requests to the catalog
+    /// with the version of the table that is read.
+    async fn read_unity_managed_table_with_requests(
+        store: Arc<InMemory>,
+        catalog_managed_property: bool,
+        ratified: Option<DeltaRatifiedCommitResponse>,
+    ) -> (usize, usize, datafusion_common::Result<i64>) {
         let catalog = Arc::new(UnityManagedCatalog {
             catalog_managed_property,
             ratified,
             commit_requests: AtomicUsize::new(0),
+            discover_requests: AtomicUsize::new(0),
             commit_error: None,
         });
         let manager = CatalogManager::try_new(CatalogManagerOptions {
@@ -1704,7 +1733,89 @@ mod catalog_managed_tests {
         )
         .await
         .map(|(snapshot, _, _)| snapshot.version());
-        (catalog.commit_requests.load(Ordering::SeqCst), result)
+        (
+            catalog.commit_requests.load(Ordering::SeqCst),
+            catalog.discover_requests.load(Ordering::SeqCst),
+            result,
+        )
+    }
+
+    async fn store_with_published_version_0(protocol: &str) -> Arc<InMemory> {
+        let store = Arc::new(InMemory::new());
+        let commit = format!(
+            concat!(
+                "{{\"protocol\":{protocol}}}\n",
+                "{{\"metaData\":{{\"id\":\"table-id\",\"format\":{{\"provider\":\"parquet\",",
+                "\"options\":{{}}}},\"schemaString\":\"{{\\\"type\\\":\\\"struct\\\",",
+                "\\\"fields\\\":[{{\\\"name\\\":\\\"id\\\",\\\"type\\\":\\\"long\\\",",
+                "\\\"nullable\\\":true,\\\"metadata\\\":{{}}}}]}}\",\"partitionColumns\":[],",
+                "\"configuration\":{{\"io.unitycatalog.tableId\":\"table-id\"}},",
+                "\"createdTime\":0}}}}\n"
+            ),
+            protocol = protocol
+        );
+        store
+            .put(
+                &Path::from("items/_delta_log/00000000000000000000.json"),
+                commit.into(),
+            )
+            .await
+            .unwrap();
+        store
+    }
+
+    #[tokio::test]
+    async fn unity_managed_table_reads_catalog_commits_when_catalog_states_catalog_managed() {
+        // The commit that enables the feature on an existing table is not published yet, and
+        // neither the table properties nor the published protocol have the feature.
+        let store = store_with_published_version_0(NON_CATALOG_MANAGED_PROTOCOL).await;
+        let enabling_commit = format!(
+            "{}{{\"protocol\":{CATALOG_MANAGED_PROTOCOL}}}\n",
+            EMPTY_COMMIT
+        );
+        store
+            .put(
+                &Path::from(format!("items/_delta_log/{}", staged_commit(1, "a"))),
+                enabling_commit.into(),
+            )
+            .await
+            .unwrap();
+        let ratified = DeltaRatifiedCommitResponse {
+            catalog_managed: true,
+            requires_published_log: true,
+            ..ratified(1, &[(1, "a")])
+        };
+        let (commit_requests, discover_requests, result) =
+            read_unity_managed_table_with_requests(store, false, Some(ratified)).await;
+        assert_eq!(result.unwrap(), 1);
+        // The commits of the discovery response are used without another request.
+        assert_eq!((commit_requests, discover_requests), (0, 1));
+    }
+
+    #[tokio::test]
+    async fn unity_managed_table_reads_published_log_when_catalog_states_not_catalog_managed() {
+        let store = store_with_published_version_0(NON_CATALOG_MANAGED_PROTOCOL).await;
+        store
+            .put(
+                &Path::from(format!("items/_delta_log/{}", staged_commit(1, "a"))),
+                EMPTY_COMMIT.to_string().into(),
+            )
+            .await
+            .unwrap();
+        let (commit_requests, discover_requests, result) =
+            read_unity_managed_table_with_requests(store, false, Some(ratified(1, &[(1, "a")])))
+                .await;
+        assert_eq!(result.unwrap(), 0);
+        assert_eq!((commit_requests, discover_requests), (0, 1));
+    }
+
+    #[tokio::test]
+    async fn unity_managed_table_with_catalog_managed_property_is_not_discovered() {
+        let store = store_with_published_version_0(CATALOG_MANAGED_PROTOCOL).await;
+        let (commit_requests, discover_requests, result) =
+            read_unity_managed_table_with_requests(store, true, Some(ratified(0, &[]))).await;
+        assert_eq!(result.unwrap(), 0);
+        assert_eq!((commit_requests, discover_requests), (1, 0));
     }
 
     #[tokio::test]
@@ -1920,6 +2031,7 @@ mod catalog_managed_tests {
             catalog_managed_property: true,
             ratified: None,
             commit_requests: AtomicUsize::new(0),
+            discover_requests: AtomicUsize::new(0),
             commit_error: Some(error),
         });
         let manager = CatalogManager::try_new(CatalogManagerOptions {
