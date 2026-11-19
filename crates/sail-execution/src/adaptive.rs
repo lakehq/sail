@@ -364,7 +364,7 @@ fn candidate(join: &HashJoinExec) -> Result<Option<Candidate>> {
         Ok(!matches!(
             statistics(side.as_ref())?.total_byte_size,
             Precision::Exact(_)
-        ))
+        ) && !is_known_large(side))
     };
     let candidate = match join.mode {
         // Null-aware anti joins must keep their sides.
@@ -387,6 +387,38 @@ fn candidate(join: &HashJoinExec) -> Result<Option<Candidate>> {
         _ => return Ok(None),
     };
     Ok(Some(candidate))
+}
+
+/// Whether `side` is a partitioned join over handed-off inputs, which were too large to
+/// broadcast, that keeps all rows of such an input (an outer join) or joins two of them
+/// (an inner join, assumed no smaller). It emits nothing until its build side has been
+/// read, so running it would hold up the decision above it for little.
+fn is_known_large(side: &Arc<dyn ExecutionPlan>) -> bool {
+    let mut plan = side;
+    loop {
+        if let Some(repartition) = plan.downcast_ref::<RepartitionExec>() {
+            plan = repartition.input();
+        } else if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
+            plan = projection.input();
+        } else {
+            break;
+        }
+    }
+    let Some(join) = plan.downcast_ref::<HashJoinExec>() else {
+        return false;
+    };
+    if join.mode != PartitionMode::Partitioned || join.fetch().is_some() {
+        return false;
+    }
+    let left = join.left().is::<HandoffExec>();
+    let right = join.right().is::<HandoffExec>();
+    match join.join_type {
+        JoinType::Inner => left && right,
+        JoinType::Left => left,
+        JoinType::Right => right,
+        JoinType::Full => left || right,
+        _ => false,
+    }
 }
 
 /// The distributed planner partitions broadcast joins that emit unmatched build rows.
@@ -1260,6 +1292,30 @@ mod tests {
     }
 
     /// The shape of TPC-H Q17: a selective join feeding a partitioned join on the same key.
+    #[tokio::test]
+    async fn join_of_handed_off_sides_is_not_run_again() {
+        let large = |name| filtered(source(name, &keys(0..1000)), 0);
+        let plan = || {
+            let inner = partitioned_join(large("a"), 0, large("b"), 0, JoinType::Inner);
+            partitioned_join(inner, 0, large("c"), 0, JoinType::Inner)
+        };
+        let runner = LocalRunner {
+            handoff: true,
+            ..Default::default()
+        };
+        let adapted = select_with(&plan(), &options(1024), &runner).await;
+        // Both sides of the inner join, then only the other side of the outer join.
+        assert_eq!(runner.jobs.load(Ordering::Relaxed), 3);
+        assert_eq!(
+            joins(&adapted),
+            vec![PartitionMode::Partitioned, PartitionMode::Partitioned]
+        );
+        assert_eq!(
+            sorted_output(without_handoffs(adapted).unwrap()).await,
+            sorted_output(plan()).await
+        );
+    }
+
     fn nested_joins() -> Arc<dyn ExecutionPlan> {
         let part = filtered(source("part", &keys(0..1000)), 995);
         let lineitem = source(
