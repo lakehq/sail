@@ -17,7 +17,8 @@ use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::catalog::delta::{
-    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
+    DELTA_UNITY_CREATE_COMMIT_KEY, DELTA_UNITY_REQUIRED_PROTOCOL_KEY, DELTA_UNITY_TABLE_ID_KEY,
+    DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
     CatalogPartitionField, CatalogTableColumnIdentity, CommitAuthority, LakehouseExecutionContext,
@@ -48,7 +49,7 @@ use url::Url;
 
 use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
 use crate::datasource::actions::adds_to_remove_actions;
-use crate::delta_log::StorageConfig;
+use crate::delta_log::{StorageConfig, get_actions, in_commit_timestamp_from_actions};
 use crate::options::r#gen::{DeltaReadOptions, DeltaWriteOptions};
 use crate::options::session_replace_where_constraint_check;
 use crate::physical_plan::planner::{DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext};
@@ -63,9 +64,9 @@ use crate::schema::{
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    ColumnMappingMode, ColumnMetadataKey, CommitAction, DataType as DeltaDataType, DeltaOperation,
-    MetadataValue, Protocol, SaveMode, StructField, StructType, TableFeature, TableProperties,
-    canonicalize_and_validate_table_properties, route_table_property_key,
+    Action, ColumnMappingMode, ColumnMetadataKey, CommitAction, DataType as DeltaDataType,
+    DeltaOperation, MetadataValue, Protocol, SaveMode, StructField, StructType, TableFeature,
+    TableProperties, canonicalize_and_validate_table_properties, route_table_property_key,
 };
 use crate::table::{
     DeltaTable, catalog_managed_commit_context, create_delta_table_with_object_store,
@@ -281,13 +282,14 @@ impl LakeSource for DeltaLakeSource {
             columns,
             comment,
             partition_by,
-            properties,
+            mut properties,
             replace,
             lakehouse_table,
         } = info;
         let catalog_table = lakehouse_table
             .as_ref()
             .map(|context| context.catalog_table().to_vec());
+        let unity_required_protocol = take_unity_required_protocol(&mut properties)?;
 
         let catalog_managed_table_id = if catalog_table.is_some() {
             Some(
@@ -470,7 +472,23 @@ impl LakeSource for DeltaLakeSource {
         if let Some(table_id) = &catalog_managed_table_id {
             metadata = metadata_with_catalog_managed(metadata, table_id);
         }
+        if let Some(required_protocol) = &unity_required_protocol {
+            protocol = protocol.merge_upgrade_requirements(required_protocol);
+            validate_unity_required_protocol(&protocol)?;
+            // The table features are creation-time directives that belong to the protocol,
+            // so they are not written to the table configuration.
+            let feature_keys = metadata
+                .configuration()
+                .keys()
+                .filter(|key| key.to_ascii_lowercase().starts_with("delta.feature."))
+                .cloned()
+                .collect::<Vec<_>>();
+            for key in feature_keys {
+                metadata = metadata.remove_config_key(&key);
+            }
+        }
 
+        let report_create_commit = unity_required_protocol.is_some() && replace_snapshot.is_none();
         let log_store = if let Some(table) = existing_table.as_ref() {
             table.log_store()
         } else {
@@ -520,10 +538,17 @@ impl LakeSource for DeltaLakeSource {
 
         CommitBuilder::from(CommitProperties::from_session_config(config)?)
             .with_actions(actions)
-            .build(replace_snapshot, log_store, operation)
+            .build(replace_snapshot, log_store.clone(), operation)
             .await
-            .map(|_| LakeSourceCreateTableResult::default())
-            .map_err(|e| DataFusionError::External(Box::new(e)))
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let mut result = LakeSourceCreateTableResult::default();
+        if report_create_commit {
+            result.properties.push((
+                DELTA_UNITY_CREATE_COMMIT_KEY.to_string(),
+                unity_create_commit(log_store.as_ref()).await?,
+            ));
+        }
+        Ok(result)
     }
 
     async fn plan_row_level_operation(
@@ -1925,6 +1950,133 @@ fn delta_create_table_metadata_configuration(
     canonicalize_and_validate_table_properties(&table_properties)
 }
 
+/// Removes the Delta protocol required by Unity Catalog from the create-table properties.
+fn take_unity_required_protocol(
+    properties: &mut Vec<(String, String)>,
+) -> Result<Option<Protocol>> {
+    let Some(index) = properties
+        .iter()
+        .position(|(key, _)| key == DELTA_UNITY_REQUIRED_PROTOCOL_KEY)
+    else {
+        return Ok(None);
+    };
+    let (_, value) = properties.remove(index);
+    let invalid = |message: String| {
+        DataFusionError::Plan(format!(
+            "invalid Delta protocol required by Unity Catalog: {message}"
+        ))
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&value).map_err(|e| invalid(e.to_string()))?;
+    let version = |key: &str| -> Result<i32> {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_i64)
+            .and_then(|version| i32::try_from(version).ok())
+            .ok_or_else(|| invalid(format!("missing {key}")))
+    };
+    let mut unsupported = Vec::new();
+    let mut features = |key: &str| -> Vec<TableFeature> {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|name| {
+                let name = name.as_str().unwrap_or_default();
+                match TableFeature::parse_str_name(name) {
+                    Ok(feature) => Some(feature),
+                    Err(_) => {
+                        unsupported.push(name.to_string());
+                        None
+                    }
+                }
+            })
+            .collect()
+    };
+    let reader_features = features("readerFeatures");
+    let writer_features = features("writerFeatures");
+    if !unsupported.is_empty() {
+        unsupported.sort();
+        unsupported.dedup();
+        return not_impl_err!(
+            "Delta table features required by Unity Catalog: {}",
+            unsupported.join(", ")
+        );
+    }
+    let protocol = Protocol::new(
+        version("minReaderVersion")?,
+        version("minWriterVersion")?,
+        Some(reader_features),
+        Some(writer_features),
+    );
+    Ok(Some(protocol))
+}
+
+/// Validates that the Delta protocol of a Unity Catalog managed table can be read and written.
+fn validate_unity_required_protocol(protocol: &Protocol) -> Result<()> {
+    let mut unsupported = crate::transaction::PROTOCOL
+        .unsupported_reader_features(protocol)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    for feature in crate::transaction::PROTOCOL
+        .unsupported_writer_features(protocol)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+    {
+        if !unsupported.contains(&feature) {
+            unsupported.push(feature);
+        }
+    }
+    if unsupported.is_empty() {
+        return Ok(());
+    }
+    let mut unsupported = unsupported
+        .iter()
+        .map(|feature| feature.as_str().to_string())
+        .collect::<Vec<_>>();
+    unsupported.sort();
+    not_impl_err!(
+        "Delta table features required by Unity Catalog: {}",
+        unsupported.join(", ")
+    )
+}
+
+/// Reads version 0 of a staged Unity Catalog managed table to report it to the catalog.
+async fn unity_create_commit(log_store: &dyn crate::delta_log::LogStore) -> Result<String> {
+    let external = |e| DataFusionError::External(Box::new(e));
+    let commit = log_store
+        .read_commit_entry(0)
+        .await
+        .map_err(external)?
+        .ok_or_else(|| {
+            DataFusionError::Internal("Delta table version 0 is missing after CREATE TABLE".into())
+        })?;
+    let actions = get_actions(0, &commit).map_err(external)?;
+    let protocol = actions.iter().find_map(|action| match action {
+        Action::Protocol(protocol) => Some(protocol),
+        _ => None,
+    });
+    let metadata = actions.iter().find_map(|action| match action {
+        Action::Metadata(metadata) => Some(metadata),
+        _ => None,
+    });
+    let (Some(protocol), Some(metadata), Some(in_commit_timestamp)) = (
+        protocol,
+        metadata,
+        in_commit_timestamp_from_actions(&actions),
+    ) else {
+        return Err(DataFusionError::Internal(
+            "Delta table version 0 is missing the protocol, metadata, or in-commit timestamp"
+                .to_string(),
+        ));
+    };
+    Ok(serde_json::json!({
+        "protocol": protocol,
+        "metaData": metadata,
+        "inCommitTimestamp": in_commit_timestamp,
+    })
+    .to_string())
+}
+
 fn delta_catalog_managed_create_table_properties(
     properties: Vec<(String, String)>,
 ) -> Vec<(String, String)> {
@@ -2425,5 +2577,234 @@ mod tests {
 
         assert!(adjusted.has_reader_feature(&TableFeature::TypeWidening));
         assert!(adjusted.has_writer_feature(&TableFeature::TypeWidening));
+    }
+
+    /// Creates the metadata of a Unity Catalog managed table in memory and returns the result
+    /// with the actions of version 0.
+    async fn create_unity_managed_table_metadata(
+        properties: Vec<(&str, &str)>,
+    ) -> Result<(LakeSourceCreateTableResult, Vec<serde_json::Value>)> {
+        use object_store::ObjectStoreExt;
+        use sail_common_datafusion::catalog::{
+            CatalogProviderId, CatalogTableIdentity, LakehouseAuthority, LakehouseFormat,
+            MetadataPointerAuthority, ScanAuthority, TableLifecycle,
+        };
+
+        let store = Arc::new(object_store::memory::InMemory::new());
+        let runtime_env = Arc::new(RuntimeEnv::default());
+        runtime_env.register_object_store(
+            &parse_location_to_url("memory:///staging/t")?,
+            store.clone(),
+        );
+        let context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("unity".to_string()),
+            vec!["main".to_string(), "default".to_string(), "t".to_string()],
+            CatalogTableIdentity {
+                table_id: None,
+                table_uri: Some("memory:///staging/t".to_string()),
+            },
+            LakehouseOperation::Create,
+            LakehouseFormat::Delta,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::Managed,
+                pointer: MetadataPointerAuthority::DeltaRatifiedCommits,
+                commit: CommitAuthority::DeltaRatifiedCommit,
+            },
+            ScanAuthority::ClientLakeSource,
+        );
+        let result = DeltaLakeSource
+            .create_table_metadata(
+                runtime_env,
+                &SessionConfig::new(),
+                LakeSourceCreateTableInfo {
+                    path: "memory:///staging/t".to_string(),
+                    columns: vec![LakeSourceCreateTableColumn {
+                        metadata: Default::default(),
+                        name: "id".to_string(),
+                        data_type: ArrowDataType::Int64,
+                        nullable: true,
+                        comment: None,
+                        default: None,
+                        generated_always_as: None,
+                        identity: None,
+                    }],
+                    comment: None,
+                    partition_by: vec![],
+                    properties: properties
+                        .into_iter()
+                        .map(|(key, value)| (key.to_string(), value.to_string()))
+                        .collect(),
+                    replace: false,
+                    lakehouse_table: Some(context),
+                },
+            )
+            .await?;
+        let commit =
+            object_store::path::Path::from("staging/t/_delta_log/00000000000000000000.json");
+        let actions = match store.get(&commit).await {
+            Ok(commit) => {
+                let commit = commit.bytes().await?;
+                serde_json::Deserializer::from_slice(&commit)
+                    .into_iter::<serde_json::Value>()
+                    .collect::<serde_json::Result<Vec<_>>>()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+            }
+            Err(object_store::Error::NotFound { .. }) => vec![],
+            Err(e) => return Err(e.into()),
+        };
+        Ok((result, actions))
+    }
+
+    fn find_action<'a>(
+        actions: &'a [serde_json::Value],
+        name: &str,
+    ) -> Result<&'a serde_json::Value> {
+        actions
+            .iter()
+            .find_map(|action| action.get(name))
+            .ok_or_else(|| DataFusionError::Internal(format!("missing {name} action")))
+    }
+
+    fn sorted_strings(value: &serde_json::Value) -> Vec<&str> {
+        let mut values = value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>();
+        values.sort();
+        values
+    }
+
+    #[tokio::test]
+    async fn unity_staged_table_version_0_has_required_protocol_and_properties() -> Result<()> {
+        let required_protocol = serde_json::json!({
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": ["catalogManaged", "deletionVectors", "v2Checkpoint"],
+            "writerFeatures": [
+                "catalogManaged", "deletionVectors", "inCommitTimestamp", "v2Checkpoint"
+            ]
+        })
+        .to_string();
+        let (result, actions) = create_unity_managed_table_metadata(vec![
+            ("owner", "sail"),
+            ("io.unitycatalog.tableId", "table-id"),
+            ("delta.checkpointPolicy", "v2"),
+            ("delta.enableDeletionVectors", "true"),
+            ("delta.checkpoint.writeStatsAsStruct", "true"),
+            ("delta.checkpoint.writeStatsAsJson", "true"),
+            ("delta.feature.appendOnly", "supported"),
+            (DELTA_UNITY_REQUIRED_PROTOCOL_KEY, &required_protocol),
+        ])
+        .await?;
+
+        let protocol = find_action(&actions, "protocol")?;
+        assert_eq!(protocol["minReaderVersion"], 3);
+        assert_eq!(protocol["minWriterVersion"], 7);
+        assert_eq!(
+            sorted_strings(&protocol["readerFeatures"]),
+            vec![
+                "catalogManaged",
+                "deletionVectors",
+                "v2Checkpoint",
+                "vacuumProtocolCheck"
+            ]
+        );
+        assert_eq!(
+            sorted_strings(&protocol["writerFeatures"]),
+            vec![
+                "appendOnly",
+                "catalogManaged",
+                "deletionVectors",
+                "inCommitTimestamp",
+                "invariants",
+                "v2Checkpoint",
+                "vacuumProtocolCheck"
+            ]
+        );
+        let metadata = find_action(&actions, "metaData")?;
+        assert_eq!(
+            metadata["configuration"],
+            serde_json::json!({
+                "delta.checkpoint.writeStatsAsJson": "true",
+                "delta.checkpoint.writeStatsAsStruct": "true",
+                "delta.checkpointPolicy": "v2",
+                "delta.enableDeletionVectors": "true",
+                "delta.enableInCommitTimestamps": "true",
+                "io.unitycatalog.tableId": "table-id"
+            })
+        );
+        let in_commit_timestamp = &find_action(&actions, "commitInfo")?["inCommitTimestamp"];
+        assert!(in_commit_timestamp.is_i64(), "{in_commit_timestamp}");
+
+        // The result reports version 0 as it is written for registering the table.
+        let [(key, create_commit)] = result.properties.as_slice() else {
+            return plan_err!("unexpected properties: {:?}", result.properties);
+        };
+        assert_eq!(key, DELTA_UNITY_CREATE_COMMIT_KEY);
+        let create_commit: serde_json::Value = serde_json::from_str(create_commit)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        assert_eq!(&create_commit["protocol"], protocol);
+        assert_eq!(&create_commit["metaData"], metadata);
+        assert_eq!(&create_commit["inCommitTimestamp"], in_commit_timestamp);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unity_staged_table_rejects_unsupported_required_features() -> Result<()> {
+        for (features, unsupported) in [
+            (vec!["catalogManaged", "rowTracking"], "rowTracking"),
+            (vec!["catalogManaged", "futureFeature"], "futureFeature"),
+        ] {
+            let required_protocol = serde_json::json!({
+                "minReaderVersion": 3,
+                "minWriterVersion": 7,
+                "readerFeatures": ["catalogManaged"],
+                "writerFeatures": features
+            })
+            .to_string();
+            let result = create_unity_managed_table_metadata(vec![
+                ("io.unitycatalog.tableId", "table-id"),
+                (DELTA_UNITY_REQUIRED_PROTOCOL_KEY, &required_protocol),
+            ])
+            .await;
+            let Err(error) = result else {
+                return plan_err!("expected an error for {unsupported}");
+            };
+            assert!(
+                matches!(error, DataFusionError::NotImplemented(_)),
+                "{error:?}"
+            );
+            assert!(
+                error.to_string().contains(&format!(
+                    "Delta table features required by Unity Catalog: {unsupported}"
+                )),
+                "{error}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unity_managed_table_version_0_without_required_protocol() -> Result<()> {
+        let (result, actions) =
+            create_unity_managed_table_metadata(vec![("io.unitycatalog.tableId", "table-id")])
+                .await?;
+        assert!(result.properties.is_empty());
+        let protocol = find_action(&actions, "protocol")?;
+        assert_eq!(
+            sorted_strings(&protocol["readerFeatures"]),
+            vec!["catalogManaged", "vacuumProtocolCheck"]
+        );
+        assert_eq!(
+            find_action(&actions, "metaData")?["configuration"],
+            serde_json::json!({
+                "delta.enableInCommitTimestamps": "true",
+                "delta.feature.catalogManaged": "supported",
+                "io.unitycatalog.tableId": "table-id"
+            })
+        );
+        Ok(())
     }
 }

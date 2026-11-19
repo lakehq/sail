@@ -19,7 +19,8 @@ use sail_catalog::provider::{
 use sail_catalog::utils::{get_property, quote_names_if_needed, quote_namespace_if_needed};
 use sail_common::utils::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::delta::{
-    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
+    DELTA_UNITY_CREATE_COMMIT_KEY, DELTA_UNITY_REQUIRED_PROTOCOL_KEY, DELTA_UNITY_TABLE_ID_KEY,
+    DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
     DatabaseStatus, TableColumnStatus, TableKind, TableStatus, identity_partition_fields,
@@ -131,6 +132,16 @@ impl UnityCatalogProvider {
         {
             Ok(_) => DeltaCommitApi::V1,
             Err(e) if e.status().is_some_and(|status| status.is_success()) => DeltaCommitApi::V1,
+            // The server has the endpoint but not the catalog.
+            Err(e)
+                if e.status() == Some(reqwest::StatusCode::NOT_FOUND)
+                    && e.to_string().contains("NoSuchCatalogException") =>
+            {
+                return Err(CatalogError::NotFound(
+                    CatalogObject::Catalog,
+                    quote_names_if_needed(&[catalog_name]),
+                ));
+            }
             Err(e)
                 if matches!(
                     e.status(),
@@ -214,6 +225,164 @@ impl UnityCatalogProvider {
                 "Unity Catalog staging table response is missing a staging location".to_string(),
             )
         })
+    }
+
+    /// Creates a staging table for a managed Delta table with the Delta REST API.
+    ///
+    /// Returns the location allocated for the table, and the create-table properties
+    /// extended with what the server requires for version 0 of the table.
+    async fn create_delta_staging_table(
+        &self,
+        client: &delta_gen::ApiClient,
+        catalog_name: &str,
+        schema_name: &str,
+        table: &str,
+        properties: Vec<(String, String)>,
+    ) -> CatalogResult<(String, Vec<(String, String)>)> {
+        let request = delta_gen::DeltaCreateStagingTableRequest {
+            name: table.to_string(),
+        };
+        let response = match client
+            .create_staging_table(catalog_name.to_string(), schema_name.to_string(), request)
+            .await
+        {
+            Ok(response) => response.inner,
+            Err(e) if e.status() == Some(reqwest::StatusCode::CONFLICT) => {
+                return Err(CatalogError::AlreadyExists(
+                    CatalogObject::Table,
+                    quote_names_if_needed(&[catalog_name, schema_name, table]),
+                ));
+            }
+            Err(e) => {
+                return Err(CatalogError::External(format!(
+                    "Failed to create staging table: {e}"
+                )));
+            }
+        };
+        let delta_gen::DeltaStagingTableResponse {
+            table_id,
+            location,
+            required_protocol,
+            required_properties,
+        } = response;
+        let mut properties = properties
+            .into_iter()
+            .filter(|(key, _)| {
+                !key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_KEY)
+                    && !key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_LEGACY_KEY)
+            })
+            .collect::<Vec<_>>();
+        let mut required_properties = required_properties
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(key, _)| !key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_KEY))
+            .collect::<Vec<_>>();
+        required_properties.sort();
+        for (key, required) in required_properties {
+            let existing = properties
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(&key))
+                .map(|(_, v)| v.as_str());
+            match (existing, required) {
+                (Some(_), None) => {}
+                (Some(existing), Some(required)) if existing == required => {}
+                (Some(existing), Some(required)) => {
+                    return Err(CatalogError::InvalidArgument(format!(
+                        "Unity Catalog requires the table property {key}={required} \
+                         for managed Delta tables, but it is set to {existing}"
+                    )));
+                }
+                (None, Some(required)) => properties.push((key, required)),
+                (None, None) => {
+                    return Err(CatalogError::NotSupported(format!(
+                        "Unity Catalog requires the table property {key} \
+                         for managed Delta tables"
+                    )));
+                }
+            }
+        }
+        properties.push((DELTA_UNITY_TABLE_ID_KEY.to_string(), table_id));
+        let required_protocol = required_protocol.map_or_else(
+            || serde_json::json!({ "minReaderVersion": 1, "minWriterVersion": 2 }),
+            |protocol| {
+                serde_json::json!({
+                    "minReaderVersion": protocol.min_reader_version,
+                    "minWriterVersion": protocol.min_writer_version,
+                    "readerFeatures": protocol.reader_features.unwrap_or_default(),
+                    "writerFeatures": protocol.writer_features.unwrap_or_default(),
+                })
+            },
+        );
+        properties.push((
+            DELTA_UNITY_REQUIRED_PROTOCOL_KEY.to_string(),
+            required_protocol.to_string(),
+        ));
+        Ok((location, properties))
+    }
+
+    /// Registers a staged managed Delta table with the Delta REST API,
+    /// after version 0 of the table is written at the staging location.
+    async fn create_staged_delta_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        location: Option<String>,
+        comment: Option<String>,
+        create_commit: &str,
+    ) -> CatalogResult<TableStatus> {
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+        let location = location.ok_or_else(|| {
+            CatalogError::External(
+                "Unity Catalog managed table is missing a planned staging location".to_string(),
+            )
+        })?;
+        let request = delta_create_table_request(table, location, comment, create_commit)?;
+        let table_id = request.properties.get(DELTA_UNITY_TABLE_ID_KEY).cloned();
+        let client = self
+            .get_delta_client()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+        let error = match client
+            .create_table(catalog_name.clone(), schema_name.clone(), request)
+            .await
+        {
+            Ok(_) => return self.get_table(database, table).await,
+            // The table is created if the status code indicates success,
+            // even if the response body cannot be deserialized.
+            Err(e) if e.status().is_some_and(|status| status.is_success()) => {
+                return self.get_table(database, table).await;
+            }
+            Err(e) => e,
+        };
+        let status = error.status();
+        // The outcome is unknown when the request fails without a client error.
+        // The table is created if it is loaded with the ID of the staging table,
+        // since only the creator of the staging table can finalize it.
+        if status.is_none_or(|status| status.is_server_error())
+            && let Some(table_id) = &table_id
+            && let Ok(response) = client
+                .load_table(catalog_name.clone(), schema_name.clone(), table.to_string())
+                .await
+            && response
+                .inner
+                .metadata
+                .table_uuid
+                .eq_ignore_ascii_case(table_id)
+        {
+            return self.get_table(database, table).await;
+        }
+        match status {
+            Some(reqwest::StatusCode::CONFLICT) => Err(CatalogError::AlreadyExists(
+                CatalogObject::Table,
+                quote_names_if_needed(&[&catalog_name, &schema_name, table]),
+            )),
+            Some(status) => Err(CatalogError::External(format!(
+                "Failed to create table: HTTP {status}: {error}"
+            ))),
+            None => Err(CatalogError::External(format!(
+                "Failed to create table: {error}"
+            ))),
+        }
     }
 
     /// Returns full name of an object for the REST API (`catalog.schema.table`).
@@ -486,7 +655,7 @@ impl CatalogProvider for UnityCatalogProvider {
                     Some(&schema_name),
                 ))
             }
-            Err(e) if e.status() == Some(reqwest::StatusCode::CONFLICT) && if_not_exists => {
+            Err(e) if if_not_exists && is_already_exists_error(e.status(), &e, "SCHEMA") => {
                 self.get_database(database).await
             }
             Err(e) => Err(CatalogError::External(format!(
@@ -626,6 +795,24 @@ impl CatalogProvider for UnityCatalogProvider {
             }
         }
 
+        // Version 0 of a managed Delta table staged with the Delta REST API is written
+        // before the table is registered with the same API.
+        if !is_external
+            && let Some((_, create_commit)) = properties
+                .iter()
+                .find(|(key, _)| key == DELTA_UNITY_CREATE_COMMIT_KEY)
+        {
+            return match self
+                .create_staged_delta_table(database, table, location, comment, create_commit)
+                .await
+            {
+                Err(CatalogError::AlreadyExists(_, _)) if mode.ignore_if_exists() => {
+                    self.get_table(database, table).await
+                }
+                result => result,
+            };
+        }
+
         let data_source_format = parse_data_source_format(&format)?;
 
         let unity_columns: Vec<r#gen::ColumnInfo> = columns
@@ -745,7 +932,7 @@ impl CatalogProvider for UnityCatalogProvider {
                 self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
             }
             Err(e)
-                if e.status() == Some(reqwest::StatusCode::CONFLICT) && mode.ignore_if_exists() =>
+                if mode.ignore_if_exists() && is_already_exists_error(e.status(), &e, "TABLE") =>
             {
                 self.get_table(database, table).await
             }
@@ -936,6 +1123,46 @@ impl CatalogProvider for UnityCatalogProvider {
             &self.lakehouse_capabilities(),
         );
         if request.options.format.eq_ignore_ascii_case("delta") && !request.options.is_external {
+            let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+            // The properties of a table staged with the Delta REST API carry the required
+            // protocol, so the staging table is created only once when the table is planned
+            // again as a write precondition.
+            let staged = request
+                .options
+                .properties
+                .iter()
+                .any(|(key, _)| key == DELTA_UNITY_REQUIRED_PROTOCOL_KEY);
+            let delta_client = self
+                .get_delta_client()
+                .await
+                .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+            if staged
+                || self
+                    .get_delta_commit_api(&delta_client, &catalog_name)
+                    .await?
+                    == DeltaCommitApi::V1
+            {
+                if !staged {
+                    let (location, properties) = self
+                        .create_delta_staging_table(
+                            &delta_client,
+                            &catalog_name,
+                            &schema_name,
+                            table,
+                            request.options.properties,
+                        )
+                        .await?;
+                    plan.table.status.location = Some(location.clone());
+                    plan.table.status.display_properties = properties;
+                    plan.table.execution.table_identity.table_uri = Some(location);
+                }
+                // Version 0 of the table is written before the table is registered.
+                plan.materialization = LakehouseCreateMaterialization::BeforeCatalogLakeSource {
+                    mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
+                    context: Some(Box::new(plan.table.execution.clone())),
+                };
+                return Ok(plan);
+            }
             plan.materialization = LakehouseCreateMaterialization::AfterCatalogLakeSource {
                 mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
             };
@@ -944,7 +1171,6 @@ impl CatalogProvider for UnityCatalogProvider {
                     .get_client()
                     .await
                     .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
-                let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
                 let location = self
                     .create_managed_staging_location(&client, &catalog_name, &schema_name, table)
                     .await?;
@@ -1326,6 +1552,140 @@ fn delta_uniform_metadata(
             base_converted_delta_version: iceberg.base_converted_delta_version,
         },
     })
+}
+
+/// Builds the create table request of the Delta REST API for a staged managed Delta table
+/// from version 0 of the table.
+fn delta_create_table_request(
+    table: &str,
+    location: String,
+    comment: Option<String>,
+    create_commit: &str,
+) -> CatalogResult<delta_gen::DeltaCreateTableRequest> {
+    let invalid = |message: &str| {
+        CatalogError::Internal(format!(
+            "Invalid Delta table version 0 for Unity Catalog: {message}"
+        ))
+    };
+    let commit: serde_json::Value =
+        serde_json::from_str(create_commit).map_err(|e| invalid(&e.to_string()))?;
+    let protocol = &commit["protocol"];
+    let metadata = &commit["metaData"];
+    let version = |key: &str| {
+        protocol[key]
+            .as_i64()
+            .and_then(|version| i32::try_from(version).ok())
+            .ok_or_else(|| invalid(&format!("missing protocol {key}")))
+    };
+    let strings = |value: &serde_json::Value| {
+        value.as_array().map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+    };
+    let schema: serde_json::Value = metadata["schemaString"]
+        .as_str()
+        .and_then(|schema| serde_json::from_str(schema).ok())
+        .ok_or_else(|| invalid("missing schema"))?;
+    let properties = metadata["configuration"]
+        .as_object()
+        .map(|configuration| {
+            configuration
+                .iter()
+                .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_string())))
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    Ok(delta_gen::DeltaCreateTableRequest {
+        columns: Box::new(delta_schema_to_wire_type(&schema)),
+        comment: metadata["description"]
+            .as_str()
+            .map(str::to_string)
+            .or(comment),
+        domain_metadata: None,
+        last_commit_timestamp_ms: commit["inCommitTimestamp"]
+            .as_i64()
+            .ok_or_else(|| invalid("missing in-commit timestamp"))?,
+        location,
+        name: table.to_string(),
+        partition_columns: strings(&metadata["partitionColumns"])
+            .filter(|columns| !columns.is_empty()),
+        properties,
+        protocol: Box::new(delta_gen::DeltaProtocol {
+            min_reader_version: version("minReaderVersion")?,
+            min_writer_version: version("minWriterVersion")?,
+            reader_features: strings(&protocol["readerFeatures"]),
+            writer_features: strings(&protocol["writerFeatures"]),
+        }),
+        table_type: Box::new(delta_gen::DeltaTableType::Managed),
+        uniform: None,
+    })
+}
+
+/// Converts a data type in the schema of the Delta log to its form in the Delta REST API,
+/// where the properties of array types and map types are named differently.
+fn delta_schema_to_wire_type(data_type: &serde_json::Value) -> serde_json::Value {
+    let Some(object) = data_type.as_object() else {
+        return data_type.clone();
+    };
+    let convert = |key: &str| delta_schema_to_wire_type(&data_type[key]);
+    match object.get("type").and_then(serde_json::Value::as_str) {
+        Some("struct") => {
+            let fields = object
+                .get("fields")
+                .and_then(serde_json::Value::as_array)
+                .map(|fields| {
+                    fields
+                        .iter()
+                        .map(|field| {
+                            let mut field = field.clone();
+                            if let Some(field) = field.as_object_mut() {
+                                if let Some(data_type) = field.get_mut("type") {
+                                    *data_type = delta_schema_to_wire_type(data_type);
+                                }
+                                field
+                                    .entry("metadata")
+                                    .or_insert_with(|| serde_json::json!({}));
+                            }
+                            field
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            serde_json::json!({ "type": "struct", "fields": fields })
+        }
+        Some("array") => serde_json::json!({
+            "type": "array",
+            "element-type": convert("elementType"),
+            "contains-null": data_type["containsNull"],
+        }),
+        Some("map") => serde_json::json!({
+            "type": "map",
+            "key-type": convert("keyType"),
+            "value-type": convert("valueType"),
+            "value-contains-null": data_type["valueContainsNull"],
+        }),
+        _ => data_type.clone(),
+    }
+}
+
+/// Whether the error of creating an object says that the object exists.
+/// Some servers report it as a bad request with an error code for the kind of object,
+/// such as `SCHEMA_ALREADY_EXISTS`, instead of a conflict.
+fn is_already_exists_error(
+    status: Option<reqwest::StatusCode>,
+    error: &impl std::fmt::Display,
+    kind: &str,
+) -> bool {
+    match status {
+        Some(reqwest::StatusCode::CONFLICT) => true,
+        Some(reqwest::StatusCode::BAD_REQUEST) => error
+            .to_string()
+            .contains(&format!("\"{kind}_ALREADY_EXISTS\"")),
+        _ => false,
+    }
 }
 
 fn parse_data_source_format(format: &str) -> CatalogResult<r#gen::DataSourceFormat> {
@@ -2620,5 +2980,612 @@ mod tests {
         let error = commit(9).await;
         assert!(matches!(error, CatalogError::External(_)), "{error:?}");
         assert!(error.to_string().contains("InternalServerError message"));
+    }
+
+    const DELTA_STAGING_PATH: &str = "/delta/v1/catalogs/main/schemas/default/staging-tables";
+    const DELTA_TABLES_PATH: &str = "/delta/v1/catalogs/main/schemas/default/tables";
+
+    fn managed_delta_create_options(
+        properties: Vec<(&str, &str)>,
+        is_write_precondition: bool,
+    ) -> CreateTableOptions {
+        CreateTableOptions {
+            columns: vec![],
+            comment: None,
+            constraints: vec![],
+            location: Some("file:///warehouse/default/events".to_string()),
+            format: "delta".to_string(),
+            partition_by: vec![],
+            sort_by: vec![],
+            bucket_by: None,
+            mode: Default::default(),
+            properties: properties
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+            is_external: false,
+            is_write_precondition,
+        }
+    }
+
+    fn lakehouse_create_request(options: CreateTableOptions) -> LakehouseCreateRequest {
+        LakehouseCreateRequest {
+            catalog_table: vec![
+                "test".to_string(),
+                "default".to_string(),
+                "events".to_string(),
+            ],
+            options,
+        }
+    }
+
+    /// The staging table response with fields that the client does not use.
+    fn delta_staging_table_json() -> serde_json::Value {
+        serde_json::json!({
+            "table-id": DELTA_TABLE_ID,
+            "table-type": "MANAGED",
+            "location": DELTA_TABLE_URI,
+            "storage-credentials": [{
+                "prefix": DELTA_TABLE_URI,
+                "operation": "READ_WRITE",
+                "config": {"s3.access-key-id": "key"}
+            }],
+            "required-protocol": {
+                "min-reader-version": 3,
+                "min-writer-version": 7,
+                "reader-features": ["catalogManaged", "deletionVectors", "v2Checkpoint"],
+                "writer-features": [
+                    "catalogManaged", "deletionVectors", "inCommitTimestamp", "v2Checkpoint"
+                ]
+            },
+            "suggested-protocol": {"writer-features": ["rowTracking"]},
+            "required-properties": {
+                "delta.checkpointPolicy": "v2",
+                "delta.enableDeletionVectors": "true",
+                "io.unitycatalog.tableId": DELTA_TABLE_ID
+            },
+            "suggested-properties": {"delta.columnMapping.maxColumnId": null}
+        })
+    }
+
+    async fn mount_delta_staging_table(server: &MockServer, response: serde_json::Value) {
+        Mock::given(method("POST"))
+            .and(path(DELTA_STAGING_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(response))
+            .mount(server)
+            .await;
+    }
+
+    /// Version 0 of the table as reported after it is written to the Delta log.
+    fn delta_create_commit() -> String {
+        let schema = serde_json::json!({
+            "type": "struct",
+            "fields": [
+                {"name": "id", "type": "long", "nullable": false, "metadata": {"comment": "key"}},
+                {
+                    "name": "tags",
+                    "type": {
+                        "type": "map",
+                        "keyType": "string",
+                        "valueType": {
+                            "type": "array",
+                            "elementType": {
+                                "type": "struct",
+                                "fields": [{"name": "x", "type": "decimal(10,2)", "nullable": true}]
+                            },
+                            "containsNull": false
+                        },
+                        "valueContainsNull": true
+                    },
+                    "nullable": true,
+                    "metadata": {}
+                }
+            ]
+        });
+        serde_json::json!({
+            "protocol": {
+                "minReaderVersion": 3,
+                "minWriterVersion": 7,
+                "readerFeatures": ["catalogManaged", "deletionVectors"],
+                "writerFeatures": ["catalogManaged", "deletionVectors", "inCommitTimestamp"]
+            },
+            "metaData": {
+                "id": "metadata-id",
+                "description": "events table",
+                "format": {"provider": "parquet", "options": {}},
+                "schemaString": schema.to_string(),
+                "partitionColumns": ["id"],
+                "createdTime": 1700000000000i64,
+                "configuration": {
+                    "delta.enableDeletionVectors": "true",
+                    "io.unitycatalog.tableId": DELTA_TABLE_ID
+                }
+            },
+            "inCommitTimestamp": 1700000000123i64
+        })
+        .to_string()
+    }
+
+    fn staged_delta_create_options() -> CreateTableOptions {
+        let mut options = managed_delta_create_options(
+            vec![("owner", "sail"), (DELTA_UNITY_REQUIRED_PROTOCOL_KEY, "{}")],
+            true,
+        );
+        options.location = Some(DELTA_TABLE_URI.to_string());
+        options.properties.push((
+            DELTA_UNITY_CREATE_COMMIT_KEY.to_string(),
+            delta_create_commit(),
+        ));
+        options
+    }
+
+    #[tokio::test]
+    async fn test_managed_delta_create_uses_delta_api() {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        mount_delta_staging_table(&server, delta_staging_table_json()).await;
+        mount_legacy_delta_table(&server).await;
+        Mock::given(method("POST"))
+            .and(path(DELTA_TABLES_PATH))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(delta_load_table_json(
+                    DELTA_TABLE_ID,
+                    None,
+                    Some(0),
+                )),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let options = managed_delta_create_options(
+            vec![
+                ("owner", "sail"),
+                ("delta.enabledeletionvectors", "true"),
+                ("io.unitycatalog.tableId", "user-table-id"),
+            ],
+            false,
+        );
+        let plan = provider
+            .plan_lakehouse_create(&database, "events", lakehouse_create_request(options))
+            .await
+            .unwrap();
+        assert_eq!(plan.table.status.location.as_deref(), Some(DELTA_TABLE_URI));
+        assert_eq!(
+            plan.table.execution.table_identity.table_uri.as_deref(),
+            Some(DELTA_TABLE_URI)
+        );
+        assert!(matches!(
+            plan.materialization,
+            LakehouseCreateMaterialization::BeforeCatalogLakeSource {
+                mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
+                context: Some(_),
+            }
+        ));
+        let required_protocol = serde_json::json!({
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": ["catalogManaged", "deletionVectors", "v2Checkpoint"],
+            "writerFeatures": [
+                "catalogManaged", "deletionVectors", "inCommitTimestamp", "v2Checkpoint"
+            ]
+        });
+        assert_eq!(
+            plan.table.status.display_properties,
+            vec![
+                ("owner".to_string(), "sail".to_string()),
+                (
+                    "delta.enabledeletionvectors".to_string(),
+                    "true".to_string()
+                ),
+                ("delta.checkpointPolicy".to_string(), "v2".to_string()),
+                (
+                    "io.unitycatalog.tableId".to_string(),
+                    DELTA_TABLE_ID.to_string()
+                ),
+                (
+                    DELTA_UNITY_REQUIRED_PROTOCOL_KEY.to_string(),
+                    required_protocol.to_string()
+                ),
+            ]
+        );
+
+        // The staging table is not created again when the staged table is planned
+        // as a write precondition.
+        let mut options = managed_delta_create_options(vec![], true);
+        options.location = plan.table.status.location.clone();
+        options.properties = plan.table.status.display_properties.clone();
+        let precondition = provider
+            .plan_lakehouse_create(&database, "events", lakehouse_create_request(options))
+            .await
+            .unwrap();
+        assert_eq!(precondition.table.status, plan.table.status);
+        assert_eq!(precondition.materialization, plan.materialization);
+
+        provider
+            .create_table(&database, "events", staged_delta_create_options())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            received_targets(&server).await,
+            vec![
+                "GET /delta/v1/config?catalog=main&protocol-versions=1.0".to_string(),
+                format!("POST {DELTA_STAGING_PATH}"),
+                format!("POST {DELTA_TABLES_PATH}"),
+                "GET /tables/main.default.events".to_string(),
+            ]
+        );
+        assert_eq!(
+            received_json_bodies(&server, DELTA_STAGING_PATH).await,
+            vec![serde_json::json!({"name": "events"})]
+        );
+        assert_eq!(
+            received_json_bodies(&server, DELTA_TABLES_PATH).await,
+            vec![serde_json::json!({
+                "name": "events",
+                "location": DELTA_TABLE_URI,
+                "table-type": "MANAGED",
+                "comment": "events table",
+                "columns": {
+                    "type": "struct",
+                    "fields": [
+                        {
+                            "name": "id",
+                            "type": "long",
+                            "nullable": false,
+                            "metadata": {"comment": "key"}
+                        },
+                        {
+                            "name": "tags",
+                            "type": {
+                                "type": "map",
+                                "key-type": "string",
+                                "value-type": {
+                                    "type": "array",
+                                    "element-type": {
+                                        "type": "struct",
+                                        "fields": [{
+                                            "name": "x",
+                                            "type": "decimal(10,2)",
+                                            "nullable": true,
+                                            "metadata": {}
+                                        }]
+                                    },
+                                    "contains-null": false
+                                },
+                                "value-contains-null": true
+                            },
+                            "nullable": true,
+                            "metadata": {}
+                        }
+                    ]
+                },
+                "partition-columns": ["id"],
+                "protocol": {
+                    "min-reader-version": 3,
+                    "min-writer-version": 7,
+                    "reader-features": ["catalogManaged", "deletionVectors"],
+                    "writer-features": ["catalogManaged", "deletionVectors", "inCommitTimestamp"]
+                },
+                "properties": {
+                    "delta.enableDeletionVectors": "true",
+                    "io.unitycatalog.tableId": DELTA_TABLE_ID
+                },
+                "last-commit-timestamp-ms": 1700000000123i64
+            })]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_managed_delta_create_uses_legacy_api() {
+        let server = MockServer::start().await;
+        mount_delta_config(&server, ResponseTemplate::new(404)).await;
+        Mock::given(method("POST"))
+            .and(path("/staging-tables"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "staging_location": DELTA_TABLE_URI
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/tables"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "catalog_name": "main",
+                "schema_name": "default",
+                "name": "events",
+                "table_type": "MANAGED",
+                "data_source_format": "DELTA",
+                "storage_location": DELTA_TABLE_URI,
+                "table_id": DELTA_TABLE_ID,
+                "columns": []
+            })))
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let after_catalog = LakehouseCreateMaterialization::AfterCatalogLakeSource {
+            mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
+        };
+
+        let options = managed_delta_create_options(vec![("owner", "sail")], false);
+        let plan = provider
+            .plan_lakehouse_create(
+                &database,
+                "events",
+                lakehouse_create_request(options.clone()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(plan.materialization, after_catalog);
+        assert_eq!(plan.table.status.location, options.location);
+        assert_eq!(plan.table.status.display_properties, options.properties);
+        provider
+            .create_table(&database, "events", options)
+            .await
+            .unwrap();
+
+        let options = managed_delta_create_options(vec![("owner", "sail")], true);
+        let plan = provider
+            .plan_lakehouse_create(
+                &database,
+                "events",
+                lakehouse_create_request(options.clone()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(plan.materialization, after_catalog);
+        assert_eq!(plan.table.status.location.as_deref(), Some(DELTA_TABLE_URI));
+        assert_eq!(plan.table.status.display_properties, options.properties);
+
+        assert_eq!(
+            received_targets(&server).await,
+            vec![
+                "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
+                "POST /staging-tables",
+                "POST /tables",
+                "POST /staging-tables",
+            ]
+        );
+        let bodies = received_json_bodies(&server, "/tables").await;
+        assert_eq!(bodies[0]["table_type"], "MANAGED");
+        assert_eq!(bodies[0]["storage_location"], DELTA_TABLE_URI);
+        assert_eq!(
+            bodies[0]["properties"],
+            serde_json::json!({"owner": "sail"})
+        );
+    }
+
+    #[tokio::test]
+    async fn test_managed_delta_create_rejects_unsupported_required_properties() {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        let mut response = delta_staging_table_json();
+        response["required-properties"]["delta.futureProperty"] = serde_json::Value::Null;
+        mount_delta_staging_table(&server, response).await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let plan = |properties| {
+            let options = managed_delta_create_options(properties, false);
+            provider.plan_lakehouse_create(&database, "events", lakehouse_create_request(options))
+        };
+
+        // The property without a required value must be set by the client.
+        let error = plan(vec![]).await.unwrap_err();
+        assert!(matches!(error, CatalogError::NotSupported(_)), "{error:?}");
+        assert!(error.to_string().contains("delta.futureProperty"));
+
+        let error = plan(vec![
+            ("delta.futureProperty", "value"),
+            ("delta.enableDeletionVectors", "false"),
+        ])
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, CatalogError::InvalidArgument(_)),
+            "{error:?}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("delta.enableDeletionVectors=true")
+        );
+
+        let plan = plan(vec![("delta.futureProperty", "value")]).await.unwrap();
+        assert!(
+            plan.table
+                .status
+                .display_properties
+                .contains(&("delta.futureProperty".to_string(), "value".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_managed_delta_create_staging_table_errors() {
+        for (status, body) in [
+            (409, "TableAlreadyExists message"),
+            (403, "Forbidden message"),
+        ] {
+            let server = MockServer::start().await;
+            mount_delta_config_ok(&server).await;
+            Mock::given(method("POST"))
+                .and(path(DELTA_STAGING_PATH))
+                .respond_with(ResponseTemplate::new(status).set_body_string(body))
+                .mount(&server)
+                .await;
+
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+            let options = managed_delta_create_options(vec![], false);
+            let error = provider
+                .plan_lakehouse_create(&database, "events", lakehouse_create_request(options))
+                .await
+                .unwrap_err();
+            if status == 409 {
+                assert!(
+                    matches!(error, CatalogError::AlreadyExists(_, _)),
+                    "{error:?}"
+                );
+            } else {
+                assert!(matches!(error, CatalogError::External(_)), "{error:?}");
+                assert!(error.to_string().contains(body), "{error}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_managed_delta_create_table_errors_and_recovery() {
+        // (create table status, table ID of the loaded table, whether the table is created)
+        let cases = [
+            (500, Some(DELTA_TABLE_ID.to_ascii_uppercase()), true),
+            (500, Some("another-table-id".to_string()), false),
+            (500, None, false),
+            (400, Some(DELTA_TABLE_ID.to_string()), false),
+            (409, Some(DELTA_TABLE_ID.to_string()), false),
+        ];
+        for (status, loaded_table_id, created) in cases {
+            let server = MockServer::start().await;
+            mount_legacy_delta_table(&server).await;
+            Mock::given(method("POST"))
+                .and(path(DELTA_TABLES_PATH))
+                .respond_with(ResponseTemplate::new(status).set_body_string("server message"))
+                .mount(&server)
+                .await;
+            let load_table =
+                match &loaded_table_id {
+                    Some(table_id) => ResponseTemplate::new(200)
+                        .set_body_json(delta_load_table_json(table_id, None, Some(0))),
+                    None => ResponseTemplate::new(404),
+                };
+            Mock::given(method("GET"))
+                .and(path(DELTA_TABLE_PATH))
+                .respond_with(load_table)
+                .mount(&server)
+                .await;
+
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+            let result = provider
+                .create_table(&database, "events", staged_delta_create_options())
+                .await;
+            let case = format!("{status} {loaded_table_id:?}");
+            let mut targets = vec![format!("POST {DELTA_TABLES_PATH}")];
+            if status == 500 {
+                targets.push(format!("GET {DELTA_TABLE_PATH}"));
+            }
+            match result {
+                Ok(_) => {
+                    assert!(created, "{case}");
+                    targets.push("GET /tables/main.default.events".to_string());
+                }
+                Err(error) => {
+                    assert!(!created, "{case}");
+                    if status == 409 {
+                        assert!(
+                            matches!(error, CatalogError::AlreadyExists(_, _)),
+                            "{case}: {error:?}"
+                        );
+                    } else {
+                        assert!(
+                            matches!(error, CatalogError::External(_)),
+                            "{case}: {error:?}"
+                        );
+                        assert!(error.to_string().contains("server message"), "{case}");
+                    }
+                }
+            }
+            assert_eq!(received_targets(&server).await, targets, "{case}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_schema_if_not_exists_with_existing_schema() {
+        let already_exists = serde_json::json!({
+            "error_code": "SCHEMA_ALREADY_EXISTS",
+            "details": [{"reason": "SCHEMA_ALREADY_EXISTS"}],
+            "message": "Schema already exists: default"
+        });
+        let invalid = serde_json::json!({
+            "error_code": "INVALID_ARGUMENT",
+            "message": "SCHEMA_ALREADY_EXISTS is not the error code"
+        });
+        for (response, exists) in [
+            (ResponseTemplate::new(409), true),
+            (
+                ResponseTemplate::new(400).set_body_json(already_exists),
+                true,
+            ),
+            (ResponseTemplate::new(400).set_body_json(invalid), false),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/schemas"))
+                .respond_with(response)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path_regex("^/schemas/"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "catalog_name": "main",
+                    "name": "default"
+                })))
+                .mount(&server)
+                .await;
+
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+            let create = |if_not_exists| {
+                provider.create_database(
+                    &database,
+                    CreateDatabaseOptions {
+                        comment: None,
+                        location: None,
+                        if_not_exists,
+                        properties: vec![],
+                    },
+                )
+            };
+            let result = create(true).await;
+            assert_eq!(result.is_ok(), exists, "{result:?}");
+            assert!(create(false).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delta_api_configuration_for_missing_catalog() {
+        let server = MockServer::start().await;
+        mount_delta_config(
+            &server,
+            ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "error": {
+                    "message": "Catalog not found: main",
+                    "type": "NoSuchCatalogException",
+                    "code": 404
+                }
+            })),
+        )
+        .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        // The legacy API is not selected, and the failure is not remembered.
+        for _ in 0..2 {
+            let options = managed_delta_create_options(vec![], false);
+            let error = provider
+                .plan_lakehouse_create(&database, "events", lakehouse_create_request(options))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, CatalogError::NotFound(CatalogObject::Catalog, _)),
+                "{error:?}"
+            );
+        }
+        assert_eq!(
+            received_targets(&server).await,
+            vec!["GET /delta/v1/config?catalog=main&protocol-versions=1.0"; 2]
+        );
     }
 }

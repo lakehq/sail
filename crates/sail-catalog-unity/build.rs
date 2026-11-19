@@ -20,8 +20,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::path::Path::new(&std::env::var("OUT_DIR")?).join("unity_catalog_delta_gen.rs"),
         OpenApiConfig {
             excluded_operations: [
-                "createStagingTable",
-                "createTable",
                 "deleteTable",
                 "tableExists",
                 "reportMetrics",
@@ -32,10 +30,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .into_iter()
             .map(str::to_owned)
             .collect(),
-            excluded_schemas: ["DeltaDataType", "DeltaLoadTableResponse"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
+            excluded_schemas: [
+                "DeltaDataType",
+                "DeltaLoadTableResponse",
+                "DeltaStagingTableResponse",
+                "DeltaStructType",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
             raw_path_parameters: Default::default(),
         },
     )?;

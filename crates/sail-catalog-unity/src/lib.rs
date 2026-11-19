@@ -101,6 +101,24 @@ pub mod delta_gen {
     /// Column data type.
     pub type DeltaDataType = serde_json::Value;
 
+    // The struct type is defined manually so that the field types and the field metadata
+    // are sent as they are written in the Delta log.
+    /// Struct type containing named fields.
+    pub type DeltaStructType = serde_json::Value;
+
+    // The response of creating a staging table is defined manually with only the fields
+    // used for creating the table, so that the other fields are not validated.
+    #[derive(Clone, Debug, serde::Deserialize)]
+    pub struct DeltaStagingTableResponse {
+        #[serde(rename = "table-id")]
+        pub table_id: String,
+        pub location: String,
+        #[serde(rename = "required-protocol", default)]
+        pub required_protocol: Option<DeltaProtocol>,
+        #[serde(rename = "required-properties", default)]
+        pub required_properties: Option<std::collections::HashMap<String, Option<String>>>,
+    }
+
     // The response of loading a table is defined manually with only the fields used for
     // commit discovery, so that the other fields are not validated.
     #[derive(Clone, Debug, serde::Deserialize)]

@@ -680,6 +680,8 @@ impl PlanResolver<'_> {
                             items: vec![("path".to_string(), location)],
                         });
                     }
+                    // The catalog may require properties for the table planned at the location.
+                    create_options.properties = create_plan.table.status.display_properties.clone();
                     sink_info.lakehouse_table = Some(
                         create_plan
                             .table

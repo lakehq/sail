@@ -1076,6 +1076,12 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
         return Ok(Some((options, create_plan)));
     };
 
+    // The catalog may plan the storage metadata at a location it allocated and with
+    // properties it requires.
+    if create_plan.table.status.location.is_some() {
+        options.location = create_plan.table.status.location.clone();
+    }
+    options.properties = create_plan.table.status.display_properties.clone();
     let location = options.location.clone().ok_or_else(|| {
         CatalogError::InvalidArgument(format!(
             "Location is required to create storage metadata for {} tables",
