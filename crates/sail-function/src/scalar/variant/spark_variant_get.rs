@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileComment: Credit: https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/variant_get.rs
 
+use std::io::Write;
 use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
 use arrow::array::{ArrayRef, StringBuilder};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef};
-use chrono::Timelike;
+use chrono::{Offset, Timelike};
 use chumsky::prelude::*;
 use datafusion::arrow::datatypes::TimeUnit;
 use datafusion_common::{Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err};
@@ -91,8 +92,55 @@ fn return_field_for_variant_get(name: &str, args: &ReturnFieldArgs) -> Result<Fi
     Ok(Arc::new(field))
 }
 
+// [CREDIT]: https://github.com/apache/spark/blob/32f7299601108917fb01920a54e084595b7b3bf8/common/variant/src/main/java/org/apache/spark/types/variant/Variant.java#L266-L346
+fn write_variant_json(value: Variant, timezone: &Tz, out: &mut Vec<u8>) -> Result<()> {
+    match value {
+        Variant::Object(object) => {
+            out.push(b'{');
+            for (i, field) in object.iter_try().enumerate() {
+                let (key, child) = field?;
+                if i > 0 {
+                    out.push(b',');
+                }
+                Variant::String(key).to_json(out)?;
+                out.push(b':');
+                write_variant_json(child, timezone, out)?;
+            }
+            out.push(b'}');
+        }
+        Variant::List(list) => {
+            out.push(b'[');
+            for (i, child) in list.iter_try().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                write_variant_json(child?, timezone, out)?;
+            }
+            out.push(b']');
+        }
+        Variant::TimestampMicros(ts) | Variant::TimestampNanos(ts) => {
+            let offset = ts.with_timezone(timezone).offset().fix().local_minus_utc();
+            let sign = if offset < 0 { '-' } else { '+' };
+            let minutes = offset.unsigned_abs() / 60;
+            write!(
+                out,
+                r#""{}{sign}{:02}:{:02}""#,
+                TimestampFormatter(&ts, Some(timezone)),
+                minutes / 60,
+                minutes % 60
+            )?;
+        }
+        Variant::TimestampNtzMicros(ts) | Variant::TimestampNtzNanos(ts) => {
+            write!(out, r#""{}""#, TimestampFormatter(&ts.and_utc(), None))?;
+        }
+        v => v.to_json(out)?,
+    }
+    Ok(())
+}
+
 fn variant_strings(values: &VariantArray, timezone: &Tz, safe: bool) -> Result<ArrayRef> {
     let mut strings = StringBuilder::new();
+    let mut json = Vec::new();
     for value in values.iter() {
         match value.unwrap_or(Variant::Null) {
             Variant::Null => strings.append_null(),
@@ -128,7 +176,9 @@ fn variant_strings(values: &VariantArray, timezone: &Tz, safe: bool) -> Result<A
                 strings.append_value(TimestampFormatter(&v.and_utc(), None).to_string());
             }
             v @ (Variant::Object(_) | Variant::List(_)) => {
-                strings.append_value(v.to_json_string()?)
+                json.clear();
+                write_variant_json(v, timezone, &mut json)?;
+                strings.append_value(std::str::from_utf8(&json).map_err(ArrowError::from)?);
             }
         }
     }

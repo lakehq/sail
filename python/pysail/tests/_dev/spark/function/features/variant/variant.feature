@@ -572,3 +572,29 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | extracted | cast_value |
         | NULL      | NULL       |
         | é         | é          |
+
+    Scenario Outline: Nested Variant timestamps retain their JSON offset in <zone>
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        WITH variants AS (
+          SELECT to_variant_object(named_struct(
+            'times', array(timestamp_micros(us), CAST(NULL AS TIMESTAMP)),
+            'ntz', TIMESTAMP_NTZ '1970-01-01 00:00:00.120000'
+          )) AS v FROM VALUES (<micros>L) AS times(us)
+        )
+        SELECT CAST(v AS STRING) AS object_json,
+               try_variant_get(v, '$.times', 'string') AS array_json,
+               variant_get(v, '$.times[0]', 'string') AS scalar_text
+        FROM variants
+        """
+      Then query result
+        | object_json                                               | array_json             | scalar_text |
+        | {"ntz":"1970-01-01 00:00:00.12","times":["<ts><z>",null]} | ["<ts><z>",null]       | <ts>        |
+
+      Examples:
+        | zone                | micros           | ts                     | z      |
+        | America/Los_Angeles | 0                | 1969-12-31 16:00:00    | -08:00 |
+        | America/Los_Angeles | 1561939200120000 | 2019-06-30 17:00:00.12 | -07:00 |
+        | UTC                 | 0                | 1970-01-01 00:00:00    | +00:00 |
+        | +05:30              | 0                | 1970-01-01 05:30:00    | +05:30 |
