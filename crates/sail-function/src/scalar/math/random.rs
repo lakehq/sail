@@ -10,7 +10,7 @@ use datafusion_expr::{
 };
 use rand::{RngExt, rng};
 
-use super::xorshift::SparkXorShiftRandom;
+use super::utils::xorshift::SparkXorShiftRandom;
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 
 #[derive(Debug, PartialEq, Eq, Hash)]

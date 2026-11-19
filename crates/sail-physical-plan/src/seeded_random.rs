@@ -26,7 +26,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{ColumnarValue, Operator};
 use futures::Stream;
-use sail_function::scalar::math::partition_random::{
+use sail_function::scalar::math::utils::partition_random::{
     LazyRightOperand, PartitionRandomGenerator, PartitionSeed, create_partition_random_generator,
     is_row_argument, lazy_right_operand, seed_argument_position,
 };

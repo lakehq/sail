@@ -6,7 +6,7 @@ use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions_nested::reverse::array_reverse_inner;
 
-use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkReverse {

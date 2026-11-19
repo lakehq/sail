@@ -1,15 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/f911d529a57b211eb44a98b253f97d839f60019f/datafusion/functions-nested/src/lambda_utils.rs
 
-///
-/// Shared helpers for `(array, lambda)` higher-order array functions
-/// (`filter`, `transform`, `exists`, `forall`, ...).
-///
-/// Mirrors the `pub(crate)` helpers in `datafusion-functions-nested` 54's
-/// `src/lambda_utils.rs`, kept here so every Spark HOF reuses the same
-/// argument-unpacking and list-coercion logic instead of duplicating it, with
-/// the Spark-specific addition of the optional 0-based index parameter
-/// (`index_array`/`offsets_to_indices`).
+//! Shared helpers for higher-order array functions.
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -19,30 +11,15 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute::take_arrays;
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::utils::{
-    adjust_offsets_for_slice, list_values, list_values_row_number, take_function_args,
-};
+use datafusion_common::utils::{adjust_offsets_for_slice, list_values, list_values_row_number};
 use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
-use datafusion_expr::{ColumnarValue, LambdaArgument, ValueOrLambda};
+use datafusion_expr::{ColumnarValue, LambdaArgument};
 
 use crate::error::generic_exec_err;
 
-/// Extracts a `(value, lambda)` pair from a [`ValueOrLambda`] slice.
-pub(crate) fn value_lambda_pair<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
-    name: &str,
-    args: &'a [ValueOrLambda<V, L>],
-) -> Result<(&'a V, &'a L)> {
-    let [value, lambda] = take_function_args(name, args)?;
-
-    let (ValueOrLambda::Value(value), ValueOrLambda::Lambda(lambda)) = (value, lambda) else {
-        return plan_err!(
-            "{name} expects a value followed by a lambda, got {value:?} and {lambda:?}"
-        );
-    };
-
-    Ok((value, lambda))
-}
-
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/f911d529a57b211eb44a98b253f97d839f60019f/datafusion/functions-nested/src/lambda_utils.rs#L46-L72
 /// Coerces a single list argument for `(array, lambda)` style higher-order functions.
 ///
 /// Normalises `ListView`/`FixedSizeList` → `List` and `LargeListView` → `LargeList`.
@@ -68,18 +45,23 @@ pub(crate) fn coerce_single_list_arg(name: &str, arg_types: &[DataType]) -> Resu
     Ok(vec![coerced])
 }
 
+// SPDX-SnippetEnd
+
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/f911d529a57b211eb44a98b253f97d839f60019f/datafusion/functions-nested/src/lambda_utils.rs#L91-L126
 /// Result of extracting flat list values, with fast-path short-circuits handled.
 pub(crate) enum ListValuesResult {
     /// Caller should return this value immediately.
     EarlyReturn(ColumnarValue),
-    /// Flat values extracted from the list; continue with execution.
+    /// Flat values extracted from the list.
     Values(ArrayRef),
 }
 
 /// Extracts flat list values, handling all fast-path short-circuits.
 ///
-/// - All-null input → `EarlyReturn(null scalar)`
-/// - All sublists empty and non-null → `EarlyReturn(default empty-list scalar)`
+/// - All-null input → `EarlyReturn(null array)`
+/// - All sublists empty and non-null → `EarlyReturn(array of empty lists)`
 /// - Otherwise → `Values(flat_values)`
 pub(crate) fn extract_list_values(
     list_array: &ArrayRef,
@@ -124,6 +106,7 @@ pub(crate) fn extract_list_values(
 
     Ok(ListValuesResult::Values(values))
 }
+// SPDX-SnippetEnd
 
 /// Evaluates a boolean lambda element by element, stopping each row at the first
 /// `stop_on` value, and reduces with Spark's three-valued logic.

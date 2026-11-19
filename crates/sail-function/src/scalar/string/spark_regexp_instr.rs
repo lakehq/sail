@@ -13,7 +13,7 @@ use datafusion_expr::{
 };
 use datafusion_functions::regex::regexpinstr::regexp_instr_func;
 
-use crate::functions_nested_utils::{evaluate_lambda_rows, scatter_active_rows};
+use crate::scalar::utils::lambda::{evaluate_lambda_rows, scatter_active_rows};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkRegexpInstr {

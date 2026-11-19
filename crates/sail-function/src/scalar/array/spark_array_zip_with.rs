@@ -20,7 +20,7 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
-use crate::functions_nested_utils::{evaluate_lambda_rows, scatter_active_rows};
+use crate::scalar::utils::lambda::{evaluate_lambda_rows, scatter_active_rows};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArrayZipWith {

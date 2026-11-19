@@ -15,11 +15,11 @@ use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::ColumnarValue;
 
-use crate::functions_strings::{
+use crate::utils::nested::{offset_span, offset_span_len};
+use crate::utils::string::{
     GenericStringArrayBuilder, STRING_VIEW_INIT_BLOCK_SIZE, STRING_VIEW_MAX_BLOCK_SIZE,
     StringViewArrayBuilder, substr_view,
 };
-use crate::functions_utils::{offset_span, offset_span_len};
 
 /// Trait for trim operations, allowing compile-time dispatch instead of runtime matching.
 ///

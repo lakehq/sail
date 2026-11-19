@@ -10,10 +10,10 @@ use datafusion::arrow::compute::{CastOptions, cast_with_options};
 use datafusion::arrow::datatypes::{DataType, i256};
 use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_functions::utils::make_scalar_function;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
-use crate::functions_nested_utils::downcast_arg;
-use crate::functions_utils::make_scalar_function;
+use crate::utils::nested::downcast_arg;
 
 /// The `to_char` / `to_varchar` function for numeric input, formatting a decimal value
 /// as a string according to a number format such as `'$99,999.99S'`.
