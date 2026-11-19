@@ -858,9 +858,10 @@ pub(crate) fn parse_complex_type_from_json_object(
 
             Ok(DataType::Struct(Fields::from(fields)))
         }
-        _ => Err(CatalogError::InvalidArgument(format!(
-            "Unsupported complex type: {type_field}"
-        ))),
+        // The type of a field can be a primitive type, such as `decimal(10,2)`.
+        _ => parse_simple_type_from_string(&type_field).map_err(|_| {
+            CatalogError::InvalidArgument(format!("Unsupported complex type: {type_field}"))
+        }),
     }
 }
 
@@ -963,6 +964,143 @@ mod tests {
         assert_eq!(
             parse_simple_type_from_string("DECIMAL(10,2)")?,
             DataType::Decimal128(10, 2)
+        );
+        Ok(())
+    }
+
+    /// The columns of a table created with the Delta REST API have the type as a field
+    /// of the Delta schema in `type_json`, without the precision and the scale.
+    #[test]
+    fn primitive_types_in_delta_schema_fields() -> CatalogResult<()> {
+        use r#gen::ColumnTypeName;
+
+        let timestamp =
+            |tz: Option<&str>| DataType::Timestamp(TimeUnit::Microsecond, tz.map(Arc::from));
+        let cases = [
+            (
+                ColumnTypeName::Boolean,
+                "boolean",
+                "boolean",
+                DataType::Boolean,
+            ),
+            (ColumnTypeName::Byte, "byte", "tinyint", DataType::Int8),
+            (ColumnTypeName::Short, "short", "smallint", DataType::Int16),
+            (ColumnTypeName::Int, "integer", "int", DataType::Int32),
+            (ColumnTypeName::Long, "long", "bigint", DataType::Int64),
+            (ColumnTypeName::Float, "float", "float", DataType::Float32),
+            (
+                ColumnTypeName::Double,
+                "double",
+                "double",
+                DataType::Float64,
+            ),
+            (ColumnTypeName::Date, "date", "date", DataType::Date32),
+            (
+                ColumnTypeName::Timestamp,
+                "timestamp",
+                "timestamp",
+                timestamp(Some("UTC")),
+            ),
+            (
+                ColumnTypeName::TimestampNtz,
+                "timestamp_ntz",
+                "timestamp_ntz",
+                timestamp(None),
+            ),
+            (ColumnTypeName::String, "string", "string", DataType::Utf8),
+            (ColumnTypeName::Binary, "binary", "binary", DataType::Binary),
+            (
+                ColumnTypeName::Decimal,
+                "decimal(10,2)",
+                "decimal(10,2)",
+                DataType::Decimal128(10, 2),
+            ),
+            (
+                ColumnTypeName::Decimal,
+                "decimal(38,18)",
+                "decimal(38,18)",
+                DataType::Decimal128(38, 18),
+            ),
+        ];
+        for (type_name, delta_type, type_text, expected) in cases {
+            let field = json!({"name": "c", "type": delta_type, "nullable": true, "metadata": {}});
+            let actual = unity_type_to_data_type(
+                Some(type_name),
+                Some(field.to_string()),
+                Some(type_text.to_string()),
+                None,
+                None,
+                None,
+            )?;
+            assert_eq!(actual, expected, "{delta_type}");
+            // The type is also parsed from the field without the type name.
+            assert_eq!(
+                parse_unity_type_json(&field.to_string())?,
+                expected,
+                "{delta_type}"
+            );
+
+            // The primitive type is parsed when it is nested in complex types.
+            let field = json!({
+                "name": "c",
+                "type": {
+                    "type": "struct",
+                    "fields": [{
+                        "name": "m",
+                        "type": {
+                            "type": "map",
+                            "keyType": "string",
+                            "valueType": {
+                                "type": "array",
+                                "elementType": delta_type,
+                                "containsNull": true
+                            },
+                            "valueContainsNull": true
+                        },
+                        "nullable": true,
+                        "metadata": {}
+                    }]
+                },
+                "nullable": true,
+                "metadata": {}
+            });
+            let actual = unity_type_to_data_type(
+                Some(ColumnTypeName::Struct),
+                Some(field.to_string()),
+                None,
+                None,
+                None,
+                None,
+            )?;
+            let DataType::Struct(fields) = &actual else {
+                return Err(CatalogError::Internal(format!(
+                    "unexpected type: {actual:?}"
+                )));
+            };
+            let DataType::Map(entries, _) = fields[0].data_type() else {
+                return Err(CatalogError::Internal(format!(
+                    "unexpected type: {actual:?}"
+                )));
+            };
+            let DataType::Struct(entries) = entries.data_type() else {
+                return Err(CatalogError::Internal(format!(
+                    "unexpected type: {actual:?}"
+                )));
+            };
+            let DataType::List(element) = entries[1].data_type() else {
+                return Err(CatalogError::Internal(format!(
+                    "unexpected type: {actual:?}"
+                )));
+            };
+            assert_eq!(element.data_type(), &expected, "{delta_type}");
+        }
+
+        let field = json!({"name": "c", "type": "unknown", "nullable": true, "metadata": {}});
+        let error = parse_unity_type_json(&field.to_string());
+        assert!(
+            matches!(&error, Err(CatalogError::InvalidArgument(message))
+                if message == "Unsupported complex type: unknown"),
+            "{error:?}"
         );
         Ok(())
     }
