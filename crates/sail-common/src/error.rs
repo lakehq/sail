@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use thiserror::Error;
 
 pub type CommonResult<T> = Result<T, CommonError>;

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Integration tests for the JDBC data source using testcontainers.
 
 A PostgreSQL container is started once per session and torn down at the end.
@@ -82,7 +84,7 @@ def register_jdbc(spark):
 def test_basic_format_read(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
     rows = df.collect()
-    assert len(rows) == 15  # noqa: PLR2004
+    assert len(rows) == 15
     col_names = {f.name for f in df.schema.fields}
     assert "id" in col_names
     assert "name" in col_names
@@ -96,7 +98,7 @@ def test_basic_format_read(spark, jdbc_opts):
 def test_jdbc_shorthand(spark, jdbc_url):
     df = spark.read.jdbc(jdbc_url, "users", properties={"user": _PG_USER, "password": _PG_PASSWORD})
     rows = df.collect()
-    assert len(rows) == 15  # noqa: PLR2004
+    assert len(rows) == 15
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +127,7 @@ def test_query_option(spark, jdbc_opts):
 def test_schema_qualified_dbtable(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "analytics.events").options(**jdbc_opts).load()
     rows = df.collect()
-    assert len(rows) == 4  # noqa: PLR2004
+    assert len(rows) == 4
 
 
 # ---------------------------------------------------------------------------
@@ -233,9 +235,9 @@ def test_null_values_handling(spark, jdbc_opts):
     assert len(null_ages) >= 1
 
     non_null = df.filter("age IS NOT NULL").collect()
-    assert len(non_null) == 14  # noqa: PLR2004
+    assert len(non_null) == 14
 
-    assert len(null_ages) + len(non_null) == 15  # noqa: PLR2004
+    assert len(null_ages) + len(non_null) == 15
 
 
 # ---------------------------------------------------------------------------
@@ -256,8 +258,8 @@ def test_empty_table(spark, jdbc_opts):
 
 def test_large_dataset(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "large_table").options(**jdbc_opts).load()
-    assert df.count() == 10000  # noqa: PLR2004
-    assert df.filter("id > 5000").count() == 5000  # noqa: PLR2004
+    assert df.count() == 10000
+    assert df.filter("id > 5000").count() == 5000
 
 
 # ---------------------------------------------------------------------------
@@ -282,11 +284,11 @@ def test_data_types(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "data_types_test").options(**jdbc_opts).load()
     row = df.filter("id = 1").collect()[0]
 
-    assert row.col_smallint == 100  # noqa: PLR2004
-    assert row.col_integer == 10000  # noqa: PLR2004
-    assert row.col_bigint == 1000000000  # noqa: PLR2004
-    assert abs(row.col_real - 3.14) < 0.01  # noqa: PLR2004
-    assert abs(row.col_double - 2.718281828) < 0.0001  # noqa: PLR2004
+    assert row.col_smallint == 100
+    assert row.col_integer == 10000
+    assert row.col_bigint == 1000000000
+    assert abs(row.col_real - 3.14) < 0.01
+    assert abs(row.col_double - 2.718281828) < 0.0001
     assert row.col_text == "Sample text"
     assert row.col_varchar == "Sample varchar"
     assert row.col_boolean is True
@@ -338,13 +340,13 @@ def test_complex_filters(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
 
     result = df.filter("age = 30 OR age = 35").collect()
-    assert len(result) >= 2  # noqa: PLR2004
+    assert len(result) >= 2
 
     result = df.filter("age IN (25, 30, 35)").collect()
-    assert len(result) >= 3  # noqa: PLR2004
+    assert len(result) >= 3
 
     result = df.filter("email LIKE '%example.com'").collect()
-    assert len(result) > 10  # noqa: PLR2004
+    assert len(result) > 10
 
     result = df.filter("NOT (age > 35)").collect()
     assert len(result) > 0
@@ -366,7 +368,7 @@ def test_partition_with_nulls(spark, jdbc_opts):
         .options(**jdbc_opts)
         .load()
     )
-    assert df.count() == 15  # noqa: PLR2004
+    assert df.count() == 15
     assert df.filter("age IS NULL").count() >= 1
 
 
@@ -379,7 +381,7 @@ def test_sql_injection_filter_value(spark, jdbc_opts):
     from pyspark.sql.functions import col
 
     orders_before = spark.read.format("jdbc").option("dbtable", "orders").options(**jdbc_opts).load().count()
-    assert orders_before == 8  # noqa: PLR2004
+    assert orders_before == 8
 
     injection_payload = "'; DROP TABLE orders; --"
     users_df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
@@ -387,7 +389,7 @@ def test_sql_injection_filter_value(spark, jdbc_opts):
     assert len(result) == 0
 
     orders_after = spark.read.format("jdbc").option("dbtable", "orders").options(**jdbc_opts).load().count()
-    assert orders_after == 8  # noqa: PLR2004
+    assert orders_after == 8
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +400,7 @@ def test_sql_injection_filter_value(spark, jdbc_opts):
 def test_special_chars_table(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "special_chars").options(**jdbc_opts).load()
     rows = df.collect()
-    assert len(rows) == 5  # noqa: PLR2004
+    assert len(rows) == 5
     names = {r.name for r in rows}
     assert "Normal Name" in names
     assert "O'Reilly" in names
@@ -461,7 +463,7 @@ def test_empty_dbtable(spark, jdbc_opts):
 def test_boolean_filter_pushdown(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load().filter("active = true")
     rows = df.collect()
-    assert len(rows) == 12  # noqa: PLR2004
+    assert len(rows) == 12
     assert all(r.active for r in rows)
 
 

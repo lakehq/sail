@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::num::ParseIntError;
 use std::str::ParseBoolError;

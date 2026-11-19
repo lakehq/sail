@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -20,7 +22,8 @@ use crate::driver::worker_scaler::{WorkerLaunchRequest, WorkerRetryRequest};
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{
-    JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId,
+    JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay,
+    TaskStreamKeySet, WorkerId,
 };
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
@@ -361,17 +364,17 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_fetch_worker_stream(
+    pub(super) fn handle_fetch_worker_streams(
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
         let _ = result.send(
             self.worker_pool
-                .fetch_task_stream(ctx, worker_id, &key, schema),
+                .fetch_task_streams(ctx, worker_id, keys, schema),
         );
         ActorAction::Continue
     }
@@ -456,6 +459,7 @@ impl DriverActor {
                 handle,
                 key,
                 schema,
+                retry_cause,
             } => {
                 let assignment =
                     TaskAssignmentGetter::get(&self.task_assigner, &TaskKey::from(key.clone()));
@@ -488,10 +492,12 @@ impl DriverActor {
                         }
                     }
                     Some(TaskAssignment::Worker { worker_id, slot: _ }) => {
-                        let _ = result.send(
-                            self.worker_pool
-                                .fetch_task_stream(ctx, *worker_id, &key, schema),
-                        );
+                        let _ = result.send(self.worker_pool.fetch_task_streams(
+                            ctx,
+                            *worker_id,
+                            key.clone().into(),
+                            schema,
+                        ));
                     }
                 }
                 let stream = futures::stream::once(async move {
@@ -506,6 +512,7 @@ impl DriverActor {
                         .send(JobOutputItem::Stream {
                             key,
                             stream: Box::pin(stream),
+                            retry_cause,
                         })
                         .await;
                 });

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -25,24 +27,22 @@ use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::approx_percentile::ApproxPercentileCont;
 use sail_function::aggregate::array_agg::ArrayAgg;
-use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
-use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
-use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
-use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
-use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
-use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
-use sail_function::aggregate::kurtosis::KurtosisFunction;
-use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
-use sail_function::aggregate::mode::ModeFunction;
-use sail_function::aggregate::percentile::PercentileFunction;
-use sail_function::aggregate::product::ProductFunction;
+use sail_function::aggregate::bitmap_and_agg::BitmapAndAgg;
+use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAgg;
+use sail_function::aggregate::bitmap_or_agg::BitmapOrAgg;
+use sail_function::aggregate::count_min_sketch::CountMinSketch;
+use sail_function::aggregate::histogram_numeric::HistogramNumeric;
+use sail_function::aggregate::hll_sketch::{HllSketchAgg, HllUnionAgg};
+use sail_function::aggregate::kurtosis::Kurtosis;
+use sail_function::aggregate::max_min_by::{MaxBy, MinBy};
+use sail_function::aggregate::mode::Mode;
+use sail_function::aggregate::percentile::Percentile;
+use sail_function::aggregate::product::Product;
 use sail_function::aggregate::regr::{Regr, RegrType};
 use sail_function::aggregate::skewness::SkewnessFunc;
-use sail_function::aggregate::theta_sketch::{
-    ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
-};
-use sail_function::aggregate::try_avg::TryAvgFunction;
-use sail_function::aggregate::vector::avg::VectorAvg;
+use sail_function::aggregate::theta_sketch::{ThetaIntersectionAgg, ThetaSketchAgg, ThetaUnionAgg};
+use sail_function::aggregate::try_avg::TryAvg;
+use sail_function::aggregate::vector_avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::window::{spark_first_value_udwf, spark_last_value_udwf, spark_ntile_udwf};
@@ -256,9 +256,7 @@ fn kurtosis(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
         .collect();
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
-            KurtosisFunction::new(),
-        ))),
+        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(Kurtosis::new()))),
         params: WindowFunctionParams {
             args,
             partition_by,
@@ -309,7 +307,7 @@ fn product(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
         .collect();
     Ok(aggregate_udf_window_expr(
-        Arc::new(AggregateUDF::from(ProductFunction::new())),
+        Arc::new(AggregateUDF::from(Product::new())),
         args,
         partition_by,
         order_by,
@@ -361,7 +359,7 @@ fn hll_sketch_agg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let args = hll_args_with_default_lg(arguments, "hll_sketch_agg")?;
     Ok(aggregate_udf_window_expr(
-        Arc::new(AggregateUDF::from(HllSketchAggFunction::new())),
+        Arc::new(AggregateUDF::from(HllSketchAgg::new())),
         args,
         partition_by,
         order_by,
@@ -383,7 +381,7 @@ fn hll_union_agg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let args = hll_union_args_with_default_allow_different_lg(arguments)?;
     Ok(aggregate_udf_window_expr(
-        Arc::new(AggregateUDF::from(HllUnionAggFunction::new())),
+        Arc::new(AggregateUDF::from(HllUnionAgg::new())),
         args,
         partition_by,
         order_by,
@@ -405,7 +403,7 @@ fn count_min_sketch(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let args = count_min_sketch_args(arguments)?;
     Ok(aggregate_udf_window_expr(
-        Arc::new(AggregateUDF::from(CountMinSketchFunction::new())),
+        Arc::new(AggregateUDF::from(CountMinSketch::new())),
         args,
         partition_by,
         order_by,
@@ -427,7 +425,7 @@ fn theta_sketch_agg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let args = theta_args_with_default_lg(arguments, "theta_sketch_agg")?;
     Ok(aggregate_udf_window_expr(
-        Arc::new(AggregateUDF::from(ThetaSketchAggFunction::new())),
+        Arc::new(AggregateUDF::from(ThetaSketchAgg::new())),
         args,
         partition_by,
         order_by,
@@ -449,7 +447,7 @@ fn theta_union_agg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let args = theta_args_with_default_lg(arguments, "theta_union_agg")?;
     Ok(aggregate_udf_window_expr(
-        Arc::new(AggregateUDF::from(ThetaUnionAggFunction::new())),
+        Arc::new(AggregateUDF::from(ThetaUnionAgg::new())),
         args,
         partition_by,
         order_by,
@@ -700,9 +698,9 @@ fn percentile_exact_agg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         function_context: _,
     } = input;
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
-            PercentileFunction::new(),
-        ))),
+        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(
+            AggregateUDF::from(Percentile::new()),
+        )),
         params: WindowFunctionParams {
             args: arguments,
             partition_by,
@@ -775,15 +773,15 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("bit_xor", F::aggregate(bit_and_or_xor::bit_xor_udaf)),
         (
             "bitmap_and_agg",
-            F::aggregate(|| Arc::new(AggregateUDF::from(BitmapAndAggFunction::new()))),
+            F::aggregate(|| Arc::new(AggregateUDF::from(BitmapAndAgg::new()))),
         ),
         (
             "bitmap_construct_agg",
-            F::aggregate(|| Arc::new(AggregateUDF::from(BitmapConstructAggFunction::new()))),
+            F::aggregate(|| Arc::new(AggregateUDF::from(BitmapConstructAgg::new()))),
         ),
         (
             "bitmap_or_agg",
-            F::aggregate(|| Arc::new(AggregateUDF::from(BitmapOrAggFunction::new()))),
+            F::aggregate(|| Arc::new(AggregateUDF::from(BitmapOrAgg::new()))),
         ),
         ("bool_and", F::aggregate(bool_and_or::bool_and_udaf)),
         ("bool_or", F::aggregate(bool_and_or::bool_or_udaf)),
@@ -802,13 +800,13 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("grouping_id", F::unknown("grouping_id")),
         (
             "histogram_numeric",
-            F::aggregate(|| Arc::new(AggregateUDF::from(HistogramNumericFunction::new()))),
+            F::aggregate(|| Arc::new(AggregateUDF::from(HistogramNumeric::new()))),
         ),
         ("hll_sketch_agg", F::custom(hll_sketch_agg)),
         ("hll_union_agg", F::custom(hll_union_agg)),
         (
             "theta_intersection_agg",
-            F::aggregate(|| Arc::new(AggregateUDF::from(ThetaIntersectionAggFunction::new()))),
+            F::aggregate(|| Arc::new(AggregateUDF::from(ThetaIntersectionAgg::new()))),
         ),
         ("theta_sketch_agg", F::custom(theta_sketch_agg)),
         ("theta_union_agg", F::custom(theta_union_agg)),
@@ -822,7 +820,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ),
         (
             "max_by",
-            F::aggregate(|| Arc::new(AggregateUDF::from(MaxByFunction::new()))),
+            F::aggregate(|| Arc::new(AggregateUDF::from(MaxBy::new()))),
         ),
         ("mean", F::aggregate(average::avg_udaf)),
         ("median", F::custom(median)),
@@ -832,11 +830,11 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ),
         (
             "min_by",
-            F::aggregate(|| Arc::new(AggregateUDF::from(MinByFunction::new()))),
+            F::aggregate(|| Arc::new(AggregateUDF::from(MinBy::new()))),
         ),
         (
             "mode",
-            F::aggregate(|| Arc::new(AggregateUDF::from(ModeFunction::new()))),
+            F::aggregate(|| Arc::new(AggregateUDF::from(Mode::new()))),
         ),
         ("percentile", F::custom(percentile_exact_agg)),
         (
@@ -897,7 +895,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("sum", F::custom(spark_sum)),
         (
             "try_avg",
-            F::aggregate(|| Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
+            F::aggregate(|| Arc::new(AggregateUDF::from(TryAvg::new()))),
         ),
         (
             "try_sum",

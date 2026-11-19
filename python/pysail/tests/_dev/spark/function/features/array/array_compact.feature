@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: array_compact() removes null values from an array
 
   Rule: Basic usage

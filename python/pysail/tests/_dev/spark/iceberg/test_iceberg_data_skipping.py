@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import contextlib
 import datetime
 import struct
@@ -325,11 +327,8 @@ def test_unpartitioned_numeric_metrics_avoid_data_file_io(spark, tmp_path, rows_
         for value in [0, 10, 20]:
             table.append(pa.table({"id": pa.array(range(value, value + rows_per_file), pa.int64())}))
         files = [task.file for task in table.scan().plan_files()]
-        target_value = 10
         excluded = [
-            file.file_path
-            for file in files
-            if int.from_bytes(file.lower_bounds[1], "little", signed=True) != target_value
+            file.file_path for file in files if int.from_bytes(file.lower_bounds[1], "little", signed=True) != 10
         ]
         assert len(excluded) == len(files) - 1
         with unavailable_iceberg_files(excluded):
@@ -664,13 +663,11 @@ def test_prefix_and_nested_file_metrics(spark, tmp_path, lazy):
                         upper_bounds={1: bound, 2: (text[0] + chr(ord(text[1]) + 1)).encode(), 4: bound},
                     )
                 )
-        leaf_field_id = 4
-        assert all(leaf_field_id in task.file.lower_bounds for task in table.scan().plan_files())
-        target_id = 2
+        assert all(4 in task.file.lower_bounds for task in table.scan().plan_files())
         excluded = [
             task.file.file_path
             for task in table.scan().plan_files()
-            if int.from_bytes(task.file.lower_bounds[1], "little", signed=True) != target_id
+            if int.from_bytes(task.file.lower_bounds[1], "little", signed=True) != 2
         ]
         with unavailable_iceberg_files(excluded):
             for predicate in ["text LIKE 'bb%'", "text = 'bbbb'", "startswith(text, 'bb')", "details.value = 2"]:

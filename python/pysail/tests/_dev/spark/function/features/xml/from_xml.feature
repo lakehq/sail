@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: from_xml parses an XML string into a struct value
 
   Rule: Primitive types

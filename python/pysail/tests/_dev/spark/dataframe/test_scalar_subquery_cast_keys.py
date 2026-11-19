@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import re
 from decimal import Decimal
 
@@ -148,7 +150,7 @@ def test_cast_correlation_evaluates_keys_after_row_elimination(spark, boundary, 
         elif boundary == "replaced_semi":
             matching = matching.select(F.lit("unrelated").alias("k"), "v").alias("a")
         if boundary in ("filter", "filtered_generator"):
-            matching = matching.alias("a").where(F.col("v") < 9)  # noqa: PLR2004
+            matching = matching.alias("a").where(F.col("v") < 9)
             if boundary == "filtered_generator":
                 matching = matching.select("k", F.explode(F.array("v", F.col("v") + 1)).alias("x"))
         else:
@@ -241,7 +243,7 @@ def test_cast_correlation_preserves_grouping_mask_width_and_capacity(spark, widt
     inner_rows = ", ".join("(" + ", ".join([k, *([str(d)] * (width - 1)), str(v)]) + ")" for k, v, d in keys)
     outer_rows = ", ".join("(" + ", ".join([identifier, k, *(["1"] * (width - 1))]) + ")" for identifier, k in outers)
     predicates.extend(f"i.g{i} = o.a{i}" for i in range(1, width))
-    if key_count == 2:  # noqa: PLR2004
+    if key_count == 2:
         predicates.append(second_key)
     # Every visible column belongs to every grouping set, so GROUPING is zero.
     # Duplicate sets and private keys widen the backend's internal grouping ID,
@@ -793,7 +795,7 @@ def test_floating_window_keys_share_completed_volatile_values(spark, correlated,
         F.lit("1").alias("tag"),
         F.col("id").alias("seq"),
         F.when((F.col("id") % 7) == 0, F.lit(None).cast("double"))
-        .when(F.expr("pmod(xxhash64(uuid()), 1000)") < 500, F.lit(float("nan")))  # noqa: PLR2004
+        .when(F.expr("pmod(xxhash64(uuid()), 1000)") < 500, F.lit(float("nan")))
         .otherwise(F.lit(-0.0))
         .alias("p"),
         F.expr("CAST(pmod(xxhash64(uuid()), 1000) AS DOUBLE) / 1000.0").alias("r"),
@@ -820,8 +822,8 @@ def test_floating_window_keys_share_completed_volatile_values(spark, correlated,
             rows = spark.sql(
                 f"SELECT seq, p, r, row_number() OVER ({window}) AS w FROM scalar_window_volatile_keys"  # noqa: S608
             ).collect()
-            assert len(rows) == 64  # noqa: PLR2004
-            assert len({row.seq for row in rows}) == 64  # noqa: PLR2004
+            assert len(rows) == 64
+            assert len({row.seq for row in rows}) == 64
             groups = {}
             for row in rows:
                 key = None if row.p is None else ("NaN" if math.isnan(row.p) else row.p)
@@ -1222,7 +1224,7 @@ def test_duplicate_grouping_sets_keep_public_grouping_id_literal_reference(spark
           GROUP BY GROUPING SETS ((k), (k), (x2, x1))
         )
     """).collect()[0]
-    assert row.n == 14  # noqa: PLR2004
+    assert row.n == 14
 
 
 @pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark rejects this correlated grouping-set shape")

@@ -370,6 +370,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     OutputRequirementExec: order_by=[(#13@0, asc)], dist_by=SinglePartition
       SortExec: expr=[#13@0 ASC], preserve_partitioning=[false]

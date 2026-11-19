@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::mem::Discriminant;
 use std::sync::Arc;
 

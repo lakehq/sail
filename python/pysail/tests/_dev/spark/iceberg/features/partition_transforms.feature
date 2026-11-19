@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Iceberg Partition Transforms
 
   Rule: Bucket transform partitions data by hash

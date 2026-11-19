@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::future::Future;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -5,6 +7,7 @@ use std::task::{Context, Poll};
 
 use futures::future::BoxFuture;
 use http_body_util::{BodyExt, Full};
+use sail_common::server::ServerBuilderOptions;
 use sail_common::telemetry::{TracingClientLayer, TracingClientService};
 use tokio::sync::{OnceCell, oneshot};
 use tokio::task::JoinHandle;
@@ -73,6 +76,27 @@ impl ServerMonitor {
                 let _ = handle.await;
             }
         }
+    }
+}
+
+/// The largest HTTP/2 flow-control window size.
+pub(crate) const MAX_WINDOW_SIZE: u32 = i32::MAX as u32;
+
+/// The options for the driver and worker servers.
+///
+/// The requests that a server has not read yet hold the window that all streams on
+/// their connection share. When that window is exhausted, the requests that wait for it
+/// are sent in DATA frames as small as one byte, and the server closes the connection
+/// with `too_many_data_frames` once too many small frames are unread. Hyper's adaptive
+/// window starts at 65,535 bytes, which the tasks of a stage can exceed when they open
+/// their shuffle streams together. Each connection therefore always has the largest
+/// window. Only the driver and the workers connect to these servers, and the unread
+/// data of each request is still limited by the window of its stream.
+pub(crate) fn server_options() -> ServerBuilderOptions {
+    ServerBuilderOptions {
+        http2_adaptive_window: Some(false),
+        http2_initial_connection_window_size: Some(MAX_WINDOW_SIZE),
+        ..Default::default()
     }
 }
 

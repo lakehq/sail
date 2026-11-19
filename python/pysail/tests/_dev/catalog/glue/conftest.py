@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Fixtures for native AWS Glue catalog integration tests."""
 
 from __future__ import annotations

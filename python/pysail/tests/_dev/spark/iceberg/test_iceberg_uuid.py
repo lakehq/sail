@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """UUID is a Sail SQL extension; Spark rejects UUID DDL."""
 
 # ruff: noqa: S608
@@ -346,12 +348,10 @@ def test_uuid_try_cast_nonnullable_nested_values(spark):
     assert converted.schema["m"].dataType.valueContainsNull
     assert converted.schema["nested"].dataType.elementType.valueType["u"].nullable
     rows = converted.collect()
-    expected_row_count = 3
-    assert len(rows) == expected_row_count
+    assert len(rows) == 3
     assert sum(tuple(row) == (None, None, None, None) for row in rows) == 1
     values = [row for row in rows if row.s is not None]
-    expected_nonnull_count = 2
-    assert len(values) == expected_nonnull_count
+    assert len(values) == 2
     for row in values:
         expected = bytes(row.s.u) if row.s.u is not None else None
         assert expected in (None, VALUE_BYTES)

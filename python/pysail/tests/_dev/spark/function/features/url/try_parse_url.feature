@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: try_parse_url migration tests
   Tests exposing differences between Sail and DataFusion fork implementations.
   Fork inherits parse_url limitations: fewer string type combinations (3 vs 27).

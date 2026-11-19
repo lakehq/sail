@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion_common::{DFSchema, Result, ScalarValue, exec_datafusion_err, exec_err};

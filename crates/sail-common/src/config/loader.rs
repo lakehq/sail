@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use figment::value::{Dict, Map, Tag, Value};
 use figment::{Error, Metadata, Profile, Provider};
 use serde::Deserialize;

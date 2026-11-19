@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Reads of a missing table
 
   # When a table is not found, the read resolver tries the name as a lake

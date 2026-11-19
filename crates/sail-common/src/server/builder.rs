@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::convert::Infallible;
 use std::future::Future;
 
@@ -19,6 +21,9 @@ pub struct ServerBuilderOptions {
     pub http2_keepalive_interval: Option<std::time::Duration>,
     pub http2_keepalive_timeout: Option<std::time::Duration>,
     pub http2_adaptive_window: Option<bool>,
+    /// The initial HTTP/2 connection window size, or the default of Hyper if not set.
+    /// The adaptive window must be off for this to take effect.
+    pub http2_initial_connection_window_size: Option<u32>,
 }
 
 impl Default for ServerBuilderOptions {
@@ -30,6 +35,7 @@ impl Default for ServerBuilderOptions {
             http2_keepalive_interval: Some(std::time::Duration::from_mins(1)),
             http2_keepalive_timeout: Some(std::time::Duration::from_secs(10)),
             http2_adaptive_window: Some(true),
+            http2_initial_connection_window_size: None,
         }
     }
 }
@@ -67,6 +73,7 @@ impl<'b> ServerBuilder<'b> {
             .http2_keepalive_interval(options.http2_keepalive_interval)
             .http2_keepalive_timeout(options.http2_keepalive_timeout)
             .http2_adaptive_window(options.http2_adaptive_window)
+            .initial_connection_window_size(options.http2_initial_connection_window_size)
             .layer(layer)
             .add_service(health_server);
 

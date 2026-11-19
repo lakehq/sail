@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Iceberg writes TIMESTAMP values in any session time zone
   Sail labels TIMESTAMP values with the session time zone, while Iceberg stores them as UTC instants.
 

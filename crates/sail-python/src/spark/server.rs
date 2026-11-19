@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::thread::JoinHandle;

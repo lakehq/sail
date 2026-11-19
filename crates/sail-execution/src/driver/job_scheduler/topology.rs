@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use datafusion::physical_plan::ExecutionPlanProperties;
@@ -285,6 +287,65 @@ mod tests {
             for input_region in &blocking_input_regions {
                 assert!(region.dependencies.contains(input_region));
             }
+        }
+    }
+
+    #[test]
+    fn flight_shared_build_region_depends_on_build_reproducibility() {
+        use datafusion::common::{JoinType, NullEquality};
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::physical_expr::expressions::col;
+        use datafusion::physical_plan::ExecutionPlan;
+        use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
+        use datafusion::physical_plan::limit::GlobalLimitExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let memory = || MemorySourceConfig::try_new_exec(&[vec![]], schema.clone(), None).unwrap();
+        // A build that every join task computes identically stays in the join stage, whose
+        // partitions run as independent one-task regions. A limit is materialized once, and
+        // the broadcast puts the producer and every join partition into one region.
+        for (build, region_sizes) in [
+            (memory() as Arc<dyn ExecutionPlan>, vec![1, 1, 1, 1]),
+            (
+                Arc::new(GlobalLimitExec::new(memory(), 0, Some(1))),
+                vec![5],
+            ),
+        ] {
+            let probe = (0..4)
+                .map(|_| Arc::new(EmptyExec::new(schema.clone())) as Arc<dyn ExecutionPlan>)
+                .collect();
+            let key = col("id", &schema).unwrap();
+            let join = HashJoinExec::try_new(
+                build,
+                UnionExec::try_new(probe).unwrap(),
+                vec![(key.clone(), key)],
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                false,
+            )
+            .unwrap();
+            let graph = JobGraph::try_new(
+                Arc::new(join),
+                JobGraphOptions {
+                    shuffle_backend: ShuffleBackendKind::Flight {
+                        compression: ShuffleCompression::None,
+                        connection_count: std::num::NonZeroUsize::MIN,
+                        initial_stream_window_size: None,
+                        initial_connection_window_size: None,
+                    },
+                },
+            )
+            .unwrap();
+            let topology = JobTopology::try_new(&graph).unwrap();
+            let sizes = topology
+                .regions
+                .iter()
+                .map(|region| region.tasks.len())
+                .collect::<Vec<_>>();
+            assert_eq!(sizes, region_sizes);
         }
     }
 }

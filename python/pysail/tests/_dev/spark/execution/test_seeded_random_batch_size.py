@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests that seeded random values do not depend on the execution batch size or mode."""
 
 import pytest

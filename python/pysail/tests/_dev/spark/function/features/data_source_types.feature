@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Data source functions preserve data type metadata
 
   @sail-only

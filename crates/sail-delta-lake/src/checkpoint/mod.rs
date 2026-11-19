@@ -1,22 +1,9 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/checkpoints.rs>
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/checkpoints.rs
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
@@ -37,6 +24,8 @@ use parquet::arrow::async_reader::{AsyncFileReader, ParquetRecordBatchStreamBuil
 use parquet::arrow::{AsyncArrowWriter, ProjectionMask};
 use parquet::errors::{ParquetError, Result as ParquetResult};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use parquet::file::properties::WriterProperties;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use serde_json::Deserializer as JsonDeserializer;
 use uuid::Uuid;
 
@@ -416,8 +405,12 @@ async fn write_checkpoint_batches(
         .map_err(|_| DeltaTableError::generic("checkpoint action count overflow"))?;
 
     let object_store_writer = BufWriter::new(store.clone(), path.clone());
-    let mut writer = AsyncArrowWriter::try_new(object_store_writer, first_batch.schema(), None)
-        .map_err(DeltaTableError::generic_err)?;
+    let properties = WriterProperties::builder()
+        .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
+        .build();
+    let mut writer =
+        AsyncArrowWriter::try_new(object_store_writer, first_batch.schema(), Some(properties))
+            .map_err(DeltaTableError::generic_err)?;
     writer
         .write(&first_batch)
         .await

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Async Thrift RPC runtime using Apache Thrift codecs over bounded memory buffers.
 
 use std::future::poll_fn;

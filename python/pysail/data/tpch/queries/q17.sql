@@ -1,5 +1,6 @@
--- SQLBench-H query 17 derived from TPC-H query 17 under the terms of the TPC Fair Use Policy.
--- TPC-H queries are Copyright 1993-2022 Transaction Processing Performance Council.
+-- SPDX-FileComment: SQLBench-H query 17 derived from TPC-H query 17 under the terms of the TPC Fair Use Policy.
+-- SPDX-FileCopyrightText: Copyright 1993-2022 Transaction Processing Performance Council
+
 select
   sum(l_extendedprice) / 7.0 as avg_yearly
 from

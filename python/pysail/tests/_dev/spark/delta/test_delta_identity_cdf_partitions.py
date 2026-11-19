@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Partitioned CDC preserves identity values even when event streams revisit partitions."""
 
 from urllib.parse import unquote

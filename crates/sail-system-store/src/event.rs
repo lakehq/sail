@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Durable system events emitted by the driver.
 
 use chrono::{DateTime, Utc};

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 import uuid
 from decimal import Decimal
@@ -115,10 +117,10 @@ def test_iceberg_merge_schema_nested_struct_promotes_float_to_double(spark, sql_
         assert isinstance(location_field["latitude"].dataType, SparkDoubleType)
         assert isinstance(location_field["longitude"].dataType, SparkDoubleType)
         rows = result.collect()
-        assert rows[0].location.latitude == 10.0  # noqa: PLR2004
-        assert rows[0].location.longitude == 20.0  # noqa: PLR2004
-        assert rows[1].location.latitude == 30.5  # noqa: PLR2004
-        assert rows[1].location.longitude == 40.5  # noqa: PLR2004
+        assert rows[0].location.latitude == 10.0
+        assert rows[0].location.longitude == 20.0
+        assert rows[1].location.latitude == 30.5
+        assert rows[1].location.longitude == 40.5
     finally:
         sql_catalog.drop_table(identifier)
 
@@ -262,7 +264,7 @@ def test_pruning_exotic_types(spark, sql_catalog):
 
         data = spark.read.format("iceberg").load(table.location())
         predicates = [
-            F.col("f_val") > 5.0,  # noqa: PLR2004
+            F.col("f_val") > 5.0,
             F.col("u_val") == F.lit(second_uuid.bytes),
             F.col("d_val") >= F.lit(Decimal("9.00")),
             F.col("fixed_val") == F.lit(b"\x00\x00\x00\x02"),

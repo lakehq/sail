@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{BTreeSet, HashMap};
 
 use datafusion::arrow::array::RecordBatch;

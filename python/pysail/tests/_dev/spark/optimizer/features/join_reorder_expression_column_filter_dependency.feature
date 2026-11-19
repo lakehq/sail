@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Join reorder preserves join filters referencing derived columns
 
   Scenario: Join filter depends on derived projection column and must not be pushed too early

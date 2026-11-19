@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{
     BeginTableAccessRequest, ResolveLakehouseTableRequest, TableAccessPurpose,

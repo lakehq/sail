@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Iceberg initial and write defaults
 
   Scenario: SQL writes distinguish missing fields and DEFAULT from explicit NULL

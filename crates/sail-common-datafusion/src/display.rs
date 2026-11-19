@@ -1,4 +1,6 @@
-/// [Credit]: <https://github.com/apache/arrow-rs/blob/master/arrow-cast/src/display.rs>
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/arrow-rs/blob/ffd216d57469a33303c0d2ec9b974fd25cc0e0f9/arrow-cast/src/display.rs
+
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Range;
 

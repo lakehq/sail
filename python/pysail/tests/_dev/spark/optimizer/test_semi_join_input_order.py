@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Order-sensitive aggregates and row order over LEFT SEMI / LEFT ANTI joins (and EXISTS / IN /
 NOT EXISTS / NOT IN subqueries) of a sorted left input: Spark keeps the left order.
 

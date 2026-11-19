@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Join reorder greedy solver handles cartesian products
 
   Scenario: Disconnected join graph requires cartesian join but should not crash

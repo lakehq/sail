@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Integration tests for the Celeborn lifecycle actor."""
 
 from __future__ import annotations

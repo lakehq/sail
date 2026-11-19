@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Comparators for upstream Spark parity tests."""
 
 from pandas._testing.asserters import assert_frame_equal

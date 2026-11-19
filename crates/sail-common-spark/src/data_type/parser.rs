@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Parsers for the type strings embedded in Spark JSON schemas.
 
 use chumsky::prelude::*;

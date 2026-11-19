@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: parse_url() extracts URL component
 
   Rule: Basic usage

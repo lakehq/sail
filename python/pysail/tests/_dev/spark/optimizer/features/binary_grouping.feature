@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Binary grouping optimization
 
   Scenario: Binary DISTINCT uses LargeBinary grouping

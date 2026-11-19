@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use chumsky::container::OrderedSeq;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{SliceInput, ValueInput};

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::functions_aggregate::{average, bit_and_or_xor, bool_and_or, count, sum};
@@ -12,7 +14,7 @@ use datafusion_expr::{
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use sail_common_datafusion::min_max::min_max_agg::{Max, Min};
-use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::aggregate::try_avg::TryAvg;
 use sail_logical_plan::repartition::ExplicitRepartitionNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 
@@ -433,7 +435,7 @@ pub(crate) fn is_order_irrelevant(aggregate: &Aggregate) -> Result<bool> {
 /// coercion casts to a floating-point type. Spark treats the average of integers as
 /// order-irrelevant, although it also adds them as floating-point numbers.
 fn is_average_of_integers(udf: &AggregateUDF, args: &[Expr], schema: &DFSchema) -> Result<bool> {
-    if !(udf == average::avg_udaf().as_ref() || udf.inner().is::<TryAvgFunction>()) {
+    if !(udf == average::avg_udaf().as_ref() || udf.inner().is::<TryAvg>()) {
         return Ok(false);
     }
     match args.first() {
@@ -467,7 +469,7 @@ pub fn is_order_irrelevant_aggregate(
     if udf == sum::sum_udaf().as_ref()
         || udf == average::avg_udaf().as_ref()
         || udf.inner().is::<SparkTrySum>()
-        || udf.inner().is::<TryAvgFunction>()
+        || udf.inner().is::<TryAvg>()
     {
         let Some(arg) = args.first() else {
             return Ok(false);

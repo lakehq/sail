@@ -1,20 +1,11 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{BTreeMap, HashMap};
 
 use datafusion_common::{DataFusionError, Result};
 use parquet::basic::{Compression, GzipLevel, ZstdLevel};
 use parquet::file::properties::WriterProperties;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::variant::DEFAULT_VARIANT_INFERENCE_NODE_BUDGET;
@@ -196,6 +187,7 @@ impl IcebergWriterExecOptions {
         };
         Ok(WriterProperties::builder()
             .set_compression(compression)
+            .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
             .set_statistics_truncate_length(None)
             .set_max_row_group_bytes(Some(positive(
                 "write.parquet.row-group-size-bytes",

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Unity Catalog managed Delta table operations
 
   Background:

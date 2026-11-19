@@ -335,6 +335,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 

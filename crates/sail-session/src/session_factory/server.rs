@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::common::config::ConfigNonZeroUsize;
@@ -16,6 +18,8 @@ use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
+use sail_common_datafusion::session::shared_cte::SharedCteConfig;
+use sail_common_datafusion::session::shuffle::ShuffleWriteConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
 use sail_telemetry::telemetry::global_system_store_reader;
@@ -123,6 +127,16 @@ impl ServerSessionFactory {
             )))
             .with_extension(Arc::new(RepartitionBufferConfig::new(
                 self.config.cluster.task_stream_buffer,
+            )))
+            .with_extension(Arc::new(
+                SharedCteConfig::new(self.config.optimizer.share_cte_definitions)
+                    .with_spills_kept_rows(!matches!(
+                        self.config.mode,
+                        ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
+                    )),
+            ))
+            .with_extension(Arc::new(ShuffleWriteConfig::new(
+                self.config.cluster.shuffle_write_buffer_size,
             )))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
             .with_extension(Arc::new(DeltaTableCache::default()));

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Backend-independent typed storage access contracts and facades.
 
 use std::convert::Infallible;

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: RUF002
 """Minimal HMS smoke tests – Sail can connect to HMS and list databases."""
 

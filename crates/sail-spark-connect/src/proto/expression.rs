@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common::spec;
 use sail_sql_analyzer::data_type::parse_data_type;
 use sail_sql_analyzer::expression::{
@@ -127,7 +129,7 @@ impl TryFrom<Expression> for spec::Expr {
                 Ok(spec::Expr::Cast {
                     expr: Box::new((*expr).try_into()?),
                     cast_to_type,
-                    rename: false,
+                    naming: spec::CastNaming::Cast,
                     is_try: matches!(EvalMode::try_from(eval_mode), Ok(EvalMode::Try)),
                 })
             }

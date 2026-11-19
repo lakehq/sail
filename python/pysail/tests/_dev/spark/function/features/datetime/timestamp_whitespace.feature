@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Unformatted timestamps trim outer Spark whitespace
   Dated timestamps ignore outer ASCII whitespace and control characters.
   Trimming does not change time-only markers, internal separators, or explicit formats.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{Display, Formatter};
 use std::num::NonZeroUsize;
 use std::str::FromStr;
@@ -224,6 +226,9 @@ pub struct ClusterConfig {
     pub worker_task_slots: usize,
     pub task_launch_timeout_secs: u64,
     pub task_stream_buffer: usize,
+    pub task_stream_memory_limit: usize,
+    pub shuffle_write_buffer_size: usize,
+    pub task_stream_stall_timeout_secs: u64,
     pub task_stream_creation_timeout_secs: u64,
     pub task_max_attempts: usize,
     pub rpc_retry_strategy: RetryStrategy,
@@ -593,9 +598,11 @@ pub struct ParquetConfig {
     pub metadata_size_hint: Option<usize>,
     pub pushdown_filters: bool,
     pub reorder_filters: bool,
+    pub force_filter_selections: bool,
     pub schema_force_view_types: bool,
     pub binary_as_string: bool,
     pub max_predicate_cache_size: usize,
+    pub max_in_list_size: usize,
     pub data_page_size_limit: usize,
     pub write_batch_size: usize,
     pub writer_version: String,
@@ -605,6 +612,11 @@ pub struct ParquetConfig {
     pub dictionary_page_size_limit: usize,
     pub statistics_enabled: String,
     pub max_row_group_size: usize,
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub max_row_group_bytes: Option<usize>,
     #[serde(
         serialize_with = "serialize_non_zero",
         deserialize_with = "deserialize_non_zero"
@@ -624,7 +636,11 @@ pub struct ParquetConfig {
     pub bloom_filter_on_read: bool,
     pub bloom_filter_on_write: bool,
     pub bloom_filter_fpp: f64,
-    pub bloom_filter_ndv: u64,
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub bloom_filter_ndv: Option<u64>,
     pub allow_single_file_parallelism: bool,
     pub maximum_parallel_row_group_writers: usize,
     pub maximum_buffered_record_batches_per_stream: usize,
@@ -839,6 +855,7 @@ pub struct OptimizerConfig {
     pub enable_join_swap: bool,
     pub prefer_hash_join: bool,
     pub enable_window_topn: bool,
+    pub share_cte_definitions: bool,
     pub expand_views_at_output: bool,
 }
 
@@ -907,6 +924,16 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         password: Option<SecretString>,
+        /// Signs every request with AWS Signature Version 4, for example for the
+        /// Amazon S3 Tables or RustFS Iceberg REST endpoints.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sigv4_enabled: Option<bool>,
+        /// The SigV4 signing region. Defaults to the AWS region provider chain.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signing_region: Option<String>,
+        /// The SigV4 signing name, such as `s3tables` or `s3`. Defaults to `execute-api`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signing_name: Option<String>,
         #[serde(flatten)]
         cache: CatalogCacheConfig,
     },
@@ -1062,6 +1089,9 @@ impl ClusterConfigEnv {
         WORKER_EXTERNAL_HOST,
         WORKER_HEARTBEAT_INTERVAL_SECS,
         TASK_STREAM_BUFFER,
+        TASK_STREAM_MEMORY_LIMIT,
+        SHUFFLE_WRITE_BUFFER_SIZE,
+        TASK_STREAM_STALL_TIMEOUT_SECS,
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
         SHUFFLE_BACKEND__TYPE,

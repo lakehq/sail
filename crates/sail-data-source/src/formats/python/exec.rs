@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Execution plan for Python data source batch reads.
 //!
 //! This execution plan reads data from a Python datasource in parallel,

@@ -1,22 +1,10 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/execution.rs
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright (2025) LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/execution.rs>
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -48,6 +36,7 @@ use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{StreamExt, once};
 use object_store::ObjectStoreExt;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use sail_common_datafusion::array::record_batch::cast_array_recursively;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
@@ -988,8 +977,14 @@ impl DeltaWriterExec {
                 if actions.is_empty() {
                     // An empty CDC file also suppresses inferred changes from copied data files.
                     let file_name = format!("cdc-{}.parquet", uuid::Uuid::new_v4());
-                    let parquet =
-                        parquet::arrow::ArrowWriter::try_new(Vec::new(), writer_schema, None)?;
+                    let properties = parquet::file::properties::WriterProperties::builder()
+                        .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
+                        .build();
+                    let parquet = parquet::arrow::ArrowWriter::try_new(
+                        Vec::new(),
+                        writer_schema,
+                        Some(properties),
+                    )?;
                     let bytes = parquet.into_inner()?;
                     let size = i64::try_from(bytes.len())
                         .map_err(|error| DataFusionError::External(Box::new(error)))?;
@@ -1039,10 +1034,13 @@ impl DeltaWriterExec {
                 if cdc_actions.is_empty() {
                     // Suppress Add/Remove inference for a rewrite with no change events.
                     let file_name = format!("cdc-{}.parquet", uuid::Uuid::new_v4());
+                    let properties = parquet::file::properties::WriterProperties::builder()
+                        .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
+                        .build();
                     let parquet = parquet::arrow::ArrowWriter::try_new(
                         Vec::new(),
                         change_data_schema(&writer_schema),
-                        None,
+                        Some(properties),
                     )?;
                     let bytes = parquet.into_inner()?;
                     let size = i64::try_from(bytes.len())

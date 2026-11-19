@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Native Delta Spark commands reuse the shared procedure execution machinery.
 //!
 //! TODO: Consider Sail-only `CALL delta.describe_detail(...)`, `CALL delta.describe_history(...)`,

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Parquet TIMESTAMP values display and convert to DATE in the session time zone
   Spark shows, formats and casts TIMESTAMP values read from Parquet, which are adjusted to UTC, in the session time zone.
 

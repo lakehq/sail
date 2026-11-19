@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake Overwrite
 
   Rule: Conditional overwrite resolves mapped data columns

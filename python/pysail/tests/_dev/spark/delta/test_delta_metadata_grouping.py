@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 
 import pyarrow as pa
@@ -111,7 +113,7 @@ def test_metadata_grouping_reads_only_residual_files(spark, tmp_path, metadata_a
         Row(q=1, p="a"),
     ]
     assert frame.groupBy("v").count().orderBy("v").collect() == [Row(5, 2), Row(7, 10_006), Row(8, 2), Row(9, 2)]
-    assert frame.count() == 10_012  # noqa: PLR2004
+    assert frame.count() == 10_012
     frame.selectExpr("q AS second", "p AS first").createOrReplaceTempView("metadata_group_aliases")
     try:
         assert spark.sql(
@@ -235,8 +237,8 @@ def test_metadata_grouping_preserves_filters_limits_and_nullable_counts(spark, t
     frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
     assert frame.where("v > 1").groupBy("p").count().orderBy("p").collect() == [Row("a", 1), Row("b", 2)]
     assert frame.where("v > 1").select("p").distinct().orderBy("p").collect() == [Row("a"), Row("b")]
-    assert frame.where("p = 'a'").count() == 3  # noqa: PLR2004
-    assert sum(row[1] for row in frame.limit(2).groupBy("p").count().collect()) == 2  # noqa: PLR2004
+    assert frame.where("p = 'a'").count() == 3
+    assert sum(row[1] for row in frame.limit(2).groupBy("p").count().collect()) == 2
     assert frame.selectExpr("COUNT(v)").collect() == [Row(4)]
     assert frame.select("v").distinct().orderBy("v").collect() == [Row(None), Row(1), Row(2), Row(3), Row(4)]
 
@@ -295,7 +297,7 @@ def test_partition_filtered_grouping_reads_only_residual_files(spark, tmp_path, 
     selected = frame.where("p = 'a' OR p IS NULL")
     assert selected.groupBy("p").count().orderBy("p").collect() == [Row(None, 1), Row("a", 10_002)]
     assert selected.select("p").distinct().orderBy("p").collect() == [Row(None), Row("a")]
-    assert selected.count() == 10_003  # noqa: PLR2004
+    assert selected.count() == 10_003
     assert frame.where("q > q").groupBy("p").count().collect() == []
     assert frame.where("q > q").count() == 0
 
@@ -314,7 +316,7 @@ def test_metadata_partition_filters_compare_columns_exactly(spark, tmp_path, met
     assert sorted(row.v for row in frame.where("p > q").limit(2).collect()) == [20, 21]
     for data_file in path.rglob("*.parquet"):
         data_file.unlink()
-    assert frame.where("p > q").count() == 2  # noqa: PLR2004
+    assert frame.where("p > q").count() == 2
     assert frame.where("NOT (p <= q)").groupBy("p").count().orderBy("p").collect() == [Row(3, 1), Row(10, 1)]
 
 
@@ -339,7 +341,7 @@ def test_partition_filters_use_requested_schema(spark, tmp_path, snapshot, metad
         selected = frame.where(predicate)
         assert [row.v for row in selected.orderBy("v").collect()] == expected
         assert selected.count() == len(expected)
-    assert frame.where("p < 'abc'").count() == 4  # noqa: PLR2004
+    assert frame.where("p < 'abc'").count() == 4
     selected = frame.where("p < '2'")
     assert {
         "rows": normalize_plan_text(selected._explain_string()),  # noqa: SLF001
@@ -454,7 +456,7 @@ def test_metadata_grouping_without_num_records_scans_file(spark, tmp_path, metad
     actions[-1]["add"]["stats"] = json.dumps(stats)
     log.write_text("".join(json.dumps(action) + "\n" for action in actions))
     frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
-    assert frame.count() == 2  # noqa: PLR2004
+    assert frame.count() == 2
     assert frame.groupBy("p").count().collect() == [Row("a", 2)]
     assert frame.where("v > 1").groupBy("p").count().collect() == [Row("a", 1)]
     assert frame.selectExpr("MIN(v)", "MAX(v)").collect() == [Row(1, 2)]
@@ -495,7 +497,7 @@ def test_metadata_grouping_uses_deletion_vector_cardinality(spark, tmp_path, sna
     for vector_file in path.rglob("deletion_vector_*.bin"):
         vector_file.unlink()
     frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
-    assert frame.count() == 3  # noqa: PLR2004
+    assert frame.count() == 3
     assert frame.groupBy("p").count().orderBy("p").collect() == [Row(None, 1), Row("a", 1), Row("b", 1)]
     assert frame.select("p").distinct().orderBy("p").collect() == [Row(None), Row("a"), Row("b")]
     assert frame.where("p = 'a'").count() == 1

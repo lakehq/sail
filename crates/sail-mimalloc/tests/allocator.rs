@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::alloc::{GlobalAlloc, Layout};
 use std::error::Error;
 use std::slice;

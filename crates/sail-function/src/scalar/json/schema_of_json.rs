@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::iter::Peekable;
 use std::str::Chars;
 use std::sync::Arc;
@@ -21,27 +23,27 @@ use crate::utils::schema_inference::{
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkSchemaOfJson {
+pub struct SchemaOfJson {
     signature: Signature,
 }
 
-impl Default for SparkSchemaOfJson {
+impl Default for SchemaOfJson {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkSchemaOfJson {
+impl SchemaOfJson {
     pub const SCHEMA_OF_JSON_NAME: &'static str = "schema_of_json";
 
     pub fn new() -> Self {
-        SparkSchemaOfJson {
+        SchemaOfJson {
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
 
-impl ScalarUDFImpl for SparkSchemaOfJson {
+impl ScalarUDFImpl for SchemaOfJson {
     fn name(&self) -> &str {
         Self::SCHEMA_OF_JSON_NAME
     }
@@ -75,13 +77,13 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
 }
 
 fn schema_of_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    validation::validate_args_len(SparkSchemaOfJson::SCHEMA_OF_JSON_NAME, args)?;
+    validation::validate_args_len(SchemaOfJson::SCHEMA_OF_JSON_NAME, args)?;
     let rows = downcast_arg!(&args[0], StringArray);
     let options = if let Some(arg) = args.get(1) {
         let map_array = downcast_arg!(arg, MapArray);
-        SparkSchemaOfJsonOptions::default().map_to_options(map_array)?
+        SchemaOfJsonOptions::default().map_to_options(map_array)?
     } else {
-        SparkSchemaOfJsonOptions::default()
+        SchemaOfJsonOptions::default()
     };
     let type_ddl = if rows.is_empty() {
         return Err(DataFusionError::Execution(
@@ -92,7 +94,7 @@ fn schema_of_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         // analysis time, since the input must be a foldable, non-null value.
         return plan_err!(
             "For function `{}`, the json must not be null",
-            SparkSchemaOfJson::SCHEMA_OF_JSON_NAME
+            SchemaOfJson::SCHEMA_OF_JSON_NAME
         );
     } else if rows.value(0).is_empty() {
         "STRING".to_string()
@@ -102,7 +104,7 @@ fn schema_of_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(StringArray::from(vec![type_ddl])))
 }
 
-fn infer_json_schema_type(json_string: &str, options: &SparkSchemaOfJsonOptions) -> Result<String> {
+fn infer_json_schema_type(json_string: &str, options: &SchemaOfJsonOptions) -> Result<String> {
     if json_string.trim().is_empty() {
         return Ok("STRING".to_string());
     }
@@ -121,11 +123,11 @@ const MAX_DECIMAL_PRECISION: usize = 38;
 /// unquoted field names, and non-numeric numbers (`NaN` and `Infinity`).
 struct JsonSchemaParser<'a> {
     chars: Peekable<Chars<'a>>,
-    options: &'a SparkSchemaOfJsonOptions,
+    options: &'a SchemaOfJsonOptions,
 }
 
 impl<'a> JsonSchemaParser<'a> {
-    fn new(json: &'a str, options: &'a SparkSchemaOfJsonOptions) -> Self {
+    fn new(json: &'a str, options: &'a SchemaOfJsonOptions) -> Self {
         JsonSchemaParser {
             chars: json.chars().peekable(),
             options,
@@ -523,7 +525,7 @@ impl ModeOptions {
 }
 
 #[derive(Debug)]
-struct SparkSchemaOfJsonOptions {
+struct SchemaOfJsonOptions {
     mode: ModeOptions,
     allow_unquoted_field_names: bool,
     allow_single_quotes: bool,
@@ -534,9 +536,9 @@ struct SparkSchemaOfJsonOptions {
     infer_timestamp: bool,
 }
 
-impl Default for SparkSchemaOfJsonOptions {
+impl Default for SchemaOfJsonOptions {
     fn default() -> Self {
-        SparkSchemaOfJsonOptions {
+        SchemaOfJsonOptions {
             mode: ModeOptions::default(),
             allow_unquoted_field_names: false,
             // Spark enables `allowSingleQuotes` and `allowNonNumericNumbers`
@@ -551,7 +553,7 @@ impl Default for SparkSchemaOfJsonOptions {
     }
 }
 
-impl SparkSchemaOfJsonOptions {
+impl SchemaOfJsonOptions {
     pub fn map_to_options(mut self, map_array: &MapArray) -> Result<Self> {
         let inner_struct = map_array.value(0);
         // validate map is of type map<string, string>
@@ -598,7 +600,7 @@ impl SparkSchemaOfJsonOptions {
                 {
                     return Err(DataFusionError::NotImplemented(format!(
                         "`{}` does not support the option `{key}`",
-                        SparkSchemaOfJson::SCHEMA_OF_JSON_NAME,
+                        SchemaOfJson::SCHEMA_OF_JSON_NAME,
                     )));
                 }
                 _ => {
@@ -619,7 +621,7 @@ impl SparkSchemaOfJsonOptions {
             "false" => Ok(false),
             _ => plan_err!(
                 "Invalid boolean value `{value}` for option `{key}` in `{}`",
-                SparkSchemaOfJson::SCHEMA_OF_JSON_NAME
+                SchemaOfJson::SCHEMA_OF_JSON_NAME
             ),
         }
     }

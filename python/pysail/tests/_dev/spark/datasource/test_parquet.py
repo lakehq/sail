@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import base64
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
@@ -387,7 +389,7 @@ def test_parquet_write_with_bloom_filter(spark, tmpdir):
     spark.sql("SELECT 1").write.parquet(path)
     # The Parquet file without bloom filter is small (less than 1 kB).
     base_size = size(path)
-    assert base_size < 1024  # noqa: PLR2004
+    assert base_size < 1024
 
     path = str(tmpdir / "bloom_filter_off_explicit")
     (
@@ -397,7 +399,7 @@ def test_parquet_write_with_bloom_filter(spark, tmpdir):
         .option("bloom_filter_ndv", "10000")
         .parquet(path)
     )
-    assert size(path) < 1024  # noqa: PLR2004
+    assert size(path) < 1024
 
     path = str(tmpdir / "bloom_filter_off_implicit")
     (
@@ -407,7 +409,7 @@ def test_parquet_write_with_bloom_filter(spark, tmpdir):
         .option("bloom_filter_ndv", "10000")
         .parquet(path)
     )
-    assert size(path) < 1024  # noqa: PLR2004
+    assert size(path) < 1024
 
     path = str(tmpdir / "bloom_filter_on")
     (

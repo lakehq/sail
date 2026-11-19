@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -15,11 +17,11 @@ use datafusion_expr::{
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_common_datafusion::type_coercion::binary_type_coercion::set_operation_coercion;
-use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
-use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
-use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::array::array_transform::ArrayTransform;
+use sail_function::scalar::conversion::to_string::ToUtf8;
+use sail_function::scalar::datetime::timestamp::Timestamp;
 use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ntz_to_ltz;
-use sail_function::scalar::r#struct::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
 use sail_logical_optimizer::type_coercion::TypeCoercion;
 
 use crate::error::{PlanError, PlanResult};
@@ -40,7 +42,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<(Expr, Expr)> {
         use datafusion_common::arrow::datatypes::DataType;
         use datafusion_expr::{ScalarUDF, lit, when};
-        use sail_function::scalar::r#struct::struct_function::StructFunction;
+        use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
         let (DataType::Struct(left_fields), DataType::Struct(right_fields)) =
             (left_type, right_type)
         else {
@@ -86,7 +88,7 @@ impl PlanResolver<'_> {
                 right_values.push(field_expr(&right, field.name()));
             }
         }
-        let function = ScalarUDF::from(StructFunction::new(names));
+        let function = ScalarUDF::from(StructFromFields::new(names));
         Ok((
             when(left.is_null(), lit(ScalarValue::Null)).otherwise(function.call(left_values))?,
             when(right.is_null(), lit(ScalarValue::Null)).otherwise(function.call(right_values))?,
@@ -415,7 +417,7 @@ impl PlanResolver<'_> {
                     value.clone()
                 };
                 Expr::HigherOrderFunction(HigherOrderFunction::new(
-                    Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new())),
+                    Arc::new(HigherOrderUDF::new_from_impl(ArrayTransform::new())),
                     vec![value, Expr::Lambda(Lambda::new(vec![parameter], body))],
                 ))
             }
@@ -448,7 +450,7 @@ impl PlanResolver<'_> {
                 // Build all converted fields together. A chain of field updates
                 // would copy the whole struct once per converted field.
                 let names = source.iter().map(|field| field.name().clone()).collect();
-                let rebuilt = ScalarUDF::from(StructFunction::new(names)).call(children);
+                let rebuilt = ScalarUDF::from(StructFromFields::new(names)).call(children);
                 when(value.clone().is_null(), lit(ScalarValue::Null)).otherwise(rebuilt)?
             }
             (
@@ -465,7 +467,7 @@ impl PlanResolver<'_> {
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Timestamp(TimeUnit::Microsecond, timezone),
-            ) => ScalarUDF::from(SparkTimestamp::try_new(
+            ) => ScalarUDF::from(Timestamp::try_new(
                 timezone.clone(),
                 self.config.ansi_mode,
                 false,
@@ -475,7 +477,7 @@ impl PlanResolver<'_> {
                 DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
             ) => ScalarUDF::from(
-                SparkToUtf8::new().with_timezone(Some(self.config.session_timezone_label())),
+                ToUtf8::new().with_timezone(Some(self.config.session_timezone_label())),
             )
             .call(vec![value.clone()]),
             _ => return Ok(None),

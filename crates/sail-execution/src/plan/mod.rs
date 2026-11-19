@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+
+mod shuffle_buffer;
 mod shuffle_compact;
 mod shuffle_read;
 mod shuffle_write;

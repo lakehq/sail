@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::functions::expr_fn;
@@ -7,7 +9,7 @@ use datafusion_spark::function::hash::expr_fn as hash_fn;
 use datafusion_spark::function::hash::xxhash64::SparkXxhash64;
 use datafusion_spark::function::math::hex::SparkHex;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
+use sail_function::scalar::hash::murmur3_hash::Murmur3Hash;
 use sail_function::scalar::string::lower::LowerFunc;
 
 use crate::error::PlanResult;
@@ -40,7 +42,7 @@ pub(super) fn list_built_in_hash_functions() -> Vec<(&'static str, ScalarFunctio
 
     vec![
         ("crc32", F::unary(hash_fn::crc32)),
-        ("hash", F::udf(SparkMurmur3Hash::new())),
+        ("hash", F::udf(Murmur3Hash::new())),
         ("md5", F::unary(expr_fn::md5)),
         ("sha", F::unary(hash_fn::sha1)),
         ("sha1", F::unary(hash_fn::sha1)),

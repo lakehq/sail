@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import io
 
 import numpy as np
@@ -73,32 +75,26 @@ def test_binary_read_options(spark, tmp_path):
     (tmp_path / "test2.dat").write_bytes(b"DAT2")
 
     png_df = spark.read.format("binaryFile").option("pathGlobFilter", "*.png").load(str(tmp_path))
-    expected_png_count = 2
-    assert png_df.count() == expected_png_count
+    assert png_df.count() == 2
     paths = [row.path for row in png_df.collect()]
     assert all("png" in p for p in paths)
 
     test_df = spark.read.format("binaryFile").option("pathGlobFilter", "test*").load(str(tmp_path))
-    expected_test_count = 2
-    assert test_df.count() == expected_test_count
+    assert test_df.count() == 2
     paths = [row.path for row in test_df.collect()]
     assert all("test" in p for p in paths)
 
     dat_df = spark.read.format("binaryFile").option("pathGlobFilter", "*.dat").load(str(tmp_path))
-    expected_dat_count = 2
-    assert dat_df.count() == expected_dat_count
+    assert dat_df.count() == 2
 
     single_char_df = spark.read.format("binaryFile").option("pathGlobFilter", "image?.png").load(str(tmp_path))
-    expected_single_count = 2
-    assert single_char_df.count() == expected_single_count
+    assert single_char_df.count() == 2
 
     alternation_df = spark.read.format("binaryFile").option("pathGlobFilter", "*.{png,jpeg}").load(str(tmp_path))
-    expected_alternation_count = 3
-    assert alternation_df.count() == expected_alternation_count
+    assert alternation_df.count() == 3
 
     all_df = spark.read.format("binaryFile").load(str(tmp_path))
-    expected_all_count = 7
-    assert all_df.count() == expected_all_count
+    assert all_df.count() == 7
 
 
 def test_binary_read_projections(spark, tmp_path):

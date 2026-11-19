@@ -1,4 +1,5 @@
-// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/string/replace.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/string/replace.rs
 
 use std::sync::Arc;
 
@@ -13,10 +14,10 @@ use datafusion_expr::{
     Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,
 };
+use datafusion_functions::utils::make_scalar_function;
 use memchr::memmem;
 
-use crate::functions_strings::{GenericStringArrayBuilder, StringWriter};
-use crate::functions_utils::{make_scalar_function, utf8_to_str_type};
+use crate::utils::string::{GenericStringArrayBuilder, StringWriter, utf8_to_str_type};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ReplaceFunc {
@@ -336,7 +337,7 @@ mod tests {
     use datafusion_common::ScalarValue;
 
     use super::*;
-    use crate::functions_utils::tests::test_function;
+    use crate::scalar::string::utils::tests::test_function;
 
     #[test]
     fn test_functions() -> Result<()> {

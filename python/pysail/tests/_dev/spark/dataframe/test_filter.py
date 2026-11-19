@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import datetime
 from decimal import Decimal
 
@@ -40,7 +42,7 @@ def test_filter_missing_projection_attribute(filter_source, predicate_kind):
 
 def test_filter_missing_attribute_with_visible_alias(filter_source):
     result = filter_source.select("key", (F.col("value") + 10).alias("adjusted")).where(
-        (F.col("adjusted") == 12) & (F.col("regionality") != "DOMESTIC")  # noqa: PLR2004
+        (F.col("adjusted") == 12) & (F.col("regionality") != "DOMESTIC")
     )
     assert result.collect() == [Row(key="b", adjusted=12)]
 
@@ -50,7 +52,7 @@ def test_filter_missing_attribute_preserves_alias_precedence(filter_source, hide
     projected = filter_source.select("key", F.lit("CURRENT").alias("regionality"))
     if hide_alias:
         projected = projected.select("key")
-    result = projected.where((F.col("regionality") == "CURRENT") & (F.col("value") == 2))  # noqa: PLR2004
+    result = projected.where((F.col("regionality") == "CURRENT") & (F.col("value") == 2))
     expected = Row(key="b") if hide_alias else Row(key="b", regionality="CURRENT")
     assert result.collect() == [expected]
 
@@ -67,11 +69,11 @@ def test_filter_replaced_attribute_preserves_reference_scope(filter_source, alia
         key = "origin.key" if aliased else "key"
         projected = projected.withColumn("label", F.concat(F.col(key), F.lit("!")))
     if reference == "bound":
-        predicate = source.value == 2  # noqa: PLR2004
+        predicate = source.value == 2
     elif reference == "qualified":
-        predicate = F.col("origin.value") == 2  # noqa: PLR2004
+        predicate = F.col("origin.value") == 2
     else:
-        predicate = F.col("value") == 2  # noqa: PLR2004
+        predicate = F.col("value") == 2
 
     result = projected.where(predicate)
     expected = []
@@ -93,15 +95,15 @@ def test_filter_recovered_column_replacement_preserves_reference_scope(spark, al
     replaced = source.withColumn(replacement_name, F.col("a"))
     projected = replaced.select("a")
 
-    assert projected.where(source.b == 20).collect() == [Row(a=1)]  # noqa: PLR2004
-    assert projected.where(F.col("b") == 2).collect() == [Row(a=2)]  # noqa: PLR2004
-    assert projected.where(replaced[replacement_name] == 2).collect() == [Row(a=2)]  # noqa: PLR2004
+    assert projected.where(source.b == 20).collect() == [Row(a=1)]
+    assert projected.where(F.col("b") == 2).collect() == [Row(a=2)]
+    assert projected.where(replaced[replacement_name] == 2).collect() == [Row(a=2)]
     assert projected.where(source.a == 1).collect() == [Row(a=1)]
     if aliased:
-        assert projected.where(F.col("origin.b") == 20).collect() == [Row(a=1)]  # noqa: PLR2004
+        assert projected.where(F.col("origin.b") == 20).collect() == [Row(a=1)]
 
     with pytest.raises(AnalysisException):
-        replaced.alias("output").select("a").where(source.b == 20).collect()  # noqa: PLR2004
+        replaced.alias("output").select("a").where(source.b == 20).collect()
 
 
 @pytest.mark.parametrize("alias", ["origin", "output"])
@@ -109,7 +111,7 @@ def test_filter_recovered_column_replacement_preserves_reference_scope(spark, al
 def test_filter_replaced_attribute_preserves_explicit_alias_boundary(filter_source, alias, reference):
     source = filter_source.alias("origin")
     projected = source.withColumn("value", F.lit(100)).alias(alias)
-    predicate = (source.value if reference == "bound" else F.col("origin.value")) == 2  # noqa: PLR2004
+    predicate = (source.value if reference == "bound" else F.col("origin.value")) == 2
     if reference == "qualified" and alias == "origin":
         assert projected.where(predicate).collect() == []
     else:
@@ -121,7 +123,7 @@ def test_filter_missing_attributes_through_nested_projections(filter_source):
     result = (
         filter_source.select("key", "regionality")
         .select("key")
-        .where((F.col("value") == 2) & (F.col("regionality") != "DOMESTIC"))  # noqa: PLR2004
+        .where((F.col("value") == 2) & (F.col("regionality") != "DOMESTIC"))
     )
     assert result.collect() == [Row(key="b")]
 
@@ -223,7 +225,7 @@ def test_unaliased_derived_tables_preserve_schema(spark, grouped):
 def test_filter_missing_attribute_through_unary_plan(filter_source, operation):
     projected = filter_source.select("key", "value")
     if operation == "filter":
-        projected = projected.where(F.col("value") < 3)  # noqa: PLR2004
+        projected = projected.where(F.col("value") < 3)
     elif operation == "limit":
         projected = projected.orderBy("key").limit(1)
     elif operation == "sort":
@@ -300,7 +302,7 @@ def test_missing_input_union_rejects_input_dataframe_references(spark, by_name, 
 
     def apply(reference):
         if operation == "filter":
-            return projected.where(reference > 15)  # noqa: PLR2004
+            return projected.where(reference > 15)
         if operation == "repartition":
             return projected.repartition(1, reference)
         return getattr(projected.coalesce(1), operation)(reference)
@@ -336,8 +338,8 @@ def test_missing_input_union_preserves_composed_inputs(spark, input_kind):
     union = intermediate.union(right)
     projected = union.select("key")
     with pytest.raises(AnalysisException):
-        projected.where(intermediate.value > 15).collect()  # noqa: PLR2004
-    result = projected.where(union.value > 15)  # noqa: PLR2004
+        projected.where(intermediate.value > 15).collect()
+    result = projected.where(union.value > 15)
     expected = [Row(key=1), Row(key=3)]
     if input_kind != "limit":
         expected.append(Row(key=3))
@@ -367,7 +369,7 @@ def test_missing_input_union_preserves_shared_cte_bindings(spark, body, copies):
     source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
     result = spark.sql("WITH t AS (SELECT * FROM {source}) " + body, source=source)  # noqa: S608
     # The CTE definition remains outside the Union and retains its source binding.
-    result = result.select("key").where(source.value > 15)  # noqa: PLR2004
+    result = result.select("key").where(source.value > 15)
     assert result.collect() == [Row(key=1)] * copies
 
 
@@ -425,9 +427,9 @@ def test_missing_input_cte_rejects_stale_source_binding(spark, query, copies):
     # Repeated CTE references have fresh attributes in Spark. The source binding
     # in the definition must not silently bind to those new attributes.
     with pytest.raises(AnalysisException):
-        projected.where(source.value > 15).collect()  # noqa: PLR2004
+        projected.where(source.value > 15).collect()
     for reference in (result.value, F.col("value")):
-        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        recovered = projected.where(reference > 15)
         assert recovered.collect() == [Row(key=1)] * copies
         assert recovered.schema == projected.schema
 
@@ -447,7 +449,7 @@ def test_missing_input_cte_rejects_stale_source_binding(spark, query, copies):
 def test_missing_input_cte_preserves_distinct_column_bindings(spark, query):
     source = spark.createDataFrame([(1, 20), (2, 10)], "key int, value int")
     projected = spark.sql(query, source=source).select("key")
-    result = projected.where(source.value > 15)  # noqa: PLR2004
+    result = projected.where(source.value > 15)
     assert result.collect() == [Row(key=1)]
     assert result.schema == projected.schema
 
@@ -458,7 +460,7 @@ def test_missing_input_cte_preserves_aliased_dataframe_bindings(spark):
     left, right = source.alias("left"), source.alias("right")
     result = spark.sql("WITH t AS (SELECT * FROM {left}), u AS (SELECT * FROM {right}) TABLE u", left=left, right=right)
     projected = result.select("key")
-    recovered = projected.where(right.value > 15)  # noqa: PLR2004
+    recovered = projected.where(right.value > 15)
     assert recovered.collect() == [Row(key=1)]
     assert recovered.schema == projected.schema
 
@@ -480,10 +482,10 @@ def test_missing_input_sql_union_rejects_stale_source_binding(spark, query):
     result = spark.sql(query, source=source)
     projected = result.select("key")
     with pytest.raises(AnalysisException):
-        projected.where(source.value > 15).collect()  # noqa: PLR2004
+        projected.where(source.value > 15).collect()
     expected = result.where("value > 15").select("key").collect()
     for reference in (result.value, F.col("value")):
-        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        recovered = projected.where(reference > 15)
         assert recovered.collect() == expected
         assert recovered.schema == projected.schema
 
@@ -541,9 +543,9 @@ def test_missing_input_sql_cte_preserves_attribute_identity(spark, query, ambigu
     projected = result.select("key")
     if ambiguous and reference == "source":
         with pytest.raises(AnalysisException):
-            projected.where(value > 15).collect()  # noqa: PLR2004
+            projected.where(value > 15).collect()
     else:
-        recovered = projected.where(value > 15)  # noqa: PLR2004
+        recovered = projected.where(value > 15)
         assert recovered.collect() == [Row(key=1)] * copies
         assert recovered.schema == projected.schema
 
@@ -567,7 +569,7 @@ def test_missing_input_parameter_view_join_bindings(spark, source_kind, projecte
     expected = sorted(result.where("value > 15").select("key").collect())
     # Only the selected instance survives the projection, so Spark binds the source to it.
     for reference in (source.value, result.value, F.col("value")):
-        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        recovered = projected.where(reference > 15)
         assert sorted(recovered.collect()) == expected
         assert recovered.schema == projected.schema
 
@@ -603,7 +605,7 @@ def test_missing_input_subquery_ambiguity_preserves_outer_binding(spark, query):
     result = spark.sql(query, source=source)
     projected = result.select("key")
     for reference in (source.value, result.value, F.col("value")):
-        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        recovered = projected.where(reference > 15)
         assert recovered.collect() == [Row(key=1)]
         assert recovered.schema == projected.schema
 
@@ -635,7 +637,7 @@ def test_missing_input_reused_relation_schema(spark, query, copies):
     result = spark.sql(query, source=source)
     projected = result.select("key", "payload")
     for reference in (result.value, F.col("value")):
-        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        recovered = projected.where(reference > 15)
         assert recovered.collect() == [Row(key=1, payload=Row(x="a"))] * copies
         assert recovered.schema == StructType([schema["key"], schema["payload"]])
 
@@ -684,7 +686,7 @@ def test_missing_input_self_join_resolves_selected_ancestor(spark, kind, side):
     # Spark only considers the source attributes that survive to the filter input,
     # so the source binds to the selected side of the self join.
     for reference in (source.value, selected.value, result.value, F.col("value")):
-        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        recovered = projected.where(reference > 15)
         assert recovered.collect() == [Row(key=1)] * copies
         assert recovered.schema == projected.schema
 
@@ -714,7 +716,7 @@ def test_missing_input_source_attribute_identity(spark, operation, side, referen
         if reference == "unqualified"
         else F.col("value")
     )
-    filtered = projected.where(value > 15)  # noqa: PLR2004
+    filtered = projected.where(value > 15)
     if reference == "unqualified":
         with pytest.raises(AnalysisException):
             filtered.collect()
@@ -731,7 +733,7 @@ def test_missing_input_source_root_uses_case_sensitive_resolver(spark, case_sens
     try:
         source = spark.createDataFrame([(1, 20, 30), (2, 10, 40)], "key int, value int, VALUE int")
         projected = source.drop("VALUE").select("key")
-        result = projected.where(source[name] > 15)  # noqa: PLR2004
+        result = projected.where(source[name] > 15)
         if not case_sensitive or name == "VaLuE":
             with pytest.raises(AnalysisException):
                 result.collect()
@@ -751,7 +753,7 @@ def test_missing_input_set_operation_resolves_left_ancestor(spark, operation):
     expected = [Row(key=1)] if operation.startswith("intersect") else []
     # The set operation outputs only its left input, so the source binds to it.
     for reference in (source.value, left.value, result.value, F.col("value")):
-        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        recovered = projected.where(reference > 15)
         assert recovered.collect() == expected
         assert recovered.schema == projected.schema
 
@@ -786,7 +788,7 @@ def test_ambiguous_ancestor_stays_ambiguous_next_to_another_instance(spark, oper
         assert nested.drop(source.value).columns == ["key"]
         return
     joined = nested.join(source, "key")
-    result = joined.select(source.value) if consumer == "select" else joined.where(source.value > 15)  # noqa: PLR2004
+    result = joined.select(source.value) if consumer == "select" else joined.where(source.value > 15)
     with pytest.raises(AnalysisException):
         result.collect()
 
@@ -812,8 +814,8 @@ def test_renamed_copy_does_not_make_ancestor_ambiguous(spark, operation, values,
     if consumer == "select":
         assert sorted(nested.select(source.value).collect()) == [Row(value=v) for v in values]
     elif consumer == "where":
-        keys = [v // 10 for v in values if v > 15]  # noqa: PLR2004
-        assert sorted(nested.where(source.value > 15).select("key").collect()) == [Row(key=k) for k in keys]  # noqa: PLR2004
+        keys = [v // 10 for v in values if v > 15]
+        assert sorted(nested.where(source.value > 15).select("key").collect()) == [Row(key=k) for k in keys]
     else:
         assert sorted(nested.drop(source.value).collect()) == [Row(key=v // 10) for v in values]
 
@@ -847,7 +849,7 @@ def test_cte_reference_join_keeps_definition_binding(spark):
     result = spark.sql(
         "WITH t AS (SELECT * FROM {s}) SELECT a.key, a.value FROM t a JOIN {s} b ON a.key = b.key", s=source
     )
-    assert sorted(result.where(source.value > 15).collect()) == [Row(key=2, value=20), Row(key=3, value=30)]  # noqa: PLR2004
+    assert sorted(result.where(source.value > 15).collect()) == [Row(key=2, value=20), Row(key=3, value=30)]
 
 
 def test_union_hides_ambiguous_ancestor_from_another_instance(spark):
@@ -865,7 +867,7 @@ def test_union_rejects_input_dataframe_columns(spark, operation):
     union = left.union(right)
 
     def apply(reference):
-        return union.where(reference > 15) if operation == "where" else getattr(union, operation)(reference)  # noqa: PLR2004
+        return union.where(reference > 15) if operation == "where" else getattr(union, operation)(reference)
 
     # A Union is a leaf for DataFrame column lookup, so the input DataFrames'
     # columns do not resolve against the Union output even though the names match.
@@ -895,12 +897,12 @@ def test_missing_input_cte_body_binding(spark, query, valid, copies):
     result = spark.sql(query, source=source)
     projected = result.select("key")
     if valid:
-        assert projected.where(source.value > 15).collect() == [Row(key=1)]  # noqa: PLR2004
+        assert projected.where(source.value > 15).collect() == [Row(key=1)]
     else:
         with pytest.raises(AnalysisException):
-            projected.where(source.value > 15).collect()  # noqa: PLR2004
+            projected.where(source.value > 15).collect()
     for reference in (result.value, F.col("value")):
-        recovered = projected.where(reference > 15)  # noqa: PLR2004
+        recovered = projected.where(reference > 15)
         assert recovered.collect() == [Row(key=1)] * copies
         assert recovered.schema == projected.schema
 
@@ -1101,7 +1103,7 @@ def test_filter_missing_attribute_keeps_bindings_above_invalid_descendant(spark)
     "predicate",
     [
         pytest.param(
-            lambda: F.coalesce(F.col("s"), F.col("s"))[F.col("k")] == 2,  # noqa: PLR2004
+            lambda: F.coalesce(F.col("s"), F.col("s"))[F.col("k")] == 2,
             marks=COLUMN_SELECTOR_MARK,
         ),
         lambda: "coalesce(s, s)[k] = 2",
@@ -1179,7 +1181,7 @@ def test_filter_native_struct_update_discards_invalid_descendant(spark, update):
         child = F.col("s").withField("x", F.col("a").cast("int"))
     # Spark resolves these native expressions before extracting `y`, so the missing
     # field discards the intermediate struct binding and recovers the older struct.
-    result = projected.where(child["y"] == 9)  # noqa: PLR2004
+    result = projected.where(child["y"] == 9)
     assert result.collect() == [Row(a=7)]
     assert result.schema == projected.schema
 
@@ -1300,7 +1302,7 @@ def test_filter_descendant_fallback_discards_multiple_failed_outputs(spark):
         .select(F.lit(41).alias("x"), F.lit(42).alias("x"))
         .select(F.lit(51).alias("z"), F.lit(52).alias("z"))
         .select(F.lit(1).alias("keep"))
-        .where((F.col("x").outer() == 1) & (F.col("z").outer() == 2))  # noqa: PLR2004
+        .where((F.col("x").outer() == 1) & (F.col("z").outer() == 2))
     )
     assert outer.where(inner.exists()).collect() == [Row(x=1, z=2)]
 
@@ -1497,7 +1499,7 @@ def test_filter_missing_attribute_ignores_sampling_auxiliaries(spark, with_repla
     expected = sampled.collect()
     assert expected
 
-    result = sampled.where(F.col(name) == 100)  # noqa: PLR2004
+    result = sampled.where(F.col(name) == 100)
 
     assert result.collect() == expected
     assert result.schema == sampled.schema
@@ -1512,7 +1514,7 @@ def test_filter_missing_attribute_ignores_stratified_sampling_auxiliary(spark, p
     expected = sampled.collect()
     assert expected
 
-    result = sampled.where(F.col("rand_value") == 100)  # noqa: PLR2004
+    result = sampled.where(F.col("rand_value") == 100)
 
     assert result.collect() == expected
     assert result.schema == sampled.schema
@@ -1550,7 +1552,7 @@ def filter_temp_view(spark, filter_source, request):
 
 def test_filter_temp_view_rejects_attribute_removed_before_registration(spark, filter_temp_view):
     with pytest.raises(AnalysisException):
-        spark.table(filter_temp_view).where(F.col("value") == 2).collect()  # noqa: PLR2004
+        spark.table(filter_temp_view).where(F.col("value") == 2).collect()
 
 
 def test_filter_temp_view_recovers_attribute_removed_after_read(spark, filter_temp_view):
@@ -1607,7 +1609,7 @@ PARAMETERIZED_BOUNDARY_IDS = [
 @pytest.mark.parametrize(
     "operation",
     [
-        lambda df: df.where(F.col("b") == 20),  # noqa: PLR2004
+        lambda df: df.where(F.col("b") == 20),
         lambda df: df.repartition(2, "b"),
         lambda df: df.coalesce(1).sortWithinPartitions(F.col("b").desc()),
     ],
@@ -1632,7 +1634,7 @@ def test_filter_parameterized_query_preserves_correlated_attribute(spark, query)
     outer = spark.createDataFrame([(1, 10), (2, 20)], "a int, b int")
     inner = spark.sql(query, args={"p": 1})
     # The column b is hidden by the query output, so b refers to the outer row.
-    predicate = (F.col("a") == F.col("o.a").outer()) & (F.col("b") == 20)  # noqa: PLR2004
+    predicate = (F.col("a") == F.col("o.a").outer()) & (F.col("b") == 20)
     assert outer.alias("o").where(inner.where(predicate).exists()).select("a").collect() == [Row(a=2)]
 
 
@@ -1758,14 +1760,14 @@ def test_filter_unpivot_rejects_removed_input_attribute(spark):
     source = spark.createDataFrame([(1, 10, 20), (2, 30, 40)], "id int, a int, b int")
     unpivoted = source.unpivot("id", ["a", "b"], "variable", "value")
     with pytest.raises(AnalysisException):
-        unpivoted.where(F.col("a") == 10).collect()  # noqa: PLR2004
+        unpivoted.where(F.col("a") == 10).collect()
 
 
 def test_filter_unpivot_recovers_projected_output_attributes(spark):
     source = spark.createDataFrame([(1, 10, 20), (2, 30, 40)], "id int, a int, b int")
     unpivoted = source.unpivot("id", ["a", "b"], "variable", "value")
     projected = unpivoted.select("id")
-    result = projected.where((F.col("variable") == "a") & (F.col("value") == 10))  # noqa: PLR2004
+    result = projected.where((F.col("variable") == "a") & (F.col("value") == 10))
     assert result.collect() == [Row(id=1)]
     assert result.schema == projected.schema
 
@@ -1788,7 +1790,7 @@ def test_filter_missing_attribute_ignores_internal_auxiliaries(spark, operation,
         source = source.orderBy("id")
         generated = F.row_number().over(Window.orderBy("id"))
     projected = source.select(generated.alias("generated"))
-    predicate = F.col("") == 100  # noqa: PLR2004
+    predicate = F.col("") == 100
 
     if has_empty_column:
         expected = projected.collect()

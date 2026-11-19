@@ -1,9 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 import json
 
 import pytest
 
 from pysail.testing._dev.spark.steps.iceberg import _find_latest_metadata
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
 @pytest.fixture(params=["parquet", "delta", "iceberg"])
@@ -39,6 +42,31 @@ def _storage_schema(metadata, fmt):
     if fmt == "delta":
         return json.loads(metadata["schemaString"])
     return next(s for s in metadata["schemas"] if s["schema-id"] == metadata["current-schema-id"])
+
+
+@pytest.mark.parametrize("fmt", ["parquet", "delta", "iceberg"])
+def test_ctas_persists_comments(spark, tmp_path, fmt):
+    table = "default.ctas_comments"
+    location = escape_sql_string_literal(str(tmp_path))
+    try:
+        for command, comment, value in [("CREATE", "initial docs", 1), ("CREATE OR REPLACE", "updated docs", 2)]:
+            spark.sql(
+                f"{command} TABLE {table} USING {fmt} LOCATION '{location}' COMMENT '{comment}' AS SELECT {value} AS id"
+            )
+            spark.sql(f"CREATE TABLE IF NOT EXISTS {table} USING {fmt} COMMENT 'ignored' AS SELECT 3 AS id")
+            spark.sql(f"COMMENT ON COLUMN {table}.id IS 'identifier'")
+            description = spark.sql(f"DESCRIBE TABLE EXTENDED {table}").collect()
+            assert next(row.data_type for row in description if row.col_name == "Comment") == comment
+            assert next(row.comment for row in description if row.col_name == "id") == "identifier"
+            assert [row.id for row in spark.table(table).collect()] == [value]
+            metadata = _storage_metadata(tmp_path, fmt)
+            if fmt == "delta":
+                assert metadata["description"] == comment
+                assert "comment" not in metadata["configuration"]
+            elif fmt == "iceberg":
+                assert metadata["properties"]["comment"] == comment
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
 def test_comment_lifecycle(spark, comment_table):

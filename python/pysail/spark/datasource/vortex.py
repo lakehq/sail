@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Vortex data source for Sail, backed by the ``vortex-data`` Python library.
 
 Supports ``spark.read.format("vortex")`` with filter pushdown and

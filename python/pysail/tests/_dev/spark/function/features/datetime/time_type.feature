@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: TIME data type support
 
   Rule: TIME literal syntax

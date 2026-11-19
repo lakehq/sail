@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 @spark-4.0
 Feature: schema_of_xml infers a DDL schema from a literal XML document
 

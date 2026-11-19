@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::Float64Array;
@@ -9,7 +11,7 @@ use datafusion_expr::{
 use rand::rng;
 use rand_distr::{Distribution, StandardNormal};
 
-use super::xorshift::SparkXorShiftRandom;
+use super::utils::xorshift::XorShiftRandom;
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -71,7 +73,7 @@ impl ScalarUDFImpl for Randn {
                     ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => 0,
                     _ => return exec_err!("`randn` expects an integer seed, got {scalar}"),
                 };
-                let mut rng = SparkXorShiftRandom::new(seed);
+                let mut rng = XorShiftRandom::new(seed);
                 let values = std::iter::repeat_with(|| rng.next_gaussian()).take(number_rows);
                 let array = Float64Array::from_iter_values(values);
                 Ok(ColumnarValue::Array(Arc::new(array)))

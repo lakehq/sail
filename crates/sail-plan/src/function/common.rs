@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
@@ -12,7 +14,7 @@ use datafusion_expr::{
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
-use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
+use sail_function::scalar::variant::cast_to_variant::CastToVariant;
 use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
 
 use crate::config::PlanConfig;
@@ -503,7 +505,7 @@ pub fn expr_contains_spark_cast_to_variant(body: &expr::Expr) -> PlanResult<bool
         Ok(matches!(
             expression,
             expr::Expr::ScalarFunction(function)
-                if function.func.inner().is::<SparkCastToVariant>()
+                if function.func.inner().is::<CastToVariant>()
         ))
     })?)
 }

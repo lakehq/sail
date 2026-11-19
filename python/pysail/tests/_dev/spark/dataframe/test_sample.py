@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from collections import Counter
 
 import pyspark.sql.functions as F  # noqa: N812
@@ -107,7 +109,7 @@ def test_dataframe_sample_accepts_spark_rounding_tolerance(spark):
         1.0000005,
         with_replacement=False,
     )
-    assert sampled.count() == 10  # noqa: PLR2004
+    assert sampled.count() == 10
 
 
 def test_dataframe_sample_rejects_fraction_beyond_spark_rounding_tolerance(spark):
@@ -166,6 +168,6 @@ def test_seeded_sample_pattern_differs_across_batches(
         42,
     )
     picked = [row.id for row in sampled.collect()]
-    first_batch = Counter(i for i in picked if i < 1024)  # noqa: PLR2004
-    second_batch = Counter(i - 1024 for i in picked if i >= 1024)  # noqa: PLR2004
+    first_batch = Counter(i for i in picked if i < 1024)
+    second_batch = Counter(i - 1024 for i in picked if i >= 1024)
     assert first_batch != second_batch

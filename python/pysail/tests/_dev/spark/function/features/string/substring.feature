@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: substring() and substr() extract substrings
 
   Rule: Basic usage with positive positions (1-based)

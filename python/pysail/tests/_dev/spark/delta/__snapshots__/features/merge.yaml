@@ -8,17 +8,17 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 4178
+    numAddedBytes: 4150
     numAddedFiles: 4
     numFiles: 4
-    numOutputBytes: 4178
+    numOutputBytes: 4150
     numOutputFiles: 4
     numOutputRows: 4
-    numRemovedBytes: 1070
+    numRemovedBytes: 1063
     numRemovedFiles: 1
     numSourceRows: 2
-    numTargetBytesAdded: 4178
-    numTargetBytesRemoved: 1070
+    numTargetBytesAdded: 4150
+    numTargetBytesRemoved: 1063
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0
@@ -1291,6 +1291,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -3394,14 +3397,14 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 743
+    numAddedBytes: 736
     numAddedFiles: 1
     numFiles: 1
-    numOutputBytes: 743
+    numOutputBytes: 736
     numOutputFiles: 1
     numOutputRows: 1
     numSourceRows: 2
-    numTargetBytesAdded: 743
+    numTargetBytesAdded: 736
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0
@@ -3497,15 +3500,15 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 966
+    numAddedBytes: 959
     numAddedFiles: 2
     numFiles: 1
-    numOutputBytes: 966
+    numOutputBytes: 959
     numOutputFiles: 1
     numOutputRows: 1
     numRemovedFiles: 1
     numSourceRows: 2
-    numTargetBytesAdded: 966
+    numTargetBytesAdded: 959
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 1
     numTargetDeletionVectorsRemoved: 0
@@ -3606,17 +3609,17 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 3091
+    numAddedBytes: 3070
     numAddedFiles: 3
     numFiles: 3
-    numOutputBytes: 3091
+    numOutputBytes: 3070
     numOutputFiles: 3
     numOutputRows: 3
-    numRemovedBytes: 1059
+    numRemovedBytes: 1052
     numRemovedFiles: 1
     numSourceRows: 2
-    numTargetBytesAdded: 3091
-    numTargetBytesRemoved: 1059
+    numTargetBytesAdded: 3070
+    numTargetBytesRemoved: 1052
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0
@@ -3655,17 +3658,17 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 3944
+    numAddedBytes: 3923
     numAddedFiles: 3
     numFiles: 3
-    numOutputBytes: 3944
+    numOutputBytes: 3923
     numOutputFiles: 3
     numOutputRows: 4
-    numRemovedBytes: 1293
+    numRemovedBytes: 1286
     numRemovedFiles: 1
     numSourceRows: 3
-    numTargetBytesAdded: 3944
-    numTargetBytesRemoved: 1293
+    numTargetBytesAdded: 3923
+    numTargetBytesRemoved: 1286
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0
@@ -3757,17 +3760,17 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 2945
+    numAddedBytes: 2924
     numAddedFiles: 3
     numFiles: 3
-    numOutputBytes: 2945
+    numOutputBytes: 2924
     numOutputFiles: 3
     numOutputRows: 3
-    numRemovedBytes: 1017
+    numRemovedBytes: 1010
     numRemovedFiles: 1
     numSourceRows: 3
-    numTargetBytesAdded: 2945
-    numTargetBytesRemoved: 1017
+    numTargetBytesAdded: 2924
+    numTargetBytesRemoved: 1010
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0

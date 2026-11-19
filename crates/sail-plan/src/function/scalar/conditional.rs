@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, TimeUnit};
@@ -6,10 +8,10 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
-use sail_function::scalar::conversion::spark_cast_string_to_int32::SparkCastStringToInt32;
-use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
-use sail_function::scalar::datetime::spark_date::SparkDate;
-use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::conversion::cast_string_to_int32::CastStringToInt32;
+use sail_function::scalar::conversion::to_string::ToUtf8;
+use sail_function::scalar::datetime::date::Date;
+use sail_function::scalar::datetime::timestamp::Timestamp;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
@@ -240,7 +242,7 @@ fn coerce_string_temporal_values(
                     .zip(data_types)
                     .map(|(arg, data_type)| {
                         if is_temporal_type(&data_type) {
-                            ScalarUDF::from(SparkToUtf8::new()).call(vec![arg])
+                            ScalarUDF::from(ToUtf8::new()).call(vec![arg])
                         } else {
                             arg
                         }
@@ -270,11 +272,11 @@ fn coerce_to_temporal(
     }
     if is_string_type(data_type) {
         match target_type {
-            DataType::Date32 => Ok(ScalarUDF::from(SparkDate::new(false)).call(vec![arg])),
+            DataType::Date32 => Ok(ScalarUDF::from(Date::new(false)).call(vec![arg])),
             // This is only reached when ANSI mode requires a temporal common type.
             DataType::Timestamp(_, timezone) => {
                 Ok(
-                    ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), true, false)?)
+                    ScalarUDF::from(Timestamp::try_new(timezone.clone(), true, false)?)
                         .call(vec![arg]),
                 )
             }
@@ -354,7 +356,7 @@ fn nullifzero(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             let value = if ansi_mode {
                 cast(arg.clone(), DataType::Int64)
             } else {
-                ScalarUDF::from(SparkCastStringToInt32::new()).call(vec![arg.clone()])
+                ScalarUDF::from(CastStringToInt32::new()).call(vec![arg.clone()])
             };
             value.eq(lit(0_i32))
         }

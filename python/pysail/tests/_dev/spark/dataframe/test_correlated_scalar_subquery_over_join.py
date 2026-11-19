@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """A correlated scalar aggregate with an inequality over a join returns one value per outer row.
 
 Expected values were verified on JVM Spark 4.2.0.

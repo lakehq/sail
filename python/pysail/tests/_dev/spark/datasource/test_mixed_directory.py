@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Spark-parity behavior when reading a directory that contains a mix of
 file types and hidden marker files.
 

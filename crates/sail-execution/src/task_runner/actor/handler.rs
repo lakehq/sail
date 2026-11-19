@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
@@ -12,7 +14,7 @@ use tokio::sync::oneshot;
 
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskAttempt, TaskKey, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskAttempt, TaskKey, TaskStreamKey, TaskStreamKeySet, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
@@ -166,21 +168,27 @@ impl TaskRunnerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_probe_pending_local_stream(&mut self, key: TaskStreamKey) -> ActorAction {
-        self.extensions.local_streams.fail_stream_if_pending(&key);
+    pub(super) fn handle_probe_pending_local_stream(
+        &mut self,
+        key: TaskStreamKey,
+        probe: usize,
+    ) -> ActorAction {
+        self.extensions
+            .local_streams
+            .fail_stream_if_pending(&key, probe);
         ActorAction::Continue
     }
 
     pub(super) fn handle_create_local_stream(
         &mut self,
-        key: TaskStreamKey,
+        key: TaskKey,
+        channels: usize,
         replicas: usize,
+        bounded: bool,
         schema: Arc<Schema>,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
-        if self.tasks.is_job_closed(key.job_id)
-            || self.tasks.is_canceled(&TaskKey::from(key.clone()))
-        {
+        if self.tasks.is_job_closed(key.job_id) || self.tasks.is_canceled(&key) {
             let _ = result.send(Err(ExecutionError::InvalidArgument(
                 "task or job has been canceled".into(),
             )));
@@ -189,7 +197,7 @@ impl TaskRunnerActor {
         let _ = result.send(
             self.extensions
                 .local_streams
-                .create_stream(key, replicas, schema),
+                .create_stream(&key, channels, replicas, bounded, schema),
         );
         ActorAction::Continue
     }
@@ -268,22 +276,22 @@ impl TaskRunnerActor {
             TaskRunnerPlacement::Worker { driver, .. } => {
                 let client = driver.flight.clone();
                 ctx.spawn(async move {
-                    let _ = result.send(client.fetch_task_stream(key, schema).await);
+                    let _ = result.send(client.fetch_task_streams(key.into(), schema).await);
                 });
             }
         }
         ActorAction::Continue
     }
 
-    pub(super) fn handle_fetch_worker_stream(
+    pub(super) fn handle_fetch_worker_streams(
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        if self.tasks.is_job_closed(key.job_id) {
+        if self.tasks.is_job_closed(keys.job_id) {
             let _ = result.send(Err(ExecutionError::InvalidArgument(
                 "task or job has been canceled".into(),
             )));
@@ -294,9 +302,9 @@ impl TaskRunnerActor {
                 let driver = driver.clone();
                 ctx.spawn(async move {
                     let _ = driver
-                        .send(DriverMessage::FetchWorkerStream {
+                        .send(DriverMessage::FetchWorkerStreams {
                             worker_id,
-                            key,
+                            keys,
                             schema,
                             result,
                         })
@@ -307,12 +315,12 @@ impl TaskRunnerActor {
                 worker_id: this_worker_id,
                 ..
             } if worker_id == *this_worker_id => {
-                let _ = result.send(self.extensions.local_streams.fetch_stream(ctx, &key));
+                let _ = result.send(self.extensions.local_streams.fetch_streams(ctx, &keys));
             }
             TaskRunnerPlacement::Worker { peers, .. } => match peers.get_client_set(worker_id) {
                 Ok(client) => {
                     ctx.spawn(async move {
-                        let _ = result.send(client.flight.fetch_task_stream(key, schema).await);
+                        let _ = result.send(client.flight.fetch_task_streams(keys, schema).await);
                     });
                 }
                 Err(error) => {
@@ -324,19 +332,19 @@ impl TaskRunnerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_fetch_local_stream(
+    pub(super) fn handle_fetch_local_streams(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        key: TaskStreamKey,
+        keys: TaskStreamKeySet,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        if self.tasks.is_job_closed(key.job_id) {
+        if self.tasks.is_job_closed(keys.job_id) {
             let _ = result.send(Err(ExecutionError::InvalidArgument(
                 "task or job has been canceled".into(),
             )));
             return ActorAction::Continue;
         }
-        let _ = result.send(self.extensions.local_streams.fetch_stream(ctx, &key));
+        let _ = result.send(self.extensions.local_streams.fetch_streams(ctx, &keys));
         ActorAction::Continue
     }
 

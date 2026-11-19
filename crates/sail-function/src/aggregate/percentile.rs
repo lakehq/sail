@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -15,7 +17,9 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use ordered_float::OrderedFloat;
 use sail_common_datafusion::literal::LiteralValue;
 
-/// The `PercentileFunction` calculates the exact percentile (quantile) from a set of values.
+use super::utils::percentile::{duration_none, interval_none, match_string_type};
+
+/// The `Percentile` calculates the exact percentile (quantile) from a set of values.
 ///
 /// Unlike `approx_percentile_cont`, this function calculates the exact percentile by:
 /// 1. Collecting all values
@@ -33,25 +37,25 @@ use sail_common_datafusion::literal::LiteralValue;
 /// - Interval types -> returns the same interval type
 /// - Duration types -> returns the same duration type
 #[derive(PartialEq, Eq, Hash)]
-pub struct PercentileFunction {
+pub struct Percentile {
     signature: Signature,
 }
 
-impl Debug for PercentileFunction {
+impl Debug for Percentile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PercentileFunction")
+        f.debug_struct("Percentile")
             .field("signature", &self.signature)
             .finish()
     }
 }
 
-impl Default for PercentileFunction {
+impl Default for Percentile {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PercentileFunction {
+impl Percentile {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
@@ -59,7 +63,7 @@ impl PercentileFunction {
     }
 }
 
-impl AggregateUDFImpl for PercentileFunction {
+impl AggregateUDFImpl for Percentile {
     fn name(&self) -> &str {
         "percentile"
     }

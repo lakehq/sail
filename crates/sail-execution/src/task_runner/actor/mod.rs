@@ -1,7 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod core;
 mod handler;
 mod message;
 mod options;
+#[cfg(test)]
+mod tests;
 
 use std::collections::HashMap;
 

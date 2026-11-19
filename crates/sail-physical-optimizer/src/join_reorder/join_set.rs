@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Sub, SubAssign};
 
@@ -8,7 +10,7 @@ const MAX_RELATIONS: usize = 64;
 
 /// Represents a set of relations using a u64 bitset.
 /// This is sufficient for most queries. For more relations, u128 or bitvec can be used.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct JoinSet(u64);
 
 impl JoinSet {

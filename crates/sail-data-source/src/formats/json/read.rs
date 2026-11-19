@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::io::BufReader;
 use std::sync::Arc;
 
@@ -42,6 +44,9 @@ impl ReadFormat for JsonReadFormat {
         Ok(infer_listing_compression(files)?.unwrap_or(CompressionTypeVariant::UNCOMPRESSED))
     }
 
+    // SPDX-SnippetBegin
+    // SPDX-License-Identifier: Apache-2.0
+    // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-json/src/file_format.rs
     async fn infer_schema(
         &self,
         _ctx: &dyn Session,
@@ -104,6 +109,7 @@ impl ReadFormat for JsonReadFormat {
         };
         Ok(Arc::new(schema))
     }
+    // SPDX-SnippetEnd
 
     async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
         let mut options = self
@@ -172,6 +178,9 @@ fn canonicalize_inferred_field(field: &Field) -> Option<Field> {
     )
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/eae7bf4fa1c037c0a065d1f36d0669f5bb97a9cf/datafusion/datasource-json/src/file_format.rs
 /// A tuple of (Schema, records_consumed) where records_consumed is the number of records that were
 /// processed for schema inference.
 fn infer_schema_from_json_array<R: std::io::Read>(
@@ -190,3 +199,4 @@ fn infer_schema_from_json_array<R: std::io::Read>(
     }))?;
     Ok((schema, count))
 }
+// SPDX-SnippetEnd

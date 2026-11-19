@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
@@ -7,7 +9,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_expr::expr::{BinaryExpr, Cast};
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::{Expr, LogicalPlan, Operator};
-use sail_function::scalar::conversion::spark_float_to_decimal::SparkFloatToDecimal;
+use sail_function::scalar::conversion::float_to_decimal::FloatToDecimal;
 
 /// Restore the plain cast for strict FLOAT or DOUBLE to DECIMAL correlation keys of
 /// `IN` and `EXISTS` subqueries that native decorrelation cannot pull up.
@@ -115,7 +117,7 @@ fn strict_cast(expression: &Expr) -> Option<Expr> {
     let decimal = function
         .func
         .inner()
-        .downcast_ref::<SparkFloatToDecimal>()
+        .downcast_ref::<FloatToDecimal>()
         .filter(|function| !function.null_on_overflow())?;
     match function.args.as_slice() {
         [column @ Expr::Column(_)] => Some(Expr::Cast(Cast::new(
@@ -150,7 +152,7 @@ mod tests {
     }
 
     fn key(null_on_overflow: bool) -> Expr {
-        ScalarUDF::from(SparkFloatToDecimal::new(10, 2, null_on_overflow))
+        ScalarUDF::from(FloatToDecimal::new(10, 2, null_on_overflow))
             .call(vec![col("d")])
             .eq(out_ref_col(DataType::Decimal128(10, 2), "k"))
     }

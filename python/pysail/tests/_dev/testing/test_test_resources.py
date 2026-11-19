@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Exercise resource discovery and deterministic PySpark assignment."""
 
 import json
@@ -293,7 +295,7 @@ def test_repeated_resource_names_must_agree_on_weight(affinity_tests, second_wei
         def test_example(first, second): pass
     """
     )
-    if second_weight == 10:  # noqa: PLR2004
+    if second_weight == 10:
         assert collect_affinities(affinity_tests) == {"test_repeated.py::test_example": ["resource", "cluster"]}
     else:
         result = affinity_tests.runpytest("--collect-only", "-q")

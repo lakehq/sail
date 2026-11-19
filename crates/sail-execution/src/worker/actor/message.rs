@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::borrow::Cow;
 
 use sail_common::telemetry::{SpanAssociation, SpanAttribute};

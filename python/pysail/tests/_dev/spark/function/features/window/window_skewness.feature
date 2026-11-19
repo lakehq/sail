@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: skewness and kurtosis over window functions
 
   Rule: skewness over expanding window

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use super::managed;
 
 pub const ICEBERG_TABLE_TYPE_KEY: &str = managed::TABLE_TYPE_KEY;

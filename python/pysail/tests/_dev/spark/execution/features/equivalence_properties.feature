@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Equivalence properties in distributed query plans
   Rule: Equivalence properties for window aggregation
     The physical optimizer may simplify sorting in the window specification

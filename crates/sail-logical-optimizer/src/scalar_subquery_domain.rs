@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
@@ -6,7 +8,7 @@ use datafusion_common::{Column, Result};
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator};
-use sail_function::scalar::conversion::spark_float_to_decimal::SparkFloatToDecimal;
+use sail_function::scalar::conversion::float_to_decimal::FloatToDecimal;
 use sail_logical_plan::seeded_random::{SeededRandomNode, is_reproducible_seeded_random_call};
 
 /// Evaluate non-equality scalar aggregates over the distinct outer values.
@@ -364,7 +366,7 @@ pub(crate) fn cast_column(expression: &Expr) -> Option<&Column> {
             if function
                 .func
                 .inner()
-                .downcast_ref::<SparkFloatToDecimal>()
+                .downcast_ref::<FloatToDecimal>()
                 .is_some_and(|function| !function.null_on_overflow()) =>
         {
             function.args.first()?
@@ -453,8 +455,7 @@ mod tests {
     fn strict_float_to_decimal_cast_is_a_correlation_key() {
         let equality = |null_on_overflow| {
             binary_expr(
-                ScalarUDF::from(SparkFloatToDecimal::new(10, 2, null_on_overflow))
-                    .call(vec![col("d")]),
+                ScalarUDF::from(FloatToDecimal::new(10, 2, null_on_overflow)).call(vec![col("d")]),
                 Operator::Eq,
                 out_ref_col(DataType::Decimal128(10, 2), "k"),
             )

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: try_to_date (never-throwing variant of to_date)
   # try_to_date parses a string to a date and "always returns null on an invalid input
   # with/without ANSI SQL mode enabled" (DESCRIBE FUNCTION EXTENDED, Spark 4.2.0,

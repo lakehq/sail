@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import json
@@ -464,9 +466,7 @@ def delta_log_json_file_contains(
 
     assert datatable is not None, "expected a datatable: | path | value |"
     header, *rows = datatable
-    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PLR2004 PT018
-        "expected datatable with columns: | path | value |"
-    )
+    assert header == ["path", "value"], "expected datatable with columns: | path | value |"
     for row in rows:
         if not row or len(row) < 2:  # noqa: PLR2004
             continue
@@ -729,9 +729,7 @@ def checkpoint_parquet_contains_add_fields(
 
     assert datatable is not None, "expected a datatable: | path | value |"
     header, *dtable_rows = datatable
-    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PLR2004 PT018
-        "expected datatable with columns: | path | value |"
-    )
+    assert header == ["path", "value"], "expected datatable with columns: | path | value |"
     for drow in dtable_rows:
         if not drow or len(drow) < 2:  # noqa: PLR2004
             continue

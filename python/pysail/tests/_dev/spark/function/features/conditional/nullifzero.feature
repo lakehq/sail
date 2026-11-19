@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: nullifzero output schema
 
   @function(nullability)
