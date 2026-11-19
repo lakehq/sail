@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Attribute identity in column resolution
 
   Scenario: Repeated CTE references allow duplicate occurrences of the same attribute

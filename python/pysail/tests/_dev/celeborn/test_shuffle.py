@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Integration tests for the Celeborn shuffle client actor."""
 
 from __future__ import annotations
@@ -16,7 +18,9 @@ from pysail.testing._dev.utils.proxy import (
     ConnectionOpened,
     ConnectionRule,
     FrameReceived,
+    FrameRule,
     ProxyEvent,
+    Replace,
     RuleApplied,
 )
 
@@ -35,6 +39,7 @@ _DATA = b"hello Celeborn"
 _REPLICATION_WORKER_COUNT = 2
 _MAX_RECOVERY_TIME_SECONDS = 2
 _MULTI_EPOCH_WORKER_COUNT = 2
+_OPEN_STREAM_MESSAGE_TYPE = 51
 
 
 def _add_drop_next_connection(proxies: dict[str, EndpointProxy]) -> None:
@@ -197,6 +202,104 @@ def test_shuffle_client_commits_after_all_mappers_end(
     shuffle_client.mapper_end(3, 1, 0, 2)
     assert b"".join(shuffle_client.read_partition_stream(3, 0)) == b"first mapsecond map"
     lifecycle_manager.unregister_shuffle(3)
+
+
+@pytest.mark.parametrize("compression", ["none", "lz4", pytest.param("zstd(1)", id="zstd")])
+def test_shuffle_client_uses_native_batch_headers(
+    celeborn_master: MasterService,
+    celeborn_push_endpoint_resolver: object,
+    celeborn_push_proxies: dict[str, EndpointProxy],
+    compression: str,
+) -> None:
+    """Batch metadata matches the native integers read by the Java client and worker."""
+    from pysail import _native
+
+    with (
+        _native._celeborn.LifecycleManager(  # noqa: SLF001
+            [f"{celeborn_master.host}:{celeborn_master.port}"],
+            f"sail-celeborn-native-batch-headers-{compression}",
+            endpoint_resolver=celeborn_push_endpoint_resolver,
+            compression=compression,
+        ) as manager,
+        _native._celeborn.ShuffleClient(manager) as client,  # noqa: SLF001
+    ):
+        client.register_shuffle(1, [0], False, 1)
+        batches = [b"first batch" * 128, b"second batch" * 128]
+        for batch in batches:
+            client.push_data(1, 0, 1, 2, batch)
+        client.mapper_end(1, 0, 0, 2)
+        client.mapper_end(1, 1, 2, 2)
+
+        frames = [
+            event.frame
+            for proxy in celeborn_push_proxies.values()
+            for event in proxy.events.snapshot()
+            if isinstance(event, FrameReceived)
+            and event.direction == "client_to_server"
+            and isinstance(event.frame, CelebornFrame)
+            and event.frame.message_type == CelebornMessageType.PUSH_DATA
+        ]
+        assert len(frames) == len(batches)
+        for batch_id, frame in enumerate(frames):
+            # '=' uses native byte order with four-byte integers and no alignment padding.
+            assert struct.unpack_from("=4i", frame.body) == (1, 2, batch_id, len(frame.body) - 16)
+        assert list(client.read_partition_stream(1, 0)) == batches
+
+
+@pytest.mark.parametrize("compression", ["none", "lz4", pytest.param("zstd(1)", id="zstd")])
+def test_shuffle_client_reads_a_sorted_map_range(
+    celeborn_master: MasterService,
+    celeborn_fetch_endpoint_resolver: object,
+    celeborn_fetch_proxies: dict[str, EndpointProxy],
+    compression: str,
+) -> None:
+    """A range read forces the worker to interpret batch headers while sorting the file."""
+    from pysail import _native
+
+    def select_middle_map(event: FrameReceived[CelebornFrame]) -> Replace[CelebornFrame]:
+        frame = event.frame
+        # Append PbOpenStream.startIndex=1 and endIndex=2. The last value of a singular
+        # protobuf field overrides the original value, so the worker sorts and filters maps.
+        payload = frame.body[8:] + b"\x18\x01\x20\x02"
+        body = struct.pack(">ii", _OPEN_STREAM_MESSAGE_TYPE, len(payload)) + payload
+        return Replace(
+            CelebornFrame(
+                frame.message_type,
+                frame.metadata[:8] + struct.pack(">i", len(body)),
+                body,
+            )
+        )
+
+    rule = FrameRule(
+        frame_type=CelebornFrame,
+        condition=lambda event: (
+            event.direction == "client_to_server"
+            and event.frame.message_type == CelebornMessageType.RPC_REQUEST
+            and struct.unpack_from(">i", event.frame.body)[0] == _OPEN_STREAM_MESSAGE_TYPE
+        ),
+        action=select_middle_map,
+    )
+    for proxy in celeborn_fetch_proxies.values():
+        proxy.rules.add(rule)
+
+    with (
+        _native._celeborn.LifecycleManager(  # noqa: SLF001
+            [f"{celeborn_master.host}:{celeborn_master.port}"],
+            f"sail-celeborn-sorted-map-range-{compression}",
+            endpoint_resolver=celeborn_fetch_endpoint_resolver,
+            compression=compression,
+        ) as manager,
+        _native._celeborn.ShuffleClient(manager) as client,  # noqa: SLF001
+    ):
+        client.register_shuffle(1, [0], False, 1)
+        # Write out of map order so sorting must use map IDs as well as batch lengths.
+        for map_id in [2, 0, 1]:
+            for batch_id in range(2):
+                client.push_data(1, 0, map_id, map_id + 1, f"map {map_id} batch {batch_id}".encode() * 128)
+            client.mapper_end(1, map_id, map_id + 1, 3)
+
+        assert b"".join(client.read_partition_stream(1, 0)) == b"map 1 batch 0" * 128 + b"map 1 batch 1" * 128
+        assert _event_count(celeborn_fetch_proxies, RuleApplied) == 1
 
 
 def test_shuffle_client_replicates_data(

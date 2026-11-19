@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 from nturl2path import url2pathname as windows_url2pathname
 from pathlib import Path

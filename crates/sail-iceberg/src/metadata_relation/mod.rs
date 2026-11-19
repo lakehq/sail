@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Iceberg metadata relations.
 
 pub(crate) mod files;

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: min and max aggregate functions
 
   Rule: extrema are duplicate agnostic

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::{DataFusionError, Result, plan_err};
 use datafusion::execution::TaskContext;

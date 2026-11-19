@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: TIMESTAMP_NTZ compares with Parquet TIMESTAMP columns in the session time zone
   Spark casts a TIMESTAMP_NTZ value compared with a TIMESTAMP value to TIMESTAMP in the session time zone, also when
   the TIMESTAMP column is read from a Parquet file whose values are adjusted to UTC. CASE, COALESCE and UNION widen

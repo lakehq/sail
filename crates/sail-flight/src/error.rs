@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::error::DataFusionError;
 
 /// Flight SQL error types.

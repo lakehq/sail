@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """DataFrame API tests for Unity Catalog managed Delta tables."""
 

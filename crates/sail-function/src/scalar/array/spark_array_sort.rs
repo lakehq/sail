@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// Spark-compatible `array_sort(array, comparator)` higher-order function.
 ///
 /// Unlike `filter`/`transform` (element-wise maps evaluated once over the

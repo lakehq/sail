@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// Port of Java's `java.util.Random` linear congruential generator.
 ///
 /// Produces the same sequence as `new java.util.Random(seed)` in Java/Spark.

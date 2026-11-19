@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// DataSource implementation for Python data sources.
 ///
 /// This enables Python data sources to be used with `spark.read.format("name")` syntax

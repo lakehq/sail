@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::logical_expr::LogicalPlan;
 use sail_common::spec;
 
@@ -20,12 +22,14 @@ impl PlanResolver<'_> {
         match plan {
             spec::Plan::Query(query) => {
                 let plan = self.resolve_query_plan(query, &mut state).await?;
+                let plan = Self::scan_shared_cte_definitions(plan, &state, true)?;
                 let plan = Self::preserve_order_sensitive_aggregate_sorts(plan)?;
                 let fields = Some(Self::get_field_names(plan.schema(), &state)?);
                 Ok(NamedPlan { plan, fields })
             }
             spec::Plan::Command(command) => {
                 let plan = self.resolve_command_plan(command, &mut state).await?;
+                let plan = Self::scan_shared_cte_definitions(plan, &state, true)?;
                 let plan = Self::preserve_order_sensitive_aggregate_sorts(plan)?;
                 Ok(NamedPlan { plan, fields: None })
             }

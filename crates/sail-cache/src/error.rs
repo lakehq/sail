@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use sail_common::error::CommonError;
 use thiserror::Error;
 pub type CacheResult<T> = Result<T, CacheError>;

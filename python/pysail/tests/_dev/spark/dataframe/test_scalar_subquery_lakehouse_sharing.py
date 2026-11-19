@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Repeated aggregate scalar subqueries over Delta and Iceberg tables.
 
 Each table has two versions (snapshots), and is partitioned by `p` or not. Count, min and max
@@ -13,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from pysail.testing.spark.utils.common import shares_deterministic_ctes
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="Sail physical plans")
@@ -91,8 +94,9 @@ def test_repeated_aggregates_through_a_cte_share_one_result(spark, lake_table, v
     )
     s = stats(ROWS[version], where)
     assert tuple(df.collect()[0]) == (s["n"], s["n"], s["hi"], s["hi"], s["lo"])
-    # One result for each distinct body, and one data scan for each when a filter is left over.
-    assert plan_counts(df) == ([3], 0 if metadata_complete(where, partitioned) else 3)
+    # One result for each distinct body, and one data scan for the shared CTE when a filter is left over.
+    scans = 0 if metadata_complete(where, partitioned) else (1 if shares_deterministic_ctes() else 3)
+    assert plan_counts(df) == ([3], scans)
 
 
 @pytest.mark.parametrize("where", list(FILTERS))

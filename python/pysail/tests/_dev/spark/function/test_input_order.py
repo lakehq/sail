@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Input-order preservation cases that are NOT expressible as SQL feature scenarios.
 
 The SQL-expressible majority of the old ``test_input_order.txt`` doctests now lives in

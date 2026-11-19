@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
 
   # Spark `pmod(a, b)` returns the positive remainder of `a / b` (always in

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: from_json function parses JSON strings into structured types
 
   Rule: Basic struct parsing

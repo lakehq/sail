@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Memory catalog database drop semantics
 
   Scenario: Drop non-empty memory database without CASCADE rejects and keeps objects

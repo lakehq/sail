@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::catalog::Session;
 use datafusion_common::parsers::CompressionTypeVariant;
 use sail_common_datafusion::datasource::OptionLayer;

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: String literals on arrays of structs select a field of every element
 
   Rule: The field is selected by name

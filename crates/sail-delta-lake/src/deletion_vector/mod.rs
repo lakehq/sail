@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Deletion Vector support for Delta Lake Merge-on-Read operations.
 
 mod bitmap;

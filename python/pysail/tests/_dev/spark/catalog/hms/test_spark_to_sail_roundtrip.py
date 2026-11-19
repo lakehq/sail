@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608, TC002
 """Spark -> Sail roundtrip tests through a shared HMS metastore.
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Fixtures for native Iceberg REST catalog integration tests."""
 
 from __future__ import annotations

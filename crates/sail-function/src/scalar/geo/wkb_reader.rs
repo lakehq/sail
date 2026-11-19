@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 const BYTE_SIZE: usize = 1;
 const INT_SIZE: usize = 4;
 const DOUBLE_SIZE: usize = 8;

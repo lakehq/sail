@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from datetime import date, datetime, timezone
 
 import pyspark.sql.functions as F  # noqa: N812

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """SQL and HTTP contract tests for Sail's async Jev functions."""
 
 import json

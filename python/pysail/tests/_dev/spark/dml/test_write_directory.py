@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pandas as pd
 from pandas.testing import assert_frame_equal
 

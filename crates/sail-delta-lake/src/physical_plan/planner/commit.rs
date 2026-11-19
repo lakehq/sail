@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Shared helpers for assembling the tail of a row-level operation physical plan.
 //!
 //! Both DELETE and MERGE produce the same pipeline shape:

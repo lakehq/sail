@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::types::{PyString, PyTuple};
 use pyo3::{Bound, BoundObject, IntoPyObject, PyAny, PyResult, intern};

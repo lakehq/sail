@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: regexp_replace() replaces regular expression matches
 
   Rule: Capture replacement

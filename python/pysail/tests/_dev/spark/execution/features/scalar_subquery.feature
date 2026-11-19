@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Scalar subqueries in distributed execution
   Scenario: Sampling auxiliaries do not shadow correlated outer attributes
     When query

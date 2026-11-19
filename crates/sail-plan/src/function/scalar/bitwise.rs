@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn::abs;
 use datafusion_expr::{ExprSchemable, Operator, cast, expr, lit, when};

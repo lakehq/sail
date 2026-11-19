@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 @function(lambda)
 Feature: forall higher-order function
 

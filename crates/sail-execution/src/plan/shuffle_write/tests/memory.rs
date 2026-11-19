@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Checks that a shuffle write with many output channels and few rows for each of them
 //! holds memory in proportion to its input rather than to its channels and batch size.
 

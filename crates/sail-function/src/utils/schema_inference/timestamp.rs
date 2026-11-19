@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use chrono::{NaiveDate, NaiveTime};
 use sail_common_datafusion::utils::datetime::SparkZone;
 

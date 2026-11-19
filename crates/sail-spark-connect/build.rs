@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Build script that generates Rust from the .proto files.
 //! and also converts json to Rust constants.
 

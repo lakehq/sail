@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Snapshot annotations stay operation-scoped across REST publication."""
 
 # ruff: noqa: T201

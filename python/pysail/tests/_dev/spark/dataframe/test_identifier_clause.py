@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for IDENTIFIER clause with parameterized SQL (named SQL parameters)."""
 
 import pytest

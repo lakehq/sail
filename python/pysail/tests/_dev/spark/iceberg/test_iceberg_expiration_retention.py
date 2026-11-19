@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # SPDX-FileAttributionText: Adapted from https://github.com/apache/iceberg/blob/212aa894e919ff9fdf89160da4aadcbe6858ac01/core/src/test/java/org/apache/iceberg/TestRemoveSnapshots.java#L342-L594
 
 # ruff: noqa: S608

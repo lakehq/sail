@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_common::Result;
 
 use super::parser::parse_datetime_pattern;

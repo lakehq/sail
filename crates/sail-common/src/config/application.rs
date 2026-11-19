@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{Display, Formatter};
 use std::num::NonZeroUsize;
 use std::str::FromStr;
@@ -842,6 +844,7 @@ pub struct OptimizerConfig {
     pub enable_join_swap: bool,
     pub prefer_hash_join: bool,
     pub enable_window_topn: bool,
+    pub share_cte_definitions: bool,
     pub expand_views_at_output: bool,
 }
 

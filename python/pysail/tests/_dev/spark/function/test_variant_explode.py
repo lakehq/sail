@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Coverage for the Spark Connect table-valued-function relation, using `variant_explode`.
 
 A table-valued function returns a relation rather than a value, so it is called in a `FROM`

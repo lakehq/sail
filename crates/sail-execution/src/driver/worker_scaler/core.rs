@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use log::warn;
 
 use crate::driver::worker_scaler::state::{WorkerDemand, WorkerDemandState};

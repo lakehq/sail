@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for seeding random functions once per partition, as Spark does.
 
 The expected values were verified on JVM Spark 4.2.0. They depend on the partition of each row,

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// Spark-compatible `exists(array, predicate)` higher-order function.
 ///
 /// Spark semantics (`ArrayExists`, three-valued logic — the modern default):

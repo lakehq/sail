@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Interval strings use the target qualifiers in casts and CSV
 
   Scenario Outline: Qualified interval strings parse in casts and CSV: <case>

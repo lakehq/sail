@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: unary minus (negative) honors ANSI overflow semantics
 
   Rule: Negating the minimum integral value overflows

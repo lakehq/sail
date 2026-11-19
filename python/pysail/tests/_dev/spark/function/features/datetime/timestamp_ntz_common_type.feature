@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: TIMESTAMP_NTZ mixed with TIMESTAMP uses the session time zone
   Spark casts TIMESTAMP_NTZ values mixed with TIMESTAMP values to TIMESTAMP in the session time zone.
   The Parquet table is written in UTC, so its TIMESTAMP column is labeled with UTC rather than the session time zone.

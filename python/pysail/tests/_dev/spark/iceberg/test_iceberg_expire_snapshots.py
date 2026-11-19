@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 # Semantic cases: Apache Iceberg 1.12 TestRemoveSnapshots and TestExpireSnapshotsProcedure.
 # NULL IDs and missing-file counts confirmed with Spark 4.1.4 + Iceberg 1.12.0.

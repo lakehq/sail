@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::DataType;
 // TODO: https://github.com/apache/spark/tree/master/common/utils/src/main/resources/error
 use datafusion_common::{DataFusionError, exec_datafusion_err, internal_datafusion_err};

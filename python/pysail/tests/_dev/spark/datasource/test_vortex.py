@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for the Vortex Python DataSource.
 
 Requires the ``vortex-data`` package to be installed.

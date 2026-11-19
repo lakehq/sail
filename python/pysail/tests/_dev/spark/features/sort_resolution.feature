@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Sort reference resolution
   Scenario Outline: Sort expressions combine visible aliases with aggregate arguments
     When query

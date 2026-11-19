@@ -1027,6 +1027,26 @@
     memory usage and runtime. The top-k operator does not support spilling to disk.
   experimental: true
 
+- key: optimizer.share_cte_definitions
+  type: boolean
+  default: "true"
+  description: |
+    Whether the references to a CTE can share one evaluation of the CTE.
+    If the value is `true`, a CTE that is referenced more than once is planned and
+    evaluated once for the references that read the same rows of it, when the CTE is
+    non-deterministic (so that every reference sees the same values), when it refers to
+    another CTE that is referenced more than once (so that nested CTEs are not evaluated
+    repeatedly), or when it holds its output before returning it (for example, an
+    aggregation or a sort), so that the rows kept for a reference that reads it later are
+    no more than what evaluating it holds anyway. A CTE of another kind is shared only
+    if every reference is the build side of a hash join, which holds the rows that it
+    reads, and is evaluated for each reference otherwise. Sharing a CTE of the last two
+    kinds can keep one more copy of the output of the CTE in memory than evaluating it
+    for each reference. With a memory limit, only the first two kinds are shared if
+    temporary files are disabled or in cluster mode.
+    If the value is `false`, the CTE is planned and evaluated for each reference.
+  experimental: true
+
 - key: optimizer.expand_views_at_output
   type: boolean
   default: "true"

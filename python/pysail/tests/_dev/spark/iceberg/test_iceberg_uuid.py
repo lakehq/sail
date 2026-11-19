@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """UUID is a Sail SQL extension; Spark rejects UUID DDL."""
 
 # ruff: noqa: S608

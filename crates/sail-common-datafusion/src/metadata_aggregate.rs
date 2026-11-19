@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Exact aggregate evaluation over a format-owned, fixed set of logical rows.
 use std::collections::HashSet;
 use std::sync::Arc;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 #![expect(clippy::expect_used)]
 
 use object_store::ObjectStoreExt;

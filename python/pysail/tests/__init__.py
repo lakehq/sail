@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for Sail.
 
 Sanity tests verify that an installed release works as expected. They are included

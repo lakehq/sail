@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Public row-batch reader for system tables.
 
 use tokio::sync::mpsc;
