@@ -59,6 +59,9 @@ pub mod r#gen {
         UserDefinedType,
         #[serde(rename = "TABLE_TYPE", alias = "table_type")]
         TableType,
+        /// A type name that is not known to the client (e.g. `GEOGRAPHY`), as it is on the wire.
+        #[serde(untagged)]
+        Unknown(String),
     }
 
     impl std::fmt::Display for ColumnTypeName {
@@ -86,6 +89,7 @@ pub mod r#gen {
                 Self::Null => "NULL",
                 Self::UserDefinedType => "USER_DEFINED_TYPE",
                 Self::TableType => "TABLE_TYPE",
+                Self::Unknown(name) => name,
             };
             f.write_str(value)
         }

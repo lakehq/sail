@@ -10,6 +10,7 @@ use sail_catalog::lakehouse::{
     DeltaRatifiedCommit, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
     LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest,
     LakehouseCreateMaterialization, LakehouseCreatePlan, LakehouseCreateRequest,
+    LakehouseResolvedTable, ResolveLakehouseTableRequest, resolve_lakehouse_table_status,
 };
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
@@ -33,6 +34,9 @@ use crate::r#gen::ApiClient;
 use crate::{delta_gen, r#gen};
 
 pub(crate) const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalog";
+
+/// The path of the Unity Catalog API in a workspace.
+pub(crate) const WORKSPACE_API_PATH: &str = "/api/2.1/unity-catalog";
 
 /// The highest version of the Unity Catalog Delta REST API supported by the client.
 const DELTA_API_PROTOCOL_VERSIONS: &str = "1.0";
@@ -449,6 +453,7 @@ impl UnityCatalogProvider {
         table_info: r#gen::TableInfo,
         catalog_name: &str,
         schema_name: &str,
+        require_columns: bool,
     ) -> CatalogResult<TableStatus> {
         let r#gen::TableInfo {
             catalog_name: table_catalog_name,
@@ -506,17 +511,19 @@ impl UnityCatalogProvider {
                 {
                     partition_by.push(col_name.to_string());
                 }
+                let name = name.unwrap_or_default();
+                let data_type = unity_type_to_data_type(
+                    type_name.map(|type_name| *type_name),
+                    type_json,
+                    type_text,
+                    type_precision,
+                    type_scale,
+                    type_interval_type,
+                )?;
                 Ok(TableColumnStatus {
                     metadata: Default::default(),
-                    name: name.unwrap_or_default(),
-                    data_type: unity_type_to_data_type(
-                        type_name.map(|type_name| *type_name),
-                        type_json,
-                        type_text,
-                        type_precision,
-                        type_scale,
-                        type_interval_type,
-                    )?,
+                    name,
+                    data_type,
                     nullable: nullable.unwrap_or(true),
                     comment,
                     default: None,
@@ -527,11 +534,24 @@ impl UnityCatalogProvider {
                     is_cluster: false,
                 })
             })
-            .collect::<CatalogResult<Vec<_>>>()?;
+            // All the columns are visited for the partition columns.
+            .collect::<Vec<_>>()
+            .into_iter()
+            .collect::<CatalogResult<Vec<_>>>();
 
         let format = data_source_format
             .map(|f| f.to_string().to_lowercase())
             .unwrap_or_else(|| "delta".to_string());
+
+        let columns = match columns {
+            Ok(columns) => columns,
+            // The schema of a Delta table is in its transaction log, and the table is
+            // resolved with the schema of the log if the catalog columns are missing.
+            // So the columns that cannot be converted do not fail the table.
+            // They do not fail the table list either, which does not need the columns.
+            Err(_) if format == "delta" || !require_columns => vec![],
+            Err(e) => return Err(e),
+        };
 
         let mut properties: HashMap<String, String> = properties
             .map(|p| p.0.into_iter().collect())
@@ -706,23 +726,28 @@ impl CatalogProvider for UnityCatalogProvider {
                 )));
             }
         };
-        let result = client.list_schemas(catalog_name.clone(), None, None).await;
-
-        match result {
-            Ok(response) => {
-                let list_response = response.inner;
-                Ok(list_response
+        let mut output = vec![];
+        let mut page_token = None;
+        loop {
+            let response = client
+                .list_schemas(catalog_name.clone(), None, page_token)
+                .await
+                .map_err(|e| CatalogError::External(format!("Failed to list schemas: {e}")))?
+                .inner;
+            output.extend(
+                response
                     .schemas
                     .unwrap_or_default()
                     .into_iter()
                     .map(|schema_info| {
                         self.schema_info_to_database_status(schema_info, &catalog_name, None)
-                    })
-                    .collect())
+                    }),
+            );
+            // A page can be empty while there are more pages.
+            page_token = response.next_page_token.filter(|token| !token.is_empty());
+            if page_token.is_none() {
+                return Ok(output);
             }
-            Err(e) => Err(CatalogError::External(format!(
-                "Failed to list schemas: {e}"
-            ))),
         }
     }
 
@@ -936,7 +961,7 @@ impl CatalogProvider for UnityCatalogProvider {
         match result {
             Ok(response) => {
                 let table_info = response.inner;
-                self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
+                self.table_info_to_table_status(table_info, &catalog_name, &schema_name, true)
             }
             Err(e)
                 if mode.ignore_if_exists()
@@ -972,7 +997,7 @@ impl CatalogProvider for UnityCatalogProvider {
         match result {
             Ok(response) => {
                 let table_info = response.inner;
-                self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
+                self.table_info_to_table_status(table_info, &catalog_name, &schema_name, true)
             }
             Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {
                 Err(CatalogError::NotFound(
@@ -992,25 +1017,27 @@ impl CatalogProvider for UnityCatalogProvider {
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
 
-        let result = client
-            .list_tables(catalog_name.clone(), schema_name.clone(), None, None)
-            .await;
-
-        match result {
-            Ok(response) => {
-                let list_response = response.inner;
-                list_response
-                    .tables
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|table_info| {
-                        self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
-                    })
-                    .collect::<CatalogResult<Vec<_>>>()
+        let mut output = vec![];
+        let mut page_token = None;
+        loop {
+            let response = client
+                .list_tables(catalog_name.clone(), schema_name.clone(), None, page_token)
+                .await
+                .map_err(|e| CatalogError::External(format!("Failed to list tables: {e}")))?
+                .inner;
+            for table_info in response.tables.unwrap_or_default() {
+                output.push(self.table_info_to_table_status(
+                    table_info,
+                    &catalog_name,
+                    &schema_name,
+                    false,
+                )?);
             }
-            Err(e) => Err(CatalogError::External(format!(
-                "Failed to list tables: {e}"
-            ))),
+            // A page can be empty while there are more pages.
+            page_token = response.next_page_token.filter(|token| !token.is_empty());
+            if page_token.is_none() {
+                return Ok(output);
+            }
         }
     }
 
@@ -1060,6 +1087,23 @@ impl CatalogProvider for UnityCatalogProvider {
             LakehouseCapability::CatalogCommit,
             LakehouseCapability::DeltaRatifiedCommits,
         ]
+    }
+
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let status = self.get_table(database, table).await?;
+        ensure_table_access(&status)?;
+        Ok(resolve_lakehouse_table_status(
+            self.get_name(),
+            request.catalog_table,
+            &status,
+            request.operation,
+            &self.lakehouse_capabilities(),
+        ))
     }
 
     fn create_table_metadata_requirement(
@@ -1321,6 +1365,7 @@ impl CatalogProvider for UnityCatalogProvider {
         request: DeltaRatifiedCommitRequest,
     ) -> CatalogResult<DeltaRatifiedCommitResponse> {
         let status = self.get_table(database, table).await?;
+        ensure_table_access(&status)?;
         let (format, location, properties) = match &status.kind {
             TableKind::Table {
                 format,
@@ -1388,7 +1433,7 @@ impl CatalogProvider for UnityCatalogProvider {
                 }
             }
             DeltaCommitApi::Preview => {
-                let request = r#gen::DeltaGetCommits {
+                let legacy_request = r#gen::DeltaGetCommits {
                     end_version: request.end_version,
                     start_version: request.start_version,
                     table_id: table_id.to_string(),
@@ -1398,7 +1443,7 @@ impl CatalogProvider for UnityCatalogProvider {
                     .get_client()
                     .await
                     .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
-                match client.get_commits(request).await {
+                match client.get_commits(legacy_request).await {
                     Ok(response) => {
                         let response = response.inner;
                         return Ok(DeltaRatifiedCommitResponse {
@@ -1416,7 +1461,38 @@ impl CatalogProvider for UnityCatalogProvider {
                                 .collect(),
                         });
                     }
-                    Err(e) => (e.status(), e.to_string()),
+                    Err(e) => {
+                        // A server can have the Delta REST API without its configuration
+                        // endpoint, and then refuse the legacy API for the table.
+                        // So the table is loaded via the Delta REST API once, which is
+                        // used for the catalog from then on if the table is loaded.
+                        if matches!(
+                            e.status(),
+                            Some(
+                                reqwest::StatusCode::UNAUTHORIZED
+                                    | reqwest::StatusCode::FORBIDDEN
+                                    | reqwest::StatusCode::NOT_FOUND
+                            )
+                        ) && let Ok(response) = delta_client
+                            .load_table(
+                                catalog_name.clone(),
+                                schema_name.clone(),
+                                table.to_string(),
+                            )
+                            .await
+                        {
+                            self.delta_commit_api_cache()?
+                                .insert(catalog_name.clone(), DeltaCommitApi::V1);
+                            return delta_ratified_commits_from_load_table(
+                                response.inner,
+                                table,
+                                table_id,
+                                request.start_version,
+                                request.end_version,
+                            );
+                        }
+                        (e.status(), e.to_string())
+                    }
                 }
             }
         };
@@ -1883,6 +1959,39 @@ fn contains_variant_type(data_type: &DataType) -> bool {
     }
 }
 
+/// Fails for the Unity Catalog objects that are not accessible as tables.
+///
+/// Views are not tables, and Databricks does not let external engines access
+/// the data of materialized views, streaming tables, and foreign tables.
+/// Such objects are still returned as catalog metadata.
+fn ensure_table_access(status: &TableStatus) -> CatalogResult<()> {
+    let TableKind::Table { properties, .. } = &status.kind else {
+        return Ok(());
+    };
+    let table_type = properties
+        .iter()
+        .find(|(key, _)| key == "table_type")
+        .map(|(_, value)| value.as_str());
+    match table_type {
+        Some(
+            table_type @ ("VIEW" | "MATERIALIZED_VIEW" | "METRIC_VIEW" | "STREAMING_TABLE"
+            | "FOREIGN"),
+        ) => {
+            let mut names = status
+                .database
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            names.push(&status.name);
+            Err(CatalogError::NotSupported(format!(
+                "Unity Catalog object {} of type {table_type} cannot be read or written as a table",
+                quote_names_if_needed(&names),
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
 fn parse_data_source_format(format: &str) -> CatalogResult<r#gen::DataSourceFormat> {
     match format.trim().to_ascii_uppercase().as_str() {
         "DELTA" => Ok(r#gen::DataSourceFormat::Delta),
@@ -1908,7 +2017,7 @@ mod tests {
         LakehouseFormat, LakehouseOperation, ScanAuthority,
     };
     use secrecy::ExposeSecret;
-    use wiremock::matchers::{method, path, path_regex, query_param};
+    use wiremock::matchers::{method, path, path_regex, query_param, query_param_is_missing};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
@@ -1949,7 +2058,10 @@ mod tests {
         let config = UnityCatalogConfig::new(None, &None, Some(options)).unwrap();
         assert!(config.bearer_token.is_some());
         assert_eq!(config.bearer_token.unwrap().expose_secret(), "test_token");
-        assert_eq!(config.uri, "https://test.databricks.com");
+        assert_eq!(
+            config.uri,
+            "https://test.databricks.com/api/2.1/unity-catalog"
+        );
     }
 
     #[test]
@@ -1973,7 +2085,10 @@ mod tests {
         );
 
         let config = UnityCatalogConfig::new(None, &None, Some(options)).unwrap();
-        assert_eq!(config.uri, "https://test.databricks.com");
+        assert_eq!(
+            config.uri,
+            "https://test.databricks.com/api/2.1/unity-catalog"
+        );
         assert_eq!(config.client_id, Some("test_client_id".to_string()));
         assert!(config.client_secret.is_some());
         assert_eq!(config.authority_id, Some("test_tenant".to_string()));
@@ -2052,7 +2167,10 @@ mod tests {
 
         assert_eq!(provider.name, "test");
         assert_eq!(provider.options.default_catalog, "test_catalog");
-        assert_eq!(provider.options.uri, "https://test.databricks.com");
+        assert_eq!(
+            provider.options.uri,
+            "https://test.databricks.com/api/2.1/unity-catalog"
+        );
     }
 
     fn mock_provider(server: &MockServer, default_catalog: &str) -> UnityCatalogProvider {
@@ -2255,8 +2373,7 @@ mod tests {
 
         let mut options = HashMap::new();
         options.insert("databricks_token".to_string(), "secret-token".to_string());
-        options.insert("databricks_host".to_string(), server.uri());
-        let config = UnityCatalogConfig::new(None, &None, Some(options)).unwrap();
+        let config = UnityCatalogConfig::new(Some(server.uri()), &None, Some(options)).unwrap();
         let provider =
             UnityCatalogProvider::new("test".to_string(), options_from_config("main", config))
                 .unwrap();
@@ -2366,10 +2483,10 @@ mod tests {
 
         let mut tables = response.tables.unwrap_or_default().into_iter();
         let empty_table = provider
-            .table_info_to_table_status(tables.next().unwrap(), "catalog", "schema")
+            .table_info_to_table_status(tables.next().unwrap(), "catalog", "schema", true)
             .unwrap();
         let typed_table = provider
-            .table_info_to_table_status(tables.next().unwrap(), "catalog", "schema")
+            .table_info_to_table_status(tables.next().unwrap(), "catalog", "schema", true)
             .unwrap();
 
         let TableKind::Table {
@@ -2414,7 +2531,7 @@ mod tests {
             UnityCatalogProvider::new("test".to_string(), empty_options("catalog")).unwrap();
 
         let status = provider
-            .table_info_to_table_status(response, "catalog", "schema")
+            .table_info_to_table_status(response, "catalog", "schema", true)
             .unwrap();
 
         let TableKind::Table {
@@ -2455,7 +2572,7 @@ mod tests {
             UnityCatalogProvider::new("test".to_string(), empty_options("catalog")).unwrap();
 
         let status = provider
-            .table_info_to_table_status(response, "catalog", "schema")
+            .table_info_to_table_status(response, "catalog", "schema", true)
             .unwrap();
 
         let TableKind::Table {
@@ -4118,6 +4235,566 @@ mod tests {
             received_targets(&server).await,
             vec!["GET /delta/v1/config?catalog=main&protocol-versions=1.0"; 2]
         );
+    }
+
+    #[tokio::test]
+    async fn test_list_requests_follow_page_tokens() {
+        let server = MockServer::start().await;
+        let schema = |name: &str| serde_json::json!({"catalog_name": "main", "name": name});
+        let table = |name: &str| {
+            serde_json::json!({
+                "catalog_name": "main",
+                "schema_name": "default",
+                "name": name,
+                "table_type": "MANAGED",
+                "data_source_format": "DELTA",
+                "columns": []
+            })
+        };
+        // A page can be empty while there are more pages, and the last page can have
+        // an empty token.
+        for (endpoint, key, pages) in [
+            (
+                "/schemas",
+                "schemas",
+                vec![
+                    (None, serde_json::json!([schema("a")]), Some("p1")),
+                    (Some("p1"), serde_json::json!([]), Some("p2")),
+                    (
+                        Some("p2"),
+                        serde_json::json!([schema("b"), schema("c")]),
+                        Some(""),
+                    ),
+                ],
+            ),
+            (
+                "/tables",
+                "tables",
+                vec![
+                    (None, serde_json::json!([table("a")]), Some("p1")),
+                    (Some("p1"), serde_json::Value::Null, Some("p2")),
+                    (
+                        Some("p2"),
+                        serde_json::json!([table("b"), table("c")]),
+                        None,
+                    ),
+                ],
+            ),
+        ] {
+            for (page_token, items, next_page_token) in pages {
+                let mut response = serde_json::json!({ key: items });
+                if let Some(next_page_token) = next_page_token {
+                    response["next_page_token"] = serde_json::json!(next_page_token);
+                }
+                let mock = Mock::given(method("GET")).and(path(endpoint));
+                let mock = match page_token {
+                    Some(page_token) => mock.and(query_param("page_token", page_token)),
+                    None => mock.and(query_param_is_missing("page_token")),
+                };
+                mock.respond_with(ResponseTemplate::new(200).set_body_json(response))
+                    .mount(&server)
+                    .await;
+            }
+        }
+
+        let provider = mock_provider(&server, "main");
+        let schemas = provider.list_databases(None).await.unwrap();
+        let names = schemas
+            .iter()
+            .map(|x| x.database.last().unwrap().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["a", "b", "c"]);
+
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let tables = provider.list_tables(&database).await.unwrap();
+        let names = tables.iter().map(|x| x.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(names, vec!["a", "b", "c"]);
+
+        assert_eq!(
+            received_targets(&server).await,
+            vec![
+                "GET /schemas?catalog_name=main",
+                "GET /schemas?catalog_name=main&page_token=p1",
+                "GET /schemas?catalog_name=main&page_token=p2",
+                "GET /tables?catalog_name=main&schema_name=default",
+                "GET /tables?catalog_name=main&schema_name=default&page_token=p1",
+                "GET /tables?catalog_name=main&schema_name=default&page_token=p2",
+            ]
+        );
+    }
+
+    fn unknown_type_table_json(name: &str, format: &str) -> serde_json::Value {
+        serde_json::json!({
+            "catalog_name": "main",
+            "schema_name": "default",
+            "name": name,
+            "table_type": "MANAGED",
+            "data_source_format": format,
+            "storage_location": DELTA_TABLE_URI,
+            "table_id": DELTA_TABLE_ID,
+            "columns": [{
+                "name": "id",
+                "type_name": "LONG",
+                "type_text": "bigint",
+                "type_json": "{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}",
+                "position": 0,
+                "nullable": true
+            }, {
+                "name": "area",
+                "type_name": "GEOGRAPHY",
+                "type_text": "geography(4326)",
+                "type_json": "{\"name\":\"area\",\"type\":\"geography(4326)\",\"nullable\":true,\"metadata\":{}}",
+                "position": 1,
+                "nullable": true
+            }, {
+                "name": "day",
+                "type_name": "DATE",
+                "type_text": "date",
+                "position": 2,
+                "partition_index": 0,
+                "nullable": true
+            }]
+        })
+    }
+
+    #[tokio::test]
+    #[expect(clippy::panic)]
+    async fn test_unknown_column_types_do_not_fail_delta_tables_and_table_lists() {
+        let server = MockServer::start().await;
+        for (name, format) in [("deltatable", "DELTA"), ("parquettable", "PARQUET")] {
+            Mock::given(method("GET"))
+                .and(path_regex(format!("^/tables/.*{name}$")))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(unknown_type_table_json(name, format)),
+                )
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(path("/tables"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "tables": [
+                    unknown_type_table_json("deltatable", "DELTA"),
+                    unknown_type_table_json("parquettable", "PARQUET"),
+                    {
+                        "catalog_name": "main",
+                        "schema_name": "default",
+                        "name": "futuretable",
+                        "table_type": "FUTURE_TABLE_TYPE",
+                        "data_source_format": "FUTURE_FORMAT",
+                        "columns": [{"name": "id", "type_name": "INT", "type_text": "int"}]
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+
+        // The Delta table is resolved with the schema of its transaction log.
+        let status = provider.get_table(&database, "deltatable").await.unwrap();
+        let TableKind::Table {
+            columns,
+            format,
+            partition_by,
+            ..
+        } = status.kind
+        else {
+            panic!("expected table status");
+        };
+        assert_eq!(format, "delta");
+        assert!(columns.is_empty());
+        assert_eq!(
+            partition_by,
+            identity_partition_fields(&["day".to_string()])
+        );
+
+        // The columns of other tables are required.
+        let error = provider
+            .get_table(&database, "parquettable")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, CatalogError::NotSupported(message) if message.contains("GEOGRAPHY")),
+            "unexpected error: {error:?}"
+        );
+
+        let tables = provider.list_tables(&database).await.unwrap();
+        let tables = tables
+            .into_iter()
+            .map(|status| {
+                let TableKind::Table {
+                    columns,
+                    format,
+                    properties,
+                    ..
+                } = status.kind
+                else {
+                    panic!("expected table status");
+                };
+                let table_type = get_property(&properties.into_iter().collect(), "table_type");
+                (status.name, format, table_type, columns.len())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tables,
+            vec![
+                (
+                    "deltatable".to_string(),
+                    "delta".to_string(),
+                    Some("MANAGED".to_string()),
+                    0
+                ),
+                (
+                    "parquettable".to_string(),
+                    "parquet".to_string(),
+                    Some("MANAGED".to_string()),
+                    0
+                ),
+                (
+                    "futuretable".to_string(),
+                    "future_format".to_string(),
+                    Some("FUTURE_TABLE_TYPE".to_string()),
+                    1
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_unknown_enum_values_are_kept() {
+        let value = serde_json::json!({
+            "table_type": "FUTURE_TABLE_TYPE",
+            "data_source_format": "FUTURE_FORMAT",
+            "columns": [{"type_name": "GEOMETRY"}, {"type_name": "variant"}]
+        });
+        let table: r#gen::TableInfo = serde_json::from_value(value.clone()).unwrap();
+        assert!(matches!(
+            table.table_type.as_deref(),
+            Some(r#gen::TableType::Unknown(x)) if x == "FUTURE_TABLE_TYPE"
+        ));
+        assert!(matches!(
+            table.data_source_format.as_deref(),
+            Some(r#gen::DataSourceFormat::Unknown(x)) if x == "FUTURE_FORMAT"
+        ));
+        let columns = table.columns.as_deref().unwrap();
+        assert!(matches!(
+            columns[0].type_name.as_deref(),
+            Some(r#gen::ColumnTypeName::Unknown(x)) if x == "GEOMETRY"
+        ));
+        assert!(matches!(
+            columns[1].type_name.as_deref(),
+            Some(r#gen::ColumnTypeName::Variant)
+        ));
+        let output = serde_json::to_value(&table).unwrap();
+        assert_eq!(output["table_type"], value["table_type"]);
+        assert_eq!(output["data_source_format"], value["data_source_format"]);
+        assert_eq!(output["columns"][0]["type_name"], "GEOMETRY");
+        assert_eq!(output["columns"][1]["type_name"], "VARIANT");
+
+        let known: r#gen::TableType = serde_json::from_value(serde_json::json!("VIEW")).unwrap();
+        assert!(matches!(known, r#gen::TableType::View));
+    }
+
+    #[tokio::test]
+    #[expect(clippy::panic)]
+    async fn test_views_and_other_objects_are_not_accessed_as_tables() {
+        for table_type in [
+            "VIEW",
+            "MATERIALIZED_VIEW",
+            "STREAMING_TABLE",
+            "METRIC_VIEW",
+            "FOREIGN",
+        ] {
+            let server = MockServer::start().await;
+            // Such an object can have no data source format and no storage location.
+            let object = serde_json::json!({
+                "catalog_name": "main",
+                "schema_name": "default",
+                "name": "events",
+                "table_type": table_type,
+                "table_id": DELTA_TABLE_ID,
+                "columns": [{"name": "id", "type_name": "LONG", "type_text": "bigint"}]
+            });
+            Mock::given(method("GET"))
+                .and(path_regex("^/tables/"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(object.clone()))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/tables"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"tables": [object]})),
+                )
+                .mount(&server)
+                .await;
+
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+
+            // The object is returned for the commands that only need its metadata
+            // (e.g. checking whether it exists or describing it), and it is listed.
+            let status = provider.get_table(&database, "events").await.unwrap();
+            let tables = provider.list_tables(&database).await.unwrap();
+            assert_eq!(tables.len(), 1);
+            assert_eq!(tables[0].name, "events");
+            assert_eq!(status.name, "events");
+            let TableKind::Table {
+                columns,
+                properties,
+                ..
+            } = status.kind
+            else {
+                panic!("expected table status");
+            };
+            assert_eq!(columns.len(), 1);
+            assert_eq!(columns[0].name, "id");
+            assert_eq!(
+                get_property(&properties.into_iter().collect(), "table_type").as_deref(),
+                Some(table_type)
+            );
+
+            // The object is not read or written as a table, and it does not get
+            // commits from the catalog.
+            let expected = format!(
+                "Unity Catalog object main.default.events of type {table_type} cannot be read or written as a table"
+            );
+            for operation in [LakehouseOperation::Read, LakehouseOperation::Write] {
+                let error = provider
+                    .resolve_lakehouse_table(
+                        &database,
+                        "events",
+                        ResolveLakehouseTableRequest {
+                            catalog_table: vec![
+                                "main".to_string(),
+                                "default".to_string(),
+                                "events".to_string(),
+                            ],
+                            operation,
+                            requested_format: None,
+                            options: vec![],
+                        },
+                    )
+                    .await
+                    .map(|_| ())
+                    .unwrap_err();
+                assert!(
+                    matches!(&error, CatalogError::NotSupported(message) if *message == expected),
+                    "unexpected error: {error:?}"
+                );
+            }
+            let error = provider
+                .get_delta_ratified_commits(
+                    &database,
+                    "events",
+                    delta_ratified_commit_request(0, None),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&error, CatalogError::NotSupported(message) if *message == expected),
+                "unexpected error: {error:?}"
+            );
+
+            // No Delta API request is made for the object.
+            let mut targets = received_targets(&server).await;
+            targets.dedup();
+            assert_eq!(
+                targets,
+                vec![
+                    "GET /tables/main.default.events",
+                    "GET /tables?catalog_name=main&schema_name=default",
+                    "GET /tables/main.default.events",
+                ],
+                "table type {table_type}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tables_are_accessed_with_catalog_commits() {
+        let server = MockServer::start().await;
+        mount_legacy_delta_table(&server).await;
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let resolved = provider
+            .resolve_lakehouse_table(
+                &database,
+                "events",
+                ResolveLakehouseTableRequest {
+                    catalog_table: vec![
+                        "main".to_string(),
+                        "default".to_string(),
+                        "events".to_string(),
+                    ],
+                    operation: LakehouseOperation::Read,
+                    requested_format: None,
+                    options: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resolved.execution.commit,
+            sail_common_datafusion::catalog::CommitAuthority::DeltaRatifiedCommit
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delta_api_is_tried_when_legacy_api_refuses_the_table() {
+        for status in [401, 403, 404] {
+            let server = MockServer::start().await;
+            mount_delta_config(&server, ResponseTemplate::new(404)).await;
+            mount_legacy_delta_table(&server).await;
+            Mock::given(method("GET"))
+                .and(path("/delta/preview/commits"))
+                .respond_with(ResponseTemplate::new(status).set_body_string("refused"))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(DELTA_TABLE_PATH))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(delta_load_table_json(
+                        DELTA_TABLE_ID,
+                        Some(vec![3, 2]),
+                        Some(3),
+                    )),
+                )
+                .mount(&server)
+                .await;
+
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+            // The Delta REST API is used for the catalog once it loads a table.
+            for _ in 0..2 {
+                let response = provider
+                    .get_delta_ratified_commits(
+                        &database,
+                        "events",
+                        delta_ratified_commit_request(2, None),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.latest_table_version, 3);
+                let versions = response
+                    .commits
+                    .iter()
+                    .map(|commit| commit.version)
+                    .collect::<Vec<_>>();
+                assert_eq!(versions, vec![2, 3]);
+            }
+
+            let table = format!("GET {DELTA_TABLE_PATH}");
+            assert_eq!(
+                received_targets(&server).await,
+                vec![
+                    "GET /tables/main.default.events",
+                    "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
+                    "GET /delta/preview/commits",
+                    table.as_str(),
+                    "GET /tables/main.default.events",
+                    table.as_str(),
+                ],
+                "status {status}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_legacy_api_error_is_reported_when_delta_api_fails_as_well() {
+        for (status, load_table_status) in [(401, 401), (403, 404), (404, 404), (401, 500)] {
+            let server = MockServer::start().await;
+            mount_delta_config(&server, ResponseTemplate::new(404)).await;
+            mount_legacy_delta_table(&server).await;
+            Mock::given(method("GET"))
+                .and(path("/delta/preview/commits"))
+                .respond_with(ResponseTemplate::new(status).set_body_string("legacy refused"))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(DELTA_TABLE_PATH))
+                .respond_with(ResponseTemplate::new(load_table_status).set_body_string("failed"))
+                .mount(&server)
+                .await;
+
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+            // The legacy API remains the API of the catalog.
+            for _ in 0..2 {
+                let error = provider
+                    .get_delta_ratified_commits(
+                        &database,
+                        "events",
+                        delta_ratified_commit_request(2, None),
+                    )
+                    .await
+                    .unwrap_err();
+                match status {
+                    404 => assert!(
+                        matches!(error, CatalogError::NotFound(CatalogObject::Table, _)),
+                        "unexpected error: {error:?}"
+                    ),
+                    _ => assert!(
+                        matches!(
+                            &error,
+                            CatalogError::External(message) if message.contains("legacy refused")
+                        ),
+                        "unexpected error: {error:?}"
+                    ),
+                }
+            }
+
+            let table = format!("GET {DELTA_TABLE_PATH}");
+            assert_eq!(
+                received_targets(&server).await,
+                vec![
+                    "GET /tables/main.default.events",
+                    "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
+                    "GET /delta/preview/commits",
+                    table.as_str(),
+                    "GET /tables/main.default.events",
+                    "GET /delta/preview/commits",
+                    table.as_str(),
+                ],
+                "status {status}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delta_api_is_not_tried_for_other_legacy_api_errors() {
+        for status in [400, 429, 500, 501] {
+            let server = MockServer::start().await;
+            mount_delta_config(&server, ResponseTemplate::new(404)).await;
+            mount_legacy_delta_table(&server).await;
+            Mock::given(method("GET"))
+                .and(path("/delta/preview/commits"))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+            provider
+                .get_delta_ratified_commits(
+                    &database,
+                    "events",
+                    delta_ratified_commit_request(2, None),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                received_targets(&server).await,
+                vec![
+                    "GET /tables/main.default.events",
+                    "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
+                    "GET /delta/preview/commits",
+                ],
+                "status {status}"
+            );
+        }
     }
 
     #[tokio::test]

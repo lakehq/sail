@@ -6,6 +6,7 @@
 // SPDX-FileContributor: Modified by LakeSail, Inc. in 2025
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::str::FromStr;
 
 use sail_catalog::error::{CatalogError, CatalogResult};
@@ -15,7 +16,7 @@ use crate::credential::{
     AzureCliCredential, ClientSecretOAuthProvider, CredentialProvider,
     ImdsManagedIdentityOAuthProvider, WorkloadIdentityOAuthProvider, WorkspaceOAuthProvider,
 };
-use crate::provider::DEFAULT_URI;
+use crate::provider::{DEFAULT_URI, WORKSPACE_API_PATH};
 use crate::token::TokenCache;
 
 pub enum UnityCatalogConfigKey {
@@ -230,14 +231,36 @@ fn str_is_truthy(value: &str) -> bool {
         | value.eq_ignore_ascii_case("y")
 }
 
+/// Returns the URI of the Unity Catalog API for a workspace URL.
+///
+/// The API path is added if the URL has no path, since the host of a workspace
+/// (e.g. `DATABRICKS_HOST`) is configured without it.
+fn workspace_api_uri(workspace_url: &str) -> String {
+    match reqwest::Url::parse(workspace_url) {
+        Ok(url) if url.has_host() && matches!(url.path(), "" | "/") => {
+            format!("{}{WORKSPACE_API_PATH}", url.origin().ascii_serialization())
+        }
+        _ => workspace_url.to_string(),
+    }
+}
+
 impl UnityCatalogConfig {
     pub fn new(
         uri: Option<String>,
         token: &Option<SecretString>,
         options: Option<HashMap<String, String>>,
     ) -> CatalogResult<Self> {
+        Self::new_with_env(uri, token, options, std::env::vars_os())
+    }
+
+    fn new_with_env(
+        uri: Option<String>,
+        token: &Option<SecretString>,
+        options: Option<HashMap<String, String>>,
+        env: impl IntoIterator<Item = (OsString, OsString)>,
+    ) -> CatalogResult<Self> {
         let mut config = Self {
-            uri: uri.unwrap_or_else(|| DEFAULT_URI.to_string()),
+            uri: DEFAULT_URI.to_string(),
             bearer_token: None,
             client_id: None,
             client_secret: None,
@@ -251,6 +274,14 @@ impl UnityCatalogConfig {
             allow_http_url: false,
         };
 
+        // The environment variables are applied first, so that they provide the defaults
+        // and the explicit configuration takes precedence.
+        config.apply_env_vars(env)?;
+
+        if let Some(uri) = uri {
+            config.uri = uri;
+        }
+
         if let Some(token) = token {
             let config_key = UnityCatalogConfigKey::from_str("token")?;
             config.set_option(config_key, token.expose_secret().to_string())?;
@@ -260,13 +291,18 @@ impl UnityCatalogConfig {
             config.apply_options(opts)?;
         }
 
-        config.apply_env()?;
-
         Ok(config)
     }
 
     pub fn apply_env(&mut self) -> CatalogResult<()> {
-        for (os_key, os_value) in std::env::vars_os() {
+        self.apply_env_vars(std::env::vars_os())
+    }
+
+    fn apply_env_vars(
+        &mut self,
+        env: impl IntoIterator<Item = (OsString, OsString)>,
+    ) -> CatalogResult<()> {
+        for (os_key, os_value) in env {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 let key = key.trim();
                 if (key.to_ascii_uppercase().starts_with("UNITY_")
@@ -311,7 +347,7 @@ impl UnityCatalogConfig {
                 self.authority_host = Some(value);
             }
             UnityCatalogConfigKey::Host | UnityCatalogConfigKey::WorkspaceUrl => {
-                self.uri = value;
+                self.uri = workspace_api_uri(&value);
             }
             UnityCatalogConfigKey::MsiEndpoint => {
                 self.msi_endpoint = Some(value);
@@ -400,5 +436,103 @@ impl UnityCatalogConfig {
         }
 
         None
+    }
+}
+
+#[expect(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env(vars: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        vars.iter()
+            .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+            .collect()
+    }
+
+    #[test]
+    fn test_explicit_configuration_takes_precedence_over_env() {
+        let vars = env(&[
+            ("DATABRICKS_HOST", "https://env.cloud.databricks.com"),
+            ("DATABRICKS_TOKEN", "env-token"),
+            ("DATABRICKS_CLIENT_ID", "env-client"),
+        ]);
+        let token = Some(SecretString::from("config-token"));
+        let config = UnityCatalogConfig::new_with_env(
+            Some("https://config.cloud.databricks.com/api/2.1/unity-catalog".to_string()),
+            &token,
+            None,
+            vars.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            config.uri,
+            "https://config.cloud.databricks.com/api/2.1/unity-catalog"
+        );
+        assert_eq!(config.bearer_token.unwrap().expose_secret(), "config-token");
+        assert_eq!(config.client_id.as_deref(), Some("env-client"));
+
+        // The environment variables are used for what is not configured.
+        let config = UnityCatalogConfig::new_with_env(None, &None, None, vars).unwrap();
+        assert_eq!(
+            config.uri,
+            "https://env.cloud.databricks.com/api/2.1/unity-catalog"
+        );
+        assert_eq!(config.bearer_token.unwrap().expose_secret(), "env-token");
+
+        let config = UnityCatalogConfig::new_with_env(None, &None, None, env(&[])).unwrap();
+        assert_eq!(config.uri, DEFAULT_URI);
+    }
+
+    #[test]
+    fn test_workspace_api_uri() {
+        for (workspace_url, expected) in [
+            (
+                "https://dbc-1.cloud.databricks.com",
+                "https://dbc-1.cloud.databricks.com/api/2.1/unity-catalog",
+            ),
+            (
+                "https://adb-1.2.azuredatabricks.net/",
+                "https://adb-1.2.azuredatabricks.net/api/2.1/unity-catalog",
+            ),
+            (
+                "http://localhost:8080",
+                "http://localhost:8080/api/2.1/unity-catalog",
+            ),
+            // A URL with a path is used as it is.
+            (
+                "https://dbc-1.cloud.databricks.com/api/2.1/unity-catalog",
+                "https://dbc-1.cloud.databricks.com/api/2.1/unity-catalog",
+            ),
+            ("https://example.com/unity/", "https://example.com/unity/"),
+            ("not a url", "not a url"),
+        ] {
+            assert_eq!(workspace_api_uri(workspace_url), expected);
+        }
+    }
+
+    #[test]
+    fn test_workspace_oauth_is_not_used_with_authority_id() {
+        let vars = env(&[
+            ("DATABRICKS_CLIENT_ID", "client"),
+            ("DATABRICKS_CLIENT_SECRET", "secret"),
+        ]);
+        let uri = Some("https://dbc-1.cloud.databricks.com/api/2.1/unity-catalog".to_string());
+        let config =
+            UnityCatalogConfig::new_with_env(uri.clone(), &None, None, vars.clone()).unwrap();
+        let output = format!("{:?}", config.get_credential_provider().unwrap());
+        assert!(
+            output.contains("\"https://dbc-1.cloud.databricks.com/oidc/v1/token\""),
+            "unexpected credential provider: {output}"
+        );
+
+        let mut vars = vars;
+        vars.extend(env(&[("DATABRICKS_AUTHORITY_ID", "tenant")]));
+        let config = UnityCatalogConfig::new_with_env(uri, &None, None, vars).unwrap();
+        let output = format!("{:?}", config.get_credential_provider().unwrap());
+        assert!(
+            output.contains("\"https://login.microsoftonline.com/tenant/oauth2/v2.0/token\""),
+            "unexpected credential provider: {output}"
+        );
     }
 }

@@ -10,6 +10,12 @@ pub struct OpenApiConfig {
     /// Use this when a schema needs a handwritten implementation in the crate that includes the
     /// generated code. References to excluded schemas are still emitted by name.
     pub excluded_schemas: BTreeSet<String>,
+    /// Names of string enum schemas that accept values missing from the specification.
+    ///
+    /// Such an enum gets an `Unknown(String)` variant that holds the value as it is on the
+    /// wire. Use this for enums that the server extends over time, so that a new value
+    /// does not fail the deserialization of the whole response.
+    pub open_enums: BTreeSet<String>,
     /// Operation IDs to omit from generated `ApiClient` methods and operation error enums.
     ///
     /// This is useful for endpoints that are not needed by the target crate or that use currently

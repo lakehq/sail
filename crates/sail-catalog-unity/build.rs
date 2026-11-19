@@ -11,6 +11,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         OpenApiConfig {
             excluded_operations: [].into_iter().collect(),
             excluded_schemas: ["ColumnTypeName".to_owned()].into_iter().collect(),
+            // Databricks adds values to these enums over time.
+            open_enums: ["DataSourceFormat", "TableType"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
             raw_path_parameters: Default::default(),
         },
     )?;
@@ -39,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .into_iter()
             .map(str::to_owned)
             .collect(),
+            open_enums: Default::default(),
             raw_path_parameters: Default::default(),
         },
     )?;

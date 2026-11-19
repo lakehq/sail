@@ -32,11 +32,13 @@ Sail automatically loads Unity Catalog configuration from environment variables 
 - `UNITY_*`: Unity Catalog configuration.
 - `UC_*`: Short-form Unity Catalog configuration.
 
+The `uri` and `token` options of the catalog provider take precedence over the environment variables.
+
 The following table lists the supported configuration keys and their corresponding environment variable names:
 
 - `DATABRICKS_HOST`, `DATABRICKS_WORKSPACE_URL`, `UNITY_HOST`, `UNITY_WORKSPACE_URL`, `UC_HOST`, `UC_WORKSPACE_URL`
 
-  The host URI.
+  The URL of the workspace, such as `https://<workspace>.cloud.databricks.com`. The Unity Catalog API path `/api/2.1/unity-catalog` is added if the URL has no path.
 
 - `DATABRICKS_TOKEN`, `DATABRICKS_ACCESS_TOKEN`, `UNITY_ACCESS_TOKEN`, `UC_ACCESS_TOKEN`
 
@@ -48,7 +50,7 @@ The following table lists the supported configuration keys and their correspondi
 
 - `DATABRICKS_CLIENT_SECRET`, `UNITY_CLIENT_SECRET`, `UC_CLIENT_SECRET`
 
-  The client secret.
+  The client secret. When the client ID and the client secret are set without the authority ID, the access token is requested from the OAuth endpoint of the workspace (`/oidc/v1/token` at the host of the `uri`).
 
 - `DATABRICKS_AUTHORITY_ID`, `UNITY_AUTHORITY_ID`, `UC_AUTHORITY_ID`
 
