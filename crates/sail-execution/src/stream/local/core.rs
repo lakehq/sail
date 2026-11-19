@@ -139,17 +139,20 @@ impl LocalStreamManager {
             bytes: self.options.shuffle_write_buffer_size,
             stall_timeout,
         });
-        // A hand-off stage counts apart, so that its tasks wait at the budget whatever the
-        // rest of the process holds.
+        // A hand-off stage also counts against a budget of its own, so that it does not run
+        // far ahead of a decision that may not use it.
         let memory = match handoff_budget {
             Some(budget) => self
                 .handoff_memory
                 .entry((key.job_id, key.stage))
-                .or_insert_with(|| Arc::new(StreamMemory::new(budget)))
+                .or_insert_with(|| Arc::new(StreamMemory::within(budget, self.memory.clone())))
                 .clone(),
             None => self.memory.clone(),
         };
         let (sink, streams) = MemoryStream::create(key, waiters, replicas, limit, memory, schema);
+        if streams.iter().any(MemoryStream::is_fully_subscribed) {
+            self.lift_handoff_budget(key.job_id, key.stage);
+        }
         for (key, stream) in keys.into_iter().zip(streams) {
             self.streams
                 .insert(key, LocalStreamState::Created { stream });
@@ -164,7 +167,13 @@ impl LocalStreamManager {
     ) -> ExecutionResult<TaskStreamSource> {
         match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => match entry.get_mut() {
-                LocalStreamState::Created { stream } => stream.subscribe(),
+                LocalStreamState::Created { stream } => {
+                    let source = stream.subscribe()?;
+                    if stream.is_fully_subscribed() {
+                        self.lift_handoff_budget(key.job_id, key.stage);
+                    }
+                    Ok(source)
+                }
                 LocalStreamState::Pending { waiters, probes } => {
                     // There is no need to probe the pending stream again, unless all
                     // earlier readers have left. The earlier probes are then ignored.
@@ -261,6 +270,14 @@ impl LocalStreamManager {
                     probes: 0,
                 });
             }
+        }
+    }
+
+    /// Lets a hand-off stage run ahead of its reader like any other stage, once a later
+    /// job reads it.
+    fn lift_handoff_budget(&self, job_id: JobId, stage: usize) {
+        if let Some(memory) = self.handoff_memory.get(&(job_id, stage)) {
+            memory.lift();
         }
     }
 
@@ -476,6 +493,26 @@ mod tests {
             ..task_key(0)
         };
         let mut sink = manager.create_stream(&other, 1, 2, true, None, schema)?;
+        assert!(write_without_waiting(&mut sink)?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handoff_budget_is_lifted_once_every_replica_has_a_reader() -> TestResult {
+        let schema = Arc::new(Schema::empty());
+        let mut manager = manager_with_memory_limit(usize::MAX)?;
+        let key = task_key(0);
+        let (lead, _lead) = MemoryStream::pending();
+        let (follower, _follower) = MemoryStream::pending();
+        manager.streams.insert(
+            key.task_stream_key(0),
+            LocalStreamState::Pending {
+                waiters: vec![lead, follower],
+                probes: 1,
+            },
+        );
+        // Ten batches of one byte each, beyond the budget of five.
+        let mut sink = manager.create_stream(&key, 1, 2, true, Some(5), schema)?;
         assert!(write_without_waiting(&mut sink)?);
         Ok(())
     }
