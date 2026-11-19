@@ -100,7 +100,6 @@ impl BuildPartialOptions<ParquetWritePartialOptions> for TableParquetOptions {
             write_batch_size: Some(self.global.write_batch_size),
             writer_version: Some(self.global.writer_version.to_string()),
             skip_arrow_metadata: Some(self.global.skip_arrow_metadata),
-            created_by: Some(self.global.created_by),
             compression: Some(self.global.compression.clone()),
             dictionary_enabled: Some(self.global.dictionary_enabled),
             dictionary_page_size_limit: Some(self.global.dictionary_page_size_limit),
@@ -142,7 +141,6 @@ impl ParquetWriteOptions {
             write_batch_size,
             writer_version,
             skip_arrow_metadata,
-            created_by,
             compression,
             dictionary_enabled,
             dictionary_page_size_limit,
@@ -270,7 +268,6 @@ impl ParquetWriteOptions {
             write_batch_size,
             writer_version,
             skip_arrow_metadata,
-            created_by,
             compression,
             dictionary_enabled,
             dictionary_page_size_limit,
@@ -458,7 +455,6 @@ mod tests {
             ("content_defined_chunking_min_chunk_size", "4096"),
             ("content_defined_chunking_max_chunk_size", "8192"),
             ("content_defined_chunking_norm_level", "-1"),
-            ("created_by", "test writer"),
             ("max_row_group_bytes", "65536"),
         ]);
         let options = ParquetWriteOptions::resolve(&state, vec![kv])
@@ -497,7 +493,6 @@ mod tests {
         assert_eq!(options.global.content_defined_chunking.min_chunk_size, 4096);
         assert_eq!(options.global.content_defined_chunking.max_chunk_size, 8192);
         assert_eq!(options.global.content_defined_chunking.norm_level, -1);
-        assert_eq!(options.global.created_by, "test writer");
         assert_eq!(
             options.global.max_row_group_bytes.map(|v| v.get()),
             Some(65536)
@@ -643,13 +638,6 @@ mod tests {
             .options_mut()
             .execution
             .parquet
-            .created_by = "session writer".to_string();
-        state
-            .write()
-            .config_mut()
-            .options_mut()
-            .execution
-            .parquet
             .max_row_group_bytes = Some(MaxRowGroupBytes::try_new(4096)?);
         let state = ctx.state();
 
@@ -666,7 +654,6 @@ mod tests {
         assert_eq!(options.global.content_defined_chunking.min_chunk_size, 4096);
         assert_eq!(options.global.content_defined_chunking.max_chunk_size, 8192);
         assert_eq!(options.global.content_defined_chunking.norm_level, -2);
-        assert_eq!(options.global.created_by, "session writer");
         assert_eq!(
             options.global.max_row_group_bytes.map(|v| v.get()),
             Some(4096)

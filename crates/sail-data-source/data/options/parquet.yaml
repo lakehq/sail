@@ -481,26 +481,6 @@
         - option.skipArrowMetadata
       parser: crate::options::parsers::parse_bool
 
-- key: created_by
-  description: |
-    (Writing) The "created by" property written to the Parquet file metadata.
-    Defaults to the Sail version string.
-  supported: true
-  rust_type: String
-  scopes:
-    - write
-  origins:
-    - type: option
-      keys:
-        - created_by
-        - createdBy
-      parser: crate::options::parsers::parse_string
-    - type: table_property
-      keys:
-        - option.created_by
-        - option.createdBy
-      parser: crate::options::parsers::parse_string
-
 - key: compression
   description: |
     (Writing) The default Parquet compression codec.
