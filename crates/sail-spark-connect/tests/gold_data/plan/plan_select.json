@@ -5552,7 +5552,7 @@
                     }
                   },
                   "castToType": "int32",
-                  "rename": true,
+                  "naming": "cast",
                   "isTry": false
                 }
               }
