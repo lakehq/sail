@@ -113,7 +113,7 @@ mod tests {
         assert_eq!(parquet.bloom_filter_ndv, None);
         assert_eq!(
             parquet.created_by,
-            concat!("sail version ", env!("CARGO_PKG_VERSION"))
+            sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY
         );
         Ok(())
     }

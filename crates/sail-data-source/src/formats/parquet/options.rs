@@ -8,6 +8,7 @@ use datafusion_common::config::{
     MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
 };
 use datafusion_common::parquet_config::DFParquetWriterVersion;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::error::{DataSourceError, DataSourceResult};
@@ -268,7 +269,7 @@ impl ParquetWriteOptions {
             write_batch_size,
             writer_version,
             skip_arrow_metadata,
-            created_by: concat!("sail version ", env!("CARGO_PKG_VERSION")).into(),
+            created_by: SAIL_PARQUET_CREATED_BY.to_string(),
             compression,
             dictionary_enabled,
             dictionary_page_size_limit,
@@ -337,6 +338,7 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use datafusion_common::config::MaxRowGroupBytes;
     use datafusion_common::parquet_config::DFParquetWriterVersion;
+    use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 
     use crate::options::r#gen::{ParquetReadOptions, ParquetWriteOptions};
     use crate::options::{ResolveOptions, option_list};
@@ -494,10 +496,7 @@ mod tests {
         assert_eq!(options.global.content_defined_chunking.min_chunk_size, 4096);
         assert_eq!(options.global.content_defined_chunking.max_chunk_size, 8192);
         assert_eq!(options.global.content_defined_chunking.norm_level, -1);
-        assert_eq!(
-            options.global.created_by,
-            concat!("sail version ", env!("CARGO_PKG_VERSION"))
-        );
+        assert_eq!(options.global.created_by, SAIL_PARQUET_CREATED_BY);
         assert_eq!(
             options.global.max_row_group_bytes.map(|v| v.get()),
             Some(65536)

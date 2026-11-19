@@ -14,6 +14,7 @@ pub use job_runner::{
     ServerSessionJobRunnerFactory, SessionJobRunner, SessionJobRunnerFactory, SessionJobRunnerInfo,
 };
 use sail_common::config::{ParquetConfig, TemporaryFileCompression};
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 pub use server::{ServerSessionFactory, ServerSessionInfo, ServerSessionMutator};
 pub use worker::WorkerSessionFactory;
 
@@ -38,7 +39,7 @@ fn temporary_file_compression(
 
 // Apply the same Parquet settings when planning on the server or building scans on workers.
 fn apply_parquet_config(parquet: &mut ParquetOptions, config: &ParquetConfig) {
-    parquet.created_by = concat!("sail version ", env!("CARGO_PKG_VERSION")).into();
+    parquet.created_by = SAIL_PARQUET_CREATED_BY.to_string();
     parquet.enable_page_index = config.enable_page_index;
     parquet.pruning = config.pruning;
     parquet.skip_metadata = config.skip_metadata;

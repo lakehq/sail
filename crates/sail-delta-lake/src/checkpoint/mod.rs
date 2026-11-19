@@ -24,6 +24,8 @@ use parquet::arrow::async_reader::{AsyncFileReader, ParquetRecordBatchStreamBuil
 use parquet::arrow::{AsyncArrowWriter, ProjectionMask};
 use parquet::errors::{ParquetError, Result as ParquetResult};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use parquet::file::properties::WriterProperties;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use serde_json::Deserializer as JsonDeserializer;
 use uuid::Uuid;
 
@@ -403,8 +405,12 @@ async fn write_checkpoint_batches(
         .map_err(|_| DeltaTableError::generic("checkpoint action count overflow"))?;
 
     let object_store_writer = BufWriter::new(store.clone(), path.clone());
-    let mut writer = AsyncArrowWriter::try_new(object_store_writer, first_batch.schema(), None)
-        .map_err(DeltaTableError::generic_err)?;
+    let properties = WriterProperties::builder()
+        .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
+        .build();
+    let mut writer =
+        AsyncArrowWriter::try_new(object_store_writer, first_batch.schema(), Some(properties))
+            .map_err(DeltaTableError::generic_err)?;
     writer
         .write(&first_batch)
         .await
