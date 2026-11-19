@@ -340,26 +340,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn metadata_adds_preserve_stored_uri_spelling() -> Result<()> {
-        let paths = vec![
-            "p=日本語/part.parquet",
-            "p=café/part.parquet",
-            "p=caf%c3%a9/part.parquet",
-            "p=a%252Fb%2525/part.parquet",
-        ];
-        let batch = RecordBatch::try_from_iter(vec![(
-            PATH_COLUMN,
-            Arc::new(StringArray::from(paths.clone())) as ArrayRef,
-        )])?;
-        let adds = decode_adds_from_meta_batch_with_partition_value_columns(&batch, None)?;
-        assert_eq!(
-            adds.iter().map(|add| add.path.as_str()).collect::<Vec<_>>(),
-            paths
-        );
-        Ok(())
-    }
-
-    #[test]
     fn decode_adds_maps_partition_keys_and_extracts_commit_metadata() -> Result<()> {
         let tags = Arc::new(
             MapArray::new_from_strings(

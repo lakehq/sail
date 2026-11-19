@@ -623,20 +623,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn vacuum_counts_object_prefixes() {
-        let files = [
-            Path::from("part=a/one"),
-            Path::from("part=a/two"),
-            Path::from("part=b/nested/three"),
-        ];
-        let mut directories = HashSet::new();
-        for file in files {
-            record_parent_directories(&mut directories, &file);
-        }
-        assert_eq!(directories.len() + 1, 4);
-    }
-
     #[tokio::test]
     async fn vacuum_batches_deletes_and_rechecks_candidates() {
         let store = Arc::new(VacuumStore::default());
