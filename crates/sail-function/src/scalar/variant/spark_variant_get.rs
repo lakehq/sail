@@ -3,8 +3,10 @@
 
 use std::sync::Arc;
 
+use arrow::array::timezone::Tz;
 use arrow::array::{ArrayRef, StringBuilder};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef};
+use chrono::Timelike;
 use chumsky::prelude::*;
 use datafusion::arrow::datatypes::TimeUnit;
 use datafusion_common::{Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err};
@@ -14,6 +16,8 @@ use datafusion_expr::{
 use parquet_variant::{Variant, VariantPath, VariantPathElement};
 use parquet_variant_compute::{GetOptions, VariantArray, VariantType, variant_get};
 use parquet_variant_json::VariantToJson;
+use sail_common_datafusion::display::{spark_f32_to_string, spark_f64_to_string};
+use sail_common_datafusion::formatter::{Time64MicrosecondFormatter, TimestampFormatter};
 use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_data_type_exec_err};
@@ -87,11 +91,60 @@ fn return_field_for_variant_get(name: &str, args: &ReturnFieldArgs) -> Result<Fi
     Ok(Arc::new(field))
 }
 
+fn variant_strings(values: &VariantArray, timezone: &Tz, safe: bool) -> Result<ArrayRef> {
+    let mut strings = StringBuilder::new();
+    for value in values.iter() {
+        match value.unwrap_or(Variant::Null) {
+            Variant::Null => strings.append_null(),
+            Variant::String(v) => strings.append_value(v),
+            Variant::ShortString(v) => strings.append_value(v.as_str()),
+            Variant::Binary(v) => match std::str::from_utf8(v) {
+                Ok(s) => strings.append_value(s),
+                Err(_) if safe => strings.append_null(),
+                Err(e) => return Err(ArrowError::from(e).into()),
+            },
+            Variant::BooleanTrue => strings.append_value("true"),
+            Variant::BooleanFalse => strings.append_value("false"),
+            Variant::Int8(v) => strings.append_value(v.to_string()),
+            Variant::Int16(v) => strings.append_value(v.to_string()),
+            Variant::Int32(v) => strings.append_value(v.to_string()),
+            Variant::Int64(v) => strings.append_value(v.to_string()),
+            Variant::Decimal4(v) => strings.append_value(v.to_string()),
+            Variant::Decimal8(v) => strings.append_value(v.to_string()),
+            Variant::Decimal16(v) => strings.append_value(v.to_string()),
+            Variant::Float(v) => strings.append_value(spark_f32_to_string(v)),
+            Variant::Double(v) => strings.append_value(spark_f64_to_string(v)),
+            Variant::Uuid(v) => strings.append_value(v.to_string()),
+            Variant::Date(v) => strings.append_value(v.to_string()),
+            Variant::Time(v) => {
+                let micros = i64::from(v.num_seconds_from_midnight()) * 1_000_000
+                    + i64::from(v.nanosecond() / 1_000);
+                strings.append_value(Time64MicrosecondFormatter(micros).to_string());
+            }
+            Variant::TimestampMicros(v) | Variant::TimestampNanos(v) => {
+                strings.append_value(TimestampFormatter(&v, Some(timezone)).to_string());
+            }
+            Variant::TimestampNtzMicros(v) | Variant::TimestampNtzNanos(v) => {
+                strings.append_value(TimestampFormatter(&v.and_utc(), None).to_string());
+            }
+            v @ (Variant::Object(_) | Variant::List(_)) => {
+                strings.append_value(v.to_json_string()?)
+            }
+        }
+    }
+    Ok(Arc::new(strings.finish()))
+}
+
 /// Shared invoke logic for `variant_get` / `try_variant_get`.
 ///
 /// Handles both scalar and array variant inputs (path is always scalar in Spark).
 /// Based on datafusion-variant's `invoke_variant_get` pattern.
-fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Result<ColumnarValue> {
+fn invoke_variant_get(
+    args: ScalarFunctionArgs,
+    name: &str,
+    safe: bool,
+    timezone: &str,
+) -> Result<ColumnarValue> {
     let variant_field = args
         .arg_fields
         .first()
@@ -180,16 +233,7 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
             build_get_options(variant_path.clone(), &Some(Arc::new(variant_output))),
         )?;
         let values = VariantArray::try_new(values.as_ref())?;
-        let mut strings = StringBuilder::new();
-        for value in values.iter() {
-            match value {
-                None | Some(Variant::Null) => strings.append_null(),
-                Some(Variant::String(value)) => strings.append_value(value),
-                Some(Variant::ShortString(value)) => strings.append_value(value.as_str()),
-                Some(value) => strings.append_value(value.to_json_string()?),
-            }
-        }
-        Arc::new(strings.finish()) as ArrayRef
+        variant_strings(&values, &timezone.parse()?, safe)?
     } else {
         variant_get(&variant_arr, options)
             .map_err(|e| datafusion_common::DataFusionError::Execution(format!("{name}: {e}")))?
@@ -285,14 +329,20 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
 pub struct SparkVariantGet {
     signature: Signature,
     safe: bool,
+    timezone: Arc<str>,
 }
 
 impl SparkVariantGet {
-    pub fn new(safe: bool) -> Self {
+    pub fn new(safe: bool, timezone: Arc<str>) -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
             safe,
+            timezone,
         }
+    }
+
+    pub fn timezone(&self) -> &str {
+        &self.timezone
     }
 
     pub fn safe(&self) -> bool {
@@ -362,7 +412,7 @@ impl ScalarUDFImpl for SparkVariantGet {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        invoke_variant_get(args, self.name(), self.safe)
+        invoke_variant_get(args, self.name(), self.safe, &self.timezone)
     }
 }
 

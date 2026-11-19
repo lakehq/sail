@@ -509,3 +509,66 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | '[1,null]'            | [1,null]  | [1,null]  |
         | CAST(NULL AS STRING)  | NULL      | NULL      |
         | '"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghij"' | abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghij | "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghij" |
+
+  Rule: Scalar Variant values cast to Spark strings
+
+    Scenario: Scalar Variant string conversions use the SQL type and session time zone
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        WITH variants AS (
+          SELECT id, CASE id
+            WHEN 0 THEN CAST(X'48656C6C6F' AS VARIANT)
+            WHEN 1 THEN CAST(DATE '1970-01-01' AS VARIANT)
+            WHEN 2 THEN CAST(timestamp_micros(120000) AS VARIANT)
+            WHEN 3 THEN CAST(TIMESTAMP_NTZ '1970-01-01 00:00:00.120000' AS VARIANT)
+            WHEN 4 THEN CAST(CAST('Infinity' AS DOUBLE) AS VARIANT)
+            WHEN 5 THEN CAST(CAST(0.0001 AS FLOAT) AS VARIANT)
+            WHEN 6 THEN CAST(CAST(-0.0100 AS DECIMAL(10,4)) AS VARIANT)
+            WHEN 7 THEN parse_json('{"v":[1]}')
+            ELSE parse_json('null')
+          END AS v FROM range(9)
+        )
+        SELECT variant_get(v, '$', 'string') AS extracted,
+               try_variant_get(v, '$', 'string') AS try_extracted,
+               CAST(v AS STRING) AS cast_value, TRY_CAST(v AS STRING) AS try_cast_value
+        FROM variants ORDER BY id
+        """
+      Then query result ordered
+        | extracted              | try_extracted          | cast_value             | try_cast_value         |
+        | Hello                  | Hello                  | Hello                  | Hello                  |
+        | 1970-01-01             | 1970-01-01             | 1970-01-01             | 1970-01-01             |
+        | 1969-12-31 16:00:00.12 | 1969-12-31 16:00:00.12 | 1969-12-31 16:00:00.12 | 1969-12-31 16:00:00.12 |
+        | 1970-01-01 00:00:00.12 | 1970-01-01 00:00:00.12 | 1970-01-01 00:00:00.12 | 1970-01-01 00:00:00.12 |
+        | Infinity               | Infinity               | Infinity               | Infinity               |
+        | 1.0E-4                 | 1.0E-4                 | 1.0E-4                 | 1.0E-4                 |
+        | -0.01                  | -0.01                  | -0.01                  | -0.01                  |
+        | {"v":[1]}              | {"v":[1]}              | {"v":[1]}              | {"v":[1]}              |
+        | NULL                   | NULL                   | NULL                   | NULL                   |
+
+    # Arrow strings require valid UTF-8. Sail handles invalid bytes like an ordinary binary cast.
+    @sail-only
+    Scenario Outline: Strict Variant string conversions reject invalid UTF-8
+      When query
+        """
+        SELECT <conversion> FROM (SELECT CAST(X'80' AS VARIANT) AS v)
+        """
+      Then query error invalid utf-8 sequence
+
+      Examples:
+        | conversion                    |
+        | variant_get(v, '$', 'string') |
+        | CAST(v AS STRING)             |
+
+    @sail-only
+    Scenario: Tolerant Variant string conversions return NULL only for invalid UTF-8
+      When query
+        """
+        SELECT try_variant_get(CAST(b AS VARIANT), '$', 'string') AS extracted,
+               TRY_CAST(CAST(b AS VARIANT) AS STRING) AS cast_value
+        FROM VALUES (1, X'80'), (2, X'C3A9') AS t(id, b) ORDER BY id
+        """
+      Then query result collected ordered
+        | extracted | cast_value |
+        | NULL      | NULL       |
+        | é         | é          |

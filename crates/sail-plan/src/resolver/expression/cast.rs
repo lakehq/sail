@@ -234,7 +234,7 @@ impl PlanResolver<'_> {
             (_, to, is_try) if expr_is_variant => {
                 let service = self.ctx.extension::<PlanService>()?;
                 let data_type_string = service.plan_formatter().data_type_to_simple_string(&to)?;
-                ScalarUDF::new_from_impl(SparkVariantGet::new(is_try)).call(vec![
+                ScalarUDF::new_from_impl(SparkVariantGet::new(is_try, session_timezone)).call(vec![
                     expr,
                     lit("$"),
                     lit(data_type_string),

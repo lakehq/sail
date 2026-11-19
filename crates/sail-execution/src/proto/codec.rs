@@ -3929,8 +3929,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkFromJson::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkVariantGet(r#gen::SparkVariantGetUdf { safe }) => {
-                return Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(safe))));
+            UdfKind::SparkVariantGet(r#gen::SparkVariantGetUdf { safe, timezone }) => {
+                let timezone = timezone.as_deref().unwrap_or("UTC").into();
+                return Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(
+                    safe, timezone,
+                ))));
             }
             UdfKind::SparkNextDay(r#gen::SparkNextDayUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkNextDay::new(ansi_mode))));
@@ -4573,7 +4576,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkTime(r#gen::SparkTimeUdf { is_try })
         } else if let Some(func) = node.inner().downcast_ref::<SparkVariantGet>() {
             let safe = func.safe();
-            UdfKind::SparkVariantGet(r#gen::SparkVariantGetUdf { safe })
+            let timezone = Some(func.timezone().to_owned());
+            UdfKind::SparkVariantGet(r#gen::SparkVariantGetUdf { safe, timezone })
         } else if let Some(func) = node.inner().downcast_ref::<SparkParseJson>() {
             let safe = func.safe();
             UdfKind::SparkParseJson(r#gen::SparkParseJsonUdf { safe })
