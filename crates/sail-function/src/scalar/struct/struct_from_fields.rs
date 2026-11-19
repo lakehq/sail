@@ -50,12 +50,12 @@ pub fn to_struct_array(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StructFunction {
+pub struct StructFromFields {
     signature: Signature,
     field_names: Vec<String>,
 }
 
-impl StructFunction {
+impl StructFromFields {
     pub fn new(field_names: Vec<String>) -> Self {
         Self {
             signature: Signature::one_of(
@@ -71,7 +71,7 @@ impl StructFunction {
     }
 }
 
-impl ScalarUDFImpl for StructFunction {
+impl ScalarUDFImpl for StructFromFields {
     fn name(&self) -> &str {
         "struct"
     }

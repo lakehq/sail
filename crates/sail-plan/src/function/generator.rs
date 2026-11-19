@@ -4,7 +4,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{Expr, ScalarUDF, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::array::array::Array;
+use sail_function::scalar::array::array_from_values::ArrayFromValues;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::variant::variant_explode::VariantExplodeUdf;
@@ -51,7 +51,7 @@ fn stack(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let arrays = (0..num_cols)
         .map(|i| args.iter().skip(i).step_by(num_cols).cloned().collect())
-        .map(|col| ScalarUDF::from(Array::new()).call(col))
+        .map(|col| ScalarUDF::from(ArrayFromValues::new()).call(col))
         .collect::<Vec<_>>();
 
     let zipped = ScalarUDF::from(ArraysZip::new(field_names)).call(arrays);

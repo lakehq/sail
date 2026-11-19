@@ -51,7 +51,7 @@ use sail_function::aggregate::vector_avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::array::array_transform::ArrayTransform;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
-use sail_function::scalar::r#struct::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
@@ -634,7 +634,7 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     } else {
         args
     };
-    // TODO: remove StructFunction call when count distinct from multiple arguments is implemented
+    // TODO: remove StructFromFields call when count distinct from multiple arguments is implemented
     // https://github.com/apache/datafusion/blob/58ddf0d4390c770bc571f3ac2727c7de77aa25ab/datafusion/functions-aggregate/src/count.rs#L333
     let args = if distinct && (args.len() > 1) {
         // In Spark, COUNT(DISTINCT col1, col2, ...) skips rows where ANY column is NULL.
@@ -646,7 +646,7 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             .iter()
             .map(|arg| arg.clone().is_null())
             .reduce(|a, b| a.or(b));
-        let struct_expr = ScalarUDF::from(StructFunction::new(
+        let struct_expr = ScalarUDF::from(StructFromFields::new(
             (0..args.len()).map(|i| format!("col{i}")).collect(),
         ))
         .call(args);

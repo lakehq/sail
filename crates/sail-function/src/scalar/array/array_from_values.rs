@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array as _, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullArray,
+    Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullArray,
     OffsetSizeTrait, make_array, new_empty_array, new_null_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
@@ -22,18 +22,18 @@ use sail_common_datafusion::type_coercion::binary_type_coercion::comparison_coer
 use sail_common_datafusion::utils::scalar::scalar_from_array;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct Array {
+pub struct ArrayFromValues {
     signature: Signature,
     aliases: Vec<String>,
 }
 
-impl Default for Array {
+impl Default for ArrayFromValues {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Array {
+impl ArrayFromValues {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -45,7 +45,7 @@ impl Array {
     }
 }
 
-impl ScalarUDFImpl for Array {
+impl ScalarUDFImpl for ArrayFromValues {
     fn name(&self) -> &str {
         "spark_array"
     }
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn array_null_coercion_and_runtime_keep_resolved_identity() -> Result<()> {
-        let function = Array::new();
+        let function = ArrayFromValues::new();
         let uuid = Arc::new(
             Field::new("source", DataType::FixedSizeBinary(16), true).with_metadata(
                 std::collections::HashMap::from([

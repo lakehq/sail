@@ -14,8 +14,8 @@ use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
 use sail_common::utils::string::SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::array::array::Array;
 use sail_function::scalar::array::array_compact::ArrayCompact;
+use sail_function::scalar::array::array_from_values::ArrayFromValues;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::array_position::ArrayPosition;
@@ -577,7 +577,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         (
             "array",
             F::custom(with_timestamp_ntz_coercion(|arguments| {
-                ScalarUDF::from(Array::new()).call(arguments)
+                ScalarUDF::from(ArrayFromValues::new()).call(arguments)
             })),
         ),
         ("array_append", F::custom(array_append)),

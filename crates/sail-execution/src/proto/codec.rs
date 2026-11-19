@@ -165,8 +165,8 @@ use sail_function::aggregate::theta_sketch::{
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::vector_avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
-use sail_function::scalar::array::array::Array;
 use sail_function::scalar::array::array_compact::ArrayCompact;
+use sail_function::scalar::array::array_from_values::ArrayFromValues;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array::array_min_max::{ArrayMax, ArrayMin};
@@ -279,7 +279,7 @@ use sail_function::scalar::string::to_number::ToNumber;
 use sail_function::scalar::string::upper::UpperFunc;
 use sail_function::scalar::r#struct::array_struct_field::ArrayStructField;
 use sail_function::scalar::r#struct::drop_struct_field::DropStructField;
-use sail_function::scalar::r#struct::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
 use sail_function::scalar::r#struct::struct_rename::StructRename;
 use sail_function::scalar::r#struct::update_struct_field::UpdateStructField;
 use sail_function::scalar::url::parse_url::ParseUrl;
@@ -3870,7 +3870,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::StructFunction(r#gen::StructFunctionUdf { field_names }) => {
-                let udf = StructFunction::new(field_names);
+                let udf = StructFromFields::new(field_names);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::ArraysZip(r#gen::ArraysZipUdf { field_names }) => {
@@ -4078,7 +4078,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "st_geomfromwkb" => Ok(Arc::new(ScalarUDF::from(StGeomFromWKB::new()))),
             "st_geogfromwkb" => Ok(Arc::new(ScalarUDF::from(StGeogFromWKB::new()))),
             "spark_array" | "spark_make_array" | "array" => {
-                Ok(Arc::new(ScalarUDF::from(Array::new())))
+                Ok(Arc::new(ScalarUDF::from(ArrayFromValues::new())))
             }
             "spark_concat" | "concat" | "array_concat" => {
                 Ok(Arc::new(ScalarUDF::from(Concat::new())))
@@ -4295,7 +4295,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<RewriteLikePatternFunc>()
             || node_inner.is::<AESDecrypt>()
             || node_inner.is::<AESEncrypt>()
-            || node_inner.is::<Array>()
+            || node_inner.is::<ArrayFromValues>()
             || node_inner.is::<Base64>()
             || node_inner.is::<SparkBitCount>()
             || node_inner.is::<SparkBitGet>()
@@ -4511,7 +4511,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<DateFormat>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkDateFormat(r#gen::SparkDateFormatUdf { session_timezone })
-        } else if let Some(func) = node.inner().downcast_ref::<StructFunction>() {
+        } else if let Some(func) = node.inner().downcast_ref::<StructFromFields>() {
             let field_names = func.field_names().to_vec();
             UdfKind::StructFunction(r#gen::StructFunctionUdf { field_names })
         } else if let Some(func) = node.inner().downcast_ref::<ArraysZip>() {

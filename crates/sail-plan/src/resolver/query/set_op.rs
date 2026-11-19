@@ -21,7 +21,7 @@ use sail_function::scalar::array::array_transform::ArrayTransform;
 use sail_function::scalar::conversion::to_string::ToUtf8;
 use sail_function::scalar::datetime::timestamp::Timestamp;
 use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ntz_to_ltz;
-use sail_function::scalar::r#struct::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
 use sail_logical_optimizer::type_coercion::TypeCoercion;
 
 use crate::error::{PlanError, PlanResult};
@@ -42,7 +42,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<(Expr, Expr)> {
         use datafusion_common::arrow::datatypes::DataType;
         use datafusion_expr::{ScalarUDF, lit, when};
-        use sail_function::scalar::r#struct::struct_function::StructFunction;
+        use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
         let (DataType::Struct(left_fields), DataType::Struct(right_fields)) =
             (left_type, right_type)
         else {
@@ -88,7 +88,7 @@ impl PlanResolver<'_> {
                 right_values.push(field_expr(&right, field.name()));
             }
         }
-        let function = ScalarUDF::from(StructFunction::new(names));
+        let function = ScalarUDF::from(StructFromFields::new(names));
         Ok((
             when(left.is_null(), lit(ScalarValue::Null)).otherwise(function.call(left_values))?,
             when(right.is_null(), lit(ScalarValue::Null)).otherwise(function.call(right_values))?,
@@ -450,7 +450,7 @@ impl PlanResolver<'_> {
                 // Build all converted fields together. A chain of field updates
                 // would copy the whole struct once per converted field.
                 let names = source.iter().map(|field| field.name().clone()).collect();
-                let rebuilt = ScalarUDF::from(StructFunction::new(names)).call(children);
+                let rebuilt = ScalarUDF::from(StructFromFields::new(names)).call(children);
                 when(value.clone().is_null(), lit(ScalarValue::Null)).otherwise(rebuilt)?
             }
             (

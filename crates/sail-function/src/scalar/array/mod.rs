@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#[expect(
-    clippy::module_inception,
-    reason = "The array function shares its name with the function group."
-)]
-pub mod array;
 pub mod array_aggregate;
 pub mod array_compact;
 pub mod array_exists;
 pub mod array_filter;
 pub mod array_forall;
+pub mod array_from_values;
 pub mod array_intersect;
 pub mod array_item_with_position;
 pub mod array_min_max;

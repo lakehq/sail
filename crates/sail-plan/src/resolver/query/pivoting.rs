@@ -16,7 +16,7 @@ use sail_common::spec;
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_function::scalar::explode;
-use sail_function::scalar::r#struct::struct_function::StructFunction;
+use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -408,7 +408,7 @@ impl PlanResolver<'_> {
         let structs = values
             .into_iter()
             .map(|(value, name)| {
-                ScalarUDF::from(StructFunction::new(vec![
+                ScalarUDF::from(StructFromFields::new(vec![
                     variable_column_name.to_string(),
                     value_column_name.to_string(),
                 ]))
@@ -463,7 +463,7 @@ fn pivot_value_name(scalar: &ScalarValue) -> PlanResult<String> {
 }
 
 fn make_pivot_struct(exprs: Vec<expr::Expr>) -> expr::Expr {
-    ScalarUDF::from(StructFunction::new(
+    ScalarUDF::from(StructFromFields::new(
         (0..exprs.len()).map(|i| format!("col{}", i + 1)).collect(),
     ))
     .call(exprs)

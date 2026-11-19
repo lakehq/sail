@@ -8,7 +8,7 @@ use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
 use sail_common_datafusion::type_coercion::binary_type_coercion::comparison_coercion;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::array::array::Array;
+use sail_function::scalar::array::array_from_values::ArrayFromValues;
 use sail_function::scalar::map::map_entries::MapEntries;
 use sail_function::scalar::map::map_from::{MapFromArrays, MapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
@@ -52,7 +52,7 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         Ok::<_, PlanError>(nullable || value.nullable(schema.as_ref())?)
     })?;
 
-    let array = ScalarUDF::from(Array::new());
+    let array = ScalarUDF::from(ArrayFromValues::new());
     let keys = array.call(keys);
     let values = array.call(values);
     let values = cast_list_value_nullability(values, schema, true)?;

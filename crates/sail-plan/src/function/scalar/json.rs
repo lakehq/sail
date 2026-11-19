@@ -7,7 +7,7 @@ use datafusion_expr::{Expr, ScalarUDF, cast, expr, lit, when};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
 use datafusion_spark::expr_fn::json_tuple as df_json_tuple;
 use sail_common_datafusion::literal::LiteralEvaluator;
-use sail_function::scalar::array::array::Array;
+use sail_function::scalar::array::array_from_values::ArrayFromValues;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::json::{
     FromJson, SchemaOfJson, json_as_text_udf, json_length_udf, json_object_keys_udf, to_json_udf,
@@ -169,7 +169,7 @@ fn json_tuple(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let json_tuple_expr = df_json_tuple(arguments);
 
     // Wrap in array and explode with Inline
-    let array_expr = ScalarUDF::from(Array::new()).call(vec![json_tuple_expr]);
+    let array_expr = ScalarUDF::from(ArrayFromValues::new()).call(vec![json_tuple_expr]);
     Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![array_expr]))
 }
 
