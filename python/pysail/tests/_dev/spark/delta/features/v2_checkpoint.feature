@@ -448,6 +448,7 @@ Feature: Delta Lake V2 Checkpoint (Sidecar Checkpoints)
         TBLPROPERTIES (
           'delta.checkpointInterval' = '2',
           'delta.logRetentionDuration' = 'interval 0 seconds',
+          'delta.deletedFileRetentionDuration' = 'interval 0 seconds',
           'delta.enableExpiredLogCleanup' = 'true',
           'delta.feature.v2Checkpoint' = 'enabled',
           'delta.checkpointPolicy' = 'v2'

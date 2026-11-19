@@ -2,6 +2,7 @@
 
 pub(crate) mod copy_on_write;
 pub mod expressions;
+pub mod imported_source;
 pub(crate) mod parquet;
 pub(crate) mod partition_defaults;
 pub(crate) mod predicate;

@@ -133,8 +133,8 @@ use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
     DeltaCommitContext, DeltaCommitExec, DeltaDecodePath, DeltaDiscoveryExec, DeltaLogReplayExec,
-    DeltaLogReplayMode, DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
-    DeltaSnapshotContext, DeltaWriteContext, DeltaWriterExec,
+    DeltaLogReplayMode, DeltaMetadataStatsExec, DeltaPathKey, DeltaRemoveActionsExec,
+    DeltaScanByAddsExec, DeltaSnapshotContext, DeltaWriteContext, DeltaWriterExec,
 };
 use sail_delta_lake::schema::PhysicalPartitionColumn;
 use sail_delta_lake::spec::{
@@ -301,6 +301,7 @@ use sail_function::scalar::xml::to_xml::ToXml;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{XpathTyped, xpath_typed_name_to_kind};
 use sail_function::window::{FirstLastValue, FirstLastValueKind, Ntile};
+use sail_iceberg::physical_plan::merge_metadata_exec::UnsupportedIcebergRowScanExec;
 use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec,
     IcebergEqualityDeleteWriterExec, IcebergFileTasksExec, IcebergManifestScanExec,
@@ -845,6 +846,30 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(BinarySource::new(table_schema)),
                 )?;
                 let source = FileScanConfigBuilder::from(source).build();
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+            }
+            NodeKind::IcebergImported(r#gen::IcebergImportedExecNode {
+                base_config,
+                format,
+            }) => {
+                let format = match format.as_str() {
+                    "avro" => sail_iceberg::spec::DataFileFormat::Avro,
+                    "orc" => sail_iceberg::spec::DataFileFormat::Orc,
+                    _ => return plan_err!("Invalid imported Iceberg file format: {format}"),
+                };
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
+                let source = parse_protobuf_file_scan_config(
+                    &base_config,
+                    &PhysicalPlanDecodeContext::new(ctx, self),
+                    proto_converter,
+                    Arc::new(
+                        sail_iceberg::datasource::imported_source::IcebergImportedFileSource::new(
+                            table_schema,
+                            format,
+                        ),
+                    ),
+                )?;
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Avro(r#gen::AvroExecNode { base_config }) => {
@@ -1939,6 +1964,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     schema, &scan,
                 )?))
             }
+            NodeKind::UnsupportedIcebergRowScanSchema(schema) => Ok(Arc::new(
+                UnsupportedIcebergRowScanExec::new(Arc::new(try_decode_schema(&schema)?)),
+            )),
             NodeKind::IcebergMetadataScan(r#gen::IcebergMetadataScanExecNode { input }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -2719,6 +2747,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         proto_converter,
                     )?)?;
                     NodeKind::Arrow(r#gen::ArrowExecNode { base_config })
+                } else if let Some(imported) = file_source.downcast_ref::<sail_iceberg::datasource::imported_source::IcebergImportedFileSource>() {
+                    let base_config = try_encode_message(serialize_file_scan_config(file_scan, self, proto_converter)?)?;
+                    NodeKind::IcebergImported(r#gen::IcebergImportedExecNode { base_config, format: match imported.format() { sail_iceberg::spec::DataFileFormat::Orc => "orc", _ => "avro" }.into() })
                 } else if file_source.is::<AvroSource>() {
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
@@ -3433,6 +3464,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 iceberg_schema_json,
                 input_file_projection,
             })
+        } else if node.is::<UnsupportedIcebergRowScanExec>() {
+            NodeKind::UnsupportedIcebergRowScanSchema(try_encode_schema(node.schema().as_ref())?)
         } else if let Some(merge_metadata) = node.downcast_ref::<IcebergMergeMetadataExec>() {
             let input = try_encode_physical_plan_with_converter(
                 self,
@@ -3933,8 +3966,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = FromJson::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkVariantGet(r#gen::SparkVariantGetUdf { safe }) => {
-                return Ok(Arc::new(ScalarUDF::from(VariantGet::new(safe))));
+            UdfKind::SparkVariantGet(r#gen::SparkVariantGetUdf { safe, timezone }) => {
+                let timezone = timezone.as_deref().unwrap_or("UTC").into();
+                return Ok(Arc::new(ScalarUDF::from(VariantGet::new(safe, timezone))));
             }
             UdfKind::SparkNextDay(r#gen::SparkNextDayUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(NextDay::new(ansi_mode))));
@@ -4230,6 +4264,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
             "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
             "delta_decode_path" => Ok(Arc::new(ScalarUDF::from(DeltaDecodePath::default()))),
+            "delta_path_key" => Ok(Arc::new(ScalarUDF::from(DeltaPathKey::default()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -4243,6 +4278,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<CollectionElement>()
             || node_inner.is::<MapExplodeEntry>()
             || node_inner.is::<DeltaDecodePath>()
+            || node_inner.is::<DeltaPathKey>()
             || node_inner.is::<MapExtract>()
             || node_inner.is::<ArrayItemWithPosition>()
             || node_inner.is::<ArrayStructField>()
@@ -4557,7 +4593,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkTime(r#gen::SparkTimeUdf { is_try })
         } else if let Some(func) = node.inner().downcast_ref::<VariantGet>() {
             let safe = func.safe();
-            UdfKind::SparkVariantGet(r#gen::SparkVariantGetUdf { safe })
+            let timezone = Some(func.timezone().to_owned());
+            UdfKind::SparkVariantGet(r#gen::SparkVariantGetUdf { safe, timezone })
         } else if let Some(func) = node.inner().downcast_ref::<ParseJson>() {
             let safe = func.safe();
             UdfKind::SparkParseJson(r#gen::SparkParseJsonUdf { safe })
@@ -8484,6 +8521,33 @@ mod tests {
         let decoded = round_trip_udf(ScalarUDF::from(MapExplodeEntry::default()))?;
         downcast_udf::<MapExplodeEntry>(&decoded, "MapExplodeEntry")?;
         assert_eq!(decoded.name(), "map_explode_entry");
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_delta_path_key_udf() -> Result<()> {
+        use datafusion::common::config::ConfigOptions;
+        use datafusion::physical_expr::ScalarFunctionExpr;
+        use datafusion::physical_expr::expressions::Literal;
+
+        let decoded = round_trip_udf(ScalarUDF::from(DeltaPathKey::default()))?;
+        downcast_udf::<DeltaPathKey>(&decoded, "DeltaPathKey")?;
+        let schema = Arc::new(Schema::empty());
+        let expression = ScalarFunctionExpr::try_new(
+            decoded,
+            vec![Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                "café/%c3%a9/%252f".to_string(),
+            ))))],
+            schema.as_ref(),
+            Arc::new(ConfigOptions::default()),
+        )?;
+        let result = expression
+            .evaluate(&RecordBatch::new_empty(schema))?
+            .into_array(1)?;
+        assert_eq!(
+            ScalarValue::try_from_array(result.as_ref(), 0)?,
+            ScalarValue::Utf8(Some("café/%C3%A9/%252f".to_string())),
+        );
         Ok(())
     }
 
