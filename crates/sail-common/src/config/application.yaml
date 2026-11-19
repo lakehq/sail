@@ -1018,7 +1018,7 @@
 
 - key: optimizer.enable_window_topn
   type: boolean
-  default: "false"
+  default: "true"
   description: |
     Whether to optimize partitioned `ROW_NUMBER` and `RANK` windows with an upper-bound
     filter using a per-partition top-k operator instead of sorting all input rows.
