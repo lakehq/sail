@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use datafusion_common::{DataFusionError, Result};
 use parquet::basic::{Compression, GzipLevel, ZstdLevel};
 use parquet::file::properties::WriterProperties;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::variant::DEFAULT_VARIANT_INFERENCE_NODE_BUDGET;
@@ -186,6 +187,7 @@ impl IcebergWriterExecOptions {
         };
         Ok(WriterProperties::builder()
             .set_compression(compression)
+            .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
             .set_statistics_truncate_length(None)
             .set_max_row_group_bytes(Some(positive(
                 "write.parquet.row-group-size-bytes",

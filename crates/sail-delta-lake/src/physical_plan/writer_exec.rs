@@ -36,6 +36,7 @@ use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{StreamExt, once};
 use object_store::ObjectStoreExt;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use sail_common_datafusion::array::record_batch::cast_array_recursively;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
@@ -976,8 +977,14 @@ impl DeltaWriterExec {
                 if actions.is_empty() {
                     // An empty CDC file also suppresses inferred changes from copied data files.
                     let file_name = format!("cdc-{}.parquet", uuid::Uuid::new_v4());
-                    let parquet =
-                        parquet::arrow::ArrowWriter::try_new(Vec::new(), writer_schema, None)?;
+                    let properties = parquet::file::properties::WriterProperties::builder()
+                        .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
+                        .build();
+                    let parquet = parquet::arrow::ArrowWriter::try_new(
+                        Vec::new(),
+                        writer_schema,
+                        Some(properties),
+                    )?;
                     let bytes = parquet.into_inner()?;
                     let size = i64::try_from(bytes.len())
                         .map_err(|error| DataFusionError::External(Box::new(error)))?;
@@ -1027,10 +1034,13 @@ impl DeltaWriterExec {
                 if cdc_actions.is_empty() {
                     // Suppress Add/Remove inference for a rewrite with no change events.
                     let file_name = format!("cdc-{}.parquet", uuid::Uuid::new_v4());
+                    let properties = parquet::file::properties::WriterProperties::builder()
+                        .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
+                        .build();
                     let parquet = parquet::arrow::ArrowWriter::try_new(
                         Vec::new(),
                         change_data_schema(&writer_schema),
-                        None,
+                        Some(properties),
                     )?;
                     let bytes = parquet.into_inner()?;
                     let size = i64::try_from(bytes.len())

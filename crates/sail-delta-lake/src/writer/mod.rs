@@ -27,6 +27,7 @@ use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
 use partitioning::partition_ranges;
+use sail_common::utils::parquet::SAIL_PARQUET_CREATED_BY;
 use stats::create_add;
 use uuid::Uuid;
 use variant_shredding::{
@@ -99,6 +100,7 @@ impl WriterConfig {
         let writer_properties = writer_properties.unwrap_or_else(|| {
             WriterProperties::builder()
                 .set_compression(Compression::SNAPPY)
+                .set_created_by(SAIL_PARQUET_CREATED_BY.to_string())
                 .build()
         });
 
