@@ -18,9 +18,9 @@ use sail_common::spec;
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::explode::Explode;
-use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
+use sail_function::scalar::misc::monotonically_increasing_id::MonotonicallyIncreasingId;
+use sail_function::scalar::misc::partition_id::PartitionId;
 use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
-use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
 use sail_logical_optimizer::{is_order_irrelevant_aggregate, push_down_left_semi_anti_join};
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::seeded_random::SeededRandomNode;
@@ -436,8 +436,8 @@ impl PlanResolver<'_> {
         for group in &grouping {
             group.expr.apply(|expr| {
                 if let Expr::ScalarFunction(function) = expr
-                    && (function.func.inner().is::<SparkMonotonicallyIncreasingId>()
-                        || function.func.inner().is::<SparkPartitionId>())
+                    && (function.func.inner().is::<MonotonicallyIncreasingId>()
+                        || function.func.inner().is::<PartitionId>())
                     && !partition_expressions.contains(expr)
                 {
                     partition_expressions.push(expr.clone());

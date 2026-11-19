@@ -630,11 +630,11 @@ mod tests {
     fn test_call_scope_keeps_nested_calls_and_reuses_outer_expressions() -> Result<()> {
         use datafusion::functions_nested::expr_fn::make_array;
         use datafusion_expr::ScalarUDF;
-        use sail_function::scalar::array::spark_shuffle::SparkShuffle;
+        use sail_function::scalar::array::shuffle::Shuffle;
         use sail_function::scalar::math::random::Random;
 
         let random = ScalarUDF::from(Random::new());
-        let outer = ScalarUDF::from(SparkShuffle::new()).call(vec![
+        let outer = ScalarUDF::from(Shuffle::new()).call(vec![
             make_array(vec![random.call(vec![lit(1_i64)]), lit(0.0)]),
             lit(3_i64),
         ]);

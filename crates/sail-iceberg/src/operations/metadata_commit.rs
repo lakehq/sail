@@ -252,6 +252,9 @@ pub(crate) fn apply_snapshot_updates(
     let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
     for update in updates {
         match update {
+            TableUpdate::SetProperties { updates } => {
+                metadata.properties.extend(updates.clone());
+            }
             TableUpdate::AddSnapshot { snapshot } => {
                 metadata.last_sequence_number = metadata
                     .last_sequence_number

@@ -136,7 +136,7 @@ impl PlanResolver<'_> {
         use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
         use sail_function::aggregate::first_last::first_value;
         use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
-        use sail_function::scalar::r#struct::struct_function::StructFunction;
+        use sail_function::scalar::r#struct::struct_from_fields::StructFromFields;
         if query.all_out_ref_exprs().is_empty() || query.schema().fields().len() != 1 {
             return Ok(expr_fn::scalar_subquery(Arc::new(query)));
         }
@@ -273,7 +273,7 @@ impl PlanResolver<'_> {
         } else {
             // Carry both results through decorrelation without asserting here:
             // an inner group may have no matching outer row at all.
-            ScalarUDF::from(StructFunction::new(vec!["value".into(), "count".into()])).call(vec![
+            ScalarUDF::from(StructFromFields::new(vec!["value".into(), "count".into()])).call(vec![
                 value,
                 Expr::Column(Column::new_unqualified(count_name)),
             ])

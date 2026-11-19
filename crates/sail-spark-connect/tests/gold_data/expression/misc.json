@@ -4545,7 +4545,7 @@
                 "timestampType": "withLocalTimeZone"
               }
             },
-            "rename": true,
+            "naming": "cast",
             "isTry": true
           }
         }
@@ -4571,7 +4571,7 @@
                 "timestampType": "withoutTimeZone"
               }
             },
-            "rename": true,
+            "naming": "cast",
             "isTry": true
           }
         }
@@ -4609,7 +4609,7 @@
                 "timestampType": "withLocalTimeZone"
               }
             },
-            "rename": true,
+            "naming": "cast",
             "isTry": true
           }
         }
@@ -4647,7 +4647,7 @@
                 "timestampType": "withoutTimeZone"
               }
             },
-            "rename": true,
+            "naming": "cast",
             "isTry": true
           }
         }

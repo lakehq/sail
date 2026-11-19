@@ -17,33 +17,31 @@ use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::length::SparkLengthFunc;
 use regex_syntax::hir::Look;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::conversion::spark_cast_string_to_int32::SparkCastStringToInt32;
-use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
+use sail_function::scalar::conversion::cast_string_to_int32::CastStringToInt32;
+use sail_function::scalar::conversion::to_string::ToUtf8;
+use sail_function::scalar::string::base64::{Base64, Unbase64};
 use sail_function::scalar::string::btrim::BTrimFunc;
+use sail_function::scalar::string::concat_ws::ConcatWs;
+use sail_function::scalar::string::encode_decode::{Decode, Encode};
 use sail_function::scalar::string::format_number::FormatNumber;
+use sail_function::scalar::string::length::{BitLength, OctetLength};
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::lower::LowerFunc;
 use sail_function::scalar::string::ltrim::LtrimFunc;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
+use sail_function::scalar::string::mask::Mask;
+use sail_function::scalar::string::quote::Quote;
 use sail_function::scalar::string::randstr::Randstr;
+use sail_function::scalar::string::regexp_extract_all::{RegexpExtract, RegexpExtractAll};
+use sail_function::scalar::string::regexp_instr::RegexpInstr;
 use sail_function::scalar::string::replace::ReplaceFunc;
 use sail_function::scalar::string::rtrim::RtrimFunc;
+use sail_function::scalar::string::sentences::Sentences;
 use sail_function::scalar::string::soundex::Soundex;
-use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
-use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
-use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
-use sail_function::scalar::string::spark_length::{SparkBitLength, SparkOctetLength};
-use sail_function::scalar::string::spark_mask::SparkMask;
-use sail_function::scalar::string::spark_quote::SparkQuote;
-use sail_function::scalar::string::spark_regexp_extract_all::{
-    SparkRegexpExtract, SparkRegexpExtractAll,
-};
-use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
-use sail_function::scalar::string::spark_sentences::SparkSentences;
-use sail_function::scalar::string::spark_split::SparkSplit;
-use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
-use sail_function::scalar::string::spark_to_char::SparkToChar;
-use sail_function::scalar::string::spark_to_number::SparkToNumber;
+use sail_function::scalar::string::split::Split;
+use sail_function::scalar::string::to_binary::{ToBinary, TryToBinary};
+use sail_function::scalar::string::to_char::ToChar;
+use sail_function::scalar::string::to_number::ToNumber;
 use sail_function::scalar::string::upper::UpperFunc;
 
 use crate::error::{PlanError, PlanResult};
@@ -125,7 +123,7 @@ fn regexp_instr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }
     let ansi_mode = input.function_context.plan_config.ansi_mode;
     let index = if index_type.is_string() && !ansi_mode {
-        ScalarUDF::from(SparkCastStringToInt32::new()).call(vec![index])
+        ScalarUDF::from(CastStringToInt32::new()).call(vec![index])
     } else {
         // ANSI conversion is deferred until the search arguments are evaluated.
         // Non-ANSI numeric narrowing preserves NULLs, and the converted value is unused.
@@ -133,9 +131,7 @@ fn regexp_instr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     };
     Ok(expr::Expr::HigherOrderFunction(
         expr::HigherOrderFunction::new(
-            Arc::new(HigherOrderUDF::new_from_impl(SparkRegexpInstr::new(
-                ansi_mode,
-            ))),
+            Arc::new(HigherOrderUDF::new_from_impl(RegexpInstr::new(ansi_mode))),
             vec![
                 cast(string, DataType::Utf8),
                 cast(pattern, DataType::Utf8),
@@ -313,7 +309,7 @@ fn length_argument(input: ScalarFunctionInput, name: &str) -> PlanResult<expr::E
         | DataType::Union(_, _) => Err(PlanError::invalid(format!(
             "`{name}` does not support {data_type} input"
         ))),
-        _ => Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![arg])),
+        _ => Ok(ScalarUDF::from(ToUtf8::new()).call(vec![arg])),
     }
 }
 
@@ -324,12 +320,12 @@ fn length(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
 fn bit_length(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let arg = length_argument(input, "bit_length")?;
-    Ok(ScalarUDF::from(SparkBitLength::new()).call(vec![arg]))
+    Ok(ScalarUDF::from(BitLength::new()).call(vec![arg]))
 }
 
 fn octet_length(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let arg = length_argument(input, "octet_length")?;
-    Ok(ScalarUDF::from(SparkOctetLength::new()).call(vec![arg]))
+    Ok(ScalarUDF::from(OctetLength::new()).call(vec![arg]))
 }
 
 fn ascii(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -396,7 +392,7 @@ fn implicit_string_argument(
                 arguments.push(lit(interval.clone()));
             }
             ScalarUDF::new_from_impl(
-                SparkToUtf8::new()
+                ToUtf8::new()
                     .with_timezone(Some(function_context.plan_config.session_timezone_label())),
             )
             .call(arguments)
@@ -491,9 +487,9 @@ fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             };
             match scalar.try_as_str() {
                 Some(Some(name)) => match name.trim().to_lowercase().as_str() {
-                    "base64" => Ok(ScalarUDF::from(SparkBase64::new()).call(vec![value])),
+                    "base64" => Ok(ScalarUDF::from(Base64::new()).call(vec![value])),
                     "hex" => Ok(math_fn::hex(value)),
-                    "utf-8" => Ok(ScalarUDF::from(SparkDecode::new()).call(vec![value, format])),
+                    "utf-8" => Ok(ScalarUDF::from(Decode::new()).call(vec![value, format])),
                     invalid => Err(PlanError::invalid(format!(
                         "to_char: the value of the `format` parameter expects one of binary formats 'base64', 'hex', 'utf-8', but got '{invalid}'"
                     ))),
@@ -508,7 +504,7 @@ fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
         _ => {
             let ansi_mode = function_context.plan_config.ansi_mode;
-            Ok(ScalarUDF::from(SparkToChar::new(ansi_mode)).call(vec![value, format]))
+            Ok(ScalarUDF::from(ToChar::new(ansi_mode)).call(vec![value, format]))
         }
     }
 }
@@ -518,7 +514,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
 
     vec![
         ("ascii", F::custom(ascii)),
-        ("base64", F::udf(SparkBase64::new())),
+        ("base64", F::udf(Base64::new())),
         ("bit_length", F::custom(bit_length)),
         ("btrim", F::custom(btrim)),
         ("char", F::unary(expr_fn::chr)),
@@ -527,11 +523,11 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("chr", F::unary(expr_fn::chr)),
         ("collate", F::unknown("collate")),
         ("collation", F::unknown("collation")),
-        ("concat_ws", F::udf(SparkConcatWs::new())),
+        ("concat_ws", F::udf(ConcatWs::new())),
         ("contains", F::custom(contains)),
-        ("decode", F::udf(SparkDecode::new())),
+        ("decode", F::udf(Decode::new())),
         ("elt", F::udf(SparkElt::new())),
-        ("encode", F::udf(SparkEncode::new())),
+        ("encode", F::udf(Encode::new())),
         ("endswith", F::custom(endswith)),
         ("find_in_set", F::binary(expr_fn::find_in_set)),
         ("format_number", F::udf(FormatNumber::new())),
@@ -555,16 +551,16 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ),
         ("luhn_check", F::unary(string_fn::luhn_check)),
         ("make_valid_utf8", F::udf(MakeValidUtf8::new())),
-        ("mask", F::udf(SparkMask::new())),
+        ("mask", F::udf(Mask::new())),
         ("octet_length", F::custom(octet_length)),
         ("overlay", F::var_arg(overlay)),
         ("position", F::custom(position)),
         ("printf", F::udf(FormatStringFunc::new())),
-        ("quote", F::udf(SparkQuote::new())),
+        ("quote", F::udf(Quote::new())),
         ("randstr", F::udf(Randstr::new())),
         ("regexp_count", F::udf(RegexpCountFunc::new())),
-        ("regexp_extract", F::udf(SparkRegexpExtract::new())),
-        ("regexp_extract_all", F::udf(SparkRegexpExtractAll::new())),
+        ("regexp_extract", F::udf(RegexpExtract::new())),
+        ("regexp_extract_all", F::udf(RegexpExtractAll::new())),
         ("regexp_instr", F::custom(regexp_instr)),
         ("regexp_replace", F::ternary(regexp_replace)),
         ("regexp_substr", F::custom(regexp_substr)),
@@ -578,18 +574,18 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
                 ScalarUDF::from(RtrimFunc::new()).call(args)
             })),
         ),
-        ("sentences", F::udf(SparkSentences::new())),
+        ("sentences", F::udf(Sentences::new())),
         ("soundex", F::udf(Soundex::new())),
         ("space", F::unary(space)),
-        ("split", F::udf(SparkSplit::new())),
+        ("split", F::udf(Split::new())),
         ("split_part", F::ternary(expr_fn::split_part)),
         ("startswith", F::custom(startswith)),
         ("substr", F::custom(substr)),
         ("substring", F::custom(substr)),
         ("substring_index", F::ternary(expr_fn::substr_index)),
-        ("to_binary", F::udf(SparkToBinary::new())),
+        ("to_binary", F::udf(ToBinary::new())),
         ("to_char", F::custom(to_char)),
-        ("to_number", F::udf(SparkToNumber::new(false))),
+        ("to_number", F::udf(ToNumber::new(false))),
         ("to_varchar", F::custom(to_char)),
         ("translate", F::ternary(expr_fn::translate)),
         (
@@ -598,11 +594,11 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
                 ScalarUDF::from(BTrimFunc::new()).call(args)
             })),
         ),
-        ("try_to_binary", F::udf(SparkTryToBinary::new())),
-        ("try_to_number", F::udf(SparkToNumber::new(true))),
+        ("try_to_binary", F::udf(TryToBinary::new())),
+        ("try_to_number", F::udf(ToNumber::new(true))),
         ("try_validate_utf8", F::custom(try_validate_utf8)),
         ("ucase", F::custom(upper)),
-        ("unbase64", F::udf(SparkUnbase64::new())),
+        ("unbase64", F::udf(Unbase64::new())),
         ("upper", F::custom(upper)),
         ("validate_utf8", F::custom(validate_utf8)),
         ("strpos", F::binary(expr_fn::strpos)),

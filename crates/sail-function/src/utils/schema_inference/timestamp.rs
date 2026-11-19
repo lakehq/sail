@@ -3,7 +3,7 @@
 use chrono::{NaiveDate, NaiveTime};
 use sail_common_datafusion::utils::datetime::SparkZone;
 
-use crate::scalar::datetime::timestamp_parser::parse_timestamp_string;
+use crate::scalar::datetime::utils::parser::parse_timestamp_string;
 
 /// Returns true if the string matches a timestamp/date that Spark's
 /// `inferTimestamp` option would promote to `TIMESTAMP`. This is a faithful

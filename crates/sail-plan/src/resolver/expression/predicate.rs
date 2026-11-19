@@ -11,10 +11,10 @@ use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit}
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::get_field;
 use sail_common::spec;
-use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
-use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
-use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::r#struct::spark_struct_rename::SparkStructRename;
+use sail_function::scalar::array::array_transform::ArrayTransform;
+use sail_function::scalar::conversion::to_string::ToUtf8;
+use sail_function::scalar::datetime::timestamp::Timestamp;
+use sail_function::scalar::r#struct::struct_rename::StructRename;
 use sail_function::scalar::r#struct::update_struct_field::UpdateStructField;
 use sail_logical_optimizer::type_coercion::{
     case_result_type, cast_case_result_value, cast_nested_value,
@@ -27,7 +27,7 @@ use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 
 static SPARK_IN_ARRAY_TRANSFORM_UDF: LazyLock<Arc<HigherOrderUDF>> =
-    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new())));
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(ArrayTransform::new())));
 
 enum TimestampStringInCoercion {
     ToString,
@@ -189,15 +189,15 @@ fn apply_timestamp_string_in_coercion(
             let target_type = DataType::Timestamp(TimeUnit::Microsecond, timezone.clone());
             Ok(match data_type {
                 data_type if data_type.is_string() => {
-                    ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
+                    ScalarUDF::from(Timestamp::try_new(timezone.clone(), ansi_mode, false)?)
                         .call(vec![expression])
                 }
                 DataType::Null => cast(expression, target_type),
                 DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None)
                     if timezone.is_some() =>
                 {
-                    let string = ScalarUDF::from(SparkToUtf8::new()).call(vec![expression]);
-                    ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
+                    let string = ScalarUDF::from(ToUtf8::new()).call(vec![expression]);
+                    ScalarUDF::from(Timestamp::try_new(timezone.clone(), ansi_mode, false)?)
                         .call(vec![string])
                 }
                 DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
@@ -268,7 +268,7 @@ fn apply_timestamp_string_in_coercion(
                 .zip(&unique_names)
                 .map(|(field, name)| Arc::new(field.as_ref().clone().with_name(name)))
                 .collect::<Vec<Arc<Field>>>();
-            expression = ScalarUDF::from(SparkStructRename::new(DataType::Struct(Fields::from(
+            expression = ScalarUDF::from(StructRename::new(DataType::Struct(Fields::from(
                 unique_fields,
             ))))
             .call(vec![expression]);
@@ -302,7 +302,7 @@ fn apply_timestamp_string_in_coercion(
                 .map(|(field, name)| Arc::new(field.as_ref().clone().with_name(name)))
                 .collect::<Vec<Arc<Field>>>();
             Ok(
-                ScalarUDF::from(SparkStructRename::new(DataType::Struct(Fields::from(
+                ScalarUDF::from(StructRename::new(DataType::Struct(Fields::from(
                     output_fields,
                 ))))
                 .call(vec![expression]),
@@ -901,7 +901,7 @@ fn coerce_string_to_timestamp(
     timezone: Option<Arc<str>>,
     ansi_mode: bool,
 ) -> DataFusionResult<expr::Expr> {
-    let function = ScalarUDF::from(SparkTimestamp::try_new(timezone, ansi_mode, false)?);
+    let function = ScalarUDF::from(Timestamp::try_new(timezone, ansi_mode, false)?);
     Ok(function.call(vec![expression]))
 }
 
@@ -918,10 +918,10 @@ fn stringify_non_ansi_expression(
         let metadata = interval
             .to_json()
             .map_err(|error| datafusion_common::DataFusionError::Plan(error.to_string()))?;
-        return Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![expression, lit(metadata)]));
+        return Ok(ScalarUDF::from(ToUtf8::new()).call(vec![expression, lit(metadata)]));
     }
     let expression = localize_timestamp_for_string(expression, data_type, session_timezone);
-    Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![expression]))
+    Ok(ScalarUDF::from(ToUtf8::new()).call(vec![expression]))
 }
 
 pub(in crate::resolver) fn spark_interval_metadata_for_expression(

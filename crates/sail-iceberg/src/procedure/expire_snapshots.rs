@@ -367,7 +367,7 @@ pub(crate) fn checked_path(store: &StoreContext, table: &Url, raw: &str) -> Resu
                 "expire_snapshots cannot access a path outside the table's object store: {raw}"
             );
         }
-        return crate::utils::url_to_object_path(&url);
+        return store.resolve_to_absolute_path(raw);
     } else if raw.contains("://") || raw.starts_with("//") {
         return plan_err!("Invalid Iceberg expiration path: {raw}");
     }

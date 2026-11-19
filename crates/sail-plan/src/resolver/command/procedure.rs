@@ -482,7 +482,7 @@ impl PlanResolver<'_> {
                 spec::Expr::Cast {
                     expr: Box::new(argument),
                     cast_to_type: target,
-                    rename: false,
+                    naming: spec::CastNaming::Cast,
                     is_try: false,
                 },
                 &schema,

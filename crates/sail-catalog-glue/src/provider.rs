@@ -7,14 +7,15 @@ use aws_credential_types::Credentials;
 use aws_sdk_glue::Client;
 use aws_sdk_glue::config::Region;
 use aws_sdk_glue::types::{
-    StorageDescriptor, Table, TableInput, ViewDefinitionInput, ViewRepresentationInput,
+    Partition, StorageDescriptor, Table, TableInput, ViewDefinitionInput, ViewRepresentationInput,
 };
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveDetectedFormat;
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
-    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, LakeSourceCreateMetadataMode, Namespace,
+    AlterTableOptions, CatalogFilePartition, CatalogProvider, CreateDatabaseOptions,
+    CreateTableMetadataRequirement, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, LakeSourceCreateMetadataMode,
+    Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -157,15 +158,7 @@ impl GlueCatalogProvider {
         } else if let Some(provider) = table_provider_format(table.parameters()) {
             provider
         } else {
-            HiveDetectedFormat::detect(
-                storage
-                    .and_then(|sd| sd.serde_info())
-                    .and_then(|si| si.serialization_library()),
-                storage.and_then(|sd| sd.input_format()),
-                storage.and_then(|sd| sd.output_format()),
-            )
-            .as_str()
-            .to_string()
+            hive_storage_format(storage)
         };
 
         // Extract columns from storage descriptor
@@ -407,6 +400,29 @@ impl GlueCatalogProvider {
     }
 }
 
+fn hive_storage_format(storage: Option<&StorageDescriptor>) -> String {
+    HiveDetectedFormat::detect(
+        storage
+            .and_then(|sd| sd.serde_info())
+            .and_then(|si| si.serialization_library()),
+        storage.and_then(|sd| sd.input_format()),
+        storage.and_then(|sd| sd.output_format()),
+    )
+    .as_str()
+    .to_string()
+}
+
+fn registered_file_partition(partition: Partition) -> CatalogFilePartition {
+    CatalogFilePartition {
+        format: hive_storage_format(partition.storage_descriptor()),
+        location: partition
+            .storage_descriptor
+            .and_then(|sd| sd.location)
+            .map(sail_catalog::hive_format::file_source_location),
+        values: partition.values.unwrap_or_default(),
+    }
+}
+
 fn table_provider_format(parameters: Option<&HashMap<String, String>>) -> Option<String> {
     let provider = parameters?
         .get(hive::SPARK_DATASOURCE_PROVIDER_KEY)?
@@ -634,6 +650,77 @@ impl CatalogProvider for GlueCatalogProvider {
         } else {
             Ok(CreateTableMetadataRequirement::None)
         }
+    }
+
+    async fn list_file_partitions(
+        &self,
+        database: &Namespace,
+        table: &str,
+        partition_values: &[Option<String>],
+    ) -> CatalogResult<Option<Vec<CatalogFilePartition>>> {
+        if partition_values.is_empty() {
+            return Ok(None);
+        }
+        let client = self.get_client().await?;
+        let database = Self::database_name(database)?;
+        if let Some(values) = partition_values.iter().cloned().collect::<Option<Vec<_>>>() {
+            let response = client
+                .get_partition()
+                .set_catalog_id(self.catalog_id())
+                .database_name(database)
+                .table_name(table)
+                .set_partition_values(Some(values))
+                .send()
+                .await;
+            return match response {
+                Ok(page) => {
+                    let partition = page.partition.ok_or_else(|| {
+                        CatalogError::External("Empty Glue partition response".into())
+                    })?;
+                    Ok(Some(vec![registered_file_partition(partition)]))
+                }
+                Err(error)
+                    if error
+                        .as_service_error()
+                        .is_some_and(|e| e.is_entity_not_found_exception()) =>
+                {
+                    Ok(Some(vec![]))
+                }
+                Err(error) => Err(CatalogError::External(format!(
+                    "Failed to get Glue partition: {error}"
+                ))),
+            };
+        }
+        let mut pages = client
+            .get_partitions()
+            .set_catalog_id(self.catalog_id())
+            .database_name(database)
+            .table_name(table)
+            .exclude_column_schema(true)
+            .into_paginator()
+            .send();
+        let mut partitions = Vec::new();
+        while let Some(page) =
+            pages.next().await.transpose().map_err(|e| {
+                CatalogError::External(format!("Failed to list Glue partitions: {e}"))
+            })?
+        {
+            for partition in page.partitions.unwrap_or_default() {
+                if partition.values().len() != partition_values.len() {
+                    return Err(CatalogError::InvalidArgument(
+                        "Glue partition value count does not match its columns".into(),
+                    ));
+                }
+                if partition_values
+                    .iter()
+                    .zip(partition.values())
+                    .all(|(key, value)| key.as_ref().is_none_or(|v| v == value))
+                {
+                    partitions.push(registered_file_partition(partition));
+                }
+            }
+        }
+        Ok(Some(partitions))
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {

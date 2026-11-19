@@ -19,17 +19,17 @@ use crate::utils::theta_sketch::{
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ThetaSketchAggFunction {
+pub struct ThetaSketchAgg {
     signature: Signature,
 }
 
-impl Default for ThetaSketchAggFunction {
+impl Default for ThetaSketchAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ThetaSketchAggFunction {
+impl ThetaSketchAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -40,7 +40,7 @@ impl ThetaSketchAggFunction {
     }
 }
 
-impl AggregateUDFImpl for ThetaSketchAggFunction {
+impl AggregateUDFImpl for ThetaSketchAgg {
     fn name(&self) -> &str {
         "theta_sketch_agg"
     }
@@ -72,17 +72,17 @@ impl AggregateUDFImpl for ThetaSketchAggFunction {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ThetaUnionAggFunction {
+pub struct ThetaUnionAgg {
     signature: Signature,
 }
 
-impl Default for ThetaUnionAggFunction {
+impl Default for ThetaUnionAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ThetaUnionAggFunction {
+impl ThetaUnionAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -93,7 +93,7 @@ impl ThetaUnionAggFunction {
     }
 }
 
-impl AggregateUDFImpl for ThetaUnionAggFunction {
+impl AggregateUDFImpl for ThetaUnionAgg {
     fn name(&self) -> &str {
         "theta_union_agg"
     }
@@ -125,17 +125,17 @@ impl AggregateUDFImpl for ThetaUnionAggFunction {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct ThetaIntersectionAggFunction {
+pub struct ThetaIntersectionAgg {
     signature: Signature,
 }
 
-impl Default for ThetaIntersectionAggFunction {
+impl Default for ThetaIntersectionAgg {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ThetaIntersectionAggFunction {
+impl ThetaIntersectionAgg {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(vec![TypeSignature::Any(1)], Volatility::Immutable),
@@ -143,7 +143,7 @@ impl ThetaIntersectionAggFunction {
     }
 }
 
-impl AggregateUDFImpl for ThetaIntersectionAggFunction {
+impl AggregateUDFImpl for ThetaIntersectionAgg {
     fn name(&self) -> &str {
         "theta_intersection_agg"
     }

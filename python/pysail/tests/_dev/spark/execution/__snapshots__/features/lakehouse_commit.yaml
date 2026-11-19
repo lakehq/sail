@@ -298,6 +298,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
@@ -734,6 +737,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -1207,6 +1213,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -1907,6 +1916,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/)
@@ -2543,6 +2555,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     SAME TEXT AS ABOVE
 
@@ -3054,6 +3069,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:

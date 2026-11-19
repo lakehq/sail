@@ -428,6 +428,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -967,6 +970,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -1511,6 +1517,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -2053,6 +2062,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -2592,6 +2604,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -3136,6 +3151,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -3676,6 +3694,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -4219,6 +4240,9 @@ data:
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
 
+    physical_plan after JoinReorder:
+    SAME TEXT AS ABOVE
+
     physical_plan after join_selection:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -4759,6 +4783,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after JoinReorder:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:

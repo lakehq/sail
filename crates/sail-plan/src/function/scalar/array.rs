@@ -14,18 +14,18 @@ use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
 use sail_common::utils::string::SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::array_compact::ArrayCompact;
+use sail_function::scalar::array::array_from_values::ArrayFromValues;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
-use sail_function::scalar::array::array_position::SparkArrayPosition;
+use sail_function::scalar::array::array_min_max::{ArrayMax, ArrayMin};
+use sail_function::scalar::array::array_position::ArrayPosition;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
-use sail_function::scalar::array::spark_array::SparkArray;
-use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
-use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
-use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
-use sail_function::scalar::array::spark_shuffle::SparkShuffle;
+use sail_function::scalar::array::sequence::{Sequence, SequenceLazy};
+use sail_function::scalar::array::shuffle::Shuffle;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
-use sail_function::scalar::datetime::spark_date::SparkDate;
-use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::date::Date;
+use sail_function::scalar::datetime::timestamp::Timestamp;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::string::btrim::BTrimFunc;
 use sail_python_udf::udf::expr_contains_python_udf;
@@ -64,7 +64,7 @@ fn array_repeat_with_nullable_element(
 }
 
 fn array_compact(array: expr::Expr) -> expr::Expr {
-    ScalarUDF::from(SparkArrayCompact::new()).call(vec![array])
+    ScalarUDF::from(ArrayCompact::new()).call(vec![array])
 }
 
 fn arrays_zip(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -384,12 +384,12 @@ fn sequence_cast(
             | DataType::UInt64,
         ) => cast(sequence_trim_string(argument), DataType::Int64),
         (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Date32) => {
-            ScalarUDF::from(SparkDate::new(false)).call(vec![sequence_trim_string(argument)])
+            ScalarUDF::from(Date::new(false)).call(vec![sequence_trim_string(argument)])
         }
         (
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
             DataType::Timestamp(TimeUnit::Microsecond, timezone),
-        ) => ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
+        ) => ScalarUDF::from(Timestamp::try_new(timezone.clone(), ansi_mode, false)?)
             .call(vec![argument]),
         (
             DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None),
@@ -413,7 +413,7 @@ fn sequence(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }
 
     let config = function_context.plan_config;
-    let udf = SparkSequence::new(Arc::clone(&config.session_timezone), config.ansi_mode);
+    let udf = Sequence::new(Arc::clone(&config.session_timezone), config.ansi_mode);
 
     let argument_types = arguments
         .iter()
@@ -452,7 +452,7 @@ fn sequence(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
     Ok(expr::Expr::HigherOrderFunction(
         expr::HigherOrderFunction::new(
-            Arc::new(HigherOrderUDF::new_from_impl(SparkSequenceLazy::new(udf))),
+            Arc::new(HigherOrderUDF::new_from_impl(SequenceLazy::new(udf))),
             arguments,
         ),
     ))
@@ -577,7 +577,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         (
             "array",
             F::custom(with_timestamp_ntz_coercion(|arguments| {
-                ScalarUDF::from(SparkArray::new()).call(arguments)
+                ScalarUDF::from(ArrayFromValues::new()).call(arguments)
             })),
         ),
         ("array_append", F::custom(array_append)),
@@ -608,7 +608,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
             "array_position",
             F::custom(with_array_element_timestamp_ntz_coercion(
                 |array, element| {
-                    Ok(ScalarUDF::from(SparkArrayPosition::new()).call(vec![array, element]))
+                    Ok(ScalarUDF::from(ArrayPosition::new()).call(vec![array, element]))
                 },
             )),
         ),
@@ -635,7 +635,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("flatten", F::custom(flatten)),
         ("get", F::binary(array_element)),
         ("sequence", F::custom(sequence)),
-        ("shuffle", F::udf(SparkShuffle::new())),
+        ("shuffle", F::udf(Shuffle::new())),
         ("slice", F::custom(slice)),
         ("sort_array", F::custom(sort_array)),
     ]
