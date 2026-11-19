@@ -161,6 +161,8 @@ impl fmt::Display for JobGraph {
 
 #[derive(Debug)]
 pub struct Stage {
+    /// A MERGE reader may already have used this attempt to choose rows to mutate.
+    pub fixed_attempt: bool,
     pub inputs: Vec<StageInput>,
     pub plan: Arc<dyn ExecutionPlan>,
     /// The name of the "slot sharing group" for the stage.

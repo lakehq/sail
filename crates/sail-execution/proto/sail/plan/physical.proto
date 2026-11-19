@@ -84,7 +84,12 @@ message ExtendedPhysicalPlanNode {
     SeededRandomExecNode seeded_random = 67;
     IdentityGenerateExecNode identity_generate = 68;
     TailExecNode tail = 69;
+    EvaluateOnceExecNode evaluate_once = 70;
   }
+}
+
+message EvaluateOnceExecNode {
+  bytes projection_plan = 1;
 }
 
 message IdentityGenerateExecNode {

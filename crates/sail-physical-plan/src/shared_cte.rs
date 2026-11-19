@@ -46,6 +46,7 @@ pub struct SharedCte {
     /// The plan of the CTE when the references were planned, if it is known.
     plan: Option<Arc<dyn ExecutionPlan>>,
     state: Mutex<SharedCteState>,
+    fixed_attempt: bool,
 }
 
 #[derive(Default)]
@@ -85,6 +86,7 @@ impl SharedCte {
             name,
             partitioning,
             plan: None,
+            fixed_attempt: false,
             state: Mutex::new(SharedCteState::default()),
         }
     }
@@ -95,6 +97,16 @@ impl SharedCte {
             plan: Some(plan),
             ..self
         }
+    }
+
+    /// Keep a single producer attempt when its output determines a table mutation.
+    pub fn with_fixed_attempt(mut self, fixed_attempt: bool) -> Self {
+        self.fixed_attempt = fixed_attempt;
+        self
+    }
+
+    pub fn fixed_attempt(&self) -> bool {
+        self.fixed_attempt
     }
 
     pub fn partitioning(&self) -> &Partitioning {
@@ -355,6 +367,25 @@ impl SharedCteExec {
         }
     }
 
+    fn bind_scans(
+        plan: Arc<dyn ExecutionPlan>,
+        handles: &HashMap<*const SharedCte, Arc<SharedCte>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        plan.transform_up(|plan| {
+            if let Some(scan) = plan.downcast_ref::<SharedCteScanExec>()
+                && let Some(cte) = handles.get(&Arc::as_ptr(&scan.cte))
+            {
+                Ok(Transformed::yes(Arc::new(SharedCteScanExec {
+                    cte: Arc::clone(cte),
+                    ..scan.clone()
+                })))
+            } else {
+                Ok(Transformed::no(plan))
+            }
+        })
+        .data()
+    }
+
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
     }
@@ -429,12 +460,21 @@ impl ExecutionPlan for SharedCteExec {
         let Some(input) = children.next() else {
             return internal_err!("{} requires an input", self.name());
         };
-        let ctes = self
-            .ctes
-            .iter()
-            .zip(children)
-            .map(|((cte, _), plan)| (Arc::clone(cte), plan))
-            .collect();
+        // Readers in the rebuilt tree must use its producers. In particular,
+        // tracing a prepared plan for two live jobs must give each job its own tees.
+        let mut handles = HashMap::new();
+        let mut ctes = Vec::with_capacity(self.ctes.len());
+        for ((cte, _), body) in self.ctes.iter().zip(children) {
+            let body = Self::bind_scans(body, &handles)?;
+            let handle = Arc::new(
+                SharedCte::new(cte.id, cte.name.clone(), cte.partitioning.clone())
+                    .with_fixed_attempt(cte.fixed_attempt)
+                    .with_plan(Arc::clone(&body)),
+            );
+            handles.insert(Arc::as_ptr(cte), Arc::clone(&handle));
+            ctes.push((handle, body));
+        }
+        let input = Self::bind_scans(input, &handles)?;
         Ok(Arc::new(Self::new(input, ctes)))
     }
 

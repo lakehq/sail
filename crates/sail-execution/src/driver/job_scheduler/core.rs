@@ -250,6 +250,17 @@ impl JobScheduler {
 
     fn update_task_regions(job: &mut JobDescriptor, task_max_attempts: usize) {
         for (r, region) in job.topology.regions.iter().enumerate() {
+            // Retrying a pipelined region reruns all its producers, including successful
+            // ones whose output another MERGE consumer may already have used.
+            let max_attempts = if region
+                .tasks
+                .iter()
+                .any(|t| job.graph.stages()[t.stage].fixed_attempt)
+            {
+                1
+            } else {
+                task_max_attempts
+            };
             let failed = region.tasks.iter().any(|t| {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
                 // A terminal cause can arrive after the attempt was canceled or replaced.
@@ -263,7 +274,7 @@ impl JobScheduler {
                 }
                 if let Some(attempt) = attempts.last()
                     && matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
-                    && attempts.len() >= task_max_attempts
+                    && attempts.len() >= max_attempts
                 {
                     return true;
                 }

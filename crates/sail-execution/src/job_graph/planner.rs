@@ -71,6 +71,7 @@ impl JobGraph {
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?.plan;
         let (last, inputs) = rewrite_inputs(last)?;
         graph.stages.push(Stage {
+            fixed_attempt: false,
             inputs,
             plan: last,
             group: String::new(),
@@ -889,6 +890,7 @@ fn build_shared_cte_job_graph(
             }
         };
         let stage = push_stage(plan, graph, distribution, TaskPlacement::Worker, mode)?;
+        graph.stages[stage].fixed_attempt = cte.fixed_attempt();
         stages.insert(Arc::as_ptr(cte), stage);
     }
     plan_job_graph_stages(
@@ -1281,6 +1283,7 @@ fn push_stage(
 ) -> ExecutionResult<usize> {
     let (plan, inputs) = rewrite_inputs(plan)?;
     let stage = Stage {
+        fixed_attempt: false,
         inputs,
         plan,
         group: String::new(),
@@ -3423,6 +3426,7 @@ mod tests {
     #[test]
     fn test_bounded_output_requires_a_single_reader_that_reads_as_the_data_comes() {
         let stage = |inputs: Vec<(usize, InputMode)>| Stage {
+            fixed_attempt: false,
             inputs: inputs
                 .into_iter()
                 .map(|(stage, mode)| StageInput { stage, mode })

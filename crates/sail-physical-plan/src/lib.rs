@@ -8,6 +8,7 @@ pub mod identity_generate;
 pub mod lake_procedure;
 pub mod map_partitions;
 pub mod merge_cardinality_check;
+pub mod merge_evaluate;
 pub mod monotonic_id;
 pub mod range;
 pub mod remote_checkpoint;

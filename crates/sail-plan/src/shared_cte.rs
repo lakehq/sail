@@ -185,6 +185,59 @@ impl CteDefinition {
     }
 }
 
+/// Replace optimized MERGE evaluation boundaries with mandatory shared scans.
+pub fn share_merge_inputs(plan: LogicalPlan) -> Result<LogicalPlan> {
+    use sail_logical_plan::replay::{ReplayId, ReplayNode};
+
+    fn bind(plan: LogicalPlan, scans: &mut HashMap<ReplayId, LogicalPlan>) -> Result<LogicalPlan> {
+        plan.transform_down_with_subqueries(|plan| {
+            let LogicalPlan::Extension(extension) = &plan else {
+                return Ok(Transformed::no(plan));
+            };
+            let Some(node) = extension.node.as_any().downcast_ref::<ReplayNode>() else {
+                return Ok(Transformed::no(plan));
+            };
+            if let Some(scan) = scans.get(&node.id()) {
+                if scan.schema() != node.input().schema() {
+                    return datafusion_common::internal_err!(
+                        "inconsistent MERGE input schema for {}",
+                        node.id()
+                    );
+                }
+                return Ok(Transformed::yes(scan.clone()));
+            }
+            // Bind dependencies first. A cloned intent can contain several copies of
+            // the source, all of which must refer to the same body.
+            let input = Arc::new(bind(node.input().as_ref().clone(), scans)?);
+            let index = scans.len();
+            let name = TableReference::bare(format!("merge_input_{index}"));
+            let definition = Arc::new(CteDefinition::new(
+                index,
+                name.clone(),
+                Arc::clone(&input),
+                true,
+            ));
+            let source = Arc::new(CteReference {
+                definition: Arc::clone(&definition),
+                body: Some(Arc::new(SharedCteBody {
+                    definition,
+                    plan: input.as_ref().clone(),
+                    columns: None,
+                    nested: false,
+                    merge_input: true,
+                })),
+            });
+            let mut scan = TableScanBuilder::new(name, source).build()?;
+            scan.projected_schema = Arc::clone(input.schema());
+            let scan = LogicalPlan::TableScan(scan);
+            scans.insert(node.id(), scan.clone());
+            Ok(Transformed::yes(scan))
+        })
+        .data()
+    }
+    bind(plan, &mut HashMap::new())
+}
+
 /// The source of a reference to a CTE definition.
 ///
 /// The optimizer records what each reference reads in its scan: the columns, the
@@ -242,9 +295,14 @@ pub struct SharedCteBody {
     columns: Option<Vec<usize>>,
     /// Whether the definition refers to other shareable definitions.
     nested: bool,
+    merge_input: bool,
 }
 
 impl SharedCteBody {
+    pub fn is_merge_input(&self) -> bool {
+        self.merge_input
+    }
+
     pub fn plan(&self) -> &LogicalPlan {
         &self.plan
     }
@@ -1464,6 +1522,7 @@ fn share_references(
         let source = Arc::new(CteReference {
             definition: Arc::clone(&definition),
             body: Some(Arc::new(SharedCteBody {
+                merge_input: false,
                 nested: contains_reference(definition.plan())?,
                 definition: Arc::clone(&definition),
                 plan,

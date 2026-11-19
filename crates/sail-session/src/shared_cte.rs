@@ -69,10 +69,19 @@ impl SharedCtePlanner {
         name: String,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<()> {
+        if body.is_merge_input()
+            && !matches!(
+                plan.properties().boundedness,
+                datafusion::physical_plan::execution_plan::Boundedness::Bounded
+            )
+        {
+            return datafusion_common::plan_err!("MERGE requires a bounded input");
+        }
         let statistics = StatisticsContext::new().compute(plan.as_ref(), &StatisticsArgs::new())?;
         let planned = PlannedCte {
             cte: Arc::new(
                 SharedCte::new(self.ctes.len(), name, plan.output_partitioning().clone())
+                    .with_fixed_attempt(body.is_merge_input())
                     .with_plan(Arc::clone(&plan)),
             ),
             plan,
