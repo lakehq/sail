@@ -6,7 +6,7 @@ use datafusion::arrow::datatypes::{DataType, FieldRef, Fields, IntervalUnit, Tim
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{ExprSchemable, Operator, ScalarUDF, cast, expr, lit};
 use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
-use sail_function::scalar::datetime::spark_timestamp_add_interval::SparkTimestampAddInterval;
+use sail_function::scalar::datetime::timestamp_add_interval::TimestampAddInterval;
 use sail_function::scalar::datetime::timestamp_cast::{
     cast_timestamp_ntz_to_ltz, session_wall_clock,
 };
@@ -82,7 +82,7 @@ pub(crate) fn add_interval_in_session_timezone(
     negated: bool,
     session_timezone: &Arc<str>,
 ) -> expr::Expr {
-    ScalarUDF::from(SparkTimestampAddInterval::new()).call(vec![
+    ScalarUDF::from(TimestampAddInterval::new()).call(vec![
         timestamp,
         interval,
         lit(session_timezone.as_ref()),

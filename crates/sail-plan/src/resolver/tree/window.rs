@@ -13,7 +13,7 @@ use datafusion_expr::expr::{WindowFunction, WindowFunctionDefinition};
 use datafusion_expr::{
     Expr, Extension, LogicalPlan, SortExpr, WindowFrame, WindowFrameUnits, ident,
 };
-use sail_function::window::SparkFirstLastValue;
+use sail_function::window::FirstLastValue;
 use sail_logical_optimizer::is_order_irrelevant_aggregate;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::sort::RequiredSortNode;
@@ -45,7 +45,7 @@ impl WindowRewriter<'_> {
             WindowFunctionDefinition::WindowUDF(udwf) => {
                 udwf.inner().downcast_ref::<NthValue>().is_some_and(|nth| {
                     matches!(nth.kind(), NthValueKind::First | NthValueKind::Last)
-                }) || udwf.inner().is::<SparkFirstLastValue>()
+                }) || udwf.inner().is::<FirstLastValue>()
             }
         };
         let frame_requires_order =

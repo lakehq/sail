@@ -4,10 +4,10 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{Expr, ScalarUDF, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::array::Array;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
-use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
-use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
+use sail_function::scalar::variant::variant_explode::VariantExplodeUdf;
 
 use crate::PlanResult;
 use crate::error::PlanError;
@@ -51,7 +51,7 @@ fn stack(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let arrays = (0..num_cols)
         .map(|i| args.iter().skip(i).step_by(num_cols).cloned().collect())
-        .map(|col| ScalarUDF::from(SparkArray::new()).call(col))
+        .map(|col| ScalarUDF::from(Array::new()).call(col))
         .collect::<Vec<_>>();
 
     let zipped = ScalarUDF::from(ArraysZip::new(field_names)).call(arrays);
@@ -62,7 +62,7 @@ fn stack(input: ScalarFunctionInput) -> PlanResult<Expr> {
 fn variant_explode(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
     let arg = arguments.one()?;
-    let explode_arr = ScalarUDF::from(SparkVariantExplodeUdf::new()).call(vec![arg]);
+    let explode_arr = ScalarUDF::from(VariantExplodeUdf::new()).call(vec![arg]);
     Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![explode_arr]))
 }
 

@@ -11,7 +11,7 @@ use datafusion::scalar::ScalarValue;
 use datafusion_common::cast::as_binary_array;
 use parquet_variant_compute::VariantArray;
 
-use crate::scalar::variant::spark_schema_of_variant::{
+use crate::scalar::variant::schema_of_variant::{
     merge_variant_types, variant_to_inferred_type, variant_type_to_spark_type,
 };
 use crate::utils::schema_inference::InferredType;

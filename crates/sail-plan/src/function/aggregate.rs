@@ -49,7 +49,7 @@ use sail_function::aggregate::theta_sketch::{
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::vector_avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
-use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array::array_transform::ArrayTransform;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;
 use sail_function::scalar::r#struct::struct_function::StructFunction;
 
@@ -128,7 +128,7 @@ fn normalize_vector_aggregate_argument(
         .when(variable.clone().eq(lit(0.0f32)), lit(0.0f32))
         .otherwise(variable)?;
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
-        Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new())),
+        Arc::new(HigherOrderUDF::new_from_impl(ArrayTransform::new())),
         vec![arg, expr::Expr::Lambda(Lambda::new(vec![parameter], body))],
     )))
 }
@@ -1269,7 +1269,7 @@ mod tests {
                 };
                 assert_eq!(
                     transform.func.as_ref(),
-                    &HigherOrderUDF::new_from_impl(SparkArrayTransform::new())
+                    &HigherOrderUDF::new_from_impl(ArrayTransform::new())
                 );
                 assert_eq!(
                     transform.args,

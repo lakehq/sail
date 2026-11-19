@@ -17,9 +17,9 @@ use datafusion_expr::{
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_common_datafusion::type_coercion::binary_type_coercion::set_operation_coercion;
-use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
-use sail_function::scalar::conversion::spark_to_string::SparkToUtf8;
-use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::array::array_transform::ArrayTransform;
+use sail_function::scalar::conversion::to_string::ToUtf8;
+use sail_function::scalar::datetime::timestamp::Timestamp;
 use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ntz_to_ltz;
 use sail_function::scalar::r#struct::struct_function::StructFunction;
 use sail_logical_optimizer::type_coercion::TypeCoercion;
@@ -417,7 +417,7 @@ impl PlanResolver<'_> {
                     value.clone()
                 };
                 Expr::HigherOrderFunction(HigherOrderFunction::new(
-                    Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new())),
+                    Arc::new(HigherOrderUDF::new_from_impl(ArrayTransform::new())),
                     vec![value, Expr::Lambda(Lambda::new(vec![parameter], body))],
                 ))
             }
@@ -467,7 +467,7 @@ impl PlanResolver<'_> {
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Timestamp(TimeUnit::Microsecond, timezone),
-            ) => ScalarUDF::from(SparkTimestamp::try_new(
+            ) => ScalarUDF::from(Timestamp::try_new(
                 timezone.clone(),
                 self.config.ansi_mode,
                 false,
@@ -477,7 +477,7 @@ impl PlanResolver<'_> {
                 DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
             ) => ScalarUDF::from(
-                SparkToUtf8::new().with_timezone(Some(self.config.session_timezone_label())),
+                ToUtf8::new().with_timezone(Some(self.config.session_timezone_label())),
             )
             .call(vec![value.clone()]),
             _ => return Ok(None),

@@ -5,9 +5,9 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_expr::{ExprSchemable, ScalarUDF, expr};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::datetime::spark_date::SparkDate;
-use sail_function::scalar::datetime::spark_time::SparkTime;
-use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::date::Date;
+use sail_function::scalar::datetime::time::Time;
+use sail_function::scalar::datetime::timestamp::Timestamp;
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -24,7 +24,7 @@ pub(crate) fn cast_to_date(input: ScalarFunctionInput) -> PlanResult<expr::Expr>
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     ) {
         Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkDate::new(false))),
+            func: Arc::new(ScalarUDF::from(Date::new(false))),
             args: vec![arg],
         }))
     } else {
@@ -47,7 +47,7 @@ fn cast_to_time(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     ) {
         Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkTime::new(false))),
+            func: Arc::new(ScalarUDF::from(Time::new(false))),
             args: vec![arg],
         }))
     } else {
@@ -70,7 +70,7 @@ fn cast_to_timestamp(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     ) {
         Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkTimestamp::try_new(
+            func: Arc::new(ScalarUDF::from(Timestamp::try_new(
                 Some(input.function_context.plan_config.session_timezone.clone()),
                 input.function_context.plan_config.ansi_mode,
                 false,

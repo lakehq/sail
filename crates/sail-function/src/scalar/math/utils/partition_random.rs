@@ -14,15 +14,15 @@ use datafusion_expr::{Operator, ScalarUDF};
 use rand::{RngExt, rng};
 
 use super::java_random::JavaRandom;
-use super::spark_poisson::SparkPoisson;
+use super::poisson::Poisson;
 use super::uniform::uniform_with_rng;
-use super::xorshift::SparkXorShiftRandom;
-use crate::scalar::array::spark_shuffle::{RandomIndicesGenerator, SparkShuffle, array_shuffle};
+use super::xorshift::XorShiftRandom;
+use crate::scalar::array::shuffle::{RandomIndicesGenerator, Shuffle, array_shuffle};
 use crate::scalar::math::rand_poisson::RandPoisson;
 use crate::scalar::math::randn::Randn;
 use crate::scalar::math::random::Random;
-use crate::scalar::math::spark_uniform::SparkUniform;
-use crate::scalar::misc::spark_uuid::{RandomUuidGenerator, SparkUuid};
+use crate::scalar::math::uniform::Uniform;
+use crate::scalar::misc::uuid::{RandomUuidGenerator, Uuid};
 use crate::scalar::string::randstr::{Randstr, random_strings, randstr_length};
 
 /// How the seed of a partition is derived from the seed of a random function.
@@ -47,11 +47,11 @@ pub trait PartitionRandomGenerator: Send {
 /// called with a seed.
 pub fn seed_argument_position(func: &ScalarUDF, num_args: usize) -> Option<usize> {
     let inner = func.inner();
-    let position = if inner.is::<Random>() || inner.is::<Randn>() || inner.is::<SparkUuid>() {
+    let position = if inner.is::<Random>() || inner.is::<Randn>() || inner.is::<Uuid>() {
         0
-    } else if inner.is::<Randstr>() || inner.is::<RandPoisson>() || inner.is::<SparkShuffle>() {
+    } else if inner.is::<Randstr>() || inner.is::<RandPoisson>() || inner.is::<Shuffle>() {
         1
-    } else if inner.is::<SparkUniform>() {
+    } else if inner.is::<Uniform>() {
         2
     } else {
         return None;
@@ -62,7 +62,7 @@ pub fn seed_argument_position(func: &ScalarUDF, num_args: usize) -> Option<usize
 /// Returns whether the argument at the position of a random function called with a seed is
 /// evaluated for each row. Other arguments are constant.
 pub fn is_row_argument(func: &ScalarUDF, position: usize) -> bool {
-    func.inner().is::<SparkShuffle>() && position == 0
+    func.inner().is::<Shuffle>() && position == 0
 }
 
 /// When Spark evaluates the right operand of a binary operator, so that the calls of random
@@ -124,11 +124,11 @@ pub fn create_partition_random_generator(
         })
         .collect::<Result<Vec<_>>>()?;
     let inner = func.inner();
-    if inner.is::<SparkUuid>() || inner.is::<SparkShuffle>() {
+    if inner.is::<Uuid>() || inner.is::<Shuffle>() {
         // A null seed means no seed, as in Spark.
         let seed = integer_value(&args[position])?.unwrap_or_else(|| rng().random());
         let seed = partition_seed(seed, seed_mode, partition);
-        return Ok(if inner.is::<SparkUuid>() {
+        return Ok(if inner.is::<Uuid>() {
             Box::new(UuidGenerator {
                 generator: RandomUuidGenerator::new(seed),
             })
@@ -141,23 +141,23 @@ pub fn create_partition_random_generator(
     let seed = partition_seed(seed_value(&args[position])?, seed_mode, partition);
     if inner.is::<Random>() {
         Ok(Box::new(RandomGenerator {
-            rng: SparkXorShiftRandom::new(seed),
+            rng: XorShiftRandom::new(seed),
         }))
     } else if inner.is::<Randn>() {
         Ok(Box::new(RandnGenerator {
-            rng: SparkXorShiftRandom::new(seed),
+            rng: XorShiftRandom::new(seed),
         }))
     } else if inner.is::<Randstr>() {
         let Some(length) = integer_value(&args[0])? else {
             return exec_err!("`randstr` expects a constant integer length");
         };
         Ok(Box::new(RandstrGenerator {
-            rng: SparkXorShiftRandom::new(seed),
+            rng: XorShiftRandom::new(seed),
             length: randstr_length(length)?,
         }))
-    } else if inner.is::<SparkUniform>() {
+    } else if inner.is::<Uniform>() {
         Ok(Box::new(UniformGenerator {
-            rng: SparkXorShiftRandom::new(seed),
+            rng: XorShiftRandom::new(seed),
             min: args[0].clone(),
             max: args[1].clone(),
             return_type: return_type.clone(),
@@ -175,7 +175,7 @@ pub fn create_partition_random_generator(
         let poisson = if lambda == 0.0 {
             None
         } else if lambda > 0.0 && lambda.is_finite() {
-            Some(SparkPoisson::new(lambda, seed))
+            Some(Poisson::new(lambda, seed))
         } else {
             return exec_err!(
                 "Failed to create Poisson distribution: lambda must be positive and finite, got {lambda}"
@@ -220,7 +220,7 @@ fn partition_seed(seed: i64, mode: PartitionSeed, partition: usize) -> i64 {
 }
 
 struct RandomGenerator {
-    rng: SparkXorShiftRandom,
+    rng: XorShiftRandom,
 }
 
 impl PartitionRandomGenerator for RandomGenerator {
@@ -231,7 +231,7 @@ impl PartitionRandomGenerator for RandomGenerator {
 }
 
 struct RandnGenerator {
-    rng: SparkXorShiftRandom,
+    rng: XorShiftRandom,
 }
 
 impl PartitionRandomGenerator for RandnGenerator {
@@ -242,7 +242,7 @@ impl PartitionRandomGenerator for RandnGenerator {
 }
 
 struct RandstrGenerator {
-    rng: SparkXorShiftRandom,
+    rng: XorShiftRandom,
     length: usize,
 }
 
@@ -257,7 +257,7 @@ impl PartitionRandomGenerator for RandstrGenerator {
 }
 
 struct UniformGenerator {
-    rng: SparkXorShiftRandom,
+    rng: XorShiftRandom,
     min: ScalarValue,
     max: ScalarValue,
     return_type: DataType,
@@ -296,7 +296,7 @@ impl PartitionRandomGenerator for ShuffleGenerator {
 
 /// Spark's `PoissonSampler` without gap sampling, as used by `SampleExec`.
 struct PoissonGenerator {
-    poisson: Option<SparkPoisson>,
+    poisson: Option<Poisson>,
 }
 
 impl PartitionRandomGenerator for PoissonGenerator {
@@ -322,7 +322,7 @@ mod tests {
 
     fn shuffle_generator(seed: i64, partition: usize) -> Result<Box<dyn PartitionRandomGenerator>> {
         create_partition_random_generator(
-            &ScalarUDF::from(SparkShuffle::new()),
+            &ScalarUDF::from(Shuffle::new()),
             &[None, Some(ScalarValue::Int64(Some(seed)))],
             &DataType::Null,
             PartitionSeed::Offset,
@@ -413,7 +413,7 @@ mod tests {
     #[test]
     fn test_uuid_per_partition() -> Result<()> {
         let mut generator = create_partition_random_generator(
-            &ScalarUDF::from(SparkUuid::new()),
+            &ScalarUDF::from(Uuid::new()),
             &[Some(ScalarValue::Int64(Some(42)))],
             &DataType::Utf8,
             PartitionSeed::Offset,

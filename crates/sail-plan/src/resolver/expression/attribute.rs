@@ -9,8 +9,8 @@ use datafusion_expr::{ExprSchemable, ScalarUDF, cast, col, expr, lit, try_cast};
 use datafusion_functions::core::get_field;
 use datafusion_functions_nested::expr_fn::{array_element, map_extract};
 use sail_common::spec;
-use sail_function::scalar::conversion::spark_cast_string_to_int32::parse_spark_legacy_string_to_i64;
-use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::conversion::cast_string_to_int32::parse_spark_legacy_string_to_i64;
+use sail_function::scalar::datetime::date::Date;
 use sail_function::scalar::r#struct::array_struct_field::ArrayStructField;
 
 use crate::error::{PlanError, PlanResult};
@@ -625,7 +625,7 @@ impl PlanResolver<'_> {
                 legacy_integer_key(name, key_type).map(lit)
             }
             DataType::Date32 => {
-                Some(ScalarUDF::new_from_impl(SparkDate::new(!ansi_mode)).call(vec![key]))
+                Some(ScalarUDF::new_from_impl(Date::new(!ansi_mode)).call(vec![key]))
             }
             key_type if key_type.is_numeric() && ansi_mode => Some(cast(key, key_type.clone())),
             key_type if key_type.is_numeric() => Some(try_cast(key, key_type.clone())),

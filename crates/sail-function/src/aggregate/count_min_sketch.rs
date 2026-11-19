@@ -13,7 +13,7 @@ use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 
 use super::utils::get_scalar_value;
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
-use crate::utils::count_min_sketch::SparkCountMinSketch;
+use crate::utils::count_min_sketch::CountMinSketch;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CountMinSketchFunction {
@@ -71,13 +71,13 @@ impl AggregateUDFImpl for CountMinSketchFunction {
 
 #[derive(Debug)]
 struct CountMinSketchAccumulator {
-    sketch: SparkCountMinSketch,
+    sketch: CountMinSketch,
 }
 
 impl CountMinSketchAccumulator {
     fn new(eps: f64, confidence: f64, seed: i32) -> Result<Self> {
         Ok(Self {
-            sketch: SparkCountMinSketch::new(eps, confidence, seed)?,
+            sketch: CountMinSketch::new(eps, confidence, seed)?,
         })
     }
 }
@@ -105,7 +105,7 @@ impl Accumulator for CountMinSketchAccumulator {
         };
         for row in 0..states.len() {
             if !states.is_null(row) {
-                let other = SparkCountMinSketch::deserialize(states.value(row))?;
+                let other = CountMinSketch::deserialize(states.value(row))?;
                 self.sketch.merge(&other)?;
             }
         }
