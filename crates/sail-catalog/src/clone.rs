@@ -2,8 +2,8 @@
 
 use datafusion::execution::TaskContext;
 use sail_common::spec::CreateTableMode;
-use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::catalog::delta::is_delta_coordinated_property;
+use sail_common_datafusion::catalog::{TableKind, TableStatus};
 use sail_common_datafusion::datasource::DataSourceRegistry;
 use sail_common_datafusion::error::CommitStateUnknownError;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -12,7 +12,7 @@ use sail_common_datafusion::lakesource::CloneMetrics;
 use crate::command::CloneTarget;
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::CatalogManager;
-use crate::provider::{CreateTableColumnOptions, CreateTableOptions};
+use crate::provider::{CreateTableOptions, StageTableOptions};
 
 impl CatalogManager {
     /// In the delta namespace, an unqualified file name can also be a table name.
@@ -78,6 +78,47 @@ fn table_location(kind: &TableKind) -> CatalogResult<(&str, bool)> {
     }
 }
 
+impl StageTableOptions {
+    /// Resolve inherited clone options from the same catalog entry as the staged generation.
+    pub fn resolve(self, existing: Option<&TableStatus>) -> CatalogResult<CreateTableOptions> {
+        let (default_location, location, mode, is_external) = match self {
+            Self::Definition(options) => return Ok(options),
+            Self::ShallowClone {
+                default_location,
+                location,
+                mode,
+                is_external,
+            } => (default_location, location, mode, is_external),
+        };
+        let (destination, external) = if let Some(status) = existing {
+            let (old_location, external) = table_location(&status.kind)?;
+            if location.as_deref().is_some_and(|path| path != old_location) {
+                return Err(CatalogError::NotSupported(
+                    "relocating a Delta table during SHALLOW CLONE".into(),
+                ));
+            }
+            (old_location.to_string(), external)
+        } else {
+            let external = is_external || location.is_some();
+            (location.unwrap_or(default_location), external)
+        };
+        Ok(CreateTableOptions {
+            columns: vec![],
+            comment: None,
+            constraints: vec![],
+            location: Some(destination),
+            format: "delta".into(),
+            partition_by: vec![],
+            sort_by: vec![],
+            bucket_by: None,
+            mode,
+            properties: vec![],
+            is_external: external,
+            is_write_precondition: false,
+        })
+    }
+}
+
 pub(crate) async fn clone_table(
     ctx: &TaskContext,
     manager: &CatalogManager,
@@ -87,14 +128,14 @@ pub(crate) async fn clone_table(
     mode: CreateTableMode,
     is_external: bool,
 ) -> CatalogResult<Option<CloneMetrics>> {
-    let (table, default_location, existing) = match target {
+    let (replacement, destination, storage_mode) = match target {
         CloneTarget::Path(path) => {
             if location.is_some() {
                 return Err(CatalogError::InvalidArgument(
                     "LOCATION cannot be combined with a path clone target".into(),
                 ));
             }
-            (None, path, None)
+            (None, path, mode)
         }
         CloneTarget::Table {
             name,
@@ -108,39 +149,45 @@ pub(crate) async fn clone_table(
                         name.join("."),
                     ));
                 }
-                Ok(status) => Some(status),
+                Ok(status) => {
+                    table_location(&status.kind)?;
+                    true
+                }
                 Err(e @ CatalogError::NotFound(_, _)) if mode.replace_requires_existing() => {
                     return Err(e);
                 }
-                Err(CatalogError::NotFound(_, _)) => None,
+                Err(CatalogError::NotFound(_, _)) => false,
                 Err(error) => return Err(error),
             };
-            (Some(name), default_location, existing)
+            let inferred_location = location.is_none();
+            let replacement = manager
+                .stage_table_replacement(
+                    &name,
+                    StageTableOptions::ShallowClone {
+                        default_location,
+                        location,
+                        mode: if existing {
+                            CreateTableMode::Replace
+                        } else {
+                            CreateTableMode::Create
+                        },
+                        is_external,
+                    },
+                )
+                .await?;
+            // An inferred directory may still belong to a renamed managed table.
+            let storage_mode = if !replacement.existing && inferred_location {
+                CreateTableMode::Create
+            } else {
+                mode
+            };
+            let destination = replacement.location.clone();
+            (Some(replacement), destination, storage_mode)
         }
-    };
-    let (destination, external) = if let Some(status) = &existing {
-        let (old_location, external) = table_location(&status.kind)?;
-        if location.as_deref().is_some_and(|path| path != old_location) {
-            return Err(CatalogError::NotSupported(
-                "relocating a Delta table during SHALLOW CLONE".into(),
-            ));
-        }
-        (old_location.to_string(), external)
-    } else {
-        (
-            location.clone().unwrap_or(default_location),
-            is_external || location.is_some() || table.is_none(),
-        )
     };
     let lake = ctx
         .extension::<DataSourceRegistry>()?
         .get_lake_source("delta")?;
-    // An inferred directory may still belong to a renamed managed table.
-    let storage_mode = if existing.is_none() && table.is_some() && location.is_none() {
-        CreateTableMode::Create
-    } else {
-        mode
-    };
     let source_location = async {
         resolve_source(manager, &source)
             .await
@@ -163,51 +210,34 @@ pub(crate) async fn clone_table(
             }
         })
     });
-    let Some(table) = table else {
+    let Some(mut replacement) = replacement else {
         publish.await?;
+        prepared.post_commit.await;
         return Ok(prepared.metrics);
     };
     let metadata = prepared.metadata;
-    let options = CreateTableOptions {
-        columns: metadata
-            .schema
-            .fields()
-            .iter()
-            .map(|field| CreateTableColumnOptions {
-                metadata: field
+    replacement.columns = metadata
+        .schema
+        .fields()
+        .iter()
+        .map(|field| {
+            (
+                field.name().clone(),
+                field.data_type().clone(),
+                field.is_nullable(),
+                field
                     .metadata()
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
-                name: field.name().clone(),
-                data_type: field.data_type().clone(),
-                nullable: field.is_nullable(),
-                comment: None,
-                default: None,
-                generated_always_as: None,
-                identity: None,
-            })
-            .collect(),
-        comment: None,
-        constraints: vec![],
-        location: Some(destination),
-        format: "delta".into(),
-        partition_by: metadata.partition_by.unwrap_or_default(),
-        sort_by: vec![],
-        bucket_by: None,
-        mode: if existing.is_some() {
-            CreateTableMode::Replace
-        } else {
-            CreateTableMode::Create
-        },
-        properties: metadata.properties.clone(),
-        is_external: external,
-        is_write_precondition: false,
-    };
-    let mut replacement = manager.stage_table_replacement(&table, options).await?;
+            )
+        })
+        .collect();
+    replacement.partition_by = metadata.partition_by.unwrap_or_default();
     replacement.properties = metadata.properties;
     manager
         .publish_table_replacement(replacement, publish)
         .await?;
+    prepared.post_commit.await;
     Ok(prepared.metrics)
 }

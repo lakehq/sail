@@ -20,7 +20,7 @@ use crate::lakehouse::{
 use crate::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
     CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    Namespace,
+    Namespace, StageTableOptions,
 };
 
 #[derive(Clone)]
@@ -289,7 +289,7 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         &self,
         database: &Namespace,
         table: &str,
-        options: CreateTableOptions,
+        options: StageTableOptions,
     ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
         self.inner
             .stage_table_replacement(database, table, options)

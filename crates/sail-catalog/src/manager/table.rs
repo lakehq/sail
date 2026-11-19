@@ -15,7 +15,7 @@ use crate::lakehouse::{
 use crate::manager::CatalogManager;
 use crate::provider::{
     AlterTableOptions, CreateTableMetadataRequirement, CreateTableOptions, DropTableOptions,
-    Namespace,
+    Namespace, StageTableOptions,
 };
 use crate::utils::match_pattern;
 
@@ -77,11 +77,11 @@ impl CatalogManager {
     pub async fn stage_table_replacement<T: AsRef<str>>(
         &self,
         table: &[T],
-        options: CreateTableOptions,
+        options: impl Into<StageTableOptions>,
     ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider
-            .stage_table_replacement(&database, &table, options)
+            .stage_table_replacement(&database, &table, options.into())
             .await
     }
 

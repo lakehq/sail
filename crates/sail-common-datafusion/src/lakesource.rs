@@ -43,6 +43,8 @@ pub struct LakeSourceClone {
     pub metrics: Option<CloneMetrics>,
     pub metadata: LakeSourceMetadata,
     pub publish: futures::future::BoxFuture<'static, Result<()>>,
+    /// Best-effort storage maintenance to run after successful publication.
+    pub post_commit: futures::future::BoxFuture<'static, ()>,
 }
 
 /// A column definition used when catalog DDL asks a lake source to create

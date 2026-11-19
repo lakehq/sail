@@ -83,7 +83,7 @@ pub trait CatalogProvider: Send + Sync {
         &self,
         database: &Namespace,
         table: &str,
-        options: CreateTableOptions,
+        options: StageTableOptions,
     ) -> CatalogResult<sail_common_datafusion::catalog::TableReplacement> {
         let _ = (database, table, options);
         Err(CatalogError::UnsupportedCapability(

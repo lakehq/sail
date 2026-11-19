@@ -170,6 +170,37 @@ def test_shallow_clone_rejections_preserve_destination(spark, tmp_path):
     assert not (tmp_path / "absent" / "_delta_log").exists()
 
 
+@pytest.mark.parametrize("link_to_directory", [True, False], ids=["directory-link", "file-link"])
+def test_clone_refresh_rejects_symlink_to_destination_file(spark, tmp_path, link_to_directory):
+    source, destination = tmp_path / "source", tmp_path / "destination"
+    for path in (source, destination):
+        _create_delta_table(spark, path, "id BIGINT, p STRING")
+    _append(spark, destination, [(2, "destination")])
+    original = _latest(destination, "add")
+    alias = tmp_path / "alias"
+    data_file = unquote(original["path"])
+    if link_to_directory:
+        alias.symlink_to(destination, target_is_directory=True)
+        reference = (alias / data_file).as_uri()
+    else:
+        alias.symlink_to(destination / data_file)
+        reference = alias.as_uri()
+    source_log = source / "_delta_log" / "00000000000000000001.json"
+    source_log.write_text(json.dumps({"add": {**original, "path": reference}}) + "\n")
+    before = _logs(destination)
+    assert _rows(spark, _identifier(source)) == [(2, "destination")]
+    with pytest.raises(PySparkException, match="cannot reference files inside its destination"):
+        spark.sql(f"REPLACE TABLE {_identifier(destination)} SHALLOW CLONE {_identifier(source)}").collect()
+    assert _logs(destination) == before
+    assert _rows(spark, _identifier(destination)) == [(2, "destination")]
+
+    # A different target can safely reference this file through its physical location.
+    other = _identifier(tmp_path / "other")
+    spark.sql(f"CREATE TABLE {other} SHALLOW CLONE {_identifier(source)}").collect()
+    alias.unlink()
+    assert _rows(spark, other) == [(2, "destination")]
+
+
 @pytest.mark.parametrize(
     ("directory", "log_directory"),
     [

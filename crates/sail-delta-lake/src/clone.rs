@@ -47,34 +47,40 @@ pub(crate) fn data_file_url(root: &Url, path: &str) -> Result<Url> {
     Ok(url)
 }
 
+/// Resolve aliases even when the last components do not exist yet.
+fn canonical_local_path(url: &Url) -> Result<std::path::PathBuf> {
+    let path = url
+        .to_file_path()
+        .map_err(|_| DataFusionError::Plan("invalid local Delta path".into()))?;
+    for ancestor in path.ancestors() {
+        match ancestor.canonicalize() {
+            Ok(canonical) => {
+                let suffix = path.strip_prefix(ancestor).map_err(external)?;
+                return Ok(if suffix.as_os_str().is_empty() {
+                    canonical
+                } else {
+                    canonical.join(suffix)
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // A dangling link has no physical location to validate.
+                if ancestor.symlink_metadata().is_ok() {
+                    return Err(external(error));
+                }
+            }
+            Err(error) => return Err(external(error)),
+        }
+    }
+    plan_err!("invalid local Delta path")
+}
+
 fn table_url(path: &str) -> Result<Url> {
     let mut url = resolve_table_url(path.to_string())?;
     if url.query().is_some() || url.fragment().is_some() {
         return plan_err!("Delta table locations cannot contain query strings or fragments");
     }
-    // Resolve existing local ancestors as well as symlink aliases of the table itself.
     if url.scheme() == "file" {
-        let path = url
-            .to_file_path()
-            .map_err(|_| DataFusionError::Plan("invalid local Delta path".into()))?;
-        let mut ancestor = path.as_path();
-        let mut suffix = Vec::new();
-        while !ancestor.exists() {
-            suffix.push(
-                ancestor
-                    .file_name()
-                    .ok_or_else(|| DataFusionError::Plan("invalid Delta path".into()))?
-                    .to_owned(),
-            );
-            ancestor = ancestor
-                .parent()
-                .ok_or_else(|| DataFusionError::Plan("invalid Delta path".into()))?;
-        }
-        let mut canonical = ancestor.canonicalize().map_err(external)?;
-        for part in suffix.into_iter().rev() {
-            canonical.push(part);
-        }
-        url = Url::from_directory_path(canonical)
+        url = Url::from_directory_path(canonical_local_path(&url)?)
             .map_err(|_| DataFusionError::Plan("invalid local Delta path".into()))?;
     } else if !url.path().ends_with('/') {
         url.set_path(&format!("{}/", url.path()));
@@ -159,6 +165,7 @@ pub(crate) async fn prepare(
                     )),
                 },
                 publish: Box::pin(async { Ok(()) }),
+                post_commit: Box::pin(async {}),
             });
         }
         if !mode.is_replace() {
@@ -238,10 +245,21 @@ pub(crate) async fn prepare(
     for add in source.adds() {
         let mut add = add.clone();
         let absolute = data_file_url(&source_url, &add.path)?;
-        // A replacement must not reference files owned by its own destination.
-        if Path::from_url_path(absolute.path())?.prefix_matches(&destination_root) {
-            return plan_err!("SHALLOW CLONE cannot reference files inside its destination");
+        // Check both the stored location and the physical location behind local symlinks.
+        let physical = if absolute.scheme() == "file" {
+            Some(
+                Url::from_file_path(canonical_local_path(&absolute)?)
+                    .map_err(|_| DataFusionError::Plan("invalid local Delta path".into()))?,
+            )
+        } else {
+            None
+        };
+        for url in std::iter::once(&absolute).chain(&physical) {
+            if Path::from_url_path(url.path())?.prefix_matches(&destination_root) {
+                return plan_err!("SHALLOW CLONE cannot reference files inside its destination");
+            }
         }
+        let absolute = physical.unwrap_or(absolute);
         if !seen.insert(absolute.clone()) {
             return plan_err!("SHALLOW CLONE source has multiple entries for the same data file");
         }
@@ -300,12 +318,21 @@ pub(crate) async fn prepare(
     .build(old, log_store, operation);
     // Protocol/append-only validation is still preparation, before catalog publication.
     let prepared = commit.into_prepared_commit_future().await?;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
     Ok(LakeSourceClone {
         metrics: Some(metrics),
         metadata: result_metadata,
         publish: Box::pin(async move {
-            prepared.await?.await?;
+            let post_commit = prepared.await?;
+            let _ = sender.send(post_commit);
             Ok(())
+        }),
+        post_commit: Box::pin(async move {
+            if let Ok(post_commit) = receiver.await
+                && let Err(error) = post_commit.await
+            {
+                log::warn!("Delta clone post-commit maintenance failed: {error}");
+            }
         }),
     })
 }
