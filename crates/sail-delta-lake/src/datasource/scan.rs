@@ -256,8 +256,13 @@ pub async fn build_file_scan_config(
     let mut per_file_stats: Vec<Arc<Statistics>> = Vec::new();
 
     for action in files.iter() {
-        let mut part =
-            partitioned_file_from_action(action, &partition_columns_mapped, &complete_schema)?;
+        let location = rewrite_data_file_location(&log_store.config().location, &action.path)?;
+        let mut part = partitioned_file_from_action(
+            action,
+            location,
+            &partition_columns_mapped,
+            &complete_schema,
+        )?;
         let action_stats = stats_for_add(action, &file_schema)?;
         if let Some(stats) = action_stats {
             per_file_stats.push(Arc::clone(&stats));
@@ -308,15 +313,6 @@ pub async fn build_file_scan_config(
             .or_default()
             .push(part);
     }
-
-    // Rewrite file paths with table location prefix
-    let table_root = Path::from_url_path(log_store.config().location.path())?;
-    file_groups.iter_mut().for_each(|(_, files)| {
-        files.iter_mut().for_each(|file| {
-            file.object_meta.location =
-                rewrite_data_file_location(table_root.clone(), file.object_meta.location.clone());
-        });
-    });
 
     // Build table partition columns schema
     let mut table_partition_cols_schema = Vec::with_capacity(partition_columns_mapped.len());
@@ -714,24 +710,13 @@ fn bounds_have_mismatched_types(a: &Precision<ScalarValue>, b: &Precision<Scalar
     }
 }
 
-fn rewrite_data_file_location(table_root: Path, location: Path) -> Path {
-    let raw = location.as_ref();
-    if looks_like_absolute_uri(raw) {
-        return location;
+fn rewrite_data_file_location(table_root: &url::Url, location: &str) -> Result<Path> {
+    let mut root = table_root.clone();
+    if !root.path().ends_with('/') {
+        root.set_path(&format!("{}/", root.path()));
     }
-
-    table_root.parts().chain(location.parts()).collect()
-}
-
-fn looks_like_absolute_uri(path: &str) -> bool {
-    let Some((scheme, rest)) = path.split_once(':') else {
-        return false;
-    };
-    !scheme.is_empty()
-        && scheme
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-        && rest.starts_with('/')
+    let url = crate::clone::data_file_url(&root, location)?;
+    Ok(Path::from_url_path(url.path())?)
 }
 
 fn stats_for_add(action: &Add, file_schema: &SchemaRef) -> Result<Option<Arc<Statistics>>> {
@@ -1042,40 +1027,33 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrite_data_file_location_preserves_absolute_uri_paths() {
-        let table_root = Path::from("bucket/table");
-        let absolute = Path::from("s3://other-bucket/path/part-000.parquet");
-
-        let rewritten = rewrite_data_file_location(table_root, absolute.clone());
-
-        assert_eq!(rewritten, absolute);
-    }
-
-    #[test]
-    fn test_rewrite_data_file_location_prefixes_relative_paths() {
-        let rewritten = rewrite_data_file_location(
-            Path::from("bucket/table"),
-            Path::from("part=1/part-000.parquet"),
-        );
-
+    #[expect(clippy::unwrap_used)]
+    fn test_rewrite_data_file_locations() {
+        let root = url::Url::parse("s3://bucket/table/").unwrap();
+        for (input, expected) in [
+            ("part=1/a.parquet", "table/part=1/a.parquet"),
+            ("p=x:/part.parquet", "table/p=x:/part.parquet"),
+            ("1x:/part.parquet", "table/1x:/part.parquet"),
+            ("s3://bucket/source/a.parquet", "source/a.parquet"),
+            (
+                "part=space%20%23%20%2520/a.parquet",
+                "table/part=space # %20/a.parquet",
+            ),
+            (
+                "s3://bucket/source/space%20%23%20%2520/a.parquet",
+                "source/space # %20/a.parquet",
+            ),
+        ] {
+            assert_eq!(
+                rewrite_data_file_location(&root, input).unwrap(),
+                Path::parse(expected).unwrap()
+            );
+        }
+        assert!(rewrite_data_file_location(&root, "s3://other-bucket/source/a.parquet").is_err());
+        let root = url::Url::parse("file:///destination/").unwrap();
         assert_eq!(
-            rewritten,
-            Path::from("bucket/table/part=1/part-000.parquet")
-        );
-    }
-
-    #[test]
-    fn test_rewrite_data_file_location_preserves_percent_encoded_partition_dirs() {
-        #[expect(clippy::expect_used)]
-        let location =
-            Path::parse("ts_utc=2024-01-15%2010%3A30%3A00.123456/part-00000-abc.snappy.parquet")
-                .expect("valid path");
-
-        let rewritten = rewrite_data_file_location(Path::from("bucket/table"), location);
-
-        assert_eq!(
-            rewritten.as_ref(),
-            "bucket/table/ts_utc=2024-01-15%2010%3A30%3A00.123456/part-00000-abc.snappy.parquet"
+            rewrite_data_file_location(&root, "file:///source/a.parquet").unwrap(),
+            Path::from("source/a.parquet")
         );
     }
 

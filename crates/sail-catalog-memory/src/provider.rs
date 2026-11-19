@@ -11,7 +11,7 @@ use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
     CreateTableMetadataRequirement, CreateTableMode, CreateTableOptions, CreateViewColumnOptions,
     CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
-    plain_lakehouse_create_table_metadata_requirement,
+    StageTableOptions, plain_lakehouse_create_table_metadata_requirement,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -546,7 +546,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         &self,
         database: &Namespace,
         table: &str,
-        options: CreateTableOptions,
+        options: StageTableOptions,
     ) -> CatalogResult<TableReplacement> {
         self.stage_replacement(database, table, options).await
     }

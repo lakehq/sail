@@ -442,7 +442,8 @@ impl OperationMetrics {
             // restoredFilesSize / removedFilesSize / numOfFilesAfterRestore /
             // tableSizeAfterRestore. Requires the restore exec to aggregate these
             // counts from the snapshot diff it produces.
-            DeltaOperation::Restore { .. }
+            DeltaOperation::Clone { .. }
+            | DeltaOperation::Restore { .. }
             | DeltaOperation::Write { .. }
             | DeltaOperation::DynamicPartitionOverwrite { .. }
             | DeltaOperation::Create { .. }
@@ -1374,6 +1375,14 @@ impl std::future::IntoFuture for PreparedCommit {
                 };
 
                 if let Some(latest_version) = latest_version {
+                    if creation_intent
+                        && matches!(this.data.operation, DeltaOperation::Clone { .. })
+                    {
+                        return Err(TransactionError::CommitConflict(
+                            CommitConflictError::MetadataChanged,
+                        )
+                        .into());
+                    }
                     if read_snapshot.is_none() {
                         let snapshot = DeltaSnapshot::try_new(
                             this.log_store.as_ref(),
@@ -1541,6 +1550,14 @@ impl std::future::IntoFuture for PreparedCommit {
                         continue;
                     }
                     Err(err) => {
+                        if matches!(this.data.operation, DeltaOperation::Clone { .. }) {
+                            return Err(DeltaError::External(Box::new(
+                                sail_common_datafusion::error::CommitStateUnknownError::with_source(
+                                    "SHALLOW CLONE publication failed; inspect the destination log before retrying",
+                                    err,
+                                ),
+                            )));
+                        }
                         this.log_store
                             .abort_commit_entry(version, commit_or_bytes, this.operation_id)
                             .await?;

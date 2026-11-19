@@ -45,6 +45,15 @@ pub(crate) fn decode_path(path: &str) -> Result<String, Utf8Error> {
 }
 // SPDX-SnippetEnd
 
+pub(crate) fn absolute_uri_parts(path: &str) -> Option<(&str, &str)> {
+    path.split_once(':').filter(|(scheme, rest)| {
+        let mut chars = scheme.chars();
+        chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+            && rest.starts_with('/')
+    })
+}
+
 /// Comparison key for stored data-file URIs, without decoding their contents.
 ///
 /// Java URI equality ignores percent-escape hex case, but distinguishes literal

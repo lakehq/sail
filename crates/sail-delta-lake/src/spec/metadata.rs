@@ -110,6 +110,16 @@ impl Metadata {
         &self.partition_columns
     }
 
+    pub(crate) fn for_clone(&self, target: Option<&Self>) -> Self {
+        Self {
+            id: target.map_or_else(|| uuid::Uuid::new_v4().to_string(), |m| m.id.clone()),
+            name: target.and_then(|m| m.name.clone()),
+            description: target.and_then(|m| m.description.clone()),
+            created_time: Some(chrono::Utc::now().timestamp_millis()),
+            ..self.clone()
+        }
+    }
+
     pub fn with_table_id(self, table_id: String) -> Metadata {
         Metadata {
             id: table_id,
