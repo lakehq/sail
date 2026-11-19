@@ -24,6 +24,7 @@ use sail_common_datafusion::catalog::delta::{
 use sail_common_datafusion::catalog::{
     DatabaseStatus, TableColumnStatus, TableKind, TableStatus, identity_partition_fields,
 };
+use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
 use crate::data_type::{
     data_type_to_unity_type, unity_struct_field_type_json, unity_type_to_data_type,
@@ -808,11 +809,21 @@ impl CatalogProvider for UnityCatalogProvider {
 
         let data_source_format = parse_data_source_format(&format)?;
 
+        // The servers with the Delta REST API have the variant type, while the variant
+        // type is a struct of its storage fields for the other servers.
+        let variant_type = columns
+            .iter()
+            .any(|col| contains_variant_type(&col.data_type))
+            && self
+                .get_delta_commit_api(&self.get_delta_client().await?, &catalog_name)
+                .await?
+                == DeltaCommitApi::V1;
+
         let unity_columns: Vec<r#gen::ColumnInfo> = columns
             .iter()
             .enumerate()
             .map(|(idx, col)| {
-                let unity_type = data_type_to_unity_type(&col.data_type)?;
+                let unity_type = data_type_to_unity_type(&col.data_type, variant_type)?;
                 let (type_precision, type_scale) = match &col.data_type {
                     DataType::Decimal32(precision, scale)
                     | DataType::Decimal64(precision, scale)
@@ -853,6 +864,7 @@ impl CatalogProvider for UnityCatalogProvider {
                             &col.data_type,
                             col.nullable,
                             &HashMap::new(),
+                            variant_type,
                         )?
                         .to_string(),
                     ),
@@ -1850,6 +1862,25 @@ fn delta_error_type<E>(error: &delta_gen::ApiError<E>) -> Option<String> {
     };
     let body = serde_json::from_str::<serde_json::Value>(body).ok()?;
     body["error"]["type"].as_str().map(str::to_string)
+}
+
+/// Whether the data type is the variant type or has the variant type nested in it.
+fn contains_variant_type(data_type: &DataType) -> bool {
+    if is_marked_variant_storage_type(data_type) {
+        return true;
+    }
+    match data_type {
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _) => contains_variant_type(field.data_type()),
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|field| contains_variant_type(field.data_type())),
+        _ => false,
+    }
 }
 
 fn parse_data_source_format(format: &str) -> CatalogResult<r#gen::DataSourceFormat> {
@@ -4087,5 +4118,82 @@ mod tests {
             received_targets(&server).await,
             vec!["GET /delta/v1/config?catalog=main&protocol-versions=1.0"; 2]
         );
+    }
+
+    #[tokio::test]
+    async fn test_create_table_variant_column_depends_on_delta_api() {
+        // (Delta REST API configuration status, type name, type text)
+        for (status, type_name, type_json) in [
+            (200, "VARIANT", Some(serde_json::json!("variant"))),
+            (404, "STRUCT", None),
+        ] {
+            let server = MockServer::start().await;
+            mount_delta_config(&server, ResponseTemplate::new(status)).await;
+            Mock::given(method("POST"))
+                .and(path("/tables"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "catalog_name": "main",
+                    "schema_name": "default",
+                    "name": "events",
+                    "table_type": "EXTERNAL",
+                    "data_source_format": "DELTA",
+                    "storage_location": DELTA_TABLE_URI,
+                    "columns": []
+                })))
+                .mount(&server)
+                .await;
+
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+            let column = |name: &str, data_type: DataType| {
+                sail_catalog::provider::CreateTableColumnOptions {
+                    metadata: Default::default(),
+                    name: name.to_string(),
+                    data_type,
+                    nullable: true,
+                    comment: None,
+                    default: None,
+                    generated_always_as: None,
+                    identity: None,
+                }
+            };
+            let mut options = managed_delta_create_options(vec![], false);
+            options.is_external = true;
+            options.columns = vec![column("id", DataType::Int64)];
+            provider
+                .create_table(&database, "events", options.clone())
+                .await
+                .unwrap();
+            // The Delta REST API is only negotiated for the variant type.
+            assert_eq!(received_targets(&server).await, vec!["POST /tables"]);
+
+            let variant = crate::data_type::parse_simple_type_from_string("variant").unwrap();
+            options.columns.push(column("v", variant));
+            provider
+                .create_table(&database, "events", options)
+                .await
+                .unwrap();
+            assert_eq!(
+                received_targets(&server).await,
+                vec![
+                    "POST /tables",
+                    "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
+                    "POST /tables",
+                ],
+                "status {status}"
+            );
+            let bodies = received_json_bodies(&server, "/tables").await;
+            let column = &bodies[1]["columns"][1];
+            assert_eq!(column["type_name"], type_name, "status {status}");
+            let field: serde_json::Value =
+                serde_json::from_str(column["type_json"].as_str().unwrap()).unwrap();
+            match type_json {
+                Some(type_json) => {
+                    assert_eq!(column["type_text"], "variant");
+                    assert_eq!(field["type"], type_json);
+                }
+                None => assert_eq!(field["type"]["type"], "struct", "status {status}"),
+            }
+        }
     }
 }

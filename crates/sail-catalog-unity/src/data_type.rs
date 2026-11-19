@@ -11,6 +11,7 @@ use sail_common::spec::{
     self, SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME,
     SAIL_MAP_VALUE_FIELD_NAME, SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY,
 };
+use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
 use crate::r#gen;
 
@@ -29,8 +30,9 @@ pub(crate) fn unity_struct_field_type_json(
     data_type: &DataType,
     nullable: bool,
     metadata: &HashMap<String, String>,
+    variant_type: bool,
 ) -> CatalogResult<serde_json::Value> {
-    let data_type_json = spark_data_type_json(data_type)?;
+    let data_type_json = spark_data_type_json(data_type, variant_type)?;
     Ok(serde_json::json!({
         "name": name,
         "type": data_type_json,
@@ -39,12 +41,13 @@ pub(crate) fn unity_struct_field_type_json(
     }))
 }
 
-fn spark_struct_field_json(field: &Field) -> CatalogResult<serde_json::Value> {
+fn spark_struct_field_json(field: &Field, variant_type: bool) -> CatalogResult<serde_json::Value> {
     unity_struct_field_type_json(
         field.name(),
         field.data_type(),
         field.is_nullable(),
         field.metadata(),
+        variant_type,
     )
 }
 
@@ -80,7 +83,13 @@ fn spark_field_metadata_json(
     Ok(serde_json::Value::Object(out))
 }
 
-fn spark_data_type_json(data_type: &DataType) -> CatalogResult<serde_json::Value> {
+fn spark_data_type_json(
+    data_type: &DataType,
+    variant_type: bool,
+) -> CatalogResult<serde_json::Value> {
+    if variant_type && is_marked_variant_storage_type(data_type) {
+        return Ok(serde_json::Value::String("variant".to_string()));
+    }
     match data_type {
         DataType::Null => Ok(serde_json::Value::String("void".to_string())),
         DataType::Boolean => Ok(serde_json::Value::String("boolean".to_string())),
@@ -136,7 +145,7 @@ fn spark_data_type_json(data_type: &DataType) -> CatalogResult<serde_json::Value
         | DataType::LargeList(field)
         | DataType::LargeListView(field) => Ok(serde_json::json!({
             "type": "array",
-            "elementType": spark_data_type_json(field.data_type())?,
+            "elementType": spark_data_type_json(field.data_type(), variant_type)?,
             "containsNull": field.is_nullable(),
         })),
         DataType::Map(field, _) => {
@@ -152,15 +161,15 @@ fn spark_data_type_json(data_type: &DataType) -> CatalogResult<serde_json::Value
             }
             Ok(serde_json::json!({
                 "type": "map",
-                "keyType": spark_data_type_json(fields[0].data_type())?,
-                "valueType": spark_data_type_json(fields[1].data_type())?,
+                "keyType": spark_data_type_json(fields[0].data_type(), variant_type)?,
+                "valueType": spark_data_type_json(fields[1].data_type(), variant_type)?,
                 "valueContainsNull": fields[1].is_nullable(),
             }))
         }
         DataType::Struct(fields) => {
             let fields = fields
                 .iter()
-                .map(|field| spark_struct_field_json(field.as_ref()))
+                .map(|field| spark_struct_field_json(field.as_ref(), variant_type))
                 .collect::<CatalogResult<Vec<_>>>()?;
             Ok(serde_json::json!({
                 "type": "struct",
@@ -185,8 +194,22 @@ fn spark_data_type_json(data_type: &DataType) -> CatalogResult<serde_json::Value
     }
 }
 
-pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<UnityColumnType> {
+/// Converts the data type to the type of a column in Unity Catalog.
+/// The variant type is the struct of its storage fields unless the server is known
+/// to have the variant type.
+pub(crate) fn data_type_to_unity_type(
+    data_type: &DataType,
+    variant_type: bool,
+) -> CatalogResult<UnityColumnType> {
     // TODO: UserDefinedType
+    if variant_type && is_marked_variant_storage_type(data_type) {
+        let type_text = r#gen::ColumnTypeName::Variant.to_string().to_lowercase();
+        return Ok(UnityColumnType {
+            type_json: serde_json::Value::String(type_text.clone()),
+            type_text,
+            type_name: r#gen::ColumnTypeName::Variant,
+        });
+    }
     match data_type {
         DataType::Null => Ok(UnityColumnType {
             type_text: r#gen::ColumnTypeName::Null.to_string().to_lowercase(),
@@ -365,7 +388,7 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
         | DataType::ListView(field)
         | DataType::LargeList(field)
         | DataType::LargeListView(field) => {
-            let field_type = data_type_to_unity_type(field.data_type())?;
+            let field_type = data_type_to_unity_type(field.data_type(), variant_type)?;
             let type_text = format!("array<{}>", field_type.type_text);
             let mut metadata_map = serde_json::Map::new();
             for (k, v) in field.metadata() {
@@ -388,8 +411,8 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
         DataType::Map(field, _) => {
             if let DataType::Struct(fields) = field.data_type() {
                 if fields.len() == 2 {
-                    let key_type = data_type_to_unity_type(fields[0].data_type())?;
-                    let value_type = data_type_to_unity_type(fields[1].data_type())?;
+                    let key_type = data_type_to_unity_type(fields[0].data_type(), variant_type)?;
+                    let value_type = data_type_to_unity_type(fields[1].data_type(), variant_type)?;
                     let type_text = format!("map<{},{}>", key_type.type_text, value_type.type_text);
                     let mut metadata_map = serde_json::Map::new();
                     for (k, v) in field.metadata() {
@@ -424,7 +447,7 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
             let mut type_text_parts = Vec::new();
             let mut json_fields = Vec::new();
             for field in fields.iter() {
-                let field_type = data_type_to_unity_type(field.data_type())?;
+                let field_type = data_type_to_unity_type(field.data_type(), variant_type)?;
                 type_text_parts.push(format!("{}:{}", field.name(), field_type.type_text));
                 let mut metadata_map = serde_json::Map::new();
                 for (k, v) in field.metadata() {
@@ -1117,10 +1140,7 @@ mod tests {
             None,
             None,
         )?;
-        assert!(
-            sail_common_datafusion::variant::is_marked_variant_storage_type(&data_type),
-            "{data_type:?}"
-        );
+        assert!(is_marked_variant_storage_type(&data_type), "{data_type:?}");
         assert_eq!(parse_unity_type_json(&field.to_string())?, data_type);
         let type_name: r#gen::ColumnTypeName = serde_json::from_value(json!("VARIANT"))
             .map_err(|e| CatalogError::Internal(e.to_string()))?;
@@ -1139,12 +1159,31 @@ mod tests {
         assert_eq!(element.data_type(), &data_type);
 
         // The variant type is a struct of its storage fields when a table is created
-        // with the table API, which has no variant type in older servers.
-        let unity_type = data_type_to_unity_type(&data_type)?;
+        // in a server that is not known to have the variant type.
+        let unity_type = data_type_to_unity_type(&data_type, false)?;
         assert!(matches!(
             unity_type.type_name,
             r#gen::ColumnTypeName::Struct
         ));
+        let field = unity_struct_field_type_json("v", &data_type, true, &HashMap::new(), false)?;
+        assert_eq!(field["type"]["type"], json!("struct"));
+
+        let unity_type = data_type_to_unity_type(&data_type, true)?;
+        assert!(matches!(
+            unity_type.type_name,
+            r#gen::ColumnTypeName::Variant
+        ));
+        assert_eq!(unity_type.type_text, "variant");
+        assert_eq!(unity_type.type_json, json!("variant"));
+        let field = unity_struct_field_type_json("v", &data_type, true, &HashMap::new(), true)?;
+        assert_eq!(field["type"], json!("variant"));
+        let array = DataType::List(Arc::new(Field::new("element", data_type.clone(), true)));
+        assert_eq!(
+            data_type_to_unity_type(&array, true)?.type_text,
+            "array<variant>"
+        );
+        let field = unity_struct_field_type_json("a", &array, true, &HashMap::new(), true)?;
+        assert_eq!(field["type"]["elementType"], json!("variant"));
         Ok(())
     }
 }
