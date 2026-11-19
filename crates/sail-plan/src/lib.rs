@@ -16,7 +16,9 @@ use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::plan::NamedPlan;
-use crate::shared_cte::{optimize_and_plan_shared_ctes, session_state_for_restart};
+use crate::shared_cte::{
+    optimize_and_plan_shared_ctes, session_state_for_restart, session_state_for_shared_body,
+};
 use crate::streaming::rewriter::{is_streaming_plan, rewrite_streaming_plan};
 
 pub mod catalog;
@@ -44,10 +46,16 @@ pub(crate) async fn plan_with_shared_ctes(
     plan: LogicalPlan,
 ) -> Result<(LogicalPlan, Arc<dyn ExecutionPlan>)> {
     let mut restart = false;
+    let mut body_state = None;
     optimize_and_plan_shared_ctes(
         plan,
         &mut |plan, query| {
-            if query && std::mem::replace(&mut restart, true) {
+            if !query {
+                return body_state
+                    .get_or_insert_with(|| session_state_for_shared_body(session_state))
+                    .optimize(&plan);
+            }
+            if std::mem::replace(&mut restart, true) {
                 session_state_for_restart(session_state).optimize(&plan)
             } else {
                 session_state.optimize(&plan)
