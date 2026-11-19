@@ -27,16 +27,11 @@ impl WriteFormat for ParquetWriteFormat {
         ctx: &dyn Session,
         mut input: ListingSinkInput,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut options = self
+        let options = self
             .options
             .clone()
             .into_table_options()
             .map_err(DataFusionError::from)?;
-        // Keep the "created by" property from the session instead of the DataFusion default.
-        options
-            .global
-            .created_by
-            .clone_from(&ctx.default_table_options().parquet.global.created_by);
         let format = ParquetFormat::default().with_options(options);
         input.sink.file_extension = self.file_extension()?;
         format

@@ -268,6 +268,7 @@ impl ParquetWriteOptions {
             write_batch_size,
             writer_version,
             skip_arrow_metadata,
+            created_by: concat!("sail version ", env!("CARGO_PKG_VERSION")).into(),
             compression,
             dictionary_enabled,
             dictionary_page_size_limit,
@@ -493,6 +494,10 @@ mod tests {
         assert_eq!(options.global.content_defined_chunking.min_chunk_size, 4096);
         assert_eq!(options.global.content_defined_chunking.max_chunk_size, 8192);
         assert_eq!(options.global.content_defined_chunking.norm_level, -1);
+        assert_eq!(
+            options.global.created_by,
+            concat!("sail version ", env!("CARGO_PKG_VERSION"))
+        );
         assert_eq!(
             options.global.max_row_group_bytes.map(|v| v.get()),
             Some(65536)
