@@ -228,10 +228,11 @@ pub trait LakeSource: DataSource {
     }
 
     /// Prepares an independent log referencing the source snapshot's existing files.
+    /// Resolve the source only when the destination requires a clone.
     async fn prepare_shallow_clone(
         &self,
         ctx: &TaskContext,
-        source: &str,
+        source: futures::future::BoxFuture<'_, Result<String>>,
         destination: &str,
         mode: sail_common::spec::CreateTableMode,
     ) -> Result<LakeSourceClone> {

@@ -36,19 +36,58 @@ const INVALID: &AsciiSet = &CONTROLS
     .add(b'*')
     .add(b'?');
 
+const INVALID_FIRST_SEGMENT: &AsciiSet = &INVALID.add(b':');
+
 pub(crate) fn encode_path(path: &str) -> String {
     percent_encode(path.as_bytes(), INVALID).to_string()
 }
 
+fn encode_log_path(path: &str) -> String {
+    if let Some(relative) = path.strip_prefix("./") {
+        let first_end = relative.find('/').unwrap_or(relative.len());
+        let (first, rest) = relative.split_at(first_end);
+        if first.contains(':') {
+            return format!(
+                "{}{}",
+                percent_encode(first.as_bytes(), INVALID_FIRST_SEGMENT),
+                percent_encode(rest.as_bytes(), INVALID)
+            );
+        }
+    }
+    encode_path(path)
+}
+
 pub(crate) fn decode_path(path: &str) -> Result<String, Utf8Error> {
-    Ok(percent_decode_str(path).decode_utf8()?.to_string())
+    let decoded = percent_decode_str(path).decode_utf8()?;
+    // Remember an escaped colon in the first segment of a relative reference.
+    // This prevents a decoded scheme from becoming absolute and lets Remove
+    // actions reuse the spelling of the Add, including older unescaped paths.
+    let first = path.split('/').next().unwrap_or_default();
+    if first
+        .as_bytes()
+        .windows(3)
+        .any(|s| s.eq_ignore_ascii_case(b"%3A"))
+        || (absolute_uri_parts(&decoded).is_some() && absolute_uri_parts(path).is_none())
+    {
+        return Ok(format!("./{decoded}"));
+    }
+    Ok(decoded.into_owned())
 }
 // SPDX-SnippetEnd
+
+pub(crate) fn absolute_uri_parts(path: &str) -> Option<(&str, &str)> {
+    path.split_once(':').filter(|(scheme, rest)| {
+        let mut chars = scheme.chars();
+        chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+            && rest.starts_with('/')
+    })
+}
 
 pub(crate) mod serde_path {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    use super::{decode_path, encode_path};
+    use super::{decode_path, encode_log_path};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
     where
@@ -62,7 +101,7 @@ pub(crate) mod serde_path {
     where
         S: Serializer,
     {
-        let encoded = encode_path(value);
+        let encoded = encode_log_path(value);
         String::serialize(&encoded, serializer)
     }
 }

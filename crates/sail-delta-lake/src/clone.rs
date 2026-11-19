@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::{HashMap, HashSet};
 
 use datafusion::execution::TaskContext;
@@ -13,7 +15,7 @@ use url::Url;
 
 use crate::DeltaTableError;
 use crate::snapshot::{DeltaSnapshot, DeltaSnapshotConfig};
-use crate::spec::utils::{decode_path, encode_path};
+use crate::spec::utils::{absolute_uri_parts, decode_path, encode_path};
 use crate::spec::{CommitAction, DeltaOperation};
 use crate::table::{
     create_logstore_with_object_store, open_table_with_object_store_and_table_config,
@@ -27,12 +29,7 @@ fn external(error: impl std::error::Error + Send + Sync + 'static) -> DataFusion
 /// Add paths are decoded by serde_path. Re-encode once before URI resolution.
 pub(crate) fn data_file_url(root: &Url, path: &str) -> Result<Url> {
     let encoded = encode_path(path);
-    let url = if path.split_once(':').is_some_and(|(scheme, rest)| {
-        let mut chars = scheme.chars();
-        chars.next().is_some_and(|c| c.is_ascii_alphabetic())
-            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-            && rest.starts_with('/')
-    }) {
+    let url = if absolute_uri_parts(path).is_some() {
         Url::parse(&encoded).map_err(external)?
     } else {
         root.join(&if path.starts_with('/') {
@@ -118,41 +115,17 @@ fn validate_snapshot(snapshot: &DeltaSnapshot) -> Result<()> {
 
 pub(crate) async fn prepare(
     ctx: &TaskContext,
-    source: &str,
+    source: futures::future::BoxFuture<'_, Result<String>>,
     destination: &str,
     mode: CreateTableMode,
 ) -> Result<LakeSourceClone> {
-    let source_url = table_url(source)?;
     let destination_url = table_url(destination)?;
-    if source_url.scheme() != destination_url.scheme()
-        || source_url.authority() != destination_url.authority()
-    {
-        return not_impl_err!("SHALLOW CLONE across object-store authorities is not supported");
-    }
-    // Match the decoded, segment-aware prefixes used by StorageConfig::decorate_store.
-    let source_root = Path::from_url_path(source_url.path())?;
     let destination_root = Path::from_url_path(destination_url.path())?;
-    if source_root.prefix_matches(&destination_root)
-        || destination_root.prefix_matches(&source_root)
-    {
-        return plan_err!(
-            "SHALLOW CLONE source and destination must be distinct, non-overlapping locations"
-        );
-    }
     let runtime = ctx.runtime_env();
     let store = runtime
         .object_store_registry
-        .get_store(&source_url)
+        .get_store(&destination_url)
         .map_err(external)?;
-    let source_table = open_table_with_object_store_and_table_config(
-        source_url.clone(),
-        store.clone(),
-        Default::default(),
-        DeltaSnapshotConfig::default(),
-    )
-    .await?;
-    let source = source_table.snapshot()?;
-    validate_snapshot(source)?;
     let destination_table = match open_table_with_object_store_and_table_config(
         destination_url.clone(),
         store.clone(),
@@ -205,6 +178,30 @@ pub(crate) async fn prepare(
             return plan_err!("SHALLOW CLONE destination is not empty and is not a Delta table");
         }
     }
+    let source_url = table_url(&source.await?)?;
+    if source_url.scheme() != destination_url.scheme()
+        || source_url.authority() != destination_url.authority()
+    {
+        return not_impl_err!("SHALLOW CLONE across object-store authorities is not supported");
+    }
+    // Match the decoded, segment-aware prefixes used by StorageConfig::decorate_store.
+    let source_root = Path::from_url_path(source_url.path())?;
+    if source_root.prefix_matches(&destination_root)
+        || destination_root.prefix_matches(&source_root)
+    {
+        return plan_err!(
+            "SHALLOW CLONE source and destination must be distinct, non-overlapping locations"
+        );
+    }
+    let source_table = open_table_with_object_store_and_table_config(
+        source_url.clone(),
+        store.clone(),
+        Default::default(),
+        DeltaSnapshotConfig::default(),
+    )
+    .await?;
+    let source = source_table.snapshot()?;
+    validate_snapshot(source)?;
     let metadata = source
         .metadata()
         .for_clone(old.as_deref().map(DeltaSnapshot::metadata));

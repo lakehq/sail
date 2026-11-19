@@ -39,6 +39,15 @@ fn clone_result_schema() -> CatalogResult<SchemaRef> {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum CloneTarget {
+    Path(String),
+    Table {
+        name: Vec<String>,
+        default_location: String,
+    },
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum CatalogCommand {
     CurrentCatalog,
     SetCurrentCatalog {
@@ -74,10 +83,9 @@ pub enum CatalogCommand {
         options: CreateTableOptions,
     },
     CloneTable {
-        table: Vec<String>,
+        target: CloneTarget,
         source: Vec<String>,
         location: Option<String>,
-        default_location: String,
         mode: sail_common::spec::CreateTableMode,
         is_external: bool,
     },
@@ -393,20 +401,18 @@ impl CatalogCommand {
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::CloneTable {
-                table,
+                target,
                 source,
                 location,
-                default_location,
                 mode,
                 is_external,
             } => {
                 let metrics = super::clone::clone_table(
                     ctx,
                     manager,
-                    table,
+                    target,
                     source,
                     location,
-                    default_location,
                     mode,
                     is_external,
                 )

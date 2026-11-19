@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 from __future__ import annotations
 
@@ -168,11 +170,21 @@ def test_shallow_clone_rejections_preserve_destination(spark, tmp_path):
     assert not (tmp_path / "absent" / "_delta_log").exists()
 
 
-def test_shallow_clone_relative_colon_paths(spark, tmp_path):
+@pytest.mark.parametrize(
+    ("directory", "log_directory"),
+    [
+        ("p=x:", "p=x%3A"),
+        ("p=x:", "p=x:"),
+        ("archive:", "archive%3A"),
+        ("file:", "file%3A"),
+        ("archive%3A", "archive%253A"),
+    ],
+)
+def test_shallow_clone_relative_colon_paths(spark, tmp_path, directory, log_directory):
     source_path = tmp_path / "source"
     source, destination = _identifier(source_path), _identifier(tmp_path / "clone")
     _create_delta_table(spark, source_path, "id BIGINT, p STRING", "PARTITIONED BY (p)")
-    partition = source_path / "p=x:"
+    partition = source_path / directory
     partition.mkdir()
     actions = []
     for value in (7, 9):
@@ -181,7 +193,7 @@ def test_shallow_clone_relative_colon_paths(spark, tmp_path):
         actions.append(
             {
                 "add": {
-                    "path": f"p=x%3A/{file.name}",
+                    "path": f"{log_directory}/{file.name}",
                     "partitionValues": {"p": "x:"},
                     "size": file.stat().st_size,
                     "modificationTime": 0,
@@ -203,6 +215,7 @@ def test_shallow_clone_relative_colon_paths(spark, tmp_path):
         assert _latest(path, "commitInfo")["operation"] == "OPTIMIZE"
         assert sum("remove" in action for action in _actions(path)) == 2
     assert _rows(spark, source) == expected
+    assert {a["remove"]["path"] for a in _actions(source_path) if "remove" in a} == {a["add"]["path"] for a in actions}
 
 
 @pytest.mark.integration
@@ -323,7 +336,11 @@ def test_clone_catalog_target_in_delta_namespace(spark, tmp_path):
     location = escape_sql_string_literal(str(tmp_path / "target"))
     try:
         qualified = f"{spark.catalog.currentCatalog()}.{target}"
-        spark.sql(f"CREATE TABLE {qualified} (id BIGINT) USING DELTA LOCATION '{location}'")
+        spark.sql(f"CREATE TABLE {target} SHALLOW CLONE {_identifier(source)} LOCATION '{location}'")
+        assert [row.id for row in spark.table(qualified).collect()] == [0]
+        managed = f"{target}_managed"
+        spark.sql(f"CREATE TABLE {managed} SHALLOW CLONE {_identifier(source)}")
+        assert [row.id for row in spark.table(f"{qualified}_managed").collect()] == [0]
         spark.sql(f"REPLACE TABLE {target} SHALLOW CLONE {_identifier(source)} LOCATION '{location}'")
         assert [row.id for row in spark.table(qualified).collect()] == [0]
         second = _identifier(tmp_path / "second")
@@ -331,3 +348,17 @@ def test_clone_catalog_target_in_delta_namespace(spark, tmp_path):
         assert [row.id for row in spark.table(second).collect()] == [0]
     finally:
         spark.sql("DROP DATABASE delta CASCADE")
+
+
+@pytest.mark.parametrize("source_kind", ["missing_path", "missing_table", "unsupported_protocol"])
+def test_existing_path_clone_skips_source(spark, tmp_path, source_kind):
+    destination = tmp_path / "existing"
+    spark.range(1).write.format("delta").save(str(destination))
+    source_path = tmp_path / "source"
+    source = f"missing_{uuid.uuid4().hex}" if source_kind == "missing_table" else _identifier(source_path)
+    if source_kind == "unsupported_protocol":
+        _create_delta_table(spark, source_path, "id BIGINT", "TBLPROPERTIES ('delta.columnMapping.mode'='name')")
+    before = _logs(destination)
+    result = spark.sql(f"CREATE TABLE IF NOT EXISTS {_identifier(destination)} SHALLOW CLONE {source}")
+    assert result.collect() == []
+    assert _logs(destination) == before

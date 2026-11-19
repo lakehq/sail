@@ -1738,34 +1738,29 @@ mod tests {
 
     #[test]
     fn checkpoint_row_roundtrip_preserves_add_path() -> DeltaResult<()> {
-        let rows = vec![CheckpointActionRow {
-            add: Some(Add {
-                path: "part-000.parquet".to_string(),
-                partition_values: HashMap::new(),
-                size: 10,
-                modification_time: 20,
-                data_change: true,
-                stats: None,
-                tags: None,
-                deletion_vector: None,
-                base_row_id: None,
-                default_row_commit_version: None,
-                clustering_provider: None,
-                commit_version: None,
-                commit_timestamp: None,
-            }),
-            ..Default::default()
-        }];
+        let paths = [
+            "part-000.parquet",
+            "./archive:/part",
+            "archive%3A/part",
+            "file:/absolute/part",
+        ];
+        let rows: Vec<_> = paths
+            .iter()
+            .map(|path| CheckpointActionRow {
+                add: Some(Add {
+                    path: (*path).into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .collect();
         let batch = encode_rows_for_test(&rows)?;
         let decoded = decode_checkpoint_rows(&batch)?;
-        assert_eq!(decoded.len(), 1);
-        assert_eq!(
-            decoded
-                .first()
-                .and_then(|row| row.add.as_ref())
-                .map(|add| add.path.as_str()),
-            Some("part-000.parquet")
-        );
+        let paths_after: Vec<_> = decoded
+            .iter()
+            .filter_map(|row| row.add.as_ref().map(|add| add.path.as_str()))
+            .collect();
+        assert_eq!(paths_after, paths);
         Ok(())
     }
 

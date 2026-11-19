@@ -19,7 +19,7 @@ use crate::deletion_vector::resolve_dv_absolute_path;
 use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
 use crate::snapshot::DeltaSnapshot;
-use crate::spec::utils::encode_path;
+use crate::spec::utils::{absolute_uri_parts, encode_path};
 use crate::spec::{DeletionVectorDescriptor, DeltaError, DeltaOperation, TableFeature};
 use crate::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 
@@ -261,16 +261,7 @@ fn protect(
     dv: Option<&DeletionVectorDescriptor>,
 ) -> Result<()> {
     // Hadoop absolute paths have an absolute path component, not merely a scheme.
-    let absolute_uri = path.split_once(':').filter(|(scheme, rest)| {
-        scheme
-            .as_bytes()
-            .first()
-            .is_some_and(u8::is_ascii_alphabetic)
-            && scheme
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-            && rest.starts_with('/')
-    });
+    let absolute_uri = absolute_uri_parts(path);
     let encoded = encode_path(path);
     let mut url = if let Some((scheme, rest)) = absolute_uri {
         if scheme.eq_ignore_ascii_case(root.scheme())
@@ -298,7 +289,7 @@ fn protect(
     if let Some(path) = relative_path(root, &url)? {
         files.insert(path);
     }
-    // Decoding erased the distinction between `scheme:/path` and `scheme%3A/path`.
+    // Older writers may have persisted a relative file name with an unescaped colon.
     // Protect the literal relative object too; `scheme://` cannot name such an object.
     if absolute_uri.is_some_and(|(_, rest)| !rest.starts_with("//")) {
         let url = root

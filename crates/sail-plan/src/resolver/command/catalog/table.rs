@@ -2,7 +2,7 @@
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
-use sail_catalog::command::CatalogCommand;
+use sail_catalog::command::{CatalogCommand, CloneTarget};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
     AlterTableOptions, CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions,
@@ -84,18 +84,20 @@ impl PlanResolver<'_> {
                 "SHALLOW CLONE supports only LOCATION; schema, properties and layout are inherited from the source",
             ));
         }
-        let default_location = if table.parts().len() == 2
-            && table.parts()[0].as_ref().eq_ignore_ascii_case("delta")
-        {
-            table.parts()[1].as_ref().to_string()
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let target = if let Some(path) = manager.clone_path(table.parts()).await? {
+            CloneTarget::Path(path.into())
         } else {
-            self.resolve_default_table_location(&table).await?
+            let default_location = self.resolve_default_table_location(&table).await?;
+            CloneTarget::Table {
+                name: table.into(),
+                default_location,
+            }
         };
         self.resolve_catalog_command(CatalogCommand::CloneTable {
-            table: table.into(),
+            target,
             source: source.into(),
             location: definition.location,
-            default_location,
             mode: definition.mode,
             is_external: definition.external,
         })

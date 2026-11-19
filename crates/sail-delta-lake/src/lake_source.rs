@@ -207,7 +207,7 @@ impl LakeSource for DeltaLakeSource {
     async fn prepare_shallow_clone(
         &self,
         ctx: &datafusion::execution::TaskContext,
-        source: &str,
+        source: futures::future::BoxFuture<'_, Result<String>>,
         destination: &str,
         mode: sail_common::spec::CreateTableMode,
     ) -> Result<sail_common_datafusion::lakesource::LakeSourceClone> {

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -12,7 +14,7 @@ use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
-use sail_catalog::command::CatalogCommand;
+use sail_catalog::command::{CatalogCommand, CloneTarget};
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::DropTableOptions;
@@ -155,14 +157,16 @@ async fn clone(
 ) -> Result<(), CatalogError> {
     let manager = session.extension::<CatalogManager>()?;
     CatalogCommand::CloneTable {
-        table: if named {
-            vec!["cloned".into()]
+        target: if named {
+            CloneTarget::Table {
+                name: vec!["cloned".into()],
+                default_location: destination.into(),
+            }
         } else {
-            vec!["delta".into(), destination.into()]
+            CloneTarget::Path(destination.into())
         },
         source: vec!["delta".into(), source.into()],
         location: named.then(|| destination.into()),
-        default_location: destination.into(),
         mode: CreateTableMode::CreateOrReplace,
         is_external: true,
     }
