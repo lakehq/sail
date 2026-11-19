@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use arrow::datatypes::DataType;
 use sail_catalog::credentials::CatalogCredentials;
@@ -28,16 +28,30 @@ use sail_common_datafusion::catalog::{
 use crate::data_type::{
     data_type_to_unity_type, unity_struct_field_type_json, unity_type_to_data_type,
 };
-use crate::r#gen;
 use crate::r#gen::ApiClient;
+use crate::{delta_gen, r#gen};
 
 pub(crate) const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalog";
+
+/// The highest version of the Unity Catalog Delta REST API supported by the client.
+const DELTA_API_PROTOCOL_VERSIONS: &str = "1.0";
+
+/// The Unity Catalog API used for catalog-managed Delta commits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeltaCommitApi {
+    /// The Delta REST API (`/delta/v1`).
+    V1,
+    /// The legacy API (`/delta/preview/commits`) for servers without the Delta REST API.
+    Preview,
+}
 
 /// Provider for Unity Catalog
 pub struct UnityCatalogProvider {
     name: String,
     options: UnityCatalogOptions,
     http_client: reqwest::Client,
+    /// The negotiated Delta commit API for each catalog.
+    delta_commit_apis: Mutex<HashMap<String, DeltaCommitApi>>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,10 +68,27 @@ impl UnityCatalogProvider {
             name,
             options,
             http_client,
+            delta_commit_apis: Mutex::new(HashMap::new()),
         })
     }
 
     async fn get_client(&self) -> CatalogResult<ApiClient> {
+        Ok(ApiClient::new(
+            self.options.uri.clone(),
+            self.http_client.clone(),
+            self.get_request_headers().await?,
+        ))
+    }
+
+    async fn get_delta_client(&self) -> CatalogResult<delta_gen::ApiClient> {
+        Ok(delta_gen::ApiClient::new(
+            self.options.uri.clone(),
+            self.http_client.clone(),
+            self.get_request_headers().await?,
+        ))
+    }
+
+    async fn get_request_headers(&self) -> CatalogResult<reqwest::header::HeaderMap> {
         let mut headers = reqwest::header::HeaderMap::new();
 
         if let Some(token) = self.options.credentials.retrieve().await? {
@@ -73,11 +104,72 @@ impl UnityCatalogProvider {
             reqwest::header::HeaderValue::from_static(SAIL_USER_AGENT),
         );
 
-        Ok(ApiClient::new(
-            self.options.uri.clone(),
-            self.http_client.clone(),
-            headers,
-        ))
+        Ok(headers)
+    }
+
+    /// Determines which API to use for catalog-managed Delta commits in the catalog.
+    ///
+    /// The Delta REST API is used if the server answers its configuration endpoint
+    /// successfully, whatever the response body is.
+    /// The legacy API is used if the server does not have the endpoint or does not
+    /// support the protocol version of the client. Other failures are returned as errors
+    /// and are not remembered.
+    async fn get_delta_commit_api(
+        &self,
+        client: &delta_gen::ApiClient,
+        catalog_name: &str,
+    ) -> CatalogResult<DeltaCommitApi> {
+        if let Some(api) = self.delta_commit_api_cache()?.get(catalog_name).copied() {
+            return Ok(api);
+        }
+        let api = match client
+            .get_config(
+                catalog_name.to_string(),
+                DELTA_API_PROTOCOL_VERSIONS.to_string(),
+            )
+            .await
+        {
+            Ok(_) => DeltaCommitApi::V1,
+            Err(e) if e.status().is_some_and(|status| status.is_success()) => DeltaCommitApi::V1,
+            Err(e)
+                if matches!(
+                    e.status(),
+                    Some(
+                        reqwest::StatusCode::NOT_FOUND
+                            | reqwest::StatusCode::NOT_IMPLEMENTED
+                            | reqwest::StatusCode::BAD_REQUEST
+                    )
+                ) =>
+            {
+                DeltaCommitApi::Preview
+            }
+            Err(e) if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED) => {
+                return Err(CatalogError::Unauthorized(format!(
+                    "Unity Catalog Delta API configuration unauthorized: {e}"
+                )));
+            }
+            Err(e) if e.status() == Some(reqwest::StatusCode::FORBIDDEN) => {
+                return Err(CatalogError::Forbidden(format!(
+                    "Unity Catalog Delta API configuration forbidden: {e}"
+                )));
+            }
+            Err(e) => {
+                return Err(CatalogError::External(format!(
+                    "Failed to get Delta API configuration from Unity Catalog: {e}"
+                )));
+            }
+        };
+        self.delta_commit_api_cache()?
+            .insert(catalog_name.to_string(), api);
+        Ok(api)
+    }
+
+    fn delta_commit_api_cache(
+        &self,
+    ) -> CatalogResult<MutexGuard<'_, HashMap<String, DeltaCommitApi>>> {
+        self.delta_commit_apis.lock().map_err(|e| {
+            CatalogError::Internal(format!("Unity Catalog Delta commit API cache: {e}"))
+        })
     }
 
     fn get_catalog_and_schema_name(
@@ -896,42 +988,68 @@ impl CatalogProvider for UnityCatalogProvider {
             CatalogError::InvalidArgument(format!("Invalid Delta commit payload: {e}"))
         })?;
 
-        let client = self
-            .get_client()
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+        let delta_client = self
+            .get_delta_client()
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
-
-        let _ = (database, table);
-        match client.commit(commit).await {
-            Ok(_) => Ok(LakehouseCommitOutcome::Committed { context, payload }),
+        // The Delta REST API commit carries no table metadata, so a commit that changes
+        // the table metadata uses the legacy API.
+        let api = if commit.metadata.is_some() {
+            DeltaCommitApi::Preview
+        } else {
+            self.get_delta_commit_api(&delta_client, &catalog_name)
+                .await?
+        };
+        let (status, error) = match api {
+            DeltaCommitApi::V1 => {
+                let request = delta_update_table_request(commit)?;
+                match delta_client
+                    .update_table(catalog_name, schema_name, table.to_string(), request)
+                    .await
+                {
+                    Ok(_) => return Ok(LakehouseCommitOutcome::Committed { context, payload }),
+                    Err(e) => (e.status(), e.to_string()),
+                }
+            }
+            DeltaCommitApi::Preview => {
+                let client = self
+                    .get_client()
+                    .await
+                    .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+                match client.commit(commit).await {
+                    Ok(_) => return Ok(LakehouseCommitOutcome::Committed { context, payload }),
+                    Err(e) => (e.status(), e.to_string()),
+                }
+            }
+        };
+        match status {
+            // The commit is accepted by the server if the status code indicates success,
+            // even if the response body cannot be deserialized.
             // The OSS Unity Catalog server currently returns a plain "200 OK" body
-            // for Delta commits even though the OpenAPI spec declares a JSON response.
+            // for legacy Delta commits even though the OpenAPI spec declares a JSON response.
             // Such responses are considered unknown errors since JSON deserialization fails.
-            Err(e) if e.status().is_some_and(|s| s.is_success()) => {
-                Ok(LakehouseCommitOutcome::Committed { context, payload })
-            }
-            Err(e) if e.status() == Some(reqwest::StatusCode::CONFLICT) => Err(
-                CatalogError::Conflict(format!("Unity Catalog Delta commit conflict: {e}")),
-            ),
-            Err(e) if e.status() == Some(reqwest::StatusCode::BAD_REQUEST) => {
-                Err(CatalogError::InvalidArgument(format!(
-                    "Unity Catalog Delta commit invalid argument: {e}"
-                )))
-            }
-            Err(e) if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED) => Err(
-                CatalogError::Unauthorized(format!("Unity Catalog Delta commit unauthorized: {e}")),
-            ),
-            Err(e) if e.status() == Some(reqwest::StatusCode::FORBIDDEN) => Err(
-                CatalogError::Forbidden(format!("Unity Catalog Delta commit forbidden: {e}")),
-            ),
-            Err(e) if e.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => Err(
-                CatalogError::RateLimited(format!("Unity Catalog Delta commit rate limited: {e}")),
-            ),
-            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_IMPLEMENTED) => Err(
-                CatalogError::NotSupported(format!("Unity Catalog Delta commit endpoint: {e}")),
-            ),
-            Err(e) => Err(CatalogError::External(format!(
-                "Failed to commit Delta table to Unity Catalog: {e}"
+            Some(s) if s.is_success() => Ok(LakehouseCommitOutcome::Committed { context, payload }),
+            Some(reqwest::StatusCode::CONFLICT) => Err(CatalogError::Conflict(format!(
+                "Unity Catalog Delta commit conflict: {error}"
+            ))),
+            Some(reqwest::StatusCode::BAD_REQUEST) => Err(CatalogError::InvalidArgument(format!(
+                "Unity Catalog Delta commit invalid argument: {error}"
+            ))),
+            Some(reqwest::StatusCode::UNAUTHORIZED) => Err(CatalogError::Unauthorized(format!(
+                "Unity Catalog Delta commit unauthorized: {error}"
+            ))),
+            Some(reqwest::StatusCode::FORBIDDEN) => Err(CatalogError::Forbidden(format!(
+                "Unity Catalog Delta commit forbidden: {error}"
+            ))),
+            Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => Err(CatalogError::RateLimited(
+                format!("Unity Catalog Delta commit rate limited: {error}"),
+            )),
+            Some(reqwest::StatusCode::NOT_IMPLEMENTED) => Err(CatalogError::NotSupported(format!(
+                "Unity Catalog Delta commit endpoint: {error}"
+            ))),
+            _ => Err(CatalogError::External(format!(
+                "Failed to commit Delta table to Unity Catalog: {error}"
             ))),
         }
     }
@@ -983,54 +1101,78 @@ impl CatalogProvider for UnityCatalogProvider {
             ))
         })?;
 
-        let request = r#gen::DeltaGetCommits {
-            end_version: request.end_version,
-            start_version: request.start_version,
-            table_id: table_id.to_string(),
-            table_uri,
-        };
-        let client = self
-            .get_client()
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+        let delta_client = self
+            .get_delta_client()
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
-        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-
-        match client.get_commits(request).await {
-            Ok(response) => {
-                let response = response.inner;
-                Ok(DeltaRatifiedCommitResponse {
-                    latest_table_version: response.latest_table_version,
-                    commits: response
-                        .commits
-                        .into_iter()
-                        .map(|commit| DeltaRatifiedCommit {
-                            version: commit.version,
-                            timestamp: commit.timestamp,
-                            file_name: commit.file_name,
-                            file_size: commit.file_size,
-                            file_modification_timestamp: commit.file_modification_timestamp,
-                        })
-                        .collect(),
-                })
+        let (status, error) = match self
+            .get_delta_commit_api(&delta_client, &catalog_name)
+            .await?
+        {
+            DeltaCommitApi::V1 => {
+                match delta_client
+                    .load_table(catalog_name.clone(), schema_name.clone(), table.to_string())
+                    .await
+                {
+                    Ok(response) => {
+                        return delta_ratified_commits_from_load_table(
+                            response.inner,
+                            table,
+                            table_id,
+                            request.start_version,
+                            request.end_version,
+                        );
+                    }
+                    Err(e) => (e.status(), e.to_string()),
+                }
             }
-            Err(e) if e.status() == Some(reqwest::StatusCode::BAD_REQUEST) => {
-                Err(CatalogError::InvalidArgument(format!(
-                    "Unity Catalog Delta commit discovery invalid argument: {e}"
-                )))
+            DeltaCommitApi::Preview => {
+                let request = r#gen::DeltaGetCommits {
+                    end_version: request.end_version,
+                    start_version: request.start_version,
+                    table_id: table_id.to_string(),
+                    table_uri,
+                };
+                let client = self
+                    .get_client()
+                    .await
+                    .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+                match client.get_commits(request).await {
+                    Ok(response) => {
+                        let response = response.inner;
+                        return Ok(DeltaRatifiedCommitResponse {
+                            latest_table_version: response.latest_table_version,
+                            commits: response
+                                .commits
+                                .into_iter()
+                                .map(|commit| DeltaRatifiedCommit {
+                                    version: commit.version,
+                                    timestamp: commit.timestamp,
+                                    file_name: commit.file_name,
+                                    file_size: commit.file_size,
+                                    file_modification_timestamp: commit.file_modification_timestamp,
+                                })
+                                .collect(),
+                        });
+                    }
+                    Err(e) => (e.status(), e.to_string()),
+                }
             }
-            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {
-                Err(CatalogError::NotFound(
-                    CatalogObject::Table,
-                    quote_names_if_needed(&[&catalog_name, &schema_name, table]),
-                ))
-            }
-            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_IMPLEMENTED) => {
-                Err(CatalogError::NotSupported(format!(
-                    "Unity Catalog Delta commit discovery endpoint: {e}"
-                )))
-            }
-            Err(e) => Err(CatalogError::External(format!(
-                "Failed to get Delta commits from Unity Catalog: {e}"
+        };
+        match status {
+            Some(reqwest::StatusCode::BAD_REQUEST) => Err(CatalogError::InvalidArgument(format!(
+                "Unity Catalog Delta commit discovery invalid argument: {error}"
+            ))),
+            Some(reqwest::StatusCode::NOT_FOUND) => Err(CatalogError::NotFound(
+                CatalogObject::Table,
+                quote_names_if_needed(&[&catalog_name, &schema_name, table]),
+            )),
+            Some(reqwest::StatusCode::NOT_IMPLEMENTED) => Err(CatalogError::NotSupported(format!(
+                "Unity Catalog Delta commit discovery endpoint: {error}"
+            ))),
+            _ => Err(CatalogError::External(format!(
+                "Failed to get Delta commits from Unity Catalog: {error}"
             ))),
         }
     }
@@ -1070,6 +1212,122 @@ impl CatalogProvider for UnityCatalogProvider {
     }
 }
 
+/// Converts the table loaded via the Delta REST API to the ratified commits
+/// in the requested version range, in ascending version order.
+fn delta_ratified_commits_from_load_table(
+    response: delta_gen::DeltaLoadTableResponse,
+    table: &str,
+    table_id: &str,
+    start_version: i64,
+    end_version: Option<i64>,
+) -> CatalogResult<DeltaRatifiedCommitResponse> {
+    let actual_table_id = response.metadata.table_uuid.as_str();
+    if !actual_table_id.eq_ignore_ascii_case(table_id) {
+        return Err(CatalogError::InvalidArgument(format!(
+            "Unity Catalog Delta commit discovery table id mismatch for `{table}`: expected `{table_id}`, got `{actual_table_id}`"
+        )));
+    }
+    let commits = response.commits.unwrap_or_default();
+    // A response without the latest table version is at the version of its latest commit.
+    let latest_table_version = response
+        .latest_table_version
+        .or_else(|| commits.iter().map(|commit| commit.version).max())
+        .unwrap_or(-1);
+    // The server returns all the unbackfilled ratified commits without version filtering.
+    let mut commits = commits
+        .into_iter()
+        .filter(|commit| {
+            commit.version >= start_version && end_version.is_none_or(|end| commit.version <= end)
+        })
+        .map(|commit| DeltaRatifiedCommit {
+            version: commit.version,
+            timestamp: commit.timestamp,
+            file_name: commit.file_name,
+            file_size: commit.file_size,
+            file_modification_timestamp: commit.file_modification_timestamp,
+        })
+        .collect::<Vec<_>>();
+    commits.sort_by_key(|commit| commit.version);
+    Ok(DeltaRatifiedCommitResponse {
+        latest_table_version,
+        commits,
+    })
+}
+
+/// Converts the legacy Delta commit payload to an update table request of the Delta REST API.
+fn delta_update_table_request(
+    commit: r#gen::DeltaCommit,
+) -> CatalogResult<delta_gen::DeltaUpdateTableRequest> {
+    let r#gen::DeltaCommit {
+        commit_info,
+        latest_backfilled_version,
+        metadata: _,
+        table_id,
+        table_uri: _,
+        uniform,
+    } = commit;
+    let mut updates = vec![];
+    match (commit_info, uniform) {
+        (Some(info), uniform) => {
+            let uniform = uniform.map(|x| delta_uniform_metadata(*x)).transpose()?;
+            updates.push(delta_gen::DeltaTableUpdate::AddCommit {
+                commit: Box::new(delta_gen::DeltaCommit {
+                    version: info.version,
+                    timestamp: info.timestamp,
+                    file_name: info.file_name,
+                    file_size: info.file_size,
+                    file_modification_timestamp: info.file_modification_timestamp,
+                }),
+                uniform: uniform.map(Box::new),
+            });
+        }
+        (None, Some(_)) => {
+            return Err(CatalogError::InvalidArgument(
+                "Unity Catalog Delta commit with UniForm metadata expects commit info".to_string(),
+            ));
+        }
+        (None, None) => {}
+    }
+    if let Some(latest_published_version) = latest_backfilled_version {
+        updates.push(delta_gen::DeltaTableUpdate::SetLatestBackfilledVersion {
+            latest_published_version,
+        });
+    }
+    if updates.is_empty() {
+        return Err(CatalogError::InvalidArgument(
+            "Unity Catalog Delta commit expects commit info or the latest backfilled version"
+                .to_string(),
+        ));
+    }
+    Ok(delta_gen::DeltaUpdateTableRequest {
+        requirements: vec![delta_gen::DeltaTableRequirement::AssertTableUuid { uuid: table_id }],
+        updates,
+    })
+}
+
+fn delta_uniform_metadata(
+    uniform: r#gen::DeltaUniform,
+) -> CatalogResult<delta_gen::DeltaUniformMetadata> {
+    let iceberg = *uniform.iceberg;
+    let converted_delta_timestamp =
+        chrono::DateTime::parse_from_rfc3339(&iceberg.converted_delta_timestamp)
+            .map_err(|e| {
+                CatalogError::InvalidArgument(format!(
+                    "Invalid UniForm converted Delta timestamp `{}`: {e}",
+                    iceberg.converted_delta_timestamp
+                ))
+            })?
+            .timestamp_millis();
+    Ok(delta_gen::DeltaUniformMetadata {
+        iceberg: delta_gen::delta_uniform_metadata::Iceberg {
+            metadata_location: Some(iceberg.metadata_location),
+            converted_delta_version: Some(iceberg.converted_delta_version),
+            converted_delta_timestamp: Some(converted_delta_timestamp),
+            base_converted_delta_version: iceberg.base_converted_delta_version,
+        },
+    })
+}
+
 fn parse_data_source_format(format: &str) -> CatalogResult<r#gen::DataSourceFormat> {
     match format.trim().to_ascii_uppercase().as_str() {
         "DELTA" => Ok(r#gen::DataSourceFormat::Delta),
@@ -1090,8 +1348,12 @@ fn parse_data_source_format(format: &str) -> CatalogResult<r#gen::DataSourceForm
 #[cfg(test)]
 mod tests {
     use sail_catalog::credentials::{CatalogCredentials, EmptyCatalogCredentials};
+    use sail_common_datafusion::catalog::{
+        CatalogProviderId, CatalogTableIdentity, LakehouseAuthority, LakehouseExecutionContext,
+        LakehouseFormat, LakehouseOperation, ScanAuthority,
+    };
     use secrecy::ExposeSecret;
-    use wiremock::matchers::{method, path, path_regex};
+    use wiremock::matchers::{method, path, path_regex, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
@@ -1424,6 +1686,103 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_error_responses_include_body_without_credentials() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/delta/preview/commits"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "error_code": "UNAUTHENTICATED",
+                "message": "Credential was not sent or was of an unsupported type"
+            })))
+            .mount(&server)
+            .await;
+
+        let mut options = HashMap::new();
+        options.insert("databricks_token".to_string(), "secret-token".to_string());
+        options.insert("databricks_host".to_string(), server.uri());
+        let config = UnityCatalogConfig::new(None, &None, Some(options)).unwrap();
+        let provider =
+            UnityCatalogProvider::new("test".to_string(), options_from_config("main", config))
+                .unwrap();
+        let client = provider.get_client().await.unwrap();
+        let error = client
+            .get_commits(r#gen::DeltaGetCommits {
+                end_version: None,
+                start_version: 1,
+                table_id: "table-id".to_string(),
+                table_uri: "s3://bucket/table".to_string(),
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.status(), Some(reqwest::StatusCode::UNAUTHORIZED));
+        let message = error.to_string();
+        assert!(
+            message.contains("Credential was not sent or was of an unsupported type"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            !message.contains("secret-token"),
+            "unexpected message: {message}"
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(
+            requests[0]
+                .headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer secret-token")
+        );
+    }
+
+    #[derive(Debug)]
+    struct NoopSigner;
+
+    impl r#gen::RequestSigner for NoopSigner {
+        fn sign(
+            &self,
+            _: &mut reqwest::Request,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_error_response_body_is_bounded_and_hidden_for_signed_requests() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/delta/preview/commits"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("x".repeat(100_000)))
+            .mount(&server)
+            .await;
+        let request = || r#gen::DeltaGetCommits {
+            end_version: None,
+            start_version: 1,
+            table_id: "table-id".to_string(),
+            table_uri: "s3://bucket/table".to_string(),
+        };
+
+        let mut client = mock_provider(&server, "main").get_client().await.unwrap();
+        let error = client.get_commits(request()).await.unwrap_err();
+        assert_eq!(error.status(), Some(reqwest::StatusCode::FORBIDDEN));
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "response error: status code 403 Forbidden: {}...",
+                "x".repeat(4096)
+            )
+        );
+
+        client.signer = Some(Arc::new(NoopSigner));
+        let error = client.get_commits(request()).await.unwrap_err();
+        assert_eq!(error.status(), Some(reqwest::StatusCode::FORBIDDEN));
+        assert_eq!(
+            error.to_string(),
+            "response error: status code 403 Forbidden"
+        );
+    }
+
     #[test]
     #[expect(clippy::panic)]
     fn test_table_info_accepts_null_columns_and_lowercase_column_type_name() {
@@ -1556,5 +1915,710 @@ mod tests {
         assert_eq!(partition_by[0].column, "value");
         assert!(!columns[0].is_partition);
         assert!(columns[1].is_partition);
+    }
+
+    const DELTA_TABLE_ID: &str = "8a1b9c3e-0f5d-4a6b-9c7d-2e1f0a3b4c5d";
+    const DELTA_TABLE_URI: &str = "s3://bucket/tables/8a1b9c3e";
+    const DELTA_TABLE_PATH: &str = "/delta/v1/catalogs/main/schemas/default/tables/events";
+
+    fn delta_execution_context() -> LakehouseExecutionContext {
+        LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("test".to_string()),
+            vec![
+                "main".to_string(),
+                "default".to_string(),
+                "events".to_string(),
+            ],
+            CatalogTableIdentity {
+                table_id: Some(DELTA_TABLE_ID.to_string()),
+                table_uri: Some(DELTA_TABLE_URI.to_string()),
+            },
+            LakehouseOperation::Read,
+            LakehouseFormat::Delta,
+            LakehouseAuthority::PathManaged,
+            ScanAuthority::ClientLakeSource,
+        )
+    }
+
+    fn delta_ratified_commit_request(
+        start_version: i64,
+        end_version: Option<i64>,
+    ) -> DeltaRatifiedCommitRequest {
+        DeltaRatifiedCommitRequest {
+            context: delta_execution_context(),
+            table_uri: DELTA_TABLE_URI.to_string(),
+            start_version,
+            end_version,
+        }
+    }
+
+    fn delta_commit_request(update: serde_json::Value) -> LakehouseCommitRequest {
+        LakehouseCommitRequest {
+            context: delta_execution_context(),
+            format: "delta".to_string(),
+            requirements: vec![],
+            updates: vec![update],
+            payload: None,
+        }
+    }
+
+    fn legacy_delta_commit(version: i64) -> serde_json::Value {
+        serde_json::json!({
+            "table_id": DELTA_TABLE_ID,
+            "table_uri": DELTA_TABLE_URI,
+            "commit_info": {
+                "version": version,
+                "timestamp": 1700000000000i64 + version,
+                "file_name": format!("{version:020}.uuid.json"),
+                "file_size": 100 + version,
+                "file_modification_timestamp": 1700000001000i64 + version,
+            }
+        })
+    }
+
+    fn delta_commit_json(version: i64) -> serde_json::Value {
+        serde_json::json!({
+            "version": version,
+            "timestamp": 1700000000000i64 + version,
+            "file-name": format!("{version:020}.uuid.json"),
+            "file-size": 100 + version,
+            "file-modification-timestamp": 1700000001000i64 + version,
+        })
+    }
+
+    fn delta_load_table_json(
+        table_uuid: &str,
+        commits: Option<Vec<i64>>,
+        latest_table_version: Option<i64>,
+    ) -> serde_json::Value {
+        let mut response = serde_json::json!({
+            "metadata": {
+                "etag": "etag-1",
+                "table-type": "MANAGED",
+                "table-uuid": table_uuid,
+                "location": DELTA_TABLE_URI,
+                "created-time": 1700000000000i64,
+                "updated-time": 1700000000000i64,
+                "columns": {
+                    "type": "struct",
+                    "fields": [
+                        {"name": "id", "type": "long", "nullable": true, "metadata": {}},
+                        {
+                            "name": "tags",
+                            "type": {
+                                "type": "array",
+                                "element-type": "string",
+                                "contains-null": true
+                            },
+                            "nullable": true,
+                            "metadata": {"comment": "tags"}
+                        }
+                    ]
+                },
+                "properties": {"delta.feature.catalogManaged": "supported"}
+            }
+        });
+        if let Some(commits) = commits {
+            response["commits"] = commits.into_iter().map(delta_commit_json).collect();
+        }
+        if let Some(latest_table_version) = latest_table_version {
+            response["latest-table-version"] = serde_json::json!(latest_table_version);
+        }
+        response
+    }
+
+    async fn mount_delta_config(server: &MockServer, response: ResponseTemplate) {
+        Mock::given(method("GET"))
+            .and(path("/delta/v1/config"))
+            .and(query_param("catalog", "main"))
+            .and(query_param("protocol-versions", "1.0"))
+            .respond_with(response)
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_delta_config_ok(server: &MockServer) {
+        let config = serde_json::json!({
+            "endpoints": [
+                "GET /v1/catalogs/main/schemas/{schema}/tables/{table}",
+                "POST /v1/catalogs/main/schemas/{schema}/tables/{table}"
+            ],
+            "protocol-version": "1.0"
+        });
+        mount_delta_config(server, ResponseTemplate::new(200).set_body_json(config)).await;
+    }
+
+    async fn mount_legacy_delta_table(server: &MockServer) {
+        let table = serde_json::json!({
+            "catalog_name": "main",
+            "schema_name": "default",
+            "name": "events",
+            "table_type": "MANAGED",
+            "data_source_format": "DELTA",
+            "storage_location": DELTA_TABLE_URI,
+            "table_id": DELTA_TABLE_ID,
+            "columns": []
+        });
+        Mock::given(method("GET"))
+            .and(path_regex("^/tables/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(table))
+            .mount(server)
+            .await;
+    }
+
+    async fn received_json_bodies(server: &MockServer, path: &str) -> Vec<serde_json::Value> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.method.as_str() == "POST" && request.url.path() == path)
+            .map(|request| serde_json::from_slice(&request.body).unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_delta_ratified_commits_use_delta_api() {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        mount_legacy_delta_table(&server).await;
+        // The server returns the commits in descending version order.
+        Mock::given(method("GET"))
+            .and(path(DELTA_TABLE_PATH))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(delta_load_table_json(
+                    DELTA_TABLE_ID,
+                    Some(vec![5, 4, 3, 2]),
+                    Some(5),
+                )),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let response = provider
+            .get_delta_ratified_commits(&database, "events", delta_ratified_commit_request(3, None))
+            .await
+            .unwrap();
+        assert_eq!(response.latest_table_version, 5);
+        assert_eq!(
+            response
+                .commits
+                .iter()
+                .map(|commit| commit.version)
+                .collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
+        assert_eq!(
+            response.commits[0],
+            DeltaRatifiedCommit {
+                version: 3,
+                timestamp: 1700000000003,
+                file_name: "00000000000000000003.uuid.json".to_string(),
+                file_size: 103,
+                file_modification_timestamp: 1700000001003,
+            }
+        );
+
+        let response = provider
+            .get_delta_ratified_commits(
+                &database,
+                "events",
+                delta_ratified_commit_request(3, Some(4)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.latest_table_version, 5);
+        assert_eq!(
+            response
+                .commits
+                .iter()
+                .map(|commit| commit.version)
+                .collect::<Vec<_>>(),
+            vec![3, 4]
+        );
+
+        // The API is negotiated only once and the legacy endpoint is not used.
+        assert_eq!(
+            received_targets(&server).await,
+            vec![
+                "GET /tables/main.default.events".to_string(),
+                "GET /delta/v1/config?catalog=main&protocol-versions=1.0".to_string(),
+                format!("GET {DELTA_TABLE_PATH}"),
+                "GET /tables/main.default.events".to_string(),
+                format!("GET {DELTA_TABLE_PATH}"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delta_ratified_commits_without_latest_table_version() {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        mount_legacy_delta_table(&server).await;
+        Mock::given(method("GET"))
+            .and(path(DELTA_TABLE_PATH))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(delta_load_table_json(
+                    DELTA_TABLE_ID,
+                    None,
+                    None,
+                )),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let response = provider
+            .get_delta_ratified_commits(&database, "events", delta_ratified_commit_request(1, None))
+            .await
+            .unwrap();
+        assert_eq!(response.latest_table_version, -1);
+        assert!(response.commits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_delta_ratified_commits_table_id_mismatch() {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        mount_legacy_delta_table(&server).await;
+        Mock::given(method("GET"))
+            .and(path(DELTA_TABLE_PATH))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(delta_load_table_json(
+                    "00000000-0000-0000-0000-000000000000",
+                    Some(vec![1]),
+                    Some(1),
+                )),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let error = provider
+            .get_delta_ratified_commits(&database, "events", delta_ratified_commit_request(1, None))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, CatalogError::InvalidArgument(message) if message.contains("table id mismatch")),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delta_ratified_commits_table_not_found() {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        mount_legacy_delta_table(&server).await;
+        Mock::given(method("GET"))
+            .and(path(DELTA_TABLE_PATH))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let error = provider
+            .get_delta_ratified_commits(&database, "events", delta_ratified_commit_request(1, None))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, CatalogError::NotFound(CatalogObject::Table, _)),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delta_commits_fall_back_to_legacy_api() {
+        for status in [404, 501, 400] {
+            let server = MockServer::start().await;
+            mount_delta_config(&server, ResponseTemplate::new(status)).await;
+            mount_legacy_delta_table(&server).await;
+            Mock::given(method("GET"))
+                .and(path("/delta/preview/commits"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "commits": [{
+                        "version": 2,
+                        "timestamp": 1700000000002i64,
+                        "file_name": "00000000000000000002.uuid.json",
+                        "file_size": 102,
+                        "file_modification_timestamp": 1700000001002i64
+                    }],
+                    "latest_table_version": 2
+                })))
+                .mount(&server)
+                .await;
+            // The legacy endpoint returns a plain text body on success.
+            Mock::given(method("POST"))
+                .and(path("/delta/preview/commits"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("200 OK"))
+                .mount(&server)
+                .await;
+
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+            let response = provider
+                .get_delta_ratified_commits(
+                    &database,
+                    "events",
+                    delta_ratified_commit_request(1, None),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.latest_table_version, 2);
+            assert_eq!(response.commits.len(), 1);
+            assert_eq!(response.commits[0].version, 2);
+
+            let mut commit = legacy_delta_commit(3);
+            commit["metadata"] = serde_json::json!({"description": "events"});
+            let outcome = provider
+                .commit_lakehouse_table(&database, "events", delta_commit_request(commit.clone()))
+                .await
+                .unwrap();
+            assert!(matches!(outcome, LakehouseCommitOutcome::Committed { .. }));
+
+            assert_eq!(
+                received_targets(&server).await,
+                vec![
+                    "GET /tables/main.default.events",
+                    "GET /delta/v1/config?catalog=main&protocol-versions=1.0",
+                    "GET /delta/preview/commits",
+                    "POST /delta/preview/commits",
+                ],
+                "status {status}"
+            );
+            assert_eq!(
+                received_json_bodies(&server, "/delta/preview/commits").await,
+                vec![commit]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delta_api_configuration_error_is_not_cached() {
+        let server = MockServer::start().await;
+        mount_legacy_delta_table(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/delta/v1/config"))
+            .respond_with(ResponseTemplate::new(500))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/delta/v1/config"))
+            .respond_with(ResponseTemplate::new(401))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let error = provider
+            .get_delta_ratified_commits(&database, "events", delta_ratified_commit_request(1, None))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, CatalogError::External(message) if message.contains("Delta API configuration")),
+            "{error:?}"
+        );
+        let error = provider
+            .commit_lakehouse_table(
+                &database,
+                "events",
+                delta_commit_request(legacy_delta_commit(1)),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, CatalogError::Unauthorized(_)), "{error:?}");
+
+        // The legacy endpoint is not used when the negotiation fails,
+        // and the negotiation is retried for the next request.
+        mount_delta_config_ok(&server).await;
+        Mock::given(method("GET"))
+            .and(path(DELTA_TABLE_PATH))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(delta_load_table_json(
+                    DELTA_TABLE_ID,
+                    Some(vec![]),
+                    Some(0),
+                )),
+            )
+            .mount(&server)
+            .await;
+        let response = provider
+            .get_delta_ratified_commits(&database, "events", delta_ratified_commit_request(1, None))
+            .await
+            .unwrap();
+        assert_eq!(response.latest_table_version, 0);
+        assert!(
+            !received_targets(&server)
+                .await
+                .iter()
+                .any(|target| target.contains("/delta/preview/commits"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delta_commit_uses_delta_api() {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        Mock::given(method("POST"))
+            .and(path(DELTA_TABLE_PATH))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(delta_load_table_json(
+                    DELTA_TABLE_ID,
+                    Some(vec![5]),
+                    Some(5),
+                )),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let outcome = provider
+            .commit_lakehouse_table(
+                &database,
+                "events",
+                delta_commit_request(legacy_delta_commit(5)),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, LakehouseCommitOutcome::Committed { .. }));
+
+        let mut commit = legacy_delta_commit(6);
+        commit["latest_backfilled_version"] = serde_json::json!(5);
+        commit["uniform"] = serde_json::json!({
+            "iceberg": {
+                "metadata_location": "s3://bucket/tables/8a1b9c3e/metadata/v6.json",
+                "converted_delta_version": 6,
+                "converted_delta_timestamp": "2025-01-04T03:13:11.423Z"
+            }
+        });
+        provider
+            .commit_lakehouse_table(&database, "events", delta_commit_request(commit))
+            .await
+            .unwrap();
+
+        let requirements = serde_json::json!([
+            {"type": "assert-table-uuid", "uuid": DELTA_TABLE_ID}
+        ]);
+        assert_eq!(
+            received_json_bodies(&server, DELTA_TABLE_PATH).await,
+            vec![
+                serde_json::json!({
+                    "requirements": requirements,
+                    "updates": [
+                        {"action": "add-commit", "commit": delta_commit_json(5)}
+                    ]
+                }),
+                serde_json::json!({
+                    "requirements": requirements,
+                    "updates": [
+                        {
+                            "action": "add-commit",
+                            "commit": delta_commit_json(6),
+                            "uniform": {
+                                "iceberg": {
+                                    "metadata-location":
+                                        "s3://bucket/tables/8a1b9c3e/metadata/v6.json",
+                                    "converted-delta-version": 6,
+                                    "converted-delta-timestamp": 1735960391423i64
+                                }
+                            }
+                        },
+                        {"action": "set-latest-backfilled-version", "latest-published-version": 5}
+                    ]
+                }),
+            ]
+        );
+        assert_eq!(
+            received_targets(&server).await,
+            vec![
+                "GET /delta/v1/config?catalog=main&protocol-versions=1.0".to_string(),
+                format!("POST {DELTA_TABLE_PATH}"),
+                format!("POST {DELTA_TABLE_PATH}"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delta_commit_with_metadata_uses_legacy_api() {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/delta/preview/commits"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let mut commit = legacy_delta_commit(5);
+        commit["metadata"] = serde_json::json!({"description": "events"});
+        let outcome = provider
+            .commit_lakehouse_table(&database, "events", delta_commit_request(commit.clone()))
+            .await
+            .unwrap();
+        assert!(matches!(outcome, LakehouseCommitOutcome::Committed { .. }));
+        assert_eq!(
+            received_json_bodies(&server, "/delta/preview/commits").await,
+            vec![commit]
+        );
+        assert_eq!(
+            received_targets(&server).await,
+            vec!["POST /delta/preview/commits"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delta_api_is_used_for_any_successful_configuration_response() {
+        for config in [
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"endpoints": null})),
+            ResponseTemplate::new(200).set_body_string("OK"),
+            ResponseTemplate::new(204),
+        ] {
+            let server = MockServer::start().await;
+            mount_delta_config(&server, config).await;
+            mount_legacy_delta_table(&server).await;
+            // The response has only the fields used for commit discovery, with values of
+            // other fields that are not in the specification.
+            Mock::given(method("GET"))
+                .and(path(DELTA_TABLE_PATH))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "metadata": {
+                        "table-uuid": DELTA_TABLE_ID.to_uppercase(),
+                        "table-type": "MANAGED_SHALLOW_CLONE",
+                        "columns": null
+                    },
+                    "commits": [
+                        {"version": 4, "file-name": "00000000000000000004.uuid.json"},
+                        {"version": 3, "file-name": "00000000000000000003.uuid.json"}
+                    ]
+                })))
+                .mount(&server)
+                .await;
+
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+            let response = provider
+                .get_delta_ratified_commits(
+                    &database,
+                    "events",
+                    delta_ratified_commit_request(1, None),
+                )
+                .await
+                .unwrap();
+            // The latest table version defaults to the version of the latest commit.
+            assert_eq!(response.latest_table_version, 4);
+            assert_eq!(
+                response
+                    .commits
+                    .iter()
+                    .map(|commit| (commit.version, commit.file_name.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (3, "00000000000000000003.uuid.json"),
+                    (4, "00000000000000000004.uuid.json")
+                ]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delta_ratified_commits_invalid_response_reports_reason() {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        mount_legacy_delta_table(&server).await;
+        Mock::given(method("GET"))
+            .and(path(DELTA_TABLE_PATH))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"commits": []})),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let error = provider
+            .get_delta_ratified_commits(&database, "events", delta_ratified_commit_request(1, None))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, CatalogError::External(message) if message.contains("missing field `metadata`")),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delta_commit_errors_from_delta_api() {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        let error = |status: u16, r#type: &str| {
+            ResponseTemplate::new(status).set_body_json(serde_json::json!({
+                "error": {"message": format!("{type} message", type = r#type), "type": r#type, "code": status}
+            }))
+        };
+        for (version, response) in [
+            (5, error(409, "CommitVersionConflictException")),
+            (6, error(400, "InvalidParameterValueException")),
+            (7, error(429, "ResourceExhaustedException")),
+            (8, ResponseTemplate::new(403)),
+            (9, error(500, "InternalServerError")),
+        ] {
+            Mock::given(method("POST"))
+                .and(path(DELTA_TABLE_PATH))
+                .and(wiremock::matchers::body_partial_json(serde_json::json!({
+                    "updates": [{"commit": {"version": version}}]
+                })))
+                .respond_with(response)
+                .mount(&server)
+                .await;
+        }
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let commit = async |version: i64| {
+            provider
+                .commit_lakehouse_table(
+                    &database,
+                    "events",
+                    delta_commit_request(legacy_delta_commit(version)),
+                )
+                .await
+                .unwrap_err()
+        };
+        let error = commit(5).await;
+        assert!(matches!(error, CatalogError::Conflict(_)), "{error:?}");
+        assert!(
+            error
+                .to_string()
+                .contains("CommitVersionConflictException message")
+        );
+        let error = commit(6).await;
+        assert!(
+            matches!(error, CatalogError::InvalidArgument(_)),
+            "{error:?}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("InvalidParameterValueException message")
+        );
+        let error = commit(7).await;
+        assert!(matches!(error, CatalogError::RateLimited(_)), "{error:?}");
+        assert!(
+            error
+                .to_string()
+                .contains("ResourceExhaustedException message")
+        );
+        let error = commit(8).await;
+        assert!(matches!(error, CatalogError::Forbidden(_)), "{error:?}");
+        let error = commit(9).await;
+        assert!(matches!(error, CatalogError::External(_)), "{error:?}");
+        assert!(error.to_string().contains("InternalServerError message"));
     }
 }

@@ -5784,10 +5784,11 @@ mod tests {
     }
 
     fn error_with_status(status: reqwest::StatusCode) -> ApiError<()> {
-        ApiError::Unknown(Box::new(crate::r#gen::Response {
+        ApiError::Unknown(Box::new(crate::r#gen::ErrorResponse {
             inner: (),
             status,
             headers: reqwest::header::HeaderMap::new(),
+            body: String::new(),
         }))
     }
 

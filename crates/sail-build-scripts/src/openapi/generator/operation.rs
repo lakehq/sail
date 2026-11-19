@@ -350,11 +350,12 @@ impl OperationDefinition {
         };
         let error_body = if self.error_responses.is_empty() {
             quote! {
-                response.error_for_status_ref()?;
-                Err(ApiError::Unknown(Box::new(Response {
+                let body = read_error_body(response).await;
+                Err(ApiError::Unknown(Box::new(ErrorResponse {
                     inner: (),
                     status,
                     headers,
+                    body: error_body_text(&body, self.signer.is_some()),
                 })))
             }
         } else {
@@ -364,21 +365,23 @@ impl OperationDefinition {
                 .map(|response| generate_error_match_arm(&error_type, response))
                 .collect::<BuildResult<Vec<_>>>()?;
             quote! {
+                let body = read_error_body(response).await;
                 let inner = match status.as_u16() {
                     #(#arms)*
                     _ => {
-                        response.error_for_status_ref()?;
-                        return Err(ApiError::Unknown(Box::new(Response {
+                        return Err(ApiError::Unknown(Box::new(ErrorResponse {
                             inner: (),
                             status,
                             headers,
+                            body: error_body_text(&body, self.signer.is_some()),
                         })));
                     }
                 };
-                Err(ApiError::Response(Box::new(Response {
+                Err(ApiError::Response(Box::new(ErrorResponse {
                     inner,
                     status,
                     headers,
+                    body: error_body_text(&body, self.signer.is_some()),
                 })))
             }
         };
@@ -634,13 +637,42 @@ fn generate_response_body_expression(rust_type: &RustType) -> TokenStream {
         quote! { () }
     } else {
         quote! {
-            match response.json::<#rust_type>().await {
+            match response
+                .bytes()
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|body| {
+                    serde_json::from_slice::<#rust_type>(&body).map_err(|e| e.to_string())
+                })
+            {
                 Ok(value) => value,
-                Err(_) => {
-                    return Err(ApiError::Unknown(Box::new(Response {
+                Err(error) => {
+                    return Err(ApiError::Unknown(Box::new(ErrorResponse {
                         inner: (),
                         status,
                         headers,
+                        body: format!("invalid response body: {error}"),
+                    })));
+                }
+            }
+        }
+    }
+}
+
+/// Parses a typed error from the response body that has already been read into `body`.
+fn generate_error_body_expression(rust_type: &RustType) -> TokenStream {
+    if rust_type.is_unit() {
+        quote! { () }
+    } else {
+        quote! {
+            match serde_json::from_slice::<#rust_type>(&body) {
+                Ok(value) => value,
+                Err(_) => {
+                    return Err(ApiError::Unknown(Box::new(ErrorResponse {
+                        inner: (),
+                        status,
+                        headers,
+                        body: error_body_text(&body, self.signer.is_some()),
                     })));
                 }
             }
@@ -656,7 +688,7 @@ fn generate_error_match_arm(
     let value = if response.rust_type.is_unit() {
         quote! { #error_type::#variant }
     } else {
-        let body = generate_response_body_expression(&response.rust_type);
+        let body = generate_error_body_expression(&response.rust_type);
         quote! { #error_type::#variant(#body) }
     };
     if let Some((start, end)) = response.status.range() {

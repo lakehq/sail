@@ -77,16 +77,36 @@ impl<'a> OpenApiGenerator<'a> {
                 pub headers: reqwest::header::HeaderMap,
             }
 
+            #[derive(Debug)]
+            pub struct ErrorResponse<T> {
+                pub inner: T,
+                pub status: reqwest::StatusCode,
+                pub headers: reqwest::header::HeaderMap,
+                /// The response body text truncated to a bounded length, or the reason the
+                /// response body is invalid. This is empty for error responses of signed requests.
+                pub body: String,
+            }
+
+            impl<T> ErrorResponse<T> {
+                fn body_suffix(&self) -> String {
+                    if self.body.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {}", self.body)
+                    }
+                }
+            }
+
             #[derive(Debug, thiserror::Error)]
             pub enum ApiError<E> {
                 #[error("request signing error: {0}")]
                 Sign(#[source] Box<dyn std::error::Error + Send + Sync>),
                 #[error("request error: {0}")]
                 Request(#[from] reqwest::Error),
-                #[error("response error: status code {}", .0.status)]
-                Response(Box<Response<E>>),
-                #[error("unknown error: status code {}", .0.status)]
-                Unknown(Box<Response<()>>),
+                #[error("response error: status code {}{}", .0.status, .0.body_suffix())]
+                Response(Box<ErrorResponse<E>>),
+                #[error("unknown error: status code {}{}", .0.status, .0.body_suffix())]
+                Unknown(Box<ErrorResponse<()>>),
             }
 
             impl<E> ApiError<E> {
@@ -98,6 +118,43 @@ impl<'a> OpenApiGenerator<'a> {
                         Self::Unknown(response) => Some(response.status),
                     }
                 }
+            }
+
+            const MAX_ERROR_BODY_LENGTH: usize = 4096;
+
+            /// Reads the error response body without buffering more than what is reported.
+            async fn read_error_body(mut response: reqwest::Response) -> Vec<u8> {
+                let limit = MAX_ERROR_BODY_LENGTH + 1;
+                let mut body = Vec::new();
+                while body.len() < limit {
+                    match response.chunk().await {
+                        Ok(Some(chunk)) => {
+                            let length = chunk.len().min(limit - body.len());
+                            body.extend_from_slice(&chunk[..length]);
+                        }
+                        Ok(None) | Err(_) => break,
+                    }
+                }
+                body
+            }
+
+            /// Returns the error response body text to report.
+            /// The body is not reported for signed requests since the server may echo
+            /// the signed request, including credentials, in the error response.
+            fn error_body_text(body: &[u8], signed: bool) -> String {
+                if signed {
+                    return String::new();
+                }
+                let text = String::from_utf8_lossy(body);
+                let text = text.trim();
+                if text.len() <= MAX_ERROR_BODY_LENGTH {
+                    return text.to_string();
+                }
+                let mut end = MAX_ERROR_BODY_LENGTH;
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                format!("{}...", &text[..end])
             }
 
             fn eager_percent_encode(value: impl AsRef<str>) -> String {

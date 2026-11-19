@@ -89,5 +89,48 @@ pub mod r#gen {
     }
 }
 
+/// The client for the Unity Catalog Delta REST API (`delta/v1`).
+#[expect(unused_imports)]
+#[expect(clippy::enum_variant_names)]
+#[expect(clippy::vec_init_then_push)]
+pub mod delta_gen {
+    include!(concat!(env!("OUT_DIR"), "/unity_catalog_delta_gen.rs"));
+
+    // The column data type is defined manually since primitive types are bare JSON strings
+    // (e.g. `"long"`) on the wire while complex types are JSON objects.
+    /// Column data type.
+    pub type DeltaDataType = serde_json::Value;
+
+    // The response of loading a table is defined manually with only the fields used for
+    // commit discovery, so that the other fields are not validated.
+    #[derive(Clone, Debug, serde::Deserialize)]
+    pub struct DeltaLoadTableResponse {
+        pub metadata: DeltaLoadTableMetadata,
+        #[serde(default)]
+        pub commits: Option<Vec<DeltaLoadTableCommit>>,
+        #[serde(rename = "latest-table-version", default)]
+        pub latest_table_version: Option<i64>,
+    }
+
+    #[derive(Clone, Debug, serde::Deserialize)]
+    pub struct DeltaLoadTableMetadata {
+        #[serde(rename = "table-uuid")]
+        pub table_uuid: String,
+    }
+
+    #[derive(Clone, Debug, serde::Deserialize)]
+    pub struct DeltaLoadTableCommit {
+        pub version: i64,
+        #[serde(rename = "file-name")]
+        pub file_name: String,
+        #[serde(default)]
+        pub timestamp: i64,
+        #[serde(rename = "file-size", default)]
+        pub file_size: i64,
+        #[serde(rename = "file-modification-timestamp", default)]
+        pub file_modification_timestamp: i64,
+    }
+}
+
 pub use config::UnityCatalogConfig;
 pub use provider::{UnityCatalogOptions, UnityCatalogProvider};
