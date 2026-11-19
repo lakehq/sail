@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: schema_of_json() returns the schema of a JSON string as DDL
 
   Rule: Argument count validation

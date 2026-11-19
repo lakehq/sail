@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pyspark.sql.functions as F  # noqa: N812
 import pyspark.sql.types as T  # noqa: N812
 import pytest

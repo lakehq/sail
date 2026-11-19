@@ -1,4 +1,5 @@
-// [CREDIT]: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/string/btrim.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/90b55e38b5de8e74a17e24bf7ea7259cbcdab022/datafusion/functions/src/string/btrim.rs
 
 use std::sync::Arc;
 
@@ -11,9 +12,9 @@ use datafusion_expr::{
     Coercion, ColumnarValue, EncodingPreservation, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
+use datafusion_functions::utils::make_scalar_function;
 
-use crate::functions_utils::make_scalar_function;
-use crate::scalar::string::common::{TrimBoth, general_trim};
+use crate::scalar::string::utils::kernels::{TrimBoth, general_trim};
 
 /// Returns the longest string with leading and trailing characters removed. If the characters are not specified, spaces are removed.
 /// btrim('xyxtrimyyx', 'xyz') = 'trim'
@@ -113,8 +114,8 @@ mod tests {
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
-    use crate::functions_utils::tests::test_function;
     use crate::scalar::string::btrim::BTrimFunc;
+    use crate::scalar::string::utils::tests::test_function;
 
     #[test]
     fn test_functions() {

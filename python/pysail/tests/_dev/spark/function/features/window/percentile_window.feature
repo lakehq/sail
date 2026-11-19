@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: percentile() window function computes running percentiles
 
   Rule: Running percentile with ORDER BY

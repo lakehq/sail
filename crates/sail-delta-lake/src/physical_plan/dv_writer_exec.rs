@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Physical execution nodes for row-level Merge-on-Read deletion vector writing.
 
 use std::collections::HashMap;

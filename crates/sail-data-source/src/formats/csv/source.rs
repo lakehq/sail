@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt;
 use std::io::{BufReader, Read};
 use std::sync::Arc;
@@ -30,6 +32,9 @@ use super::projected::{DecoderBatchReader, ProjectedCsvDecoder, ProjectedCsvOpti
 
 type CsvBatchReader = Box<dyn Iterator<Item = std::result::Result<RecordBatch, ArrowError>> + Send>;
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/0d1f2ebe2cc97c91b736bc0a160b5b73cf40437a/datafusion/datasource-csv/src/source.rs
 #[derive(Debug, Clone)]
 pub struct CsvSource {
     options: CsvOptions,
@@ -344,3 +349,4 @@ impl FileOpener for CsvOpener {
         }))
     }
 }
+// SPDX-SnippetEnd

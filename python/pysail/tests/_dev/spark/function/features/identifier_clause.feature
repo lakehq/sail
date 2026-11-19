@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: IDENTIFIER clause
 
   Rule: IDENTIFIER in expression context

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod array_struct_field;
 pub mod drop_struct_field;
 pub mod spark_struct_rename;

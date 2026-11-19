@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod actor;
 
 pub(crate) use actor::{TaskRunnerActor, TaskRunnerMessage};

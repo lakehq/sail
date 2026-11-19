@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType};
 use serde::{Deserialize, Serialize};

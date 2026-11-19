@@ -52,6 +52,11 @@ You can skip API documentation generation if you are only working on files insid
 
 ## Conventions and Practices
 
+### Licensing
+
+Use `SPDX-` comments to record licensing information and credit the upstream source of code copied or adapted from another project.
+Follow the conventions in existing code for file-level and snippet-level comments.
+
 ### Codec
 
 When adding functions (`ScalarUDF`, `AggregateUDF`, or `HigherOrderUDF`), physical expressions (`PhysicalExpr`), or physical plan nodes (`ExecutionPlan`), make sure to update `crates/sail-execution/src/proto/codec.rs` so that the query plan can work in cluster mode.

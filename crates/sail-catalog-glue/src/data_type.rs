@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use arrow::datatypes::{DataType, Field};
 use aws_smithy_types::Document;
 use sail_catalog::error::{CatalogError, CatalogResult};

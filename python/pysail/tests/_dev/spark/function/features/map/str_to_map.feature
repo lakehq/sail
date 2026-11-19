@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: str_to_map output schema
 
   Rule: Duplicate key policy

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from datetime import date
 
 from pyspark.sql.types import LongType, Row, StringType, StructField, StructType
@@ -19,9 +21,9 @@ def test_delta_skipping_on_numeric_column(spark, tmp_path):
 
     filtered_df = spark.read.format("delta").load(delta_table_path).filter("value > 200000.0")
 
-    assert filtered_df.count() == 10, "Should return exactly 10 records from the third file"  # noqa: PLR2004
-    assert filtered_df.agg({"value": "min"}).collect()[0][0] == 200001.0, "Minimum value should be 200001"  # noqa: PLR2004
-    assert filtered_df.agg({"value": "max"}).collect()[0][0] == 200010.0, "Maximum value should be 200010"  # noqa: PLR2004
+    assert filtered_df.count() == 10, "Should return exactly 10 records from the third file"
+    assert filtered_df.agg({"value": "min"}).collect()[0][0] == 200001.0, "Minimum value should be 200001"
+    assert filtered_df.agg({"value": "max"}).collect()[0][0] == 200010.0, "Maximum value should be 200010"
 
 
 def test_delta_skipping_on_string_and_date(spark, tmp_path):
@@ -40,10 +42,10 @@ def test_delta_skipping_on_string_and_date(spark, tmp_path):
 
     filtered_df_str = spark.read.format("delta").load(delta_table_path).filter("event_name > 'W'")
 
-    assert filtered_df_str.count() == 3  # noqa: PLR2004
+    assert filtered_df_str.count() == 3
 
     filtered_df_date = spark.read.format("delta").load(delta_table_path).filter("event_date < '2023-03-01'")
-    assert filtered_df_date.count() == 3  # noqa: PLR2004
+    assert filtered_df_date.count() == 3
 
 
 def test_delta_skipping_with_null_counts(spark, tmp_path):

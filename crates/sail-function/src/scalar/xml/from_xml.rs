@@ -1,25 +1,31 @@
+// SPDX-License-Identifier: Apache-2.0
+
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+use datafusion::arrow::compute::kernels::cast_utils::parse_decimal;
 use datafusion::arrow::datatypes::*;
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
+use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{self, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
-use xee_xpath::Documents;
 
-use crate::functions_utils::make_scalar_function;
+use super::reader;
 use crate::scalar::datetime::format::{DateTimeFormat, ParsedDateTime};
+use crate::scalar::datetime::spark_timestamp::TimestampParser;
+use crate::scalar::datetime::timestamp_parser::parse_timestamp_string;
 
 #[cfg(test)]
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
 
-/// UDF implementation of `from_xml`, similar to Spark's `XmlToStructs`
+/// UDF implementation of `from_xml`, similar to `XmlToStructs` in Spark
 /// Parses an XML string column into a struct column using a user-provided schema
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -34,7 +40,8 @@ impl SparkFromXml {
     pub fn new(session_timezone: Arc<str>) -> Self {
         Self {
             session_timezone,
-            signature: Signature::user_defined(Volatility::Immutable),
+            // Time-only timestamps use the current date in the effective time zone.
+            signature: Signature::user_defined(Volatility::Stable),
         }
     }
 
@@ -52,16 +59,20 @@ enum ParseMode {
 #[derive(Debug)]
 struct SparkFromXmlOptions {
     null_value: Option<String>,
+    ignore_surrounding_spaces: bool,
+    ignore_namespace: bool,
+    exclude_attribute: bool,
     attribute_prefix: String,
     value_tag: String,
-    timestamp_ltz_format: DateTimeFormat,
-    timestamp_ntz_format: DateTimeFormat,
+    timestamp_ltz_format: Option<DateTimeFormat>,
+    timestamp_ntz_format: Option<DateTimeFormat>,
     date_format: DateTimeFormat,
     mode: ParseMode,
 }
 
 impl SparkFromXmlOptions {
     const NULL_VALUE_OPTION: &'static str = "nullValue";
+    const IGNORE_SURROUNDING_SPACES_OPTION: &'static str = "ignoreSurroundingSpaces";
     const ATTRIBUTE_PREFIX_OPTION: &'static str = "attributePrefix";
     const ATTRIBUTE_PREFIX_DEFAULT: &'static str = "_";
     const VALUE_TAG_OPTION: &'static str = "valueTag";
@@ -70,12 +81,20 @@ impl SparkFromXmlOptions {
     const TIMESTAMP_NTZ_FORMAT_OPTION: &'static str = "timestampNTZFormat";
     const DATE_FORMAT_OPTION: &'static str = "dateFormat";
     const MODE_OPTION: &'static str = "mode";
-    const TIMESTAMP_LTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
-    const TIMESTAMP_NTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
     const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     fn from_map(map: &MapArray) -> Result<Self> {
         let null_value = find_key_value(map, Self::NULL_VALUE_OPTION);
+        let ignore_surrounding_spaces =
+            match find_key_value(map, Self::IGNORE_SURROUNDING_SPACES_OPTION)
+                .as_deref()
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                None | Some("true") => true,
+                Some("false") => false,
+                _ => return plan_err!("`ignoreSurroundingSpaces` must be true or false"),
+            };
         let attribute_prefix = find_key_value(map, Self::ATTRIBUTE_PREFIX_OPTION)
             .unwrap_or_else(|| Self::ATTRIBUTE_PREFIX_DEFAULT.to_string());
         let value_tag = find_key_value(map, Self::VALUE_TAG_OPTION)
@@ -89,21 +108,11 @@ impl SparkFromXmlOptions {
         let timestamp_ltz_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
             .map(DateTimeFormat::for_parsing)
-            .transpose()?
-            .unwrap_or_else(|| {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_LTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp LTZ format should be valid")
-            });
+            .transpose()?;
         let timestamp_ntz_format = find_key_value(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
             .as_deref()
             .map(DateTimeFormat::for_parsing)
-            .transpose()?
-            .unwrap_or_else(|| {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp NTZ format should be valid")
-            });
+            .transpose()?;
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
             .map(DateTimeFormat::for_parsing)
@@ -126,6 +135,9 @@ impl SparkFromXmlOptions {
         };
         Ok(Self {
             null_value,
+            ignore_surrounding_spaces,
+            ignore_namespace: boolean_option(map, "ignoreNamespace", false)?,
+            exclude_attribute: boolean_option(map, "excludeAttribute", false)?,
             attribute_prefix,
             value_tag,
             timestamp_ltz_format,
@@ -134,24 +146,47 @@ impl SparkFromXmlOptions {
             mode,
         })
     }
+
+    fn parse_timestamp(
+        &self,
+        value: &str,
+        has_timezone: bool,
+        session_timezone: &str,
+    ) -> Result<i64> {
+        let format = if has_timezone {
+            &self.timestamp_ltz_format
+        } else {
+            &self.timestamp_ntz_format
+        };
+        if let Some(format) = format {
+            let parsed = format.parse_datetime_value(value)?;
+            return parsed_timestamp_to_micros(parsed, has_timezone, session_timezone);
+        }
+        let parser = if has_timezone {
+            TimestampParser::Ltz {
+                default_timezone: session_timezone.to_string(),
+            }
+        } else {
+            if parse_timestamp_string(value).is_some_and(|p| p.timezone.is_some()) {
+                return exec_err!("TIMESTAMP_NTZ XML values must not contain a time zone");
+            }
+            TimestampParser::Ntz
+        };
+        parser.parse_unformatted(value)
+    }
 }
 
 impl Default for SparkFromXmlOptions {
     fn default() -> Self {
         Self {
             null_value: None,
+            ignore_surrounding_spaces: true,
+            ignore_namespace: false,
+            exclude_attribute: false,
             attribute_prefix: Self::ATTRIBUTE_PREFIX_DEFAULT.to_string(),
             value_tag: Self::VALUE_TAG_DEFAULT.to_string(),
-            timestamp_ltz_format: {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_LTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp LTZ format should be valid")
-            },
-            timestamp_ntz_format: {
-                #[expect(clippy::expect_used)]
-                DateTimeFormat::for_parsing(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp NTZ format should be valid")
-            },
+            timestamp_ltz_format: None,
+            timestamp_ntz_format: None,
             date_format: {
                 #[expect(clippy::expect_used)]
                 DateTimeFormat::for_parsing(Self::DATE_FORMAT_DEFAULT)
@@ -366,6 +401,13 @@ struct TopLevelStructBuilder {
     nulls: Vec<bool>,
 }
 
+enum XmlFieldValue<'a> {
+    Null,
+    Text(Cow<'a, str>),
+    List(Vec<Self>),
+    Struct(Vec<Self>),
+}
+
 #[expect(clippy::only_used_in_recursion)]
 fn create_field_builder(
     data_type: &DataType,
@@ -520,134 +562,151 @@ fn parse_xml_into_builder(
     options: &SparkFromXmlOptions,
     session_timezone: &str,
 ) -> Result<()> {
-    let mut documents = Documents::new();
-    let handle = documents
-        .add_string_without_uri(xml)
+    let mut arena = xot::Xot::new();
+    let doc_node = reader::parse(&mut arena, xml, reader::ParseMode::Struct)
         .map_err(|e| DataFusionError::Execution(format!("Invalid XML: {e}")))?;
-
-    let doc_node = documents
-        .document_node(handle)
-        .ok_or_else(|| DataFusionError::Execution("XML document has no root node".to_string()))?;
-
-    let xot = documents.xot();
+    let xot = &arena;
     let root = xot
-        .document_element(doc_node)
+        .document_element(doc_node.node)
         .map_err(|e| DataFusionError::Execution(format!("No root element: {e}")))?;
 
+    // Validate the entire row before appending values so permissive mode can
+    // append a row of null fields even if an error occurs inside a nested field.
+    let values = read_xml_fields(xot, root, &builder.fields, &builder.children, options)?;
     builder.nulls.push(true);
-
-    for (field, child_builder) in builder.fields.iter().zip(builder.children.iter_mut()) {
-        append_xml_field(
-            xot,
-            root,
-            field.name(),
-            child_builder,
-            options,
-            session_timezone,
-        )?;
+    for (child, value) in builder.children.iter_mut().zip(values) {
+        append_xml_value(value, child, options, session_timezone)?;
     }
 
     Ok(())
 }
 
-fn append_xml_field(
-    xot: &xot::Xot,
+fn read_xml_fields<'a>(
+    xot: &'a xot::Xot,
+    parent: xot::Node,
+    fields: &Fields,
+    builders: &[XmlFieldBuilder],
+    options: &SparkFromXmlOptions,
+) -> Result<Vec<XmlFieldValue<'a>>> {
+    fields
+        .iter()
+        .zip(builders)
+        .map(|(field, builder)| read_xml_field(xot, parent, field.name(), builder, options))
+        .collect()
+}
+
+fn read_xml_field<'a>(
+    xot: &'a xot::Xot,
     parent: xot::Node,
     field_name: &str,
-    builder: &mut XmlFieldBuilder,
+    builder: &XmlFieldBuilder,
     options: &SparkFromXmlOptions,
-    session_timezone: &str,
-) -> Result<()> {
+) -> Result<XmlFieldValue<'a>> {
     if field_name == options.value_tag {
-        let text = element_text_content(xot, parent);
-        return append_text(text.as_deref(), builder, options, session_timezone);
+        let text = xot
+            .children(parent)
+            .filter_map(|child| match xot.value(child) {
+                xot::Value::Text(text) if !is_xml_whitespace(text.get()) => Some(text.get()),
+                _ => None,
+            });
+        if matches!(builder, XmlFieldBuilder::List { .. }) {
+            let values: Vec<_> = text
+                .map(|text| XmlFieldValue::Text(Cow::Borrowed(text)))
+                .collect();
+            return Ok(if values.is_empty() {
+                XmlFieldValue::Null
+            } else {
+                XmlFieldValue::List(values)
+            });
+        }
+
+        return Ok(text.last().map_or(XmlFieldValue::Null, |text| {
+            XmlFieldValue::Text(Cow::Borrowed(text))
+        }));
     }
 
-    let attr_name = field_name.strip_prefix(options.attribute_prefix.as_str());
-    if let Some(attr_name) = attr_name {
-        if let Some(val) = find_attribute(xot, parent, attr_name) {
-            return append_text(Some(val.as_str()), builder, options, session_timezone);
+    if let Some(attr_name) = field_name.strip_prefix(options.attribute_prefix.as_str()) {
+        if let Some(val) = find_attribute(xot, parent, attr_name, options) {
+            return Ok(XmlFieldValue::Text(Cow::Borrowed(val)));
         } else if !options.attribute_prefix.is_empty() {
-            return append_text(None, builder, options, session_timezone);
+            return Ok(XmlFieldValue::Null);
         }
     }
 
-    let matches: Vec<xot::Node> = child_elements_named(xot, parent, field_name);
+    let matches = child_elements_named(xot, parent, field_name, options);
+    if matches.is_empty() {
+        return Ok(XmlFieldValue::Null);
+    }
 
     match builder {
-        XmlFieldBuilder::List {
-            field,
-            offsets,
-            values,
-            nulls,
-        } => {
-            if matches.is_empty() {
-                nulls.push(false);
-                let curr = offsets.last().copied().unwrap_or(0);
-                offsets.push(curr);
-            } else {
-                nulls.push(true);
-                let start = offsets.last().copied().unwrap_or(0);
-                for &node in &matches {
-                    append_element_to_field(xot, node, values, options, session_timezone)?;
-                }
-                offsets.push(start + matches.len() as i32);
-                let _ = field;
-            }
-        }
-        XmlFieldBuilder::Struct {
-            fields,
-            children,
-            nulls,
-        } => {
-            if matches.is_empty() {
-                nulls.push(false);
-                for child in children.iter_mut() {
-                    append_null_to_field(child)?;
-                }
-            } else {
-                nulls.push(true);
-                let node = matches[0];
-                for (f, child) in fields.iter().zip(children.iter_mut()) {
-                    append_xml_field(xot, node, f.name(), child, options, session_timezone)?;
-                }
-            }
-        }
-        _ => {
-            if matches.is_empty() {
-                append_null_to_field(builder)?;
-            } else {
-                let text = element_text_content(xot, matches[0]);
-                append_text(text.as_deref(), builder, options, session_timezone)?;
-            }
-        }
+        XmlFieldBuilder::List { values, .. } => matches
+            .into_iter()
+            .map(|node| read_xml_element(xot, node, values, options))
+            .collect::<Result<Vec<_>>>()
+            .map(XmlFieldValue::List),
+        _ => read_xml_element(xot, matches[matches.len() - 1], builder, options),
     }
-
-    Ok(())
 }
 
-fn append_element_to_field(
-    xot: &xot::Xot,
+fn read_xml_element<'a>(
+    xot: &'a xot::Xot,
     node: xot::Node,
+    builder: &XmlFieldBuilder,
+    options: &SparkFromXmlOptions,
+) -> Result<XmlFieldValue<'a>> {
+    match builder {
+        XmlFieldBuilder::Struct {
+            fields, children, ..
+        } => read_xml_fields(xot, node, fields, children, options).map(XmlFieldValue::Struct),
+        XmlFieldBuilder::String(_) => {
+            element_markup(xot, node).map(|text| XmlFieldValue::Text(Cow::Owned(text)))
+        }
+        XmlFieldBuilder::List { .. } | XmlFieldBuilder::Unsupported { .. } => {
+            Ok(XmlFieldValue::Null)
+        }
+        _ => scalar_element_text(xot, node).map(|text| XmlFieldValue::Text(Cow::Borrowed(text))),
+    }
+}
+
+fn append_xml_value(
+    value: XmlFieldValue<'_>,
     builder: &mut XmlFieldBuilder,
     options: &SparkFromXmlOptions,
     session_timezone: &str,
 ) -> Result<()> {
-    match builder {
-        XmlFieldBuilder::Struct {
-            fields,
-            children,
-            nulls,
-        } => {
+    match (value, builder) {
+        (XmlFieldValue::Null, builder) => append_null_to_field(builder)?,
+        (XmlFieldValue::Text(text), builder) => {
+            append_text(Some(&text), builder, options, session_timezone)?;
+        }
+        (
+            XmlFieldValue::List(items),
+            XmlFieldBuilder::List {
+                offsets,
+                values,
+                nulls,
+                ..
+            },
+        ) => {
+            let end = offsets.last().copied().unwrap_or(0) + items.len() as i32;
+            for item in items {
+                append_xml_value(item, values, options, session_timezone)?;
+            }
+            offsets.push(end);
             nulls.push(true);
-            for (f, child) in fields.iter().zip(children.iter_mut()) {
-                append_xml_field(xot, node, f.name(), child, options, session_timezone)?;
+        }
+        (
+            XmlFieldValue::Struct(fields),
+            XmlFieldBuilder::Struct {
+                children, nulls, ..
+            },
+        ) => {
+            nulls.push(true);
+            for (child, field) in children.iter_mut().zip(fields) {
+                append_xml_value(field, child, options, session_timezone)?;
             }
         }
-        _ => {
-            let text = element_text_content(xot, node);
-            append_text(text.as_deref(), builder, options, session_timezone)?;
-        }
+        _ => return internal_err!("from_xml: field value does not match its builder"),
     }
     Ok(())
 }
@@ -660,6 +719,7 @@ fn append_text(
 ) -> Result<()> {
     let raw = match text {
         None => return append_null_to_field(builder),
+        Some(s) if options.ignore_surrounding_spaces => s.trim_matches(|c| c <= '\u{20}'),
         Some(s) => s,
     };
 
@@ -714,30 +774,14 @@ fn append_text(
             Err(_) => b.append_null(),
         },
         XmlFieldBuilder::TimestampMicrosecond { builder: b, has_tz } => {
-            let fmt = if *has_tz {
-                &options.timestamp_ltz_format
-            } else {
-                &options.timestamp_ntz_format
-            };
-            match fmt.parse_datetime_value(raw) {
-                Ok(parsed) => {
-                    let micros = parsed_timestamp_to_micros(parsed, *has_tz, session_timezone)?;
-                    b.append_value(micros);
-                }
+            match options.parse_timestamp(raw, *has_tz, session_timezone) {
+                Ok(micros) => b.append_value(micros),
                 Err(_) => b.append_null(),
             }
         }
         XmlFieldBuilder::TimestampNanosecond { builder: b, has_tz } => {
-            let fmt = if *has_tz {
-                &options.timestamp_ltz_format
-            } else {
-                &options.timestamp_ntz_format
-            };
-            match fmt.parse_datetime_value(raw) {
-                Ok(parsed) => {
-                    let micros = parsed_timestamp_to_micros(parsed, *has_tz, session_timezone)?;
-                    b.append_value(micros * 1_000);
-                }
+            match options.parse_timestamp(raw, *has_tz, session_timezone) {
+                Ok(micros) => b.append_value(micros * 1_000),
                 Err(_) => b.append_null(),
             }
         }
@@ -775,45 +819,19 @@ fn parsed_timestamp_to_micros(
 }
 
 fn parse_decimal128(raw: &str, precision: u8, scale: i8) -> Option<i128> {
-    let raw = raw.trim();
-    let is_negative = raw.starts_with('-');
-    let raw = if is_negative { &raw[1..] } else { raw };
-
-    let (int_part, frac_part) = if let Some(pos) = raw.find('.') {
-        (&raw[..pos], &raw[pos + 1..])
-    } else {
-        (raw, "")
-    };
-
-    let int_val: i128 = int_part.parse().ok()?;
-
-    let scale = scale as usize;
-    let frac_val: i128 = if frac_part.len() >= scale {
-        frac_part[..scale].parse().ok()?
-    } else {
-        let padded = format!("{:0<width$}", frac_part, width = scale);
-        padded.parse().ok()?
-    };
-
-    let scale_factor: i128 = 10_i128.checked_pow(scale as u32)?;
-    let value = int_val.checked_mul(scale_factor)?.checked_add(frac_val)?;
-    let value = if is_negative {
-        value.checked_neg()?
-    } else {
-        value
-    };
-    let max_value = 10_i128.checked_pow(precision as u32)?;
-    if value.abs() >= max_value {
-        return None; // overflow
-    }
-    Some(value)
+    parse_decimal::<Decimal128Type>(&raw.replace(',', ""), precision, scale).ok()
 }
 
-fn child_elements_named(xot: &xot::Xot, parent: xot::Node, name: &str) -> Vec<xot::Node> {
+fn child_elements_named(
+    xot: &xot::Xot,
+    parent: xot::Node,
+    name: &str,
+    options: &SparkFromXmlOptions,
+) -> Vec<xot::Node> {
     xot.children(parent)
         .filter(|&child| {
             if let xot::Value::Element(el) = xot.value(child) {
-                xot.local_name_str(el.name()) == name
+                field_name(xot.local_name_str(el.name()), options) == name
             } else {
                 false
             }
@@ -821,27 +839,95 @@ fn child_elements_named(xot: &xot::Xot, parent: xot::Node, name: &str) -> Vec<xo
         .collect()
 }
 
-fn element_text_content(xot: &xot::Xot, node: xot::Node) -> Option<String> {
-    let text: String = xot
-        .children(node)
-        .filter_map(|child| {
-            if let xot::Value::Text(t) = xot.value(child) {
-                Some(t.get().to_string())
-            } else {
-                None
-            }
-        })
-        .collect();
-    Some(text)
+fn is_xml_whitespace(text: &str) -> bool {
+    text.trim_matches([' ', '\t', '\n', '\r']).is_empty()
 }
 
-fn find_attribute(xot: &xot::Xot, node: xot::Node, attr_name: &str) -> Option<String> {
-    for (name_id, value) in xot.attributes(node).iter() {
-        if xot.local_name_str(name_id) == attr_name {
-            return Some(value.clone());
+fn scalar_element_text(xot: &xot::Xot, node: xot::Node) -> Result<&str> {
+    let mut value = None;
+    for child in xot.children(node) {
+        match xot.value(child) {
+            xot::Value::Text(text) if !is_xml_whitespace(text.get()) && value.is_none() => {
+                value = Some(text.get());
+            }
+            xot::Value::Element(_) => {
+                return exec_err!("Invalid XML: nested element in a scalar field");
+            }
+            xot::Value::Text(text) if !is_xml_whitespace(text.get()) => {
+                return exec_err!("Invalid XML: unexpected text after scalar field value");
+            }
+            _ => {}
         }
     }
-    None
+    Ok(value.unwrap_or_default())
+}
+
+fn find_attribute<'a>(
+    xot: &'a xot::Xot,
+    node: xot::Node,
+    attr_name: &str,
+    options: &SparkFromXmlOptions,
+) -> Option<&'a str> {
+    if options.exclude_attribute {
+        return None;
+    }
+    xot.attributes(node)
+        .iter()
+        .filter(|(name, _)| field_name(xot.local_name_str(*name), options) == attr_name)
+        .map(|(_, value)| value.as_str())
+        .last()
+}
+
+fn field_name<'a>(name: &'a str, options: &SparkFromXmlOptions) -> &'a str {
+    if options.ignore_namespace {
+        reader::local_name(name)
+    } else {
+        name
+    }
+}
+
+fn boolean_option(map: &MapArray, key: &str, default: bool) -> Result<bool> {
+    match find_key_value(map, key)
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        None => Ok(default),
+        Some("true") => Ok(true),
+        Some("false") => Ok(false),
+        _ => plan_err!("`{key}` must be true or false"),
+    }
+}
+
+// StAX returns the inner markup for STRING fields, with expanded empty tags and
+// decoded text and attributes. Keep lexical names even with ignoreNamespace.
+fn element_markup(xot: &xot::Xot, node: xot::Node) -> Result<String> {
+    use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+    use xot::NodeEdge;
+
+    let mut writer = quick_xml::Writer::new(Vec::new());
+    for edge in xot.traverse(node).filter(|edge| edge.node() != node) {
+        match (edge, xot.value(edge.node())) {
+            (NodeEdge::Start(child), xot::Value::Element(element)) => {
+                let name = xot.local_name_str(element.name());
+                let mut start = BytesStart::new(name);
+                for (key, value) in xot.attributes(child).iter() {
+                    start.push_attribute((xot.local_name_str(key).as_bytes(), value.as_bytes()));
+                }
+                writer.write_event(Event::Start(start))?;
+            }
+            (NodeEdge::End(_), xot::Value::Element(element)) => {
+                let name = xot.local_name_str(element.name());
+                writer.write_event(Event::End(BytesEnd::new(name)))?;
+            }
+            (NodeEdge::Start(_), xot::Value::Text(text)) => {
+                writer.write_event(Event::Text(BytesText::from_escaped(text.get())))?;
+            }
+            _ => {}
+        }
+    }
+
+    String::from_utf8(writer.into_inner()).map_err(|e| DataFusionError::Execution(e.to_string()))
 }
 
 fn find_key_value(map: &MapArray, key: &str) -> Option<String> {

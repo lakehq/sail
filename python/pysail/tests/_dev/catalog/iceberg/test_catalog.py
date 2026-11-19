@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Native Iceberg REST catalog provider integration tests."""
 
 from __future__ import annotations
@@ -31,9 +33,6 @@ _DYNAMIC_TABLE_PROPERTIES = {
     "metadata.last-updated-ms",
     "metadata.table-uuid",
 }
-_BASIC_TABLE_PROPERTY_COUNT = 15
-_DETAILED_TABLE_PROPERTY_COUNT = 18
-_VIEW_PROPERTY_COUNT = 6
 
 
 def _namespace(prefix: str, *tail: str) -> list[str]:
@@ -83,7 +82,7 @@ def _assert_detailed_table(status: object, namespace: list[str], table: str, loc
     properties = _properties(status)
     static_properties = {key: value for key, value in properties.items() if key not in _DYNAMIC_TABLE_PROPERTIES}
 
-    assert len(properties) == _DETAILED_TABLE_PROPERTY_COUNT
+    assert len(properties) == 18
     assert static_properties == {
         "comment": "test table",
         "metadata.current-schema-id": "0",
@@ -266,7 +265,7 @@ def test_create_table(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRes
     static_properties = {key: value for key, value in properties.items() if key not in _DYNAMIC_TABLE_PROPERTIES}
     expected_location = f"s3://icebergdata/demo/{'/'.join(namespace)}/t1"
 
-    assert len(properties) == _BASIC_TABLE_PROPERTY_COUNT
+    assert len(properties) == 15
     assert static_properties == {
         "comment": "peow",
         "metadata.current-schema-id": "0",
@@ -325,7 +324,7 @@ def test_create_table(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRes
     assert detailed.partition_by == [("baz", None)]
     assert set(detailed.sort_by) == {("bar", False), ("foo", True)}
     assert detailed.bucket_by is None
-    assert len(detailed.properties) == _DETAILED_TABLE_PROPERTY_COUNT
+    assert len(detailed.properties) == 18
     assert {("option.key1", "value1"), ("owner", "mr. meow"), ("team", "data-eng")}.issubset(set(detailed.properties))
     assert _column_statuses(detailed) == {
         ("foo", "Utf8", True, None, False),
@@ -398,7 +397,7 @@ def test_create_view(iceberg_rest_catalog: _native._catalog._iceberg.IcebergRest
     }
     expected_location = f"s3://icebergdata/demo/{namespace[0]}/view1"
 
-    assert len(properties) == _VIEW_PROPERTY_COUNT
+    assert len(properties) == 6
     assert properties["metadata-location"].startswith(f"{expected_location}/metadata/")
     assert properties["metadata.view-uuid"]
     assert static_properties == {

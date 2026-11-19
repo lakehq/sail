@@ -123,7 +123,7 @@ def test_optimize_metrics_history_and_artifacts(spark, semantic_table, indexed):
     assert metrics.numFilesRemoved == metrics.totalConsideredFiles == len(before)
     assert metrics.numFilesAdded == metrics.partitionsOptimized == metrics.numBins == len(after)
     assert metrics.totalFilesSkipped == 0
-    assert metrics.numTableColumns == 2  # noqa: PLR2004
+    assert metrics.numTableColumns == 2
     assert metrics.numTableColumnsWithStats == indexed
     assert metrics.zOrderStats is None
     assert metrics.clusteringStats is None
@@ -203,18 +203,18 @@ def test_optimize_dv_ratio_and_file_size_boundaries(spark, delta_jvm_spark, tmp_
     source = source_files[0]
     assert source.deletionVector is not None
     assert source.deletionVector["cardinality"] == deleted
-    assert json.loads(source.stats)["numRecords"] == 128  # noqa: PLR2004
+    assert json.loads(source.stats)["numRecords"] == 128
     # A companion makes a two-file bin; Delta 4.0.1 does not rewrite singleton DV bins.
     jvm.range(1000, 1001).coalesce(1).write.format("delta").mode("append").save(str(reference))
     source_files = _active_files(reference)
-    assert len(source_files) == 2  # noqa: PLR2004
+    assert len(source_files) == 2
     companion = next(file for file in source_files if file.path != source.path)
     assert companion.deletionVector is None
     assert companion.size < source.size - 1
     shutil.copytree(reference, candidate)
 
     # Binary-exact ratios distinguish strict comparison from >= without rounding ambiguity.
-    rewrite = deleted > 32 or size_delta > 0  # noqa: PLR2004
+    rewrite = deleted > 32 or size_delta > 0
     expected = [Row(id=value) for value in [*range(deleted, 128), 1000]]
     settings = {
         "spark.databricks.delta.optimize.maxDeletedRowsRatio": "0.25",
@@ -237,7 +237,7 @@ def test_optimize_dv_ratio_and_file_size_boundaries(spark, delta_jvm_spark, tmp_
                 actions = commits[version + 1]
                 removes = [action["remove"] for action in actions if "remove" in action]
                 adds = [action["add"] for action in actions if "add" in action]
-                assert len(removes) == 2  # noqa: PLR2004
+                assert len(removes) == 2
                 assert len(adds) == 1
                 assert {action["path"] for action in removes} == {source.path, companion.path}
                 dv_remove = next(action for action in removes if action["path"] == source.path)

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Iceberg v3 merge-on-read deletion vectors
 
   Scenario: V3 MOR combines DELETE UPDATE and MERGE while preserving lineage and history

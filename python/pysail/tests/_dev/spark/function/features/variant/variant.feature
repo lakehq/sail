@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 @spark-4
 Feature: Variant type functions (parse_json, is_variant_null, variant_get)
 

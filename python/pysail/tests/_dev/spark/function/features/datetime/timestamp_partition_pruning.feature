@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Timestamp conversions of string partition columns prune partitions
   A deterministic filter that only references partition columns prunes partitions,
   so a partition directory that does not match the filter is never read.

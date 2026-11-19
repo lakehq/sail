@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: CREATE TABLE with PARTITIONED BY clause
 
   Scenario: CREATE TABLE with typed partition column not in column list

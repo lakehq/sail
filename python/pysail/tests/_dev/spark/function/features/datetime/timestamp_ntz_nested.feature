@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Nested TIMESTAMP_NTZ values compare with TIMESTAMP values in the session time zone
   Spark finds the common type of arrays, structs and maps element by element, so TIMESTAMP_NTZ elements become TIMESTAMP
   in the session time zone, like top-level values, including DST gaps and overlaps.

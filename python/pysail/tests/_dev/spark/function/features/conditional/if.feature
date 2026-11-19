@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: if output schema
 
   Rule: Spark-compatible coercion for mixed string and temporal branches

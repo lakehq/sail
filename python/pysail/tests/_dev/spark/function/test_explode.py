@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 
 
@@ -11,7 +13,7 @@ def test_explode_in_aggregate_with_group_by_id(spark):
         ORDER BY id
         """
     ).collect()
-    assert len(rows) == 10  # noqa: PLR2004
+    assert len(rows) == 10
 
     for index, row in enumerate(rows):
         assert row[0] == index

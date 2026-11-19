@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use arrow_pyarrow::FromPyArrow;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion_common::ScalarValue;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Deletion Vector file storage: read and write DV files.
 //!
 //! DV file format:

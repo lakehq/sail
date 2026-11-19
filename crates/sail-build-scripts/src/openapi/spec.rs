@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Rust types for the OpenAPI specification.
 //!
 //! The types are compatible with a subset of OpenAPI 3.0 and 3.1 (which has a few breaking changes

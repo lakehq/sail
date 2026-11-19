@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """DDL on managed Delta and external lakehouse registrations in Unity."""
 
 import json
@@ -42,7 +44,7 @@ def test_unity_managed_delta_ddl(spark, unity_rest_url):
         assert [tuple(r) for r in spark.sql(f"SHOW TBLPROPERTIES {table} ('after-unpublished')").collect()] == [
             ("after-unpublished", "true")
         ]
-        assert spark.table(table).count() == 3  # noqa: PLR2004
+        assert spark.table(table).count() == 3
         with pytest.raises(Exception, match="coordination properties"):
             spark.sql(f"ALTER TABLE {table} UNSET TBLPROPERTIES ('io.unitycatalog.tableId')")
         assert json.loads(next(c["type_json"] for c in info["columns"] if c["name"] == "id"))["type"] == "long"
@@ -65,7 +67,7 @@ def test_unity_external_lakehouse_ddl(spark, unity_storage_root, fmt):
         exercise_lakehouse_alter(spark, table)
         spark.sql(f"DROP TABLE {table}")
         spark.sql(f"CREATE TABLE {table} USING {fmt} LOCATION '{location}'")
-        assert spark.table(table).count() == 3  # noqa: PLR2004
+        assert spark.table(table).count() == 3
         assert spark.table(table).schema["id"].dataType.simpleString() == "bigint"
     finally:
         spark.sql(f"DROP SCHEMA {database} CASCADE")

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 import pytest
 
@@ -55,7 +57,7 @@ def test_reference_lifecycle_preserves_data_and_history(spark, tmp_path, version
         spark.sql(f"ALTER TABLE {table} REPLACE BRANCH main AS OF VERSION {first}")
         assert [tuple(row) for row in spark.table(table).collect()] == [(1,)]
         spark.sql(f"CALL system.fast_forward('{table}', 'main', 'audit')").collect()
-        assert spark.table(table).count() == 2  # noqa: PLR2004
+        assert spark.table(table).count() == 2
         spark.sql(f"ALTER TABLE {table} DROP BRANCH audit")
         spark.sql(f"ALTER TABLE {table} DROP TAG release")
         dropped = _find_latest_metadata(tmp_path)
@@ -84,7 +86,7 @@ def test_create_branch_on_empty_table(spark, tmp_path, version):
         assert metadata["refs"]["audit"]["snapshot-id"] == metadata["snapshots"][0]["snapshot-id"]
         assert metadata["snapshots"][0]["summary"]["operation"] == "append"
         assert spark.sql(f"SELECT * FROM {table} VERSION AS OF 'audit'").count() == 0
-        if version == 3:  # noqa: PLR2004
+        if version == 3:
             assert metadata["snapshots"][0]["first-row-id"] == 0
             assert metadata["snapshots"][0]["added-rows"] == 0
             assert metadata["next-row-id"] == 0

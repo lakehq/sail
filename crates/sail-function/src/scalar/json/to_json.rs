@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::cmp::Ordering;
 use std::sync::{Arc, OnceLock};
 
@@ -16,12 +18,12 @@ use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
 };
+use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use serde_json::{Map, Value};
 
-use crate::functions_nested_utils::opt_downcast_arg;
-use crate::functions_utils::make_scalar_function;
 use crate::scalar::datetime::format::DateTimeFormat;
+use crate::utils::nested::opt_downcast_arg;
 
 /// Macro to simplify downcasting arrays and extracting values as JSON
 macro_rules! downcast_and_convert {

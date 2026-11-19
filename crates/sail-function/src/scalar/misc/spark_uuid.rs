@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::StringArray;
@@ -9,7 +11,7 @@ use datafusion_expr::{
 use rand::{RngExt, rng};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
-use crate::scalar::math::mersenne_twister::MersenneTwister;
+use crate::scalar::math::utils::mersenne_twister::MersenneTwister;
 
 /// `uuid([seed])`, which returns random version 4 UUIDs as Spark does.
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -100,9 +102,11 @@ fn uuid_seed(value: &ScalarValue) -> Result<Option<i64>> {
     }
 }
 
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/spark/blob/32f7299601108917fb01920a54e084595b7b3bf8/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/RandomUUIDGenerator.scala#L26-L43
 /// Port of Spark's `RandomUUIDGenerator`.
 ///
-/// [CREDIT]: https://github.com/apache/spark/blob/v4.2.0-rc6/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/RandomUUIDGenerator.scala
 pub struct RandomUuidGenerator {
     random: MersenneTwister,
 }
@@ -132,6 +136,7 @@ impl RandomUuidGenerator {
         StringArray::from_iter_values((0..num_rows).map(|_| self.next_uuid()))
     }
 }
+// SPDX-SnippetEnd
 
 #[cfg(test)]
 mod tests {

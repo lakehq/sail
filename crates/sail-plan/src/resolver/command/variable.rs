@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_expr::{LogicalPlan, ResetVariable, SetVariable};
 use sail_sql_analyzer::parser::parse_native_config_value;
 

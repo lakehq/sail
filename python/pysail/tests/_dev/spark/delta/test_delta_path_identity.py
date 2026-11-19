@@ -15,7 +15,7 @@ from pysail.tests._dev.spark.delta.utils import _active_files, _commits, write_d
 
 """Stored Delta URIs identify logical files; decoded paths identify physical objects."""
 
-# ruff: noqa: S608, PLR2004
+# ruff: noqa: S608
 
 
 def _identity(action):

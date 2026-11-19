@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: make_ym_interval builds a year-month interval from years and months
 
   Rule: A NULL in any argument yields NULL (Spark MakeYMInterval is null-intolerant)

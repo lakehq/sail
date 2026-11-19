@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: hash() returns murmur3 hash
 
   Rule: Basic usage

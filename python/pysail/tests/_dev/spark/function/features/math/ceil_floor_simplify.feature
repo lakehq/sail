@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: ceil() / floor() — simplify hook (integer identity + idempotence)
 
   # SparkCeil and SparkFloor implement `fn simplify`:

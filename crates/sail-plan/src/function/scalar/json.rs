@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use chumsky::prelude::*;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;

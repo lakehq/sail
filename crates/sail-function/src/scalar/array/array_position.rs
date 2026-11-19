@@ -1,4 +1,5 @@
-// [CREDIT]: https://raw.githubusercontent.com/apache/datafusion-comet/c41e4645a92dc3121d62004515f3fb03f1348631/native/spark-expr/src/array_funcs/array_position.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion-comet/blob/c41e4645a92dc3121d62004515f3fb03f1348631/native/spark-expr/src/array_funcs/array_position.rs
 
 use std::sync::Arc;
 

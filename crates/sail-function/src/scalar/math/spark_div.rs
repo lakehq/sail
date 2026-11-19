@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array};
@@ -16,7 +18,7 @@ use datafusion_expr::{
 use sail_common_datafusion::type_coercion::binary_type_coercion::BinaryTypeCoercer;
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err};
-use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::utils::make_scalar_function;
 
 /// Spark's integral division for numeric values and matching interval types.
 #[derive(Debug, PartialEq, Eq, Hash)]

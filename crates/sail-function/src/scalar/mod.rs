@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod array;
 pub mod collection;
 pub mod conditional;
@@ -21,6 +23,7 @@ pub mod string;
 pub mod r#struct;
 pub mod table_input;
 pub mod url;
+mod utils;
 pub mod variant;
 pub mod vector;
 pub mod xml;

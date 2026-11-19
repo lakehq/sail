@@ -65,7 +65,12 @@ tokio = { workspace = true }
 uuid = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+postcard = { workspace = true }
+quick-xml = { workspace = true }
 xee-xpath = { workspace = true }
+xee-xpath-ast = { workspace = true }
+xee-xpath-compiler = { workspace = true }
+xee-xpath-lexer = { workspace = true }
 xot = { workspace = true }
 itertools = { workspace = true }
 hashbrown = { workspace = true }

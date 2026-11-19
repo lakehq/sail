@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import math
 from collections import Counter
 from datetime import datetime, timedelta
@@ -80,7 +82,7 @@ def test_struct_null_filters(spark, tmp_path):
         table.append(t2)
         path = table.location()
         df_all = spark.read.format("iceberg").load(path)
-        assert df_all.count() == 2  # noqa: PLR2004
+        assert df_all.count() == 2
         df_not_null = df_all.filter("col_struct.test is not null")
         assert df_not_null.count() == 1
         df_null = df_all.filter("col_struct.test is null")
@@ -105,7 +107,7 @@ def test_limit_with_multiple_files(spark, tmp_path):
         table.append(tbl2)
         path = table.location()
         df = spark.read.format("iceberg").load(path).limit(3)
-        assert df.count() == 3  # noqa: PLR2004
+        assert df.count() == 3
     finally:
         catalog.drop_table(identifier)
 
@@ -150,7 +152,7 @@ def test_input_file_metadata_tracks_iceberg_data_files(spark, tmp_path, metadata
         ]
         rows = frame.select("label", "id", *metadata).orderBy("id").collect()
         limited = frame.select("id", *metadata).limit(3).collect()
-        assert len(limited) == len({row.id for row in limited}) == 3  # noqa: PLR2004
+        assert len(limited) == len({row.id for row in limited}) == 3
         for row in limited:
             assert tuple(row)[1:] == expected_files[row.id]
 
@@ -169,7 +171,7 @@ def test_input_file_metadata_tracks_iceberg_data_files(spark, tmp_path, metadata
         second_file = {row_files[value] for value in second_ids}
         assert len(first_file) == 1
         assert len(second_file) == 1
-        if file_count == 2:  # noqa: PLR2004
+        if file_count == 2:
             assert first_file.isdisjoint(second_file)
         else:
             assert first_file == second_file
@@ -228,7 +230,7 @@ def test_limit_with_filter(spark, tmp_path):
         table.append(tbl2)
         path = table.location()
         df = spark.read.format("iceberg").load(path).filter("flag = true").limit(3)
-        assert df.count() == 3  # noqa: PLR2004
+        assert df.count() == 3
     finally:
         catalog.drop_table(identifier)
 

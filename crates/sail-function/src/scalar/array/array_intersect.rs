@@ -1,4 +1,6 @@
-// [CREDIT]: https://github.com/apache/datafusion/blob/4a41173ba3df9b5d47638599c819a1e6e46ad92b/datafusion/functions-nested/src/set_ops.rs
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileComment: Credit: https://github.com/apache/datafusion/blob/4a41173ba3df9b5d47638599c819a1e6e46ad92b/datafusion/functions-nested/src/set_ops.rs
+
 // Adapted from DataFusion's set operation implementation with Spark-compatible empty array handling for array intersections.
 
 use std::sync::Arc;
@@ -20,7 +22,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayIntersect {

@@ -1,5 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod client;
 mod server;
+#[cfg(test)]
+mod tests;
 mod transport;
 
 pub use client::{TaskStreamFlightClient, TaskStreamOwner};

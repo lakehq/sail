@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake Checkpoint
 
   Rule: Checkpoint parquet and _last_checkpoint files are created at the configured interval

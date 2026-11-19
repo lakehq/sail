@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_common::DFSchemaRef;
 use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::datatype::FieldExt;
@@ -80,7 +82,14 @@ impl PlanResolver<'_> {
                 })
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        let mut lambda_params = get_lambda_parameters(function_name, &fields)?.into_iter();
+        let session_timezone = self.config.session_timezone_label();
+        let mut lambda_params = get_lambda_parameters(
+            function_name,
+            &fields,
+            self.config.ansi_mode,
+            &session_timezone,
+        )?
+        .into_iter();
 
         let mut names: Vec<String> = Vec::with_capacity(slots.len());
         let mut exprs: Vec<expr::Expr> = Vec::with_capacity(slots.len());

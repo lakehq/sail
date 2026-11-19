@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Map generators retain persisted Iceberg child-field metadata."""
 
 from uuid import UUID

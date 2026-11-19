@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub(crate) use lambda::{get_lambda_parameters, is_higher_order_function};
 
 use crate::function::common::ScalarFunction;

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: to_csv converts a struct value to a CSV string
 
   Rule: Basic serialization

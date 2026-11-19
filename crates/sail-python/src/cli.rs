@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::{PyErr, PyResult, Python, pyfunction};
 

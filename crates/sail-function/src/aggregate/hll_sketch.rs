@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 
 use arrow::array::{Array, ArrayRef, BinaryArray};
@@ -10,7 +12,7 @@ use datafusion::logical_expr::{
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 
 use super::utils::get_scalar_value;
-use crate::hll_sketch::{
+use crate::utils::hll_sketch::{
     DEFAULT_LG_CONFIG_K, empty_hll_union_bytes, new_hll_sketch, normalize_hll_sketch_bytes,
     union_hll_sketches, update_hll_sketch_from_array, validate_lg_config_k,
 };

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: min_by function
 
   Rule: min_by with all NULLs in ordering column

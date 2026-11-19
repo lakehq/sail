@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod planner;
 
 use std::fmt;
@@ -6,7 +8,13 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::physical_expr::{PhysicalExpr, RangePartitioning};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::joins::{
+    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PiecewiseMergeJoinExec,
+};
+use datafusion::physical_plan::scalar_subquery::ScalarSubqueryExec;
+use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use sail_physical_plan::barrier::BarrierExec;
 
 use crate::shuffle::ShuffleBackendKind;
 
@@ -64,6 +72,59 @@ impl JobGraph {
         // ensure one replica for final stages for the job output
         replicas.max(1)
     }
+
+    /// Whether the tasks of the given stage wait for the readers of their output
+    /// when the readers fall behind.
+    ///
+    /// The tasks can only wait when each part of the output has a single reader that
+    /// takes the data of all its producers in the order of arrival. This is not the
+    /// case when the output is the result of the job, which is read at the pace of
+    /// the client, when the output is read in full by several tasks or stages, or when
+    /// the output is merged in order, so that the reader decides which producer it
+    /// reads next. Besides, the tasks of the reading stage must read all the inputs
+    /// of the stage in a fixed order.
+    pub fn bounded_output(&self, stage: usize) -> bool {
+        let mut readers = self.stages.iter().flat_map(|reader| {
+            let inputs = reader.inputs.iter();
+            inputs
+                .filter(move |input| input.stage == stage)
+                .map(move |input| (reader, input))
+        });
+        match (readers.next(), readers.next()) {
+            (Some((reader, input)), None) => match input.mode {
+                InputMode::Forward | InputMode::Shuffle | InputMode::Rescale { .. } => {
+                    reads_inputs_in_fixed_order(&reader.plan)
+                }
+                InputMode::Merge | InputMode::Broadcast => false,
+            },
+            _ => false,
+        }
+    }
+}
+
+/// Whether a task that runs the plan reads the inputs of the plan one after another
+/// in an order that does not depend on the data, each one to its end, and gives up
+/// an input that it does not read before it reads a later one.
+///
+/// This depends on the operators that have several inputs. It is known for the
+/// operators listed here, and has to be shown for an operator before it is added.
+/// A hash join reads its build side to the end, and drops it, before its probe
+/// side. The joins that collect one side read that side first, and it is broadcast.
+/// A union reads one input in each task, an interleave takes the data of all its
+/// inputs as it comes, and a barrier runs its inputs to the end one by one.
+/// Among others, a sort-merge join is not listed: it decides by the data which
+/// input it reads next.
+fn reads_inputs_in_fixed_order(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    let children = plan.children();
+    let known = plan.is::<HashJoinExec>()
+        || plan.is::<NestedLoopJoinExec>()
+        || plan.is::<CrossJoinExec>()
+        || plan.is::<PiecewiseMergeJoinExec>()
+        || plan.is::<UnionExec>()
+        || plan.is::<InterleaveExec>()
+        || plan.is::<ScalarSubqueryExec>()
+        || plan.is::<BarrierExec>();
+    (children.len() < 2 || known) && children.into_iter().all(reads_inputs_in_fixed_order)
 }
 
 impl fmt::Display for JobGraph {

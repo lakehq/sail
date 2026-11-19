@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// Spark-compatible `array_sort(array, comparator)` higher-order function.
 ///
 /// Unlike `filter`/`transform` (element-wise maps evaluated once over the
@@ -30,9 +32,8 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
-use crate::scalar::array::lambda_utils::{
-    ListValuesResult, coerce_single_list_arg, extract_list_values, value_lambda_pair,
-};
+use super::utils::{ListValuesResult, coerce_single_list_arg, extract_list_values};
+use crate::scalar::utils::lambda::value_lambda_pair;
 
 /// The physical lambda evaluation batch is laid out as `[captures..., params...]`
 /// with the body projected to the columns it actually uses, which only lines up

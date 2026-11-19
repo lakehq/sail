@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """UUID identity survives catalog replacement, persisted output, and reopening."""
 
 # ruff: noqa: S608

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -11,11 +13,12 @@ use datafusion_expr::function::Hint;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
+use datafusion_functions::utils::make_scalar_function;
 use regex::Regex;
 
 use crate::error::{generic_exec_err, generic_internal_err, unsupported_data_types_exec_err};
-use crate::functions_nested_utils::opt_downcast_arg;
-use crate::functions_utils::{StrMemo, make_scalar_function};
+use crate::scalar::string::utils::memo::StrMemo;
+use crate::utils::nested::opt_downcast_arg;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSplit {

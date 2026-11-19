@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: to_timestamp (strict variant)
   Strict to_timestamp that throws on invalid input,
   contrasting with try_to_timestamp which returns NULL.

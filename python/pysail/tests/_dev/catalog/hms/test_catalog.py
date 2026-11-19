@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Native HMS catalog provider integration tests."""
 
 from __future__ import annotations

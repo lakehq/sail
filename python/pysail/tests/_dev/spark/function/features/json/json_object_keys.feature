@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: json_object_keys output schema
 
   @function(nullability)

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod mcp_server;
 pub(crate) mod run;
 mod server;

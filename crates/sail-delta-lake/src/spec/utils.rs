@@ -1,20 +1,8 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright 2025-2026 LakeSail, Inc.
-// Modified in 2026 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileAttributionText: License: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+// SPDX-FileCopyrightText: Copyright (2020) QP Hou and a number of other contributors.
+// SPDX-FileCopyrightText: Portions Copyright 2025-2026 LakeSail, Inc.
+// SPDX-FileContributor: Modified by LakeSail, Inc. in 2026
 
 use std::str::Utf8Error;
 
@@ -25,7 +13,9 @@ use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
 use super::schema::{DataType, StructField};
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L1092-L1150>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L1092-L1150
 const INVALID: &AsciiSet = &CONTROLS
     .add(b' ')
     .add(b'\\')
@@ -53,6 +43,7 @@ pub(crate) fn encode_path(path: &str) -> String {
 pub(crate) fn decode_path(path: &str) -> Result<String, Utf8Error> {
     Ok(percent_decode_str(path).decode_utf8()?.to_string())
 }
+// SPDX-SnippetEnd
 
 /// Comparison key for stored data-file URIs, without decoding their contents.
 ///
@@ -172,11 +163,14 @@ fn arrow_field_contains_variant(field: &datafusion::arrow::datatypes::Field) -> 
     }
 }
 
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L149-L160>
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L149-L160
 /// Checks if any field (including nested) in the provided iterator is a `timestampNtz`.
 pub(crate) fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
     fields.any(|field| data_type_contains_timestampntz(field.data_type()))
 }
+// SPDX-SnippetEnd
 
 /// Checks if any field (including nested) in an Arrow schema contains a `timestamp_ntz` type.
 ///

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::Schema;
 use datafusion_common::ScalarValue;
 use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};

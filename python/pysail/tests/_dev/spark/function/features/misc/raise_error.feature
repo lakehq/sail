@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: raise_error output schema
 
   @function(nullability) @spark-4

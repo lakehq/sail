@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Repeated aggregate scalar subqueries.
 
 Spark plans identical uncorrelated scalar subqueries once and reuses the result

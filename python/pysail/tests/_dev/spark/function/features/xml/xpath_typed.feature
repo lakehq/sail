@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: xpath_boolean/double/float/int/long/number/short/string extract typed values from XML
 
   Rule: xpath_boolean evaluates XPath to a boolean

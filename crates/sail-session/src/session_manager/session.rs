@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::prelude::SessionContext;
 use sail_execution::DriverId;
 use tokio::sync::oneshot;

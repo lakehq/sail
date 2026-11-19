@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -45,7 +47,7 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
-use sail_function::aggregate::vector::avg::VectorAvg;
+use sail_function::aggregate::vector_avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::conditional::coalesce::CoalesceFunc;

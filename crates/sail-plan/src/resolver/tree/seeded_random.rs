@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
@@ -9,7 +11,7 @@ use datafusion_expr::expr::{BinaryExpr, Case, Placeholder, ScalarFunction};
 use datafusion_expr::{Expr, Extension, LogicalPlan, Projection, SubqueryAlias, ident};
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_function::scalar::explode::Explode;
-use sail_function::scalar::math::partition_random::{
+use sail_function::scalar::math::utils::partition_random::{
     LazyRightOperand, PartitionSeed, is_row_argument, lazy_right_operand, seed_argument_position,
 };
 use sail_function::scalar::multi_expr::MultiExpr;

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Select tests by suite and assign PySpark versions by affinity."""
 
 import json

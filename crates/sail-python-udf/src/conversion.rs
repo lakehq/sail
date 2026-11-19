@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::prelude::SessionContext;
 use futures::future::BoxFuture;
 use sail_common::actor::ActorSystem;

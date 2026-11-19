@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for Spark Catalog API field names.
 
 PySpark maps tableName from the server to name in the client Table namedtuple.

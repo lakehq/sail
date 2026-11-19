@@ -1,164 +1,538 @@
-use std::collections::VecDeque;
+// SPDX-License-Identifier: Apache-2.0
+
+use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::common::Result;
-use futures::future::join_all;
-use log::debug;
-use tokio::sync::mpsc;
-use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::common::{DataFusionError, Result};
+use futures::{FutureExt, StreamExt};
+use log::warn;
+use sail_common_datafusion::array::record_batch::cast_record_batch_positionally;
+use tokio::sync::oneshot;
 
 use crate::error::{ExecutionError, ExecutionResult};
+use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::stream::error::TaskStreamResult;
+use crate::stream::local::queue::{
+    QueueLimit, QueueReader, QueueWrite, QueueWriter, StreamMemory, task_queues,
+};
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::{TaskStreamChannelSink, TaskStreamWriteState};
+use crate::stream::writer::{TaskStreamSink, TaskStreamWriteState};
 
 /// A memory stream that can be read multiple times.
 /// It maintains multiple replicas of the stream internally.
 /// Since [`Arc`] is used inside the record batch, it is relatively cheap
 /// to clone the data in multiple replicas.
 pub(crate) struct MemoryStream {
-    sender: Option<MemoryStreamReplicaSender>,
-    receivers: Vec<mpsc::Receiver<TaskStreamResult<RecordBatch>>>,
+    /// The replicas that have not been read.
+    receivers: Vec<QueueReader<RecordBatch>>,
 }
 
 impl MemoryStream {
-    pub fn new(
-        buffer: usize,
+    /// Creates the memory streams for all channels of a task, along with the sink
+    /// that writes to them. Each channel has at least the given number of replicas,
+    /// and one replica for each reader that is already waiting for the channel.
+    ///
+    /// With a limit, the sink waits for the readers while the streams in the given
+    /// memory of the process have reached its ceiling, and the replicas of all
+    /// channels together have at least the bytes of the limit. The sink does
+    /// not continue because a reader waits for data, so each replica needs a reader
+    /// that takes the data as it comes. A batch counts for the memory until it is
+    /// taken from all replicas of its channel. Its size is the memory that its
+    /// arrays refer to, so the batches are expected not to share their memory with
+    /// other data, which holds for the batches of a shuffle up to a factor of two:
+    /// a batch that is passed on whole may keep up to twice the memory that its
+    /// rows need.
+    ///
+    /// The sink gives the batches the schema of the streams, as described in
+    /// [`with_stream_schema`].
+    pub(crate) fn create(
+        key: &TaskKey,
+        waiters: Vec<Vec<MemoryStreamWaiter>>,
         replicas: usize,
-        senders: Vec<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
-    ) -> Self {
-        let replicas = replicas.max(senders.len());
-        let diff = replicas - senders.len();
-        let mut senders = senders.into_iter().map(Some).collect::<Vec<_>>();
-        senders.reserve(diff);
-        let mut receivers = Vec::with_capacity(diff);
-        for _ in 0..diff {
-            let (tx, rx) = mpsc::channel(buffer);
-            senders.push(Some(tx));
-            receivers.push(rx);
+        limit: Option<QueueLimit>,
+        memory: Arc<StreamMemory>,
+        schema: SchemaRef,
+    ) -> (Box<dyn TaskStreamSink>, Vec<Self>) {
+        let replicas = waiters
+            .iter()
+            .map(|waiters| replicas.max(waiters.len()))
+            .collect::<Vec<_>>();
+        let (writer, receivers) = task_queues(&replicas, limit, memory, batch_size);
+        let mut receivers = receivers.into_iter();
+        let mut streams = Vec::with_capacity(waiters.len());
+        for (waiters, replicas) in waiters.into_iter().zip(&replicas) {
+            let mut stream = Self {
+                receivers: receivers.by_ref().take(*replicas).collect(),
+            };
+            for waiter in waiters {
+                if let Some(receiver) = stream.receivers.pop() {
+                    // The replica is closed if the reader is no longer waiting.
+                    let _ = waiter.send(Ok(receiver));
+                }
+            }
+            streams.push(stream);
         }
-        let overflow = vec![VecDeque::new(); senders.len()];
-        Self {
-            sender: Some(MemoryStreamReplicaSender { senders, overflow }),
-            receivers,
-        }
-    }
-
-    pub(crate) fn publish(&mut self) -> ExecutionResult<Box<dyn TaskStreamChannelSink>> {
-        let sender = self.sender.take().ok_or_else(|| {
-            ExecutionError::InternalError("memory stream can only be written once".to_string())
-        })?;
-        Ok(Box::new(sender))
+        let sink = MemoryStreamSink {
+            key: key.clone(),
+            writer,
+            channels: replicas.len(),
+            schema,
+        };
+        (Box::new(sink), streams)
     }
 
     pub(crate) fn subscribe(&mut self) -> ExecutionResult<TaskStreamSource> {
-        let rx = self.receivers.pop().ok_or_else(|| {
+        let receiver = self.receivers.pop().ok_or_else(|| {
             ExecutionError::InternalError("memory stream has exhausted all replica(s)".to_string())
         })?;
-        Ok(Box::pin(ReceiverStream::new(rx)))
+        Ok(source(receiver))
+    }
+
+    /// Returns a source for a reader that arrives before the memory stream is created,
+    /// along with the handle to supply the replica for the reader later.
+    /// The source ends without data if the handle is dropped.
+    pub(crate) fn pending() -> (MemoryStreamWaiter, TaskStreamSource) {
+        let (tx, rx) = oneshot::channel();
+        let output = rx
+            .map(|receiver| match receiver {
+                Ok(Ok(receiver)) => source(receiver),
+                Ok(Err(error)) => futures::stream::iter([Err(error)]).boxed(),
+                Err(_) => futures::stream::empty().boxed(),
+            })
+            .flatten_stream();
+        (tx, Box::pin(output))
     }
 }
 
-struct MemoryStreamReplicaSender {
-    senders: Vec<Option<mpsc::Sender<TaskStreamResult<RecordBatch>>>>,
-    /// An overflow buffer for each sender to avoid blocking sending for slow senders.
-    /// This also avoids deadlock situations where the task stream buffer size is small.
-    // TODO: More investigation is needed to understand deadlocks during writes when
-    //   task stream buffers are bounded, and whether unbounded overflow can be avoided.
-    //   Concurrent finalization fixes commit deadlocks but does not remove this need.
-    overflow: Vec<VecDeque<TaskStreamResult<RecordBatch>>>,
+/// A handle to supply the replica for a reader that is waiting for a memory stream.
+pub(crate) type MemoryStreamWaiter = oneshot::Sender<TaskStreamResult<QueueReader<RecordBatch>>>;
+
+fn source(receiver: QueueReader<RecordBatch>) -> TaskStreamSource {
+    Box::pin(receiver.map(TaskStreamResult::Ok))
+}
+
+/// Returns the size in bytes that a batch counts for. A batch without rows does not
+/// count, and a batch with rows counts as one byte at least, so that the sink of
+/// streams that have rows can wait for the readers even if the rows have no columns.
+fn batch_size(batch: &RecordBatch) -> usize {
+    match batch.num_rows() {
+        0 => 0,
+        _ => batch.get_array_memory_size().max(1),
+    }
+}
+
+/// Returns the batch with the schema of the stream that it is written to.
+///
+/// The batches of a task can differ from the schema of its stage in the names and
+/// the nullability of the columns, since some operators pass on the batches of their
+/// inputs as they are. In particular, the tasks of a union can run different inputs.
+/// The readers need one schema for all the tasks of a stage, since the batches of
+/// several tasks are encoded together for a reader on another worker, with the
+/// schema of the first batch. The columns are taken by position, as a reader on
+/// another worker does for the batches that it receives.
+///
+/// A batch that does not fit the schema of the stream is passed on as it is, so that
+/// it reaches a reader on the same worker like any other batch.
+fn with_stream_schema(batch: RecordBatch, schema: &SchemaRef) -> RecordBatch {
+    if batch.schema_ref() == schema {
+        return batch;
+    }
+    cast_record_batch_positionally(batch.clone(), schema.clone()).unwrap_or(batch)
+}
+
+/// A sink for all channels of a task. The data stays in memory until it is read,
+/// and each reader sees the end of the stream after the data that remains for it,
+/// once the sink is committed or dropped, whichever way the task has ended.
+/// A write waits for the readers as described in [`MemoryStream::create`].
+struct MemoryStreamSink {
+    key: TaskKey,
+    writer: QueueWriter<RecordBatch>,
+    channels: usize,
+    /// The schema of the streams.
+    schema: SchemaRef,
 }
 
 #[tonic::async_trait]
-impl TaskStreamChannelSink for MemoryStreamReplicaSender {
-    async fn write(&mut self, batch: RecordBatch) -> Result<TaskStreamWriteState> {
-        let mut active = false;
-        for (i, sender) in self.senders.iter_mut().enumerate() {
-            if sender.is_none() {
-                continue;
-            }
-
-            let overflow = &mut self.overflow[i];
-            let mut dropped = false;
-
-            if let Some(tx) = sender.as_ref() {
-                // Try to flush overflow first
-                while let Some(item) = overflow.pop_front() {
-                    match tx.try_send(item) {
-                        Ok(_) => {}
-                        Err(mpsc::error::TrySendError::Full(x)) => {
-                            overflow.push_front(x);
-                            break;
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => {
-                            dropped = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // A dropped receiver can happen under normal operation when the receiver no longer
-            // needs more data (e.g., after a LIMIT operator has received enough rows).
-
-            if dropped {
-                debug!("memory stream replica receiver has been dropped");
-                *sender = None;
-                overflow.clear();
-                continue;
-            }
-
-            if let Some(tx) = sender.as_ref() {
-                if overflow.is_empty() {
-                    match tx.try_send(Ok(batch.clone())) {
-                        Ok(_) => {}
-                        Err(mpsc::error::TrySendError::Full(x)) => {
-                            overflow.push_back(x);
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => {
-                            dropped = true;
-                        }
-                    }
-                } else {
-                    overflow.push_back(Ok(batch.clone()));
-                }
-            }
-
-            if dropped {
-                debug!("memory stream replica receiver has been dropped");
-                *sender = None;
-                overflow.clear();
-            } else {
-                active = true;
-            }
+impl TaskStreamSink for MemoryStreamSink {
+    async fn write(&mut self, batches: Vec<Option<RecordBatch>>) -> Result<TaskStreamWriteState> {
+        if batches.len() != self.channels {
+            return Err(DataFusionError::Internal(format!(
+                "expected {} shuffle output channels, got {}",
+                self.channels,
+                batches.len()
+            )));
         }
-        Ok(if active {
-            TaskStreamWriteState::Active
-        } else {
-            TaskStreamWriteState::Closed
-        })
+        // A reader that is gone can happen under normal operation when it no longer
+        // needs more data (e.g., after a LIMIT operator has received enough rows).
+        // The writer can stop when the readers of all channels are gone, including
+        // the channels that it has not written to since their readers left.
+        let batches = batches
+            .into_iter()
+            .map(|batch| batch.map(|batch| with_stream_schema(batch, &self.schema)))
+            .collect();
+        match self.writer.write(batches).await {
+            QueueWrite::Queued => Ok(TaskStreamWriteState::Active),
+            QueueWrite::QueuedAfterStall => {
+                warn!(
+                    "task stream of {} stopped waiting for its readers after {} seconds without progress",
+                    TaskKeyDisplay(&self.key),
+                    self.writer.stall_timeout().as_secs()
+                );
+                Ok(TaskStreamWriteState::Active)
+            }
+            QueueWrite::Closed => Ok(TaskStreamWriteState::Closed),
+        }
     }
 
     async fn commit(self: Box<Self>) -> Result<()> {
         // Replicas can be consumed at different times or left unread entirely.
-        // Flush them independently, dropping each sender as soon as it finishes
-        // so that its consumer sees EOF without waiting for the other replicas.
-        join_all(self.senders.into_iter().zip(self.overflow).map(
-            |(sender, overflow)| async move {
-                if let Some(tx) = sender {
-                    for item in overflow {
-                        if tx.send(item).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-            },
-        ))
-        .await;
+        // Each reader sees the end of the stream after the data that remains for it,
+        // so there is no need to wait for the readers here.
+        let Self { writer, .. } = *self;
+        writer.finish();
         Ok(())
     }
 
     async fn abort(self: Box<Self>) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use datafusion::arrow::array::{AsArray, BinaryArray, Int32Array, RecordBatchOptions};
+    use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use futures::TryStreamExt;
+    use tokio::task::JoinHandle;
+
+    use super::*;
+    use crate::id::JobId;
+    use crate::stream::error::TaskStreamError;
+
+    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
+    const STALL_TIMEOUT: Duration = Duration::from_secs(300);
+
+    /// Creates the streams of a task in a process that has no memory left for
+    /// them, so that the sink waits whenever the streams have the given number
+    /// of bytes.
+    fn create(
+        waiters: Vec<Vec<MemoryStreamWaiter>>,
+        replicas: usize,
+        bytes: Option<usize>,
+    ) -> (Box<dyn TaskStreamSink>, Vec<MemoryStream>) {
+        let limit = bytes.map(|bytes| QueueLimit {
+            bytes,
+            stall_timeout: STALL_TIMEOUT,
+        });
+        let memory = Arc::new(StreamMemory::new(1));
+        create_with_memory(waiters, replicas, limit, memory, schema())
+    }
+
+    fn create_with_memory(
+        waiters: Vec<Vec<MemoryStreamWaiter>>,
+        replicas: usize,
+        limit: Option<QueueLimit>,
+        memory: Arc<StreamMemory>,
+        schema: SchemaRef,
+    ) -> (Box<dyn TaskStreamSink>, Vec<MemoryStream>) {
+        let key = TaskKey {
+            job_id: JobId::from(1),
+            stage: 0,
+            partition: 0,
+            attempt: 0,
+        };
+        MemoryStream::create(&key, waiters, replicas, limit, memory, schema)
+    }
+
+    fn schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]))
+    }
+
+    /// Creates a batch with the given number of rows that all have the given value.
+    fn rows(value: i32, rows: usize) -> Result<RecordBatch> {
+        let values = Int32Array::from(vec![value; rows]);
+        Ok(RecordBatch::try_new(schema(), vec![Arc::new(values)])?)
+    }
+
+    fn batch(value: i32) -> Result<RecordBatch> {
+        rows(value, 1)
+    }
+
+    #[test]
+    fn batch_takes_the_schema_of_the_stream_if_it_fits() -> TestResult {
+        let batch = |name: &str, values: Vec<Option<i32>>| {
+            let schema = Schema::new(vec![Field::new(name, DataType::Int32, true)]);
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(Int32Array::from(values))])
+        };
+        // A column with another name and without nulls fits a schema without nulls.
+        let output = with_stream_schema(batch("other", vec![Some(1)])?, &schema());
+        assert_eq!(output.schema(), schema());
+        assert_eq!(output.column(0).as_primitive::<Int32Type>().value(0), 1);
+        // A column with nulls does not, and the batch stays as it is.
+        let nulls = batch("value", vec![None])?;
+        assert_eq!(with_stream_schema(nulls.clone(), &schema()), nulls);
+        Ok(())
+    }
+
+    async fn read(source: &mut TaskStreamSource) -> TaskStreamResult<Option<i32>> {
+        let batch = source.try_next().await?;
+        Ok(batch.map(|batch| batch.column(0).as_primitive::<Int32Type>().value(0)))
+    }
+
+    async fn read_all(mut source: TaskStreamSource) -> TaskStreamResult<Vec<i32>> {
+        let mut values = vec![];
+        while let Some(value) = read(&mut source).await? {
+            values.push(value);
+        }
+        Ok(values)
+    }
+
+    type WriteTask = JoinHandle<Result<(Box<dyn TaskStreamSink>, TaskStreamWriteState)>>;
+
+    /// Starts a write that has to wait.
+    async fn start_waiting_write(
+        mut sink: Box<dyn TaskStreamSink>,
+        batches: Vec<Option<RecordBatch>>,
+    ) -> WriteTask {
+        let task = tokio::spawn(async move {
+            let state = sink.write(batches).await?;
+            Ok((sink, state))
+        });
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+        task
+    }
+
+    /// Completes a write that no longer has to wait.
+    async fn finish_write(
+        task: WriteTask,
+    ) -> std::result::Result<Box<dyn TaskStreamSink>, Box<dyn std::error::Error>> {
+        let (sink, state) = tokio::time::timeout(Duration::from_secs(5), task).await???;
+        assert_eq!(state, TaskStreamWriteState::Active);
+        Ok(sink)
+    }
+
+    fn write_now(sink: &mut Box<dyn TaskStreamSink>, batches: Vec<Option<RecordBatch>>) {
+        let state = sink.write(batches).now_or_never();
+        assert!(matches!(state, Some(Ok(TaskStreamWriteState::Active))));
+    }
+
+    #[tokio::test]
+    async fn commit_and_abort_do_not_wait_for_readers() -> TestResult {
+        for commit in [true, false] {
+            let (mut sink, mut streams) = create(vec![vec![]], 1, Some(0));
+            let reader = streams[0].subscribe()?;
+            write_now(&mut sink, vec![Some(batch(0)?)]);
+            let result = if commit {
+                sink.commit().now_or_never()
+            } else {
+                sink.abort().now_or_never()
+            };
+            assert!(matches!(result, Some(Ok(()))));
+            assert_eq!(read_all(reader).await?, vec![0]);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit_keeps_the_data_for_readers_that_come_later() -> TestResult {
+        let (mut sink, mut streams) = create(vec![vec![], vec![]], 2, None);
+        for i in 0..100 {
+            // The data stays in the stream when there is no reader.
+            write_now(&mut sink, vec![Some(batch(i)?), Some(batch(-i)?)]);
+        }
+        assert!(matches!(sink.commit().now_or_never(), Some(Ok(()))));
+
+        // Each replica of each channel has all the data of the channel in order.
+        for (stream, sign) in streams.iter_mut().zip([1, -1]) {
+            let expected = (0..100).map(|i| sign * i).collect::<Vec<_>>();
+            assert_eq!(read_all(stream.subscribe()?).await?, expected);
+            assert_eq!(read_all(stream.subscribe()?).await?, expected);
+            assert!(stream.subscribe().is_err());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn uncommitted_sink_leaves_the_data_to_the_readers() -> TestResult {
+        for abort in [true, false] {
+            let (mut sink, mut streams) = create(vec![vec![]], 2, None);
+            let mut reader = streams[0].subscribe()?;
+            let first = batch(0)?;
+            let data = Arc::downgrade(first.column(0));
+            sink.write(vec![Some(first)]).await?;
+            sink.write(vec![Some(batch(1)?)]).await?;
+            assert_eq!(read(&mut reader).await?, Some(0));
+
+            if abort {
+                sink.abort().await?;
+            } else {
+                drop(sink);
+            }
+            // The readers see the end of the stream after the data that was written,
+            // whether or not they have started.
+            assert_eq!(read_all(reader).await?, vec![1]);
+            assert_eq!(data.strong_count(), 1);
+            assert_eq!(read_all(streams[0].subscribe()?).await?, vec![0, 1]);
+            assert_eq!(data.strong_count(), 0);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_waits_only_when_the_process_is_short_of_memory() -> TestResult {
+        // The streams of the process can hold three batches and a bit.
+        let rows = |value| rows(value, 65536);
+        let size = rows(0)?.get_array_memory_size();
+        assert!(size >= 65536 * 4);
+        let memory = Arc::new(StreamMemory::new(3 * size + size / 2));
+        let limit = QueueLimit {
+            bytes: size,
+            stall_timeout: STALL_TIMEOUT,
+        };
+        let (mut sink, mut streams) =
+            create_with_memory(vec![vec![]], 1, Some(limit), memory.clone(), schema());
+        let mut reader = streams[0].subscribe()?;
+        for i in 0..4 {
+            write_now(&mut sink, vec![Some(rows(i)?)]);
+        }
+        assert_eq!(memory.used(), 4 * size);
+        let task = start_waiting_write(sink, vec![Some(rows(4)?)]).await;
+        assert_eq!(read(&mut reader).await?, Some(0));
+        let sink = finish_write(task).await?;
+        assert_eq!(memory.used(), 4 * size);
+        sink.commit().await?;
+        assert_eq!(read_all(reader).await?, vec![1, 2, 3, 4]);
+        assert_eq!(memory.used(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_waits_for_the_bytes_of_the_streams_whatever_their_rows() -> TestResult {
+        // The sink waits when its streams have as many bytes as 32 batches of narrow rows.
+        let narrow = rows(0, 8192)?;
+        let limit = 32 * batch_size(&narrow);
+        let (mut sink, _streams) = create(vec![vec![]], 1, Some(limit));
+        for _ in 0..32 {
+            write_now(&mut sink, vec![Some(narrow.clone())]);
+        }
+        let write = sink.write(vec![Some(narrow)]);
+        assert!(write.now_or_never().is_none());
+
+        // Two wide rows have more bytes than the 262144 narrow rows.
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Binary,
+            false,
+        )]));
+        let values = BinaryArray::from_iter_values([vec![0u8; limit], vec![0u8; limit]]);
+        let wide = RecordBatch::try_new(schema.clone(), vec![Arc::new(values)])?;
+        assert!(batch_size(&wide) >= 2 * limit);
+        let limit = Some(QueueLimit {
+            bytes: limit,
+            stall_timeout: STALL_TIMEOUT,
+        });
+        let memory = Arc::new(StreamMemory::new(1));
+        let (mut sink, _streams) = create_with_memory(vec![vec![]], 1, limit, memory, schema);
+        write_now(&mut sink, vec![Some(wide.clone())]);
+        let write = sink.write(vec![Some(wide)]);
+        assert!(write.now_or_never().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn batch_counts_for_its_arrays_if_it_has_rows() -> TestResult {
+        assert_eq!(batch_size(&rows(0, 0)?), 0);
+        assert!(batch_size(&rows(0, 100)?) >= 400);
+        let options = RecordBatchOptions::new().with_row_count(Some(100));
+        let schema = Arc::new(Schema::empty());
+        let batch = RecordBatch::try_new_with_options(schema, vec![], &options)?;
+        assert_eq!(batch_size(&batch), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn closes_after_all_readers_are_gone() -> TestResult {
+        let (mut sink, mut streams) = create(vec![vec![], vec![]], 2, None);
+        let mut reader = streams[0].subscribe()?;
+        drop(streams[0].subscribe()?);
+
+        // A dropped reader does not affect the other replica of the channel.
+        let first = batch(0)?;
+        let data = Arc::downgrade(first.column(0));
+        let state = sink.write(vec![Some(first), None]).await?;
+        assert_eq!(state, TaskStreamWriteState::Active);
+        assert_eq!(read(&mut reader).await?, Some(0));
+        assert_eq!(data.strong_count(), 0);
+
+        // The other channel still has replicas that may be read later.
+        drop(reader);
+        let state = sink.write(vec![Some(batch(1)?), Some(batch(1)?)]).await?;
+        assert_eq!(state, TaskStreamWriteState::Active);
+
+        streams.clear();
+        let state = sink.write(vec![None, Some(batch(2)?)]).await?;
+        assert_eq!(state, TaskStreamWriteState::Closed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn supplies_replicas_to_waiting_readers() -> TestResult {
+        let (waiter, mut reader) = MemoryStream::pending();
+        let (gone, _) = MemoryStream::pending();
+        assert!(futures::poll!(reader.next()).is_pending());
+
+        // The channel has one replica for each reader that arrived before its creation.
+        let (mut sink, mut streams) = create(vec![vec![waiter, gone]], 1, None);
+        assert!(streams[0].subscribe().is_err());
+
+        let state = sink.write(vec![Some(batch(0)?)]).await?;
+        assert_eq!(state, TaskStreamWriteState::Active);
+        assert_eq!(read(&mut reader).await?, Some(0));
+
+        // The replica of the reader that left before the creation is closed as well.
+        drop(reader);
+        let state = sink.write(vec![Some(batch(1)?)]).await?;
+        assert_eq!(state, TaskStreamWriteState::Closed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn does_not_wait_for_readers_that_left_before_the_creation() -> TestResult {
+        // The bytes for a reader that is gone do not count, so the sink only
+        // waits for the reader that is there.
+        let (waiter, mut reader) = MemoryStream::pending();
+        let (gone, _) = MemoryStream::pending();
+        let (mut sink, _streams) = create(vec![vec![waiter], vec![gone]], 1, Some(1));
+        write_now(&mut sink, vec![Some(batch(0)?), Some(rows(0, 100)?)]);
+        write_now(&mut sink, vec![None, Some(rows(1, 100)?)]);
+        let task = start_waiting_write(sink, vec![Some(batch(1)?), None]).await;
+        assert_eq!(read(&mut reader).await?, Some(0));
+        let sink = finish_write(task).await?;
+        sink.commit().await?;
+        assert_eq!(read_all(reader).await?, vec![1]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ends_waiting_readers_without_replica() -> TestResult {
+        let (waiter, mut reader) = MemoryStream::pending();
+        let error = TaskStreamError::Unknown("failed".to_string());
+        assert!(waiter.send(Err(error)).is_ok());
+        assert!(read(&mut reader).await.is_err());
+        assert_eq!(read(&mut reader).await?, None);
+
+        let (waiter, mut reader) = MemoryStream::pending();
+        drop(waiter);
+        assert_eq!(read(&mut reader).await?, None);
         Ok(())
     }
 }

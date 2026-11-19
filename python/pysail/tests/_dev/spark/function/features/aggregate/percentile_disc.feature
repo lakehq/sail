@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: percentile_disc() returns the discrete percentile for a numeric column
 
   # Regression coverage for `percentile_disc` over numeric inputs (including

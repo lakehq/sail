@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};
@@ -8,11 +10,10 @@ use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignature, TypeSignatureClass};
+use datafusion_functions::utils::make_scalar_function;
 use sail_common_datafusion::type_coercion::binary_type_coercion::{
     binary_to_string_coercion, string_coercion,
 };
-
-use crate::functions_utils::make_scalar_function;
 
 /// Spark-compatible `levenshtein` function.
 ///

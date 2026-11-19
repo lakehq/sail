@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -14,6 +16,8 @@ use datafusion_common::DataFusionError;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use ordered_float::OrderedFloat;
 use sail_common_datafusion::literal::LiteralValue;
+
+use super::utils::percentile::{duration_none, interval_none, match_string_type};
 
 /// The `PercentileFunction` calculates the exact percentile (quantile) from a set of values.
 ///

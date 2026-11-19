@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// Spark-compatible `forall(array, predicate)` higher-order function.
 ///
 /// Spark semantics (`ArrayForAll`, three-valued logic):
@@ -23,9 +25,8 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
-use super::lambda_utils::{
-    coerce_single_list_arg, short_circuit_boolean_reduce, value_lambda_pair,
-};
+use super::utils::{coerce_single_list_arg, short_circuit_boolean_reduce};
+use crate::scalar::utils::lambda::value_lambda_pair;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArrayForall {

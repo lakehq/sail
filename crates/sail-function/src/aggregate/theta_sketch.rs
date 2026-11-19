@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 
 use arrow::array::{Array, ArrayRef, BinaryArray};
@@ -10,7 +12,7 @@ use datafusion::logical_expr::{
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 
 use super::utils::get_scalar_value;
-use crate::theta_sketch::{
+use crate::utils::theta_sketch::{
     DEFAULT_LG_NOM_ENTRIES, compact_update_sketch_bytes, empty_compact_sketch_bytes,
     intersect_sketch_bytes, new_update_sketch, normalize_sketch_bytes, union_sketches,
     update_sketch_from_array, validate_lg_nom_entries,

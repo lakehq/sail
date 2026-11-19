@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import json
@@ -85,7 +87,7 @@ def test_native_detail_and_history(spark, inspection_table):
     spark.sql(f"INSERT OVERWRITE {name} VALUES (3, 'new')")  # noqa: S608
     current = [action["add"] for action in _actions(path, 2) if "add" in action]
     assert spark.sql(f"DESCRIBE DETAIL {name}").first().numFiles == len(current)
-    assert spark.sql(f"DESCRIBE HISTORY {name} LIMIT 1").first().version == 2  # noqa: PLR2004
+    assert spark.sql(f"DESCRIBE HISTORY {name} LIMIT 1").first().version == 2
 
 
 @pytest.mark.parametrize(
@@ -185,7 +187,7 @@ def test_history_optional_fields(spark, tmp_path):
         assert history[1].operationMetrics == {"numOutputRows": "1"}
         assert history[1].userMetadata == "audit"
         limited = spark.sql("DESCRIBE HISTORY raw_inspection LIMIT 1").first()
-        assert limited.version == 2  # noqa: PLR2004
+        assert limited.version == 2
         assert limited.timestamp == history[-1].timestamp
         assert spark.sql("DESCRIBE DETAIL raw_inspection").first().tableFeatures == ["domainMetadata"]
     finally:
@@ -284,10 +286,10 @@ def test_native_delta_commands_resolve_delta_namespace_table(spark, tmp_path):
         spark.range(2, 4).coalesce(1).write.format("delta").mode("append").save(str(path))
         detail = spark.sql(f"DESCRIBE DETAIL {target}").first()
         assert detail.name == "sail.delta.relative-table"
-        assert detail.numFiles == 2  # noqa: PLR2004
+        assert detail.numFiles == 2
         assert [row.version for row in spark.sql(f"DESCRIBE HISTORY {target}").collect()] == [2, 1, 0]
         metrics = spark.sql(f"OPTIMIZE {target}").first().metrics
-        assert metrics.numFilesRemoved == 2  # noqa: PLR2004
+        assert metrics.numFilesRemoved == 2
         assert metrics.numFilesAdded == 1
         assert spark.sql(f"VACUUM {target} DRY RUN").collect() == []
         assert [row.id for row in spark.table(f"sail.{target}").orderBy("id").collect()] == [0, 1, 2, 3]
@@ -324,7 +326,7 @@ def test_native_target_resolution(spark, inspection_table):
     try:
         spark.sql(f"CREATE TABLE {name}.history (marker INT) USING parquet")
         spark.sql(f"INSERT INTO {name}.history VALUES (42)")  # noqa: S608
-        assert spark.table(f"{name}.history").first().marker == 42  # noqa: PLR2004
+        assert spark.table(f"{name}.history").first().marker == 42
     finally:
         spark.sql(f"DROP DATABASE {name} CASCADE")
 
@@ -408,7 +410,7 @@ def test_inspection_matches_delta_spark(spark, delta_jvm_spark, tmp_path, ict):
             spark.sql("DESCRIBE HISTORY inspection_interop").collect()
             == jvm.sql(f"DESCRIBE HISTORY delta.`{path}`").collect()
         )
-        assert jvm.read.format("delta").load(str(path)).count() == 7  # noqa: PLR2004
+        assert jvm.read.format("delta").load(str(path)).count() == 7
     finally:
         spark.sql("DROP TABLE inspection_interop")
 
@@ -434,7 +436,7 @@ def test_detail_preserves_mapping_and_deletion_vectors(spark, delta_jvm_spark, t
         assert actual.sizeInBytes == expected.sizeInBytes == sum(add["size"] for add in current)
         assert actual.partitionColumns == expected.partitionColumns == ["part"]
         assert actual.tableFeatures == expected.tableFeatures
-        assert spark.table("inspection_mapped").count() == 2  # noqa: PLR2004
+        assert spark.table("inspection_mapped").count() == 2
     finally:
         spark.sql("DROP TABLE inspection_mapped")
 
