@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: collect_set over window functions
 
   Rule: collect_set over expanding window

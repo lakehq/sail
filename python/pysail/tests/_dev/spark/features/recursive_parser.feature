@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Recursive SQL grammar
 
   Scenario: Nested queries and parenthesized joins

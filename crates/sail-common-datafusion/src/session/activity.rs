@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Mutex;
 
 use datafusion_common::internal_datafusion_err;

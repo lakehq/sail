@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Table function queries
 
   Rule: Wildcard aggregation for table function

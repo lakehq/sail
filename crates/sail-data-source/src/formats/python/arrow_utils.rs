@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Arrow conversion utilities for Python data sources.
 //!
 //! This module provides efficient conversion between Arrow and Python types

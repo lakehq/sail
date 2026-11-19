@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Test partition column mismatch validation for Iceberg tables"""
 
 import json

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod spark_first_last_value;
 mod spark_ntile;
 

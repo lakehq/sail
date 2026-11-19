@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for partition-dependent functions next to generators, map generators,
 and non-deterministic expressions and subqueries in aggregate queries.
 

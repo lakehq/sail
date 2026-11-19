@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Roaring bitmap wrapper for Deletion Vectors.
 
 use roaring::RoaringTreemap;

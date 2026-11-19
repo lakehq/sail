@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Random number generators for seeded random functions, created once per partition.
 //!
 //! Spark seeds a random expression once per partition and advances one generator over all

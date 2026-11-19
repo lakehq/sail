@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Unity Catalog object names that need quoting in SQL.
 
 Since this module changes the current database it uses its own module-scoped Spark session.

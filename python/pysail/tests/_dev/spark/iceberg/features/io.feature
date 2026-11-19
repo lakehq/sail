@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Iceberg Basic IO
 
   Rule: Create table and basic operations

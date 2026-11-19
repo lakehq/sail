@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::collections::BTreeSet;
 use std::ops::Bound;
 use std::sync::Arc;

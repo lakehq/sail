@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Nested seeded calls in keys preserve the semantics of Spark's extracted projections.
 
 The direct-key and explicit-projection forms were compared on JVM Spark 4.2.0.

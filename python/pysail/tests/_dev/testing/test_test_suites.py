@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Exercise suite inference and standard pytest marker selection."""
 
 import json

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 from pyspark.sql.functions import PandasUDFType, pandas_udf, udf
 from pyspark.sql.types import DoubleType

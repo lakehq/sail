@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for `uuid` and `shuffle` with a seed, and for the schema of random functions.
 
 The expected values were verified on JVM Spark 4.2.0. Spark seeds `uuid` and `shuffle` with the

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: TIMESTAMP_NTZ and TIMESTAMP values in the session time zone
   Spark casts TIMESTAMP_NTZ to TIMESTAMP in the session time zone, which it accepts in the spellings of
   `java.time.ZoneId`, in grouping sets, window keys, `timestampdiff`, `nvl2` and `nullif`.

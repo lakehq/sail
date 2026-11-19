@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Exercise resource discovery and deterministic PySpark assignment."""
 
 import json

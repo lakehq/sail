@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake Generated Columns
 
   Rule: Generated columns are computed from generation expressions during inserts

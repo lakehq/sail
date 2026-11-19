@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608
 """Reference DDL roundtrips through HMS and the JVM Iceberg client."""
 

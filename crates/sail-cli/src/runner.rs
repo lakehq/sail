@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use clap::{Parser, Subcommand};
 use sail_common::error::CommonError;
 

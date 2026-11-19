@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Integration tests for the JDBC data source using testcontainers.
 
 A PostgreSQL container is started once per session and torn down at the end.

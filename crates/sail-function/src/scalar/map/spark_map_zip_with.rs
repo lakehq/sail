@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /// Spark-compatible `map_zip_with(map1, map2, lambda)` higher-order function.
 ///
 /// The lambda receives `(key, left_value, right_value)` for the union of keys.

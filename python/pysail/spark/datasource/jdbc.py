@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """JDBC data source for Sail, backed by connectorX.
 
 Supports ``spark.read.format("jdbc")`` and ``spark.read.jdbc()`` with options

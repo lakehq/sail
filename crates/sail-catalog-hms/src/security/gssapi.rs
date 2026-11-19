@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::ffi::OsStr;
 use std::marker::PhantomData;
 use std::ops::Deref;

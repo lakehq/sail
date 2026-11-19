@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! This module bridges DataFusion query execution metrics with OpenTelemetry.
 
 mod aggregate;

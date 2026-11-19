@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Hash joins in distributed execution
 
   Scenario Outline: Hash join preserves an input limit across shuffle

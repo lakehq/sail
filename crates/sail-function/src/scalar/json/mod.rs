@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod from_json;
 mod json_as_text;
 mod json_length;

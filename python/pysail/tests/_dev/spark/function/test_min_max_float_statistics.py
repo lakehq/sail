@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """`min` and `max` of floating point columns in Parquet files, which may be answered from file statistics.
 
 Parquet statistics leave out NaN, which is the largest floating point value in Spark.

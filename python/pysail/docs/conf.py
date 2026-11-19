@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # Configuration file for the Sphinx documentation builder.
 from __future__ import annotations
 

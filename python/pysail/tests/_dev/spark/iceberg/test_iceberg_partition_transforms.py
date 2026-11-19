@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for partition transforms with the DataFrameWriterV2 API.
 
 These tests verify that partition transforms are correctly parsed when using

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion::arrow::datatypes::DataType;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::sync::PyOnceLock;

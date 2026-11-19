@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: date_from_unix_date output schema
 
   @function(nullability)

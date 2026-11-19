@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # ruff: noqa: S608, F811
 """Snapshot reference DDL publishes through the catalog and retries conflicts."""
 

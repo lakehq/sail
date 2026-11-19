@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod aggregate;
 pub mod error;
 mod functions_nested_utils;

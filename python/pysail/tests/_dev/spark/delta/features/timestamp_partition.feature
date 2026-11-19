@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: Delta Lake timestamp-partitioned tables
 
   Rule: Writes and reads timestamp-partitioned tables correctly

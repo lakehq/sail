@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: System catalog queries
 
   Scenario: Filter and limit pushdown for system tables

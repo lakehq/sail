@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use datafusion_common::Result;
 use datafusion_expr::LogicalPlan;
 use datafusion_expr::logical_plan::Extension;

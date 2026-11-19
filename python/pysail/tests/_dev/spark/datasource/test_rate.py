@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 
 pytestmark = pytest.mark.spark(skip_if_jvm=True, reason="JVM Spark does not support the rate format in SQL")

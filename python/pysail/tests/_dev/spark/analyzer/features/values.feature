@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: VALUES relation output schema
 
   Rule: Column nullability

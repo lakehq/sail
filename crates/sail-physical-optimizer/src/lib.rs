@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::sync::Arc;
 
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
@@ -26,7 +28,7 @@ use crate::input_file_name::{
     RewriteInputFileMetadataFallback, WrapInputFileMetadataSource,
 };
 use crate::join_reorder::JoinReorder;
-pub use crate::join_reorder::JoinReorderOptions;
+pub use crate::join_reorder::{JoinReorderOptions, SharedCteRestrictions};
 use crate::offset::OffsetSafeRequirements;
 use crate::partition_sensitive::KeepPartitionSensitiveInputs;
 use crate::projection_pushdown::ContextSafeProjectionPushdown;

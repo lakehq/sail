@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::spec::{DeltaError, DeltaResult};
 
 /// The 85-character alphabet used by Z85 encoding.

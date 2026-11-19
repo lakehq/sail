@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Built-in Jev functions. Only the kind, never credentials or clients, is serialized.
 
 use std::collections::BTreeMap;

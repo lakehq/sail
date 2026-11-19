@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Filter pushdown system for Python data sources.
 //!
 //! Converts DataFusion expressions to Python filter objects that can be

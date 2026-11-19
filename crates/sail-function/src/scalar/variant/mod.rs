@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod spark_cast_to_variant;
 pub mod spark_is_variant_null;
 pub mod spark_parse_json;

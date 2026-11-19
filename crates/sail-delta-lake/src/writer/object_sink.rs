@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use object_store::buffered::BufWriter;

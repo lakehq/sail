@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! A dedicated module for job scheduler options to ensure readonly access.
 
 use std::time::Duration;

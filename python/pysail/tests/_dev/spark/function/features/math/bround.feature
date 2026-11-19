@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: bround comprehensive tests
   # bround = banker's rounding (round-half-to-even). The scenarios below use
   # explicit CAST to DOUBLE/FLOAT/INT/BIGINT so they exercise the vectorized

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Identity MERGE invariants.
 
 Assertions avoid assumptions about partition-stride numbering and row-to-ID ordering.

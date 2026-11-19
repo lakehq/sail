@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::{self, Debug};
 use std::io::{BufRead, BufReader as StdBufReader, Read};
 use std::sync::Arc;

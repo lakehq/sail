@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fmt::Debug;
 
 use arrow::array::{Array, ArrayRef, BinaryArray};

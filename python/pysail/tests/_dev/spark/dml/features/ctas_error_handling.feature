@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: CREATE TABLE AS SELECT error handling
 
   Scenario: CREATE TABLE AS SELECT fails when table already exists

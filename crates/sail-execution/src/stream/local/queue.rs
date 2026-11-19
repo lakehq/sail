@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! The queues that hold the output of one task in memory until it is read.
 //!
 //! A task has one writer and any number of queues, each of which is read by one

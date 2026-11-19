@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Scan Python files and Jupyter notebooks for usage of functions from
 specified modules (TARGET_MODULES). Returns total count of function

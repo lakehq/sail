@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Defaults shared by Unity Catalog test fixtures."""
 
 import os

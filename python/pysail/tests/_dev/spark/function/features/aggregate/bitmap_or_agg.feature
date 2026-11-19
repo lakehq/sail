@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: bitmap_or_agg returns the bitwise OR of all input bitmaps
 
   Rule: bitmap_or_agg ORs identical bitmaps

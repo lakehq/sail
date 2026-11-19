@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Fixtures for native Unity Catalog integration tests."""
 
 from __future__ import annotations

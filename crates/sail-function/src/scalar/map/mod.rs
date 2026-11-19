@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 pub mod map_entries;
 pub mod map_from;
 pub mod spark_map_filter;

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: btrim function
 
   Rule: Numeric arguments are implicitly cast to strings

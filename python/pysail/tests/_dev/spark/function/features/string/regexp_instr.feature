@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 Feature: regexp_instr returns the first match position
 
   Rule: Argument semantics

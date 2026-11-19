@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use log::{Log, Metadata, Record};
 
 /// A logger that delegates logging to a primary logger,

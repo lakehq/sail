@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Commit execution plan for Python data source writes.
 //!
 //! This node consumes per-partition write results produced by
