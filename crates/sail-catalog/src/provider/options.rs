@@ -43,6 +43,21 @@ pub struct CreateTableOptions {
     pub is_external: bool,
     #[serde(default)]
     pub is_write_precondition: bool,
+    /// The state of the table when the catalog stages it before it is created.
+    #[serde(default)]
+    pub staged: Option<Box<StagedTableCreate>>,
+}
+
+/// The state of a table that the catalog stages before the table is created.
+/// The catalog plans it, and the storage metadata created for the table is added to it
+/// before the table is created in the catalog.
+#[derive(Debug, Clone, Default, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct StagedTableCreate {
+    /// The protocol that the catalog requires for the storage metadata,
+    /// in the form defined by the table format.
+    pub required_protocol: Option<String>,
+    /// The storage metadata created for the table, in the form defined by the table format.
+    pub created_metadata: Option<String>,
 }
 
 pub enum StageTableOptions {

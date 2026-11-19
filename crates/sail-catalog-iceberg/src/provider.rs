@@ -1387,6 +1387,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             properties,
             is_external: _,
             is_write_precondition,
+            staged: _,
         } = options;
 
         if !format.eq_ignore_ascii_case("iceberg") {
@@ -2886,6 +2887,7 @@ mod tests {
             properties: vec![],
             is_external: false,
             is_write_precondition: true,
+            staged: None,
         }
     }
 

@@ -5,15 +5,6 @@ use super::managed;
 pub const DELTA_TABLE_TYPE_VALUE: &str = "delta";
 pub const DELTA_UNITY_TABLE_ID_KEY: &str = "io.unitycatalog.tableId";
 pub const DELTA_UNITY_TABLE_ID_LEGACY_KEY: &str = "table_id";
-/// The create-table property with the Delta protocol that Unity Catalog requires for
-/// version 0 of a staged managed table, as a Delta `protocol` action in JSON.
-/// The property is consumed when version 0 is written and is never stored.
-pub const DELTA_UNITY_REQUIRED_PROTOCOL_KEY: &str = "sail.unity.requiredProtocol";
-/// The create-table result property with version 0 of a staged managed table, which
-/// Unity Catalog needs to register the table. The value is a JSON object with the
-/// `protocol` and `metaData` actions and the `inCommitTimestamp` of the commit.
-/// The property is never stored.
-pub const DELTA_UNITY_CREATE_COMMIT_KEY: &str = "sail.unity.createCommit";
 
 /// Properties that bind a Delta log to a catalog or commit coordinator.
 pub fn is_delta_coordinated_property(key: &str) -> bool {

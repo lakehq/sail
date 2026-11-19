@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::provider::{
     CreateTableMetadataRequirement, CreateTableOptions, LakeSourceCreateMetadataMode,
+    StagedTableCreate,
 };
 
 // TODO: Complete the remaining lakehouse catalog capability work:
@@ -61,6 +62,8 @@ pub struct LakehouseCreateRequest {
 pub struct LakehouseCreatePlan {
     pub table: LakehouseResolvedTable,
     pub materialization: LakehouseCreateMaterialization,
+    /// The state of the table when the catalog stages it before it is created.
+    pub staged: Option<Box<StagedTableCreate>>,
 }
 
 // TODO: Replace this compatibility materialization shape with protocol-specific
@@ -309,6 +312,7 @@ pub fn plan_lakehouse_create_from_requirement(
             runtime: None,
         },
         materialization,
+        staged: options.staged.clone(),
     }
 }
 

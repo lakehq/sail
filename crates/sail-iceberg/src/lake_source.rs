@@ -336,6 +336,7 @@ impl LakeSource for IcebergLakeSource {
             properties,
             replace,
             lakehouse_table,
+            required_protocol: _,
         } = info;
         let catalog_table = lakehouse_table
             .as_ref()
@@ -360,6 +361,7 @@ impl LakeSource for IcebergLakeSource {
                         crate::datasource::type_converter::iceberg_schema_to_arrow(schema)?,
                     )),
                     partition_by: Some(partition_columns_from_table_metadata(&metadata)?),
+                    created_metadata: None,
                     properties: vec![(
                         sail_common_datafusion::catalog::managed::METADATA_LOCATION_UNDERSCORE_KEY
                             .to_string(),

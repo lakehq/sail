@@ -175,6 +175,7 @@ impl PlanResolver<'_> {
                 properties,
                 is_external,
                 is_write_precondition: false,
+                staged: None,
             },
         };
         self.resolve_catalog_command(command)

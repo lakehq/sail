@@ -289,6 +289,7 @@ mod tests {
             properties: vec![("owner".into(), "new".into())],
             is_external: true,
             is_write_precondition: true,
+            staged: None,
         }
     }
 

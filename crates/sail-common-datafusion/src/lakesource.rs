@@ -72,6 +72,9 @@ pub struct LakeSourceCreateTableInfo {
     pub properties: Vec<(String, String)>,
     pub replace: bool,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    /// The protocol that the catalog requires for the storage metadata of a table
+    /// it staged, in the form defined by the table format.
+    pub required_protocol: Option<String>,
 }
 
 impl LakeSourceCreateTableInfo {
@@ -89,6 +92,9 @@ pub struct LakeSourceCreateTableResult {
     /// Authoritative schema and partitioning when registering an existing table.
     pub schema: Option<SchemaRef>,
     pub partition_by: Option<Vec<CatalogPartitionField>>,
+    /// The storage metadata created for a table that the catalog staged,
+    /// in the form defined by the table format.
+    pub created_metadata: Option<String>,
 }
 
 #[derive(Debug, Default)]

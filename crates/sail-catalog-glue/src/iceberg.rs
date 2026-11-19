@@ -300,6 +300,7 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
         properties,
         is_external: _,
         is_write_precondition: _,
+        staged: _,
     } = options;
 
     let location = location.ok_or_else(|| {

@@ -1082,6 +1082,7 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
         options.location = create_plan.table.status.location.clone();
     }
     options.properties = create_plan.table.status.display_properties.clone();
+    options.staged = create_plan.staged.clone();
     let location = options.location.clone().ok_or_else(|| {
         CatalogError::InvalidArgument(format!(
             "Location is required to create storage metadata for {} tables",
@@ -1098,8 +1099,15 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
         options.properties.clone(),
         options.mode.is_replace(),
         context.as_deref().cloned(),
+        options
+            .staged
+            .as_ref()
+            .and_then(|staged| staged.required_protocol.clone()),
     )
     .await?;
+    if let Some(staged) = options.staged.as_mut() {
+        staged.created_metadata = metadata.created_metadata;
+    }
     if options.columns.is_empty() {
         if let Some(schema) = metadata.schema {
             options.columns = schema
@@ -1194,6 +1202,7 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
         properties.clone(),
         false,
         lakehouse_table,
+        None,
     )
     .await
     .map(|_| ())
@@ -1210,6 +1219,7 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
     properties: Vec<(String, String)>,
     replace: bool,
     lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
+    required_protocol: Option<String>,
 ) -> CatalogResult<LakeSourceCreateTableResult> {
     let registry = ctx.extension::<DataSourceRegistry>().map_err(|e| {
         CatalogError::External(format!(
@@ -1245,6 +1255,7 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
                 properties,
                 replace,
                 lakehouse_table,
+                required_protocol,
             },
         )
         .await

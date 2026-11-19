@@ -17,8 +17,7 @@ use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::catalog::delta::{
-    DELTA_UNITY_CREATE_COMMIT_KEY, DELTA_UNITY_REQUIRED_PROTOCOL_KEY, DELTA_UNITY_TABLE_ID_KEY,
-    DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
+    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
     CatalogPartitionField, CatalogTableColumnIdentity, CommitAuthority, LakehouseExecutionContext,
@@ -282,14 +281,18 @@ impl LakeSource for DeltaLakeSource {
             columns,
             comment,
             partition_by,
-            mut properties,
+            properties,
             replace,
             lakehouse_table,
+            required_protocol,
         } = info;
         let catalog_table = lakehouse_table
             .as_ref()
             .map(|context| context.catalog_table().to_vec());
-        let unity_required_protocol = take_unity_required_protocol(&mut properties)?;
+        let unity_required_protocol = required_protocol
+            .as_deref()
+            .map(parse_unity_required_protocol)
+            .transpose()?;
 
         let catalog_managed_table_id = if catalog_table.is_some() {
             Some(
@@ -543,10 +546,7 @@ impl LakeSource for DeltaLakeSource {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let mut result = LakeSourceCreateTableResult::default();
         if report_create_commit {
-            result.properties.push((
-                DELTA_UNITY_CREATE_COMMIT_KEY.to_string(),
-                unity_create_commit(log_store.as_ref()).await?,
-            ));
+            result.created_metadata = Some(unity_create_commit(log_store.as_ref()).await?);
         }
         Ok(result)
     }
@@ -1950,24 +1950,16 @@ fn delta_create_table_metadata_configuration(
     canonicalize_and_validate_table_properties(&table_properties)
 }
 
-/// Removes the Delta protocol required by Unity Catalog from the create-table properties.
-fn take_unity_required_protocol(
-    properties: &mut Vec<(String, String)>,
-) -> Result<Option<Protocol>> {
-    let Some(index) = properties
-        .iter()
-        .position(|(key, _)| key == DELTA_UNITY_REQUIRED_PROTOCOL_KEY)
-    else {
-        return Ok(None);
-    };
-    let (_, value) = properties.remove(index);
+/// Parses the Delta protocol required by Unity Catalog for a staged managed table,
+/// which is a Delta `protocol` action in JSON.
+fn parse_unity_required_protocol(value: &str) -> Result<Protocol> {
     let invalid = |message: String| {
         DataFusionError::Plan(format!(
             "invalid Delta protocol required by Unity Catalog: {message}"
         ))
     };
     let value: serde_json::Value =
-        serde_json::from_str(&value).map_err(|e| invalid(e.to_string()))?;
+        serde_json::from_str(value).map_err(|e| invalid(e.to_string()))?;
     let version = |key: &str| -> Result<i32> {
         value
             .get(key)
@@ -2010,7 +2002,7 @@ fn take_unity_required_protocol(
         Some(reader_features),
         Some(writer_features),
     );
-    Ok(Some(protocol))
+    Ok(protocol)
 }
 
 /// Validates that the Delta protocol of a Unity Catalog managed table can be read and written.
@@ -2583,6 +2575,7 @@ mod tests {
     /// with the actions of version 0.
     async fn create_unity_managed_table_metadata(
         properties: Vec<(&str, &str)>,
+        required_protocol: Option<String>,
     ) -> Result<(LakeSourceCreateTableResult, Vec<serde_json::Value>)> {
         use object_store::ObjectStoreExt;
         use sail_common_datafusion::catalog::{
@@ -2636,6 +2629,7 @@ mod tests {
                         .collect(),
                     replace: false,
                     lakehouse_table: Some(context),
+                    required_protocol,
                 },
             )
             .await?;
@@ -2687,16 +2681,18 @@ mod tests {
             ]
         })
         .to_string();
-        let (result, actions) = create_unity_managed_table_metadata(vec![
-            ("owner", "sail"),
-            ("io.unitycatalog.tableId", "table-id"),
-            ("delta.checkpointPolicy", "v2"),
-            ("delta.enableDeletionVectors", "true"),
-            ("delta.checkpoint.writeStatsAsStruct", "true"),
-            ("delta.checkpoint.writeStatsAsJson", "true"),
-            ("delta.feature.appendOnly", "supported"),
-            (DELTA_UNITY_REQUIRED_PROTOCOL_KEY, &required_protocol),
-        ])
+        let (result, actions) = create_unity_managed_table_metadata(
+            vec![
+                ("owner", "sail"),
+                ("io.unitycatalog.tableId", "table-id"),
+                ("delta.checkpointPolicy", "v2"),
+                ("delta.enableDeletionVectors", "true"),
+                ("delta.checkpoint.writeStatsAsStruct", "true"),
+                ("delta.checkpoint.writeStatsAsJson", "true"),
+                ("delta.feature.appendOnly", "supported"),
+            ],
+            Some(required_protocol),
+        )
         .await?;
 
         let protocol = find_action(&actions, "protocol")?;
@@ -2739,10 +2735,10 @@ mod tests {
         assert!(in_commit_timestamp.is_i64(), "{in_commit_timestamp}");
 
         // The result reports version 0 as it is written for registering the table.
-        let [(key, create_commit)] = result.properties.as_slice() else {
-            return plan_err!("unexpected properties: {:?}", result.properties);
+        assert!(result.properties.is_empty());
+        let Some(create_commit) = result.created_metadata.as_deref() else {
+            return plan_err!("missing created metadata");
         };
-        assert_eq!(key, DELTA_UNITY_CREATE_COMMIT_KEY);
         let create_commit: serde_json::Value = serde_json::from_str(create_commit)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         assert_eq!(&create_commit["protocol"], protocol);
@@ -2764,10 +2760,10 @@ mod tests {
                 "writerFeatures": features
             })
             .to_string();
-            let result = create_unity_managed_table_metadata(vec![
-                ("io.unitycatalog.tableId", "table-id"),
-                (DELTA_UNITY_REQUIRED_PROTOCOL_KEY, &required_protocol),
-            ])
+            let result = create_unity_managed_table_metadata(
+                vec![("io.unitycatalog.tableId", "table-id")],
+                Some(required_protocol),
+            )
             .await;
             let Err(error) = result else {
                 return plan_err!("expected an error for {unsupported}");
@@ -2788,10 +2784,13 @@ mod tests {
 
     #[tokio::test]
     async fn unity_managed_table_version_0_without_required_protocol() -> Result<()> {
-        let (result, actions) =
-            create_unity_managed_table_metadata(vec![("io.unitycatalog.tableId", "table-id")])
-                .await?;
+        let (result, actions) = create_unity_managed_table_metadata(
+            vec![("io.unitycatalog.tableId", "table-id")],
+            None,
+        )
+        .await?;
         assert!(result.properties.is_empty());
+        assert!(result.created_metadata.is_none());
         let protocol = find_action(&actions, "protocol")?;
         assert_eq!(
             sorted_strings(&protocol["readerFeatures"]),

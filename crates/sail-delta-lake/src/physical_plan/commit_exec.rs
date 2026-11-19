@@ -414,9 +414,16 @@ impl DeltaCommitExec {
         }
     }
 
+    /// Loads the table that exists where the create actions are to be committed.
+    ///
+    /// The existing table must have the protocol and the metadata of the create actions.
+    /// For a catalog-managed table, the catalog creates the table before the data is
+    /// written and decides its protocol and configuration, so only the schema and the
+    /// partition columns must be the same.
     async fn existing_create_bootstrap_snapshot(
         log_store: &LogStoreRef,
         actions: &[CommitAction],
+        catalog_managed: bool,
     ) -> Result<Option<Arc<crate::table::DeltaSnapshot>>> {
         let latest_version = match log_store.get_latest_version(-1).await {
             Ok(version) => version,
@@ -438,7 +445,8 @@ impl DeltaCommitExec {
         if let Some(protocol) = actions.iter().find_map(|action| match action {
             CommitAction::Protocol(protocol) => Some(protocol),
             _ => None,
-        }) && protocol != snapshot.protocol()
+        }) && !catalog_managed
+            && protocol != snapshot.protocol()
         {
             return Err(DataFusionError::Plan(
                 "Delta table already exists with a different protocol".to_string(),
@@ -458,7 +466,8 @@ impl DeltaCommitExec {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let metadata_matches = create_schema == existing_schema
                 && metadata.partition_columns() == snapshot.metadata().partition_columns()
-                && metadata.configuration() == snapshot.metadata().configuration();
+                && (catalog_managed
+                    || metadata.configuration() == snapshot.metadata().configuration());
             if !metadata_matches {
                 return Err(DataFusionError::Plan(
                     "Delta table already exists with different metadata".to_string(),
@@ -472,8 +481,9 @@ impl DeltaCommitExec {
     async fn existing_create_bootstrap_commit_matches(
         log_store: &LogStoreRef,
         actions: &[CommitAction],
+        catalog_managed: bool,
     ) -> Result<bool> {
-        Self::existing_create_bootstrap_snapshot(log_store, actions)
+        Self::existing_create_bootstrap_snapshot(log_store, actions, catalog_managed)
             .await
             .map(|snapshot| snapshot.is_some())
     }
@@ -859,8 +869,12 @@ impl ExecutionPlan for DeltaCommitExec {
 
             if !table_exists
                 && is_create_bootstrap_only_commit(&final_actions)
-                && Self::existing_create_bootstrap_commit_matches(&log_store, &final_actions)
-                    .await?
+                && Self::existing_create_bootstrap_commit_matches(
+                    &log_store,
+                    &final_actions,
+                    catalog_managed_table.is_some(),
+                )
+                .await?
             {
                 return output.empty_batch();
             }
@@ -1024,6 +1038,7 @@ impl ExecutionPlan for DeltaCommitExec {
                         match Self::existing_create_bootstrap_snapshot(
                             &log_store,
                             &bootstrap_actions,
+                            true,
                         )
                         .await?
                         {
@@ -1676,6 +1691,95 @@ mod result_tests {
             ..metrics
         };
         assert!(commit_output_batch(CommandOutput::MergeRows, 0, &operation, &overflow).is_err());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod create_bootstrap_tests {
+    use object_store::ObjectStoreExt;
+    use object_store::memory::InMemory;
+
+    use super::*;
+    use crate::spec::{DataType, Protocol, StructField};
+
+    fn create_actions(
+        features: Vec<TableFeature>,
+        configuration: &[(&str, &str)],
+        column: &str,
+    ) -> Result<Vec<CommitAction>> {
+        let schema = StructType::try_new([StructField::nullable(column, DataType::LONG)])
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let metadata = metadata_for_create_with_struct_type(
+            schema,
+            vec![],
+            0,
+            configuration
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Ok(vec![
+            CommitAction::Protocol(Protocol::new(3, 7, Some(vec![]), Some(features))),
+            CommitAction::Metadata(metadata),
+        ])
+    }
+
+    /// The data of CREATE TABLE AS SELECT is committed to the table that the catalog
+    /// created with the protocol and the properties that the catalog requires.
+    #[tokio::test]
+    async fn catalog_managed_create_adopts_existing_table_of_catalog() -> Result<()> {
+        let store = Arc::new(InMemory::new());
+        let existing = create_actions(
+            vec![TableFeature::InCommitTimestamp, TableFeature::AppendOnly],
+            &[("delta.appendOnly", "true")],
+            "id",
+        )?;
+        let commit = existing
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<serde_json::Result<Vec<_>>>()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .join("\n");
+        store
+            .put(
+                &object_store::path::Path::from("t/_delta_log/00000000000000000000.json"),
+                commit.into(),
+            )
+            .await?;
+        let table_url =
+            url::Url::parse("memory:///t").map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let log_store = create_delta_table_with_object_store(table_url, store, StorageConfig)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .log_store();
+        let snapshot = |actions: Vec<CommitAction>, catalog_managed| {
+            let log_store = log_store.clone();
+            async move {
+                DeltaCommitExec::existing_create_bootstrap_snapshot(
+                    &log_store,
+                    &actions,
+                    catalog_managed,
+                )
+                .await
+            }
+        };
+
+        assert!(snapshot(existing, false).await?.is_some());
+        let writer = create_actions(vec![TableFeature::InCommitTimestamp], &[], "id")?;
+        let Err(error) = snapshot(writer.clone(), false).await else {
+            return internal_err!("expected an error for a different protocol");
+        };
+        assert!(error.to_string().contains("different protocol"), "{error}");
+        let adopted = snapshot(writer, true).await?;
+        assert_eq!(adopted.map(|snapshot| snapshot.version()), Some(0));
+
+        let writer = create_actions(vec![TableFeature::InCommitTimestamp], &[], "other")?;
+        let Err(error) = snapshot(writer, true).await else {
+            return internal_err!("expected an error for a different schema");
+        };
+        assert!(error.to_string().contains("different metadata"), "{error}");
         Ok(())
     }
 }

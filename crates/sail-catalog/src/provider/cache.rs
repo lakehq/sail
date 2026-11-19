@@ -951,6 +951,7 @@ mod tests {
             properties: vec![],
             is_external: false,
             is_write_precondition: false,
+            staged: None,
         };
         provider.create_table(&ns, "t2", options).await.unwrap();
 

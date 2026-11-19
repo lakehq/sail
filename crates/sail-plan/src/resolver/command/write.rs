@@ -650,6 +650,7 @@ impl PlanResolver<'_> {
                         properties,
                         is_external: table_is_external || write_options_had_location,
                         is_write_precondition: true,
+                        staged: None,
                     };
                     if write_format.eq_ignore_ascii_case("iceberg")
                         && matches!(mode, WriteMode::Replace { .. })
@@ -680,8 +681,9 @@ impl PlanResolver<'_> {
                             items: vec![("path".to_string(), location)],
                         });
                     }
-                    // The catalog may require properties for the table planned at the location.
+                    // The catalog may stage the table and require properties for it.
                     create_options.properties = create_plan.table.status.display_properties.clone();
+                    create_options.staged = create_plan.staged.clone();
                     sink_info.lakehouse_table = Some(
                         create_plan
                             .table

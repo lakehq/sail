@@ -14,13 +14,12 @@ use sail_catalog::lakehouse::{
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
     CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    LakeSourceCreateMetadataMode, Namespace, PartitionTransform,
+    LakeSourceCreateMetadataMode, Namespace, PartitionTransform, StagedTableCreate,
 };
 use sail_catalog::utils::{get_property, quote_names_if_needed, quote_namespace_if_needed};
 use sail_common::utils::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::delta::{
-    DELTA_UNITY_CREATE_COMMIT_KEY, DELTA_UNITY_REQUIRED_PROTOCOL_KEY, DELTA_UNITY_TABLE_ID_KEY,
-    DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
+    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
     DatabaseStatus, TableColumnStatus, TableKind, TableStatus, identity_partition_fields,
@@ -135,7 +134,7 @@ impl UnityCatalogProvider {
             // The server has the endpoint but not the catalog.
             Err(e)
                 if e.status() == Some(reqwest::StatusCode::NOT_FOUND)
-                    && e.to_string().contains("NoSuchCatalogException") =>
+                    && delta_error_type(&e).as_deref() == Some("NoSuchCatalogException") =>
             {
                 return Err(CatalogError::NotFound(
                     CatalogObject::Catalog,
@@ -229,8 +228,10 @@ impl UnityCatalogProvider {
 
     /// Creates a staging table for a managed Delta table with the Delta REST API.
     ///
-    /// Returns the location allocated for the table, and the create-table properties
-    /// extended with what the server requires for version 0 of the table.
+    /// Returns the location allocated for the table, the create-table properties extended
+    /// with the properties that the server requires for version 0 of the table, and the
+    /// protocol that the server requires for it as a Delta `protocol` action in JSON.
+    /// Returns nothing if the table exists.
     async fn create_delta_staging_table(
         &self,
         client: &delta_gen::ApiClient,
@@ -238,7 +239,7 @@ impl UnityCatalogProvider {
         schema_name: &str,
         table: &str,
         properties: Vec<(String, String)>,
-    ) -> CatalogResult<(String, Vec<(String, String)>)> {
+    ) -> CatalogResult<Option<(String, Vec<(String, String)>, String)>> {
         let request = delta_gen::DeltaCreateStagingTableRequest {
             name: table.to_string(),
         };
@@ -247,12 +248,7 @@ impl UnityCatalogProvider {
             .await
         {
             Ok(response) => response.inner,
-            Err(e) if e.status() == Some(reqwest::StatusCode::CONFLICT) => {
-                return Err(CatalogError::AlreadyExists(
-                    CatalogObject::Table,
-                    quote_names_if_needed(&[catalog_name, schema_name, table]),
-                ));
-            }
+            Err(e) if e.status() == Some(reqwest::StatusCode::CONFLICT) => return Ok(None),
             Err(e) => {
                 return Err(CatalogError::External(format!(
                     "Failed to create staging table: {e}"
@@ -313,11 +309,7 @@ impl UnityCatalogProvider {
                 })
             },
         );
-        properties.push((
-            DELTA_UNITY_REQUIRED_PROTOCOL_KEY.to_string(),
-            required_protocol.to_string(),
-        ));
-        Ok((location, properties))
+        Ok(Some((location, properties, required_protocol.to_string())))
     }
 
     /// Registers a staged managed Delta table with the Delta REST API,
@@ -655,7 +647,7 @@ impl CatalogProvider for UnityCatalogProvider {
                     Some(&schema_name),
                 ))
             }
-            Err(e) if if_not_exists && is_already_exists_error(e.status(), &e, "SCHEMA") => {
+            Err(e) if if_not_exists && is_already_exists_error(&e, "SCHEMA_ALREADY_EXISTS") => {
                 self.get_database(database).await
             }
             Err(e) => Err(CatalogError::External(format!(
@@ -779,6 +771,7 @@ impl CatalogProvider for UnityCatalogProvider {
             properties,
             is_external,
             is_write_precondition,
+            staged,
         } = options;
 
         let client = self
@@ -798,9 +791,9 @@ impl CatalogProvider for UnityCatalogProvider {
         // Version 0 of a managed Delta table staged with the Delta REST API is written
         // before the table is registered with the same API.
         if !is_external
-            && let Some((_, create_commit)) = properties
-                .iter()
-                .find(|(key, _)| key == DELTA_UNITY_CREATE_COMMIT_KEY)
+            && let Some(create_commit) = staged
+                .as_ref()
+                .and_then(|staged| staged.created_metadata.as_deref())
         {
             return match self
                 .create_staged_delta_table(database, table, location, comment, create_commit)
@@ -932,7 +925,8 @@ impl CatalogProvider for UnityCatalogProvider {
                 self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
             }
             Err(e)
-                if mode.ignore_if_exists() && is_already_exists_error(e.status(), &e, "TABLE") =>
+                if mode.ignore_if_exists()
+                    && is_already_exists_error(&e, "TABLE_ALREADY_EXISTS") =>
             {
                 self.get_table(database, table).await
             }
@@ -1124,14 +1118,9 @@ impl CatalogProvider for UnityCatalogProvider {
         );
         if request.options.format.eq_ignore_ascii_case("delta") && !request.options.is_external {
             let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-            // The properties of a table staged with the Delta REST API carry the required
-            // protocol, so the staging table is created only once when the table is planned
-            // again as a write precondition.
-            let staged = request
-                .options
-                .properties
-                .iter()
-                .any(|(key, _)| key == DELTA_UNITY_REQUIRED_PROTOCOL_KEY);
+            // A table staged with the Delta REST API is not staged again when the table
+            // is planned as a write precondition.
+            let staged = plan.staged.is_some();
             let delta_client = self
                 .get_delta_client()
                 .await
@@ -1143,7 +1132,8 @@ impl CatalogProvider for UnityCatalogProvider {
                     == DeltaCommitApi::V1
             {
                 if !staged {
-                    let (location, properties) = self
+                    let ignore_if_exists = request.options.mode.ignore_if_exists();
+                    let Some((location, properties, required_protocol)) = self
                         .create_delta_staging_table(
                             &delta_client,
                             &catalog_name,
@@ -1151,10 +1141,34 @@ impl CatalogProvider for UnityCatalogProvider {
                             table,
                             request.options.properties,
                         )
-                        .await?;
+                        .await?
+                    else {
+                        if !ignore_if_exists {
+                            return Err(CatalogError::AlreadyExists(
+                                CatalogObject::Table,
+                                quote_names_if_needed(&[&catalog_name, &schema_name, table]),
+                            ));
+                        }
+                        // The table is created concurrently, so the existing table is used.
+                        let status = self.get_table(database, table).await?;
+                        if let TableKind::Table {
+                            location: Some(location),
+                            ..
+                        } = status.kind
+                        {
+                            plan.table.status.location = Some(location.clone());
+                            plan.table.execution.table_identity.table_uri = Some(location);
+                        }
+                        plan.materialization = LakehouseCreateMaterialization::None;
+                        return Ok(plan);
+                    };
                     plan.table.status.location = Some(location.clone());
                     plan.table.status.display_properties = properties;
                     plan.table.execution.table_identity.table_uri = Some(location);
+                    plan.staged = Some(Box::new(StagedTableCreate {
+                        required_protocol: Some(required_protocol),
+                        created_metadata: None,
+                    }));
                 }
                 // Version 0 of the table is written before the table is registered.
                 plan.materialization = LakehouseCreateMaterialization::BeforeCatalogLakeSource {
@@ -1674,18 +1688,29 @@ fn delta_schema_to_wire_type(data_type: &serde_json::Value) -> serde_json::Value
 /// Whether the error of creating an object says that the object exists.
 /// Some servers report it as a bad request with an error code for the kind of object,
 /// such as `SCHEMA_ALREADY_EXISTS`, instead of a conflict.
-fn is_already_exists_error(
-    status: Option<reqwest::StatusCode>,
-    error: &impl std::fmt::Display,
-    kind: &str,
-) -> bool {
-    match status {
+fn is_already_exists_error<E>(error: &r#gen::ApiError<E>, error_code: &str) -> bool {
+    let body = match error {
+        r#gen::ApiError::Response(response) => response.body.as_str(),
+        r#gen::ApiError::Unknown(response) => response.body.as_str(),
+        _ => "",
+    };
+    match error.status() {
         Some(reqwest::StatusCode::CONFLICT) => true,
-        Some(reqwest::StatusCode::BAD_REQUEST) => error
-            .to_string()
-            .contains(&format!("\"{kind}_ALREADY_EXISTS\"")),
+        Some(reqwest::StatusCode::BAD_REQUEST) => serde_json::from_str::<serde_json::Value>(body)
+            .is_ok_and(|body| body["error_code"] == error_code),
         _ => false,
     }
+}
+
+/// Returns the error type in the error response of the Delta REST API.
+fn delta_error_type<E>(error: &delta_gen::ApiError<E>) -> Option<String> {
+    let body = match error {
+        delta_gen::ApiError::Response(response) => response.body.as_str(),
+        delta_gen::ApiError::Unknown(response) => response.body.as_str(),
+        _ => return None,
+    };
+    let body = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    body["error"]["type"].as_str().map(str::to_string)
 }
 
 fn parse_data_source_format(format: &str) -> CatalogResult<r#gen::DataSourceFormat> {
@@ -3005,6 +3030,7 @@ mod tests {
                 .collect(),
             is_external: false,
             is_write_precondition,
+            staged: None,
         }
     }
 
@@ -3107,15 +3133,12 @@ mod tests {
     }
 
     fn staged_delta_create_options() -> CreateTableOptions {
-        let mut options = managed_delta_create_options(
-            vec![("owner", "sail"), (DELTA_UNITY_REQUIRED_PROTOCOL_KEY, "{}")],
-            true,
-        );
+        let mut options = managed_delta_create_options(vec![("owner", "sail")], true);
         options.location = Some(DELTA_TABLE_URI.to_string());
-        options.properties.push((
-            DELTA_UNITY_CREATE_COMMIT_KEY.to_string(),
-            delta_create_commit(),
-        ));
+        options.staged = Some(Box::new(StagedTableCreate {
+            required_protocol: Some("{}".to_string()),
+            created_metadata: Some(delta_create_commit()),
+        }));
         options
     }
 
@@ -3184,11 +3207,14 @@ mod tests {
                     "io.unitycatalog.tableId".to_string(),
                     DELTA_TABLE_ID.to_string()
                 ),
-                (
-                    DELTA_UNITY_REQUIRED_PROTOCOL_KEY.to_string(),
-                    required_protocol.to_string()
-                ),
             ]
+        );
+        assert_eq!(
+            plan.staged,
+            Some(Box::new(StagedTableCreate {
+                required_protocol: Some(required_protocol.to_string()),
+                created_metadata: None,
+            }))
         );
 
         // The staging table is not created again when the staged table is planned
@@ -3196,12 +3222,14 @@ mod tests {
         let mut options = managed_delta_create_options(vec![], true);
         options.location = plan.table.status.location.clone();
         options.properties = plan.table.status.display_properties.clone();
+        options.staged = plan.staged.clone();
         let precondition = provider
             .plan_lakehouse_create(&database, "events", lakehouse_create_request(options))
             .await
             .unwrap();
         assert_eq!(precondition.table.status, plan.table.status);
         assert_eq!(precondition.materialization, plan.materialization);
+        assert_eq!(precondition.staged, plan.staged);
 
         provider
             .create_table(&database, "events", staged_delta_create_options())
@@ -3425,6 +3453,18 @@ mod tests {
                 .await
                 .unwrap_err();
             if status == 409 {
+                // The existing table is planned if the table is created only if it
+                // does not exist.
+                mount_legacy_delta_table(&server).await;
+                let mut options = managed_delta_create_options(vec![], true);
+                options.mode = sail_catalog::provider::CreateTableMode::CreateIfNotExists;
+                let plan = provider
+                    .plan_lakehouse_create(&database, "events", lakehouse_create_request(options))
+                    .await
+                    .unwrap();
+                assert_eq!(plan.table.status.location.as_deref(), Some(DELTA_TABLE_URI));
+                assert_eq!(plan.materialization, LakehouseCreateMaterialization::None);
+                assert_eq!(plan.staged, None);
                 assert!(
                     matches!(error, CatalogError::AlreadyExists(_, _)),
                     "{error:?}"
@@ -3510,7 +3550,7 @@ mod tests {
         });
         let invalid = serde_json::json!({
             "error_code": "INVALID_ARGUMENT",
-            "message": "SCHEMA_ALREADY_EXISTS is not the error code"
+            "message": "\"SCHEMA_ALREADY_EXISTS\" is not the error code"
         });
         for (response, exists) in [
             (ResponseTemplate::new(409), true),
