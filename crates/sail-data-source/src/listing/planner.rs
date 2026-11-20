@@ -42,7 +42,8 @@ use crate::listing::delete::FileDeleteExec;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
-    can_be_evaluated_for_partition_pruning, has_hidden_path_component, matches_path_glob_filter,
+    can_be_evaluated_for_partition_pruning, has_hidden_path_component, listing_cache_scoped_url,
+    matches_path_glob_filter,
 };
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 
@@ -367,22 +368,26 @@ async fn list_files_for_scan<'a>(
     let store_ref = store.as_ref();
     let partition_cols_ref = partition_cols.as_slice();
     let path_glob_filter = source.config().path_glob_filter.as_ref();
-    let file_list = future::try_join_all(source.config().table_paths.iter().map(
-        |table_path| async move {
-            let files =
-                pruned_partition_list(ctx, store_ref, table_path, filters, "", partition_cols_ref)
-                    .await?;
-            // Apply listing-level file-name filters so scans agree with `inputFiles` and sampling.
-            let files = files.try_filter(move |file| {
-                let location = &file.object_meta.location;
-                futures::future::ready(
-                    !has_hidden_path_component(table_path, location)
-                        && matches_path_glob_filter(path_glob_filter, location),
-                )
-            });
-            Ok::<_, datafusion_common::DataFusionError>(files.boxed())
-        },
-    ))
+    let table_paths = source
+        .config()
+        .table_paths
+        .iter()
+        .map(listing_cache_scoped_url)
+        .collect::<Vec<_>>();
+    let file_list = future::try_join_all(table_paths.iter().map(|table_path| async move {
+        let files =
+            pruned_partition_list(ctx, store_ref, table_path, filters, "", partition_cols_ref)
+                .await?;
+        // Apply listing-level file-name filters so scans agree with `inputFiles` and sampling.
+        let files = files.try_filter(move |file| {
+            let location = &file.object_meta.location;
+            futures::future::ready(
+                !has_hidden_path_component(table_path, location)
+                    && matches_path_glob_filter(path_glob_filter, location),
+            )
+        });
+        Ok::<_, datafusion_common::DataFusionError>(files.boxed())
+    }))
     .await?;
 
     let meta_fetch_concurrency: usize =

@@ -140,20 +140,21 @@ impl ReadFormat for ParquetReadFormat {
             ctx.config_options().execution.meta_fetch_concurrency.into();
 
         let objects = files.iter().flat_map(|group| {
+            let metadata_cache = object_store_scoped_file_metadata_cache(
+                Arc::clone(&metadata_cache),
+                &group.url.object_store(),
+            );
             group
                 .objects
                 .iter()
-                .map(|object| (&group.store, group.url, object))
+                .map(move |object| (&group.store, Arc::clone(&metadata_cache), object))
         });
 
         let mut schemas: Vec<(object_store::path::Path, Schema)> = futures::stream::iter(objects)
-            .map(|(store, url, object)| async {
+            .map(|(store, metadata_cache, object)| async {
                 let reader = DFParquetMetadata::new(store.as_ref(), object)
                     .with_metadata_size_hint(metadata_size_hint)
-                    .with_file_metadata_cache(Some(object_store_scoped_file_metadata_cache(
-                        Arc::clone(&metadata_cache),
-                        &url.object_store(),
-                    )))
+                    .with_file_metadata_cache(Some(metadata_cache))
                     .with_coerce_int96(coerce_int96);
                 // Fetch the Parquet footer once and derive both schemas from it.
                 // `fetch_schema()` would read (and parse) the footer a second time; when the

@@ -415,9 +415,6 @@ impl ScanByDataFilesState {
 
         // Build PartitionedFile entries using file size from manifest metadata,
         // avoiding a per-file HEAD request to the object store.
-        // The manifest has no modification time, so use current time as a placeholder.
-        // Retain that timestamp per file through footer preparation and execution for
-        // cache reuse within this scan; rebuilding the scan generates new timestamps.
         let mut partitioned_files = Vec::with_capacity(files.len());
         for file in &files {
             let file_path = store_ctx.resolve_to_absolute_path(&file.path)?;

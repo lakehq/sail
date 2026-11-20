@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Scoping of file cache keys to the object store that holds the files.
 //!
 //! The file metadata, file statistics, and file listing caches are keyed by object paths, which
@@ -20,7 +22,18 @@ pub fn object_store_scoped_path(object_store_url: &ObjectStoreUrl, path: &Path) 
         .collect()
 }
 
+/// Returns the table reference that scopes file listing cache entries to one object store.
+///
+/// DataFusion keys its file listing cache by the table reference of the listing URL and the
+/// listing prefix, so every listing of a prefix must use this reference for the same store.
+pub fn object_store_listing_cache_scope(object_store_url: &ObjectStoreUrl) -> TableReference {
+    TableReference::bare(object_store_url.as_str())
+}
+
 /// Returns a view of the shared file metadata cache whose keys are scoped to one object store.
+///
+/// Only lookups, insertions, and removals are scoped. The size and capacity methods and
+/// `clear` act on the shared cache.
 pub fn object_store_scoped_file_metadata_cache(
     cache: Arc<FileMetadataCache>,
     object_store_url: &ObjectStoreUrl,

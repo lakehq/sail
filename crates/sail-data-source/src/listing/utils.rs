@@ -18,7 +18,7 @@ use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
-use sail_common_datafusion::cache_scope::object_store_scoped_path;
+use sail_common_datafusion::cache_scope::object_store_listing_cache_scope;
 
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
@@ -269,6 +269,13 @@ pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<String>> 
     Ok(inferred.unwrap_or_default())
 }
 
+/// Returns `url` with the table reference that scopes its file listing cache entries to its
+/// object store. DataFusion uses this reference when it lists files for a scan.
+pub fn listing_cache_scoped_url(url: &ListingTableUrl) -> ListingTableUrl {
+    url.clone()
+        .with_table_ref(object_store_listing_cache_scope(&url.object_store()))
+}
+
 pub async fn list_all_files<'a>(
     url: &'a ListingTableUrl,
     ctx: &'a dyn Session,
@@ -282,9 +289,10 @@ pub async fn list_all_files<'a>(
         true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
             None => store.list(Some(url.prefix())),
             Some(cache) => {
+                // This key must match the one DataFusion uses when listing for a scan.
                 let key = TableScopedPath {
-                    table: None,
-                    path: object_store_scoped_path(&url.object_store(), url.prefix()),
+                    table: Some(object_store_listing_cache_scope(&url.object_store())),
+                    path: url.prefix().clone(),
                 };
                 if let Some(res) = cache.get(&key) {
                     debug!("Hit list all files cache");
@@ -608,6 +616,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_listing_cache_keeps_object_stores_apart() -> Result<()> {
+        use datafusion::datasource::listing::helpers::pruned_partition_list;
         use datafusion::prelude::SessionContext;
         use object_store::PutPayload;
         use object_store::memory::InMemory;
@@ -636,14 +645,36 @@ mod tests {
                 .try_collect::<Vec<_>>()
                 .await?;
             listed.push(files);
+            // The scan lists through DataFusion, which must reuse the same cache entry.
+            let scanned = pruned_partition_list(
+                &state,
+                &store,
+                &listing_cache_scoped_url(&url),
+                &[],
+                "",
+                &[],
+            )
+            .await?
+            .map_ok(|file| file.object_meta.location.to_string())
+            .try_collect::<Vec<_>>()
+            .await?;
+            listed.push(scanned);
         }
         assert_eq!(
             listed,
             vec![
                 vec!["data/a.parquet".to_string()],
+                vec!["data/a.parquet".to_string()],
+                vec!["data/b.parquet".to_string()],
                 vec!["data/b.parquet".to_string()]
             ]
         );
+        let cache = ctx
+            .runtime_env()
+            .cache_manager
+            .get_list_files_cache()
+            .ok_or_else(|| internal_datafusion_err!("missing file listing cache"))?;
+        assert_eq!(cache.len(), 2);
         Ok(())
     }
 }
