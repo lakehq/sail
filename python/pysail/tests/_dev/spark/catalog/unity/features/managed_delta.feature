@@ -720,6 +720,39 @@ Feature: Unity Catalog managed Delta table operations
     Then Delta commit for version 3 exists in location
     Then no staged Delta commits exist in location
 
+  Scenario: Column changes on managed Delta table without catalogManaged follow the Delta log
+    Given Unity Catalog managed Delta table unity_table_test.managed_delta_filesystem_columns_t exists with id and name columns without catalogManaged
+    Given final Unity Catalog managed table cleanup for unity_table_test.managed_delta_filesystem_columns_t
+    Given statement
+      """
+      ALTER TABLE unity_table_test.managed_delta_filesystem_columns_t
+      SET TBLPROPERTIES ('delta.columnMapping.mode' = 'name')
+      """
+    Given statement
+      """
+      ALTER TABLE unity_table_test.managed_delta_filesystem_columns_t
+      ADD COLUMNS (extra STRING)
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_filesystem_columns_t VALUES (1, 'one', 'x')
+      """
+    Given statement
+      """
+      ALTER TABLE unity_table_test.managed_delta_filesystem_columns_t DROP COLUMN name
+      """
+    Given statement
+      """
+      ALTER TABLE unity_table_test.managed_delta_filesystem_columns_t RENAME COLUMN extra TO label
+      """
+    When query
+      """
+      SELECT * FROM unity_table_test.managed_delta_filesystem_columns_t
+      """
+    Then query result
+      | id | label |
+      | 1  | x     |
+
   Scenario: Metadata ALTER commits through the catalog for managed Delta tables
     Given statement
       """

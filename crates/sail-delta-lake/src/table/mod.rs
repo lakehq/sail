@@ -10,7 +10,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result};
@@ -41,7 +41,8 @@ pub use features::{
 };
 
 use crate::delta_log::{
-    LogStoreRef, StorageConfig, default_logstore, get_actions, resolve_version_timestamp,
+    LogStoreRef, StorageConfig, complete_checkpoint_file_sets, default_logstore, get_actions,
+    list_delta_log_entries_from, resolve_version_timestamp,
 };
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::r#gen::DeltaReadOptions;
@@ -758,25 +759,15 @@ where
 
 /// Returns whether an existing Delta log uses catalog-managed commits.
 ///
-/// Version 0 creates the table and is never ratified through the catalog, so its protocol can
-/// be trusted even when later published commits of a catalog-managed table must be ignored.
-/// The latest published version is only read for a table that did not start catalog-managed,
-/// or whose version 0 was removed by log cleanup.
+/// The protocol is read from the earliest state that the log retains, so that published commits
+/// that a catalog-managed table must ignore are never replayed. The latest published version is
+/// only read for a table that did not start catalog-managed.
 async fn delta_log_is_catalog_managed(log_store: &LogStoreRef) -> Result<bool> {
-    if let Some(bytes) = log_store.read_commit_entry(0).await? {
-        let initial_protocol =
-            get_actions(0, &bytes)?
-                .into_iter()
-                .find_map(|action| match action {
-                    Action::Protocol(protocol) => Some(protocol),
-                    _ => None,
-                });
-        if initial_protocol
-            .as_ref()
-            .is_some_and(protocol_is_catalog_managed)
-        {
-            return Ok(true);
-        }
+    if earliest_retained_protocol(log_store)
+        .await?
+        .is_some_and(|protocol| protocol_is_catalog_managed(&protocol))
+    {
+        return Ok(true);
     }
     let mut table = DeltaTable::new(
         log_store.clone(),
@@ -787,6 +778,35 @@ async fn delta_log_is_catalog_managed(log_store: &LogStoreRef) -> Result<bool> {
     );
     table.load().await?;
     Ok(protocol_is_catalog_managed(table.snapshot()?.protocol()))
+}
+
+/// Returns the protocol of the earliest state that the Delta log retains: version 0, or the
+/// oldest checkpoint once log cleanup has removed version 0. Neither is ratified after the
+/// catalog's latest version, unlike later published commits.
+async fn earliest_retained_protocol(log_store: &LogStoreRef) -> Result<Option<Protocol>> {
+    if let Some(bytes) = log_store.read_commit_entry(0).await? {
+        return Ok(get_actions(0, &bytes)?
+            .into_iter()
+            .find_map(|action| match action {
+                Action::Protocol(protocol) => Some(protocol),
+                _ => None,
+            }));
+    }
+    let entries = list_delta_log_entries_from(log_store.object_store(None), 0).await?;
+    let Some(checkpoint) = complete_checkpoint_file_sets(entries).into_iter().next() else {
+        return Ok(None);
+    };
+    let snapshot = DeltaSnapshot::try_new(
+        log_store.as_ref(),
+        DeltaSnapshotConfig {
+            require_files: false,
+            ..Default::default()
+        },
+        Some(checkpoint.version()),
+        None,
+    )
+    .await?;
+    Ok(Some(snapshot.protocol().clone()))
 }
 
 pub(crate) async fn load_delta_read_state(
@@ -860,42 +880,38 @@ pub(crate) async fn load_delta_read_state(
 }
 
 fn refresh_catalog_delta_schema(catalog_schema: Schema, snapshot_schema: &Schema) -> Schema {
-    let mut fields = catalog_schema.fields().iter().cloned().collect::<Vec<_>>();
-    for snapshot_field in snapshot_schema.fields() {
-        if let Some(index) = fields
-            .iter()
-            .position(|field| field.name().eq_ignore_ascii_case(snapshot_field.name()))
-        {
-            fields[index] = Arc::new(refresh_catalog_delta_field(
-                fields[index].as_ref(),
-                snapshot_field.as_ref(),
-            ));
-        } else {
-            fields.push(snapshot_field.clone());
-        }
-    }
+    let fields = refresh_catalog_delta_fields(catalog_schema.fields(), snapshot_schema.fields());
     Schema::new_with_metadata(fields, catalog_schema.metadata().clone())
+}
+
+/// Refreshes catalog fields from the snapshot. The Delta log decides which fields exist and in
+/// which order, since the catalog can miss changes such as a dropped or renamed column. A field
+/// that the catalog also has keeps its catalog metadata.
+fn refresh_catalog_delta_fields(
+    catalog_fields: &Fields,
+    snapshot_fields: &Fields,
+) -> Vec<FieldRef> {
+    snapshot_fields
+        .iter()
+        .map(|snapshot_field| {
+            match catalog_fields
+                .iter()
+                .find(|field| field.name().eq_ignore_ascii_case(snapshot_field.name()))
+            {
+                Some(catalog_field) => Arc::new(refresh_catalog_delta_field(
+                    catalog_field.as_ref(),
+                    snapshot_field.as_ref(),
+                )),
+                None => snapshot_field.clone(),
+            }
+        })
+        .collect()
 }
 
 fn refresh_catalog_delta_field(catalog_field: &Field, snapshot_field: &Field) -> Field {
     let data_type = match (catalog_field.data_type(), snapshot_field.data_type()) {
         (DataType::Struct(catalog_fields), DataType::Struct(snapshot_fields)) => {
-            let mut fields = catalog_fields.iter().cloned().collect::<Vec<_>>();
-            for snapshot_child in snapshot_fields {
-                if let Some(index) = fields.iter().position(|catalog_child| {
-                    catalog_child
-                        .name()
-                        .eq_ignore_ascii_case(snapshot_child.name())
-                }) {
-                    fields[index] = Arc::new(refresh_catalog_delta_field(
-                        fields[index].as_ref(),
-                        snapshot_child.as_ref(),
-                    ));
-                } else {
-                    fields.push(snapshot_child.clone());
-                }
-            }
-            DataType::Struct(fields.into())
+            DataType::Struct(refresh_catalog_delta_fields(catalog_fields, snapshot_fields).into())
         }
         (DataType::List(catalog_child), DataType::List(snapshot_child)) => DataType::List(
             Arc::new(refresh_catalog_delta_field(catalog_child, snapshot_child)),
@@ -1087,12 +1103,24 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::{ObjectStore, ObjectStoreExt};
+    use url::Url;
+    use uuid::Uuid;
 
     use super::{
-        effective_catalog_commit_end_version, next_catalog_commit_start_version,
-        refresh_catalog_delta_schema,
+        delta_log_is_catalog_managed, effective_catalog_commit_end_version,
+        next_catalog_commit_start_version, refresh_catalog_delta_schema,
     };
+    use crate::catalog_managed::protocol_with_catalog_managed;
+    use crate::checkpoint::create_checkpoint_for;
+    use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore};
     use crate::schema::attach_column_mapping_metadata;
+    use crate::spec::{
+        Action, Add, DataType as DeltaDataType, DeltaResult, Metadata, Protocol, StructField,
+        StructType,
+    };
 
     #[test]
     fn catalog_schema_refresh_appends_snapshot_fields_without_replacing_existing_types() {
@@ -1351,5 +1379,130 @@ mod tests {
             error.as_deref(),
             Some(message) if message.contains("before requested start version 6")
         ));
+    }
+
+    #[test]
+    fn catalog_schema_refresh_follows_snapshot_fields_and_order() {
+        // The catalog still lists `name` and `extra`, which the Delta log renamed and dropped.
+        let catalog_schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("name", DataType::Utf8, true),
+            Field::new(
+                "payload",
+                DataType::Struct(
+                    vec![
+                        Field::new("a", DataType::Int32, true),
+                        Field::new("b", DataType::Int32, true),
+                    ]
+                    .into(),
+                ),
+                true,
+            ),
+            Field::new("extra", DataType::Utf8, true),
+        ]);
+        let snapshot_schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("label", DataType::Utf8, true),
+            Field::new(
+                "payload",
+                DataType::Struct(vec![Field::new("b", DataType::Int32, true)].into()),
+                true,
+            ),
+        ]);
+
+        let refreshed = refresh_catalog_delta_schema(catalog_schema, &snapshot_schema);
+
+        assert_eq!(refreshed, snapshot_schema);
+    }
+
+    async fn put_commit(
+        store: &Arc<dyn ObjectStore>,
+        version: i64,
+        actions: &[Action],
+    ) -> DeltaResult<()> {
+        let lines = actions
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<Result<Vec<_>, _>>()?;
+        store
+            .put(
+                &Path::from(format!("_delta_log/{version:020}.json")),
+                lines.join("\n").into(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Builds a log with a checkpoint at version 2 whose earlier commits were removed by log
+    /// cleanup, followed by a published commit at version 3 that cannot be parsed.
+    async fn log_after_cleanup_with_corrupt_tail(protocol: Protocol) -> DeltaResult<LogStoreRef> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let table_url = Url::parse("memory:///").map_err(crate::spec::DeltaError::generic_err)?;
+        let log_store = default_logstore(store.clone(), store.clone(), &table_url, &StorageConfig);
+        let metadata = Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([StructField::nullable("id", DeltaDataType::INTEGER)])?,
+            Vec::new(),
+            0,
+            HashMap::new(),
+        )?;
+        put_commit(
+            &store,
+            0,
+            &[Action::Protocol(protocol), Action::Metadata(metadata)],
+        )
+        .await?;
+        for version in 1..=2 {
+            let add = Add {
+                path: format!("part-{version}.parquet"),
+                size: 1,
+                data_change: true,
+                ..Default::default()
+            };
+            put_commit(&store, version, &[Action::Add(add)]).await?;
+        }
+        create_checkpoint_for(2, log_store.as_ref(), Uuid::nil()).await?;
+        for version in 0..2 {
+            store
+                .delete(&Path::from(format!("_delta_log/{version:020}.json")))
+                .await?;
+        }
+        store
+            .put(
+                &Path::from(format!("_delta_log/{:020}.json", 3)),
+                "{not valid delta json".into(),
+            )
+            .await?;
+        Ok(log_store)
+    }
+
+    #[tokio::test]
+    async fn catalog_managed_detection_after_log_cleanup_reads_the_checkpoint() -> DeltaResult<()> {
+        let protocol = protocol_with_catalog_managed(&Protocol::new(1, 2, None, None));
+        let log_store = log_after_cleanup_with_corrupt_tail(protocol).await?;
+
+        let is_catalog_managed = delta_log_is_catalog_managed(&log_store)
+            .await
+            .map_err(crate::spec::DeltaError::generic_err)?;
+
+        assert!(is_catalog_managed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn filesystem_managed_detection_after_log_cleanup_reads_the_latest_version()
+    -> DeltaResult<()> {
+        let log_store =
+            log_after_cleanup_with_corrupt_tail(Protocol::new(1, 2, None, None)).await?;
+
+        // The published log is authoritative for a table that is not catalog-managed.
+        let result = delta_log_is_catalog_managed(&log_store).await;
+
+        assert!(
+            matches!(&result, Err(error) if error.to_string().contains("Invalid JSON")),
+            "{result:?}"
+        );
+        Ok(())
     }
 }

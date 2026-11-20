@@ -403,3 +403,35 @@ Feature: Unity Catalog table operations
       """
     Then query result
       | database | tableName | isTemporary |
+
+  Scenario: Column changes on external Delta table follow the Delta log
+    Given final statement
+      """
+      DROP TABLE IF EXISTS unity_table_test.external_columns_t
+      """
+    Given statement template
+      """
+      CREATE TABLE unity_table_test.external_columns_t (id INT, name STRING, extra STRING)
+      USING delta
+      LOCATION '{{ storage.file_uri }}/external_columns_t'
+      TBLPROPERTIES ('delta.columnMapping.mode' = 'name')
+      """
+    Given statement
+      """
+      INSERT INTO unity_table_test.external_columns_t VALUES (1, 'one', 'x')
+      """
+    Given statement
+      """
+      ALTER TABLE unity_table_test.external_columns_t DROP COLUMN extra
+      """
+    Given statement
+      """
+      ALTER TABLE unity_table_test.external_columns_t RENAME COLUMN name TO label
+      """
+    When query
+      """
+      SELECT * FROM unity_table_test.external_columns_t
+      """
+    Then query result
+      | id | label |
+      | 1  | one   |
