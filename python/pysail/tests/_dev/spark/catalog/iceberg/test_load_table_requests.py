@@ -156,6 +156,7 @@ def test_invalid_scan_planning_mode_is_reported_after_read_validation(
     name = f"{NAMESPACE}.planned"
     try:
         spark.sql(f"CREATE TABLE {name} (id BIGINT) USING iceberg")
+        # The `spark` session has already loaded the catalog config above, so only the new server sees this.
         catalog_config_overrides["scan-planning-mode"] = "unknown"
         with (
             _server(recording_catalog, seaweedfs_host_endpoint) as server,
