@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use sail_common_datafusion::catalog::{
     CommitAuthority, LakehouseFormat, StorageAccess, TableStorageCredentials,
@@ -13,12 +14,24 @@ use crate::error::{CatalogError, CatalogResult};
 use crate::lakehouse::{LakehouseResolvedTable, TableStorageCredentialsRequest};
 use crate::manager::CatalogManager;
 
+/// How long the session does not ask the catalog again for the storage credentials
+/// of a table, after the catalog did not issue them.
+const NOT_ISSUED_TTL: Duration = Duration::from_secs(300);
+
+/// Returns the name that identifies the table in the session, regardless of the
+/// current catalog and database.
+fn table_owner(manager: &CatalogManager, table: &[String]) -> CatalogResult<(Vec<String>, String)> {
+    let name = manager.resolve_fully_qualified_object_name(table)?;
+    let owner = format!("{name:?}");
+    Ok((name, owner))
+}
+
 /// Accesses the storage location of the table with the storage credentials that the
 /// catalog issues for the table, for the rest of the session.
 ///
 /// Nothing changes if the catalog does not issue storage credentials for the table,
-/// or refuses to issue them, in which case the storage is accessed with the
-/// credentials of the environment as before.
+/// or refuses to issue them, or fails to issue them, in which case the storage is
+/// accessed with the credentials of the environment as before.
 /// Only Delta tables whose commits are coordinated by the catalog are considered.
 pub async fn install_table_storage_credentials<C: SessionExtensionAccessor>(
     ctx: &C,
@@ -39,23 +52,21 @@ pub async fn install_table_storage_credentials<C: SessionExtensionAccessor>(
     let Ok(stores) = ctx.extension::<VendedObjectStores>() else {
         return Ok(());
     };
-    let owner = format!(
-        "{}:{}",
-        resolved.execution.catalog_provider_id.0,
-        table.join(".")
-    );
-    if stores.contains(&url, &owner) {
+    let manager = ctx
+        .extension::<CatalogManager>()
+        .map_err(|e| CatalogError::Internal(e.to_string()))?;
+    // The table is identified as it is resolved now, so that the credentials are
+    // fetched for the same table later, even if the current database changes.
+    let (table, owner) = table_owner(&manager, table)?;
+    if stores.contains(&url, &owner) || stores.is_not_issued(&url, &owner) {
         return Ok(());
     }
     if !stores.is_enabled() {
         stores.report_disabled();
         return Ok(());
     }
-    let manager = ctx
-        .extension::<CatalogManager>()
-        .map_err(|e| CatalogError::Internal(e.to_string()))?;
     let get = {
-        let table = table.to_vec();
+        let table = table.clone();
         let location = location.clone();
         move |access: StorageAccess| {
             let manager = Arc::clone(&manager);
@@ -70,11 +81,19 @@ pub async fn install_table_storage_credentials<C: SessionExtensionAccessor>(
     let name = table.join(".");
     let initial = match get(StorageAccess::Read).await {
         Ok(Some(initial)) => initial,
-        Ok(None) => return Ok(()),
+        Ok(None) => {
+            stores.set_not_issued(&url, &owner, NOT_ISSUED_TTL);
+            return Ok(());
+        }
         // The storage may be accessible with the credentials of the environment
-        // when the catalog refuses to issue credentials.
-        Err(CatalogError::Unauthorized(message) | CatalogError::Forbidden(message)) => {
+        // when the catalog refuses or fails to issue credentials.
+        Err(
+            CatalogError::Unauthorized(message)
+            | CatalogError::Forbidden(message)
+            | CatalogError::External(message),
+        ) => {
             stores.report_refused(&owner, &name, &message);
+            stores.set_not_issued(&url, &owner, NOT_ISSUED_TTL);
             return Ok(());
         }
         Err(e) => return Err(e),
@@ -103,6 +122,20 @@ pub async fn install_table_storage_credentials<C: SessionExtensionAccessor>(
             fetch,
         )
         .map_err(|e| CatalogError::External(e.to_string()))
+}
+
+/// Stops accessing the storage location of the table with the storage credentials
+/// that the catalog issued for the table, e.g. after the table is dropped.
+pub fn remove_table_storage_credentials<C: SessionExtensionAccessor>(ctx: &C, table: &[String]) {
+    let (Ok(stores), Ok(manager)) = (
+        ctx.extension::<VendedObjectStores>(),
+        ctx.extension::<CatalogManager>(),
+    ) else {
+        return;
+    };
+    if let Ok((_, owner)) = table_owner(&manager, table) {
+        stores.remove(&owner);
+    }
 }
 
 #[cfg(test)]
@@ -166,8 +199,14 @@ mod tests {
             unreachable!()
         }
 
-        async fn get_database(&self, _database: &Namespace) -> CatalogResult<DatabaseStatus> {
-            unreachable!()
+        async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
+            Ok(DatabaseStatus {
+                catalog: "unity".to_string(),
+                database: database.clone().into(),
+                comment: None,
+                location: None,
+                properties: vec![],
+            })
         }
 
         async fn list_databases(
@@ -323,7 +362,17 @@ mod tests {
         }
 
         async fn install(&self, commit: CommitAuthority) -> CatalogResult<()> {
+            self.install_as(&["default", "items"], commit).await
+        }
+
+        /// Installs the storage credentials for the table as it is referenced.
+        async fn install_as(
+            &self,
+            reference: &[&str],
+            commit: CommitAuthority,
+        ) -> CatalogResult<()> {
             let table = vec!["default".to_string(), "items".to_string()];
+            let reference = reference.iter().map(|x| x.to_string()).collect::<Vec<_>>();
             let resolved = LakehouseResolvedTable {
                 status: LakehouseStatusHints {
                     lifecycle: TableLifecycle::Managed,
@@ -350,7 +399,7 @@ mod tests {
                 ),
                 runtime: None,
             };
-            install_table_storage_credentials(&self.ctx, &table, &resolved).await
+            install_table_storage_credentials(&self.ctx, &reference, &resolved).await
         }
 
         /// Whether the table location is accessed with the credentials issued by the catalog.
@@ -447,15 +496,101 @@ mod tests {
             assert!(!session.is_vended().await);
         }
 
+        // The catalog fails to issue credentials.
         let session = TestSession::new(
             || Err(CatalogError::External("server error".to_string())),
             Some(true),
         );
+        session
+            .install(CommitAuthority::DeltaRatifiedCommit)
+            .await
+            .unwrap();
+        assert!(!session.is_vended().await);
+
+        // Other errors are reported.
+        let session = TestSession::new(
+            || Err(CatalogError::Internal("bug".to_string())),
+            Some(true),
+        );
         let result = session.install(CommitAuthority::DeltaRatifiedCommit).await;
         assert!(
-            matches!(result, Err(CatalogError::External(_))),
+            matches!(result, Err(CatalogError::Internal(_))),
             "{result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn storage_credentials_not_issued_are_not_requested_again_for_a_while() {
+        for response in [
+            (|| Ok(None)) as fn() -> _,
+            || Err(CatalogError::Forbidden("no privilege".to_string())),
+            || Err(CatalogError::External("server error".to_string())),
+        ] {
+            let session = TestSession::new(response, Some(true));
+            for _ in 0..3 {
+                session
+                    .install(CommitAuthority::DeltaRatifiedCommit)
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(session.requests(), vec![StorageAccess::Read]);
+            assert!(!session.is_vended().await);
+        }
+    }
+
+    #[tokio::test]
+    async fn storage_credentials_are_fetched_for_the_table_resolved_at_installation() {
+        let session = TestSession::new(issued, Some(true));
+        session
+            .install_as(&["items"], CommitAuthority::DeltaRatifiedCommit)
+            .await
+            .unwrap();
+        // The same table referenced by another name is the same table.
+        session
+            .install_as(
+                &["unity", "default", "items"],
+                CommitAuthority::DeltaRatifiedCommit,
+            )
+            .await
+            .unwrap();
+        assert_eq!(session.requests(), vec![StorageAccess::Read]);
+
+        // The current database changes before the credentials are fetched again.
+        let manager = session.ctx.extension::<CatalogManager>().unwrap();
+        manager.set_default_database(vec!["other"]).await.unwrap();
+        let fetch = session.fetch.lock().unwrap().clone().unwrap();
+        assert!(fetch(StorageAccess::ReadWrite).await.is_ok());
+        assert!(fetch(StorageAccess::Read).await.is_ok());
+        // All requests are for `default.items`, which is checked here.
+        assert_eq!(
+            session.requests(),
+            vec![
+                StorageAccess::Read,
+                StorageAccess::ReadWrite,
+                StorageAccess::Read
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn storage_credentials_are_removed_with_the_table() {
+        let session = TestSession::new(issued, Some(true));
+        session
+            .install(CommitAuthority::DeltaRatifiedCommit)
+            .await
+            .unwrap();
+        assert!(session.is_vended().await);
+        remove_table_storage_credentials(&session.ctx, &["items".to_string()]);
         assert!(!session.is_vended().await);
+        // The table is created again.
+        session
+            .install(CommitAuthority::DeltaRatifiedCommit)
+            .await
+            .unwrap();
+        assert!(session.is_vended().await);
+        assert_eq!(
+            session.requests(),
+            vec![StorageAccess::Read, StorageAccess::Read]
+        );
     }
 }

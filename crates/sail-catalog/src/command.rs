@@ -25,7 +25,9 @@ use crate::provider::{
     CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions,
     DropViewOptions,
 };
-use crate::storage_credentials::install_table_storage_credentials;
+use crate::storage_credentials::{
+    install_table_storage_credentials, remove_table_storage_credentials,
+};
 use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
 
 fn clone_result_schema() -> CatalogResult<SchemaRef> {
@@ -505,6 +507,7 @@ impl CatalogCommand {
             }
             CatalogCommand::DropTable { table, options } => {
                 manager.drop_table(&table, options).await?;
+                remove_table_storage_credentials(ctx, &table);
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::RenameTable {

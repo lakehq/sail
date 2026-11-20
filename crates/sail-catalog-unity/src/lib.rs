@@ -150,6 +150,9 @@ pub mod delta_gen {
     pub struct DeltaStorageCredential {
         #[serde(default)]
         pub prefix: Option<String>,
+        /// The operation that the credential is issued for, such as `READ` or `READ_WRITE`.
+        #[serde(default)]
+        pub operation: Option<String>,
         #[serde(default)]
         pub config: Option<std::collections::HashMap<String, Option<String>>>,
         #[serde(rename = "expiration-time-ms", default)]
@@ -160,6 +163,7 @@ pub mod delta_gen {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("DeltaStorageCredential")
                 .field("prefix", &self.prefix)
+                .field("operation", &self.operation)
                 .field("expiration_time_ms", &self.expiration_time_ms)
                 .finish_non_exhaustive()
         }

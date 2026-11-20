@@ -373,6 +373,8 @@ impl UnityCatalogProvider {
             }
             Err(e) => e,
         };
+        // The staging table is not used after the request, whatever its outcome.
+        self.staging_table_id_cache()?.remove(&staging_location);
         let status = error.status();
         // The outcome is unknown when the request fails without a client error.
         // The table is created if it is loaded with the ID of the staging table,
@@ -388,7 +390,6 @@ impl UnityCatalogProvider {
                 .table_uuid
                 .eq_ignore_ascii_case(table_id)
         {
-            self.staging_table_id_cache()?.remove(&staging_location);
             return self.get_table(database, table).await;
         }
         match status {
@@ -1245,6 +1246,7 @@ impl CatalogProvider for UnityCatalogProvider {
                     return Ok(select_storage_credentials(
                         response.inner,
                         &request.location,
+                        request.access,
                     ));
                 }
                 Err(e) => (e.status(), delta_error_message(&e)),
@@ -1267,6 +1269,7 @@ impl CatalogProvider for UnityCatalogProvider {
                     return Ok(select_storage_credentials(
                         response.inner,
                         &request.location,
+                        request.access,
                     ));
                 }
                 Err(e) => (e.status(), delta_error_message(&e)),
@@ -2263,11 +2266,15 @@ fn storage_location_key(location: &str) -> &str {
     location.trim_end_matches('/')
 }
 
-/// Selects the credential with the longest prefix that covers the storage location.
+/// Selects the credential with the longest prefix that covers the storage location
+/// among the credentials issued for the access, preferring a credential issued for
+/// exactly the access. A credential for reading and writing can be used for reading,
+/// and a credential without an operation is assumed to be issued for the access.
 /// Returns nothing if no credential that the client can use covers the location.
 fn select_storage_credentials(
     response: delta_gen::DeltaCredentialsResponse,
     location: &str,
+    access: StorageAccess,
 ) -> Option<TableStorageCredentials> {
     let location = storage_location_key(location);
     response
@@ -2280,6 +2287,13 @@ fn select_storage_credentials(
             if !(rest.is_empty() || rest.starts_with('/')) {
                 return None;
             }
+            let exact = match (item.operation.as_deref(), access) {
+                (None, _) => false,
+                (Some(x), StorageAccess::Read) if x.eq_ignore_ascii_case("READ") => true,
+                (Some(x), StorageAccess::ReadWrite) if x.eq_ignore_ascii_case("READ_WRITE") => true,
+                (Some(x), StorageAccess::Read) if x.eq_ignore_ascii_case("READ_WRITE") => false,
+                (Some(_), _) => return None,
+            };
             let length = prefix.len();
             let mut config = item.config?;
             let mut take = |key: &str| config.remove(key).flatten().filter(|x| !x.is_empty());
@@ -2299,14 +2313,14 @@ fn select_storage_credentials(
                 }
             };
             Some((
-                length,
+                (length, exact),
                 TableStorageCredentials {
                     credential,
                     expires_at_ms: item.expiration_time_ms,
                 },
             ))
         })
-        .max_by_key(|(length, _)| *length)
+        .max_by_key(|(key, _)| *key)
         .map(|(_, credentials)| credentials)
 }
 
@@ -6121,6 +6135,176 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(token(&provider).await, "table-token");
+    }
+
+    #[tokio::test]
+    async fn test_table_storage_credentials_follow_the_operation() {
+        let entry = |operation: Option<&str>, key: &str| {
+            let mut entry = serde_json::json!({
+                "prefix": DELTA_TABLE_URI,
+                "expiration-time-ms": 1,
+                "config": {"gcs.oauth-token": key}
+            });
+            if let Some(operation) = operation {
+                entry["operation"] = operation.into();
+            }
+            entry
+        };
+        let token = async |operation: &str, access, entries: Vec<serde_json::Value>| {
+            let response = serde_json::json!({ "storage-credentials": entries });
+            let credentials = table_storage_credentials(
+                operation,
+                access,
+                ResponseTemplate::new(200).set_body_json(response),
+            )
+            .await
+            .unwrap();
+            credentials.map(|x| match x.credential {
+                StorageCredential::GcsOauth { token } => token,
+                other => format!("{other:?}"),
+            })
+        };
+        let both = || {
+            vec![
+                entry(Some("READ_WRITE"), "write-key"),
+                entry(Some("READ"), "read-key"),
+                entry(Some("READ_WRITE"), "write-key"),
+            ]
+        };
+        // The credential issued for exactly the access is preferred.
+        assert_eq!(
+            token("READ", StorageAccess::Read, both()).await.as_deref(),
+            Some("read-key")
+        );
+        assert_eq!(
+            token("READ_WRITE", StorageAccess::ReadWrite, both())
+                .await
+                .as_deref(),
+            Some("write-key")
+        );
+        // A credential for reading and writing can be used for reading, but not the reverse.
+        assert_eq!(
+            token(
+                "READ",
+                StorageAccess::Read,
+                vec![entry(Some("READ_WRITE"), "w")]
+            )
+            .await
+            .as_deref(),
+            Some("w")
+        );
+        for operation in [Some("READ"), Some("WRITE")] {
+            assert_eq!(
+                token(
+                    "READ_WRITE",
+                    StorageAccess::ReadWrite,
+                    vec![entry(operation, "x")]
+                )
+                .await,
+                None
+            );
+        }
+        // A credential without an operation is used for the requested access.
+        assert_eq!(
+            token(
+                "READ_WRITE",
+                StorageAccess::ReadWrite,
+                vec![entry(None, "any")]
+            )
+            .await
+            .as_deref(),
+            Some("any")
+        );
+        // A longer prefix is preferred over the operation.
+        let mut table = entry(Some("READ_WRITE"), "table-key");
+        table["prefix"] = format!("{DELTA_TABLE_URI}/").into();
+        let mut bucket = entry(Some("READ"), "bucket-key");
+        bucket["prefix"] = "s3://bucket".into();
+        assert_eq!(
+            token("READ", StorageAccess::Read, vec![bucket, table])
+                .await
+                .as_deref(),
+            Some("table-key")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_staging_table_storage_credentials_are_not_used_after_a_failed_create() {
+        let server = MockServer::start().await;
+        mount_delta_config_ok(&server).await;
+        mount_delta_staging_table(&server, delta_staging_table_json()).await;
+        mount_legacy_delta_table(&server).await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/delta/v1/staging-tables/[^/]+/credentials$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "storage-credentials": [{
+                    "prefix": DELTA_TABLE_URI,
+                    "operation": "READ_WRITE",
+                    "expiration-time-ms": 5,
+                    "config": {"gcs.oauth-token": "staging-token"}
+                }]
+            })))
+            .mount(&server)
+            .await;
+        mount_table_credentials(
+            &server,
+            "READ_WRITE",
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "storage-credentials": [{
+                    "prefix": DELTA_TABLE_URI,
+                    "operation": "READ_WRITE",
+                    "expiration-time-ms": 6,
+                    "config": {"gcs.oauth-token": "table-token"}
+                }]
+            })),
+        )
+        .await;
+        Mock::given(method("POST"))
+            .and(path(DELTA_TABLES_PATH))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": {"message": "invalid commit", "type": "BadRequestException", "code": 400}
+            })))
+            .mount(&server)
+            .await;
+
+        let provider = mock_provider(&server, "main");
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let token = async |provider: &UnityCatalogProvider| {
+            let credentials = provider
+                .get_table_storage_credentials(
+                    &database,
+                    "events",
+                    storage_credentials_request(StorageAccess::ReadWrite),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            match credentials.credential {
+                StorageCredential::GcsOauth { token } => token,
+                other => format!("{other:?}"),
+            }
+        };
+        let plan = provider
+            .plan_lakehouse_create(
+                &database,
+                "events",
+                lakehouse_create_request(managed_delta_create_options(vec![], false)),
+            )
+            .await
+            .unwrap();
+        // The staging table is written with the credentials of the staging table.
+        assert_eq!(token(&provider).await, "staging-token");
+        let result = provider
+            .create_staged_delta_table(
+                &database,
+                "events",
+                plan.table.status.location.clone(),
+                None,
+                &delta_create_commit(),
+            )
+            .await;
+        assert!(result.is_err(), "{result:?}");
         assert_eq!(token(&provider).await, "table-token");
     }
 }
