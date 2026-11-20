@@ -1,15 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Typed checkpoint stats that Spark wrote as INT96 in its legacy hybrid calendar.
-//!
-//! Spark writes INT96 values in its legacy hybrid calendar, and rebases them back on read, when
-//! the footer has `org.apache.spark.version` and either the version is older than "3.1.0" or the
-//! footer also has `org.apache.spark.legacyINT96` (`DataSourceUtils.getRebaseSpec`). The rebase
-//! keeps values from 1900-01-01T00:00:00Z on and shifts earlier values by an amount that depends
-//! on the time zone, by days before 1582 and by up to several hours after it, so a stored value
-//! can be a few hours later than 1900-01-01T00:00:00Z even though the original value was before.
-//! Sail does not rebase, so it reads the `add.stats_parsed` bounds before 1900-01-02T00:00:00Z as
-//! null, which means unknown and keeps file skipping conservative.
+//! Spark writes INT96 values in its legacy hybrid calendar when the footer has
+//! `org.apache.spark.version` and either the version is older than "3.1.0" or the footer also has
+//! `org.apache.spark.legacyINT96` (`DataSourceUtils.getRebaseSpec`). That shifts values before 1900
+//! by up to several hours after 1582 and by days before. Sail does not rebase, so it reads such
+//! `add.stats_parsed` bounds before 1900-01-02 as null, an unknown bound.
 
 use std::sync::Arc;
 
@@ -123,8 +118,11 @@ fn null_before_cutoff(array: &ArrayRef, path: &[String]) -> Result<ArrayRef, Arr
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
+    use datafusion::arrow::array::{AsArray, Int64Array};
+    use datafusion::arrow::datatypes::{DataType, Fields, TimeUnit, TimestampMicrosecondType};
     use parquet::file::metadata::{FileMetaData, KeyValue, ParquetMetaData};
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
@@ -174,5 +172,70 @@ mod tests {
         assert!(paths(&[(version, Some("3.5.0"))]).is_empty());
         assert!(paths(&[(legacy, Some(""))]).is_empty());
         assert!(paths(&[]).is_empty());
+    }
+
+    #[test]
+    fn test_null_legacy_int96_stats_before_cutoff() -> Result<(), ArrowError> {
+        // 1900-01-01T03:00:00Z, which a legacy write can produce from a value before 1900.
+        let shifted = -2_208_978_000_000_000;
+        let ts: ArrayRef = Arc::new(TimestampMicrosecondArray::from(vec![
+            Some(LEGACY_INT96_CUTOFF_MICROS - 1),
+            Some(shifted),
+            Some(LEGACY_INT96_CUTOFF_MICROS),
+            None,
+        ]));
+        let n: ArrayRef = Arc::new(Int64Array::from(vec![Some(-1), Some(-2), Some(-3), None]));
+        let bound_fields = Fields::from(vec![
+            Field::new("ts", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            Field::new("n", DataType::Int64, true),
+        ]);
+        let bound: ArrayRef = Arc::new(StructArray::try_new(
+            bound_fields.clone(),
+            vec![Arc::clone(&ts), Arc::clone(&n)],
+            None,
+        )?);
+        let stats_fields = Fields::from(vec![
+            Field::new(
+                STATS_FIELD_MIN_VALUES,
+                DataType::Struct(bound_fields.clone()),
+                true,
+            ),
+            Field::new(STATS_FIELD_MAX_VALUES, DataType::Struct(bound_fields), true),
+        ]);
+        let stats: ArrayRef = Arc::new(StructArray::try_new(
+            stats_fields.clone(),
+            vec![Arc::clone(&bound), Arc::clone(&bound)],
+            None,
+        )?);
+        let add_fields = Fields::from(vec![Field::new(
+            FIELD_NAME_STATS_PARSED,
+            DataType::Struct(stats_fields),
+            true,
+        )]);
+        let add: ArrayRef = Arc::new(StructArray::try_new(add_fields.clone(), vec![stats], None)?);
+        let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+        let schema = Schema::new_with_metadata(
+            vec![Field::new("add", DataType::Struct(add_fields), true)],
+            metadata.clone(),
+        );
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![add])?;
+        let path = ["add", FIELD_NAME_STATS_PARSED, STATS_FIELD_MIN_VALUES, "ts"]
+            .map(str::to_string)
+            .to_vec();
+
+        let batch = null_legacy_int96_stats(batch, &[path])?;
+        assert_eq!(batch.schema().metadata(), &metadata);
+        let stats = batch.column(0).as_struct().column(0).as_struct();
+        let min = stats.column(0).as_struct();
+        assert_eq!(
+            min.column(0)
+                .as_primitive::<TimestampMicrosecondType>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![None, None, Some(LEGACY_INT96_CUTOFF_MICROS), None]
+        );
+        assert_eq!(min.column(1), &n);
+        assert_eq!(stats.column(1), &bound);
+        Ok(())
     }
 }
