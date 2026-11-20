@@ -19,6 +19,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    for item in items:
+        if "unity_container" in getattr(item, "fixturenames", ()) and item.get_closest_marker("timeout") is None:
+            # The pytest timeout includes pulling the image, creating the container and waiting for Unity.
+            item.add_marker(pytest.mark.timeout(300))
+
+
 @pytest.fixture(scope="module")
 def unity_storage_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Return the host path mounted for managed Unity Catalog table storage."""
