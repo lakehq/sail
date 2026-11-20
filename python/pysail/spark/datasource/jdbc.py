@@ -13,6 +13,7 @@ Install the optional dependency before use::
 from __future__ import annotations
 
 import datetime
+import logging
 from urllib.parse import quote
 
 try:
@@ -43,6 +44,8 @@ try:
 except ImportError as e:
     msg = "PySpark with the DataSource API is required (PySpark >= 4.0)"
     raise ImportError(msg) from e
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -200,7 +203,7 @@ class JdbcDataSourceReader(DataSourceReader):
     def partitions(self) -> list[InputPartition]:
         base = self._base_ref()
 
-        if self.num_partitions <= 1 or self.partition_column is None:
+        if self.num_partitions <= 1 or self.partition_column is None or self.lower_bound == self.upper_bound:
             # Single partition — may include pushed-down filters
             where = _build_where(self._sql_filters)
             q = f"SELECT * FROM {base}{where}"  # noqa: S608
@@ -211,6 +214,18 @@ class JdbcDataSourceReader(DataSourceReader):
         lb = self.lower_bound
         ub = self.upper_bound
         n = self.num_partitions
+        if ub - lb < n:  # type: ignore[operator]
+            # Same as Spark: cap the partition count so that every stride is at least 1.
+            logger.warning(
+                "The number of partitions is reduced because the specified number of partitions is less than "
+                "the difference between upper bound and lower bound. Updated number of partitions: %d; "
+                "Input number of partitions: %d; Lower bound: %d; Upper bound: %d.",
+                ub - lb,  # type: ignore[operator]
+                n,
+                lb,
+                ub,
+            )
+            n = ub - lb  # type: ignore[operator]
         stride = (ub - lb) / n  # type: ignore[operator]
 
         parts: list[InputPartition] = []
@@ -390,9 +405,6 @@ class JdbcDataSource(DataSource):
                     f"Missing: {missing}"
                 )
                 raise ValueError(msg)
-            if num_partitions <= 1:
-                msg = "Partitioning options 'partitionColumn', 'lowerBound', 'upperBound' require 'numPartitions' > 1."
-                raise ValueError(msg)
             if query is not None:
                 msg = (
                     "Options 'partitionColumn' and 'query' are incompatible. "
@@ -411,8 +423,12 @@ class JdbcDataSource(DataSource):
             )
             raise ValueError(msg) from None
 
-        if lower_bound is not None and upper_bound is not None and lower_bound >= upper_bound:
-            msg = f"'lowerBound' ({lower_bound}) must be strictly less than 'upperBound' ({upper_bound})."
+        # Same as Spark: the check is skipped when a single partition is read.
+        if num_partitions > 1 and lower_bound is not None and upper_bound is not None and lower_bound > upper_bound:
+            msg = (
+                "Operation not allowed: the lower bound of partitioning column is larger than the upper bound. "
+                f"Lower bound: {lower_bound}; Upper bound: {upper_bound}"
+            )
             raise ValueError(msg)
 
         push_down_predicate = opts.get("pushDownPredicate", "true").lower() == "true"
