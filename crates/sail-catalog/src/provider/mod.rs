@@ -127,14 +127,8 @@ pub trait CatalogProvider: Send + Sync {
         table: &str,
         request: ResolveLakehouseTableRequest,
     ) -> CatalogResult<LakehouseResolvedTable> {
-        let status = self.get_table(database, table).await?;
-        Ok(resolve_lakehouse_table_status(
-            self.get_name(),
-            request.catalog_table,
-            &status,
-            request.operation,
-            &self.lakehouse_capabilities(),
-        ))
+        let (_, resolved) = self.get_lakehouse_table(database, table, request).await?;
+        Ok(resolved)
     }
 
     /// Returns the table status together with its lakehouse resolution.

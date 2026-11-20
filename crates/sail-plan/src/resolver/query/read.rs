@@ -12,10 +12,12 @@ use datafusion_expr::{
 };
 use rand::{RngExt, rng};
 use sail_catalog::error::CatalogError;
-use sail_catalog::lakehouse::TableAccessPurpose;
+use sail_catalog::lakehouse::{ResolveLakehouseTableRequest, TableAccessPurpose};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
+use sail_common_datafusion::catalog::{
+    LakehouseFormat, LakehouseOperation, TableColumnStatus, TableKind,
+};
 use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakerelation::{
@@ -36,8 +38,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
 use crate::resolver::function::PythonUdtf;
-use crate::resolver::lakehouse::table_access_purpose;
-use crate::resolver::state::{PlanResolverState, TableSourceKey};
+use crate::resolver::state::{CatalogTableLookup, PlanResolverState, TableSourceKey};
 
 impl PlanResolver<'_> {
     /// Resolves a named table or view reference into a logical plan node.
@@ -126,6 +127,41 @@ impl PlanResolver<'_> {
         .await
     }
 
+    /// Looks up a catalog table or view, once per query for each reference.
+    /// Data-source identifier reads (with a required format) use the catalog directly,
+    /// without view shadowing. The lakehouse resolution of a catalog table comes from the
+    /// same catalog response as its status, so that catalogs such as Iceberg REST load
+    /// the table only once.
+    async fn lookup_catalog_table(
+        manager: &CatalogManager,
+        reference: &[String],
+        required_format: Option<&str>,
+        state: &mut PlanResolverState,
+    ) -> Result<CatalogTableLookup, CatalogError> {
+        let key = (reference.to_vec(), required_format.map(ToString::to_string));
+        if let Some(lookup) = state.get_catalog_table_lookup(&key) {
+            return Ok(lookup);
+        }
+        // The table format is not known before the lookup, so only a required format
+        // can be requested.
+        let request = ResolveLakehouseTableRequest {
+            catalog_table: reference.to_vec(),
+            operation: LakehouseOperation::Read,
+            requested_format: required_format.map(LakehouseFormat::from_format_name),
+            options: vec![],
+        };
+        let lookup = if required_format.is_some() {
+            let (status, resolved) = manager.get_lakehouse_table(reference, request).await?;
+            (status, Some(resolved))
+        } else {
+            manager
+                .get_lakehouse_table_or_view(reference, request)
+                .await?
+        };
+        state.insert_catalog_table_lookup(key, lookup.clone());
+        Ok(lookup)
+    }
+
     async fn resolve_query_read_catalog_table(
         &self,
         table: spec::ReadNamedTable,
@@ -142,19 +178,7 @@ impl PlanResolver<'_> {
         let reference: Vec<String> = name.clone().into();
         let manager = self.ctx.extension::<CatalogManager>()?;
         let data_source_registry = self.ctx.extension::<DataSourceRegistry>()?;
-        // Data-source identifier reads use the catalog directly, without view shadowing.
-        // The lakehouse resolution comes from the same catalog response as the table status,
-        // so that catalogs such as Iceberg REST load the table only once.
-        let lookup = if required_format.is_some() {
-            manager
-                .get_lakehouse_table(&reference, LakehouseOperation::Read)
-                .await
-                .map(|(status, resolved)| (status, Some(resolved)))
-        } else {
-            manager
-                .get_lakehouse_table_or_view(&reference, LakehouseOperation::Read)
-                .await
-        };
+        let lookup = Self::lookup_catalog_table(&manager, &reference, required_format, state).await;
         let ((status, resolved), catalog_reference, lake_relation) = match lookup {
             Ok(lookup) => (lookup, reference.clone(), None),
             Err(error @ CatalogError::NotFound(_, _))
@@ -165,26 +189,22 @@ impl PlanResolver<'_> {
                 if base_reference.is_empty() {
                     return Err(error.into());
                 }
-                let base_lookup = if required_format.is_some() {
-                    manager
-                        .get_lakehouse_table(base_reference, LakehouseOperation::Read)
-                        .await
-                        .map(|(status, resolved)| (status, Some(resolved)))
-                } else {
-                    manager
-                        .get_lakehouse_table_or_view(base_reference, LakehouseOperation::Read)
-                        .await
-                };
+                let base_lookup =
+                    Self::lookup_catalog_table(&manager, base_reference, required_format, state)
+                        .await;
                 let (base_status, base_resolved) = match base_lookup {
                     Ok(lookup) => lookup,
+                    Err(CatalogError::NotFound(_, _) | CatalogError::NotSupported(_)) => {
+                        return Err(error.into());
+                    }
                     // A base that names no table, such as `catalog.database` left by
                     // `catalog.database.table`, is not a lake relation either: the
                     // table is what is missing.
-                    Err(
-                        CatalogError::NotFound(_, _)
-                        | CatalogError::NotSupported(_)
-                        | CatalogError::InvalidArgument(_),
-                    ) => {
+                    Err(CatalogError::InvalidArgument(_))
+                        if manager
+                            .resolve_fully_qualified_object_name(base_reference)
+                            .is_err() =>
+                    {
                         return Err(error.into());
                     }
                     Err(base_error) => return Err(base_error.into()),
@@ -285,28 +305,18 @@ impl PlanResolver<'_> {
                     None => {
                         let access_purpose = match lake_relation.as_ref() {
                             Some((_, relation)) => lake_relation_access_purpose(relation.access()),
-                            None => table_access_purpose(LakehouseOperation::Read),
+                            None => TableAccessPurpose::DataRead,
                         };
-                        let lakehouse_table = match resolved {
-                            Some(resolved) => {
-                                self.begin_lakehouse_table_access(
-                                    &catalog_reference,
-                                    resolved.execution,
-                                    access_purpose,
-                                )
-                                .await?
-                            }
-                            None => {
-                                self.resolve_lakehouse_table_context_for_access(
-                                    &catalog_reference,
-                                    LakehouseOperation::Read,
-                                    Some(&format),
-                                    vec![],
-                                    access_purpose,
-                                )
-                                .await?
-                            }
-                        };
+                        let resolved = resolved.ok_or_else(|| {
+                            PlanError::internal("catalog table without lakehouse resolution")
+                        })?;
+                        let lakehouse_table = self
+                            .begin_lakehouse_table_access(
+                                &catalog_reference,
+                                resolved.execution,
+                                access_purpose,
+                            )
+                            .await?;
                         let info = SourceInfo {
                             paths: location.map(|x| vec![x]).unwrap_or_default(),
                             lakehouse_table: Some(lakehouse_table),

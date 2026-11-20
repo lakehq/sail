@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use sail_common_datafusion::catalog::{LakehouseOperation, TableStatus};
+use sail_common_datafusion::catalog::TableStatus;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::lakehouse::{
@@ -346,15 +346,9 @@ impl CatalogManager {
     pub async fn get_lakehouse_table<T: AsRef<str>>(
         &self,
         table: &[T],
-        operation: LakehouseOperation,
+        request: ResolveLakehouseTableRequest,
     ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
         let (provider, database, name) = self.resolve_object(table)?;
-        let request = ResolveLakehouseTableRequest {
-            catalog_table: table.iter().map(|part| part.as_ref().to_string()).collect(),
-            operation,
-            requested_format: None,
-            options: vec![],
-        };
         provider
             .get_lakehouse_table(&database, &name, request)
             .await
@@ -365,10 +359,10 @@ impl CatalogManager {
     pub async fn get_lakehouse_table_or_view<T: AsRef<str>>(
         &self,
         reference: &[T],
-        operation: LakehouseOperation,
+        request: ResolveLakehouseTableRequest,
     ) -> CatalogResult<(TableStatus, Option<LakehouseResolvedTable>)> {
         let table = async {
-            let (status, resolved) = self.get_lakehouse_table(reference, operation).await?;
+            let (status, resolved) = self.get_lakehouse_table(reference, request).await?;
             Ok((status, Some(resolved)))
         };
         self.get_table_or_view_with(reference, table, |status| (status, None))

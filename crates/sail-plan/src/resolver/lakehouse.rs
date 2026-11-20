@@ -82,7 +82,7 @@ impl PlanResolver<'_> {
     }
 }
 
-pub(super) fn table_access_purpose(operation: LakehouseOperation) -> TableAccessPurpose {
+fn table_access_purpose(operation: LakehouseOperation) -> TableAccessPurpose {
     match operation {
         LakehouseOperation::Read => TableAccessPurpose::DataRead,
         LakehouseOperation::Write

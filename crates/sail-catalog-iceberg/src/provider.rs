@@ -1039,16 +1039,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         ]
     }
 
-    async fn resolve_lakehouse_table(
-        &self,
-        database: &Namespace,
-        table: &str,
-        request: sail_catalog::lakehouse::ResolveLakehouseTableRequest,
-    ) -> CatalogResult<sail_catalog::lakehouse::LakehouseResolvedTable> {
-        let (_, resolved) = self.get_lakehouse_table(database, table, request).await?;
-        Ok(resolved)
-    }
-
     async fn get_lakehouse_table(
         &self,
         database: &Namespace,
