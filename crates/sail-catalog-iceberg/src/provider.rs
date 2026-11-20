@@ -1712,7 +1712,13 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             })
             .await?
             .map(|response| response.inner)
-            .map_err(|e| CatalogError::External(format!("Failed to list tables: {e}")))?;
+            .map_err(|e| match e.status() {
+                Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
+                    CatalogObject::Namespace,
+                    quote_namespace_if_needed(database),
+                ),
+                _ => CatalogError::External(format!("Failed to list tables: {e}")),
+            })?;
 
         Ok(result
             .identifiers

@@ -252,6 +252,23 @@ async fn plan_file_write(
             },
         )
         .await?;
+    // Spark SQL uses signed longs for counts. DataFusion file sinks return UInt64.
+    let count = datafusion::physical_expr::expressions::CastExpr::new(
+        Arc::new(datafusion::physical_expr::expressions::Column::new(
+            "count", 0,
+        )),
+        DataType::Int64,
+        None,
+    );
+    let plan = Arc::new(
+        datafusion::physical_plan::projection::ProjectionExec::try_new(
+            vec![(
+                Arc::new(count) as Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+                "count".to_string(),
+            )],
+            plan,
+        )?,
+    );
     if *overwrite {
         let delete = Arc::new(FileDeleteExec::new(
             object_store_url,

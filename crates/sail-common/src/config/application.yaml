@@ -1085,6 +1085,13 @@
     types pass through to the client.
   experimental: true
 
+- key: spark.dml_result_counts
+  type: boolean
+  default: "false"
+  description: |
+    Return row counts for supported SQL writes through Spark Connect.
+    A client can override the server default for its session with `sail.spark.dml_result_counts`.
+
 - key: spark.session_timeout_secs
   type: number
   default: "900"

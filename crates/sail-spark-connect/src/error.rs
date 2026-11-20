@@ -248,6 +248,7 @@ where
 pub(crate) enum SparkThrowable {
     ParseException(String),
     AnalysisException(String),
+    ClassifiedAnalysisException(String, SparkErrorClass),
     #[expect(dead_code)]
     StreamingQueryException(String),
     QueryExecutionException(String),
@@ -269,6 +270,7 @@ impl SparkThrowable {
     pub fn message(&self) -> &str {
         match self {
             SparkThrowable::ParseException(message)
+            | SparkThrowable::ClassifiedAnalysisException(message, _)
             | SparkThrowable::AnalysisException(message)
             | SparkThrowable::StreamingQueryException(message)
             | SparkThrowable::QueryExecutionException(message)
@@ -291,7 +293,8 @@ impl SparkThrowable {
             SparkThrowable::ParseException(_) => {
                 "org.apache.spark.sql.catalyst.parser.ParseException"
             }
-            SparkThrowable::AnalysisException(_) => "org.apache.spark.sql.AnalysisException",
+            SparkThrowable::ClassifiedAnalysisException(_, _)
+            | SparkThrowable::AnalysisException(_) => "org.apache.spark.sql.AnalysisException",
             SparkThrowable::StreamingQueryException(_) => {
                 "org.apache.spark.sql.streaming.StreamingQueryException"
             }
@@ -318,7 +321,8 @@ impl SparkThrowable {
 
     pub fn error_class(&self) -> Option<&SparkErrorClass> {
         match self {
-            SparkThrowable::SparkSQLException(_, error_class) => Some(error_class),
+            SparkThrowable::SparkSQLException(_, error_class)
+            | SparkThrowable::ClassifiedAnalysisException(_, error_class) => Some(error_class),
             _ => None,
         }
     }
@@ -431,6 +435,17 @@ impl From<SparkThrowable> for Status {
 impl From<CommonErrorCause> for SparkThrowable {
     fn from(value: CommonErrorCause) -> Self {
         match value {
+            CommonErrorCause::SchemaNotFound(name) => {
+                let detail = format!(
+                    "The schema {name} cannot be found. Verify the spelling and correctness of the schema and catalog."
+                );
+                let class = SparkErrorClass {
+                    name: "SCHEMA_NOT_FOUND",
+                    sql_state: "42704",
+                    message_parameters: HashMap::from([("schemaName", name)]),
+                };
+                SparkThrowable::ClassifiedAnalysisException(class.message(&detail), class)
+            }
             CommonErrorCause::NotImplemented(x) => SparkThrowable::UnsupportedOperationException(x),
             CommonErrorCause::InvalidArgument(x) => SparkThrowable::IllegalArgumentException(x),
             CommonErrorCause::Unknown(x)

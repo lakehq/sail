@@ -222,7 +222,8 @@ impl CatalogManager {
         };
         Ok(provider
             .list_tables(&database)
-            .await?
+            .await
+            .map_err(|e| Self::listing_error(provider.get_name(), &database, e))?
             .into_iter()
             .filter(|x| match_pattern(&x.name, pattern))
             .collect())

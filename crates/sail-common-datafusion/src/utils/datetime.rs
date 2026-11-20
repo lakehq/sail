@@ -80,6 +80,13 @@ impl SparkZone {
             .ok_or_else(|| exec_datafusion_err!("invalid time-zone offset: {seconds}"))
     }
 
+    pub fn localize(&self, datetime: &NaiveDateTime) -> Result<DateTime<Utc>> {
+        match self {
+            Self::Fixed(zone) => localize_with_fallback(zone, datetime),
+            Self::Named(zone) => localize_with_fallback(zone, datetime),
+        }
+    }
+
     pub fn current_date(&self) -> (i64, u32, u32) {
         let now = Utc::now();
         let date = match self {

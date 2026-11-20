@@ -555,3 +555,31 @@ def test_rewrite_procedure_does_not_publish_action_metrics(spark, tmp_path, metr
     result = spark.sql(f"CALL system.rewrite_data_files('{table}')").first()
     assert tuple(result) == (0, 0, 0, 0, 0)
     assert _find_latest_metadata(tmp_path) == metadata
+
+
+def test_sql_action_counts(metrics_table, spark, tmp_path):
+    table, _ = metrics_table
+    _seed(spark, table, tmp_path)
+    key = "sail.spark.dml_result_counts"
+    spark.conf.set(key, "true")
+    try:
+        merge = spark.sql(f"""
+            MERGE INTO {table} t USING (SELECT * FROM VALUES (1), (2), (4) s(id)) s
+            ON t.id = s.id
+            WHEN MATCHED AND s.id = 1 THEN DELETE
+            WHEN MATCHED THEN UPDATE SET salary = salary + 1
+            WHEN NOT MATCHED THEN INSERT (id, dep, salary) VALUES (s.id, 'new', 0)
+        """)
+        assert merge.columns == ["num_affected_rows", "num_updated_rows", "num_deleted_rows", "num_inserted_rows"]
+        assert merge.collect() == [(3, 1, 1, 1)]
+        assert merge.collect() == [(3, 1, 1, 1)]
+        assert spark.sql(f"UPDATE {table} SET salary = 0 WHERE id = -1").collect() == [(0,)]
+        assert spark.sql(f"INSERT INTO {table} VALUES (5, 'hr', 10)").collect() == [(1,)]
+        assert spark.table(table).orderBy("id").collect() == [
+            (2, "software", 201),
+            (3, "finance", 300),
+            (4, "new", 0),
+            (5, "hr", 10),
+        ]
+    finally:
+        spark.conf.unset(key)

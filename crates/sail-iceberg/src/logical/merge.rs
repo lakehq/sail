@@ -28,7 +28,7 @@ use crate::row_level_metadata::{MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC
 /// Expand MERGE information into a unified row-level write node for Iceberg.
 ///
 /// The table mode selects either affected-file rewrites or position deletes.
-pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
+pub fn expand_merge_node(info: MergeInfo, counts: bool) -> Result<LogicalPlan> {
     // TODO: Add Iceberg MERGE schema evolution support.
     if info.options.with_schema_evolution {
         return not_impl_err!("Iceberg MERGE WITH SCHEMA EVOLUTION is not supported");
@@ -161,7 +161,11 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         expansion.options,
         expansion.output_schema,
     )
-    .with_output(CommandOutput::Empty)
+    .with_output(if counts {
+        CommandOutput::MergeRows
+    } else {
+        CommandOutput::Empty
+    })
     .with_expected_snapshot_id(expected_snapshot_id);
 
     Ok(LogicalPlan::Extension(Extension {

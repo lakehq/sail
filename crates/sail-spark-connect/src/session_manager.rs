@@ -57,6 +57,7 @@ impl ServerSessionMutator for SparkSessionMutator {
                 info.client_session_id.clone(),
                 info.user_id.clone(),
                 SparkSessionOptions {
+                    dml_result_counts: self.config.spark.dml_result_counts,
                     execution_heartbeat_interval: Duration::from_secs(
                         self.config.spark.execution_heartbeat_interval_secs,
                     ),

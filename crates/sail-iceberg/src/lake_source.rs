@@ -109,7 +109,7 @@ impl DataSource for IcebergLakeSource {
         Ok(self.create_source(ctx, info).await?.schema())
     }
 
-    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
+    async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         crate::options::snapshot_properties_from_options(&info.options)?;
         let Some(path) = find_path_in_options(&info.options) else {
             return plan_err!("missing path in Iceberg table options");
@@ -133,7 +133,9 @@ impl DataSource for IcebergLakeSource {
             node: Arc::new(IcebergWriteNode::new(
                 Arc::new(input),
                 IcebergWriteNodeOptions {
-                    output: if sql_insert {
+                    output: if sql_insert
+                        && !sail_common_datafusion::command::dml_counts_enabled(ctx.config())?
+                    {
                         CommandOutput::Empty
                     } else {
                         CommandOutput::Count
@@ -294,7 +296,7 @@ impl LakeSource for IcebergLakeSource {
 
     async fn plan_row_level_operation(
         &self,
-        _ctx: &dyn Session,
+        ctx: &dyn Session,
         operation: RowLevelOperation,
     ) -> Result<LogicalPlan> {
         match operation {
@@ -316,9 +318,18 @@ impl LakeSource for IcebergLakeSource {
                     node: Arc::new(node),
                 }))
             }
-            RowLevelOperation::Delete(info) => crate::logical::delete::expand_delete_node(*info),
-            RowLevelOperation::Update(info) => crate::logical::update::expand_update_node(*info),
-            RowLevelOperation::Merge(info) => crate::logical::merge::expand_merge_node(*info),
+            RowLevelOperation::Delete(info) => crate::logical::delete::expand_delete_node(
+                *info,
+                sail_common_datafusion::command::dml_counts_enabled(ctx.config())?,
+            ),
+            RowLevelOperation::Update(info) => crate::logical::update::expand_update_node(
+                *info,
+                sail_common_datafusion::command::dml_counts_enabled(ctx.config())?,
+            ),
+            RowLevelOperation::Merge(info) => crate::logical::merge::expand_merge_node(
+                *info,
+                sail_common_datafusion::command::dml_counts_enabled(ctx.config())?,
+            ),
         }
     }
 

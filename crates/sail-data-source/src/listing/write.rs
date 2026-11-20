@@ -3,11 +3,12 @@
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion_common::{DFSchema, DFSchemaRef};
+use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::catalog::CatalogPartitionField;
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::utils::items::ItemTaker;
 use url::Url;
 
@@ -38,7 +39,7 @@ impl FileWriteNode {
         Self {
             input,
             options,
-            schema: Arc::new(DFSchema::empty()),
+            schema: CommandOutput::Count.df_schema(),
         }
     }
 

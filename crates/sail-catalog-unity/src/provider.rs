@@ -721,6 +721,12 @@ impl CatalogProvider for UnityCatalogProvider {
                     })
                     .collect::<CatalogResult<Vec<_>>>()
             }
+            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {
+                Err(CatalogError::NotFound(
+                    CatalogObject::Schema,
+                    quote_names_if_needed(&[&catalog_name, &schema_name]),
+                ))
+            }
             Err(e) => Err(CatalogError::External(format!(
                 "Failed to list tables: {e}"
             ))),

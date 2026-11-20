@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use sail_common_datafusion::command::DML_RESULT_COUNTS_KEY;
 use sail_plan::config::{
     DefaultTimestampType, MapKeyDedupPolicy, PlanConfig, StoreAssignmentPolicy,
 };
@@ -40,13 +41,14 @@ impl From<ConfigKeyValue> for connect::KeyValue {
 }
 
 pub(crate) struct SparkRuntimeConfig {
+    default_dml_result_counts: bool,
     entries:
         &'static phf::Map<&'static str, &'static crate::spark::config::SparkConfigEntry<'static>>,
     config: HashMap<String, String>,
 }
 
 impl SparkRuntimeConfig {
-    pub(crate) fn try_new() -> SparkResult<Self> {
+    pub(crate) fn try_new(default_dml_result_counts: bool) -> SparkResult<Self> {
         let entries = match get_pyspark_version() {
             Ok(version) => {
                 let mut parts = version.split('.');
@@ -72,6 +74,7 @@ impl SparkRuntimeConfig {
             }
         };
         Ok(Self {
+            default_dml_result_counts,
             entries,
             config: HashMap::new(),
         })
@@ -104,8 +107,18 @@ impl SparkRuntimeConfig {
         None
     }
 
+    fn get_with_server_default(&self, key: &str) -> Option<&str> {
+        self.get_by_key(key).or_else(|| {
+            (key == DML_RESULT_COUNTS_KEY).then_some(if self.default_dml_result_counts {
+                "true"
+            } else {
+                "false"
+            })
+        })
+    }
+
     pub(crate) fn get(&self, key: &str) -> SparkResult<Option<&str>> {
-        if let Some(value) = self.get_by_key(key) {
+        if let Some(value) = self.get_with_server_default(key) {
             return Ok(Some(value));
         }
         let entry = self.entries.get(key);
@@ -121,7 +134,7 @@ impl SparkRuntimeConfig {
     }
 
     pub(crate) fn get_option(&self, key: &str) -> Option<&str> {
-        if let Some(value) = self.get_by_key(key) {
+        if let Some(value) = self.get_with_server_default(key) {
             return Some(value);
         }
         let entry = self.entries.get(key);
@@ -167,8 +180,10 @@ impl SparkRuntimeConfig {
         // Spark rejects a value that is not a boolean instead of storing it. The check belongs here
         // rather than at the point of use, so that a rejected value leaves both the session
         // configuration and the mirrored DataFusion Parquet option as they were.
-        if key == SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING
-            && value.trim().to_lowercase().parse::<bool>().is_err()
+        if matches!(
+            key.as_str(),
+            SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING | DML_RESULT_COUNTS_KEY
+        ) && value.trim().to_lowercase().parse::<bool>().is_err()
         {
             return Err(SparkError::invalid(format!(
                 "[INVALID_CONF_VALUE.TYPE_MISMATCH] The value '{value}' in the config \"{key}\" \
@@ -202,10 +217,12 @@ impl SparkRuntimeConfig {
     }
 
     pub(crate) fn is_modifiable(&self, key: &str) -> bool {
-        self.entries
-            .get(key)
-            .map(|entry| !entry.is_static && entry.removed.is_none())
-            .unwrap_or(false)
+        key == DML_RESULT_COUNTS_KEY
+            || self
+                .entries
+                .get(key)
+                .map(|entry| !entry.is_static && entry.removed.is_none())
+                .unwrap_or(false)
     }
 
     fn get_warning(&self, key: &str) -> Option<&str> {

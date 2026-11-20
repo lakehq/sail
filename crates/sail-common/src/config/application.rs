@@ -993,6 +993,7 @@ pub enum CatalogType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SparkConfig {
+    pub dml_result_counts: bool,
     pub session_timeout_secs: u64,
     pub execution_heartbeat_interval_secs: u64,
 }
