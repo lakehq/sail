@@ -129,11 +129,8 @@ impl PlanResolver<'_> {
         .await
     }
 
-    /// Looks up a catalog table or view, once per query for each reference.
-    /// Data-source identifier reads (with a required format) use the catalog directly,
-    /// without view shadowing. The lakehouse resolution of a catalog table comes from the
-    /// same catalog response as its status, so that catalogs such as Iceberg REST load
-    /// the table only once.
+    /// Looks up a catalog table or view, reusing earlier successful lookups in the query.
+    /// Data-source identifier reads (with a required format) do not look up views.
     async fn lookup_catalog_table(
         manager: &CatalogManager,
         reference: &[String],
@@ -147,8 +144,6 @@ impl PlanResolver<'_> {
         if let Some(lookup) = state.get_catalog_table_lookup(&key) {
             return Ok(lookup);
         }
-        // The table format is not known before the lookup, so only a required format
-        // can be requested.
         let request = ResolveLakehouseTableRequest {
             catalog_table: reference.to_vec(),
             operation: LakehouseOperation::Read,

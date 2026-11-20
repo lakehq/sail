@@ -162,8 +162,8 @@ pub(super) struct PlanResolverState {
     /// The sources of the catalog tables read so far, shared by repeated references to
     /// the same table within the query.
     table_sources: HashMap<TableSourceKey, SharedTableSource>,
-    /// The catalog lookups made so far, keyed by the table reference and the required
-    /// format, so that the query loads each catalog table only once.
+    /// The successful catalog table lookups so far, shared by repeated references to
+    /// the same table within the query.
     catalog_table_lookups: HashMap<CatalogTableLookupKey, CatalogTableLookup>,
 }
 

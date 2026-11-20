@@ -6,11 +6,13 @@
 
 from __future__ import annotations
 
+import urllib.parse
 from typing import TYPE_CHECKING
 
 import pytest
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+from pysail.tests._dev.spark.catalog.iceberg.conftest import recording_proxy
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -21,9 +23,9 @@ NAMESPACE = "load_table_requests"
 def _requests(records, start):
     """Returns the table and view loads recorded since `start`."""
     return [
-        (record.path.removeprefix("/v1/namespaces/"), record.status, record.access_delegation)
-        for record in records[start:]
-        if record.method == "GET" and ("/tables/" in record.path or "/views/" in record.path)
+        (urllib.parse.unquote(path).removeprefix("/v1/namespaces/"), status, access_delegation)
+        for method, path, _, status, access_delegation in records[start:]
+        if method == "GET" and ("/tables/" in path or "/views/" in path)
     ]
 
 
@@ -150,16 +152,15 @@ def test_view_read_loads_the_view_and_its_table_once(spark, recording_catalog):
 
 
 def test_invalid_scan_planning_mode_is_reported_after_read_validation(
-    spark, recording_catalog, catalog_config_overrides, seaweedfs_host_endpoint
+    spark, iceberg_rest_endpoint, seaweedfs_host_endpoint
 ):
     spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
     name = f"{NAMESPACE}.planned"
     try:
         spark.sql(f"CREATE TABLE {name} (id BIGINT) USING iceberg")
-        # The `spark` session has already loaded the catalog config above, so only the new server sees this.
-        catalog_config_overrides["scan-planning-mode"] = "unknown"
         with (
-            _server(recording_catalog, seaweedfs_host_endpoint) as server,
+            recording_proxy(iceberg_rest_endpoint, {"scan-planning-mode": "unknown"}) as catalog,
+            _server(catalog, seaweedfs_host_endpoint) as server,
             spark_session_factory(server.remote) as sessions,
         ):
             session = sessions.create()
@@ -171,5 +172,4 @@ def test_invalid_scan_planning_mode_is_reported_after_read_validation(
             with pytest.raises(Exception, match="expression must be deterministic"):
                 session.sql(f"SELECT * FROM {name} VERSION AS OF rand()").collect()
     finally:
-        catalog_config_overrides.clear()
         spark.sql(f"DROP TABLE IF EXISTS {name}")

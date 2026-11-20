@@ -46,8 +46,6 @@ pub const REST_CATALOG_PROP_NAMESPACE_SEPARATOR: &str = "namespace-separator";
 pub const REST_CATALOG_PROP_ACCESS_DELEGATION: &str = "access-delegation";
 
 const REST_CATALOG_DEFAULT_NAMESPACE_SEPARATOR: &str = "\x1F";
-// FIXME: Sail does not use vended credentials yet, and the header makes some catalogs (e.g.
-// Polaris without STS) reject table loads; restore `vended-credentials` once supported.
 // const REST_ACCESS_DELEGATION_VENDED_CREDENTIALS: &str = "vended-credentials";
 const REST_ACCESS_DELEGATION_NONE: &str = "none";
 const REST_TABLE_SCAN_PLANNING_MODE_KEY: &str = "scan-planning-mode";
@@ -110,9 +108,8 @@ impl CatalogConfig<'_> {
             .get(REST_CATALOG_PROP_ACCESS_DELEGATION)
             .map(|value| value.trim())
         {
-            // FIXME: Sail does not use vended credentials yet, and the header makes some
-            // catalogs (e.g. Polaris without STS) reject table loads; restore
-            // `vended-credentials` once supported.
+            // FIXME: The `vended-credentials` default is commented out because Sail does not
+            // use vended credentials yet.
             // None => Some(REST_ACCESS_DELEGATION_VENDED_CREDENTIALS),
             None => None,
             Some("") => None,
@@ -376,7 +373,7 @@ impl IcebergRestCatalogProvider {
         }
     }
 
-    /// Returns the configured scan planning mode without validating it.
+    /// Returns the scan planning mode from the table or catalog config, without validating it.
     fn configured_scan_planning_mode(
         table_config: Option<&HashMap<String, String>>,
         catalog_config: &CatalogConfig<'_>,
@@ -1832,7 +1829,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             mut context,
             purpose: _,
         } = request;
-        // A context resolved by this catalog already has the session from the same table load.
+        // A context from `get_lakehouse_table` already has the session from that table load.
         let rest_session = match context.rest_session.take() {
             Some(rest_session) => rest_session,
             None => {
@@ -5293,7 +5290,7 @@ mod tests {
             .mount(&ctx.server)
             .await;
 
-        // The lookup succeeds, so that lookup and read validation errors come first.
+        // The table lookup does not validate the scan planning mode.
         let (_, resolved) = ctx
             .catalog
             .get_lakehouse_table(

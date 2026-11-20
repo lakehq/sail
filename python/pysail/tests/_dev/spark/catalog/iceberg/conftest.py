@@ -12,8 +12,9 @@ import json
 import threading
 import time
 import urllib.parse
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import requests
@@ -25,7 +26,7 @@ from testcontainers.core.waiting_utils import wait_for_logs
 from pysail.testing.spark.session import spark_connect_server
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Iterator
     from pathlib import Path
 
 LAKEKEEPER_IMAGE = "quay.io/lakekeeper/catalog:v0.12.1"
@@ -290,27 +291,15 @@ def iceberg_rest_endpoint(iceberg_rest_container: DockerContainer) -> str:
     return f"http://{host}:{port}"
 
 
-class RecordedRequest(NamedTuple):
-    """A request forwarded by the recording catalog proxy."""
+@contextmanager
+def recording_proxy(
+    target: str, config_overrides: dict[str, str] | None = None
+) -> Iterator[tuple[str, list[tuple[str, str, Any, int, str | None]]]]:
+    """Forward requests to a REST catalog and record each of them.
 
-    method: str
-    path: str
-    body: Any
-    status: int
-    access_delegation: str | None
-
-
-@pytest.fixture(scope="module")
-def catalog_config_overrides() -> dict[str, str]:
-    """Catalog properties that the recording catalog proxy adds as config overrides."""
-    return {}
-
-
-@pytest.fixture(scope="module")
-def recording_catalog(
-    iceberg_rest_endpoint: str, catalog_config_overrides: dict[str, str]
-) -> Generator[tuple[str, list[RecordedRequest]], None, None]:
-    """Forward requests to the REST catalog and record each of them."""
+    Each record is the method, the path, the JSON body, the response status, and the
+    access delegation header. `config_overrides` are added to the catalog config overrides.
+    """
     records = []
 
     class Proxy(BaseHTTPRequestHandler):
@@ -321,24 +310,24 @@ def recording_catalog(
                 headers[ACCESS_DELEGATION] = self.headers[ACCESS_DELEGATION]
             response = requests.request(
                 self.command,
-                iceberg_rest_endpoint + self.path,
+                target + self.path,
                 data=body or None,
                 headers=headers,
                 timeout=30,
             )
             records.append(
-                RecordedRequest(
+                (
                     self.command,
-                    urllib.parse.unquote(self.path),
+                    self.path,
                     json.loads(body) if body else None,
                     response.status_code,
                     self.headers.get(ACCESS_DELEGATION),
                 )
             )
             content = response.content
-            if catalog_config_overrides and urllib.parse.urlsplit(self.path).path == "/v1/config":
+            if config_overrides and urllib.parse.urlsplit(self.path).path == "/v1/config":
                 config = response.json()
-                config.setdefault("overrides", {}).update(catalog_config_overrides)
+                config.setdefault("overrides", {}).update(config_overrides)
                 content = json.dumps(config).encode()
             self.send_response(response.status_code)
             self.send_header("Content-Type", "application/json")
@@ -364,6 +353,13 @@ def recording_catalog(
         server.shutdown()
         server.server_close()
         thread.join(timeout=10)
+
+
+@pytest.fixture(scope="module")
+def recording_catalog(iceberg_rest_endpoint: str) -> Generator[tuple[str, list], None, None]:
+    """A recording proxy for the Iceberg REST catalog."""
+    with recording_proxy(iceberg_rest_endpoint) as catalog:
+        yield catalog
 
 
 @pytest.fixture(scope="module")
