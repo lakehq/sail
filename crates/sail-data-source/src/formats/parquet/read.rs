@@ -11,6 +11,7 @@ use datafusion::datasource::physical_plan::parquet::metadata::{
 use datafusion::datasource::physical_plan::parquet::{
     CachedParquetFileReaderFactory, Int96Coercer,
 };
+use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::parquet_to_arrow_schema;
 use datafusion::parquet::basic::Type as PhysicalType;
 use datafusion::parquet::schema::types::SchemaDescriptor;
@@ -21,6 +22,7 @@ use datafusion_common::{DataFusionError, Result, plan_err};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
+use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 use sail_common_datafusion::scan::load_parquet_scan_metadata;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
@@ -137,15 +139,23 @@ impl ReadFormat for ParquetReadFormat {
         let metadata_fetch_concurrency: usize =
             ctx.config_options().execution.meta_fetch_concurrency.into();
 
-        let objects = files
-            .iter()
-            .flat_map(|group| group.objects.iter().map(|object| (&group.store, object)));
+        let objects = files.iter().flat_map(|group| {
+            let metadata_cache = scoped_file_metadata_cache(
+                Arc::clone(&metadata_cache),
+                &group.url.object_store(),
+                ctx.session_id(),
+            );
+            group
+                .objects
+                .iter()
+                .map(move |object| (&group.store, Arc::clone(&metadata_cache), object))
+        });
 
         let mut schemas: Vec<(object_store::path::Path, Schema)> = futures::stream::iter(objects)
-            .map(|(store, object)| async {
+            .map(|(store, metadata_cache, object)| async {
                 let reader = DFParquetMetadata::new(store.as_ref(), object)
                     .with_metadata_size_hint(metadata_size_hint)
-                    .with_file_metadata_cache(Some(Arc::clone(&metadata_cache)))
+                    .with_file_metadata_cache(Some(metadata_cache))
                     .with_coerce_int96(coerce_int96);
                 // Fetch the Parquet footer once and derive both schemas from it.
                 // `fetch_schema()` would read (and parse) the footer a second time; when the
@@ -240,12 +250,17 @@ impl ReadFormat for ParquetReadFormat {
         &self,
         ctx: &dyn Session,
         store: &Arc<dyn ObjectStore>,
+        object_store_url: &ObjectStoreUrl,
         object: &ObjectMeta,
         file_schema: SchemaRef,
         _compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
         let options = self.options.clone().into_table_options();
-        let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
+        let metadata_cache = scoped_file_metadata_cache(
+            ctx.runtime_env().cache_manager.get_file_metadata_cache(),
+            object_store_url,
+            ctx.session_id(),
+        );
         let metadata = DFParquetMetadata::new(store, object)
             .with_metadata_size_hint(options.global.metadata_size_hint)
             .with_file_metadata_cache(Some(metadata_cache))
@@ -294,7 +309,11 @@ impl ReadFormat for ParquetReadFormat {
         let mut source =
             ParquetSource::new(input.schema).with_table_parquet_options(options.clone());
 
-        let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
+        let metadata_cache = scoped_file_metadata_cache(
+            ctx.runtime_env().cache_manager.get_file_metadata_cache(),
+            &input.object_store_url,
+            ctx.session_id(),
+        );
         let store = ctx.runtime_env().object_store(&input.object_store_url)?;
 
         input.file_groups = load_parquet_scan_metadata(
@@ -540,7 +559,7 @@ fn clear_metadata(schema: Schema) -> Schema {
 /// Parses `coerce_int96` setting into an Arrow [`TimeUnit`].
 ///
 /// This is adapted from DataFusion's Parquet data source implementation.
-fn parse_coerce_int96_string(setting: &str) -> Result<TimeUnit> {
+pub fn parse_coerce_int96_string(setting: &str) -> Result<TimeUnit> {
     match setting.to_lowercase().as_str() {
         "ns" => Ok(TimeUnit::Nanosecond),
         "us" => Ok(TimeUnit::Microsecond),

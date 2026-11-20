@@ -20,10 +20,21 @@ use crate::spec::delete_index::{DeleteFileIndex, MatchedDeletes};
 use crate::spec::{DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec};
 use crate::utils::get_object_store_from_session;
 
+/// A live data file loaded from a manifest.
+#[derive(Debug, PartialEq)]
+pub(crate) struct ManifestDataFile {
+    pub data_file: DataFile,
+    pub data_sequence_number: i64,
+    /// The ID of the snapshot that added the file, inherited from the manifest when the entry
+    /// has none.
+    pub added_snapshot_id: i64,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct IcebergFileScanTask {
     pub data_file: DataFile,
     pub data_sequence_number: i64,
+    pub added_snapshot_id: i64,
     pub deletes: MatchedDeletes,
     pub residual: Vec<Expr>,
 }
@@ -93,9 +104,9 @@ impl IcebergScan {
         });
         if let Some(limit) = file_limit {
             let mut rows = 0u64;
-            files.retain(|(file, _)| {
+            files.retain(|file| {
                 let keep = rows < limit as u64;
-                rows = rows.saturating_add(file.record_count());
+                rows = rows.saturating_add(file.data_file.record_count());
                 keep
             });
         }
@@ -105,7 +116,12 @@ impl IcebergScan {
         let deletes = self.build_delete_file_index(&store_ctx, &manifests).await?;
         planned.tasks = files
             .into_iter()
-            .map(|(data_file, data_sequence_number)| {
+            .map(|file| {
+                let ManifestDataFile {
+                    data_file,
+                    data_sequence_number,
+                    added_snapshot_id,
+                } = file;
                 let spec = self
                     .partition_specs
                     .iter()
@@ -123,6 +139,7 @@ impl IcebergScan {
                 IcebergFileScanTask {
                     data_file,
                     data_sequence_number,
+                    added_snapshot_id,
                     deletes,
                     residual,
                 }
@@ -147,13 +164,14 @@ impl IcebergScan {
         Ok(ml)
     }
 
-    /// Load data files from manifests, preserving per-file data sequence numbers.
+    /// Load live data files from manifests, preserving per-file data sequence numbers and the
+    /// IDs of the snapshots that added them.
     pub(super) async fn load_data_files_with_seq(
         &self,
         filters: &[Expr],
         store_ctx: &StoreContext,
         manifest_list: &ManifestList,
-    ) -> Result<Vec<(DataFile, i64)>> {
+    ) -> Result<Vec<ManifestDataFile>> {
         let spec_map: HashMap<i32, PartitionSpec> = self
             .partition_specs
             .iter()
@@ -170,7 +188,7 @@ impl IcebergScan {
             candidate_filters.as_deref().unwrap_or(filters),
         );
 
-        let mut out: Vec<(DataFile, i64)> = Vec::new();
+        let mut out: Vec<ManifestDataFile> = Vec::new();
         for manifest_file in manifest_files {
             if manifest_file.content != ManifestContentType::Data {
                 continue;
@@ -184,8 +202,8 @@ impl IcebergScan {
             let parent_seq = manifest_file.sequence_number;
             let mut inherited_next_row_id = manifest_file.first_row_id;
 
-            // Collect (DataFile, seq) pairs preserving inheritance.
-            let mut manifest_pairs: Vec<(DataFile, i64)> = Vec::new();
+            // Collect files with their sequence numbers and snapshot IDs, preserving inheritance.
+            let mut live_files: Vec<ManifestDataFile> = Vec::new();
             for entry_ref in manifest.entries().iter() {
                 let entry = entry_ref.as_ref();
                 if !matches!(
@@ -209,19 +227,28 @@ impl IcebergScan {
                         })?;
                     }
                 }
-                let seq = entry.sequence_number.unwrap_or(parent_seq);
-                manifest_pairs.push((df, seq));
+                live_files.push(ManifestDataFile {
+                    data_file: df,
+                    data_sequence_number: entry.sequence_number.unwrap_or(parent_seq),
+                    added_snapshot_id: entry.snapshot_id.unwrap_or(manifest_file.added_snapshot_id),
+                });
             }
 
             // Early prune at manifest entry level using DataFusion predicate over metrics.
-            if !filters.is_empty() && !manifest_pairs.is_empty() {
+            if !filters.is_empty() && !live_files.is_empty() {
                 // Preserve pairing by keying on file_path before/after prune.
-                let (mut files_only, seq_only): (Vec<DataFile>, Vec<i64>) =
-                    manifest_pairs.iter().cloned().unzip();
-                let seq_by_path: HashMap<String, i64> = files_only
+                let mut files_only: Vec<DataFile> = live_files
                     .iter()
-                    .map(|f| f.file_path.clone())
-                    .zip(seq_only)
+                    .map(|file| file.data_file.clone())
+                    .collect();
+                let ids_by_path: HashMap<String, (i64, i64)> = live_files
+                    .into_iter()
+                    .map(|file| {
+                        (
+                            file.data_file.file_path,
+                            (file.data_sequence_number, file.added_snapshot_id),
+                        )
+                    })
                     .collect();
                 if let Some(spec) = spec_map.get(&partition_spec_id) {
                     files_only = prune_data_files_by_partition_values(
@@ -238,11 +265,17 @@ impl IcebergScan {
                     &self.schema,
                 );
                 for df in kept {
-                    let seq = *seq_by_path.get(&df.file_path).unwrap_or(&parent_seq);
-                    out.push((df, seq));
+                    let (data_sequence_number, added_snapshot_id) = *ids_by_path
+                        .get(&df.file_path)
+                        .unwrap_or(&(parent_seq, manifest_file.added_snapshot_id));
+                    out.push(ManifestDataFile {
+                        data_file: df,
+                        data_sequence_number,
+                        added_snapshot_id,
+                    });
                 }
             } else {
-                out.extend(manifest_pairs);
+                out.extend(live_files);
             }
         }
 

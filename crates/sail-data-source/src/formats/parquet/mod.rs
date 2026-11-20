@@ -14,7 +14,7 @@ mod options;
 mod read;
 mod write;
 
-pub use read::ParquetReadFormat;
+pub use read::{ParquetReadFormat, parse_coerce_int96_string};
 pub use write::ParquetWriteFormat;
 
 pub type ParquetDataSource = ListingDataSource<ParquetFormatFactory>;

@@ -561,3 +561,39 @@ def test_add_files_repeated_partition_import_with_snapshot_inheritance(spark, tm
             uuid.UUID(manifest["manifest-path"].rsplit("/", 1)[-1].removeprefix("add-files-").removesuffix(".avro"))
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize("metadata_as_data", ["false", "true"])
+def test_add_files_reused_path_after_expiration_reads_new_file(spark, tmp_path, metadata_as_data):
+    # A new file at the path of an expired data file must not reuse the cached footer of the
+    # old file, even with the same size.
+    source = tmp_path / "source"
+    source.mkdir()
+    data_file = source / "data.parquet"
+    pq.write_table(pa.table({"id": pa.array([1], pa.int64())}), data_file)
+    size = data_file.stat().st_size
+    name = "add_files_reused_path"
+    path = tmp_path / "target"
+    spark.sql(f"CREATE TABLE {name} (id BIGINT) USING iceberg LOCATION '{escape_sql_string_literal(str(path))}'")
+    try:
+
+        def ids(where):
+            frame = spark.read.format("iceberg").option("metadataAsDataRead", metadata_as_data).load(str(path))
+            return [row.id for row in frame.where(where).collect()]
+
+        assert _add(spark, name, f"parquet.`{source}`") == (1, None)
+        assert ids("id = 1") == [1]
+        spark.sql(f"DELETE FROM {name} WHERE id = 1").collect()
+        expired = spark.sql(
+            f"CALL system.expire_snapshots(table => '{name}', older_than => TIMESTAMP '2999-01-01 00:00:00')"
+        ).first()
+        assert expired[0] == 1
+        assert not data_file.exists()
+
+        pq.write_table(pa.table({"id": pa.array([9], pa.int64())}), data_file)
+        assert data_file.stat().st_size == size
+        assert _add(spark, name, f"parquet.`{source}`") == (1, None)
+        assert ids("id = 9") == [9]
+        assert ids("true") == [9]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
