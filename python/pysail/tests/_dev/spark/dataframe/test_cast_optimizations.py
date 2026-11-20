@@ -227,7 +227,7 @@ def test_integer_decimal_correlation_keeps_exact_precision_and_outer_image(
 @pytest.mark.parametrize("explicit", [False, True])
 @pytest.mark.parametrize("target", ["TIMESTAMP", "TIMESTAMP_NTZ"])
 @pytest.mark.parametrize("timezone", ["UTC", "America/New_York"])
-def test_date_timestamp_correlation_preserves_midnight_image(spark, ansi, explicit, target, timezone, request):
+def test_date_timestamp_correlation_preserves_midnight_image(spark, ansi, explicit, target, timezone):
     inner = [(date(1970, 1, 1), 10), (date(1970, 1, 1), 20), (None, 99)]
     key = f"CAST(i.k AS {target})" if explicit else "i.k"
     query = f"""WITH o(seq,k) AS (VALUES
@@ -239,24 +239,8 @@ def test_date_timestamp_correlation_preserves_midnight_image(spark, ansi, explic
         _configuration(spark, **{"spark.sql.ansi.enabled": str(ansi).lower(), "spark.sql.session.timeZone": timezone}),
         _view(spark, "followup_date_inner", inner, "k date,v int"),
     ):
-        historical = not is_jvm_spark() and timezone == "America/New_York" and target == "TIMESTAMP" and not explicit
-        if historical:
-            request.node.add_marker(
-                pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(
-                        AssertionError, match="historical implicit DATE/TIMESTAMP midnight mismatch"
-                    ),
-                    reason="Implicit New York DATE/TIMESTAMP comparison returned no matches before #2843",
-                )
-            )
         rows = [tuple(row) for row in spark.sql(query).collect()]
-        diagnostic = (
-            "historical implicit DATE/TIMESTAMP midnight mismatch"
-            if historical and rows == [(0, 0, None), (1, 0, None), (2, 0, None)]
-            else "unexpected DATE/TIMESTAMP comparison result"
-        )
-        assert rows == [(0, 2, 30), (1, 0, None), (2, 0, None)], diagnostic
+        assert rows == [(0, 2, 30), (1, 0, None), (2, 0, None)]
 
 
 @pytest.mark.parametrize("ansi", [False, True])
