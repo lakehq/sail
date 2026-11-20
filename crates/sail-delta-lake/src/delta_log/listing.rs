@@ -188,22 +188,38 @@ pub(crate) fn v2_checkpoint_path_from_hint(hint: &LastCheckpointHint) -> DeltaRe
 }
 
 /// Whether the object store of the location lists keys in lexicographic order, which object
-/// stores such as Amazon S3, Azure Blob Storage, and Google Cloud Storage do. The local file
-/// system does not.
+/// stores such as Amazon S3 general purpose buckets, Azure Blob Storage, and Google Cloud
+/// Storage do. The local file system and Amazon S3 directory buckets do not.
 pub(crate) fn lists_keys_in_order(location: &Url) -> bool {
-    matches!(
-        ObjectStoreScheme::parse(location),
+    match ObjectStoreScheme::parse(location) {
+        Ok((ObjectStoreScheme::AmazonS3, _)) => !is_s3_directory_bucket_location(location),
         Ok((
-            ObjectStoreScheme::AmazonS3
-                | ObjectStoreScheme::MicrosoftAzure
-                | ObjectStoreScheme::GoogleCloudStorage
-                | ObjectStoreScheme::Memory,
-            _
-        ))
-    )
+            ObjectStoreScheme::MicrosoftAzure
+            | ObjectStoreScheme::GoogleCloudStorage
+            | ObjectStoreScheme::Memory,
+            _,
+        )) => true,
+        _ => false,
+    }
 }
 
-pub(crate) async fn list_delta_log_entries_from(
+/// Whether the location is in an Amazon S3 directory bucket (S3 Express One Zone), whose name
+/// ends with `--x-s3`. The bucket is the host of an `s3://` location, the first label of a
+/// virtual-hosted endpoint, or the first path segment of a path-style endpoint.
+fn is_s3_directory_bucket_location(location: &Url) -> bool {
+    const SUFFIX: &str = "--x-s3";
+    let host = location.host_str().unwrap_or_default();
+    let first_segment = location
+        .path_segments()
+        .and_then(|mut segments| segments.next())
+        .unwrap_or_default();
+    host.split('.').next().unwrap_or_default().ends_with(SUFFIX)
+        || host.contains(".s3express-")
+        || first_segment.ends_with(SUFFIX)
+}
+
+#[cfg(test)]
+async fn list_delta_log_entries_from(
     store: Arc<dyn ObjectStore>,
     offset_version: i64,
 ) -> DeltaResult<Vec<ObjectMeta>> {
@@ -556,6 +572,50 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn unsorted_listing_reads_every_key_of_an_unordered_store() {
+        let store = Arc::new(crate::test_store::ObservedStore::default());
+        store.list_in_reverse_order();
+        for key in [
+            "_delta_log/00000000000000000000.json",
+            "_delta_log/00000000000000000001.json",
+            "_delta_log/00000000000000000002.json",
+            "_delta_log/_last_checkpoint",
+            "_delta_log/_staged_commits/00000000000000000003.uuid.json",
+        ] {
+            store
+                .put(&Path::from(key), b"{}".to_vec().into())
+                .await
+                .unwrap();
+        }
+        let store = store as Arc<dyn ObjectStore>;
+        let url = Url::parse("s3://bucket--use1-az4--x-s3/table").unwrap();
+        let sorted = lists_keys_in_order(&url);
+        assert!(!sorted);
+        let mut versions = list_delta_log_entries(store.clone(), 0, sorted)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|meta| parse_commit_version_from_location(&meta.location))
+            .collect::<Vec<_>>();
+        versions.sort();
+        assert_eq!(versions, [0, 1, 2]);
+        assert_eq!(
+            latest_version_from_listing(store.clone(), sorted)
+                .await
+                .unwrap(),
+            Some(2)
+        );
+        // The listing that stops at the first key under `_delta_log/_` misses versions of an
+        // unordered store, which is why such a store is not listed as sorted.
+        assert!(
+            list_delta_log_entries(store, 0, true)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     #[test]
     fn object_stores_that_list_keys_in_order() {
         for (location, sorted) in [
@@ -564,6 +624,17 @@ mod tests {
             ("abfss://container@account.dfs.core.windows.net/table", true),
             ("memory:///table", true),
             ("file:///tmp/table", false),
+            ("s3://bucket--use1-az4--x-s3/table", false),
+            ("s3a://bucket--use1-az4--x-s3/table", false),
+            (
+                "https://bucket--use1-az4--x-s3.s3express-use1-az4.us-east-1.amazonaws.com/table",
+                false,
+            ),
+            ("https://s3.us-east-1.amazonaws.com/bucket/table", true),
+            (
+                "https://s3.us-east-1.amazonaws.com/bucket--use1-az4--x-s3/table",
+                false,
+            ),
         ] {
             let url = Url::parse(location).unwrap();
             assert_eq!(lists_keys_in_order(&url), sorted, "{location}");

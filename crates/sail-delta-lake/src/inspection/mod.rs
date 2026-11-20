@@ -21,7 +21,7 @@ use crate::options::r#gen::DeltaReadOptions;
 use crate::snapshot::DeltaSnapshot;
 use crate::spec::inspection::DeltaInspectionType;
 use crate::spec::{DeltaError, DeltaResult};
-use crate::table::load_delta_read_state;
+use crate::table::{SnapshotIntent, load_delta_read_state};
 
 pub(crate) struct InspectionState {
     snapshot: Arc<DeltaSnapshot>,
@@ -61,6 +61,7 @@ pub(crate) async fn load_state(
         options,
         metadata_only,
         info.lakehouse_table,
+        SnapshotIntent::Read,
     )
     .await?;
     Ok(InspectionState {

@@ -32,7 +32,7 @@ use super::{optimize, vacuum};
 use crate::DeltaLakeSource;
 use crate::options::r#gen::DeltaReadOptions;
 use crate::spec::TableFeature;
-use crate::table::load_delta_read_state;
+use crate::table::{SnapshotIntent, load_delta_read_state};
 use crate::transaction::PROTOCOL;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
@@ -304,6 +304,7 @@ async fn execute(
         read_options,
         false,
         info.lakehouse_table.clone(),
+        SnapshotIntent::Write,
     )
     .await?;
     validate_snapshot(&snapshot, &call.invocation)?;
