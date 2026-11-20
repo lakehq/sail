@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion::arrow::array::{
     Array, ArrayData, ArrayRef, RecordBatch, RecordBatchOptions, make_array,
 };
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema};
 use datafusion_common::Result;
 
 use crate::array::record_batch::{
@@ -281,6 +282,133 @@ pub fn normalize_data_type(
         _ => data_type.clone(),
     }
 }
+
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/bdd86f1da39949d09e915ca46c95f32a253689db/datafusion/datasource-parquet/src/file_format.rs#L247-L368
+/// Clears all metadata (Schema level and field level) on an iterator
+/// of Schemas, except for the extension type of the fields, which is part
+/// of the type of a field.
+pub fn clear_metadata(schemas: impl IntoIterator<Item = Schema>) -> impl Iterator<Item = Schema> {
+    schemas.into_iter().map(|schema| {
+        let fields = schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let metadata = field
+                    .metadata()
+                    .iter()
+                    .filter(|(key, _)| {
+                        key.as_str() == EXTENSION_TYPE_NAME_KEY
+                            || key.as_str() == EXTENSION_TYPE_METADATA_KEY
+                    })
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    // TODO: Uncomment after DataFusion 56
+                    // .collect::<Metadata>();
+                    .collect::<HashMap<String, String>>();
+                field.as_ref().clone().with_metadata(metadata)
+            })
+            .collect::<Fields>();
+        Schema::new(fields)
+    })
+}
+
+/// Widen fields missing from some of their containing schemas. An absent parent
+/// produces a null parent, not a null value for each required child, so children
+/// are compared only across files in which their parent exists.
+pub fn mark_partially_present_fields_nullable(schema: Schema, sources: &[Schema]) -> Schema {
+    if sources.len() <= 1
+        || sources[1..]
+            .iter()
+            .all(|source| source.fields() == sources[0].fields())
+    {
+        return schema;
+    }
+    let fields = widen_fields(
+        schema.fields(),
+        &sources.iter().map(Schema::fields).collect::<Vec<_>>(),
+    );
+    Schema::new_with_metadata(fields, schema.metadata().clone())
+}
+
+fn widen_fields(fields: &Fields, sources: &[&Fields]) -> Fields {
+    if !sources.is_empty()
+        && fields == sources[0]
+        && sources[1..].iter().all(|source| *source == sources[0])
+    {
+        return fields.clone();
+    }
+
+    let mut present: HashMap<&str, Vec<&FieldRef>> = HashMap::new();
+    for source in sources {
+        for field in *source {
+            present.entry(field.name()).or_default().push(field);
+        }
+    }
+    fields
+        .iter()
+        .map(|field| {
+            let occurrences = present
+                .get(field.name().as_str())
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let missing = occurrences.is_empty() || occurrences.len() < sources.len();
+            widen_field(field, occurrences, missing)
+        })
+        .collect()
+}
+
+fn widen_field(field: &FieldRef, sources: &[&FieldRef], missing: bool) -> FieldRef {
+    let source_types = sources.iter().map(|f| f.data_type()).collect::<Vec<_>>();
+    let data_type = widen_nested_type(field.data_type(), &source_types);
+    let nullable = field.is_nullable() || missing;
+    if &data_type == field.data_type() && nullable == field.is_nullable() {
+        Arc::clone(field)
+    } else {
+        Arc::new(
+            field
+                .as_ref()
+                .clone()
+                .with_data_type(data_type)
+                .with_nullable(nullable),
+        )
+    }
+}
+
+fn widen_nested_type(data_type: &DataType, sources: &[&DataType]) -> DataType {
+    match data_type {
+        DataType::Struct(fields) => {
+            let sources = sources
+                .iter()
+                .filter_map(|t| match t {
+                    DataType::Struct(fields) => Some(fields),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            DataType::Struct(widen_fields(fields, &sources))
+        }
+        DataType::List(field) | DataType::LargeList(field) => {
+            let sources = sources
+                .iter()
+                .filter_map(|t| match t {
+                    DataType::List(f) | DataType::LargeList(f) => Some(f),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let field = widen_field(field, &sources, false);
+            if matches!(data_type, DataType::List(_)) {
+                DataType::List(field)
+            } else {
+                DataType::LargeList(field)
+            }
+        }
+        // Parquet cannot represent unions. Arrow requires exact type equality
+        // for ListView, LargeListView, FixedSizeList, Map, Dictionary, and
+        // RunEndEncoded, so nested evolution in those types is rejected earlier.
+        _ => data_type.clone(),
+    }
+}
+// SPDX-SnippetEnd
 
 #[cfg(test)]
 mod tests {

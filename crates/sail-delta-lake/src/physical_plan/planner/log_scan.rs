@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
-use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::config::TableParquetOptions;
@@ -28,6 +27,7 @@ use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use sail_cache::scope::scoped_file_metadata_cache;
+use sail_common_datafusion::schema::{clear_metadata, mark_partially_present_fields_nullable};
 use sail_data_source::formats::parquet::parse_coerce_int96_string;
 
 use super::context::PlannerContext;
@@ -155,131 +155,6 @@ async fn head_many(
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/bdd86f1da39949d09e915ca46c95f32a253689db/datafusion/datasource-parquet/src/file_format.rs#L247-L368
-/// Clears all metadata (Schema level and field level) on an iterator
-/// of Schemas, except for the extension type of the fields, which is part
-/// of the type of a field.
-fn clear_metadata(schemas: impl IntoIterator<Item = Schema>) -> impl Iterator<Item = Schema> {
-    schemas.into_iter().map(|schema| {
-        let fields = schema
-            .fields()
-            .iter()
-            .map(|field| {
-                let metadata = field
-                    .metadata()
-                    .iter()
-                    .filter(|(key, _)| {
-                        key.as_str() == EXTENSION_TYPE_NAME_KEY
-                            || key.as_str() == EXTENSION_TYPE_METADATA_KEY
-                    })
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect::<HashMap<String, String>>();
-                field.as_ref().clone().with_metadata(metadata)
-            })
-            .collect::<Fields>();
-        Schema::new(fields)
-    })
-}
-
-/// Widen fields missing from some of their containing schemas. An absent parent
-/// produces a null parent, not a null value for each required child, so children
-/// are compared only across files in which their parent exists.
-fn mark_partially_present_fields_nullable(schema: Schema, sources: &[Schema]) -> Schema {
-    if sources.len() <= 1
-        || sources[1..]
-            .iter()
-            .all(|source| source.fields() == sources[0].fields())
-    {
-        return schema;
-    }
-    let fields = widen_fields(
-        schema.fields(),
-        &sources.iter().map(Schema::fields).collect::<Vec<_>>(),
-    );
-    Schema::new_with_metadata(fields, schema.metadata().clone())
-}
-
-fn widen_fields(fields: &Fields, sources: &[&Fields]) -> Fields {
-    if !sources.is_empty()
-        && fields == sources[0]
-        && sources[1..].iter().all(|source| *source == sources[0])
-    {
-        return fields.clone();
-    }
-
-    let mut present: HashMap<&str, Vec<&FieldRef>> = HashMap::new();
-    for source in sources {
-        for field in *source {
-            present.entry(field.name()).or_default().push(field);
-        }
-    }
-    fields
-        .iter()
-        .map(|field| {
-            let occurrences = present
-                .get(field.name().as_str())
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            let missing = occurrences.is_empty() || occurrences.len() < sources.len();
-            widen_field(field, occurrences, missing)
-        })
-        .collect()
-}
-
-fn widen_field(field: &FieldRef, sources: &[&FieldRef], missing: bool) -> FieldRef {
-    let source_types = sources.iter().map(|f| f.data_type()).collect::<Vec<_>>();
-    let data_type = widen_nested_type(field.data_type(), &source_types);
-    let nullable = field.is_nullable() || missing;
-    if &data_type == field.data_type() && nullable == field.is_nullable() {
-        Arc::clone(field)
-    } else {
-        Arc::new(
-            field
-                .as_ref()
-                .clone()
-                .with_data_type(data_type)
-                .with_nullable(nullable),
-        )
-    }
-}
-
-fn widen_nested_type(data_type: &DataType, sources: &[&DataType]) -> DataType {
-    match data_type {
-        DataType::Struct(fields) => {
-            let sources = sources
-                .iter()
-                .filter_map(|t| match t {
-                    DataType::Struct(fields) => Some(fields),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            DataType::Struct(widen_fields(fields, &sources))
-        }
-        DataType::List(field) | DataType::LargeList(field) => {
-            let sources = sources
-                .iter()
-                .filter_map(|t| match t {
-                    DataType::List(f) | DataType::LargeList(f) => Some(f),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            let field = widen_field(field, &sources, false);
-            if matches!(data_type, DataType::List(_)) {
-                DataType::List(field)
-            } else {
-                DataType::LargeList(field)
-            }
-        }
-        // Parquet cannot represent unions. Arrow requires exact type equality
-        // for ListView, LargeListView, FixedSizeList, Map, Dictionary, and
-        // RunEndEncoded, so nested evolution in those types is rejected earlier.
-        _ => data_type.clone(),
-    }
-}
-// SPDX-SnippetEnd
-
-// SPDX-SnippetBegin
-// SPDX-License-Identifier: Apache-2.0
 // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/bdd86f1da39949d09e915ca46c95f32a253689db/datafusion/datasource-parquet/src/file_format.rs#L370-L402
 // The `parquet_encryption` variant is left out since Sail does not enable that DataFusion feature.
 #[expect(clippy::unused_async)]
@@ -308,7 +183,7 @@ async fn infer_parquet_checkpoint_schema(
     objects: &[ObjectMeta],
 ) -> Result<SchemaRef> {
     let format = ParquetFormat::default();
-    // TODO: uncomment after DataFusion 56
+    // TODO: Uncomment after DataFusion 56
     // let coerce_int96 = format.coerce_int96().map(arrow::datatypes::TimeUnit::from);
     let coerce_int96 = format
         .coerce_int96()
@@ -331,7 +206,7 @@ async fn infer_parquet_checkpoint_schema(
                 .with_file_metadata_cache(Some(Arc::clone(file_metadata_cache)))
                 .with_coerce_int96(coerce_int96)
                 .with_coerce_int96_tz(coerce_int96_tz.clone())
-                // TODO: uncomment after DataFusion 56
+                // TODO: Uncomment after DataFusion 56
                 // .with_enable_rle_to_dictionary(
                 //     format.options().global.enable_rle_to_dictionary,
                 // )
@@ -359,7 +234,7 @@ async fn infer_parquet_checkpoint_schema(
     // https://github.com/apache/datafusion/pull/6629
     schemas.sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
-    // TODO: uncomment after DataFusion 56
+    // TODO: Uncomment after DataFusion 56
     // let mut seen = HashSet::new();
     // for (location, schema) in &schemas {
     //     ensure_unique_field_names(schema, &mut seen).map_err(|err| {
@@ -372,8 +247,11 @@ async fn infer_parquet_checkpoint_schema(
     // drop(seen);
 
     // Normalize dict-promoted schemas before merging so mixed dict/plain files merge cleanly.
+    // TODO: Uncomment after DataFusion 56
+    // let mut schemas: Vec<Schema> =
+    //     schemas.into_iter().map(|(_, schema)| schema).collect();
     let schemas: Vec<Schema> = schemas.into_iter().map(|(_, schema)| schema).collect();
-    // TODO: uncomment after DataFusion 56
+    // TODO: Uncomment after DataFusion 56
     // if format.options().global.enable_rle_to_dictionary {
     //     schemas = crate::schema_coercion::uniform_dict_schemas(schemas);
     // }
