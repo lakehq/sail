@@ -178,6 +178,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after restore_predicate_subquery_cast_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -301,6 +304,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after restore_predicate_subquery_cast_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -722,6 +728,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after restore_predicate_subquery_cast_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -845,6 +854,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after restore_predicate_subquery_cast_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -1267,6 +1279,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after restore_predicate_subquery_cast_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -1390,6 +1405,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after restore_predicate_subquery_cast_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -1812,6 +1830,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after restore_predicate_subquery_cast_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -1935,6 +1956,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after restore_predicate_subquery_cast_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -2356,6 +2380,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after restore_predicate_subquery_cast_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -2479,6 +2506,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after restore_predicate_subquery_cast_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -2901,6 +2931,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after restore_predicate_subquery_cast_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -3024,6 +3057,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after restore_predicate_subquery_cast_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -3446,6 +3482,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after restore_predicate_subquery_cast_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -3569,6 +3608,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after restore_predicate_subquery_cast_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -3990,6 +4032,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after restore_predicate_subquery_cast_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -4113,6 +4158,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after restore_predicate_subquery_cast_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
@@ -4535,6 +4583,9 @@ data:
     logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
+    logical_plan after restore_predicate_subquery_cast_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
@@ -4658,6 +4709,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after restore_predicate_subquery_cast_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
