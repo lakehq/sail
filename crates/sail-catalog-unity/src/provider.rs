@@ -778,7 +778,9 @@ impl UnityCatalogProvider {
         let is_external = table_type.as_ref().is_none_or(|table_type| {
             matches!(
                 &**table_type,
-                r#gen::TableType::External | r#gen::TableType::Unknown(_)
+                r#gen::TableType::External
+                    | r#gen::TableType::ExternalShallowClone
+                    | r#gen::TableType::Unknown(_)
             )
         });
         if let Some(table_type) = table_type {
