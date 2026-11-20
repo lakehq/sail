@@ -9,6 +9,24 @@ use datafusion_common::DataFusionError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[derive(Debug, Clone, Error, Serialize, Deserialize)]
+pub enum ReadPathError {
+    #[error("Path does not exist: {0}.")]
+    PathNotFound(String),
+    #[error("Delta table `{0}` doesn't exist.")]
+    DeltaTableNotFound(String),
+    #[error("Iceberg table not found at `{0}`.")]
+    IcebergTableNotFound(String),
+    #[error("Unable to infer schema for {format} at {locations}. It must be specified manually.")]
+    UnableToInferSchema { format: String, locations: String },
+}
+
+impl From<ReadPathError> for DataFusionError {
+    fn from(error: ReadPathError) -> Self {
+        Self::External(Box::new(error))
+    }
+}
+
 /// An error with a cause received from a remote worker.
 #[derive(Debug, Clone, Error)]
 #[error("remote error: {cause}")]
@@ -103,6 +121,7 @@ pub enum CommonErrorCause {
     Execution(String),
     DeltaTable(String),
     CommitStateUnknown(String),
+    ReadPath(ReadPathError),
 }
 
 impl fmt::Display for CommonErrorCause {
@@ -134,6 +153,7 @@ impl fmt::Display for CommonErrorCause {
             | CommonErrorCause::Execution(x)
             | CommonErrorCause::DeltaTable(x)
             | CommonErrorCause::CommitStateUnknown(x) => write!(f, "{x}"),
+            CommonErrorCause::ReadPath(error) => error.fmt(f),
             CommonErrorCause::Python(PythonErrorCause { summary, .. }) => {
                 write!(f, "{summary}")
             }
@@ -219,6 +239,10 @@ impl CommonErrorCause {
                 DataFusionError::Shared(e) => Self::build::<Py>(e.as_ref(), seen),
                 DataFusionError::Ffi(x) => Self::Unknown(x.clone()),
             };
+        }
+
+        if let Some(error) = error.downcast_ref::<ReadPathError>() {
+            return Self::ReadPath(error.clone());
         }
 
         if let Some(cause) = Py::extract(error) {

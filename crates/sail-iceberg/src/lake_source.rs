@@ -66,7 +66,7 @@ use crate::spec::{
     NullOrder, PartitionSpec, Schema, Snapshot, SortDirection, SortOrder, TableMetadata, Transform,
 };
 use crate::table::metadata_loader::{
-    load_metadata_file_bytes, metadata_file_version_from_path,
+    is_missing_table_metadata, load_metadata_file_bytes, metadata_file_version_from_path,
     metadata_location_to_object_path_string, table_metadata_location,
 };
 use crate::table::{Table, find_latest_metadata_file};
@@ -376,14 +376,10 @@ impl LakeSource for IcebergLakeSource {
                 }
                 Some((metadata_file, metadata))
             }
-            Err(err)
-                if err.to_string().contains("No metadata files found")
-                    && columns.is_empty()
-                    && !replace =>
-            {
+            Err(err) if is_missing_table_metadata(&err) && columns.is_empty() && !replace => {
                 return plan_err!("Iceberg CREATE TABLE requires at least one column");
             }
-            Err(err) if err.to_string().contains("No metadata files found") => None,
+            Err(err) if is_missing_table_metadata(&err) => None,
             Err(err) => return Err(err),
         };
 
@@ -889,7 +885,7 @@ pub(crate) async fn plan_iceberg_write(
     };
     let table_exists = exists_res.is_ok();
     if let Err(error) = &exists_res
-        && !error.to_string().contains("No metadata files found")
+        && !is_missing_table_metadata(error)
     {
         return plan_err!("cannot resolve Iceberg table metadata: {error}");
     }
@@ -1218,13 +1214,23 @@ pub(crate) async fn load_iceberg_read_table(
     info: SourceInfo,
     read_purpose: IcebergReadPurpose,
 ) -> Result<(Table, IcebergReadOptions)> {
+    let path_read = info.lakehouse_table.is_none();
     let read = resolve_iceberg_read(ctx, info, read_purpose).await?;
     let table = Table::load_with_metadata_location(
         ctx.runtime_env().as_ref(),
-        read.table_url,
+        read.table_url.clone(),
         read.metadata_location,
     )
-    .await?;
+    .await;
+    let table = match table {
+        Err(error) if path_read && is_missing_table_metadata(&error) => {
+            let url =
+                datafusion::datasource::listing::ListingTableUrl::try_new(read.table_url, None)?;
+            sail_data_source::ensure_read_path_exists(ctx, &url).await?;
+            return Err(error);
+        }
+        result => result?,
+    };
     Ok((table, read.options))
 }
 

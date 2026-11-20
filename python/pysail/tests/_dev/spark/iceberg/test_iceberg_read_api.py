@@ -4,7 +4,7 @@ import json
 
 import pytest
 from pyiceberg.table import StaticTable
-from pyspark.errors import PySparkException
+from pyspark.errors import AnalysisException, PySparkException
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 from pysail.tests._dev.spark.iceberg.utils import pyiceberg_file_io_properties
@@ -61,6 +61,28 @@ def test_iceberg_load_identifier_matches_table_and_path(spark, read_table, ident
     for dataframe in [loaded, spark.table(identifier), spark.read.format("iceberg").load(str(path))]:
         _assert_table(dataframe, expected)
     assert [tuple(row) for row in loaded.where("id > 1").select("value").collect()] == [("two",)]
+
+
+@pytest.mark.parametrize(
+    ("case", "condition", "sql_state"),
+    [
+        ("missing", "PATH_NOT_FOUND", "42K03"),
+        ("empty", "TABLE_OR_VIEW_NOT_FOUND", "42P01"),
+        ("empty_metadata", "TABLE_OR_VIEW_NOT_FOUND", "42P01"),
+    ],
+)
+def test_iceberg_read_without_table_metadata(spark, tmp_path, case, condition, sql_state):
+    path = tmp_path / case
+    if case == "empty":
+        path.mkdir()
+    elif case == "empty_metadata":
+        (path / "metadata").mkdir(parents=True)
+
+    with pytest.raises(AnalysisException) as error:
+        spark.read.format("iceberg").load(str(path)).collect()
+    assert error.value.getCondition() == condition
+    assert error.value.getSqlState() == sql_state
+    assert path.as_posix() in str(error.value)
 
 
 @pytest.mark.parametrize("directory", ["ordinary", "literal#files"])

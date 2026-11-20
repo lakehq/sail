@@ -11,7 +11,7 @@ use prost::{DecodeError, UnknownEnumValue};
 use sail_cache::error::CacheError;
 use sail_common::actor::ActorSendError;
 use sail_common::error::CommonError;
-use sail_common_datafusion::error::{CommonErrorCause, PythonErrorCause};
+use sail_common_datafusion::error::{CommonErrorCause, PythonErrorCause, ReadPathError};
 use sail_execution::error::ExecutionError;
 use sail_plan::error::PlanError;
 use sail_python_udf::error::PyErrExtractor;
@@ -248,6 +248,7 @@ where
 pub(crate) enum SparkThrowable {
     ParseException(String),
     AnalysisException(String),
+    ClassifiedAnalysisException(String, SparkErrorClass),
     #[expect(dead_code)]
     StreamingQueryException(String),
     QueryExecutionException(String),
@@ -269,6 +270,7 @@ impl SparkThrowable {
     pub fn message(&self) -> &str {
         match self {
             SparkThrowable::ParseException(message)
+            | SparkThrowable::ClassifiedAnalysisException(message, _)
             | SparkThrowable::AnalysisException(message)
             | SparkThrowable::StreamingQueryException(message)
             | SparkThrowable::QueryExecutionException(message)
@@ -291,7 +293,8 @@ impl SparkThrowable {
             SparkThrowable::ParseException(_) => {
                 "org.apache.spark.sql.catalyst.parser.ParseException"
             }
-            SparkThrowable::AnalysisException(_) => "org.apache.spark.sql.AnalysisException",
+            SparkThrowable::ClassifiedAnalysisException(_, _)
+            | SparkThrowable::AnalysisException(_) => "org.apache.spark.sql.AnalysisException",
             SparkThrowable::StreamingQueryException(_) => {
                 "org.apache.spark.sql.streaming.StreamingQueryException"
             }
@@ -318,7 +321,8 @@ impl SparkThrowable {
 
     pub fn error_class(&self) -> Option<&SparkErrorClass> {
         match self {
-            SparkThrowable::SparkSQLException(_, error_class) => Some(error_class),
+            SparkThrowable::SparkSQLException(_, error_class)
+            | SparkThrowable::ClassifiedAnalysisException(_, error_class) => Some(error_class),
             _ => None,
         }
     }
@@ -431,6 +435,34 @@ impl From<SparkThrowable> for Status {
 impl From<CommonErrorCause> for SparkThrowable {
     fn from(value: CommonErrorCause) -> Self {
         match value {
+            CommonErrorCause::ReadPath(error) => {
+                let (name, sql_state, parameter) = match &error {
+                    ReadPathError::PathNotFound(path) => {
+                        ("PATH_NOT_FOUND", "42K03", ("path", path.clone()))
+                    }
+                    ReadPathError::DeltaTableNotFound(path) => (
+                        "DELTA_TABLE_NOT_FOUND",
+                        "42P01",
+                        ("tableName", format!("`{path}`")),
+                    ),
+                    ReadPathError::IcebergTableNotFound(path) => (
+                        "TABLE_OR_VIEW_NOT_FOUND",
+                        "42P01",
+                        ("relationName", format!("`{path}`")),
+                    ),
+                    ReadPathError::UnableToInferSchema { format, .. } => (
+                        "UNABLE_TO_INFER_SCHEMA",
+                        "42KD9",
+                        ("format", format.clone()),
+                    ),
+                };
+                let class = SparkErrorClass {
+                    name,
+                    sql_state,
+                    message_parameters: HashMap::from([parameter]),
+                };
+                SparkThrowable::ClassifiedAnalysisException(class.message(&error), class)
+            }
             CommonErrorCause::NotImplemented(x) => SparkThrowable::UnsupportedOperationException(x),
             CommonErrorCause::InvalidArgument(x) => SparkThrowable::IllegalArgumentException(x),
             CommonErrorCause::Unknown(x)

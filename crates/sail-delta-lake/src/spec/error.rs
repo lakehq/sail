@@ -122,8 +122,8 @@ pub enum DeltaError {
     #[error("No table version found.")]
     MissingVersion,
 
-    #[error("Invalid table location: {0}")]
-    InvalidTableLocation(String),
+    #[error("Delta table `{0}` doesn't exist.")]
+    TableNotFound(String),
 
     #[error("File not found: {0}")]
     FileNotFound(String),
@@ -208,10 +208,6 @@ impl DeltaError {
         Self::Schema(msg.to_string())
     }
 
-    pub fn invalid_table_location(location: impl ToString) -> Self {
-        Self::InvalidTableLocation(location.to_string())
-    }
-
     pub fn missing_column(name: impl ToString) -> Self {
         Self::MissingColumn(name.to_string())
     }
@@ -251,8 +247,8 @@ impl From<DeltaError> for DataFusionError {
             DeltaError::InvalidUrl(err) => {
                 DataFusionError::Configuration(format!("Invalid Delta URL: {err}"))
             }
-            DeltaError::InvalidTableLocation(location) => {
-                DataFusionError::Configuration(format!("Invalid table location: {location}"))
+            DeltaError::TableNotFound(path) => {
+                sail_common_datafusion::error::ReadPathError::DeltaTableNotFound(path).into()
             }
             DeltaError::MissingVersion => {
                 DataFusionError::Execution("No table version found.".to_string())

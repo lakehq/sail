@@ -433,14 +433,6 @@ fn next_catalog_commit_start_version(
     }
 }
 
-fn is_missing_delta_log_error(error: &DeltaTableError) -> bool {
-    matches!(
-        error,
-        DeltaTableError::InvalidTableLocation(message)
-            if message.contains("No commit files found in _delta_log")
-    )
-}
-
 pub(crate) fn catalog_managed_commit_context(
     lakehouse_table: Option<&LakehouseExecutionContext>,
 ) -> Option<&LakehouseExecutionContext> {
@@ -774,7 +766,7 @@ where
                 Ok(None)
             }
         }
-        Err(err) if is_missing_delta_log_error(&err) => {
+        Err(err @ DeltaTableError::TableNotFound(_)) => {
             if bootstrap_catalog_managed_delta_table(
                 ctx,
                 catalog_table,
@@ -835,7 +827,12 @@ pub(crate) async fn load_delta_read_state(
     let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
 
     // Load the table state according to the provided time travel options.
-    load_table_by_options(&mut deltalake_table, &options).await?;
+    if let Err(err) = load_table_by_options(&mut deltalake_table, &options).await {
+        if !reads_catalog_table && matches!(err, DeltaTableError::TableNotFound(_)) {
+            sail_data_source::ensure_read_path_exists(ctx, &url).await?;
+        }
+        return Err(err.into());
+    }
 
     let snapshot = deltalake_table.snapshot()?.clone();
 
@@ -972,7 +969,10 @@ fn refresh_catalog_delta_map_entries(catalog_entries: &Field, snapshot_entries: 
 }
 
 /// Helper function to load a DeltaTable based on version or timestamp options.
-async fn load_table_by_options(table: &mut DeltaTable, options: &DeltaReadOptions) -> Result<()> {
+async fn load_table_by_options(
+    table: &mut DeltaTable,
+    options: &DeltaReadOptions,
+) -> DeltaResult<()> {
     // Precedence: version > timestamp > latest.
     if let Some(version) = options.version_as_of {
         table.load_version(version).await?;

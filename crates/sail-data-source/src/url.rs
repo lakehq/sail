@@ -9,10 +9,12 @@ use chumsky::{IterParser, Parser};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result, not_impl_err, plan_datafusion_err, plan_err};
+use futures::TryStreamExt;
 use glob::Pattern;
 use log::debug;
 use object_store::ObjectStoreExt;
 use percent_encoding::percent_decode;
+use sail_common_datafusion::error::ReadPathError;
 use sail_common_datafusion::utils::items::ItemTaker;
 use url::Url;
 
@@ -528,6 +530,32 @@ impl TryFrom<GlobUrl> for ListingTableUrl {
         let GlobUrl { base, glob } = value;
         Self::try_new(base, glob)
     }
+}
+
+/// Check an input location after a read found no data. A local directory can
+/// exist without children, while object stores can represent it by a prefix.
+pub async fn ensure_read_path_exists(ctx: &dyn Session, url: &ListingTableUrl) -> Result<()> {
+    let location: &Url = url.as_ref();
+    let exists = if location.scheme() == "file"
+        && let Ok(path) = location.to_file_path()
+    {
+        tokio::fs::try_exists(path.components().collect::<PathBuf>()).await?
+    } else {
+        let store = ctx.runtime_env().object_store(url)?;
+        if store.list(Some(url.prefix())).try_next().await?.is_some() {
+            true
+        } else {
+            match store.head(url.prefix()).await {
+                Ok(_) => true,
+                Err(object_store::Error::NotFound { .. }) => false,
+                Err(err) => return Err(err.into()),
+            }
+        }
+    };
+    if !exists {
+        return Err(ReadPathError::PathNotFound(location.to_string()).into());
+    }
+    Ok(())
 }
 
 pub async fn resolve_listing_urls(
