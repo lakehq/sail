@@ -1006,6 +1006,63 @@ pub(crate) async fn inspect_checkpoint_main_file(
     Ok(summary.sidecars)
 }
 
+/// Reads the protocol of a checkpoint. Parquet files are read through range requests for the
+/// `protocol` column only, so the file actions are not downloaded.
+pub(crate) async fn read_checkpoint_protocol(
+    root_store: Arc<dyn ObjectStore>,
+    checkpoint: CheckpointFileSet,
+) -> DeltaResult<Option<Protocol>> {
+    for meta in checkpoint.into_files() {
+        let protocol = if is_json_checkpoint_filename(meta.location.filename().unwrap_or_default())
+        {
+            read_checkpoint_main_rows_from_checkpoint_file(root_store.clone(), meta)
+                .await?
+                .into_iter()
+                .find_map(|row| row.protocol)
+        } else {
+            read_parquet_checkpoint_protocol(root_store.clone(), meta).await?
+        };
+        if protocol.is_some() {
+            return Ok(protocol);
+        }
+    }
+    Ok(None)
+}
+
+async fn read_parquet_checkpoint_protocol(
+    root_store: Arc<dyn ObjectStore>,
+    meta: ObjectMeta,
+) -> DeltaResult<Option<Protocol>> {
+    let reader = CheckpointObjectStoreReader::new(root_store, meta.location.clone(), meta.size);
+    let builder = ParquetRecordBatchStreamBuilder::new(reader)
+        .await
+        .map_err(DeltaTableError::generic_err)?;
+    if builder.schema().field_with_name("protocol").is_err() {
+        return Ok(None);
+    }
+    let projection = ProjectionMask::columns(builder.parquet_schema(), ["protocol"]);
+    let mut stream = builder
+        .with_projection(projection)
+        .build()
+        .map_err(DeltaTableError::generic_err)?;
+    while let Some(batch) = stream
+        .try_next()
+        .await
+        .map_err(DeltaTableError::generic_err)?
+    {
+        let Some(column) = batch.column_by_name("protocol") else {
+            continue;
+        };
+        // Only the row that holds the protocol is decoded.
+        if let Some(row) = (0..column.len()).find(|row| column.is_valid(*row)) {
+            return Ok(decode_checkpoint_rows(&batch.slice(row, 1))?
+                .into_iter()
+                .find_map(|row| row.protocol));
+        }
+    }
+    Ok(None)
+}
+
 /// Reads the batches of a checkpoint Parquet file, with INT96 timestamps as microseconds.
 ///
 /// Spark writes timestamps, including the typed stats of a checkpoint, as INT96 by default.
@@ -1573,18 +1630,25 @@ pub(crate) fn should_create_compaction(version: i64, compaction_interval: u64) -
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::fmt;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
+    use async_trait::async_trait;
     use chrono::DateTime;
     use datafusion::arrow::array::{Array, ArrayRef, Int64Array, StructArray};
     use datafusion::arrow::datatypes::{
         DataType as ArrowDataType, Field, FieldRef, Fields, Schema as ArrowSchema,
     };
     use datafusion::arrow::record_batch::RecordBatch;
+    use futures::stream::BoxStream;
     use object_store::buffered::BufWriter;
     use object_store::memory::InMemory;
     use object_store::path::Path;
-    use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
+    use object_store::{
+        CopyOptions, GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
+        ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    };
     use parquet::arrow::AsyncArrowWriter;
     use url::Url;
     use uuid::Uuid;
@@ -1593,8 +1657,8 @@ mod tests {
         CheckpointManager, ReconciledCheckpointState, ReconciledHeaderState, checkpoint_fields,
         checkpoint_row_action, decode_checkpoint_rows, encode_checkpoint_rows,
         inspect_checkpoint_main_file, read_checkpoint_main_rows_from_checkpoint_file,
-        read_checkpoint_rows_from_checkpoint_file, replay_commit_header_actions,
-        validate_multi_part_checkpoint_rows,
+        read_checkpoint_rows_from_checkpoint_file, read_parquet_checkpoint_protocol,
+        replay_commit_header_actions, validate_multi_part_checkpoint_rows,
     };
     use crate::checkpoint::action_fields::{
         AddAugmentationConfig, normalize_checkpoint_batch_for_decode,
@@ -2689,6 +2753,128 @@ mod tests {
                 .await?;
 
         assert!(sidecars.is_empty());
+        Ok(())
+    }
+
+    /// An object store that only serves bounded range reads and counts the bytes it serves.
+    #[derive(Debug, Default)]
+    struct RangeOnlyStore {
+        data: InMemory,
+        bytes_read: AtomicU64,
+    }
+
+    impl fmt::Display for RangeOnlyStore {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "RangeOnlyStore")
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for RangeOnlyStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            options: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.data.put_opts(location, payload, options).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            options: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.data.put_multipart_opts(location, options).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            let Some(GetRange::Bounded(range)) = &options.range else {
+                return Err(object_store::Error::NotSupported {
+                    source: "checkpoint protocol reads must request a bounded range".into(),
+                });
+            };
+            self.bytes_read
+                .fetch_add(range.end - range.start, Ordering::Relaxed);
+            self.data.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.data.delete_stream(locations)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.data.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.data.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.data.copy_opts(from, to, options).await
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_protocol_is_read_from_ranges_of_the_protocol_column() -> DeltaResult<()> {
+        let store = Arc::new(RangeOnlyStore::default());
+        let checkpoint_path = Path::from("_delta_log/00000000000000000002.checkpoint.parquet");
+        let protocol = Protocol::new(1, 2, None, None);
+        let mut rows = vec![CheckpointActionRow {
+            metadata: Some(test_metadata([])?),
+            ..Default::default()
+        }];
+        for index in 0..8_192 {
+            rows.push(CheckpointActionRow {
+                add: Some(Add {
+                    path: format!("part-{index:05}.parquet"),
+                    data_change: true,
+                    stats: Some(
+                        r#"{"numRecords":1,"minValues":{"value":1},"maxValues":{"value":1}}"#
+                            .to_string(),
+                    ),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+        // The protocol comes after the file actions, in a later batch.
+        rows.push(CheckpointActionRow {
+            protocol: Some(protocol.clone()),
+            ..Default::default()
+        });
+        let batch = encode_rows_for_test(&rows)?;
+        put_parquet_batch(store.clone(), checkpoint_path.clone(), batch).await?;
+        let meta = store.data.head(&checkpoint_path).await?;
+
+        let read = read_parquet_checkpoint_protocol(store.clone(), meta.clone()).await?;
+
+        assert_eq!(read, Some(protocol));
+        let bytes_read = store.bytes_read.load(Ordering::Relaxed);
+        assert!(
+            bytes_read < meta.size / 2,
+            "read {bytes_read} of {} bytes",
+            meta.size
+        );
         Ok(())
     }
 
