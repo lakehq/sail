@@ -17,6 +17,7 @@ from pysail.tests._dev.spark.catalog.unity.conftest import (
     _location_to_path,
     _qualified_table_name,
     _table_location,
+    _unique_database,
     _unity_table_info,
 )
 
@@ -48,7 +49,7 @@ def _rows(spark: SparkSession, table: str, order_by: str) -> list[tuple]:
 
 
 def test_save_as_table_overwrite_replaces_managed_delta_table(spark: SparkSession, unity_rest_url: str) -> None:
-    database = "unity_replace_save_as_table"
+    database = _unique_database("unity_replace_save_as_table")
     table = f"{database}.t"
     spark.sql(f"CREATE SCHEMA {database}")
     try:
@@ -99,7 +100,7 @@ def test_save_as_table_overwrite_replaces_managed_delta_table(spark: SparkSessio
 
 
 def test_write_to_replace_managed_delta_table(spark: SparkSession, unity_rest_url: str) -> None:
-    database = "unity_replace_write_to"
+    database = _unique_database("unity_replace_write_to")
     table = f"{database}.t"
     spark.sql(f"CREATE SCHEMA {database}")
     try:
@@ -132,7 +133,7 @@ def test_write_to_replace_managed_delta_table(spark: SparkSession, unity_rest_ur
 
 
 def test_sql_replace_managed_delta_table(spark: SparkSession, unity_rest_url: str, unity_uses_delta_api: bool) -> None:  # noqa: FBT001
-    database = "unity_replace_sql"
+    database = _unique_database("unity_replace_sql")
     table = f"{database}.t"
     spark.sql(f"CREATE SCHEMA {database}")
     try:
@@ -205,7 +206,7 @@ def test_sql_replace_managed_delta_table(spark: SparkSession, unity_rest_url: st
 
 
 def test_replace_external_delta_table(spark: SparkSession, unity_rest_url: str, unity_storage_root: Path) -> None:
-    database = "unity_replace_external"
+    database = _unique_database("unity_replace_external")
     table = f"{database}.t"
     path = unity_storage_root / database
     location = path.as_uri()
@@ -244,7 +245,7 @@ def test_replace_external_delta_table(spark: SparkSession, unity_rest_url: str, 
 
 
 def test_sql_replace_drops_the_delta_properties_of_the_replaced_table(spark: SparkSession) -> None:
-    database = "unity_replace_properties"
+    database = _unique_database("unity_replace_properties")
     table = f"{database}.t"
     spark.sql(f"CREATE SCHEMA {database}")
     try:

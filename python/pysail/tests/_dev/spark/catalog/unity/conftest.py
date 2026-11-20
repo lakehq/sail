@@ -92,6 +92,12 @@ def unity_api_delta_log_contains(
     delta_log_assert(which, "contains", variables, delta_log_cache, snapshot, datatable)
 
 
+def _unique_database(prefix: str) -> str:
+    """Returns a new schema name, so that a schema left behind by a failed test does not
+    affect other tests that share the Unity Catalog server."""
+    return f"{prefix}_{uuid.uuid4().hex[:8]}"
+
+
 def _qualified_table_name(table_name: str) -> str:
     parts = table_name.split(".")
     if len(parts) == 3:

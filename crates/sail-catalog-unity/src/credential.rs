@@ -16,6 +16,7 @@ use sail_catalog::error::{CatalogError, CatalogResult};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
+use crate::provider::{CONNECT_TIMEOUT, REQUEST_TIMEOUT};
 use crate::token::{TemporaryToken, TokenCache};
 
 // https://learn.microsoft.com/en-us/azure/databricks/dev-tools/api/latest/authentication
@@ -79,9 +80,13 @@ impl CatalogCredentials for CredentialProvider {
         match self {
             CredentialProvider::BearerToken(token) => Ok(Some(token.clone())),
             CredentialProvider::TokenCredential(cache, cred) => {
-                let oauth_client = Client::builder().build().map_err(|e| {
-                    CatalogError::External(format!("Failed to build OAuth client: {e}"))
-                })?;
+                let oauth_client = Client::builder()
+                    .connect_timeout(CONNECT_TIMEOUT)
+                    .timeout(REQUEST_TIMEOUT)
+                    .build()
+                    .map_err(|e| {
+                        CatalogError::External(format!("Failed to build OAuth client: {e}"))
+                    })?;
                 let token = cache
                     .get_or_insert_with(|| cred.fetch_token(&oauth_client))
                     .await?;

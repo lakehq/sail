@@ -10,13 +10,14 @@ from pysail.testing._dev.spark.ddl import exercise_lakehouse_alter
 from pysail.tests._dev.spark.catalog.unity.conftest import (
     _location_to_path,
     _table_location,
+    _unique_database,
     _unity_delta_commit_info,
     _unity_table_info,
 )
 
 
 def test_unity_managed_delta_ddl(spark, unity_rest_url):
-    database = "managed_ddl"
+    database = _unique_database("managed_ddl")
     table = f"{database}.t"
     spark.sql(f"CREATE SCHEMA {database}")
     try:
@@ -54,7 +55,7 @@ def test_unity_managed_delta_ddl(spark, unity_rest_url):
 
 @pytest.mark.parametrize("fmt", ["delta"])
 def test_unity_external_lakehouse_ddl(spark, unity_storage_root, fmt):
-    database = f"external_ddl_{fmt}"
+    database = _unique_database(f"external_ddl_{fmt}")
     table = f"{database}.t"
     location = (unity_storage_root / database).as_uri()
     properties = "'format-version'='3'" if fmt == "iceberg" else "'delta.enableTypeWidening'='true'"
@@ -74,7 +75,7 @@ def test_unity_external_lakehouse_ddl(spark, unity_storage_root, fmt):
 
 
 def test_unity_native_iceberg_create_rejected_before_storage(spark, unity_storage_root):
-    database = "unsupported_iceberg_ddl"
+    database = _unique_database("unsupported_iceberg_ddl")
     location = unity_storage_root / database
     spark.sql(f"CREATE SCHEMA {database}")
     try:

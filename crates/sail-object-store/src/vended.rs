@@ -5,7 +5,7 @@ use std::fmt;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use datafusion::execution::object_store::ObjectStoreRegistry;
 use datafusion_common::{Result as DataFusionResult, plan_datafusion_err};
@@ -601,7 +601,7 @@ pub struct VendedObjectStores {
     reported_refused: Mutex<HashSet<String>>,
     /// The time until which no credentials are requested for a storage location
     /// and an owner, since they were not issued when they were last requested.
-    not_issued: Mutex<HashMap<(String, String), Instant>>,
+    not_issued: Mutex<HashMap<(String, String), tokio::time::Instant>>,
 }
 
 impl SessionExtension for VendedObjectStores {
@@ -693,7 +693,7 @@ impl VendedObjectStores {
     /// Remembers for the given time that no credentials are issued for the storage
     /// location and the owner.
     pub fn set_not_issued(&self, location: &Url, owner: &str, duration: Duration) {
-        let now = Instant::now();
+        let now = tokio::time::Instant::now();
         let mut not_issued = self.not_issued.lock().unwrap_or_else(|e| e.into_inner());
         not_issued.retain(|_, until| *until > now);
         not_issued.insert(
@@ -709,7 +709,7 @@ impl VendedObjectStores {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&(owner.to_string(), location.as_str().to_string()))
-            .is_some_and(|until| *until > Instant::now())
+            .is_some_and(|until| *until > tokio::time::Instant::now())
     }
 
     /// Stops accessing storage locations with the credentials issued for the owner,

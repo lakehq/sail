@@ -544,6 +544,39 @@ mod tests {
         }
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn storage_credentials_are_requested_again_sooner_after_a_failure() {
+        for (response, ttl) in [
+            ((|| Ok(None)) as fn() -> _, NOT_ISSUED_TTL),
+            (
+                || Err(CatalogError::Forbidden("no privilege".to_string())),
+                NOT_ISSUED_TTL,
+            ),
+            (
+                || Err(CatalogError::Unauthorized("no token".to_string())),
+                NOT_ISSUED_TTL,
+            ),
+            (
+                || Err(CatalogError::External("server error".to_string())),
+                FAILED_TTL,
+            ),
+        ] {
+            let session = TestSession::new(response, Some(true));
+            let install = || session.install(CommitAuthority::DeltaRatifiedCommit);
+            install().await.unwrap();
+            tokio::time::advance(ttl - Duration::from_secs(1)).await;
+            install().await.unwrap();
+            assert_eq!(session.requests(), vec![StorageAccess::Read], "{ttl:?}");
+            tokio::time::advance(Duration::from_secs(2)).await;
+            install().await.unwrap();
+            assert_eq!(
+                session.requests(),
+                vec![StorageAccess::Read, StorageAccess::Read],
+                "{ttl:?}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn storage_credentials_are_fetched_for_the_table_resolved_at_installation() {
         let session = TestSession::new(issued, Some(true));

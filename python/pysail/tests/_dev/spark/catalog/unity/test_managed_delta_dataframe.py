@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from pysail.tests._dev.spark.catalog.unity.conftest import _unity_delta_commit_info, _unity_table_info
+from pysail.tests._dev.spark.catalog.unity.conftest import (
+    _unique_database,
+    _unity_delta_commit_info,
+    _unity_table_info,
+)
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
@@ -44,7 +48,7 @@ def test_dataframe_append_and_merge_schema_are_unity_managed(
     spark: SparkSession,
     unity_rest_url: str,
 ) -> None:
-    database = "unity_dataframe_test"
+    database = _unique_database("unity_dataframe_test")
     table = "managed_delta_df_t"
     table_fqn = f"{database}.{table}"
 
@@ -96,7 +100,7 @@ def test_managed_delta_create_and_schema_merge_write_spark_struct_field_type_jso
     spark: SparkSession,
     unity_rest_url: str,
 ) -> None:
-    database = "unity_dataframe_type_json_test"
+    database = _unique_database("unity_dataframe_type_json_test")
     table = "managed_delta_type_json_t"
     table_fqn = f"{database}.{table}"
 
@@ -136,7 +140,7 @@ def test_spark_sql_merge_dataframe_source_is_unity_managed(
     spark: SparkSession,
     unity_rest_url: str,
 ) -> None:
-    database = "unity_dataframe_sql_args_test"
+    database = _unique_database("unity_dataframe_sql_args_test")
     table = "managed_delta_sql_args_merge_t"
     table_fqn = f"{database}.{table}"
 
@@ -177,7 +181,7 @@ def test_spark_sql_merge_dataframe_source_is_unity_managed(
 
 @pytest.mark.parametrize("mode", ["name", "id"])
 def test_write_to_creates_column_mapped_managed_table(spark: SparkSession, mode: str) -> None:
-    database = "unity_dataframe_column_mapping_test"
+    database = _unique_database("unity_dataframe_column_mapping_test")
     table_fqn = f"{database}.managed_delta_mapped_{mode}_t"
 
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {database}")
@@ -199,7 +203,7 @@ def test_save_as_table_with_delta_option_does_not_write_mismatched_data(spark: S
     """The table is created before the data is written, without the Delta write options
     as table properties, while the data is written with them. The write fails instead of
     committing data files that the table cannot read."""
-    database = "unity_dataframe_delta_option_test"
+    database = _unique_database("unity_dataframe_delta_option_test")
     table_fqn = f"{database}.managed_delta_option_t"
 
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {database}")

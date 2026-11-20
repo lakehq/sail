@@ -17,6 +17,7 @@ from pysail.tests._dev.spark.catalog.unity.conftest import (
     _location_to_path,
     _qualified_table_name,
     _table_location,
+    _unique_database,
     _unity_table_info,
 )
 
@@ -66,7 +67,7 @@ def test_metadata_changes_are_in_unity_catalog(
     unity_rest_url: str,
     unity_uses_delta_api: bool,  # noqa: FBT001
 ) -> None:
-    database = "unity_catalog_state_metadata"
+    database = _unique_database("unity_catalog_state_metadata")
     table = f"{database}.t"
     spark.sql(f"CREATE SCHEMA {database}")
     try:
@@ -114,7 +115,7 @@ def test_metadata_changes_are_in_unity_catalog(
 
 
 def test_managed_delta_table_time_travel(spark: SparkSession) -> None:
-    database = "unity_catalog_state_time_travel"
+    database = _unique_database("unity_catalog_state_time_travel")
     table = f"{database}.t"
     spark.sql(f"CREATE SCHEMA {database}")
     try:
@@ -149,7 +150,7 @@ def test_managed_delta_table_time_travel(spark: SparkSession) -> None:
 
 def test_managed_delta_table_is_checkpointed_at_the_checkpoint_interval(spark: SparkSession) -> None:
     """Sail checkpoints a catalog-managed table at a published version, so reads do not replay every commit."""
-    database = "unity_catalog_state_commits"
+    database = _unique_database("unity_catalog_state_commits")
     table = f"{database}.t"
     spark.sql(f"CREATE SCHEMA {database}")
     try:
@@ -175,7 +176,7 @@ def test_partial_overwrites_of_managed_delta_table_are_not_table_replacements(
     spark: SparkSession,
     unity_rest_url: str,
 ) -> None:
-    database = "unity_catalog_state_overwrite"
+    database = _unique_database("unity_catalog_state_overwrite")
     table = f"{database}.t"
     spark.sql(f"CREATE SCHEMA {database}")
     try:

@@ -46,11 +46,11 @@ pub(crate) const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalo
 pub(crate) const WORKSPACE_API_PATH: &str = "/api/2.1/unity-catalog";
 
 /// The time allowed to connect to the Unity Catalog server.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The time allowed for a request to the Unity Catalog server, from sending the request
 /// to reading the whole response.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The maximum number of pages read for a list request.
 const MAX_LIST_PAGES: usize = 10_000;
@@ -774,9 +774,13 @@ impl UnityCatalogProvider {
         if let Some(updated_by) = updated_by {
             properties.insert("updated_by".to_string(), updated_by);
         }
-        let is_external = table_type
-            .as_ref()
-            .is_none_or(|table_type| matches!(&**table_type, r#gen::TableType::External));
+        // A table type unknown to the client is not handled as a managed table.
+        let is_external = table_type.as_ref().is_none_or(|table_type| {
+            matches!(
+                &**table_type,
+                r#gen::TableType::External | r#gen::TableType::Unknown(_)
+            )
+        });
         if let Some(table_type) = table_type {
             properties.insert("table_type".to_string(), table_type.to_string());
         }
@@ -1316,8 +1320,21 @@ impl CatalogProvider for UnityCatalogProvider {
             .get_delta_client()
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
-        if self.get_delta_commit_api(&client, &catalog_name).await? != DeltaCommitApi::V1 {
-            return Ok(None);
+        // Only a definite answer that the catalog does not have the Delta REST API means
+        // that no credentials are issued. Otherwise the request is a failure that may be
+        // resolved soon.
+        match self
+            .negotiate_delta_commit_api(&client, &catalog_name)
+            .await?
+        {
+            Ok(DeltaCommitApi::V1) => {}
+            Ok(DeltaCommitApi::Preview) => return Ok(None),
+            Err(unknown) => {
+                return Err(CatalogError::External(format!(
+                    "Unity Catalog Delta API configuration of catalog {catalog_name} is not available: {}",
+                    unknown.message
+                )));
+            }
         }
         let staging_table_id = self
             .staging_table_id_cache()?
@@ -5909,6 +5926,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_only_managed_table_types_are_managed() {
+        for (table_type, expected) in [
+            ("MANAGED", false),
+            ("MANAGED_SHALLOW_CLONE", false),
+            ("EXTERNAL", true),
+            ("EXTERNAL_SHALLOW_CLONE", true),
+            ("FUTURE_TABLE_TYPE", true),
+        ] {
+            let server = MockServer::start().await;
+            mount_existing_table(&server, table_type, "DELTA").await;
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+            let status = provider.get_table(&database, "events").await.unwrap();
+            assert!(
+                matches!(status.kind, TableKind::Table { is_external, .. } if is_external == expected),
+                "table type {table_type}"
+            );
+        }
+    }
+
+    #[tokio::test]
     #[expect(clippy::panic)]
     async fn test_views_and_other_objects_are_not_accessed_as_tables() {
         for table_type in [
@@ -6543,6 +6581,60 @@ mod tests {
             !targets.iter().any(|target| target.contains("credentials")),
             "{targets:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_table_storage_credentials_fail_when_the_delta_api_configuration_is_unknown() {
+        for status in [401, 429, 503] {
+            let server = MockServer::start().await;
+            mount_delta_config(&server, ResponseTemplate::new(status)).await;
+            let provider = mock_provider(&server, "main");
+            let database = Namespace::try_from(vec!["default"]).unwrap();
+            let request = || storage_credentials_request(StorageAccess::Read);
+            // The failure is not an answer that the catalog does not issue credentials.
+            let result = provider
+                .get_table_storage_credentials(&database, "events", request())
+                .await;
+            assert!(
+                matches!(&result, Err(CatalogError::External(message))
+                    if message.contains("main") && message.contains(&status.to_string())),
+                "status {status}: {result:?}"
+            );
+            let targets = received_targets(&server).await;
+            assert!(
+                !targets.iter().any(|target| target.contains("credentials")),
+                "status {status}: {targets:?}"
+            );
+
+            // The credentials are issued once the server answers.
+            server.reset().await;
+            mount_delta_config_ok(&server).await;
+            let response = serde_json::json!({
+                "storage-credentials": [{
+                    "prefix": DELTA_TABLE_URI,
+                    "operation": "READ",
+                    "config": {"gcs.oauth-token": "token"}
+                }]
+            });
+            mount_table_credentials(
+                &server,
+                "READ",
+                ResponseTemplate::new(200).set_body_json(response),
+            )
+            .await;
+            let credentials = provider
+                .get_table_storage_credentials(&database, "events", request())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                credentials.credential,
+                StorageCredential::GcsOauth {
+                    token: "token".to_string()
+                },
+                "status {status}"
+            );
+        }
     }
 
     #[tokio::test]
