@@ -140,7 +140,7 @@ fn group_table_paths_by_object_store(table_paths: &[ListingTableUrl]) -> Vec<Vec
 
 /// Plans a scan of listing table paths that are all in the same object store.
 ///
-/// The output partitioning by partition values is declared only if `preserve_partitioning`
+/// The output partitioning by partition values is declared only if `declare_output_partitioning`
 /// is true, since it does not hold across scans of different object stores combined with a union.
 async fn plan_listing_scan(
     source: &ListingTableSource,
@@ -148,7 +148,7 @@ async fn plan_listing_scan(
     projection: Option<Vec<usize>>,
     filters: &[Expr],
     limit: Option<usize>,
-    preserve_partitioning: bool,
+    declare_output_partitioning: bool,
 ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
     let partition_column_names = source
         .config()
@@ -222,7 +222,7 @@ async fn plan_listing_scan(
         ))));
     };
 
-    let output_partitioning = if partitioned_by_file_group && preserve_partitioning {
+    let output_partitioning = if partitioned_by_file_group && declare_output_partitioning {
         output_partitioning_from_partition_fields(
             table_schema,
             source.config().schema.table_partition_cols(),
