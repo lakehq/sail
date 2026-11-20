@@ -28,8 +28,8 @@ use sail_common_datafusion::catalog::delta::{
 };
 use sail_common_datafusion::catalog::{
     CommitAuthority, DatabaseStatus, LakehouseFormat, LakehouseOperation, StorageAccess,
-    StorageCredential,
-    TableColumnStatus, TableKind, TableStatus, TableStorageCredentials, identity_partition_fields,
+    StorageCredential, TableColumnStatus, TableKind, TableStatus, TableStorageCredentials,
+    identity_partition_fields,
 };
 use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
@@ -194,7 +194,10 @@ impl UnityCatalogProvider {
         client: &delta_gen::ApiClient,
         catalog_name: &str,
     ) -> CatalogResult<DeltaCommitApi> {
-        match self.negotiate_delta_commit_api(client, catalog_name).await? {
+        match self
+            .negotiate_delta_commit_api(client, catalog_name)
+            .await?
+        {
             Ok(api) => Ok(api),
             Err(unknown) => Ok(self.unknown_delta_commit_api(catalog_name, unknown)),
         }
@@ -1697,12 +1700,9 @@ impl CatalogProvider for UnityCatalogProvider {
 
         // The Delta REST API returns the ID of the table, which is compared with the ID in
         // the resolved table, so the table is not looked up again with the legacy API.
-        let resolved_table_id = request
-            .context
-            .table_identity
-            .table_id
-            .clone()
-            .filter(|_| api == DeltaCommitApi::V1 && request.context.format == LakehouseFormat::Delta);
+        let resolved_table_id = request.context.table_identity.table_id.clone().filter(|_| {
+            api == DeltaCommitApi::V1 && request.context.format == LakehouseFormat::Delta
+        });
         let (table_id, table_uri) = if let Some(table_id) = resolved_table_id {
             if let Some(location) = &request.context.table_identity.table_uri
                 && location.trim_end_matches('/') != request.table_uri.trim_end_matches('/')
@@ -3496,7 +3496,10 @@ mod tests {
                 .mount(&server)
                 .await;
             let error = discover_delta_catalog_managed(&server).await.unwrap_err();
-            assert!(error.to_string().contains("failed"), "status {status}: {error}");
+            assert!(
+                error.to_string().contains("failed"),
+                "status {status}: {error}"
+            );
         }
 
         // A server that fails to tell which API the catalog has may serve the table with
@@ -5489,7 +5492,8 @@ mod tests {
         let server = MockServer::start().await;
         // The server returns a page token that was returned before.
         for (endpoint, key) in [("/schemas", "schemas"), ("/tables", "tables")] {
-            for (page_token, next_page_token) in [(None, "p1"), (Some("p1"), "p2"), (Some("p2"), "p1")]
+            for (page_token, next_page_token) in
+                [(None, "p1"), (Some("p1"), "p2"), (Some("p2"), "p1")]
             {
                 let response = serde_json::json!({ key: [], "next_page_token": next_page_token });
                 let mock = Mock::given(method("GET")).and(path(endpoint));
@@ -5505,16 +5509,10 @@ mod tests {
 
         let provider = mock_provider(&server, "main");
         let error = provider.list_databases(None).await.unwrap_err();
-        assert!(
-            error.to_string().contains("page token again"),
-            "{error:?}"
-        );
+        assert!(error.to_string().contains("page token again"), "{error:?}");
         let database = Namespace::try_from(vec!["default"]).unwrap();
         let error = provider.list_tables(&database).await.unwrap_err();
-        assert!(
-            error.to_string().contains("page token again"),
-            "{error:?}"
-        );
+        assert!(error.to_string().contains("page token again"), "{error:?}");
         assert_eq!(server.received_requests().await.unwrap().len(), 6);
     }
 
@@ -5522,10 +5520,15 @@ mod tests {
     fn test_page_tokens_are_bounded() {
         let mut page_tokens = PageTokens::default();
         assert_eq!(page_tokens.next(None, "tables").unwrap(), None);
-        assert_eq!(page_tokens.next(Some(String::new()), "tables").unwrap(), None);
+        assert_eq!(
+            page_tokens.next(Some(String::new()), "tables").unwrap(),
+            None
+        );
         for page in 1..MAX_LIST_PAGES {
             assert_eq!(
-                page_tokens.next(Some(format!("p{page}")), "tables").unwrap(),
+                page_tokens
+                    .next(Some(format!("p{page}")), "tables")
+                    .unwrap(),
                 Some(format!("p{page}"))
             );
         }
