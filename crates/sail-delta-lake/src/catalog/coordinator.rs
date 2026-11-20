@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
 use datafusion_common::{DataFusionError, Result};
 use futures::StreamExt;
 use futures::future::BoxFuture;
@@ -23,8 +24,12 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 use uuid::Uuid;
 
+<<<<<<< ours
 use crate::checkpoint::create_checkpoint_for;
 use crate::delta_log::LogStoreRef;
+=======
+use crate::delta_log::{LogStoreRef, ObjectStoreRef};
+>>>>>>> theirs
 use crate::snapshot::{
     DeltaSnapshotConfig, catalog_managed_commit_path, catalog_managed_commit_version,
 };
@@ -33,7 +38,7 @@ use crate::spec::{
     DomainMetadata, Metadata, MetadataValue, PrimitiveType, Protocol, StructField, TableProperties,
     commit_path,
 };
-use crate::table::{DeltaSnapshot, load_catalog_managed_commits_for_snapshot};
+use crate::table::{DeltaSnapshot, SnapshotIntent, load_catalog_managed_commits_for_snapshot};
 use crate::transaction::{
     CatalogManagedStagedCommit, CommitBuilder, CommitData, CommitProperties, DEFAULT_RETRIES,
     check_catalog_managed_commit_conflicts, should_create_checkpoint,
@@ -308,28 +313,13 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
         if response.latest_table_version < staged.version {
             return Ok(StagedCommitState::Pending);
         }
-        // The catalog does not return a commit that is published and reported.
-        let path = response
-            .commits
-            .iter()
-            .find(|commit| {
-                commit.version == staged.version
-                    && catalog_managed_commit_version(&commit.file_name) == Some(staged.version)
-            })
-            .map(|commit| catalog_managed_commit_path(&commit.file_name))
-            .unwrap_or_else(|| commit_path(staged.version));
+        let path = ratified_commit_path(&response, staged.version);
         if path == staged.staged_path {
             return Ok(StagedCommitState::Ratified);
         }
         // The file name of a published commit does not tell whose commit it is.
         let store = log_store.object_store(None);
-        let read = async |path: &Path| {
-            let result = store.get(path).await;
-            let result = result.map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let bytes = result.bytes().await;
-            bytes.map_err(|e| DataFusionError::External(Box::new(e)))
-        };
-        if read(&path).await? == read(&staged.staged_path).await? {
+        if read_object(&store, &path).await? == read_object(&store, &staged.staged_path).await? {
             Ok(StagedCommitState::Ratified)
         } else {
             Ok(StagedCommitState::Lost)
@@ -478,6 +468,8 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
             table_url,
             log_store.clone(),
             Some(latest_version),
+            SnapshotIntent::Write,
+            None,
         )
         .await?
         .commits;
@@ -575,12 +567,57 @@ fn commit_state_unknown_error(
 /// their versions, and returns the latest version up to which every commit is published,
 /// which is the version that a commit request may report as backfilled.
 ///
+/// Returns the path of the commit of the version that the catalog returned, or the path of
+/// the published commit of the version when the catalog returned none, since the catalog does
+/// not return a commit that is published and reported. A commit whose file name has another
+/// version is not the commit of the version.
+fn ratified_commit_path(response: &DeltaRatifiedCommitResponse, version: i64) -> Path {
+    response
+        .commits
+        .iter()
+        .find(|commit| {
+            commit.version == version
+                && catalog_managed_commit_version(&commit.file_name) == Some(version)
+        })
+        .map(|commit| catalog_managed_commit_path(&commit.file_name))
+        .unwrap_or_else(|| commit_path(version))
+}
+
+async fn read_object(store: &ObjectStoreRef, path: &Path) -> Result<Bytes> {
+    store
+        .get(path)
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+        .bytes()
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))
+}
+
+/// Checks that the published commit of the version has the bytes of the ratified commit. A
+/// published commit with other bytes was not written by publishing the ratified commit, so
+/// the ratified commit is not published.
+fn check_published_commit(
+    published: &Bytes,
+    ratified: &Bytes,
+    path: &Path,
+    version: i64,
+) -> Result<()> {
+    if published == ratified {
+        Ok(())
+    } else {
+        Err(DataFusionError::Execution(format!(
+            "the published Delta commit of version {version} is not the ratified commit `{path}`"
+        )))
+    }
+}
+
 /// The catalog returns the ratified commits that are not reported as published, so every
 /// version before the first of them, or up to the latest version of the table when there is
-/// none, is published. Any other version counts only when its published commit exists.
-/// Commits are published in the order of their versions, so the publishing stops at the
-/// first commit that cannot be published. A commit whose file name has another version is
-/// not published, since it is not the commit of its version.
+/// none, is published. Any other version counts only when its published commit exists, and
+/// for a version that the catalog returned, only when the published commit has the bytes of
+/// the ratified commit. Commits are published in the order of their versions, so the
+/// publishing stops at the first commit that cannot be published. A commit whose file name
+/// has another version is not published, since it is not the commit of its version.
 async fn publish_ratified_commits_before(
     log_store: &LogStoreRef,
     response: &DeltaRatifiedCommitResponse,
@@ -624,6 +661,11 @@ async fn publish_ratified_commits_before(
             .get(&next)
             .map(|file_name| catalog_managed_commit_path(file_name));
         let result = match (lookup, path) {
+            (Ok(_), Some(path)) if path != commit_path(next) => {
+                verify_published_commit(&store, &path, next)
+                    .await
+                    .map_err(|error| (path, error))
+            }
             (Ok(_), _) => Ok(()),
             (Err(_), None) => break,
             (Err(ObjectStoreError::NotFound { .. }), Some(path)) if path != commit_path(next) => {
@@ -731,27 +773,44 @@ async fn checkpoint_published_commit(log_store: &LogStoreRef, version: i64, inte
     }
 }
 
-/// Copies a ratified commit to its place in the published Delta log. The commit that is
-/// published already is not written again.
+/// Checks that the published commit of the version has the bytes of the ratified commit at
+/// the path. A ratified commit that is deleted after it is published cannot be compared, and
+/// its published commit is taken as it is.
+async fn verify_published_commit(store: &ObjectStoreRef, path: &Path, version: i64) -> Result<()> {
+    let ratified = match store.get(path).await {
+        Ok(result) => result
+            .bytes()
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?,
+        Err(ObjectStoreError::NotFound { .. }) => return Ok(()),
+        Err(e) => return Err(DataFusionError::External(Box::new(e))),
+    };
+    let published = read_object(store, &commit_path(version)).await?;
+    check_published_commit(&published, &ratified, path, version)
+}
+
+/// Copies a ratified commit to its place in the published Delta log. A commit that is
+/// published already is not written again, and must have the bytes of the ratified commit.
 async fn publish_commit(log_store: &LogStoreRef, path: &Path, version: i64) -> Result<()> {
     let published = commit_path(version);
     if *path == published {
         return Ok(());
     }
     let store = log_store.object_store(None);
-    let bytes = store
-        .get(path)
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?
-        .bytes()
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let bytes = read_object(&store, path).await?;
     let options = PutOptions {
         mode: PutMode::Create,
         ..Default::default()
     };
-    match store.put_opts(&published, bytes.into(), options).await {
-        Ok(_) | Err(ObjectStoreError::AlreadyExists { .. }) => Ok(()),
+    match store
+        .put_opts(&published, bytes.clone().into(), options)
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(ObjectStoreError::AlreadyExists { .. }) => {
+            let existing = read_object(&store, &published).await?;
+            check_published_commit(&existing, &bytes, path, version)
+        }
         Err(err) => Err(DataFusionError::External(Box::new(err))),
     }
 }
@@ -1315,7 +1374,9 @@ mod tests {
     /// A case of publishing the ratified commits before a commit.
     struct PublishCase {
         name: &'static str,
-        /// The published commits and the staged commits (`<version>.<id>`) in the log.
+        /// The published commits and the staged commits (`<version>.<id>`) in the log. A
+        /// published commit has the bytes of the staged commits of its version, unless it is
+        /// written by another writer (`<version>!`).
         files: &'static [&'static str],
         /// The published commits whose lookup fails.
         failing: &'static [i64],
@@ -1329,6 +1390,7 @@ mod tests {
     }
 
     fn log_file(name: &str) -> Path {
+        let name = name.trim_end_matches('!');
         match name.split_once('.') {
             Some((version, id)) => Path::from(format!(
                 "_delta_log/_staged_commits/{:020}.{id}.json",
@@ -1405,6 +1467,16 @@ mod tests {
                 published: &[0, 1],
             },
             PublishCase {
+                name: "publishing stops at a published commit of another writer",
+                files: &["0", "1!", "1.a", "2.b"],
+                failing: &[],
+                latest_table_version: 2,
+                commits: &[(1, "a"), (2, "b")],
+                version: 3,
+                expected: Some(0),
+                published: &[0, 1],
+            },
+            PublishCase {
                 name: "a commit whose file name has another version is not published",
                 files: &["0", "1.a"],
                 failing: &[],
@@ -1418,8 +1490,12 @@ mod tests {
         for case in cases {
             let store = Arc::new(ObservedStore::default());
             for file in case.files {
+                let bytes = match file.strip_suffix('!') {
+                    Some(_) => "another writer\n".to_string(),
+                    None => format!("{}\n", file.split('.').next().unwrap_or_default()),
+                };
                 store
-                    .put(&log_file(file), format!("{file}\n").into())
+                    .put(&log_file(file), bytes.into())
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
             }
@@ -1476,5 +1552,63 @@ mod tests {
             }
         }
         Ok(())
+    }
+    #[tokio::test]
+    async fn a_published_commit_of_another_writer_is_not_the_ratified_commit() -> Result<()> {
+        use crate::delta_log::{StorageConfig, default_logstore};
+
+        let store: Arc<dyn object_store::ObjectStore> =
+            Arc::new(object_store::memory::InMemory::new());
+        let url = Url::parse("memory:///").map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let log_store = default_logstore(store.clone(), store.clone(), &url, &StorageConfig);
+        let put = async |name: &str, bytes: &'static str| {
+            store
+                .put(&log_file(name), bytes.to_string().into())
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))
+        };
+        put("1.a", "ratified\n").await?;
+        put("1", "ratified\n").await?;
+        put("2.b", "ratified\n").await?;
+        put("2", "another writer\n").await?;
+        // A published commit with the bytes of the ratified commit is the ratified commit.
+        publish_commit(&log_store, &log_file("1.a"), 1).await?;
+        assert!(
+            publish_commit(&log_store, &log_file("2.b"), 2)
+                .await
+                .is_err()
+        );
+        let published = read_object(&store, &commit_path(2)).await?;
+        assert_eq!(published.as_ref(), b"another writer\n");
+        Ok(())
+    }
+
+    #[test]
+    fn the_ratified_commit_path_ignores_a_commit_with_another_version() {
+        let response = |file_name: &str| DeltaRatifiedCommitResponse {
+            latest_table_version: 2,
+            commits: vec![sail_catalog::lakehouse::DeltaRatifiedCommit {
+                version: 2,
+                timestamp: 1,
+                file_name: file_name.to_string(),
+                file_size: 1,
+                file_modification_timestamp: 1,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            ratified_commit_path(&response(&format!("{:020}.a.json", 2)), 2),
+            log_file("2.a")
+        );
+        // The file name of the commit has version 1, so the catalog returned no commit for
+        // version 2, and the published commit of version 2 is the one to compare.
+        assert_eq!(
+            ratified_commit_path(&response(&format!("{:020}.a.json", 1)), 2),
+            commit_path(2)
+        );
+        assert_eq!(
+            ratified_commit_path(&response(&format!("{:020}.a.json", 2)), 3),
+            commit_path(3)
+        );
     }
 }

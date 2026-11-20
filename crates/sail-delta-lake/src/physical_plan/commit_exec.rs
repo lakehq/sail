@@ -41,7 +41,7 @@ use crate::spec::{
     MetadataValue, SaveMode, StructField, StructType,
 };
 use crate::table::{
-    CatalogSnapshotSource, create_delta_table_with_object_store,
+    CatalogSnapshotSource, SnapshotIntent, create_delta_table_with_object_store,
     load_catalog_managed_commits_for_snapshot,
 };
 use crate::transaction::{CommitBuilder, CommitProperties, FinalizedCommit, OperationMetrics};
@@ -275,11 +275,19 @@ impl DeltaCommitExec {
                 table_url,
                 log_store.clone(),
                 version,
+                SnapshotIntent::Write,
+                Some(&DeltaSnapshotConfig {
+                    require_files,
+                    ..Default::default()
+                }),
             )
             .await?
         } else {
             CatalogSnapshotSource::default()
         };
+        if let Some(snapshot) = source.snapshot {
+            return Ok(snapshot);
+        }
         let snapshot = crate::table::DeltaSnapshot::try_new(
             log_store.as_ref(),
             DeltaSnapshotConfig {

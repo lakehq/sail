@@ -16,8 +16,8 @@ use crate::delta_log::{LogStoreRef, StorageConfig};
 use crate::snapshot::{DeltaSnapshot, DeltaSnapshotConfig};
 use crate::spec::{CommitAction, DeltaOperation};
 use crate::table::{
-    DeltaTable, catalog_managed_commit_context, create_logstore_with_object_store,
-    load_catalog_managed_commits_for_snapshot,
+    CatalogSnapshotSource, DeltaTable, SnapshotIntent, catalog_managed_commit_context,
+    create_logstore_with_object_store, load_catalog_managed_commits_for_snapshot,
 };
 use crate::transaction::{CommitBuilder, CommitProperties};
 
@@ -776,28 +776,32 @@ async fn open_table_with_config(
     let store = ctx.runtime_env().object_store_registry.get_store(&url)?;
     let log_store = create_logstore_with_object_store(store, url.clone(), StorageConfig)
         .map_err(|error| DataFusionError::External(Box::new(error)))?;
-    let mut config = DeltaSnapshotConfig {
+    let config = DeltaSnapshotConfig {
         require_files,
         ..Default::default()
     };
-    let mut replay_hint = None;
-    if let Some(lakehouse) = catalog_managed_commit_context(lakehouse) {
-        let source = load_catalog_managed_commits_for_snapshot(
-            ctx,
-            lakehouse,
-            &url,
-            log_store.clone(),
-            None,
-        )
-        .await?;
-        config.catalog_managed_commits = source.commits;
-        replay_hint = source.replay_hint;
+    let source = match catalog_managed_commit_context(lakehouse) {
+        Some(lakehouse) => {
+            load_catalog_managed_commits_for_snapshot(
+                ctx,
+                lakehouse,
+                &url,
+                log_store.clone(),
+                None,
+                SnapshotIntent::Write,
+                Some(&config),
+            )
+            .await?
+        }
+        None => CatalogSnapshotSource::default(),
+    };
+    let mut table = source.into_table(log_store, config);
+    if table.state.is_none() {
+        table
+            .load()
+            .await
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
     }
-    let mut table = DeltaTable::new(log_store, config).with_replay_hint(replay_hint);
-    table
-        .load()
-        .await
-        .map_err(|error| DataFusionError::External(Box::new(error)))?;
     Ok(table)
 }
 

@@ -70,8 +70,9 @@ use crate::spec::{
     TableProperties, canonicalize_and_validate_table_properties, route_table_property_key,
 };
 use crate::table::{
-    DeltaTable, catalog_managed_commit_context, create_delta_table_with_object_store,
-    create_logstore_with_object_store, infer_delta_logical_metadata, infer_delta_logical_schema,
+    DeltaTable, SnapshotIntent, catalog_managed_commit_context,
+    create_delta_table_with_object_store, create_logstore_with_object_store,
+    infer_delta_logical_metadata, infer_delta_logical_schema,
     load_catalog_managed_commits_for_snapshot, open_table_with_object_store_and_table_config,
 };
 use crate::transaction::{CommitBuilder, CommitProperties};
@@ -1174,7 +1175,7 @@ async fn open_delta_write_planning_table(
 ) -> std::result::Result<DeltaTable, DeltaTableError> {
     // Only partition columns and table existence are needed at planning time;
     // skip replaying Add/Remove file actions unless a later physical plan needs them.
-    let mut table_config = DeltaSnapshotConfig {
+    let table_config = DeltaSnapshotConfig {
         require_files: false,
         ..Default::default()
     };
@@ -1191,13 +1192,15 @@ async fn open_delta_write_planning_table(
             &table_url,
             log_store.clone(),
             None,
+            SnapshotIntent::Write,
+            Some(&table_config),
         )
         .await
         .map_err(DeltaTableError::from)?;
-        table_config.catalog_managed_commits = source.commits;
-        let mut table =
-            DeltaTable::new(log_store, table_config).with_replay_hint(source.replay_hint);
-        table.load().await?;
+        let mut table = source.into_table(log_store, table_config);
+        if table.state.is_none() {
+            table.load().await?;
+        }
         Ok(table)
     } else {
         open_table_with_object_store_and_table_config(
