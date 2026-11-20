@@ -42,7 +42,8 @@ pub use features::{
 
 use crate::delta_log::{
     LogStoreRef, StorageConfig, complete_checkpoint_file_sets, default_logstore, get_actions,
-    list_delta_log_entries_from, resolve_version_timestamp,
+    list_delta_log_entries_from, read_checkpoint_protocol, replay_table_header,
+    resolve_version_timestamp,
 };
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::r#gen::DeltaReadOptions;
@@ -726,7 +727,9 @@ where
     C: SessionExtensionAccessor + ?Sized,
 {
     let is_catalog_managed = match log_store.get_latest_version(-1).await {
-        Ok(_) => delta_log_is_catalog_managed(&log_store).await?,
+        Ok(latest_version) => {
+            delta_log_is_catalog_managed(&log_store, latest_version, version_as_of).await?
+        }
         // Unity Catalog registers a managed table before any Delta commit exists,
         // so the first access creates version 0 from the catalog metadata.
         Err(DeltaError::MissingVersion) => {
@@ -759,36 +762,42 @@ where
 
 /// Returns whether an existing Delta log uses catalog-managed commits.
 ///
-/// The protocol is read from the earliest state that the log retains, so that published commits
-/// that a catalog-managed table must ignore are never replayed. The latest published version is
-/// only read for a table that did not start catalog-managed.
-async fn delta_log_is_catalog_managed(log_store: &LogStoreRef) -> Result<bool> {
-    if earliest_retained_protocol(log_store)
-        .await?
-        .is_some_and(|protocol| protocol_is_catalog_managed(&protocol))
-    {
-        return Ok(true);
+/// The protocol is first read from the earliest state that the log retains, so that published
+/// commits that a catalog-managed table must ignore are never replayed. A table that did not
+/// start catalog-managed can be upgraded later, so the protocol at the version being read then
+/// decides: `version_as_of`, or the latest published version. Commits after that version are not
+/// replayed, and only header actions are read.
+async fn delta_log_is_catalog_managed(
+    log_store: &LogStoreRef,
+    latest_version: i64,
+    version_as_of: Option<i64>,
+) -> Result<bool> {
+    let earliest_version = match earliest_retained_protocol(log_store).await? {
+        Some((_, protocol)) if protocol_is_catalog_managed(&protocol) => return Ok(true),
+        Some((version, _)) => Some(version),
+        None => None,
+    };
+    // A version outside the retained log is left to the table load to report.
+    let version = version_as_of
+        .unwrap_or(latest_version)
+        .min(latest_version)
+        .max(earliest_version.unwrap_or(0));
+    if earliest_version == Some(version) {
+        return Ok(false);
     }
-    let mut table = DeltaTable::new(
-        log_store.clone(),
-        DeltaSnapshotConfig {
-            require_files: false,
-            ..Default::default()
-        },
-    );
-    table.load().await?;
-    Ok(protocol_is_catalog_managed(table.snapshot()?.protocol()))
+    let header = replay_table_header(version, log_store.as_ref()).await?;
+    Ok(protocol_is_catalog_managed(&header.protocol))
 }
 
-/// Returns the protocol of the earliest state that the Delta log retains: version 0, or the
-/// oldest checkpoint once log cleanup has removed version 0. Neither is ratified after the
+/// Returns the earliest version that the Delta log retains, with its protocol: version 0, or
+/// the oldest checkpoint once log cleanup has removed version 0. Neither is ratified after the
 /// catalog's latest version, unlike later published commits.
-async fn earliest_retained_protocol(log_store: &LogStoreRef) -> Result<Option<Protocol>> {
+async fn earliest_retained_protocol(log_store: &LogStoreRef) -> Result<Option<(i64, Protocol)>> {
     if let Some(bytes) = log_store.read_commit_entry(0).await? {
         return Ok(get_actions(0, &bytes)?
             .into_iter()
             .find_map(|action| match action {
-                Action::Protocol(protocol) => Some(protocol),
+                Action::Protocol(protocol) => Some((0, protocol)),
                 _ => None,
             }));
     }
@@ -796,17 +805,10 @@ async fn earliest_retained_protocol(log_store: &LogStoreRef) -> Result<Option<Pr
     let Some(checkpoint) = complete_checkpoint_file_sets(entries).into_iter().next() else {
         return Ok(None);
     };
-    let snapshot = DeltaSnapshot::try_new(
-        log_store.as_ref(),
-        DeltaSnapshotConfig {
-            require_files: false,
-            ..Default::default()
-        },
-        Some(checkpoint.version()),
-        None,
-    )
-    .await?;
-    Ok(Some(snapshot.protocol().clone()))
+    let version = checkpoint.version();
+    Ok(read_checkpoint_protocol(log_store.as_ref(), checkpoint)
+        .await?
+        .map(|protocol| (version, protocol)))
 }
 
 pub(crate) async fn load_delta_read_state(
@@ -1433,9 +1435,12 @@ mod tests {
         Ok(())
     }
 
-    /// Builds a log with a checkpoint at version 2 whose earlier commits were removed by log
-    /// cleanup, followed by a published commit at version 3 that cannot be parsed.
-    async fn log_after_cleanup_with_corrupt_tail(protocol: Protocol) -> DeltaResult<LogStoreRef> {
+    /// Writes version 0 with `protocol`, adds a file in each version up to `last_version`, and
+    /// publishes a commit after it that cannot be parsed. No checksum files are written.
+    async fn log_with_corrupt_tail(
+        protocol: Protocol,
+        last_version: i64,
+    ) -> DeltaResult<(Arc<dyn ObjectStore>, LogStoreRef)> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let table_url = Url::parse("memory:///").map_err(crate::spec::DeltaError::generic_err)?;
         let log_store = default_logstore(store.clone(), store.clone(), &table_url, &StorageConfig);
@@ -1453,7 +1458,7 @@ mod tests {
             &[Action::Protocol(protocol), Action::Metadata(metadata)],
         )
         .await?;
-        for version in 1..=2 {
+        for version in 1..=last_version {
             let add = Add {
                 path: format!("part-{version}.parquet"),
                 size: 1,
@@ -1462,19 +1467,40 @@ mod tests {
             };
             put_commit(&store, version, &[Action::Add(add)]).await?;
         }
+        store
+            .put(
+                &Path::from(format!("_delta_log/{:020}.json", last_version + 1)),
+                "{not valid delta json".into(),
+            )
+            .await?;
+        Ok((store, log_store))
+    }
+
+    /// Builds a log with a checkpoint at version 2 whose earlier commits were removed by log
+    /// cleanup, followed by a published commit at version 3 that cannot be parsed.
+    async fn log_after_cleanup_with_corrupt_tail(protocol: Protocol) -> DeltaResult<LogStoreRef> {
+        let (store, log_store) = log_with_corrupt_tail(protocol, 2).await?;
         create_checkpoint_for(2, log_store.as_ref(), Uuid::nil()).await?;
         for version in 0..2 {
             store
                 .delete(&Path::from(format!("_delta_log/{version:020}.json")))
                 .await?;
         }
-        store
-            .put(
-                &Path::from(format!("_delta_log/{:020}.json", 3)),
-                "{not valid delta json".into(),
-            )
-            .await?;
         Ok(log_store)
+    }
+
+    async fn is_catalog_managed(
+        log_store: &LogStoreRef,
+        latest_version: i64,
+        version_as_of: Option<i64>,
+    ) -> DeltaResult<bool> {
+        delta_log_is_catalog_managed(log_store, latest_version, version_as_of)
+            .await
+            .map_err(crate::spec::DeltaError::generic_err)
+    }
+
+    fn is_invalid_json_error(result: &DeltaResult<bool>) -> bool {
+        matches!(result, Err(error) if error.to_string().contains("Invalid JSON"))
     }
 
     #[tokio::test]
@@ -1482,11 +1508,7 @@ mod tests {
         let protocol = protocol_with_catalog_managed(&Protocol::new(1, 2, None, None));
         let log_store = log_after_cleanup_with_corrupt_tail(protocol).await?;
 
-        let is_catalog_managed = delta_log_is_catalog_managed(&log_store)
-            .await
-            .map_err(crate::spec::DeltaError::generic_err)?;
-
-        assert!(is_catalog_managed);
+        assert!(is_catalog_managed(&log_store, 3, None).await?);
         Ok(())
     }
 
@@ -1497,12 +1519,43 @@ mod tests {
             log_after_cleanup_with_corrupt_tail(Protocol::new(1, 2, None, None)).await?;
 
         // The published log is authoritative for a table that is not catalog-managed.
-        let result = delta_log_is_catalog_managed(&log_store).await;
+        let result = is_catalog_managed(&log_store, 3, None).await;
+        assert!(is_invalid_json_error(&result), "{result:?}");
+        // Time travel reads the checkpoint, also for a version that log cleanup removed.
+        assert!(!is_catalog_managed(&log_store, 3, Some(2)).await?);
+        assert!(!is_catalog_managed(&log_store, 3, Some(1)).await?);
+        Ok(())
+    }
 
-        assert!(
-            matches!(&result, Err(error) if error.to_string().contains("Invalid JSON")),
-            "{result:?}"
-        );
+    #[tokio::test]
+    async fn filesystem_managed_detection_for_time_travel_stops_at_the_requested_version()
+    -> DeltaResult<()> {
+        let (_, log_store) = log_with_corrupt_tail(Protocol::new(1, 2, None, None), 2).await?;
+
+        assert!(!is_catalog_managed(&log_store, 3, Some(2)).await?);
+        let result = is_catalog_managed(&log_store, 3, None).await;
+        assert!(is_invalid_json_error(&result), "{result:?}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn detection_follows_an_upgrade_to_catalog_managed_commits() -> DeltaResult<()> {
+        let protocol = Protocol::new(1, 2, None, None);
+        let (store, log_store) = log_with_corrupt_tail(protocol.clone(), 1).await?;
+        // Version 2 enables catalog-managed commits and replaces the corrupt commit.
+        put_commit(
+            &store,
+            2,
+            &[Action::Protocol(protocol_with_catalog_managed(&protocol))],
+        )
+        .await?;
+
+        assert!(is_catalog_managed(&log_store, 2, None).await?);
+        assert!(!is_catalog_managed(&log_store, 2, Some(0)).await?);
+        assert!(!is_catalog_managed(&log_store, 2, Some(1)).await?);
+        assert!(is_catalog_managed(&log_store, 2, Some(2)).await?);
+        // Versions after the latest published one exist only in the catalog.
+        assert!(is_catalog_managed(&log_store, 2, Some(5)).await?);
         Ok(())
     }
 }

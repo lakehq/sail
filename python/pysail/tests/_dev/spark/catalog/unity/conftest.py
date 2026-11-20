@@ -437,6 +437,16 @@ def write_invalid_published_delta_commit(version: int, location_var: str, variab
     commit_path.write_text("{not valid delta json\n", encoding="utf-8")
 
 
+@given(parsers.parse("Delta checksum for version {version:d} in {location_var} is removed"))
+def remove_delta_checksum(version: int, location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    checksum_path = Path(location.path) / "_delta_log" / f"{version:020}.crc"
+    assert checksum_path.exists(), f"Delta checksum does not exist: {checksum_path}"
+    checksum_path.unlink()
+
+
 @then(parsers.parse("Delta commit for version {version:d} in {location_var} has catalog-managed commit info"))
 def delta_commit_has_catalog_managed_commit_info(version: int, location_var: str, variables: dict) -> None:
     location = variables.get(location_var)

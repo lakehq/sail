@@ -17,6 +17,7 @@ pub(crate) use listing::{
 };
 pub(crate) use replay::{
     latest_replayable_version, load_replayed_table_header, load_replayed_table_state,
+    read_checkpoint_protocol, replay_table_header,
 };
 pub(crate) use segment::{
     LogSegmentResolver, ReplayedTableHeader, ResolvedLogSegment, list_log_files,

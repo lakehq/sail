@@ -692,6 +692,24 @@ Feature: Unity Catalog managed Delta table operations
     Then Delta commit for version 3 exists in location
     Then no staged Delta commits exist in location
 
+  Scenario: Time travel on managed Delta table without catalogManaged stops at the requested version
+    Given Unity Catalog managed Delta table unity_table_test.managed_delta_filesystem_time_travel_t exists with id and name columns without catalogManaged
+    Given final Unity Catalog managed table cleanup for unity_table_test.managed_delta_filesystem_time_travel_t
+    Given variable location for table unity_table_test.managed_delta_filesystem_time_travel_t
+    Given rows are appended one commit at a time to the Delta table path in location
+      | id | name |
+      | 1  | one  |
+      | 2  | two  |
+    Given published Delta commit for version 2 in location is invalid JSON
+    Given Delta checksum for version 2 in location is removed
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_filesystem_time_travel_t VERSION AS OF 1 ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 1  | one  |
+
   Scenario: Metadata ALTER on managed Delta table without catalogManaged commits to the Delta log
     Given Unity Catalog managed Delta table unity_table_test.managed_delta_filesystem_alter_t exists with id and name columns without catalogManaged
     Given final Unity Catalog managed table cleanup for unity_table_test.managed_delta_filesystem_alter_t

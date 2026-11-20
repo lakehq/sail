@@ -21,7 +21,9 @@ use crate::checkpoint::{
 };
 use crate::delta_log::LogStore;
 use crate::snapshot::CatalogManagedCommitSet;
-use crate::spec::{DeltaError as DeltaTableError, DeltaResult, is_json_checkpoint_filename};
+use crate::spec::{
+    DeltaError as DeltaTableError, DeltaResult, Protocol, is_json_checkpoint_filename,
+};
 
 async fn read_checkpoint_header_from_checkpoint_files(
     root_store: Arc<dyn ObjectStore>,
@@ -200,55 +202,16 @@ pub(crate) async fn load_replayed_table_header(
             commit_files,
             compaction_files,
             target_version,
-        } => {
-            let store = log_store.object_store(None);
-
-            let (mut state, start_commit_version, mut commit_timestamps) = match checkpoint {
-                Some(checkpoint_files) => {
-                    let next_version = checkpoint_files.version().saturating_add(1);
-                    let checkpoint_state = read_checkpoint_header_from_checkpoint_files(
-                        store.clone(),
-                        checkpoint_files,
-                    )
-                    .await?;
-                    (checkpoint_state, next_version, BTreeMap::new())
-                }
-                None => {
-                    let start = base.version.saturating_add(1);
-                    let ts = Arc::unwrap_or_clone(base.commit_timestamps.clone());
-                    (ReconciledHeaderState::from_header(&base), start, ts)
-                }
-            };
-
-            if start_commit_version <= target_version {
-                commit_timestamps.extend(
-                    replay_commit_header_actions_with_compactions(
-                        &mut state,
-                        store,
-                        &commit_files,
-                        &compaction_files,
-                        start_commit_version,
-                        target_version,
-                    )
-                    .await?,
-                );
-            }
-
-            let protocol = state.protocol.ok_or_else(|| {
-                DeltaTableError::generic("Cannot load table header without protocol")
-            })?;
-            let metadata = state.metadata.ok_or_else(|| {
-                DeltaTableError::generic("Cannot load table header without metadata")
-            })?;
-            Ok(Some(ReplayedTableHeader {
-                version: target_version,
-                protocol,
-                metadata,
-                txns: Arc::new(state.txns),
-                domain_metadata: Arc::new(state.domain_metadata),
-                commit_timestamps: Arc::new(commit_timestamps),
-            }))
-        }
+        } => replay_table_header_segment(
+            log_store,
+            Some(&base),
+            checkpoint,
+            &commit_files,
+            &compaction_files,
+            target_version,
+        )
+        .await
+        .map(Some),
         ResolvedLogSegment::FullReplay { .. } => {
             debug!(
                 "crc-header: no usable base state, returning None for header fast path target_version={version}"
@@ -256,6 +219,132 @@ pub(crate) async fn load_replayed_table_header(
             Ok(None)
         }
     }
+}
+
+/// Loads the table header at `version` without decoding file actions.
+///
+/// Unlike [`load_replayed_table_header`], this also replays the header actions of the latest
+/// checkpoint and the commits after it when no checksum or replay hint gives a base state.
+pub(crate) async fn replay_table_header(
+    version: i64,
+    log_store: &dyn LogStore,
+) -> DeltaResult<ReplayedTableHeader> {
+    if version < 0 {
+        return Err(DeltaTableError::generic(format!(
+            "Cannot load table header for negative version: {version}"
+        )));
+    }
+
+    let segment = LogSegmentResolver::new(log_store, version, None, None)
+        .resolve_for_header()
+        .await?;
+
+    let (base, checkpoint, commit_files, compaction_files, target_version) = match segment {
+        ResolvedLogSegment::ExactChecksum { header } => return Ok(header),
+        ResolvedLogSegment::Incremental {
+            base,
+            checkpoint,
+            commit_files,
+            compaction_files,
+            target_version,
+        } => (
+            Some(base),
+            checkpoint,
+            commit_files,
+            compaction_files,
+            target_version,
+        ),
+        ResolvedLogSegment::FullReplay {
+            checkpoint,
+            commit_files,
+            compaction_files,
+            target_version,
+        } => (
+            None,
+            checkpoint,
+            commit_files,
+            compaction_files,
+            target_version,
+        ),
+    };
+    replay_table_header_segment(
+        log_store,
+        base.as_ref(),
+        checkpoint,
+        &commit_files,
+        &compaction_files,
+        target_version,
+    )
+    .await
+}
+
+/// Reads the protocol of a checkpoint, decoding only its header columns.
+pub(crate) async fn read_checkpoint_protocol(
+    log_store: &dyn LogStore,
+    checkpoint: CheckpointFileSet,
+) -> DeltaResult<Option<Protocol>> {
+    let state =
+        read_checkpoint_header_from_checkpoint_files(log_store.object_store(None), checkpoint)
+            .await?;
+    Ok(state.protocol)
+}
+
+/// Replays header actions up to `target_version`, starting from the checkpoint if there is one,
+/// otherwise from `base`, otherwise from version 0.
+async fn replay_table_header_segment(
+    log_store: &dyn LogStore,
+    base: Option<&ReplayedTableHeader>,
+    checkpoint: Option<CheckpointFileSet>,
+    commit_files: &[(i64, ObjectMeta)],
+    compaction_files: &[((i64, i64), ObjectMeta)],
+    target_version: i64,
+) -> DeltaResult<ReplayedTableHeader> {
+    let store = log_store.object_store(None);
+
+    let (mut state, start_commit_version, mut commit_timestamps) = match (checkpoint, base) {
+        (Some(checkpoint_files), _) => {
+            let next_version = checkpoint_files.version().saturating_add(1);
+            let checkpoint_state =
+                read_checkpoint_header_from_checkpoint_files(store.clone(), checkpoint_files)
+                    .await?;
+            (checkpoint_state, next_version, BTreeMap::new())
+        }
+        (None, Some(base)) => {
+            let start = base.version.saturating_add(1);
+            let ts = Arc::unwrap_or_clone(base.commit_timestamps.clone());
+            (ReconciledHeaderState::from_header(base), start, ts)
+        }
+        (None, None) => (ReconciledHeaderState::default(), 0, BTreeMap::new()),
+    };
+
+    if start_commit_version <= target_version {
+        commit_timestamps.extend(
+            replay_commit_header_actions_with_compactions(
+                &mut state,
+                store,
+                commit_files,
+                compaction_files,
+                start_commit_version,
+                target_version,
+            )
+            .await?,
+        );
+    }
+
+    let protocol = state
+        .protocol
+        .ok_or_else(|| DeltaTableError::generic("Cannot load table header without protocol"))?;
+    let metadata = state
+        .metadata
+        .ok_or_else(|| DeltaTableError::generic("Cannot load table header without metadata"))?;
+    Ok(ReplayedTableHeader {
+        version: target_version,
+        protocol,
+        metadata,
+        txns: Arc::new(state.txns),
+        domain_metadata: Arc::new(state.domain_metadata),
+        commit_timestamps: Arc::new(commit_timestamps),
+    })
 }
 
 pub(crate) async fn latest_replayable_version(log_store: &dyn LogStore) -> DeltaResult<i64> {
