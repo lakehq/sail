@@ -476,6 +476,23 @@ pub(crate) fn catalog_managed_commit_context(
     lakehouse_table.filter(|context| context.commit == CommitAuthority::DeltaRatifiedCommit)
 }
 
+/// Whether a commit of the actions to the snapshot uses the catalog-managed protocol:
+/// the last protocol action in the commit, or else the protocol of the snapshot.
+pub(crate) fn is_catalog_managed_commit(
+    snapshot: Option<&DeltaSnapshot>,
+    actions: &[crate::spec::CommitAction],
+) -> bool {
+    let protocol = actions
+        .iter()
+        .rev()
+        .find_map(|action| match action {
+            crate::spec::CommitAction::Protocol(protocol) => Some(protocol),
+            _ => None,
+        })
+        .or_else(|| snapshot.map(|snapshot| snapshot.protocol()));
+    protocol.is_some_and(|protocol| protocol.is_catalog_managed())
+}
+
 async fn load_catalog_managed_delta_bootstrap_info<C>(
     ctx: &C,
     catalog_table: &[String],
@@ -3507,6 +3524,23 @@ mod catalog_managed_tests {
         assert!(published_commit_bytes(&commit, 2).await.is_some());
     }
 
+    #[tokio::test]
+    async fn catalog_commit_at_the_limit_of_the_catalog_names_the_commit_that_is_not_published() {
+        // Another writer publishes other actions as version 1 before the catalog refuses the
+        // request at its limit, so the ratified version 1 cannot be published.
+        let commit = commit_with_script_after(
+            vec![CommitStep::PublishPredecessorAndExhaust],
+            true,
+            UnpublishedCommit::Staged,
+        )
+        .await;
+        let error = commit.result.as_ref().err().unwrap().to_string();
+        let published = crate::spec::commit_path(1).to_string();
+        assert!(error.contains("429"), "{error}");
+        assert!(error.contains("of version 1"), "{error}");
+        assert!(error.contains(&published), "{error}");
+    }
+
     /// Returns a store with the published version 0 of a catalog-managed table and the files
     /// of its log, and the log store of the table.
     async fn observed_log_store(
@@ -3637,5 +3671,190 @@ mod catalog_managed_tests {
             .to_string();
         assert!(error.contains("503 Service Unavailable"), "{error}");
         assert_eq!(lists_staged_commits(&store), 0);
+    }
+
+    /// Alters a Unity managed table that is published at version 1, with the protocol and
+    /// the table properties (`,"<key>":"<value>"...`). The catalog answers the discovery
+    /// request with the response, and fails every commit request. Returns the result of
+    /// the ALTER, the number of the requests for ratified commits, and the published commits.
+    async fn alter_unity_managed_table(
+        protocol: &str,
+        configuration: &str,
+        ratified: DeltaRatifiedCommitResponse,
+        operation: sail_common_datafusion::lakesource::LakeSourceAlterTableOperation,
+    ) -> (
+        datafusion_common::Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult>,
+        usize,
+        Vec<String>,
+    ) {
+        use sail_common_datafusion::lakesource::LakeSource;
+
+        let store = Arc::new(InMemory::new());
+        let version_0 = format!(
+            concat!(
+                "{{\"commitInfo\":{{\"timestamp\":1,\"inCommitTimestamp\":1}}}}\n",
+                "{{\"protocol\":{protocol}}}\n",
+                "{{\"metaData\":{{\"id\":\"table-id\",\"format\":{{\"provider\":\"parquet\",",
+                "\"options\":{{}}}},\"schemaString\":\"{{\\\"type\\\":\\\"struct\\\",",
+                "\\\"fields\\\":[{{\\\"name\\\":\\\"id\\\",\\\"type\\\":\\\"long\\\",",
+                "\\\"nullable\\\":true,\\\"metadata\\\":{{}}}}]}}\",\"partitionColumns\":[],",
+                "\"configuration\":{{\"io.unitycatalog.tableId\":\"table-id\"{configuration}}},",
+                "\"createdTime\":0}}}}\n"
+            ),
+            protocol = protocol,
+            configuration = configuration,
+        );
+        for (version, commit) in [(0, version_0.as_str()), (1, EMPTY_COMMIT)] {
+            let path = Path::from(format!("items/_delta_log/{}", published_commit(version)));
+            store.put(&path, commit.to_string().into()).await.unwrap();
+        }
+        let catalog = Arc::new(UnityManagedCatalog {
+            catalog_managed_property: false,
+            ratified: Some(ratified),
+            commit_requests: AtomicUsize::new(0),
+            discover_requests: AtomicUsize::new(0),
+            discover_error: None,
+            commit_error: Some(|| CatalogError::External("unexpected commit request".into())),
+            script: None,
+            page_size: None,
+        });
+        let manager = CatalogManager::try_new(CatalogManagerOptions {
+            catalogs: HashMap::from([(
+                "unity".into(),
+                catalog.clone() as Arc<dyn CatalogProvider>,
+            )]),
+            default_catalog: "unity".into(),
+            default_database: vec!["default".into()],
+            global_temporary_database: vec!["global_temp".into()],
+        })
+        .unwrap();
+        let session =
+            SessionContext::new_with_config(SessionConfig::new().with_extension(Arc::new(manager)));
+        let table_url = Url::parse("memory:///items/").unwrap();
+        session
+            .runtime_env()
+            .register_object_store(&table_url, store.clone());
+        let mut context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("unity".into()),
+            vec!["unity".into(), "default".into(), "items".into()],
+            CatalogTableIdentity {
+                table_id: Some("table-id".into()),
+                table_uri: Some(table_url.to_string()),
+            },
+            LakehouseOperation::Alter,
+            LakehouseFormat::Delta,
+            LakehouseAuthority::PathManaged,
+            ScanAuthority::ClientLakeSource,
+        );
+        context.commit = CommitAuthority::DeltaRatifiedCommit;
+        let result = crate::lake_source::DeltaLakeSource
+            .alter_table(
+                session.task_ctx().as_ref(),
+                table_url.as_str(),
+                operation,
+                Some(context),
+            )
+            .await;
+        let prefix = Path::from("items/_delta_log");
+        let mut published = store
+            .list(Some(&prefix))
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|meta| meta.location.filename().unwrap().to_string())
+            .filter(|name| name.ends_with(".json"))
+            .collect::<Vec<_>>();
+        published.sort();
+        (
+            result,
+            catalog.commit_requests.load(Ordering::SeqCst),
+            published,
+        )
+    }
+
+    fn set_table_property(
+        key: &str,
+        value: &str,
+    ) -> sail_common_datafusion::lakesource::LakeSourceAlterTableOperation {
+        sail_common_datafusion::lakesource::LakeSourceAlterTableOperation::SetTableProperties {
+            changes: vec![(key.to_string(), Some(value.to_string()))],
+            if_exists: false,
+        }
+    }
+
+    /// The response of a catalog that serves the table with the Delta REST API and states
+    /// that the table is not catalog-managed. The catalog has no commits of the table.
+    fn not_catalog_managed() -> DeltaRatifiedCommitResponse {
+        DeltaRatifiedCommitResponse {
+            requires_published_log: true,
+            ..ratified(0, &[])
+        }
+    }
+
+    #[tokio::test]
+    async fn alter_of_unity_managed_table_that_is_not_catalog_managed_commits_to_the_log() {
+        let comment =
+            sail_common_datafusion::lakesource::LakeSourceAlterTableOperation::AlterColumns {
+                changes: vec![sail_common::spec::ColumnChange::Comment {
+                    path: vec!["id".into()],
+                    comment: Some("the id".into()),
+                }],
+                case_sensitive: false,
+            };
+        for operation in [set_table_property("k", "v"), comment] {
+            let (result, commit_requests, published) = alter_unity_managed_table(
+                NON_CATALOG_MANAGED_PROTOCOL,
+                "",
+                not_catalog_managed(),
+                operation,
+            )
+            .await;
+            assert!(!result.unwrap().catalog_updated);
+            assert_eq!(commit_requests, 0);
+            assert_eq!(
+                published,
+                [
+                    published_commit(0),
+                    published_commit(1),
+                    published_commit(2)
+                ]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn alter_of_unity_managed_table_that_is_not_catalog_managed_changes_unity_properties() {
+        let (result, commit_requests, published) = alter_unity_managed_table(
+            r#"{"minReaderVersion":3,"minWriterVersion":7,"readerFeatures":["deletionVectors"],"writerFeatures":["deletionVectors"]}"#,
+            r#","delta.enableDeletionVectors":"true""#,
+            not_catalog_managed(),
+            set_table_property("delta.enableDeletionVectors", "false"),
+        )
+        .await;
+        assert!(!result.unwrap().catalog_updated);
+        assert_eq!(commit_requests, 0);
+        assert_eq!(published.last(), Some(&published_commit(2)));
+    }
+
+    #[tokio::test]
+    async fn alter_of_catalog_managed_table_keeps_unity_properties() {
+        let (result, commit_requests, published) = alter_unity_managed_table(
+            CATALOG_MANAGED_PROTOCOL,
+            r#","delta.enableInCommitTimestamps":"true","delta.enableDeletionVectors":"true""#,
+            DeltaRatifiedCommitResponse {
+                catalog_managed: true,
+                ..ratified(1, &[])
+            },
+            set_table_property("delta.enableDeletionVectors", "false"),
+        )
+        .await;
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("Unity Catalog requires the table property"),
+            "{error}"
+        );
+        assert_eq!(commit_requests, 0);
+        assert_eq!(published.last(), Some(&published_commit(1)));
     }
 }

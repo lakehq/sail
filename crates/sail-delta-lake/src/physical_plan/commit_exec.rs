@@ -303,21 +303,6 @@ impl DeltaCommitExec {
         Ok(Arc::new(snapshot))
     }
 
-    fn is_catalog_managed_commit(
-        reference: Option<&Arc<crate::table::DeltaSnapshot>>,
-        actions: &[CommitAction],
-    ) -> bool {
-        let protocol = actions
-            .iter()
-            .rev()
-            .find_map(|action| match action {
-                CommitAction::Protocol(protocol) => Some(protocol),
-                _ => None,
-            })
-            .or_else(|| reference.map(|snapshot| snapshot.protocol()));
-        protocol.is_some_and(|protocol| protocol.is_catalog_managed())
-    }
-
     fn split_create_actions_for_catalog_managed_commit(
         actions: Vec<CommitAction>,
     ) -> (Vec<CommitAction>, Vec<CommitAction>) {
@@ -900,7 +885,7 @@ impl ExecutionPlan for DeltaCommitExec {
             }
 
             let commit_uses_catalog_managed_protocol =
-                Self::is_catalog_managed_commit(reference.as_ref(), &final_actions);
+                crate::table::is_catalog_managed_commit(reference.as_deref(), &final_actions);
             if commit_uses_catalog_managed_protocol && catalog_managed_table.is_none() {
                 return Err(DataFusionError::Plan(
                     "catalog-managed Delta writes require a managed catalog table reference"

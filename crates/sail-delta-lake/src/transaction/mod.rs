@@ -2415,6 +2415,19 @@ mod tests {
         )
     }
 
+    #[test]
+    fn a_commit_has_a_line_terminator_after_every_action() {
+        let actions = [
+            CommitAction::Add(commit_test_add("a.parquet")),
+            CommitAction::Add(commit_test_add("b.parquet")),
+        ];
+        let bytes = actions_to_log_bytes(&actions).unwrap();
+        let lines = std::str::from_utf8(&bytes).unwrap().split_inclusive('\n');
+        let lines = lines.collect::<Vec<_>>();
+        assert_eq!(lines.len(), actions.len());
+        assert!(lines.iter().all(|line| line.ends_with("}\n")), "{lines:?}");
+    }
+
     #[derive(Debug)]
     enum CommitPutFault {
         Landed,

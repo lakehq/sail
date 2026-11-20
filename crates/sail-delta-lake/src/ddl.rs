@@ -17,7 +17,8 @@ use crate::snapshot::{DeltaSnapshot, DeltaSnapshotConfig};
 use crate::spec::{CommitAction, DeltaOperation};
 use crate::table::{
     CatalogSnapshotSource, DeltaTable, SnapshotIntent, catalog_managed_commit_context,
-    create_logstore_with_object_store, load_catalog_managed_commits_for_snapshot,
+    create_logstore_with_object_store, is_catalog_managed_commit,
+    load_catalog_managed_commits_for_snapshot,
 };
 use crate::transaction::{CommitBuilder, CommitProperties};
 
@@ -27,7 +28,7 @@ pub(crate) async fn drop_check_constraint(
     lakehouse: Option<&LakehouseExecutionContext>,
     name: String,
     if_exists: bool,
-) -> Result<()> {
+) -> Result<bool> {
     let table = open_table(ctx, path, lakehouse).await?;
     let snapshot = table
         .snapshot()
@@ -257,7 +258,7 @@ pub(crate) async fn replace_columns(
         actions.push(CommitAction::Protocol(protocol));
     }
     actions.push(CommitAction::Metadata(metadata));
-    commit(
+    let catalog_updated = commit(
         ctx,
         lakehouse,
         snapshot,
@@ -268,7 +269,7 @@ pub(crate) async fn replace_columns(
     .await?;
     Ok(
         sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
-            catalog_updated: catalog_managed_commit_context(lakehouse).is_some(),
+            catalog_updated,
             schema: Some(schema),
             properties,
             partition_by: None,
@@ -584,7 +585,7 @@ pub(crate) async fn alter_columns(
         actions.push(CommitAction::Protocol(protocol));
     }
     actions.push(CommitAction::Metadata(metadata));
-    commit(
+    let catalog_updated = commit(
         ctx,
         lakehouse,
         snapshot,
@@ -595,7 +596,7 @@ pub(crate) async fn alter_columns(
     .await?;
     Ok(
         sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
-            catalog_updated: catalog_managed_commit_context(lakehouse).is_some(),
+            catalog_updated,
             schema: Some(schema),
             properties,
             partition_by: None,
@@ -805,6 +806,9 @@ async fn open_table_with_config(
     Ok(table)
 }
 
+/// Commits the actions to the table, and returns whether the commit went to the catalog.
+/// Only a commit that uses the catalog-managed protocol goes to the catalog. Any other
+/// commit goes to the file system, which refuses to write a catalog-managed table.
 pub(crate) async fn commit(
     ctx: &TaskContext,
     lakehouse: Option<&LakehouseExecutionContext>,
@@ -812,14 +816,16 @@ pub(crate) async fn commit(
     log_store: LogStoreRef,
     actions: Vec<CommitAction>,
     operation: DeltaOperation,
-) -> Result<()> {
+) -> Result<bool> {
     let commit_properties = CommitProperties::from_session_config(ctx.session_config())?;
-    let Some(lakehouse) = catalog_managed_commit_context(lakehouse) else {
+    let Some(lakehouse) = catalog_managed_commit_context(lakehouse)
+        .filter(|_| is_catalog_managed_commit(Some(snapshot.as_ref()), &actions))
+    else {
         return CommitBuilder::from(commit_properties)
             .with_actions(actions)
             .build(Some(snapshot), log_store, operation)
             .await
-            .map(|_| ())
+            .map(|_| false)
             .map_err(|error| DataFusionError::External(Box::new(error)));
     };
     let manager = ctx.extension::<CatalogManager>()?;
@@ -858,7 +864,8 @@ pub(crate) async fn commit(
             &actions,
             backfilled,
         )
-        .await
+        .await?;
+    Ok(true)
 }
 
 fn column_position(position: &sail_common::spec::ColumnPosition) -> String {

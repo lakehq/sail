@@ -269,7 +269,9 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                 {
                     Ok(published) => {
                         publish_failure = published.failure;
-                        if published.version > latest_backfilled_version {
+                        // A request that is sent again after an unknown outcome must be the
+                        // same request, so the backfill is reported with the next commit.
+                        if published.version > latest_backfilled_version && !outcome_unknown {
                             latest_backfilled_version = published.version;
                             update["latest_backfilled_version"] =
                                 serde_json::json!(published.version);
@@ -638,7 +640,8 @@ fn check_published_commit(
 /// Whether the published commit is the ratified commit. A writer may publish a ratified commit
 /// by writing its lines again, for example with a line terminator after every line, as Delta
 /// Spark does, so the commits are compared by their non-empty lines without line terminators,
-/// as Delta Spark compares them, and by the actions on those lines otherwise.
+/// and by the actions on those lines otherwise. This is more lenient than Delta Spark, which
+/// also requires the files to have the same length and does not compare the actions.
 fn is_ratified_commit(published: &[u8], ratified: &[u8]) -> bool {
     if published == ratified {
         return true;
@@ -1840,7 +1843,7 @@ mod tests {
     }
 
     #[test]
-    fn a_published_commit_is_identified_by_its_transaction() {
+    fn a_published_commit_is_identified_by_its_lines() {
         let ratified = commit_bytes(Some("t1"), 1);
         let cases = [
             ("the same bytes", ratified.clone(), true),
