@@ -2114,57 +2114,13 @@ fn delta_create_table_metadata_configuration(
 
 /// Parses the Delta protocol required by Unity Catalog for a staged managed table,
 /// which is a Delta `protocol` action in JSON.
+/// The table features are validated after the protocol of the table is merged with it.
 fn parse_unity_required_protocol(value: &str) -> Result<Protocol> {
-    let invalid = |message: String| {
+    serde_json::from_str(value).map_err(|e| {
         DataFusionError::Plan(format!(
-            "invalid Delta protocol required by Unity Catalog: {message}"
+            "invalid Delta protocol required by Unity Catalog: {e}"
         ))
-    };
-    let value: serde_json::Value =
-        serde_json::from_str(value).map_err(|e| invalid(e.to_string()))?;
-    let version = |key: &str| -> Result<i32> {
-        value
-            .get(key)
-            .and_then(serde_json::Value::as_i64)
-            .and_then(|version| i32::try_from(version).ok())
-            .ok_or_else(|| invalid(format!("missing {key}")))
-    };
-    let mut unsupported = Vec::new();
-    let mut features = |key: &str| -> Vec<TableFeature> {
-        value
-            .get(key)
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|name| {
-                let name = name.as_str().unwrap_or_default();
-                match TableFeature::parse_str_name(name) {
-                    Ok(feature) => Some(feature),
-                    Err(_) => {
-                        unsupported.push(name.to_string());
-                        None
-                    }
-                }
-            })
-            .collect()
-    };
-    let reader_features = features("readerFeatures");
-    let writer_features = features("writerFeatures");
-    if !unsupported.is_empty() {
-        unsupported.sort();
-        unsupported.dedup();
-        return not_impl_err!(
-            "Delta table features required by Unity Catalog: {}",
-            unsupported.join(", ")
-        );
-    }
-    let protocol = Protocol::new(
-        version("minReaderVersion")?,
-        version("minWriterVersion")?,
-        Some(reader_features),
-        Some(writer_features),
-    );
-    Ok(protocol)
+    })
 }
 
 /// Validates that the Delta protocol of a Unity Catalog managed table can be read and written.

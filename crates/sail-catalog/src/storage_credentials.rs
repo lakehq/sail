@@ -18,6 +18,11 @@ use crate::manager::CatalogManager;
 /// of a table, after the catalog did not issue them.
 const NOT_ISSUED_TTL: Duration = Duration::from_secs(300);
 
+/// How long the session does not ask the catalog again for the storage credentials
+/// of a table, after the catalog failed to issue them (e.g. a server or network error),
+/// which may be resolved soon.
+const FAILED_TTL: Duration = Duration::from_secs(15);
+
 /// Returns the name that identifies the table in the session, regardless of the
 /// current catalog and database.
 fn table_owner(manager: &CatalogManager, table: &[String]) -> CatalogResult<(Vec<String>, String)> {
@@ -87,13 +92,14 @@ pub async fn install_table_storage_credentials<C: SessionExtensionAccessor>(
         }
         // The storage may be accessible with the credentials of the environment
         // when the catalog refuses or fails to issue credentials.
-        Err(
-            CatalogError::Unauthorized(message)
-            | CatalogError::Forbidden(message)
-            | CatalogError::External(message),
-        ) => {
+        Err(CatalogError::Unauthorized(message) | CatalogError::Forbidden(message)) => {
             stores.report_refused(&owner, &name, &message);
             stores.set_not_issued(&url, &owner, NOT_ISSUED_TTL);
+            return Ok(());
+        }
+        Err(CatalogError::External(message)) => {
+            stores.report_refused(&owner, &name, &message);
+            stores.set_not_issued(&url, &owner, FAILED_TTL);
             return Ok(());
         }
         Err(e) => return Err(e),

@@ -19,8 +19,8 @@ use object_store::gcp::{GcpCredential, GoogleCloudStorageBuilder};
 use object_store::path::Path;
 use object_store::{
     CopyOptions, CredentialProvider, GetOptions, GetResult, ListResult, MultipartUpload,
-    ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload,
-    PutResult, RenameOptions, Result,
+    ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+    Result,
 };
 use percent_encoding::percent_decode_str;
 use sail_common::runtime::RuntimeHandle;
@@ -44,6 +44,10 @@ const DEFAULT_LIFETIME: Duration = Duration::from_secs(1800);
 /// When no credential is valid and the credential cannot be fetched,
 /// the requests within this time fail without another fetch.
 const FAILURE_BACKOFF: Duration = Duration::from_secs(5);
+/// A fetch of the credential that does not finish within this time fails.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
+/// The number of locations that are grouped by object store when they are deleted.
+const DELETE_GROUP_SIZE: usize = 1000;
 
 /// Gets the storage credentials for an access level from where they are issued.
 /// The error message must not contain secret values.
@@ -115,7 +119,7 @@ impl VendedCredential for GcpCredential {
 struct CurrentCredential<C> {
     credential: Arc<C>,
     expires_at_ms: Option<i64>,
-    fetched_at: Instant,
+    fetched_at: tokio::time::Instant,
 }
 
 impl<C> CurrentCredential<C> {
@@ -149,7 +153,7 @@ impl<C> CurrentCredential<C> {
 struct CredentialState<C> {
     current: Option<CurrentCredential<C>>,
     /// The time and the error of the last fetch, if it failed.
-    failure: Option<(Instant, String)>,
+    failure: Option<(tokio::time::Instant, String)>,
 }
 
 struct CredentialSource<C> {
@@ -173,15 +177,26 @@ impl<C: VendedCredential> CredentialSource<C> {
         Ok(CurrentCredential {
             credential: Arc::new(credential),
             expires_at_ms: credentials.expires_at_ms,
-            fetched_at: Instant::now(),
+            fetched_at: tokio::time::Instant::now(),
         })
     }
 
     /// Fetches the credential. The state is not locked while the credential is fetched.
+    /// A fetch that times out or returns an expired credential fails.
     async fn fetch(&self) -> Result<Arc<C>> {
-        let fetched = match (self.fetch)(self.access).await {
-            Ok(credentials) => Self::current(credentials),
-            Err(message) => Err(message),
+        let fetched = match tokio::time::timeout(FETCH_TIMEOUT, (self.fetch)(self.access)).await {
+            Ok(Ok(credentials)) => Self::current(credentials).and_then(|current| {
+                if current.is_expired() {
+                    Err("the storage credential has expired when it is issued".to_string())
+                } else {
+                    Ok(current)
+                }
+            }),
+            Ok(Err(message)) => Err(message),
+            Err(_) => Err(format!(
+                "the storage credential is not issued within {} seconds",
+                FETCH_TIMEOUT.as_secs()
+            )),
         };
         let mut state = self.state();
         match fetched {
@@ -192,7 +207,7 @@ impl<C: VendedCredential> CredentialSource<C> {
                 Ok(credential)
             }
             Err(message) => {
-                state.failure = Some((Instant::now(), message.clone()));
+                state.failure = Some((tokio::time::Instant::now(), message.clone()));
                 Err(credential_error(message))
             }
         }
@@ -510,23 +525,38 @@ impl ObjectStore for PrefixRoutingObjectStore {
         &self,
         locations: BoxStream<'static, Result<Path>>,
     ) -> BoxStream<'static, Result<Path>> {
-        let default = Arc::clone(&self.default);
         let routes = self.routes();
+        if routes.is_empty() {
+            return self.default.delete_stream(locations);
+        }
+        // The locations are deleted in groups, each with the batched deletion
+        // of the store for writing the locations.
+        let default = Arc::clone(&self.default);
         locations
-            .map(move |location| {
-                let store = location.as_ref().ok().map(|location| {
-                    select_route(&routes, location)
-                        .map_or_else(|| Arc::clone(&default), |route| Arc::clone(&route.write))
-                });
-                async move {
-                    let location = location?;
-                    if let Some(store) = store {
-                        store.delete(&location).await?;
+            .chunks(DELETE_GROUP_SIZE)
+            .flat_map(move |locations| {
+                let mut errors = Vec::new();
+                let mut groups: Vec<(Arc<dyn ObjectStore>, Vec<Path>)> = Vec::new();
+                for location in locations {
+                    let location = match location {
+                        Ok(location) => location,
+                        Err(e) => {
+                            errors.push(Err(e));
+                            continue;
+                        }
+                    };
+                    let store =
+                        select_route(&routes, &location).map_or(&default, |route| &route.write);
+                    match groups.iter_mut().find(|(x, _)| Arc::ptr_eq(x, store)) {
+                        Some((_, group)) => group.push(location),
+                        None => groups.push((Arc::clone(store), vec![location])),
                     }
-                    Ok(location)
                 }
+                let deleted = groups.into_iter().map(|(store, group)| {
+                    store.delete_stream(futures::stream::iter(group.into_iter().map(Ok)).boxed())
+                });
+                futures::stream::iter(errors).chain(futures::stream::iter(deleted).flatten())
             })
-            .buffered(10)
             .boxed()
     }
 
@@ -758,7 +788,8 @@ impl VendedObjectStores {
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use futures::TryStreamExt;
+    use futures::{TryFutureExt, TryStreamExt};
+    use object_store::ObjectStoreExt;
     use object_store::memory::InMemory;
     use tokio::runtime::Handle;
 
@@ -805,12 +836,10 @@ mod tests {
         provider.get_credential().await.unwrap().key_id.clone()
     }
 
-    /// Makes the current credential of the provider look as if it was fetched
-    /// the given time ago.
-    fn age(provider: &VendedCredentialProvider<AwsCredential>, by: Duration) {
-        if let Some(current) = provider.source.state().current.as_mut() {
-            current.fetched_at = Instant::now().checked_sub(by).unwrap();
-        }
+    /// Lets the given time pass for the credentials fetched so far.
+    /// The tests that call this run with the time paused.
+    async fn age(by: Duration) {
+        tokio::time::advance(by).await;
     }
 
     /// Waits until the provider no longer fetches a credential in the background.
@@ -818,7 +847,7 @@ mod tests {
         drop(provider.source.refresh.lock().await);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn credential_provider_fetches_missing_and_expiring_credentials() {
         // A credential that does not expire soon is kept.
         for expires_at_ms in [None, Some(now_ms() + 3_600_000)] {
@@ -829,7 +858,7 @@ mod tests {
                 fetch,
             )
             .unwrap();
-            age(&provider, REFRESH_INTERVAL);
+            age(REFRESH_INTERVAL).await;
             assert_eq!(key_id(&provider).await, "initial");
             wait_for_refresh(&provider).await;
             assert!(requests.lock().unwrap().is_empty());
@@ -871,7 +900,7 @@ mod tests {
         assert_eq!(key_id(&provider).await, "initial");
         wait_for_refresh(&provider).await;
         assert!(requests.lock().unwrap().is_empty());
-        age(&provider, REFRESH_INTERVAL);
+        age(REFRESH_INTERVAL).await;
         assert_eq!(key_id(&provider).await, "initial");
         wait_for_refresh(&provider).await;
         assert_eq!(key_id(&provider).await, "Read-1");
@@ -885,14 +914,14 @@ mod tests {
             fetch,
         )
         .unwrap();
-        age(&provider, DEFAULT_LIFETIME);
+        age(DEFAULT_LIFETIME).await;
         assert_eq!(key_id(&provider).await, "initial");
         wait_for_refresh(&provider).await;
         assert_eq!(key_id(&provider).await, "Read-1");
         assert_eq!(requests.lock().unwrap().len(), 1);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn credential_provider_does_not_wait_for_a_stalled_catalog() {
         // The catalog accepts the request for a new credential but does not answer.
         let requests = Arc::new(Mutex::new(0));
@@ -909,7 +938,7 @@ mod tests {
             fetch,
         )
         .unwrap();
-        age(&provider, REFRESH_INTERVAL);
+        age(REFRESH_INTERVAL).await;
         // The valid credential is used while the new one is fetched once.
         for _ in 0..3 {
             let key = tokio::time::timeout(Duration::from_secs(5), key_id(&provider))
@@ -921,7 +950,51 @@ mod tests {
         assert_eq!(*requests.lock().unwrap(), 1);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
+    async fn credential_provider_fails_when_the_catalog_stalls_without_a_valid_credential() {
+        // The catalog accepts the request for a new credential but does not answer,
+        // and the current credential has expired.
+        let requests = Arc::new(Mutex::new(0));
+        let fetch: StorageCredentialFetch = {
+            let requests = Arc::clone(&requests);
+            Arc::new(move |_| {
+                *requests.lock().unwrap() += 1;
+                Box::pin(futures::future::pending())
+            })
+        };
+        let provider = VendedCredentialProvider::<AwsCredential>::try_new(
+            StorageAccess::Read,
+            Some(s3_credentials("initial", Some(now_ms() - 1))),
+            fetch,
+        )
+        .unwrap();
+        // The request fails once the fetch times out, and the requests right after
+        // the failure do not wait for the catalog again.
+        for _ in 0..2 {
+            let error = provider.get_credential().await.unwrap_err();
+            assert!(error.to_string().contains("not issued within"), "{error}");
+        }
+        assert_eq!(*requests.lock().unwrap(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn credential_provider_fails_when_the_catalog_issues_an_expired_credential() {
+        let (fetch, requests) = counting_fetch(Some(now_ms() - 1));
+        let provider =
+            VendedCredentialProvider::<AwsCredential>::try_new(StorageAccess::Read, None, fetch)
+                .unwrap();
+        // The requests right after the failure do not ask the catalog again.
+        for _ in 0..3 {
+            let error = provider.get_credential().await.unwrap_err();
+            assert!(error.to_string().contains("expired"), "{error}");
+        }
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        age(FAILURE_BACKOFF).await;
+        assert!(provider.get_credential().await.is_err());
+        assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn credential_provider_reports_fetch_errors_without_secrets() {
         // The current credential is used while it is valid, and the failed fetch
         // is not repeated right away.
@@ -939,7 +1012,7 @@ mod tests {
             fetch.clone(),
         )
         .unwrap();
-        age(&provider, REFRESH_INTERVAL);
+        age(REFRESH_INTERVAL).await;
         assert_eq!(key_id(&provider).await, "initial");
         wait_for_refresh(&provider).await;
         assert_eq!(key_id(&provider).await, "initial");
@@ -967,9 +1040,7 @@ mod tests {
             }
         }
         assert_eq!(*requests.lock().unwrap(), 1);
-        if let Some((at, _)) = provider.source.state().failure.as_mut() {
-            *at = Instant::now().checked_sub(FAILURE_BACKOFF).unwrap();
-        }
+        age(FAILURE_BACKOFF).await;
         assert!(provider.get_credential().await.is_err());
         assert_eq!(*requests.lock().unwrap(), 2);
 
@@ -1143,6 +1214,129 @@ mod tests {
         );
         assert!(!store.has_route(&Path::from("data/items"), "a"));
         assert!(store.get(&path).await.is_err());
+    }
+
+    /// An object store in memory that records the number of locations
+    /// in each batched deletion.
+    #[derive(Debug, Default)]
+    struct DeleteCountingStore {
+        inner: InMemory,
+        deletes: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl fmt::Display for DeleteCountingStore {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "DeleteCountingStore")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for DeleteCountingStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> Result<PutResult> {
+            self.inner.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+            self.inner.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, Result<Path>>,
+        ) -> BoxStream<'static, Result<Path>> {
+            let inner = self.inner.clone();
+            let deletes = Arc::clone(&self.deletes);
+            locations
+                .try_collect::<Vec<_>>()
+                .map_ok(move |locations| {
+                    deletes.lock().unwrap().push(locations.len());
+                    inner
+                        .delete_stream(futures::stream::iter(locations.into_iter().map(Ok)).boxed())
+                })
+                .try_flatten_stream()
+                .boxed()
+        }
+
+        fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    #[tokio::test]
+    async fn routing_store_deletes_locations_in_batches() {
+        let default = Arc::new(DeleteCountingStore::default());
+        let write = Arc::new(DeleteCountingStore::default());
+        let store = PrefixRoutingObjectStore::new(default.clone());
+        let locations =
+            |names: &[&str]| names.iter().map(|x| Ok(Path::from(*x))).collect::<Vec<_>>();
+        let delete = |locations: Vec<Result<Path>>| {
+            store
+                .delete_stream(futures::stream::iter(locations).boxed())
+                .try_collect::<Vec<_>>()
+        };
+
+        // Without routes, the stream is deleted by the default store.
+        assert_eq!(
+            delete(locations(&["a/1", "a/2", "a/3"]))
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(*default.deletes.lock().unwrap(), vec![3]);
+
+        // With routes, the locations are grouped by store.
+        store.set_route(Path::from("t"), "a", write.clone(), write.clone());
+        default.deletes.lock().unwrap().clear();
+        let many = (0..DELETE_GROUP_SIZE + 2)
+            .map(|i| {
+                if i % 2 == 0 {
+                    format!("t/{i}")
+                } else {
+                    format!("a/{i}")
+                }
+            })
+            .collect::<Vec<_>>();
+        let many = many.iter().map(|x| x.as_str()).collect::<Vec<_>>();
+        let deleted = delete(locations(&many)).await.unwrap();
+        assert_eq!(deleted.len(), DELETE_GROUP_SIZE + 2);
+        assert_eq!(
+            *default.deletes.lock().unwrap(),
+            vec![DELETE_GROUP_SIZE / 2, 1]
+        );
+        assert_eq!(
+            *write.deletes.lock().unwrap(),
+            vec![DELETE_GROUP_SIZE / 2, 1]
+        );
+
+        // The errors of the input are returned.
+        let mut input = locations(&["t/x"]);
+        input.push(Err(object_store::Error::NotImplemented {
+            operation: "test".to_string(),
+            implementer: "test".to_string(),
+        }));
+        assert!(delete(input).await.is_err());
     }
 
     /// Returns the object stores of a session that keep the data of each access level

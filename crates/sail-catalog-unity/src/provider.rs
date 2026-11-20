@@ -1651,9 +1651,11 @@ impl CatalogProvider for UnityCatalogProvider {
             Some(reqwest::StatusCode::NOT_IMPLEMENTED) => Err(CatalogError::NotSupported(format!(
                 "Unity Catalog Delta commit endpoint: {error}"
             ))),
-            // The server may have ratified the commit when it reports a server error, and
-            // when the request fails without a response (a timeout or a network error).
-            Some(s) if s.is_server_error() => Err(CatalogError::CommitStateUnknown(
+            // The server may have ratified the commit when it reports a server error or
+            // another status that is not documented for the request (e.g. a gateway that
+            // reports a timeout), and when the request fails without a response
+            // (a timeout or a network error).
+            Some(_) => Err(CatalogError::CommitStateUnknown(
                 format!("Failed to commit Delta table to Unity Catalog: {error}").into(),
             )),
             None if request_failed => Err(CatalogError::CommitStateUnknown(
@@ -4572,6 +4574,8 @@ mod tests {
             (11, error(500, "CommitStateUnknownException")),
             (12, ResponseTemplate::new(503)),
             (14, error(404, "NoSuchTableException")),
+            (15, ResponseTemplate::new(408)),
+            (16, ResponseTemplate::new(418)),
         ] {
             Mock::given(method("POST"))
                 .and(path(DELTA_TABLE_PATH))
@@ -4624,11 +4628,14 @@ mod tests {
         );
         let error = commit(8).await;
         assert!(matches!(error, CatalogError::Forbidden(_)), "{error:?}");
-        // The commit may be ratified when the server fails or does not answer.
+        // The commit may be ratified when the server fails or does not answer,
+        // or reports a status that is not documented for the request.
         for (version, message) in [
             (9, "InternalServerError message"),
             (11, "CommitStateUnknownException message"),
             (12, "503"),
+            (15, "408"),
+            (16, "418"),
         ] {
             let error = commit(version).await;
             assert!(
