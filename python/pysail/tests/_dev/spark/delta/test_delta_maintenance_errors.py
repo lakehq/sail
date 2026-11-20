@@ -227,18 +227,57 @@ def test_unsupported_maintenance_preserves_external_dvs(spark, delta_jvm_spark, 
 
 
 # [CREDIT]: https://github.com/delta-io/delta/blob/v4.4.1/spark/src/test/scala/org/apache/spark/sql/delta/CloneTableSQLSuite.scala#L43-L132
-@pytest.mark.parametrize("destination_kind", ["missing", "delta", "parquet", "self"])
 @pytest.mark.parametrize(
-    "template",
+    ("destination_kind", "mode", "outcome"),
     [
-        pytest.param("CREATE TABLE {dest} SHALLOW CLONE {source}", id="create"),
-        pytest.param("CREATE OR REPLACE TABLE {dest} SHALLOW CLONE {source}", id="replace"),
-        pytest.param("CREATE TABLE IF NOT EXISTS {dest} SHALLOW CLONE {source}", id="if-not-exists"),
-        pytest.param("CREATE TABLE {dest} SHALLOW CLONE {source} VERSION AS OF 1", id="version"),
-        pytest.param("CREATE TABLE {dest} SHALLOW CLONE {source} TIMESTAMP AS OF '2020-01-01'", id="timestamp"),
+        ("missing", "CREATE TABLE", "clone"),
+        ("delta", "CREATE TABLE", "destination already exists"),
+        ("parquet", "CREATE TABLE", "not a Delta table"),
+        ("self", "CREATE TABLE", "destination already exists"),
+        ("missing", "CREATE OR REPLACE TABLE", "clone"),
+        ("delta", "CREATE OR REPLACE TABLE", "clone"),
+        ("parquet", "CREATE OR REPLACE TABLE", "not a Delta table"),
+        ("self", "CREATE OR REPLACE TABLE", "non-overlapping locations"),
+        ("missing", "CREATE TABLE IF NOT EXISTS", "clone"),
+        ("delta", "CREATE TABLE IF NOT EXISTS", "skip"),
+        ("parquet", "CREATE TABLE IF NOT EXISTS", "not a Delta table"),
+        ("self", "CREATE TABLE IF NOT EXISTS", "skip"),
     ],
 )
-def test_unsupported_clone_protects_both_tables(spark, semantic_table, tmp_path, destination_kind, template):
+def test_clone_destination_modes(spark, semantic_table, tmp_path, destination_kind, mode, outcome):
+    name, source = semantic_table
+    spark.sql(f"INSERT INTO {name} VALUES (1, 'a')").collect()  # noqa: S608
+    dest = source if destination_kind == "self" else tmp_path / "destination"
+    if destination_kind in ("delta", "parquet"):
+        spark.range(10, 12).coalesce(1).write.format(destination_kind).save(str(dest))
+
+    source_before = _tree(source)
+    dest_before = _tree(dest)
+    sql = f"{mode} delta.`{dest}` SHALLOW CLONE {name}"
+    if outcome == "clone":
+        spark.sql(sql).collect()
+        assert spark.read.format("delta").load(str(dest)).collect() == [Row(id=1, part="a")]
+    else:
+        if outcome == "skip":
+            assert spark.sql(sql).collect() == []
+        else:
+            with pytest.raises(Exception, match=outcome):
+                spark.sql(sql).collect()
+        assert _tree(dest) == dest_before
+        if destination_kind in ("delta", "parquet"):
+            assert spark.read.format(destination_kind).load(str(dest)).orderBy("id").collect() == [
+                Row(id=10),
+                Row(id=11),
+            ]
+    assert _tree(source) == source_before
+    assert spark.table(name).collect() == [Row(id=1, part="a")]
+
+
+@pytest.mark.parametrize("destination_kind", ["missing", "delta", "parquet", "self"])
+@pytest.mark.parametrize(
+    ("clause", "token"), [("VERSION AS OF 1", "VERSION"), ("TIMESTAMP AS OF '2020-01-01'", "TIMESTAMP")]
+)
+def test_historical_clone_protects_both_tables(spark, semantic_table, tmp_path, destination_kind, clause, token):
     name, source = semantic_table
     spark.sql(f"INSERT INTO {name} VALUES (1, 'a')").collect()  # noqa: S608
     dest = tmp_path / "destination"
@@ -248,8 +287,8 @@ def test_unsupported_clone_protects_both_tables(spark, semantic_table, tmp_path,
         dest = source
     before = _tree(tmp_path)
     exists = dest.exists()
-    with pytest.raises(Exception, match=_NATIVE_REJECTION):
-        spark.sql(template.format(dest=f"delta.`{dest}`", source=name)).collect()
+    with pytest.raises(Exception, match=rf"found {token} at \d+:\d+ expected"):
+        spark.sql(f"CREATE TABLE delta.`{dest}` SHALLOW CLONE {name} {clause}").collect()
     assert _tree(tmp_path) == before
     assert dest.exists() == exists
     assert spark.table(name).collect() == [Row(id=1, part="a")]

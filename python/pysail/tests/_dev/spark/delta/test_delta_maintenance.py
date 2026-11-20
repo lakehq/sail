@@ -539,18 +539,13 @@ def test_vacuum_retention_dry_run_and_audit(spark, delta_jvm_spark, maintenance_
         assert _paths(spark.sql(f"VACUUM {name} RETAIN 24 HOURS DRY RUN").collect()) == set()
     finally:
         spark.conf.unset(ignore_window)
-    parallelism = "spark.sql.sources.parallelPartitionDiscovery.parallelism"
-    previous = delta_jvm_spark.conf.get(parallelism)
-    delta_jvm_spark.conf.set(parallelism, "2")
-    try:
-        assert _paths(delta_jvm_spark.sql(f"VACUUM delta.`{path}` FULL DRY RUN RETAIN 24 HOURS").collect()) == {
-            str(cdf.parent)
-        }
-        reference = delta_jvm_spark.sql(f"VACUUM delta.`{path}` FULL DRY RUN RETAIN 1 HOURS")
-        assert dry.schema == reference.schema
-        assert _paths(dry.collect()) == _paths(reference.collect()) == {str(orphan), str(cdf)}
-    finally:
-        delta_jvm_spark.conf.set(parallelism, previous)
+    jvm = delta_jvm_spark.newSession()
+    jvm.conf.set(ignore_window, "false")
+    jvm.conf.set("spark.sql.sources.parallelPartitionDiscovery.parallelism", "2")
+    assert _paths(jvm.sql(f"VACUUM delta.`{path}` FULL DRY RUN RETAIN 24 HOURS").collect()) == {str(cdf.parent)}
+    reference = jvm.sql(f"VACUUM delta.`{path}` FULL DRY RUN RETAIN 1 HOURS")
+    assert dry.schema == reference.schema
+    assert _paths(dry.collect()) == _paths(reference.collect()) == {str(orphan), str(cdf)}
     assert orphan.exists()
     assert max(_commits(path)) == before
     with pytest.raises(Exception, match=r"retention.*shorter"):

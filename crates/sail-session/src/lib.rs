@@ -13,6 +13,8 @@ mod shared_cte;
 
 #[cfg(test)]
 mod tests {
+    mod clone;
+
     use std::collections::HashMap;
     use std::sync::Arc;
 

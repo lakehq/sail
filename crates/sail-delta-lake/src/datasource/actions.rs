@@ -19,6 +19,7 @@ use crate::spec::{Add, DeltaError as DeltaTableError, DeltaResult, Remove};
 /// Convert an Add action to a PartitionedFile for DataFusion scanning
 pub fn partitioned_file_from_action(
     action: &Add,
+    location: object_store::path::Path,
     partition_columns: &[PhysicalPartitionColumn],
     schema: &ArrowSchema,
 ) -> DeltaResult<PartitionedFile> {
@@ -50,12 +51,13 @@ pub fn partitioned_file_from_action(
             ))
         })?;
 
-    let object_meta: ObjectMeta = action.try_into()?;
-
     Ok(PartitionedFile {
         object_meta: ObjectMeta {
             last_modified,
-            ..object_meta
+            location,
+            size: action.size as u64,
+            e_tag: None,
+            version: None,
         },
         partition_values,
         extensions: Extensions::default(),
@@ -113,8 +115,13 @@ mod tests {
         };
 
         #[expect(clippy::expect_used)]
-        let file = partitioned_file_from_action(&action, &partition_columns, &schema)
-            .expect("partition values should parse");
+        let file = partitioned_file_from_action(
+            &action,
+            object_store::path::Path::from(action.path.as_str()),
+            &partition_columns,
+            &schema,
+        )
+        .expect("partition values should parse");
 
         assert_eq!(
             file.partition_values,

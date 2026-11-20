@@ -14,6 +14,43 @@ use crate::array::record_batch::{
 };
 use crate::uuid::UUID_EXTENSION_NAME;
 
+/// Spark's nullable query schema for Iceberg CTAS and RTAS. Map keys and
+/// the storage layout of logical extension types retain their nullability.
+pub fn nullable_query_field(field: &Field) -> Field {
+    let child = |field: &FieldRef| Arc::new(nullable_query_field(field));
+    let data_type = match field.data_type() {
+        _ if field.extension_type_name().is_some()
+            || crate::variant::is_variant_storage_field(field) =>
+        {
+            field.data_type().clone()
+        }
+        DataType::Struct(fields) => DataType::Struct(fields.iter().map(child).collect()),
+        DataType::List(value) => DataType::List(child(value)),
+        DataType::LargeList(value) => DataType::LargeList(child(value)),
+        DataType::FixedSizeList(value, size) => DataType::FixedSizeList(child(value), *size),
+        DataType::Map(entries, sorted) => {
+            let entries_type = match entries.data_type() {
+                DataType::Struct(fields) => DataType::Struct(
+                    fields
+                        .iter()
+                        .enumerate()
+                        .map(|(index, field)| {
+                            Arc::new(nullable_query_field(field).with_nullable(index != 0))
+                        })
+                        .collect(),
+                ),
+                other => other.clone(),
+            };
+            DataType::Map(
+                Arc::new(entries.as_ref().clone().with_data_type(entries_type)),
+                *sorted,
+            )
+        }
+        other => other.clone(),
+    };
+    field.clone().with_data_type(data_type).with_nullable(true)
+}
+
 /// Spark exposes UUID storage as BinaryType, whose Python values must be bytes,
 /// not the uuid.UUID objects produced by Arrow's canonical extension decoder.
 /// Adapt only the outbound field, retaining storage and unrelated metadata.
