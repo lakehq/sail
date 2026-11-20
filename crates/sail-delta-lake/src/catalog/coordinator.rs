@@ -21,19 +21,22 @@ use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::error::CommitStateUnknownError;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
+use uuid::Uuid;
 
+use crate::checkpoint::create_checkpoint_for;
 use crate::delta_log::LogStoreRef;
 use crate::snapshot::{
     DeltaSnapshotConfig, catalog_managed_commit_path, catalog_managed_commit_version,
 };
 use crate::spec::{
     CommitAction, DataType as DeltaDataType, DeltaError, DeltaOperation, DeltaResult,
-    DomainMetadata, Metadata, MetadataValue, PrimitiveType, Protocol, StructField, commit_path,
+    DomainMetadata, Metadata, MetadataValue, PrimitiveType, Protocol, StructField, TableProperties,
+    commit_path,
 };
 use crate::table::{DeltaSnapshot, load_catalog_managed_commits_for_snapshot};
 use crate::transaction::{
     CatalogManagedStagedCommit, CommitBuilder, CommitData, CommitProperties, DEFAULT_RETRIES,
-    check_catalog_managed_commit_conflicts,
+    check_catalog_managed_commit_conflicts, should_create_checkpoint,
 };
 
 #[derive(Debug, Clone)]
@@ -148,7 +151,14 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
             .await?
         {
             StagedCommitOutcome::Committed(latest_backfilled_version) => {
-                publish_ratified_commit(log_store, staged, latest_backfilled_version).await;
+                if publish_ratified_commit(log_store, staged, latest_backfilled_version).await {
+                    checkpoint_published_commit(
+                        log_store,
+                        staged.version,
+                        post_commit_checkpoint_interval(base, actions),
+                    )
+                    .await;
+                }
                 Ok(())
             }
             StagedCommitOutcome::Conflict(message) => Err(commit_conflict_error(&message)),
@@ -414,7 +424,15 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
             {
                 StagedCommitOutcome::Committed(latest_backfilled_version) => {
                     staged.metrics.num_retries = retries;
-                    publish_ratified_commit(log_store, &staged, latest_backfilled_version).await;
+                    if publish_ratified_commit(log_store, &staged, latest_backfilled_version).await
+                    {
+                        staged.metrics.new_checkpoint_created = checkpoint_published_commit(
+                            log_store,
+                            staged.version,
+                            post_commit_checkpoint_interval(reference.as_deref(), actions),
+                        )
+                        .await;
+                    }
                     return Ok(staged);
                 }
                 StagedCommitOutcome::Conflict(message) => {
@@ -653,24 +671,63 @@ const PUBLISHED_COMMIT_LOOKUP_CONCURRENCY: usize = 16;
 
 /// Publishes a commit that the catalog ratified once every version before it is published,
 /// since the versions of a table are published in order. A failure to publish does not fail
-/// the commit, which any writer of the table may publish later.
+/// the commit, which any writer of the table may publish later. Returns whether the commit
+/// and every version before it are published.
 async fn publish_ratified_commit(
     log_store: &LogStoreRef,
     staged: &CatalogManagedStagedCommit,
     latest_backfilled_version: Option<i64>,
-) {
+) -> bool {
     if latest_backfilled_version != Some(staged.version - 1) {
         warn!(
             "Catalog-managed Delta commit version {} is not published since an earlier version is not published",
             staged.version
         );
-        return;
+        return false;
     }
     if let Err(error) = publish_commit(log_store, &staged.staged_path, staged.version).await {
         warn!(
             "Failed to publish catalog-managed Delta commit version {} after catalog ratification: {error}",
             staged.version
         );
+        return false;
+    }
+    true
+}
+
+/// Returns the checkpoint interval of the table after a commit of the actions on top of the
+/// `base` snapshot.
+fn post_commit_checkpoint_interval(base: Option<&DeltaSnapshot>, actions: &[CommitAction]) -> i64 {
+    let interval = actions
+        .iter()
+        .find_map(|action| match action {
+            CommitAction::Metadata(metadata) => {
+                Some(TableProperties::from(metadata.configuration().iter()).checkpoint_interval())
+            }
+            _ => None,
+        })
+        .or_else(|| base.map(|base| base.table_properties().checkpoint_interval()))
+        .unwrap_or_else(|| TableProperties::default().checkpoint_interval());
+    i64::try_from(interval.get()).unwrap_or(i64::MAX)
+}
+
+/// Writes a checkpoint for a published commit when its version is at the checkpoint interval
+/// of the table. A catalog-managed table may only be checkpointed at a version whose commit
+/// and the commits before it are published in `_delta_log`. A failure to write the checkpoint
+/// does not fail the commit, since the log can always be replayed without it. Returns whether
+/// the checkpoint is written.
+async fn checkpoint_published_commit(log_store: &LogStoreRef, version: i64, interval: i64) -> bool {
+    if !should_create_checkpoint(version, interval) {
+        return false;
+    }
+    match create_checkpoint_for(version, log_store.as_ref(), Uuid::new_v4()).await {
+        Ok(()) => true,
+        Err(error) => {
+            warn!(
+                "Failed to create checkpoint for catalog-managed Delta version {version}: {error}"
+            );
+            false
+        }
     }
 }
 

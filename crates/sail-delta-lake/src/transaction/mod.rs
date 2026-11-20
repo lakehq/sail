@@ -1671,7 +1671,7 @@ impl PreparedCommit {
                 in_commit_timestamp,
                 staged_path,
                 domain_metadata,
-                metrics: CommitMetrics { num_retries: 0 },
+                metrics: Metrics::default(),
             })
         })
     }
@@ -2138,7 +2138,7 @@ impl PostCommit {
     }
 }
 
-fn should_create_checkpoint(version: i64, checkpoint_interval: i64) -> bool {
+pub(crate) fn should_create_checkpoint(version: i64, checkpoint_interval: i64) -> bool {
     version != 0 && version % checkpoint_interval == 0
 }
 
@@ -2166,7 +2166,7 @@ pub struct CatalogManagedStagedCommit {
     pub staged_path: object_store::path::Path,
     /// The domain metadata actions of the commit, which the catalog tracks as well.
     pub domain_metadata: Vec<crate::spec::DomainMetadata>,
-    pub metrics: CommitMetrics,
+    pub metrics: Metrics,
 }
 impl std::future::IntoFuture for PostCommit {
     type Output = DeltaResult<FinalizedCommit>;

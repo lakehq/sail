@@ -44,10 +44,7 @@ use crate::table::{
     CatalogSnapshotSource, create_delta_table_with_object_store,
     load_catalog_managed_commits_for_snapshot,
 };
-use crate::transaction::{
-    CommitBuilder, CommitProperties, FinalizedCommit, Metrics as CommitFinalMetrics,
-    OperationMetrics,
-};
+use crate::transaction::{CommitBuilder, CommitProperties, FinalizedCommit, OperationMetrics};
 
 const METRIC_NUM_COMMIT_RETRIES: &str = "num_commit_retries";
 const METRIC_CHECKPOINT_CREATED: &str = "checkpoint_created";
@@ -1022,11 +1019,7 @@ impl ExecutionPlan for DeltaCommitExec {
                             .await?;
                     FinalizedCommit {
                         snapshot: None,
-                        metrics: CommitFinalMetrics {
-                            num_retries: staged.metrics.num_retries,
-                            new_checkpoint_created: false,
-                            num_log_files_cleaned_up: 0,
-                        },
+                        metrics: staged.metrics,
                     }
                 }
             } else {

@@ -147,8 +147,8 @@ def test_managed_delta_table_time_travel(spark: SparkSession) -> None:
         spark.sql(f"DROP SCHEMA {database} CASCADE")
 
 
-def test_managed_delta_table_has_no_checkpoint_after_many_commits(spark: SparkSession) -> None:
-    """Sail does not write checkpoints for catalog-managed tables, so reads replay every commit."""
+def test_managed_delta_table_is_checkpointed_at_the_checkpoint_interval(spark: SparkSession) -> None:
+    """Sail checkpoints a catalog-managed table at a published version, so reads do not replay every commit."""
     database = "unity_catalog_state_commits"
     table = f"{database}.t"
     spark.sql(f"CREATE SCHEMA {database}")
@@ -160,10 +160,13 @@ def test_managed_delta_table_has_no_checkpoint_after_many_commits(spark: SparkSe
         location = _location_to_path(_table_location(spark, table))
         assert _published_versions(location) == list(range(13))
         log = location / "_delta_log"
-        assert not list(log.glob("*.checkpoint*")), sorted(path.name for path in log.iterdir())
-        assert not (log / "_last_checkpoint").exists()
+        checkpoints = {int(path.name.split(".", 1)[0]) for path in log.glob("*.checkpoint*")}
+        assert checkpoints == {10}, sorted(path.name for path in log.iterdir())
+        with (log / "_last_checkpoint").open(encoding="utf-8") as f:
+            assert json.load(f)["version"] == 10
         assert _rows(spark, f"SELECT count(*), sum(id) FROM {table}") == [(12, sum(range(12)))]
         assert _rows(spark, f"SELECT count(*) FROM {table} VERSION AS OF 11") == [(11,)]
+        assert _rows(spark, f"SELECT count(*) FROM {table} VERSION AS OF 5") == [(5,)]
     finally:
         spark.sql(f"DROP SCHEMA {database} CASCADE")
 

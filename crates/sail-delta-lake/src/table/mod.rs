@@ -2383,6 +2383,8 @@ mod catalog_managed_tests {
         catalog: Arc<UnityManagedCatalog>,
         store: Arc<InMemory>,
         result: datafusion_common::Result<crate::transaction::CatalogManagedStagedCommit>,
+        /// The versions of the commits that wrote a checkpoint.
+        checkpoints: Vec<i64>,
     }
 
     impl ScriptedCommit {
@@ -2445,6 +2447,28 @@ mod catalog_managed_tests {
         blind_append: bool,
         unpublished: UnpublishedCommit,
     ) -> ScriptedCommit {
+        commit_with_script_in(
+            steps,
+            blind_append,
+            unpublished,
+            CATALOG_MANAGED_PROTOCOL,
+            "",
+            1,
+        )
+        .await
+    }
+
+    /// Commits files like `commit_with_script_after`, one after another, to a table with the
+    /// protocol and the table properties (`,"<key>":"<value>"...`) in addition to the table
+    /// properties of a catalog-managed table. Every commit is a commit of one file.
+    async fn commit_with_script_in(
+        steps: Vec<CommitStep>,
+        blind_append: bool,
+        unpublished: UnpublishedCommit,
+        protocol: &str,
+        configuration: &str,
+        commits: usize,
+    ) -> ScriptedCommit {
         use crate::catalog::coordinator::{
             DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable,
         };
@@ -2463,8 +2487,13 @@ mod catalog_managed_tests {
                 "{{\"commitInfo\":{{\"timestamp\":1,\"inCommitTimestamp\":1}}}}\n",
                 "{{\"protocol\":{protocol}}}\n{metadata}\n"
             ),
-            protocol = CATALOG_MANAGED_PROTOCOL,
-            metadata = METADATA_ACTION.replace(r#"\"type\":\"string\""#, r#"\"type\":\"long\""#),
+            protocol = protocol,
+            metadata = METADATA_ACTION
+                .replace(r#"\"type\":\"string\""#, r#"\"type\":\"long\""#)
+                .replace(
+                    r#""delta.enableInCommitTimestamps":"true""#,
+                    &format!(r#""delta.enableInCommitTimestamps":"true"{configuration}"#),
+                ),
         );
         store
             .put(
@@ -2564,37 +2593,53 @@ mod catalog_managed_tests {
                 .to_snapshot(log_store.as_ref(), config)
                 .unwrap()
         };
-        let add = Add {
-            path: "new.parquet".to_string(),
-            size: 5,
-            data_change: true,
-            ..Default::default()
-        };
         let operation = DeltaOperation::Write {
             mode: SaveMode::Append,
             partition_by: None,
             predicate: (!blind_append).then(|| "id > 0".to_string()),
         };
         let state = session.state();
-        let result = DeltaCatalogCommitCoordinator::new(&state, &catalog_table)
-            .commit_actions(
-                &context,
-                &DeltaCatalogManagedTable {
-                    table_id: "table-id".into(),
-                    table_uri: table_url.to_string(),
+        let snapshot = Arc::new(snapshot);
+        let mut checkpoints = vec![];
+        let mut result = None;
+        for commit in 0..commits {
+            let add = Add {
+                path: if commit == 0 {
+                    "new.parquet".to_string()
+                } else {
+                    format!("new-{commit}.parquet")
                 },
-                &table_url,
-                &log_store,
-                Some(Arc::new(snapshot)),
-                &[CommitAction::Add(add)],
-                &operation,
-                CommitProperties::default(),
-            )
-            .await;
+                size: 5,
+                data_change: true,
+                ..Default::default()
+            };
+            let commit_result = DeltaCatalogCommitCoordinator::new(&state, &catalog_table)
+                .commit_actions(
+                    &context,
+                    &DeltaCatalogManagedTable {
+                        table_id: "table-id".into(),
+                        table_uri: table_url.to_string(),
+                    },
+                    &table_url,
+                    &log_store,
+                    Some(snapshot.clone()),
+                    &[CommitAction::Add(add)],
+                    &operation,
+                    CommitProperties::default(),
+                )
+                .await;
+            if let Ok(staged) = &commit_result
+                && staged.metrics.new_checkpoint_created
+            {
+                checkpoints.push(staged.version);
+            }
+            result = Some(commit_result);
+        }
         ScriptedCommit {
             catalog,
             store,
-            result,
+            result: result.unwrap(),
+            checkpoints,
         }
     }
 
@@ -2773,6 +2818,164 @@ mod catalog_managed_tests {
         assert_eq!(backfilled_versions(&commit), vec![serde_json::json!(0)]);
         assert_eq!(published_commit_bytes(&commit, 1).await, None);
         assert_eq!(published_commit_bytes(&commit, 2).await, None);
+    }
+
+    const CATALOG_MANAGED_V2_CHECKPOINT_PROTOCOL: &str = concat!(
+        r#"{"minReaderVersion":3,"minWriterVersion":7,"#,
+        r#""readerFeatures":["catalogManaged","v2Checkpoint","vacuumProtocolCheck"],"#,
+        r#""writerFeatures":["catalogManaged","inCommitTimestamp","v2Checkpoint","vacuumProtocolCheck"]}"#
+    );
+
+    /// Returns the versions of the checkpoints in the log, and the version in the last
+    /// checkpoint file.
+    async fn checkpoint_versions(commit: &ScriptedCommit) -> (Vec<i64>, Option<i64>) {
+        let prefix = Path::from("_delta_log");
+        let files = commit.store.list(Some(&prefix)).try_collect::<Vec<_>>();
+        let mut versions = files
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|meta| {
+                let name = meta.location.filename()?.to_string();
+                let (version, rest) = name.split_once('.')?;
+                rest.starts_with("checkpoint.")
+                    .then(|| version.parse::<i64>().unwrap())
+            })
+            .collect::<Vec<_>>();
+        versions.sort();
+        versions.dedup();
+        let last = match commit
+            .store
+            .get(&Path::from("_delta_log/_last_checkpoint"))
+            .await
+        {
+            Ok(result) => {
+                let bytes = result.bytes().await.unwrap();
+                let hint: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                hint["version"].as_i64()
+            }
+            Err(_) => None,
+        };
+        (versions, last)
+    }
+
+    /// Opens the table at the latest version of the catalog after the commits before the
+    /// latest checkpoint are deleted, which only succeeds when the open reads the checkpoint.
+    /// Returns the version and the number of files of the table.
+    async fn open_from_latest_checkpoint(commit: &ScriptedCommit) -> (i64, usize) {
+        use crate::delta_log::{StorageConfig, default_logstore};
+        use crate::snapshot::{
+            CatalogManagedCommitFile, CatalogManagedCommitSet, DeltaSnapshotConfig,
+        };
+        use crate::table::DeltaSnapshot;
+
+        let checkpoint = checkpoint_versions(commit).await.1.unwrap();
+        let ratified = commit.script().ratified.lock().unwrap().clone();
+        for version in 0..=checkpoint {
+            let path = Path::from(format!("_delta_log/{}", published_commit(version)));
+            commit.store.delete(&path).await.unwrap();
+        }
+        for staged in &ratified.commits {
+            if staged.version <= checkpoint {
+                let path = Path::from(format!("_delta_log/_staged_commits/{}", staged.file_name));
+                commit.store.delete(&path).await.unwrap();
+            }
+        }
+        let table_url = Url::parse("memory:///").unwrap();
+        let object_store = commit.store.clone() as Arc<dyn ObjectStore>;
+        let log_store = default_logstore(
+            object_store.clone(),
+            object_store,
+            &table_url,
+            &StorageConfig,
+        );
+        let config = DeltaSnapshotConfig {
+            require_files: true,
+            catalog_managed_commits: Some(CatalogManagedCommitSet {
+                latest_table_version: ratified.latest_table_version,
+                commits: ratified
+                    .commits
+                    .iter()
+                    .map(|commit| CatalogManagedCommitFile {
+                        version: commit.version,
+                        file_name: commit.file_name.clone(),
+                    })
+                    .collect(),
+            }),
+            ..Default::default()
+        };
+        let snapshot = DeltaSnapshot::try_new(
+            log_store.as_ref(),
+            config,
+            Some(ratified.latest_table_version),
+            None,
+        )
+        .await
+        .unwrap();
+        (snapshot.version(), snapshot.adds().len())
+    }
+
+    #[tokio::test]
+    async fn catalog_managed_commits_are_checkpointed_at_the_checkpoint_interval() {
+        // The classic checkpoint policy writes a classic checkpoint, and the v2 checkpoint
+        // policy of a table with the v2 checkpoint feature writes a v2 checkpoint.
+        for (protocol, configuration) in [
+            (
+                CATALOG_MANAGED_PROTOCOL,
+                r#","delta.checkpointInterval":"2""#,
+            ),
+            (
+                CATALOG_MANAGED_V2_CHECKPOINT_PROTOCOL,
+                r#","delta.checkpointInterval":"2","delta.checkpointPolicy":"v2""#,
+            ),
+        ] {
+            let commit = commit_with_script_in(
+                vec![],
+                true,
+                UnpublishedCommit::None,
+                protocol,
+                configuration,
+                5,
+            )
+            .await;
+            assert_eq!(commit.result.as_ref().unwrap().version, 5);
+            assert_eq!(commit.checkpoints, vec![2, 4], "{configuration}");
+            assert_eq!(
+                checkpoint_versions(&commit).await,
+                (vec![2, 4], Some(4)),
+                "{configuration}"
+            );
+            assert_eq!(
+                open_from_latest_checkpoint(&commit).await,
+                (5, 5),
+                "{configuration}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn catalog_managed_commit_is_checkpointed_only_when_it_is_published() {
+        // Version 2 is at the checkpoint interval. It is published once the unpublished
+        // version 1 of another writer is published before it, and it is not published when
+        // version 1 cannot be published, so it is not checkpointed.
+        for (unpublished, checkpoints) in [
+            (UnpublishedCommit::Staged, vec![2]),
+            (UnpublishedCommit::Missing, vec![]),
+        ] {
+            let commit = commit_with_script_in(
+                vec![],
+                true,
+                unpublished,
+                CATALOG_MANAGED_PROTOCOL,
+                r#","delta.checkpointInterval":"2""#,
+                1,
+            )
+            .await;
+            assert_eq!(commit.result.as_ref().unwrap().version, 2);
+            assert_eq!(commit.checkpoints, checkpoints);
+            let last = checkpoints.last().copied();
+            assert_eq!(checkpoint_versions(&commit).await, (checkpoints, last));
+        }
     }
 
     #[tokio::test]
