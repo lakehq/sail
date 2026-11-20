@@ -28,7 +28,9 @@ if TYPE_CHECKING:
 
 
 def _published_versions(location: Path) -> list[int]:
-    return sorted(int(path.stem) for path in (location / "_delta_log").glob("[0-9]*.json"))
+    # A v2 checkpoint can be a JSON file (`<version>.checkpoint.<uuid>.json`) as well.
+    paths = (location / "_delta_log").glob("[0-9]*.json")
+    return sorted(int(path.stem) for path in paths if path.stem.isdigit())
 
 
 def _commit_actions(location: Path, version: int) -> list[dict]:
