@@ -556,7 +556,7 @@ fn clear_metadata(schema: Schema) -> Schema {
 /// Parses `coerce_int96` setting into an Arrow [`TimeUnit`].
 ///
 /// This is adapted from DataFusion's Parquet data source implementation.
-fn parse_coerce_int96_string(setting: &str) -> Result<TimeUnit> {
+pub fn parse_coerce_int96_string(setting: &str) -> Result<TimeUnit> {
     match setting.to_lowercase().as_str() {
         "ns" => Ok(TimeUnit::Nanosecond),
         "us" => Ok(TimeUnit::Microsecond),

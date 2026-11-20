@@ -5,6 +5,8 @@ use std::sync::{Arc, LazyLock};
 
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
+use datafusion::common::config::TableParquetOptions;
+use datafusion::common::encryption::FileDecryptionProperties;
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::PartitionedFile;
@@ -25,6 +27,7 @@ use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use sail_cache::scope::object_store_scoped_file_metadata_cache;
+use sail_data_source::formats::parquet::parse_coerce_int96_string;
 
 use super::context::PlannerContext;
 use crate::datasource::create_object_store_url;
@@ -276,13 +279,27 @@ fn widen_nested_type(data_type: &DataType, sources: &[&DataType]) -> DataType {
 
 // SPDX-SnippetBegin
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/bdd86f1da39949d09e915ca46c95f32a253689db/datafusion/datasource-parquet/src/file_format.rs#L370-L402
+// The `parquet_encryption` variant is left out since Sail does not enable that DataFusion feature.
+#[expect(clippy::unused_async)]
+async fn get_file_decryption_properties(
+    _state: &dyn datafusion::catalog::Session,
+    _options: &TableParquetOptions,
+    _file_path: &Path,
+) -> Result<Option<Arc<FileDecryptionProperties>>> {
+    Ok(None)
+}
+// SPDX-SnippetEnd
+
+// SPDX-SnippetBegin
+// SPDX-License-Identifier: Apache-2.0
 // SPDX-SnippetComment: Credit: https://github.com/apache/datafusion/blob/bdd86f1da39949d09e915ca46c95f32a253689db/datafusion/datasource-parquet/src/file_format.rs#L451-L549
 /// Infers the merged schema of Parquet checkpoint files, reading the footers through the given
 /// file metadata cache.
 ///
 /// This mirrors `ParquetFormat::infer_schema()` on DataFusion main with the default format
 /// options, except that it reads the footers through `file_metadata_cache` instead of the
-/// runtime's unscoped file metadata cache. The default format has no decryption.
+/// runtime's unscoped file metadata cache.
 async fn infer_parquet_checkpoint_schema(
     state: &dyn datafusion::catalog::Session,
     store: &Arc<dyn ObjectStore>,
@@ -292,21 +309,28 @@ async fn infer_parquet_checkpoint_schema(
     let format = ParquetFormat::default();
     // TODO: uncomment after DataFusion 56
     // let coerce_int96 = format.coerce_int96().map(arrow::datatypes::TimeUnit::from);
-    // let coerce_int96_tz = format
-    //     .options()
-    //     .global
-    //     .coerce_int96_tz
-    //     .as_ref()
-    //     .map(|tz| Arc::<str>::from(tz.as_str()));
+    let coerce_int96 = format
+        .coerce_int96()
+        .map(|time_unit| parse_coerce_int96_string(&time_unit))
+        .transpose()?;
+    let coerce_int96_tz = format
+        .options()
+        .global
+        .coerce_int96_tz
+        .as_ref()
+        .map(|tz| Arc::<str>::from(tz.as_str()));
 
     let mut schemas: Vec<_> = futures::stream::iter(objects)
         .map(|object| async {
+            let file_decryption_properties =
+                get_file_decryption_properties(state, format.options(), &object.location).await?;
             let meta = DFParquetMetadata::new(store.as_ref(), object)
                 .with_metadata_size_hint(format.metadata_size_hint())
+                .with_decryption_properties(file_decryption_properties)
                 .with_file_metadata_cache(Some(Arc::clone(file_metadata_cache)))
+                .with_coerce_int96(coerce_int96)
+                .with_coerce_int96_tz(coerce_int96_tz.clone())
                 // TODO: uncomment after DataFusion 56
-                // .with_coerce_int96(coerce_int96)
-                // .with_coerce_int96_tz(coerce_int96_tz.clone())
                 // .with_enable_rle_to_dictionary(
                 //     format.options().global.enable_rle_to_dictionary,
                 // )
