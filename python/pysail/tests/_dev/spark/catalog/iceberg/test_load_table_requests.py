@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
+# ruff: noqa: S608
+
 """Reading an Iceberg REST table loads the table once per statement."""
 
 from __future__ import annotations
