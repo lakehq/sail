@@ -3,6 +3,7 @@
 mod config;
 mod credential;
 mod data_type;
+mod legacy_commit;
 mod provider;
 mod token;
 

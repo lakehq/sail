@@ -2314,25 +2314,35 @@ pub(crate) async fn unity_create_commit(
         ));
     };
     Ok(DeltaCreatedVersion {
-        protocol: DeltaProtocolInfo {
-            min_reader_version: protocol.min_reader_version(),
-            min_writer_version: protocol.min_writer_version(),
-            reader_features: delta_feature_names(protocol.reader_features()),
-            writer_features: delta_feature_names(protocol.writer_features()),
-        },
-        metadata: DeltaMetadataInfo {
-            schema_string: metadata.schema_string().to_string(),
-            partition_columns: metadata.partition_columns().clone(),
-            configuration: metadata
-                .configuration()
-                .iter()
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect(),
-            description: metadata.description().map(str::to_string),
-        },
+        protocol: delta_protocol_info(protocol),
+        metadata: delta_metadata_info(metadata),
         in_commit_timestamp,
         row_id_high_water_mark: row_id_high_water_mark(&actions)?,
     })
+}
+
+/// Returns the protocol in the form that a catalog keeps.
+pub(crate) fn delta_protocol_info(protocol: &Protocol) -> DeltaProtocolInfo {
+    DeltaProtocolInfo {
+        min_reader_version: protocol.min_reader_version(),
+        min_writer_version: protocol.min_writer_version(),
+        reader_features: delta_feature_names(protocol.reader_features()),
+        writer_features: delta_feature_names(protocol.writer_features()),
+    }
+}
+
+/// Returns the table metadata in the form that a catalog keeps.
+pub(crate) fn delta_metadata_info(metadata: &Metadata) -> DeltaMetadataInfo {
+    DeltaMetadataInfo {
+        schema_string: metadata.schema_string().to_string(),
+        partition_columns: metadata.partition_columns().clone(),
+        configuration: metadata
+            .configuration()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+        description: metadata.description().map(str::to_string),
+    }
 }
 
 /// The row ID high-water mark that the actions of a commit set.

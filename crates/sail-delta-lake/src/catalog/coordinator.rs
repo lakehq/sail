@@ -17,8 +17,10 @@ use sail_catalog::lakehouse::{
     LakehouseCommitRequest,
 };
 use sail_catalog::manager::CatalogManager;
-use sail_common::spec::{SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY};
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
+use sail_common_datafusion::catalog::delta::{
+    DeltaCatalogCommit, DeltaCatalogCommitInfo, DeltaCommitActions, DeltaDomainMetadataInfo,
+};
 use sail_common_datafusion::error::CommitStateUnknownError;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
@@ -26,13 +28,13 @@ use uuid::Uuid;
 
 use crate::checkpoint::create_checkpoint_for;
 use crate::delta_log::{LogStoreRef, ObjectStoreRef};
+use crate::lake_source::{delta_metadata_info, delta_protocol_info};
 use crate::snapshot::{
     DeltaSnapshotConfig, catalog_managed_commit_path, catalog_managed_commit_version,
 };
 use crate::spec::{
-    CommitAction, DataType as DeltaDataType, DeltaError, DeltaOperation, DeltaResult,
-    DomainMetadata, Metadata, MetadataValue, PrimitiveType, Protocol, StructField, TableProperties,
-    commit_path,
+    CommitAction, DeltaError, DeltaOperation, DeltaResult, DomainMetadata, Metadata, Protocol,
+    TableProperties, commit_path,
 };
 use crate::table::{DeltaSnapshot, SnapshotIntent, load_catalog_managed_commits_for_snapshot};
 use crate::transaction::{
@@ -44,15 +46,6 @@ use crate::transaction::{
 pub(crate) struct DeltaCatalogManagedTable {
     pub(crate) table_id: String,
     pub(crate) table_uri: String,
-}
-
-#[derive(Debug)]
-struct UnityCommitColumnType {
-    type_text: String,
-    type_json: serde_json::Value,
-    type_name: &'static str,
-    type_precision: Option<i32>,
-    type_scale: Option<i32>,
 }
 
 // TODO: Extend catalog-managed Delta coordination to cover inline ratified
@@ -1011,383 +1004,67 @@ fn delta_catalog_managed_commit_update(
     actions: &[CommitAction],
     latest_backfilled_version: Option<i64>,
 ) -> Result<serde_json::Value> {
-    let mut update = serde_json::json!({
-        "table_id": table.table_id,
-        "table_uri": table.table_uri,
-        "commit_info": {
-            "version": staged.version,
-            "timestamp": staged.in_commit_timestamp,
-            "file_name": staged.file_name,
-            "file_size": staged.file_size,
-            "file_modification_timestamp": staged.file_modification_timestamp,
-        }
-    });
-    if let Some(latest_backfilled_version) = latest_backfilled_version {
-        update["latest_backfilled_version"] = serde_json::json!(latest_backfilled_version);
-    }
-    match unity_commit_metadata(actions) {
-        Ok(Some(metadata)) => update["metadata"] = metadata,
-        Ok(None) => {}
-        // The metadata of the legacy commit API is not used by a catalog with the Delta
-        // REST API, so the catalog reports the error when it needs the metadata.
-        Err(error) => update["metadata_error"] = serde_json::json!(error.to_string()),
-    }
-    if let Some(changes) = delta_log_changes(base, actions, &staged.domain_metadata)? {
-        update["delta_log"] = changes;
-    }
-    Ok(update)
+    let commit = DeltaCatalogCommit {
+        table_id: table.table_id.clone(),
+        table_uri: table.table_uri.clone(),
+        commit_info: DeltaCatalogCommitInfo {
+            version: staged.version,
+            timestamp: staged.in_commit_timestamp,
+            file_name: staged.file_name.clone(),
+            file_size: staged.file_size,
+            file_modification_timestamp: staged.file_modification_timestamp,
+        },
+        latest_backfilled_version,
+        delta_log: delta_commit_actions(base, actions, &staged.domain_metadata),
+    };
+    serde_json::to_value(commit).map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
-/// Returns the metadata action and the protocol action of the commit that differ from
-/// the metadata and the protocol of the base snapshot, in the form of the Delta log.
-/// The metadata action comes with the metadata of the base snapshot, so that the catalog
-/// can tell what the commit changes. The domain metadata actions of the commit are
-/// returned as they are.
-fn delta_log_changes(
+/// Returns the metadata action, the protocol action, and the domain metadata actions of
+/// the commit. The metadata action and the protocol action come with the metadata and the
+/// protocol of the base snapshot.
+fn delta_commit_actions(
     base: Option<(&Metadata, &Protocol)>,
     actions: &[CommitAction],
     domain_metadata: &[DomainMetadata],
-) -> Result<Option<serde_json::Value>> {
-    let json = |value: serde_json::Result<serde_json::Value>| {
-        value.map_err(|e| DataFusionError::External(Box::new(e)))
-    };
-    let mut changes = serde_json::Map::new();
+) -> DeltaCommitActions {
     let metadata = actions.iter().rev().find_map(|action| match action {
         CommitAction::Metadata(metadata) => Some(metadata),
         _ => None,
     });
-    if let Some(metadata) = metadata.filter(|x| base.map(|(metadata, _)| metadata) != Some(x)) {
-        changes.insert(
-            "metaData".to_string(),
-            json(serde_json::to_value(metadata))?,
-        );
-        if let Some((base, _)) = base {
-            changes.insert(
-                "baseMetaData".to_string(),
-                json(serde_json::to_value(base))?,
-            );
-        }
-    }
     let protocol = actions.iter().rev().find_map(|action| match action {
         CommitAction::Protocol(protocol) => Some(protocol),
         _ => None,
     });
-    if let Some(protocol) = protocol.filter(|x| base.map(|(_, protocol)| protocol) != Some(x)) {
-        changes.insert(
-            "protocol".to_string(),
-            json(serde_json::to_value(protocol))?,
-        );
-    }
-    if !domain_metadata.is_empty() {
-        changes.insert(
-            "domainMetadata".to_string(),
-            json(serde_json::to_value(domain_metadata))?,
-        );
-    }
-    Ok((!changes.is_empty()).then_some(serde_json::Value::Object(changes)))
-}
-
-fn unity_commit_metadata(actions: &[CommitAction]) -> Result<Option<serde_json::Value>> {
-    let Some(metadata) = actions.iter().rev().find_map(|action| match action {
-        CommitAction::Metadata(metadata) => Some(metadata),
-        _ => None,
-    }) else {
-        return Ok(None);
-    };
-
-    let schema = metadata
-        .parse_schema()
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let columns = schema
-        .fields()
-        .enumerate()
-        .map(|(position, field)| unity_column_info(metadata, field, position))
-        .collect::<Result<Vec<_>>>()?;
-
-    let mut out = serde_json::Map::new();
-    if let Some(description) = metadata.description() {
-        out.insert(
-            "description".to_string(),
-            serde_json::Value::String(description.to_string()),
-        );
-    }
-    out.insert(
-        "schema".to_string(),
-        serde_json::json!({
-            "columns": columns,
-        }),
-    );
-    if !metadata.configuration().is_empty() {
-        out.insert(
-            "properties".to_string(),
-            serde_json::json!({
-                "properties": metadata.configuration(),
-            }),
-        );
-    }
-
-    Ok(Some(serde_json::Value::Object(out)))
-}
-
-fn unity_column_info(
-    metadata: &Metadata,
-    field: &StructField,
-    position: usize,
-) -> Result<serde_json::Value> {
-    let column_type = unity_column_type(field.data_type())?;
-    let mut column = serde_json::json!({
-        "name": field.name(),
-        "nullable": field.is_nullable(),
-        "position": i32::try_from(position).unwrap_or(i32::MAX),
-        "type_text": column_type.type_text,
-        "type_json": unity_struct_field_type_json(field)?.to_string(),
-        "type_name": column_type.type_name,
-    });
-
-    if let Some(precision) = column_type.type_precision {
-        column["type_precision"] = serde_json::json!(precision);
-    }
-    if let Some(scale) = column_type.type_scale {
-        column["type_scale"] = serde_json::json!(scale);
-    }
-    if let Some(partition_index) = metadata
-        .partition_columns()
-        .iter()
-        .position(|column| column.eq_ignore_ascii_case(field.name()))
-    {
-        column["partition_index"] =
-            serde_json::json!(i32::try_from(partition_index).unwrap_or(i32::MAX));
-    }
-    if let Some(MetadataValue::String(comment)) = field.metadata().get("comment") {
-        column["comment"] = serde_json::Value::String(comment.clone());
-    }
-
-    Ok(column)
-}
-
-fn unity_struct_field_type_json(field: &StructField) -> Result<serde_json::Value> {
-    Ok(serde_json::json!({
-        "name": field.name(),
-        "type": spark_delta_data_type_json(field.data_type())?,
-        "nullable": field.is_nullable(),
-        "metadata": unity_field_metadata(field)?,
-    }))
-}
-
-fn spark_delta_data_type_json(data_type: &DeltaDataType) -> Result<serde_json::Value> {
-    match data_type {
-        DeltaDataType::Primitive(primitive) => Ok(spark_delta_primitive_json(primitive)),
-        DeltaDataType::Array(array) => Ok(serde_json::json!({
-            "type": "array",
-            "elementType": spark_delta_data_type_json(array.element_type())?,
-            "containsNull": array.contains_null(),
-        })),
-        DeltaDataType::Struct(struct_type) => {
-            let fields = struct_type
-                .fields()
-                .map(unity_struct_field_type_json)
-                .collect::<Result<Vec<_>>>()?;
-            Ok(serde_json::json!({
-                "type": "struct",
-                "fields": fields,
-            }))
-        }
-        DeltaDataType::Map(map) => Ok(serde_json::json!({
-            "type": "map",
-            "keyType": spark_delta_data_type_json(map.key_type())?,
-            "valueType": spark_delta_data_type_json(map.value_type())?,
-            "valueContainsNull": map.value_contains_null(),
-        })),
-        DeltaDataType::Variant(_) => Err(DataFusionError::NotImplemented(
-            "Unity Catalog metadata payloads for Delta variant columns".to_string(),
-        )),
-    }
-}
-
-fn spark_delta_primitive_json(primitive: &PrimitiveType) -> serde_json::Value {
-    let type_name = match primitive {
-        PrimitiveType::String => "string".to_string(),
-        PrimitiveType::Long => "long".to_string(),
-        PrimitiveType::Integer => "integer".to_string(),
-        PrimitiveType::Short => "short".to_string(),
-        PrimitiveType::Byte => "byte".to_string(),
-        PrimitiveType::Float => "float".to_string(),
-        PrimitiveType::Double => "double".to_string(),
-        PrimitiveType::Boolean => "boolean".to_string(),
-        PrimitiveType::Binary => "binary".to_string(),
-        PrimitiveType::Date => "date".to_string(),
-        PrimitiveType::Timestamp => "timestamp".to_string(),
-        PrimitiveType::TimestampNtz => "timestamp_ntz".to_string(),
-        PrimitiveType::Decimal(decimal) => {
-            format!("decimal({},{})", decimal.precision(), decimal.scale())
-        }
-    };
-    serde_json::Value::String(type_name)
-}
-
-fn unity_column_type(data_type: &DeltaDataType) -> Result<UnityCommitColumnType> {
-    match data_type {
-        DeltaDataType::Primitive(primitive) => Ok(unity_primitive_column_type(primitive)),
-        DeltaDataType::Array(array) => {
-            let element_type = unity_column_type(array.element_type())?;
-            Ok(UnityCommitColumnType {
-                type_text: format!("array<{}>", element_type.type_text),
-                type_json: serde_json::json!({
-                    "type": {
-                        "type": "array",
-                        "elementType": element_type.type_json,
-                        "containsNull": array.contains_null(),
-                    },
-                }),
-                type_name: "ARRAY",
-                type_precision: None,
-                type_scale: None,
+    DeltaCommitActions {
+        metadata: metadata.map(delta_metadata_info),
+        base_metadata: metadata
+            .and(base)
+            .map(|(metadata, _)| delta_metadata_info(metadata)),
+        protocol: protocol.map(delta_protocol_info),
+        base_protocol: protocol
+            .and(base)
+            .map(|(_, protocol)| delta_protocol_info(protocol)),
+        domain_metadata: domain_metadata
+            .iter()
+            .map(|action| DeltaDomainMetadataInfo {
+                domain: action.domain.clone(),
+                configuration: action.configuration.clone(),
+                removed: action.removed,
             })
-        }
-        DeltaDataType::Struct(struct_type) => {
-            let mut type_text_parts = Vec::new();
-            let mut fields = Vec::new();
-            for field in struct_type.fields() {
-                let field_type = unity_column_type(field.data_type())?;
-                type_text_parts.push(format!("{}:{}", field.name(), field_type.type_text));
-                fields.push(serde_json::json!({
-                    "name": field.name(),
-                    "type": field_type.type_json,
-                    "nullable": field.is_nullable(),
-                    "metadata": unity_field_metadata(field)?,
-                }));
-            }
-            Ok(UnityCommitColumnType {
-                type_text: format!("struct<{}>", type_text_parts.join(",")),
-                type_json: serde_json::json!({
-                    "type": {
-                        "type": "struct",
-                        "fields": fields,
-                    },
-                }),
-                type_name: "STRUCT",
-                type_precision: None,
-                type_scale: None,
-            })
-        }
-        DeltaDataType::Map(map) => {
-            let key_type = unity_column_type(map.key_type())?;
-            let value_type = unity_column_type(map.value_type())?;
-            Ok(UnityCommitColumnType {
-                type_text: format!("map<{},{}>", key_type.type_text, value_type.type_text),
-                type_json: serde_json::json!({
-                    "type": {
-                        "type": "map",
-                        "keyType": key_type.type_json,
-                        "valueType": value_type.type_json,
-                        "valueContainsNull": map.value_contains_null(),
-                    },
-                }),
-                type_name: "MAP",
-                type_precision: None,
-                type_scale: None,
-            })
-        }
-        DeltaDataType::Variant(_) => Err(DataFusionError::NotImplemented(
-            "Unity Catalog metadata payloads for Delta variant columns".to_string(),
-        )),
-    }
-}
-
-fn unity_primitive_column_type(primitive: &PrimitiveType) -> UnityCommitColumnType {
-    let (type_text, type_name) = match primitive {
-        PrimitiveType::String => ("string".to_string(), "STRING"),
-        PrimitiveType::Long => ("long".to_string(), "LONG"),
-        PrimitiveType::Integer => ("int".to_string(), "INT"),
-        PrimitiveType::Short => ("short".to_string(), "SHORT"),
-        PrimitiveType::Byte => ("byte".to_string(), "BYTE"),
-        PrimitiveType::Float => ("float".to_string(), "FLOAT"),
-        PrimitiveType::Double => ("double".to_string(), "DOUBLE"),
-        PrimitiveType::Boolean => ("boolean".to_string(), "BOOLEAN"),
-        PrimitiveType::Binary => ("binary".to_string(), "BINARY"),
-        PrimitiveType::Date => ("date".to_string(), "DATE"),
-        PrimitiveType::Timestamp => ("timestamp".to_string(), "TIMESTAMP"),
-        PrimitiveType::TimestampNtz => ("timestamp_ntz".to_string(), "TIMESTAMP_NTZ"),
-        PrimitiveType::Decimal(decimal) => {
-            return UnityCommitColumnType {
-                type_text: format!("decimal({},{})", decimal.precision(), decimal.scale()),
-                type_json: serde_json::json!({
-                    "type": {
-                        "type": "decimal",
-                        "precision": decimal.precision(),
-                        "scale": decimal.scale(),
-                    },
-                }),
-                type_name: "DECIMAL",
-                type_precision: Some(i32::from(decimal.precision())),
-                type_scale: Some(i32::from(decimal.scale())),
-            };
-        }
-    };
-
-    UnityCommitColumnType {
-        type_json: serde_json::Value::String(type_text.clone()),
-        type_text,
-        type_name,
-        type_precision: None,
-        type_scale: None,
-    }
-}
-
-fn unity_field_metadata(field: &StructField) -> Result<serde_json::Value> {
-    let mut out = if let Some(value) = field.metadata().get(SPARK_METADATA_JSON_KEY) {
-        match spark_metadata_value_json(value)? {
-            serde_json::Value::Object(object) => object,
-            other => {
-                return Err(DataFusionError::External(Box::new(
-                    CatalogError::InvalidArgument(format!(
-                        "{SPARK_METADATA_JSON_KEY} must contain a JSON object, got {other:?}",
-                    )),
-                )));
-            }
-        }
-    } else {
-        serde_json::Map::new()
-    };
-
-    for (key, value) in field.metadata() {
-        if key == SPARK_METADATA_JSON_KEY || key == SAIL_SPARK_UDT_METADATA_KEY {
-            continue;
-        }
-        out.entry(key.clone())
-            .or_insert(metadata_value_json(value)?);
-    }
-
-    Ok(serde_json::Value::Object(out))
-}
-
-fn spark_metadata_value_json(value: &MetadataValue) -> Result<serde_json::Value> {
-    match value {
-        MetadataValue::String(value) => serde_json::from_str(value).map_err(|e| {
-            DataFusionError::External(Box::new(CatalogError::InvalidArgument(format!(
-                "{SPARK_METADATA_JSON_KEY} contains invalid JSON: {e}",
-            ))))
-        }),
-        other => metadata_value_json(other),
-    }
-}
-
-fn metadata_value_json(value: &MetadataValue) -> Result<serde_json::Value> {
-    match value {
-        MetadataValue::Number(value) => Ok(serde_json::Value::Number((*value).into())),
-        MetadataValue::String(value) => Ok(serde_json::Value::String(value.clone())),
-        MetadataValue::Boolean(value) => Ok(serde_json::Value::Bool(*value)),
-        MetadataValue::Other(value) => Ok(value.clone()),
+            .collect(),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use sail_common_datafusion::catalog::delta::{DeltaMetadataInfo, DeltaProtocolInfo};
+
     use super::*;
-    use crate::spec::StructType;
+    use crate::spec::{DataType as DeltaDataType, StructField, StructType, TableFeature};
 
     #[test]
-    fn delta_log_changes_are_relative_to_the_base_snapshot() -> Result<()> {
+    fn commit_actions_come_with_the_base_snapshot() -> Result<()> {
         let external = |e| DataFusionError::External(Box::new(e));
         let schema = |columns: &[&str]| {
             StructType::try_new(
@@ -1398,70 +1075,129 @@ mod tests {
         };
         let base_metadata = Metadata::try_new(
             None,
-            None,
+            Some("events".to_string()),
             schema(&["id"]).map_err(external)?,
-            vec![],
+            vec!["id".to_string()],
             0,
             [("owner".to_string(), "a".to_string())].into(),
         )
         .map_err(external)?;
         let base_protocol = Protocol::new(3, 7, Some(vec![]), Some(vec![]));
         let base = Some((&base_metadata, &base_protocol));
+        let base_metadata_info = DeltaMetadataInfo {
+            schema_string: base_metadata.schema_string().to_string(),
+            partition_columns: vec!["id".to_string()],
+            configuration: [("owner".to_string(), "a".to_string())].into(),
+            description: Some("events".to_string()),
+        };
+        let base_protocol_info = DeltaProtocolInfo {
+            min_reader_version: 3,
+            min_writer_version: 7,
+            reader_features: Some(vec![]),
+            writer_features: Some(vec![]),
+        };
 
-        // The actions of the base snapshot written again are not changes.
+        assert_eq!(
+            delta_commit_actions(base, &[], &[]),
+            DeltaCommitActions::default()
+        );
+        // The actions of the base snapshot written again come with the base snapshot, so
+        // that the catalog can tell that they change nothing.
         let actions = vec![
             CommitAction::Protocol(base_protocol.clone()),
             CommitAction::Metadata(base_metadata.clone()),
         ];
-        assert_eq!(delta_log_changes(base, &actions, &[])?, None);
-        assert_eq!(delta_log_changes(base, &[], &[])?, None);
+        assert_eq!(
+            delta_commit_actions(base, &actions, &[]),
+            DeltaCommitActions {
+                metadata: Some(base_metadata_info.clone()),
+                base_metadata: Some(base_metadata_info.clone()),
+                protocol: Some(base_protocol_info.clone()),
+                base_protocol: Some(base_protocol_info.clone()),
+                domain_metadata: vec![],
+            }
+        );
 
         let metadata = base_metadata
             .clone()
             .with_schema(&schema(&["id", "value"]).map_err(external)?)
             .map_err(external)?;
-        let protocol = Protocol::new(3, 7, Some(vec![]), None);
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::DeletionVectors]),
+            Some(vec![
+                TableFeature::DeletionVectors,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let metadata_info = DeltaMetadataInfo {
+            schema_string: metadata.schema_string().to_string(),
+            ..base_metadata_info.clone()
+        };
+        let protocol_info = DeltaProtocolInfo {
+            min_reader_version: 3,
+            min_writer_version: 7,
+            reader_features: Some(vec!["deletionVectors".to_string()]),
+            writer_features: Some(vec![
+                "deletionVectors".to_string(),
+                "rowTracking".to_string(),
+            ]),
+        };
+        // The last metadata action and the last protocol action of the commit count.
         let actions = vec![
+            CommitAction::Protocol(base_protocol.clone()),
+            CommitAction::Metadata(base_metadata.clone()),
             CommitAction::Protocol(protocol.clone()),
             CommitAction::Metadata(metadata.clone()),
         ];
         assert_eq!(
-            delta_log_changes(base, &actions, &[])?,
-            Some(serde_json::json!({
-                "metaData": metadata,
-                "baseMetaData": base_metadata,
-                "protocol": protocol,
-            }))
+            delta_commit_actions(base, &actions, &[]),
+            DeltaCommitActions {
+                metadata: Some(metadata_info.clone()),
+                base_metadata: Some(base_metadata_info.clone()),
+                protocol: Some(protocol_info.clone()),
+                base_protocol: Some(base_protocol_info),
+                domain_metadata: vec![],
+            }
         );
         assert_eq!(
-            delta_log_changes(None, &actions, &[])?,
-            Some(serde_json::json!({
-                "metaData": metadata,
-                "protocol": protocol,
-            }))
+            delta_commit_actions(None, &actions, &[]),
+            DeltaCommitActions {
+                metadata: Some(metadata_info),
+                protocol: Some(protocol_info),
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            delta_commit_actions(base, &[CommitAction::Metadata(metadata.clone())], &[])
+                .base_protocol,
+            None
         );
 
-        // The domain metadata actions of the commit are changes of their own.
         let domain = DomainMetadata {
             domain: "delta.rowTracking".to_string(),
             configuration: r#"{"rowIdHighWaterMark":41}"#.to_string(),
             removed: false,
         };
         assert_eq!(
-            delta_log_changes(base, &[], std::slice::from_ref(&domain))?,
-            Some(serde_json::json!({
-                "domainMetadata": [{
-                    "domain": "delta.rowTracking",
-                    "configuration": r#"{"rowIdHighWaterMark":41}"#,
-                    "removed": false,
+            delta_commit_actions(base, &[], std::slice::from_ref(&domain)),
+            DeltaCommitActions {
+                domain_metadata: vec![DeltaDomainMetadataInfo {
+                    domain: "delta.rowTracking".to_string(),
+                    configuration: r#"{"rowIdHighWaterMark":41}"#.to_string(),
+                    removed: false,
                 }],
-            }))
+                ..Default::default()
+            }
         );
         Ok(())
     }
 
+    /// The commit payload carries the table metadata once, in the form of the Delta log,
+    /// even for metadata that has no form in the legacy commit API of Unity Catalog.
     #[test]
-    fn commit_update_defers_legacy_metadata_errors() -> Result<()> {
+    fn commit_update_carries_the_delta_log_actions() -> Result<()> {
         let external = |e| DataFusionError::External(Box::new(e));
         let metadata = |data_type: DeltaDataType| {
             Metadata::try_new(
@@ -1480,9 +1216,9 @@ mod tests {
         let staged = CatalogManagedStagedCommit {
             version: 1,
             file_name: "00000000000000000001.uuid.json".to_string(),
-            file_size: 1,
-            file_modification_timestamp: 1,
-            in_commit_timestamp: 1,
+            file_size: 2,
+            file_modification_timestamp: 3,
+            in_commit_timestamp: 4,
             staged_path: object_store::path::Path::from("t/_delta_log/_staged_commits/1.json"),
             domain_metadata: vec![],
             metrics: Default::default(),
@@ -1491,22 +1227,42 @@ mod tests {
         let base_protocol = Protocol::new(3, 7, Some(vec![]), Some(vec![]));
         let base = Some((&base_metadata, &base_protocol));
 
+        let update = delta_catalog_managed_commit_update(&table, base, &staged, &[], None)?;
+        assert_eq!(
+            update,
+            serde_json::json!({
+                "table_id": "id",
+                "table_uri": "memory:///t",
+                "commit_info": {
+                    "version": 1,
+                    "timestamp": 4,
+                    "file_name": "00000000000000000001.uuid.json",
+                    "file_size": 2,
+                    "file_modification_timestamp": 3,
+                },
+                "delta_log": {},
+            })
+        );
+
         let variant = metadata(DeltaDataType::unshredded_variant()).map_err(external)?;
         let actions = vec![CommitAction::Metadata(variant.clone())];
-        let update = delta_catalog_managed_commit_update(&table, base, &staged, &actions, None)?;
+        let update = delta_catalog_managed_commit_update(&table, base, &staged, &actions, Some(0))?;
+        assert_eq!(update["latest_backfilled_version"], serde_json::json!(0));
         assert_eq!(update.get("metadata"), None);
-        assert!(
-            update["metadata_error"]
-                .as_str()
-                .is_some_and(|error| error.contains("variant columns")),
-            "{update}"
+        assert_eq!(
+            update["delta_log"]["metaData"]["schemaString"],
+            serde_json::json!(variant.schema_string())
         );
-        assert_eq!(update["delta_log"]["metaData"], serde_json::json!(variant));
-
-        let actions = vec![CommitAction::Metadata(base_metadata.clone())];
-        let update = delta_catalog_managed_commit_update(&table, base, &staged, &actions, None)?;
-        assert!(update["metadata"].is_object(), "{update}");
-        assert_eq!(update.get("metadata_error"), None);
+        assert_eq!(
+            update["delta_log"]["baseMetaData"]["schemaString"],
+            serde_json::json!(base_metadata.schema_string())
+        );
+        let commit: DeltaCatalogCommit =
+            serde_json::from_value(update).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        assert_eq!(
+            commit.delta_log.metadata,
+            Some(delta_metadata_info(&variant))
+        );
         Ok(())
     }
 

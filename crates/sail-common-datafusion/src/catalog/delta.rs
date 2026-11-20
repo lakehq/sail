@@ -47,6 +47,67 @@ pub struct DeltaCreatedVersion {
     pub row_id_high_water_mark: Option<i64>,
 }
 
+/// A domain metadata action of the Delta log.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeltaDomainMetadataInfo {
+    pub domain: String,
+    #[serde(default)]
+    pub configuration: String,
+    #[serde(default)]
+    pub removed: bool,
+}
+
+/// A staged commit of a catalog-managed Delta table that a catalog ratifies.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct DeltaCatalogCommit {
+    pub table_id: String,
+    pub table_uri: String,
+    pub commit_info: DeltaCatalogCommitInfo,
+    /// The latest version of the table that is published.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_backfilled_version: Option<i64>,
+    /// The actions of the commit that the catalog derives the table metadata from.
+    #[serde(default)]
+    pub delta_log: DeltaCommitActions,
+}
+
+/// The staged commit file of a Delta commit.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct DeltaCatalogCommitInfo {
+    pub version: i64,
+    /// The in-commit timestamp of the commit.
+    pub timestamp: i64,
+    pub file_name: String,
+    pub file_size: i64,
+    pub file_modification_timestamp: i64,
+}
+
+/// The metadata action, the protocol action, and the domain metadata actions of a Delta
+/// commit, in the form of the Delta log. The metadata action and the protocol action come
+/// with the metadata and the protocol of the snapshot that the commit is based on, so that
+/// the catalog can tell what the commit changes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeltaCommitActions {
+    #[serde(rename = "metaData", default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<DeltaMetadataInfo>,
+    /// The metadata of the base snapshot, for a commit with a metadata action.
+    #[serde(
+        rename = "baseMetaData",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub base_metadata: Option<DeltaMetadataInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<DeltaProtocolInfo>,
+    /// The protocol of the base snapshot, for a commit with a protocol action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_protocol: Option<DeltaProtocolInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub domain_metadata: Vec<DeltaDomainMetadataInfo>,
+}
+
 /// Properties that bind a Delta log to a catalog or commit coordinator.
 pub fn is_delta_coordinated_property(key: &str) -> bool {
     key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_KEY)
