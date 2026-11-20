@@ -181,7 +181,7 @@ async fn infer_parquet_checkpoint_schema(
 
     let mut schemas: Vec<_> = futures::stream::iter(objects)
         .map(|object| async {
-            // For Parquet encryption, port `get_file_decryption_properties` and uncomment these.
+            // TODO: Port `get_file_decryption_properties` and uncomment for Parquet encryption.
             // let file_decryption_properties =
             //     get_file_decryption_properties(state, format.options(), &object.location).await?;
             let meta = DFParquetMetadata::new(store.as_ref(), object)

@@ -10,7 +10,8 @@
 //! object store registry, which creates a new, empty in-memory store for such a URL. Without the
 //! session ID, the same path in the in-memory stores of different sessions would share cache
 //! entries, even though the caches themselves can be shared across sessions. Other stores refer
-//! to the same data in every session, so their cache entries are shared too.
+//! to the same data in every session, so their cache entries are shared too. Any store registered
+//! per session (none are today) would also need to be scoped by session.
 
 use std::borrow::Cow;
 use std::sync::Arc;

@@ -413,7 +413,8 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(values, vec![Some(1), Some(2), Some(3)], "column {column}");
         }
-        // One footer per session: planning and execution in a session must share a key.
+        // Execution reuses the footer read at planning in the same session, and sessions do not
+        // share it.
         assert_eq!(shared.len(), 2);
         Ok(())
     }
