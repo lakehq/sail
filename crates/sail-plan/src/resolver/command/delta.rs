@@ -311,7 +311,7 @@ impl PlanResolver<'_> {
             }
             Err(e) => return Err(e.into()),
         };
-        // A catalog-managed table is refused before the validation reads its storage.
+        // A Unity Catalog managed table is refused before the validation reads its storage.
         let resolved = self
             .ctx
             .extension::<CatalogManager>()?
@@ -319,7 +319,7 @@ impl PlanResolver<'_> {
             .await?;
         if resolved.execution.commit == CommitAuthority::DeltaRatifiedCommit {
             return Err(PlanError::unsupported(
-                "ALTER TABLE ADD CONSTRAINT is not yet supported for catalog-managed Delta tables",
+                "ALTER TABLE ADD CONSTRAINT is not yet supported for Unity Catalog managed Delta tables",
             ));
         }
 
@@ -1034,7 +1034,7 @@ mod tests {
             .to_string();
         assert!(
             error.contains(
-                "ALTER TABLE ADD CONSTRAINT is not yet supported for catalog-managed Delta tables"
+                "ALTER TABLE ADD CONSTRAINT is not yet supported for Unity Catalog managed Delta tables"
             ),
             "{error}"
         );

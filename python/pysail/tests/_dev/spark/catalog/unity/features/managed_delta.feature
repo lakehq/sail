@@ -756,7 +756,7 @@ Feature: Unity Catalog managed Delta table operations
       ALTER TABLE unity_table_test.managed_delta_alter_t
       SET TBLPROPERTIES ('my.tag' = 'blocked')
       """
-    Given statement with error catalog-managed Delta tables
+    Given statement with error Unity Catalog managed Delta tables
       """
       ALTER TABLE unity_table_test.managed_delta_alter_t
       ADD CONSTRAINT positive_id CHECK (id > 0)

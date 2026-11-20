@@ -269,9 +269,11 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> DeltaCatalogCommitCoordinator<'a,
                 {
                     Ok(published) => {
                         publish_failure = published.failure;
-                        // A request that is sent again after an unknown outcome must be the
-                        // same request, so the backfill is reported with the next commit.
-                        if published.version > latest_backfilled_version && !outcome_unknown {
+                        // The catalog counts only the backfill that a request reports, so the
+                        // request is sent again with the backfill even after an unknown outcome.
+                        // The catalog checks for a replay of the staged commit before its limit,
+                        // so the refusal shows that no earlier request was ratified.
+                        if published.version > latest_backfilled_version {
                             latest_backfilled_version = published.version;
                             update["latest_backfilled_version"] =
                                 serde_json::json!(published.version);

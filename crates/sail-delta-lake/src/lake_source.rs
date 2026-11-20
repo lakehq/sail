@@ -840,7 +840,7 @@ fn reject_catalog_managed_delta_alter(
         )
     {
         return not_impl_err!(
-            "{} is not yet supported for catalog-managed Delta tables",
+            "{} is not yet supported for Unity Catalog managed Delta tables",
             delta_alter_operation_name(operation)
         );
     }

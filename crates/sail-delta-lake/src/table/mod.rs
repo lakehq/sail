@@ -3524,6 +3524,71 @@ mod catalog_managed_tests {
         assert!(published_commit_bytes(&commit, 2).await.is_some());
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn catalog_commit_with_unknown_outcome_at_the_limit_of_the_catalog_reports_backfill() {
+        // The catalog does not answer the first request, then refuses the same request at
+        // its limit after another writer publishes version 1. The request is sent again
+        // with version 1 reported as backfilled.
+        let commit = commit_with_script_after(
+            vec![
+                CommitStep::Refuse(state_unknown),
+                CommitStep::PublishPredecessorAndExhaust,
+            ],
+            true,
+            UnpublishedCommit::Missing,
+        )
+        .await;
+        let staged = commit.result.as_ref().unwrap();
+        assert_eq!(staged.version, 2);
+        let request = (2, staged.file_name.clone());
+        assert_eq!(commit.requests(), vec![request.clone(); 3]);
+        let backfilled = [0, 0, 1].map(|version| serde_json::json!(version));
+        assert_eq!(backfilled_versions(&commit), backfilled);
+        assert_eq!(commit.latest_table_version(), 2);
+        assert!(published_commit_bytes(&commit, 1).await.is_some());
+        assert!(published_commit_bytes(&commit, 2).await.is_some());
+
+        // The request with the backfill is ratified but not answered, and the catalog
+        // recognizes the same request when it is sent again.
+        let commit = commit_with_script_after(
+            vec![
+                CommitStep::Refuse(state_unknown),
+                CommitStep::PublishPredecessorAndExhaust,
+                CommitStep::RatifyAndFail(state_unknown),
+            ],
+            true,
+            UnpublishedCommit::Missing,
+        )
+        .await;
+        let staged = commit.result.as_ref().unwrap();
+        assert_eq!(commit.requests(), vec![(2, staged.file_name.clone()); 4]);
+        let backfilled = [0, 0, 1, 1].map(|version| serde_json::json!(version));
+        assert_eq!(backfilled_versions(&commit), backfilled);
+        assert_eq!(commit.latest_table_version(), 2);
+        let ratified = commit.script().ratified.lock().unwrap().commits.clone();
+        let versions: Vec<_> = ratified.iter().map(|commit| commit.version).collect();
+        assert_eq!(versions, vec![1, 2]);
+        assert!(published_commit_bytes(&commit, 2).await.is_some());
+
+        // The first request is ratified but not answered. The commits of the table show
+        // that the commit is ratified, so the request is not sent again.
+        let commit = commit_with_script_after(
+            vec![
+                CommitStep::RatifyAndFail(state_unknown),
+                CommitStep::PublishPredecessorAndExhaust,
+            ],
+            true,
+            UnpublishedCommit::Missing,
+        )
+        .await;
+        let staged = commit.result.as_ref().unwrap();
+        assert_eq!(commit.requests(), vec![(2, staged.file_name.clone()); 2]);
+        assert_eq!(commit.latest_table_version(), 2);
+        let ratified = commit.script().ratified.lock().unwrap().commits.clone();
+        let versions: Vec<_> = ratified.iter().map(|commit| commit.version).collect();
+        assert_eq!(versions, vec![1, 2]);
+    }
+
     #[tokio::test]
     async fn catalog_commit_at_the_limit_of_the_catalog_names_the_commit_that_is_not_published() {
         // Another writer publishes other actions as version 1 before the catalog refuses the
