@@ -1269,6 +1269,7 @@ impl IcebergScan {
                     .cache_manager
                     .get_file_metadata_cache(),
                 &object_store_url,
+                session.session_id(),
             ),
         ));
 
@@ -1528,6 +1529,7 @@ impl IcebergScan {
                     .cache_manager
                     .get_file_metadata_cache(),
                 &object_store_url,
+                session.session_id(),
             ),
         ));
         let mut branches: Vec<Arc<dyn ExecutionPlan>> =

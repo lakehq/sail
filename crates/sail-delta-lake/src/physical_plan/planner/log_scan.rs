@@ -423,6 +423,7 @@ pub async fn build_delta_log_datasource_scans_with_options(
             .cache_manager
             .get_file_metadata_cache(),
         &object_store_url,
+        ctx.session().session_id(),
     );
 
     // Commit/checkpoint lists are expected to be selected by the planner log-segment resolver.
@@ -683,7 +684,7 @@ mod tests {
         let shared =
             CacheManager::try_new(&CacheManagerConfig::default())?.get_file_metadata_cache();
         let url = ObjectStoreUrl::parse("memory://")?;
-        let scoped = scoped_file_metadata_cache(Arc::clone(&shared), &url);
+        let scoped = scoped_file_metadata_cache(Arc::clone(&shared), &url, state.session_id());
         let actual = infer_parquet_checkpoint_schema(&state, &store, &scoped, &objects).await?;
 
         assert_eq!(actual, expected);

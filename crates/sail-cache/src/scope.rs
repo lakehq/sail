@@ -5,7 +5,14 @@
 //! The file metadata, file statistics, and file listing caches are keyed by object paths, which
 //! do not include the object store. Without a scope, the same path in different stores (for
 //! example, two S3 buckets) would share cache entries.
+//!
+//! The scope also includes the session ID for `memory` URLs, since each session has its own
+//! object store registry, which creates a new, empty in-memory store for such a URL. Without the
+//! session ID, the same path in the in-memory stores of different sessions would share cache
+//! entries, even though the caches themselves can be shared across sessions. Other stores are
+//! shared across sessions, so their cache entries are too.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,56 +23,76 @@ use datafusion::execution::cache::{Cache, CacheEntryInfo};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use object_store::path::{Path, PathPart};
 
-/// Returns a cache key for `path` in the object store at `object_store_url`.
-pub fn scoped_path(object_store_url: &ObjectStoreUrl, path: &Path) -> Path {
-    std::iter::once(PathPart::from(object_store_url.as_str()))
-        .chain(path.parts())
-        .collect()
+/// Returns the cache scope of the object store at `object_store_url` in the session with
+/// `session_id`. Only `memory` URLs include the session ID.
+fn cache_scope<'a>(object_store_url: &'a ObjectStoreUrl, session_id: &str) -> Cow<'a, str> {
+    let url = object_store_url.as_str();
+    if url.starts_with("memory:") {
+        Cow::Owned(format!("{url} session {session_id}"))
+    } else {
+        Cow::Borrowed(url)
+    }
+}
+
+/// Returns a cache key for `path` in the object store at `object_store_url` in the session with
+/// `session_id`.
+pub fn scoped_path(object_store_url: &ObjectStoreUrl, session_id: &str, path: &Path) -> Path {
+    std::iter::once(PathPart::from(
+        cache_scope(object_store_url, session_id).as_ref(),
+    ))
+    .chain(path.parts())
+    .collect()
 }
 
 /// Returns the table reference that scopes the file listing cache entries of `url` to its
-/// object store.
+/// object store in the session with `session_id`.
 ///
 /// DataFusion keys its file listing cache by the table reference of the listing URL and the
 /// listing prefix, so every listing of a prefix must use this reference for the same store.
-pub fn listing_table_ref(url: &ListingTableUrl) -> TableReference {
-    TableReference::bare(url.object_store().as_str())
+pub fn listing_table_ref(url: &ListingTableUrl, session_id: &str) -> TableReference {
+    TableReference::bare(cache_scope(&url.object_store(), session_id).as_ref())
 }
 
 /// Returns `url` with the table reference that scopes its file listing cache entries to its
-/// object store. DataFusion uses this reference when it lists files for a scan.
-pub fn scoped_listing_url(url: &ListingTableUrl) -> ListingTableUrl {
-    url.clone().with_table_ref(listing_table_ref(url))
+/// object store in the session with `session_id`. DataFusion uses this reference when it lists
+/// files for a scan.
+pub fn scoped_listing_url(url: &ListingTableUrl, session_id: &str) -> ListingTableUrl {
+    url.clone()
+        .with_table_ref(listing_table_ref(url, session_id))
 }
 
-/// Returns a view of the shared file metadata cache whose keys are scoped to one object store.
+/// Returns a view of the shared file metadata cache whose keys are scoped to one object store
+/// in the session with `session_id`.
 ///
 /// Lookups, insertions, removals, and `list_entries` are scoped to the object store. The size,
 /// capacity, and TTL methods, `clear`, and `drop_table_entries` act on the shared cache.
 pub fn scoped_file_metadata_cache(
     cache: Arc<FileMetadataCache>,
     object_store_url: &ObjectStoreUrl,
+    session_id: &str,
 ) -> Arc<FileMetadataCache> {
     Arc::new(ObjectStoreScopedFileMetadataCache {
         inner: cache,
-        object_store_url: object_store_url.clone(),
+        scope: PathPart::from(cache_scope(object_store_url, session_id).into_owned()),
     })
 }
 
 struct ObjectStoreScopedFileMetadataCache {
     inner: Arc<FileMetadataCache>,
-    object_store_url: ObjectStoreUrl,
+    scope: PathPart<'static>,
 }
 
 impl ObjectStoreScopedFileMetadataCache {
     fn scoped(&self, key: &Path) -> Path {
-        scoped_path(&self.object_store_url, key)
+        std::iter::once(self.scope.clone())
+            .chain(key.parts())
+            .collect()
     }
 
     fn unscoped(&self, key: &Path) -> Option<Path> {
         let mut parts = key.parts();
         let first = parts.next()?;
-        (first == PathPart::from(self.object_store_url.as_str())).then(|| parts.collect())
+        (first == self.scope).then(|| parts.collect())
     }
 }
 
@@ -95,11 +122,7 @@ impl Cache<Path, CachedFileMetadataEntry> for ObjectStoreScopedFileMetadataCache
     }
 
     fn name(&self) -> String {
-        format!(
-            "{} scoped to {}",
-            self.inner.name(),
-            self.object_store_url.as_str()
-        )
+        format!("{} scoped to {}", self.inner.name(), self.scope.as_ref())
     }
 
     fn cache_limit(&self) -> usize {
@@ -164,13 +187,19 @@ mod tests {
         let bucket_b = ObjectStoreUrl::parse("s3://bucket-b")?;
         let path = Path::from("warehouse/table/data.parquet");
         let other = Path::from("warehouse/table/other.parquet");
-        assert_eq!(scoped_path(&bucket_a, &path), scoped_path(&bucket_a, &path));
-        assert_ne!(scoped_path(&bucket_a, &path), scoped_path(&bucket_b, &path));
-        assert_ne!(
-            scoped_path(&bucket_a, &path),
-            scoped_path(&bucket_a, &other)
+        assert_eq!(
+            scoped_path(&bucket_a, "s", &path),
+            scoped_path(&bucket_a, "s", &path)
         );
-        assert_ne!(scoped_path(&bucket_a, &path), path);
+        assert_ne!(
+            scoped_path(&bucket_a, "s", &path),
+            scoped_path(&bucket_b, "s", &path)
+        );
+        assert_ne!(
+            scoped_path(&bucket_a, "s", &path),
+            scoped_path(&bucket_a, "s", &other)
+        );
+        assert_ne!(scoped_path(&bucket_a, "s", &path), path);
         Ok(())
     }
 
@@ -179,10 +208,45 @@ mod tests {
         let bucket_a = ListingTableUrl::parse("s3://bucket-a/data/")?;
         let bucket_b = ListingTableUrl::parse("s3://bucket-b/data/")?;
         assert_eq!(
-            scoped_listing_url(&bucket_a).get_table_ref(),
-            &Some(listing_table_ref(&bucket_a))
+            scoped_listing_url(&bucket_a, "s").get_table_ref(),
+            &Some(listing_table_ref(&bucket_a, "s"))
         );
-        assert_ne!(listing_table_ref(&bucket_a), listing_table_ref(&bucket_b));
+        assert_ne!(
+            listing_table_ref(&bucket_a, "s"),
+            listing_table_ref(&bucket_b, "s")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn only_memory_scopes_differ_by_session() -> Result<()> {
+        let path = Path::from("warehouse/table/data.parquet");
+        let memory = ObjectStoreUrl::parse("memory://")?;
+        assert_eq!(
+            scoped_path(&memory, "a", &path),
+            scoped_path(&memory, "a", &path)
+        );
+        assert_ne!(
+            scoped_path(&memory, "a", &path),
+            scoped_path(&memory, "b", &path)
+        );
+        let memory = ListingTableUrl::parse("memory:///data/")?;
+        assert_ne!(
+            listing_table_ref(&memory, "a"),
+            listing_table_ref(&memory, "b")
+        );
+        for url in ["s3://bucket", "file:///"] {
+            let object_store_url = ObjectStoreUrl::parse(url)?;
+            assert_eq!(
+                scoped_path(&object_store_url, "a", &path),
+                scoped_path(&object_store_url, "b", &path)
+            );
+            let listing_url = ListingTableUrl::parse(format!("{url}/data/"))?;
+            assert_eq!(
+                listing_table_ref(&listing_url, "a"),
+                listing_table_ref(&listing_url, "b")
+            );
+        }
         Ok(())
     }
 
@@ -193,10 +257,12 @@ mod tests {
         let bucket_a = scoped_file_metadata_cache(
             Arc::clone(&shared),
             &ObjectStoreUrl::parse("s3://bucket-a")?,
+            "s",
         );
         let bucket_b = scoped_file_metadata_cache(
             Arc::clone(&shared),
             &ObjectStoreUrl::parse("s3://bucket-b")?,
+            "s",
         );
         let path = Path::from("warehouse/table/data.parquet");
         let entry = CachedFileMetadataEntry::new(

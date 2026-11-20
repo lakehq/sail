@@ -140,8 +140,11 @@ impl ReadFormat for ParquetReadFormat {
             ctx.config_options().execution.meta_fetch_concurrency.into();
 
         let objects = files.iter().flat_map(|group| {
-            let metadata_cache =
-                scoped_file_metadata_cache(Arc::clone(&metadata_cache), &group.url.object_store());
+            let metadata_cache = scoped_file_metadata_cache(
+                Arc::clone(&metadata_cache),
+                &group.url.object_store(),
+                ctx.session_id(),
+            );
             group
                 .objects
                 .iter()
@@ -256,6 +259,7 @@ impl ReadFormat for ParquetReadFormat {
         let metadata_cache = scoped_file_metadata_cache(
             ctx.runtime_env().cache_manager.get_file_metadata_cache(),
             object_store_url,
+            ctx.session_id(),
         );
         let metadata = DFParquetMetadata::new(store, object)
             .with_metadata_size_hint(options.global.metadata_size_hint)
@@ -308,6 +312,7 @@ impl ReadFormat for ParquetReadFormat {
         let metadata_cache = scoped_file_metadata_cache(
             ctx.runtime_env().cache_manager.get_file_metadata_cache(),
             &input.object_store_url,
+            ctx.session_id(),
         );
         let store = ctx.runtime_env().object_store(&input.object_store_url)?;
 

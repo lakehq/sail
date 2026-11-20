@@ -263,6 +263,7 @@ impl ScanByDataFilesState {
                     .cache_manager
                     .get_file_metadata_cache(),
                 &object_store_url,
+                &self.context.session_id(),
             ),
         ));
         let source = ParquetSource::new(table_schema)
@@ -536,6 +537,7 @@ impl ScanByDataFilesState {
                 .cache_manager
                 .get_file_metadata_cache(),
             object_store_url,
+            &context.session_id(),
         );
         let file_groups = load_parquet_scan_metadata(
             file_groups,

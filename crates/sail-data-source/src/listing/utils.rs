@@ -284,7 +284,7 @@ pub async fn list_all_files<'a>(
             Some(cache) => {
                 // This key must match the one DataFusion uses when listing for a scan.
                 let key = TableScopedPath {
-                    table: Some(listing_table_ref(url)),
+                    table: Some(listing_table_ref(url, ctx.session_id())),
                     path: url.prefix().clone(),
                 };
                 if let Some(res) = cache.get(&key) {
@@ -639,12 +639,18 @@ mod tests {
                 .await?;
             listed.push(files);
             // The scan lists through DataFusion, which must reuse the same cache entry.
-            let scanned =
-                pruned_partition_list(&state, &store, &scoped_listing_url(&url), &[], "", &[])
-                    .await?
-                    .map_ok(|file| file.object_meta.location.to_string())
-                    .try_collect::<Vec<_>>()
-                    .await?;
+            let scanned = pruned_partition_list(
+                &state,
+                &store,
+                &scoped_listing_url(&url, state.session_id()),
+                &[],
+                "",
+                &[],
+            )
+            .await?
+            .map_ok(|file| file.object_meta.location.to_string())
+            .try_collect::<Vec<_>>()
+            .await?;
             listed.push(scanned);
         }
         assert_eq!(

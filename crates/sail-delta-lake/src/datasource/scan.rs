@@ -466,6 +466,7 @@ pub async fn build_file_scan_config(
             .cache_manager
             .get_file_metadata_cache(),
         &object_store_url,
+        session.session_id(),
     );
     let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
         Arc::clone(&store),

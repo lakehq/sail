@@ -750,6 +750,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let metadata_cache = scoped_file_metadata_cache(
                     ctx.runtime_env().cache_manager.get_file_metadata_cache(),
                     &object_store_url,
+                    &ctx.session_id(),
                 );
                 let reader_factory =
                     Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));

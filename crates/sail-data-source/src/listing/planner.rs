@@ -371,7 +371,7 @@ async fn list_files_for_scan<'a>(
         .config()
         .table_paths
         .iter()
-        .map(scoped_listing_url)
+        .map(|url| scoped_listing_url(url, ctx.session_id()))
         .collect::<Vec<_>>();
     let file_list = future::try_join_all(table_paths.iter().map(|table_path| async move {
         let files =
@@ -475,7 +475,7 @@ async fn do_collect_statistics_and_ordering(
         )),
         // Scope the path explicitly, since the store in the table reference above depends on
         // DataFusion's `pruned_partition_list` copying it from the scoped listing URL.
-        path: scoped_path(object_store_url, &meta.location),
+        path: scoped_path(object_store_url, ctx.session_id(), &meta.location),
     };
 
     if let Some(cached) = file_statistic_cache
