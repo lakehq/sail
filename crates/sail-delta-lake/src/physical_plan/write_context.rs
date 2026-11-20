@@ -147,8 +147,9 @@ impl DeltaTableReplacement {
     /// commits, and upgrades the protocol for the new configuration. The schema and the
     /// partitioning stay the ones of the write.
     ///
-    /// A new column mapping mode in the configuration is applied to the data that the
-    /// write produces, as Delta Spark allows any change of the mode on REPLACE.
+    /// The column mapping mode in the configuration is applied to the data that the write
+    /// produces, as Delta Spark allows any change of the mode on REPLACE. As in Delta
+    /// Spark, the columns get new physical names and IDs even if the mode stays the same.
     pub fn apply(&self, context: &mut DeltaWriteContext, snapshot: &DeltaSnapshot) -> Result<()> {
         let mut metadata = context
             .schema_actions
@@ -164,8 +165,10 @@ impl DeltaTableReplacement {
             .get("delta.columnMapping.mode")
             .and_then(|mode| ColumnMappingMode::try_from(mode.as_str()).ok())
             .unwrap_or_default();
-        if mode == context.effective_column_mapping_mode {
-            // The data is written with the column mapping of the table.
+        if mode == ColumnMappingMode::None
+            && context.effective_column_mapping_mode == ColumnMappingMode::None
+        {
+            // The data is written without column mapping, as the table has none.
             for key in [
                 "delta.columnMapping.mode",
                 "delta.columnMapping.maxColumnId",
@@ -1005,22 +1008,34 @@ mod tests {
             vec!["id".to_string(), "p".to_string()]
         );
 
-        let (context, metadata) = replace(mapped, mapped_configuration, Some("id"))?;
-        assert_eq!(context.effective_column_mapping_mode, ColumnMappingMode::Id);
-        assert_eq!(
-            metadata
-                .configuration()
-                .get("delta.columnMapping.maxColumnId"),
-            Some(&"9".to_string())
-        );
-        let schema = metadata.parse_schema().expect("schema");
-        for field in schema.fields() {
-            assert!(
-                field
-                    .physical_name(ColumnMappingMode::Id)
-                    .starts_with("col-")
+        // The same mode, as a new mode, gives the columns new physical names and IDs.
+        for (mode, expected) in [
+            ("id", ColumnMappingMode::Id),
+            ("name", ColumnMappingMode::Name),
+        ] {
+            let (context, metadata) =
+                replace(mapped.clone(), mapped_configuration.clone(), Some(mode))?;
+            assert_eq!(context.effective_column_mapping_mode, expected);
+            assert_eq!(
+                metadata
+                    .configuration()
+                    .get("delta.columnMapping.maxColumnId"),
+                Some(&"9".to_string())
             );
-            assert!(!["col-id", "col-p"].contains(&field.physical_name(ColumnMappingMode::Id)));
+            let schema = metadata.parse_schema().expect("schema");
+            let physical_names = schema
+                .fields()
+                .map(|field| field.physical_name(expected).to_string())
+                .collect::<Vec<_>>();
+            for name in &physical_names {
+                assert!(name.starts_with("col-"), "{mode}: {physical_names:?}");
+                assert!(
+                    !["col-id", "col-p"].contains(&name.as_str()),
+                    "{mode}: {physical_names:?}"
+                );
+            }
+            assert_eq!(context.physical_partition_columns, physical_names[1..]);
+            assert_eq!(context.logical_kernel_for_mapping.as_ref(), Some(&schema));
         }
         Ok(())
     }

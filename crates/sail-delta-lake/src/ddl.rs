@@ -245,8 +245,12 @@ pub(crate) async fn replace_columns(
         })
         .collect::<Result<Vec<_>>>()?;
     let schema = Arc::new(Schema::try_from(&candidate)?);
-    let desired = crate::schema::protocol_for_metadata(&metadata)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let desired = crate::transaction::row_tracking::protocol_for_existing_table_metadata(
+        snapshot.protocol(),
+        snapshot.metadata().configuration(),
+        &metadata,
+    )
+    .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let desired = crate::lake_source::avoid_stable_type_widening_auto_upgrade_for_preview_tables(
         snapshot.protocol(),
         &desired,
@@ -572,8 +576,12 @@ pub(crate) async fn alter_columns(
         _ => return plan_err!("Invalid combination of column changes"),
     };
     let schema = Arc::new(Schema::try_from(&candidate)?);
-    let desired = crate::schema::protocol_for_metadata(&metadata)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let desired = crate::transaction::row_tracking::protocol_for_existing_table_metadata(
+        snapshot.protocol(),
+        snapshot.metadata().configuration(),
+        &metadata,
+    )
+    .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let desired = crate::lake_source::avoid_stable_type_widening_auto_upgrade_for_preview_tables(
         snapshot.protocol(),
         &desired,

@@ -1088,7 +1088,18 @@ impl CatalogProvider for UnityCatalogProvider {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         if !is_external && mode.ignore_if_exists() {
             match self.get_table(database, table).await {
-                Ok(status) => return Ok(status),
+                Ok(status) => {
+                    // A table staged for this statement is not registered after all.
+                    if staged
+                        .as_ref()
+                        .is_some_and(|staged| staged.created_metadata.is_some())
+                        && let Some(location) = &location
+                    {
+                        self.staging_table_id_cache()?
+                            .remove(storage_location_key(location));
+                    }
+                    return Ok(status);
+                }
                 Err(CatalogError::NotFound(_, _)) => {}
                 Err(e) => return Err(e),
             }
@@ -5811,6 +5822,32 @@ mod tests {
             }
             assert_eq!(received_targets(&server).await, targets, "{case}");
         }
+    }
+
+    /// A staged table that is not registered because another writer created the table first
+    /// is not used afterwards.
+    #[tokio::test]
+    async fn test_managed_delta_create_if_not_exists_forgets_the_unregistered_staging_table() {
+        let server = MockServer::start().await;
+        mount_legacy_delta_table(&server).await;
+        let provider = mock_provider(&server, "main");
+        provider.staging_table_id_cache().unwrap().insert(
+            storage_location_key(DELTA_TABLE_URI).to_string(),
+            DELTA_TABLE_ID.to_string(),
+        );
+        let database = Namespace::try_from(vec!["default"]).unwrap();
+        let mut options = staged_delta_create_options();
+        options.mode = sail_catalog::provider::CreateTableMode::CreateIfNotExists;
+        let status = provider
+            .create_table(&database, "events", options)
+            .await
+            .unwrap();
+        assert_eq!(status.name, "events");
+        assert_eq!(
+            received_targets(&server).await,
+            vec!["GET /tables/main.default.events".to_string()]
+        );
+        assert!(provider.staging_table_id_cache().unwrap().is_empty());
     }
 
     #[tokio::test]

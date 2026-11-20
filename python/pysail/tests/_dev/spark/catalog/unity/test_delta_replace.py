@@ -8,8 +8,9 @@ from __future__ import annotations
 import json
 import uuid
 from typing import TYPE_CHECKING
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
+import pyarrow.parquet as pq
 import pytest
 import requests
 
@@ -508,5 +509,79 @@ def test_replace_as_select_replaces_the_properties_in_the_data_commit(
         replaced = _unity_table_info(unity_rest_url, table)
         assert replaced["table_id"] == created["table_id"]
         assert replaced["storage_location"] == created["storage_location"]
+    finally:
+        spark.sql(f"DROP SCHEMA {database} CASCADE")
+
+
+def _column_mapping(fields: list[dict]) -> dict[str, tuple[str, int, dict]]:
+    """Returns the physical name, the column ID and the nested mapping of each column."""
+    mapping = {}
+    for field in fields:
+        metadata = field.get("metadata") or {}
+        nested = field["type"].get("fields", []) if isinstance(field["type"], dict) else []
+        mapping[field["name"]] = (
+            metadata.get("delta.columnMapping.physicalName"),
+            metadata.get("delta.columnMapping.id"),
+            _column_mapping(nested),
+        )
+    return mapping
+
+
+def test_replace_as_select_applies_the_column_mapping_mode(spark: SparkSession) -> None:
+    database = _unique_database("unity_replace_column_mapping")
+    table = f"{database}.t"
+    spark.sql(f"CREATE SCHEMA {database}")
+
+    def values(start: int) -> str:
+        return (
+            f"SELECT * FROM VALUES (CAST({start} AS INT), named_struct('x', {start * 10}, 'y', 'p'), 'a'), "
+            f"(CAST({start + 1} AS INT), named_struct('x', {(start + 1) * 10}, 'y', 'q'), 'b') AS t(id, point, grp)"
+        )
+
+    try:
+        spark.sql(f"CREATE TABLE {table} USING delta PARTITIONED BY (grp) AS {values(1)}")
+        location = _location_to_path(_table_location(spark, table))
+        used_ids: set[int] = set()
+        used_names: set[str] = set()
+        # The data of each replacement is written with the column mapping of the statement,
+        # with new physical names and column IDs, also when the mode stays the same.
+        for start, mode in [(3, "name"), (5, "name"), (7, None)]:
+            properties = f"TBLPROPERTIES ('delta.columnMapping.mode' = '{mode}')" if mode else ""
+            spark.sql(
+                f"CREATE OR REPLACE TABLE {table} USING delta PARTITIONED BY (grp) {properties} AS {values(start)}"
+            )
+            rows = spark.sql(f"SELECT id, point.x, point.y, grp FROM {table} ORDER BY id").collect()
+            assert [tuple(row) for row in rows] == [
+                (start, start * 10, "p", "a"),
+                (start + 1, (start + 1) * 10, "q", "b"),
+            ]
+            _, actions = _latest_commit(location)
+            (metadata,) = _actions(actions, "metaData")
+            mapping = _column_mapping(json.loads(metadata["schemaString"])["fields"])
+            adds = _actions(actions, "add")
+            assert len(adds) == 2  # noqa: PLR2004
+            if mode is None:
+                assert not any(key.startswith("delta.columnMapping.") for key in metadata["configuration"])
+                assert all(physical is None for physical, _, _ in mapping.values())
+                data_columns = {"id": "id", "point": "point"}
+                nested_columns = ["x", "y"]
+            else:
+                assert metadata["configuration"]["delta.columnMapping.mode"] == mode
+                columns = [*mapping.values(), *mapping["point"][2].values()]
+                names = {physical for physical, _, _ in columns}
+                ids = {column_id for _, column_id, _ in columns}
+                assert all(isinstance(column_id, int) for column_id in ids)
+                assert names.isdisjoint(used_names | set(mapping) | {"x", "y"}), (names, used_names)
+                assert min(ids) > max(used_ids, default=0), (ids, used_ids)
+                assert int(metadata["configuration"]["delta.columnMapping.maxColumnId"]) == max(ids)
+                used_ids |= ids
+                used_names |= names
+                data_columns = {"id": mapping["id"][0], "point": mapping["point"][0]}
+                nested_columns = [mapping["point"][2][name][0] for name in ["x", "y"]]
+                assert all(set(add["partitionValues"]) == {mapping["grp"][0]} for add in adds)
+            for add in adds:
+                schema = pq.read_schema(location / unquote(add["path"]))
+                assert schema.names == list(data_columns.values()), add["path"]
+                assert [field.name for field in schema.field(data_columns["point"]).type] == nested_columns
     finally:
         spark.sql(f"DROP SCHEMA {database} CASCADE")
