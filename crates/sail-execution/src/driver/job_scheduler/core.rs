@@ -584,13 +584,17 @@ impl JobScheduler {
     fn find_job_failure_cause(job: &JobDescriptor) -> Option<CommonErrorCause> {
         // a map from (stage, partition) to a list of causes
         let mut causes: HashMap<(usize, usize), Vec<&CommonErrorCause>> = HashMap::new();
+        let mut terminal_cause = None;
         for (s, stage) in job.stages.iter().enumerate() {
             for (t, task) in stage.tasks.iter().enumerate() {
                 for attempt in task.attempts.iter() {
-                    if let Some(cause) = &attempt.cause
-                        && !cause.is_retryable()
-                    {
-                        return Some(cause.clone());
+                    if let Some(cause) = &attempt.cause {
+                        if matches!(cause, CommonErrorCause::CommitStateUnknown(_)) {
+                            return Some(cause.clone());
+                        }
+                        if !cause.is_retryable() {
+                            terminal_cause.get_or_insert(cause);
+                        }
                     }
                     if matches!(attempt.state, TaskState::Failed)
                         && let Some(cause) = &attempt.cause
@@ -599,6 +603,9 @@ impl JobScheduler {
                     }
                 }
             }
+        }
+        if let Some(cause) = terminal_cause {
+            return Some(cause.clone());
         }
         // Get the most recent cause from the most likely failed task.
         if let Some((_, &[.., cause])) = causes.iter().map(|(k, v)| (k, v.as_slice())).min_by(
@@ -1183,6 +1190,28 @@ pub(super) mod tests {
 
     #[tokio::test]
     async fn late_unknown_commit_cancels_queued_retry() -> Result<(), Box<dyn std::error::Error>> {
+        late_terminal_commit_cancels_queued_retry(
+            sail_common_datafusion::error::CommonErrorCause::CommitStateUnknown(
+                "response lost".into(),
+            ),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn late_replanning_commit_cancels_queued_retry() -> Result<(), Box<dyn std::error::Error>>
+    {
+        late_terminal_commit_cancels_queued_retry(
+            sail_common_datafusion::error::CommonErrorCause::CommitRequiresReplanning(
+                "stale output".into(),
+            ),
+        )
+        .await
+    }
+
+    async fn late_terminal_commit_cancels_queued_retry(
+        cause: sail_common_datafusion::error::CommonErrorCause,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         use std::sync::Arc;
 
         use datafusion::arrow::datatypes::Schema;
@@ -1205,7 +1234,7 @@ pub(super) mod tests {
         use crate::worker_manager::LocalWorkerManager;
 
         let mut config = AppConfig::load()?;
-        config.cluster.task_max_attempts = 4;
+        assert!(config.cluster.task_max_attempts > 1);
         config.cluster.worker_task_slots = 1;
         config.cluster.worker_max_count = 1;
         config.catalog.system.store = SystemCatalogStore::Memory;
@@ -1287,20 +1316,15 @@ pub(super) mod tests {
             Some(TaskState::Created)
         ));
 
-        scheduler.update_task(
-            &original,
-            TaskState::Failed,
-            None,
-            Some(CommonErrorCause::CommitStateUnknown("response lost".into())),
-        );
+        scheduler.update_task(&original, TaskState::Failed, None, Some(cause.clone()));
         let actions = scheduler.refresh_job(job_id);
         assert!(matches!(scheduler.jobs[&job_id].state, JobState::Failed));
         assert!(actions.iter().any(|action| matches!(
             action,
             JobAction::FailJobOutput {
-                cause: CommonErrorCause::CommitStateUnknown(_),
+                cause: reported,
                 ..
-            }
+            } if std::mem::discriminant(reported) == std::mem::discriminant(&cause)
         )));
         for action in &actions {
             if let JobAction::CancelTask { key } = action {
@@ -1314,7 +1338,7 @@ pub(super) mod tests {
             actions.iter().any(
                 |action| matches!(action, JobAction::CancelTask { key } if key == &replacement)
             ) && assignments.is_empty(),
-            "late unknown commit must cancel its queued retry; actions: {actions:?}; assignments: {assignments:?}"
+            "late terminal commit must cancel its queued retry; actions: {actions:?}; assignments: {assignments:?}"
         );
         Ok(())
     }
@@ -1489,6 +1513,13 @@ pub(super) mod tests {
                 .all(|r| matches!(r.state, TaskRegionState::Running))
         );
 
+        job.stages[0].tasks[0].attempts.push(attempt(
+            TaskState::Failed,
+            Some(CommonErrorCause::CommitRequiresReplanning(
+                "stale output".into(),
+            )),
+        ));
+        // An unknown outcome dominates even a definite rejection in another task.
         // A late error from a canceled attempt must still stop a replacement attempt.
         job.stages[0].tasks[1].attempts.push(attempt(
             TaskState::Canceled,

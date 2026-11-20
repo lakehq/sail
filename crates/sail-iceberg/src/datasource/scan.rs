@@ -176,12 +176,7 @@ impl IcebergScan {
             log::trace!("Failed to convert schema to Arrow: {:?}", e);
             e
         })?;
-        let arrow_schema = Arc::new(Self::reorder_arrow_schema_for_identity_partitions(
-            &schema,
-            &partition_specs,
-            default_spec_id,
-            &arrow_schema,
-        ));
+        let arrow_schema = Arc::new(arrow_schema);
 
         log::trace!(
             "Converted schema to Arrow with {} fields",
@@ -223,12 +218,7 @@ impl IcebergScan {
             log::trace!("Failed to convert schema to Arrow: {:?}", e);
             e
         })?;
-        let arrow_schema = Arc::new(Self::reorder_arrow_schema_for_identity_partitions(
-            &schema,
-            &partition_specs,
-            default_spec_id,
-            &arrow_schema,
-        ));
+        let arrow_schema = Arc::new(arrow_schema);
 
         Ok(Self {
             row_level_options: Default::default(),
@@ -324,61 +314,6 @@ impl IcebergScan {
         };
         self.output_schema = Arc::new(metadata_columns.append_to_schema(&data_schema)?);
         Ok(())
-    }
-
-    fn reorder_arrow_schema_for_identity_partitions(
-        schema: &Schema,
-        partition_specs: &[PartitionSpec],
-        default_spec_id: i32,
-        arrow_schema: &ArrowSchema,
-    ) -> ArrowSchema {
-        // BDD scenarios expect "data columns" first and identity-partition columns last (in spec order),
-        // but only for identity-only partition specs. For mixed transform specs (e.g. `years(x), y`)
-        // we keep the original schema order.
-        let Some(spec) = partition_specs
-            .iter()
-            .find(|s| s.spec_id() == default_spec_id)
-        else {
-            return arrow_schema.clone();
-        };
-        if spec
-            .fields()
-            .iter()
-            .any(|pf| !matches!(pf.transform, Transform::Identity))
-        {
-            return arrow_schema.clone();
-        }
-
-        let mut identity_cols: Vec<String> = Vec::new();
-        for pf in spec.fields().iter() {
-            if matches!(pf.transform, Transform::Identity)
-                && let Some(field) = schema.field_by_id(pf.source_id)
-            {
-                identity_cols.push(field.name.clone());
-            }
-        }
-        if identity_cols.is_empty() {
-            return arrow_schema.clone();
-        }
-
-        let identity_set: std::collections::HashSet<&str> =
-            identity_cols.iter().map(|s| s.as_str()).collect();
-        let mut out_fields: Vec<datafusion::arrow::datatypes::FieldRef> = Vec::new();
-
-        // Keep non-partition columns in original order.
-        for f in arrow_schema.fields().iter() {
-            if !identity_set.contains(f.name().as_str()) {
-                out_fields.push(Arc::new((**f).clone()));
-            }
-        }
-        // Append identity partition columns in spec order.
-        for name in identity_cols {
-            if let Ok(idx) = arrow_schema.index_of(&name) {
-                out_fields.push(Arc::new(arrow_schema.field(idx).clone()));
-            }
-        }
-
-        ArrowSchema::new(out_fields)
     }
 
     /// Get the table URI
@@ -715,12 +650,6 @@ impl IcebergScan {
                 .flat_map(|delete| delete.data_file.equality_ids.iter().copied()),
         )?;
         let schema = iceberg_schema_to_arrow(&read_scan.schema)?;
-        let schema = Self::reorder_arrow_schema_for_identity_partitions(
-            &read_scan.schema,
-            &self.partition_specs,
-            self.default_spec_id,
-            &schema,
-        );
         read_scan.arrow_schema = Arc::new(match &self.name_mapping {
             Some(mapping) => {
                 crate::datasource::type_converter::apply_name_mapping(&schema, mapping)?
@@ -2408,17 +2337,16 @@ mod tests {
         file.partition = vec![Some(Literal::Primitive(PrimitiveLiteral::String(
             "tag".to_string(),
         )))];
-        // Identity partition columns move to the end of the scan schema.
         let names = read_scan
             .arrow_schema
             .fields()
             .iter()
             .map(|field| field.name().as_str())
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["id", "payload", "meta", "tag"]);
+        assert_eq!(names, vec!["id", "tag", "payload", "meta"]);
 
         let (narrow, file_size) =
-            planned_byte_size(read_scan, file, spec, Some(&vec![0, 3])).await?;
+            planned_byte_size(read_scan, file, spec, Some(&vec![0, 1])).await?;
         let expected = 12_000 + (file_size / 100) as usize;
         assert_eq!(narrow, Precision::Inexact(expected));
         assert!(
@@ -2447,11 +2375,11 @@ mod tests {
         file.column_sizes.remove(&2);
         let statistics = read_scan.create_file_statistics(&file);
         assert_eq!(
-            statistics.column_statistics[3].byte_size,
+            statistics.column_statistics[1].byte_size,
             Precision::Inexact(4_000)
         );
         assert_eq!(
-            IcebergScan::projected_byte_size(&statistics, Some(&vec![0, 3])),
+            IcebergScan::projected_byte_size(&statistics, Some(&vec![0, 1])),
             Some(12_000)
         );
         Ok(())
