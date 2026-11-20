@@ -280,9 +280,9 @@ fn widen_nested_type(data_type: &DataType, sources: &[&DataType]) -> DataType {
 /// Infers the merged schema of Parquet checkpoint files, reading the footers through the given
 /// file metadata cache.
 ///
-/// This is `ParquetFormat::default().infer_schema()`, except that it reads the footers through
-/// `file_metadata_cache` instead of the runtime's unscoped file metadata cache. The default
-/// format has no decryption.
+/// This mirrors `ParquetFormat::infer_schema()` on DataFusion main with the default format
+/// options, except that it reads the footers through `file_metadata_cache` instead of the
+/// runtime's unscoped file metadata cache. The default format has no decryption.
 async fn infer_parquet_checkpoint_schema(
     state: &dyn datafusion::catalog::Session,
     store: &Arc<dyn ObjectStore>,
@@ -303,13 +303,14 @@ async fn infer_parquet_checkpoint_schema(
         .map(|object| async {
             let meta = DFParquetMetadata::new(store.as_ref(), object)
                 .with_metadata_size_hint(format.metadata_size_hint())
-                .with_file_metadata_cache(Some(Arc::clone(file_metadata_cache)));
-            // TODO: uncomment after DataFusion 56
-            // .with_coerce_int96(coerce_int96)
-            // .with_coerce_int96_tz(coerce_int96_tz.clone())
-            // .with_enable_rle_to_dictionary(
-            //     format.options().global.enable_rle_to_dictionary,
-            // );
+                .with_file_metadata_cache(Some(Arc::clone(file_metadata_cache)))
+                // TODO: uncomment after DataFusion 56
+                // .with_coerce_int96(coerce_int96)
+                // .with_coerce_int96_tz(coerce_int96_tz.clone())
+                // .with_enable_rle_to_dictionary(
+                //     format.options().global.enable_rle_to_dictionary,
+                // )
+                ;
             let result = (object.location.clone(), meta.fetch_schema().await?);
             Ok::<_, DataFusionError>(result)
         })
@@ -742,7 +743,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn checkpoint_schema_inference_matches_parquet_format_with_scoped_cache() -> Result<()> {
+    async fn checkpoint_schema_inference_reads_footers_through_scoped_cache() -> Result<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let field_metadata = HashMap::from([("f".to_string(), "m".to_string())]);
         let b = put_parquet(
@@ -773,6 +774,8 @@ mod tests {
 
         let ctx = SessionContext::new();
         let state = ctx.state();
+        // DataFusion 55.2 gives the same schema here as DataFusion main, since the files have no
+        // extension type metadata and every field is nullable.
         let expected = ParquetFormat::default()
             .infer_schema(&state, &store, &objects)
             .await?;

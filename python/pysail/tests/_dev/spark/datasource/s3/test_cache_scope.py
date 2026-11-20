@@ -16,7 +16,10 @@ from pyspark.sql import functions as F  # noqa: N812
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
+pytestmark = pytest.mark.integration(group="glue")
+
 _KEY = "data/part-0.parquet"
+_PUT_ATTEMPTS = 10
 
 
 def _parquet_bytes(ids: list[int]) -> bytes:
@@ -37,10 +40,18 @@ def buckets(moto_endpoint: str) -> dict[str, list[int]]:
     files = {bucket: _parquet_bytes(ids) for bucket, ids in contents.items()}
     assert len(set(map(len, files.values()))) == 1, "the files must have the same size"
     s3 = boto3.client("s3", region_name="us-east-1", endpoint_url=moto_endpoint)
-    for bucket, data in files.items():
+    for bucket in files:
         s3.create_bucket(Bucket=bucket)
-        s3.put_object(Bucket=bucket, Key=_KEY, Body=data)
-    return contents
+    # The file metadata cache validates entries by size and last modified time, so the files must
+    # agree on both for a mix-up between the buckets to be possible. The last modified time has
+    # second resolution, so put the files again if they were written in different seconds.
+    for _ in range(_PUT_ATTEMPTS):
+        for bucket, data in files.items():
+            s3.put_object(Bucket=bucket, Key=_KEY, Body=data)
+        modified = {s3.head_object(Bucket=bucket, Key=_KEY)["LastModified"] for bucket in files}
+        if len(modified) == 1:
+            return contents
+    pytest.fail("the files must have the same last modified time")
 
 
 @pytest.mark.parametrize("path", ["data/", _KEY])
