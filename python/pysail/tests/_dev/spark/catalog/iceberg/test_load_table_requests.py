@@ -108,7 +108,15 @@ def test_read_loads_each_table_once_per_statement(spark, recording_catalog):
         assert _table_loads(records, start) == [("first", "vended-credentials")]
 
         start = len(records)
-        rows = spark.read.table(first).join(spark.read.table(second), "id").collect()
+        # Repeated references to a table also load it once.
+        rows = (
+            spark.read.table(first)
+            .alias("a")
+            .join(spark.read.table(first).alias("b"), "id")
+            .join(spark.read.table(first).alias("c"), "id")
+            .join(spark.read.table(second), "id")
+            .collect()
+        )
         assert [row.id for row in rows] == [2]
         assert sorted(_table_loads(records, start)) == [
             ("first", "vended-credentials"),
