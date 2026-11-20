@@ -53,6 +53,9 @@ pub struct DeltaPlannerConfig {
     pub identity_columns_to_track: Vec<String>,
     pub table_snapshot: Option<Arc<DeltaSnapshot>>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    /// The schema of a table that is created before the data is written, with the
+    /// column mapping that the data is written with.
+    pub create_table_schema: Option<SchemaRef>,
 }
 
 impl DeltaPlannerConfig {
@@ -80,6 +83,7 @@ impl DeltaPlannerConfig {
             identity_columns_to_track: Vec::new(),
             table_snapshot: None,
             lakehouse_table: None,
+            create_table_schema: None,
         }
     }
 
@@ -111,6 +115,11 @@ impl DeltaPlannerConfig {
 
     pub fn with_metadata_schema(mut self, metadata_schema: Option<SchemaRef>) -> Self {
         self.metadata_schema = metadata_schema;
+        self
+    }
+
+    pub fn with_create_table_schema(mut self, create_table_schema: Option<SchemaRef>) -> Self {
+        self.create_table_schema = create_table_schema;
         self
     }
 
@@ -260,6 +269,7 @@ impl<'a> PlannerContext<'a> {
             sink_mode,
             self.table_exists(),
             input_schema,
+            self.config.create_table_schema.as_ref(),
             operation_override,
         )?;
         context.commit_context.identity_columns_to_track =

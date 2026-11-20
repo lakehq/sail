@@ -312,6 +312,7 @@ impl PlanResolver<'_> {
                 .map(|items| OptionLayer::OptionList { items })
                 .collect(),
             lakehouse_table: None,
+            create_table_schema: None,
         };
         let mut preconditions = vec![];
         let mut table_replacement = None;
@@ -690,6 +691,30 @@ impl PlanResolver<'_> {
                         create_options.properties = staged.properties.clone();
                     }
                     create_options.staged = create_plan.staged.clone();
+                    // A staged table is created before the data is written, so the table
+                    // and the data files are created with the same schema.
+                    if create_options.staged.is_some()
+                        && let Some(lake_source) = self
+                            .ctx
+                            .extension::<DataSourceRegistry>()?
+                            .get_lake_source_if_supported(&write_format)?
+                        && let Some(schema) = lake_source.create_table_schema_for_write(
+                            input.schema().inner(),
+                            &create_options.properties,
+                        )?
+                    {
+                        for (column, field) in
+                            create_options.columns.iter_mut().zip(schema.fields())
+                        {
+                            column.data_type = field.data_type().clone();
+                            column.metadata = field
+                                .metadata()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                        }
+                        sink_info.create_table_schema = Some(schema);
+                    }
                     sink_info.lakehouse_table = Some(
                         create_plan
                             .table

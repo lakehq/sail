@@ -1669,20 +1669,14 @@ mod create_bootstrap_tests {
     /// the writer planned, so the table that the catalog created must have the same one.
     #[tokio::test]
     async fn catalog_managed_create_requires_the_column_mapping_of_the_data() -> Result<()> {
-        let mapped_create_actions = |table: &str, mode: &str, comment: bool| {
+        let schema = |comment: bool| {
             let mut field = StructField::nullable("id", DataType::LONG);
             if comment {
                 field = field.with_metadata([("comment", MetadataValue::String("c".to_string()))]);
             }
-            let schema =
-                StructType::try_new([field]).map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let table_url =
-                url::Url::parse(table).map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let schema = if mode == "none" {
-                schema
-            } else {
-                crate::schema::annotate_schema_for_column_mapping(&schema, &table_url)
-            };
+            StructType::try_new([field]).map_err(|e| DataFusionError::External(Box::new(e)))
+        };
+        let mapped_create_actions = |schema: StructType, mode: &str| {
             let metadata = metadata_for_create_with_struct_type(
                 schema,
                 vec![],
@@ -1698,8 +1692,9 @@ mod create_bootstrap_tests {
                 CommitAction::Metadata(metadata),
             ])
         };
+        let annotated = crate::schema::annotate_schema_for_column_mapping(&schema(false)?);
         let store = Arc::new(InMemory::new());
-        let commit = mapped_create_actions("memory:///t", "name", false)?
+        let commit = mapped_create_actions(annotated.clone(), "name")?
             .iter()
             .map(serde_json::to_string)
             .collect::<serde_json::Result<Vec<_>>>()
@@ -1725,18 +1720,23 @@ mod create_bootstrap_tests {
             }
         };
 
-        // The writer annotates the same table in the same way, and the other field
-        // metadata is not compared.
-        let adopted = snapshot(mapped_create_actions("memory:///t", "name", true)?).await?;
+        // The writer has the column mapping of the table, and the other field metadata
+        // is not compared.
+        let (with_comment, _) =
+            crate::schema::annotate_new_fields_for_column_mapping(&annotated, &schema(true)?, 2);
+        let adopted = snapshot(mapped_create_actions(with_comment, "name")?).await?;
         assert_eq!(adopted.map(|snapshot| snapshot.version()), Some(0));
 
-        for (table, mode) in [
-            ("memory:///other", "name"),
-            ("memory:///t", "id"),
-            ("memory:///t", "none"),
+        for (schema, mode) in [
+            (
+                crate::schema::annotate_schema_for_column_mapping(&schema(false)?),
+                "name",
+            ),
+            (annotated.clone(), "id"),
+            (schema(false)?, "none"),
         ] {
-            let Err(error) = snapshot(mapped_create_actions(table, mode, false)?).await else {
-                return internal_err!("expected an error for {table} with column mapping {mode}");
+            let Err(error) = snapshot(mapped_create_actions(schema, mode)?).await else {
+                return internal_err!("expected an error for column mapping {mode}");
             };
             assert!(error.to_string().contains("different metadata"), "{error}");
         }

@@ -268,6 +268,9 @@ pub struct SinkInfo {
     pub options: Vec<OptionLayer>,
     /// Unified lakehouse catalog context for catalog-coordinated writes.
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    /// The schema of the table that a precondition of the write creates, from
+    /// `LakeSource::create_table_schema_for_write`. The data is written with it.
+    pub create_table_schema: Option<SchemaRef>,
 }
 
 impl SinkInfo {

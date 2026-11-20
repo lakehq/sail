@@ -231,6 +231,7 @@ async fn build_overwrite_if_plan(
         },
         ctx.table_exists(),
         &union_plan.schema(),
+        None,
         operation_override,
     )?;
     write_context.commit_context.identity_columns_to_track =

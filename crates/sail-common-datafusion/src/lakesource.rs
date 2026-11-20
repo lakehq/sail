@@ -235,6 +235,19 @@ pub trait LakeSource: DataSource {
         Ok(LakeSourceCreateTableResult::default())
     }
 
+    /// Returns the schema of a table that is created before the data of a write is
+    /// written, with the storage metadata that the table assigns to its columns, or
+    /// `None` when the lake source assigns none. The table metadata and the data files
+    /// are both created with the returned schema, so that they agree.
+    fn create_table_schema_for_write(
+        &self,
+        schema: &SchemaRef,
+        properties: &[(String, String)],
+    ) -> Result<Option<SchemaRef>> {
+        let _ = (schema, properties);
+        Ok(None)
+    }
+
     /// Prepares an independent log referencing the source snapshot's existing files.
     /// Resolve the source only when the destination requires a clone.
     async fn prepare_shallow_clone(

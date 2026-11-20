@@ -186,6 +186,7 @@ pub(crate) async fn plan(
         &PhysicalSinkMode::Append,
         true,
         &schema,
+        None,
         Some(operation.clone()),
     )?;
     let num_bins = bins.len();

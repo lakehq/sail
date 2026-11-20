@@ -171,14 +171,19 @@ pub(super) fn assign_row_tracking(
 
     if enabled {
         // Rows that an operation copies to a new file get fresh row IDs, since the
-        // materialized row tracking columns are not written.
+        // materialized row tracking columns are not written. An overwrite with a
+        // predicate, such as `replaceWhere`, may copy the rows of the removed files that
+        // do not match the predicate.
         let copies_rows = adds_new_rows
             && actions
                 .iter()
                 .any(|action| matches!(action, CommitAction::Remove(_)))
             && !matches!(
                 operation,
-                DeltaOperation::Write { .. } | DeltaOperation::DynamicPartitionOverwrite { .. }
+                DeltaOperation::Write {
+                    predicate: None,
+                    ..
+                } | DeltaOperation::DynamicPartitionOverwrite { .. }
             );
         if let Some(CommitAction::CommitInfo(info)) = actions.first_mut() {
             let tags = info

@@ -1,31 +1,136 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use datafusion::arrow::datatypes::{
+    DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
+};
+use datafusion::arrow::error::ArrowError;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
-use twox_hash::XxHash3_128;
-use url::Url;
 
+use crate::schema::{normalize_delta_schema, strip_column_mapping_metadata};
 use crate::spec::{
     ArrayType, ColumnMetadataKey, DataType, MapType, MetadataValue, StructField, StructType,
 };
 
 /// Annotate a logical kernel schema with column mapping metadata (id + physicalName)
 /// using a sequential id assignment. Intended only for new table creation (name mode).
-///
-/// The physical names are derived from the table location and the column ids, so the
-/// annotation of the same schema for the same table is always the same. A table that
-/// is created before its data is written, such as a table that a catalog creates for
-/// CTAS, then has the physical names that the data files are written with.
-pub fn annotate_schema_for_column_mapping(schema: &StructType, table_url: &Url) -> StructType {
+pub fn annotate_schema_for_column_mapping(schema: &StructType) -> StructType {
     let counter = AtomicI64::new(1);
-    let naming = PhysicalNaming::Table(table_url.as_str().trim_end_matches('/'));
     let annotated_fields: Vec<StructField> = schema
         .fields()
-        .map(|f| annotate_field(f, &counter, naming))
+        .map(|f| annotate_field(f, &counter))
         .collect();
     StructType::try_new(annotated_fields).unwrap_or_else(|_| empty_struct_type())
+}
+
+/// Annotate the Arrow schema of a new table with the column mapping metadata that
+/// `annotate_schema_for_column_mapping` assigns, keeping the Arrow types. Any column
+/// mapping metadata of the input is replaced.
+///
+/// A table that is created before its data is written gets the column mapping of this
+/// schema, and the data is written with the same schema, so the physical names of the
+/// table and of the data files are the same.
+pub fn annotate_arrow_schema_for_column_mapping(
+    schema: &ArrowSchema,
+) -> Result<ArrowSchema, ArrowError> {
+    let schema = strip_column_mapping_metadata(&Arc::new(schema.clone()));
+    let annotated =
+        annotate_schema_for_column_mapping(&StructType::try_from(normalize_delta_schema(&schema))?);
+    let fields = schema
+        .fields()
+        .iter()
+        .zip(annotated.fields())
+        .map(|(field, annotated)| with_column_mapping_of(field, annotated))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ArrowSchema::new_with_metadata(
+        fields,
+        schema.metadata().clone(),
+    ))
+}
+
+fn with_column_mapping_of(
+    field: &ArrowField,
+    annotated: &StructField,
+) -> Result<ArrowField, ArrowError> {
+    let mut metadata = field.metadata().clone();
+    for key in [
+        ColumnMetadataKey::ColumnMappingId,
+        ColumnMetadataKey::ColumnMappingPhysicalName,
+    ] {
+        let value = match annotated.get_config_value(&key) {
+            Some(MetadataValue::String(value)) => value.clone(),
+            Some(value) => {
+                serde_json::to_string(value).map_err(|e| ArrowError::JsonError(e.to_string()))?
+            }
+            None => continue,
+        };
+        metadata.insert(key.as_ref().to_string(), value);
+    }
+    let data_type = with_nested_column_mapping_of(field.data_type(), annotated.data_type())?;
+    Ok(field
+        .clone()
+        .with_data_type(data_type)
+        .with_metadata(metadata))
+}
+
+fn with_nested_column_mapping_of(
+    data_type: &ArrowDataType,
+    annotated: &DataType,
+) -> Result<ArrowDataType, ArrowError> {
+    let element = |item: &Arc<ArrowField>, annotated: &DataType| {
+        with_nested_column_mapping_of(item.data_type(), annotated)
+            .map(|data_type| Arc::new(item.as_ref().clone().with_data_type(data_type)))
+    };
+    Ok(match (data_type, annotated) {
+        (ArrowDataType::Struct(fields), DataType::Struct(annotated)) => ArrowDataType::Struct(
+            fields
+                .iter()
+                .zip(annotated.fields())
+                .map(|(field, annotated)| with_column_mapping_of(field, annotated).map(Arc::new))
+                .collect::<Result<Vec<_>, _>>()?
+                .into(),
+        ),
+        (ArrowDataType::List(item), DataType::Array(annotated)) => {
+            ArrowDataType::List(element(item, annotated.element_type())?)
+        }
+        (ArrowDataType::LargeList(item), DataType::Array(annotated)) => {
+            ArrowDataType::LargeList(element(item, annotated.element_type())?)
+        }
+        (ArrowDataType::ListView(item), DataType::Array(annotated)) => {
+            ArrowDataType::ListView(element(item, annotated.element_type())?)
+        }
+        (ArrowDataType::LargeListView(item), DataType::Array(annotated)) => {
+            ArrowDataType::LargeListView(element(item, annotated.element_type())?)
+        }
+        (ArrowDataType::FixedSizeList(item, size), DataType::Array(annotated)) => {
+            ArrowDataType::FixedSizeList(element(item, annotated.element_type())?, *size)
+        }
+        (ArrowDataType::Map(entries, sorted), DataType::Map(annotated)) => {
+            let ArrowDataType::Struct(key_value) = entries.data_type() else {
+                return Ok(data_type.clone());
+            };
+            let [key, value] = &key_value[..] else {
+                return Ok(data_type.clone());
+            };
+            let key_value = vec![
+                element(key, annotated.key_type())?,
+                element(value, annotated.value_type())?,
+            ];
+            ArrowDataType::Map(
+                Arc::new(
+                    entries
+                        .as_ref()
+                        .clone()
+                        .with_data_type(ArrowDataType::Struct(key_value.into())),
+                ),
+                *sorted,
+            )
+        }
+        _ => data_type.clone(),
+    })
 }
 
 /// Annotate only new fields (compared to `existing`) within `candidate` with
@@ -118,30 +223,9 @@ fn merge_metadata(prev: &StructField, new: &StructField) -> HashMap<String, Meta
     merged
 }
 
-/// How the physical names of newly annotated columns are chosen.
-#[derive(Clone, Copy)]
-enum PhysicalNaming<'a> {
-    Random,
-    /// Derived from the table location and the column id.
-    Table(&'a str),
-}
-
-impl PhysicalNaming<'_> {
-    fn physical_name(self, id: i64) -> String {
-        let uuid = match self {
-            Self::Random => uuid::Uuid::new_v4(),
-            Self::Table(location) => {
-                let hash = XxHash3_128::oneshot(format!("{location}#{id}").as_bytes());
-                uuid::Builder::from_custom_bytes(hash.to_be_bytes()).into_uuid()
-            }
-        };
-        format!("col-{uuid}")
-    }
-}
-
-fn annotate_field(field: &StructField, counter: &AtomicI64, naming: PhysicalNaming) -> StructField {
+fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
     let next_id = counter.fetch_add(1, Ordering::Relaxed);
-    let physical_name = naming.physical_name(next_id);
+    let physical_name = format!("col-{}", uuid::Uuid::new_v4());
     let mut annotated = field.clone();
     strip_parquet_field_id_metadata(&mut annotated.metadata);
     let annotated = annotated.add_metadata([
@@ -155,7 +239,7 @@ fn annotate_field(field: &StructField, counter: &AtomicI64, naming: PhysicalNami
         ),
     ]);
 
-    let new_data_type = merge_types(None, annotated.data_type(), counter, naming);
+    let new_data_type = merge_types(None, annotated.data_type(), counter);
     StructField {
         name: annotated.name().clone(),
         data_type: new_data_type,
@@ -164,27 +248,21 @@ fn annotate_field(field: &StructField, counter: &AtomicI64, naming: PhysicalNami
     }
 }
 
-fn annotate_nested_type(
-    data_type: &DataType,
-    counter: &AtomicI64,
-    naming: PhysicalNaming,
-) -> DataType {
+fn annotate_nested_type(data_type: &DataType, counter: &AtomicI64) -> DataType {
     match data_type {
         DataType::Struct(st) => {
-            let fields: Vec<StructField> = st
-                .fields()
-                .map(|f| annotate_field(f, counter, naming))
-                .collect();
+            let fields: Vec<StructField> =
+                st.fields().map(|f| annotate_field(f, counter)).collect();
             let result = StructType::try_new(fields).unwrap_or_else(|_| empty_struct_type());
             DataType::Struct(Box::new(result))
         }
         DataType::Array(at) => {
-            let new_elem = annotate_nested_type(at.element_type(), counter, naming);
+            let new_elem = annotate_nested_type(at.element_type(), counter);
             DataType::Array(Box::new(ArrayType::new(new_elem, at.contains_null())))
         }
         DataType::Map(mt) => {
-            let new_key = annotate_nested_type(mt.key_type(), counter, naming);
-            let new_value = annotate_nested_type(mt.value_type(), counter, naming);
+            let new_key = annotate_nested_type(mt.key_type(), counter);
+            let new_value = annotate_nested_type(mt.value_type(), counter);
             DataType::Map(Box::new(MapType::new(
                 new_key,
                 new_value,
@@ -199,7 +277,6 @@ fn merge_types(
     existing_type: Option<&DataType>,
     new_type: &DataType,
     counter: &AtomicI64,
-    naming: PhysicalNaming,
 ) -> DataType {
     match (existing_type, new_type) {
         (Some(DataType::Struct(prev_st)), DataType::Struct(new_st)) => DataType::Struct(Box::new(
@@ -210,7 +287,6 @@ fn merge_types(
                 Some(prev_arr.element_type()),
                 new_arr.element_type(),
                 counter,
-                naming,
             );
             DataType::Array(Box::new(ArrayType::new(
                 merged_elem,
@@ -218,25 +294,15 @@ fn merge_types(
             )))
         }
         (Some(DataType::Map(prev_map)), DataType::Map(new_map)) => {
-            let new_key = merge_types(
-                Some(prev_map.key_type()),
-                new_map.key_type(),
-                counter,
-                naming,
-            );
-            let new_value = merge_types(
-                Some(prev_map.value_type()),
-                new_map.value_type(),
-                counter,
-                naming,
-            );
+            let new_key = merge_types(Some(prev_map.key_type()), new_map.key_type(), counter);
+            let new_value = merge_types(Some(prev_map.value_type()), new_map.value_type(), counter);
             DataType::Map(Box::new(MapType::new(
                 new_key,
                 new_value,
                 new_map.value_contains_null(),
             )))
         }
-        (None, new_type) => annotate_nested_type(new_type, counter, naming),
+        (None, new_type) => annotate_nested_type(new_type, counter),
         (_, _) => new_type.clone(),
     }
 }
@@ -276,12 +342,8 @@ fn merge_struct(existing: &StructType, candidate: &StructType, counter: &AtomicI
         .map(|nf| {
             let prev = find_matching_field(nf, &existing_fields);
             if let Some(prev_field) = prev {
-                let merged_dtype = merge_types(
-                    Some(prev_field.data_type()),
-                    nf.data_type(),
-                    counter,
-                    PhysicalNaming::Random,
-                );
+                let merged_dtype =
+                    merge_types(Some(prev_field.data_type()), nf.data_type(), counter);
                 let merged_metadata = merge_metadata(prev_field, nf);
                 StructField {
                     name: nf.name().clone(),
@@ -290,7 +352,7 @@ fn merge_struct(existing: &StructType, candidate: &StructType, counter: &AtomicI
                     metadata: merged_metadata,
                 }
             } else {
-                annotate_field(nf, counter, PhysicalNaming::Random)
+                annotate_field(nf, counter)
             }
         })
         .collect();
@@ -321,8 +383,7 @@ mod tests {
             .with_metadata([(PARQUET_FIELD_ID_META_KEY, MetadataValue::Number(20))]);
         let schema = StructType::try_new(vec![details]).expect("schema");
 
-        let table_url = Url::parse("memory:///t").expect("table URL");
-        let annotated = annotate_schema_for_column_mapping(&schema, &table_url);
+        let annotated = annotate_schema_for_column_mapping(&schema);
         let details = annotated.field("details").expect("details field");
         let DataType::Struct(nested) = details.data_type() else {
             panic!("details must be a struct");
@@ -340,57 +401,101 @@ mod tests {
         }
     }
 
-    /// A table that a catalog creates before the data is written for CTAS is annotated
-    /// separately from the data files, so both must get the same physical names.
+    /// The Arrow schema that a write creates a table with has the column mapping of the
+    /// table for each field, and keeps the Arrow types of the data.
     #[test]
-    fn annotation_of_new_table_depends_only_on_table_and_schema() {
-        let point = StructType::try_new(vec![
-            StructField::new("x", DataType::LONG, true),
-            StructField::new("y", DataType::LONG, true),
-        ])
-        .expect("point schema");
-        let schema = StructType::try_new(vec![
-            StructField::new("id", DataType::LONG, false),
-            StructField::new(
+    fn arrow_annotation_follows_the_table_annotation() {
+        let column_mapping = |field: &ArrowField| {
+            (
+                field.metadata().get("delta.columnMapping.id").cloned(),
+                field
+                    .metadata()
+                    .get("delta.columnMapping.physicalName")
+                    .cloned(),
+            )
+        };
+        let point = ArrowDataType::Struct(
+            vec![
+                ArrowField::new("x", ArrowDataType::Int64, true),
+                ArrowField::new("y", ArrowDataType::Utf8View, true),
+            ]
+            .into(),
+        );
+        let schema = ArrowSchema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int32, false).with_metadata(HashMap::from([
+                ("delta.columnMapping.id".to_string(), "7".to_string()),
+                (
+                    "delta.columnMapping.physicalName".to_string(),
+                    "col-source".to_string(),
+                ),
+                ("comment".to_string(), "kept".to_string()),
+            ])),
+            ArrowField::new(
                 "points",
-                DataType::Array(Box::new(ArrayType::new(
-                    DataType::Struct(Box::new(point)),
-                    true,
-                ))),
+                ArrowDataType::LargeList(Arc::new(ArrowField::new("item", point.clone(), true))),
                 true,
             ),
-        ])
-        .expect("schema");
-        let table = Url::parse("file:///warehouse/tables/a").expect("table URL");
-        let same_table = Url::parse("file:///warehouse/tables/a/").expect("table URL");
-        let other_table = Url::parse("file:///warehouse/tables/b").expect("table URL");
+            ArrowField::new_map(
+                "by_name",
+                "entries",
+                ArrowField::new("key", ArrowDataType::Utf8, false),
+                ArrowField::new("value", point, true),
+                false,
+                true,
+            ),
+        ]);
 
-        let annotated = annotate_schema_for_column_mapping(&schema, &table);
-        assert_eq!(
-            annotated,
-            annotate_schema_for_column_mapping(&schema, &same_table)
-        );
-        assert_eq!(compute_max_column_id(&annotated), 4);
+        let annotated = annotate_arrow_schema_for_column_mapping(&schema).expect("annotation");
 
-        let other = annotate_schema_for_column_mapping(&schema, &other_table);
-        let physical_names = |schema: &StructType| {
-            schema
-                .fields()
-                .map(|field| column_mapping_physical_name(field).map(str::to_string))
-                .collect::<Vec<_>>()
+        // The Arrow types are kept, and the other field metadata too.
+        let strip = |schema: &ArrowSchema| {
+            crate::schema::strip_column_mapping_metadata(&Arc::new(schema.clone()))
         };
-        let names = physical_names(&annotated);
-        assert!(
-            names
-                .iter()
-                .all(|name| name.as_deref().is_some_and(|name| name.starts_with("col-")))
+        assert_eq!(strip(&annotated).fields(), strip(&schema).fields());
+        assert_eq!(
+            annotated
+                .field(0)
+                .metadata()
+                .get("comment")
+                .map(String::as_str),
+            Some("kept")
         );
-        assert_ne!(names[0], names[1]);
-        assert!(
-            names
-                .iter()
-                .zip(physical_names(&other))
-                .all(|(name, other)| *name != other)
+        // The column IDs are assigned in the order of the table annotation, and the
+        // column mapping of the input is replaced.
+        let (id, name) = column_mapping(annotated.field(0));
+        assert_eq!(id.as_deref(), Some("1"));
+        assert_ne!(name.as_deref(), Some("col-source"));
+        let ArrowDataType::LargeList(item) = annotated.field(1).data_type() else {
+            panic!("points must be a large list");
+        };
+        let ArrowDataType::Struct(point) = item.data_type() else {
+            panic!("the element of points must be a struct");
+        };
+        assert_eq!(column_mapping(annotated.field(1)).0.as_deref(), Some("2"));
+        assert_eq!(column_mapping(&point[0]).0.as_deref(), Some("3"));
+        assert_eq!(column_mapping(&point[1]).0.as_deref(), Some("4"));
+        let ArrowDataType::Map(entries, _) = annotated.field(2).data_type() else {
+            panic!("by_name must be a map");
+        };
+        let ArrowDataType::Struct(entries) = entries.data_type() else {
+            panic!("the entries of by_name must be a struct");
+        };
+        let ArrowDataType::Struct(value) = entries[1].data_type() else {
+            panic!("the value of by_name must be a struct");
+        };
+        assert_eq!(column_mapping(annotated.field(2)).0.as_deref(), Some("5"));
+        assert_eq!(column_mapping(&value[0]).0.as_deref(), Some("6"));
+        assert_eq!(column_mapping(&value[1]).0.as_deref(), Some("7"));
+
+        // The table that is created from the schema has the same column mapping.
+        let table = StructType::try_from(&annotated).expect("table schema");
+        assert_eq!(compute_max_column_id(&table), 7);
+        let (merged, last_id) = annotate_new_fields_for_column_mapping(
+            &table,
+            &StructType::try_from(&strip(&annotated).as_ref().clone()).expect("data schema"),
+            8,
         );
+        assert_eq!(last_id, 7);
+        assert_eq!(merged, table);
     }
 }

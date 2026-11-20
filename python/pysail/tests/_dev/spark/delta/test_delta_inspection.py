@@ -7,6 +7,8 @@ import os
 from datetime import datetime, timezone
 from urllib.parse import unquote, urlparse
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from pyspark.sql import Row
 
@@ -205,14 +207,29 @@ def test_history_optional_fields(spark, tmp_path):
 def test_unsupported_writer_features_are_rejected_before_data_files_are_written(spark, tmp_path, statement):
     path = tmp_path / "raw"
     features = ["clustering", "icebergCompatV2", "futureFeature"]
-    _write_log(path, [[]], protocol={"minReaderVersion": 1, "minWriterVersion": 7, "writerFeatures": features})
+    # The table has a data file with the row that UPDATE and DELETE would rewrite.
+    path.mkdir()
+    data_file = path / "part-00000.parquet"
+    pq.write_table(pa.table({"id": pa.array([1], type=pa.int64())}), data_file)
+    add = {
+        "add": {
+            "path": data_file.name,
+            "partitionValues": {},
+            "size": data_file.stat().st_size,
+            "modificationTime": 1700000000000,
+            "dataChange": True,
+            "stats": json.dumps({"numRecords": 1}),
+        }
+    }
+    _write_log(path, [[add]], protocol={"minReaderVersion": 1, "minWriterVersion": 7, "writerFeatures": features})
     spark.sql(f"CREATE TABLE raw_unsupported_writer USING delta LOCATION '{escape_sql_string_literal(path.as_uri())}'")
     try:
+        assert spark.table("raw_unsupported_writer").collect() == [Row(id=1)]
         with pytest.raises(Exception, match="Unsupported table features required") as error:
             spark.sql(statement).collect()
         for feature in features:
             assert feature in str(error.value)
-        assert sorted(os.listdir(path)) == ["_delta_log"]
+        assert sorted(os.listdir(path)) == ["_delta_log", data_file.name]
         assert sorted(os.listdir(path / "_delta_log")) == [f"{0:020d}.json"]
     finally:
         spark.sql("DROP TABLE raw_unsupported_writer")

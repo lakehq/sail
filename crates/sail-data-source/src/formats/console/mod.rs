@@ -51,6 +51,7 @@ impl DataSource for ConsoleDataSource {
             lakehouse_table: _,
             sql_insert: _,
             identity_columns_to_track: _,
+            create_table_schema: _,
         } = info;
         if !matches!(mode, SinkMode::Append) {
             return not_impl_err!("the console data source only supports append mode");

@@ -237,3 +237,31 @@ def test_replace_external_delta_table(spark: SparkSession, unity_rest_url: str, 
         assert replaced["storage_location"] == created["storage_location"]
     finally:
         spark.sql(f"DROP SCHEMA {database} CASCADE")
+
+
+def test_sql_replace_drops_the_delta_properties_of_the_replaced_table(spark: SparkSession) -> None:
+    database = "unity_replace_properties"
+    table = f"{database}.t"
+    spark.sql(f"CREATE SCHEMA {database}")
+    try:
+        spark.sql(
+            f"CREATE TABLE {table} (id INT) USING delta "
+            "TBLPROPERTIES ('delta.appendOnly' = 'true', 'delta.enableChangeDataFeed' = 'true')"
+        )
+        spark.sql(f"INSERT INTO {table} VALUES (1), (2)")
+        with pytest.raises(Exception, match=r"(?i)append"):
+            spark.sql(f"DELETE FROM {table} WHERE id = 1")
+        location = _location_to_path(_table_location(spark, table))
+
+        # The properties that the statement does not set are not kept, as in Delta Spark.
+        spark.sql(f"CREATE OR REPLACE TABLE {table} (id INT) USING delta")
+        _, actions = _latest_commit(location)
+        (metadata,) = _actions(actions, "metaData")
+        assert "delta.appendOnly" not in metadata["configuration"]
+        assert "delta.enableChangeDataFeed" not in metadata["configuration"]
+
+        spark.sql(f"INSERT INTO {table} VALUES (3), (4)")
+        spark.sql(f"DELETE FROM {table} WHERE id = 3")
+        assert _rows(spark, table, "id") == [(4,)]
+    finally:
+        spark.sql(f"DROP SCHEMA {database} CASCADE")

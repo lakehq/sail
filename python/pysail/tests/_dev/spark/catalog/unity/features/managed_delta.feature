@@ -108,6 +108,7 @@ Feature: Unity Catalog managed Delta table operations
         (2, 'two', 'b')
       AS t(id, name, grp)
       """
+    Given variable location for table unity_table_test.managed_ctas_mapped_name_t
     When query
       """
       SELECT id, name, grp FROM unity_table_test.managed_ctas_mapped_name_t ORDER BY id
@@ -116,6 +117,7 @@ Feature: Unity Catalog managed Delta table operations
       | id | name | grp |
       | 1  | one  | a   |
       | 2  | two  | b   |
+    Then Delta table in location has column mapping name in the metadata and the data files
 
   Scenario: CTAS managed Delta table with column mapping by id writes the mapped columns
     Given statement
@@ -129,6 +131,7 @@ Feature: Unity Catalog managed Delta table operations
         (2, named_struct('x', 20, 'y', 'q'), 'b')
       AS t(id, point, grp)
       """
+    Given variable location for table unity_table_test.managed_ctas_mapped_id_t
     When query
       """
       SELECT id, point.x AS x, point.y AS y, grp FROM unity_table_test.managed_ctas_mapped_id_t ORDER BY id
@@ -137,6 +140,7 @@ Feature: Unity Catalog managed Delta table operations
       | id | x  | y | grp |
       | 1  | 10 | p | a   |
       | 2  | 20 | q | b   |
+    Then Delta table in location has column mapping id in the metadata and the data files
 
   Scenario: Managed Delta table created without LOCATION accepts first INSERT
     Given statement

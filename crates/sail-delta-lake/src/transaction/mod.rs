@@ -4351,6 +4351,43 @@ mod tests {
             DeltaSnapshot::try_new(log_store.as_ref(), Default::default(), Some(4), None).await?;
         assert_eq!(snapshot.row_tracking_high_water_mark()?, Some(25));
         assert!(appended.snapshot.is_some());
+
+        // An overwrite with a predicate, such as `replaceWhere`, may copy the rows of the
+        // removed files that do not match the predicate to new files, while an overwrite
+        // without a predicate writes only new rows.
+        for (version, predicate, preserved) in [(5, Some("id = 1"), "false"), (6, None, "true")] {
+            let snapshot = Arc::new(
+                DeltaSnapshot::try_new(
+                    log_store.as_ref(),
+                    Default::default(),
+                    Some(version - 1),
+                    None,
+                )
+                .await?,
+            );
+            let existing = snapshot
+                .adds()
+                .first()
+                .cloned()
+                .ok_or_else(|| DeltaError::generic("missing file"))?;
+            CommitBuilder::default()
+                .with_actions(vec![
+                    CommitAction::Remove(existing.into_remove(1)),
+                    CommitAction::Add(row_tracking_add(&format!("overwrite-{version}"), 1)),
+                ])
+                .build(
+                    Some(snapshot),
+                    log_store.clone(),
+                    DeltaOperation::Write {
+                        mode: SaveMode::Overwrite,
+                        partition_by: None,
+                        predicate: predicate.map(str::to_string),
+                    },
+                )
+                .await?;
+            let actions = read_commit_actions(&log_store, version).await;
+            assert_eq!(row_tracking_preserved(&actions)?, Some(preserved.into()));
+        }
         Ok(())
     }
 

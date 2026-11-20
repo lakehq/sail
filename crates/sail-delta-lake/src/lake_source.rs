@@ -55,7 +55,8 @@ use crate::physical_plan::planner::{DeltaPhysicalPlanner, DeltaPlannerConfig, Pl
 use crate::schema::manager::{canonicalize_partition_columns, is_check_constraint_property};
 use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
 use crate::schema::{
-    add_type_widening_metadata, annotate_for_column_mapping, collect_type_changes,
+    add_type_widening_metadata, annotate_arrow_schema_for_column_mapping,
+    annotate_for_column_mapping, annotate_new_fields_for_column_mapping, collect_type_changes,
     compute_max_column_id, evolve_schema, format_type_change_path, inject_default_expressions,
     inject_generation_expressions, inject_identity_columns, is_supported_type_change_for_write,
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_can_write_type_widening,
@@ -141,6 +142,7 @@ impl DataSource for DeltaLakeSource {
             sort_order,
             options,
             lakehouse_table,
+            create_table_schema,
         } = info;
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Delta format");
@@ -179,6 +181,7 @@ impl DataSource for DeltaLakeSource {
                     sort_order,
                     options,
                     lakehouse_table,
+                    create_table_schema,
                 },
             )),
         }))
@@ -268,6 +271,25 @@ impl LakeSource for DeltaLakeSource {
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
         infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await
+    }
+
+    fn create_table_schema_for_write(
+        &self,
+        schema: &SchemaRef,
+        properties: &[(String, String)],
+    ) -> Result<Option<SchemaRef>> {
+        let configuration = delta_create_table_metadata_configuration(properties.to_vec())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let mode = configuration
+            .get("delta.columnMapping.mode")
+            .and_then(|mode| ColumnMappingMode::try_from(mode.as_str()).ok())
+            .unwrap_or_default();
+        if mode == ColumnMappingMode::None {
+            return Ok(None);
+        }
+        let schema = annotate_arrow_schema_for_column_mapping(schema)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Ok(Some(Arc::new(schema)))
     }
 
     async fn create_table_metadata(
@@ -456,13 +478,12 @@ impl LakeSource for DeltaLakeSource {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         validate_delta_retention_properties(config, &metadata_configuration)?;
         if let (Some(_), Some(snapshot)) = (replace_context, replace_snapshot.as_ref()) {
-            // The table keeps its identity in the catalog and the Delta properties that
-            // the statement does not set, since the protocol of the table and the
-            // catalog depend on them. All the other properties are replaced.
+            // A catalog-managed table keeps its identity in the catalog, the catalog
+            // coordination, and the in-commit timestamps that the coordination requires,
+            // as Delta Spark retains them on REPLACE. All the other properties are
+            // replaced by the ones of the statement.
             for (key, value) in snapshot.metadata().configuration() {
-                if (key.to_ascii_lowercase().starts_with("delta.")
-                    || key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_KEY)
-                    || key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_LEGACY_KEY))
+                if is_delta_replace_retained_property(key)
                     && !metadata_configuration.contains_key(key)
                 {
                     metadata_configuration.insert(key.clone(), value.clone());
@@ -491,33 +512,45 @@ impl LakeSource for DeltaLakeSource {
             .unwrap_or_default();
 
         let mut configuration = metadata_configuration;
-        let mapped_snapshot = replace_snapshot.as_ref().filter(|snapshot| {
-            replace_context.is_some()
-                && !matches!(
-                    snapshot.effective_column_mapping_mode(),
-                    ColumnMappingMode::None
-                )
-        });
+        // A table that is created before the data of a write is written has the column
+        // mapping that the data is written with.
+        let assigned_column_mapping = if unity_required_protocol.is_some() {
+            delta_create_table_column_mapping(&columns)?
+        } else {
+            None
+        };
         let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
-            let (annotated, max_column_id) = if let Some(snapshot) = mapped_snapshot {
-                // The column IDs continue after the IDs that the table has used.
+            let (annotated, max_column_id) = if let Some(snapshot) =
+                replace_snapshot.as_ref().filter(|snapshot| {
+                    snapshot.effective_column_mapping_mode() != ColumnMappingMode::None
+                }) {
+                // A replaced table gets new physical names, and column IDs after the IDs
+                // that the table has used.
                 let current = StructType::try_from(snapshot.schema())
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let (annotated, evolved) = evolve_schema(
-                    &current,
-                    &kernel_schema,
-                    snapshot.metadata(),
-                    effective_mode,
-                )
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let max_column_id = evolved
+                let used_column_id = snapshot
+                    .metadata()
                     .configuration()
                     .get("delta.columnMapping.maxColumnId")
-                    .cloned()
-                    .unwrap_or_else(|| compute_max_column_id(&annotated).to_string());
-                (annotated, max_column_id)
+                    .and_then(|id| id.parse::<i64>().ok())
+                    .unwrap_or_default()
+                    .max(compute_max_column_id(&current));
+                let (annotated, max_column_id) = annotate_new_fields_for_column_mapping(
+                    &StructType::try_new(Vec::<StructField>::new())
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?,
+                    &kernel_schema,
+                    used_column_id + 1,
+                );
+                (annotated, max_column_id.to_string())
+            } else if let Some(assigned) = &assigned_column_mapping {
+                let (annotated, max_column_id) = annotate_new_fields_for_column_mapping(
+                    assigned,
+                    &kernel_schema,
+                    compute_max_column_id(assigned) + 1,
+                );
+                (annotated, max_column_id.to_string())
             } else {
-                let annotated = annotate_for_column_mapping(&kernel_schema, &table_url);
+                let annotated = annotate_for_column_mapping(&kernel_schema);
                 let max_column_id = compute_max_column_id(&annotated).to_string();
                 (annotated, max_column_id)
             };
@@ -840,6 +873,8 @@ pub struct DeltaWriteNodeOptions {
     #[educe(PartialEq(ignore), Hash(ignore), PartialOrd(ignore))]
     pub options: Vec<OptionLayer>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    #[educe(PartialOrd(ignore))]
+    pub create_table_schema: Option<SchemaRef>,
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -912,6 +947,7 @@ pub(crate) async fn plan_delta_write(
         sort_order,
         options,
         lakehouse_table,
+        create_table_schema,
     } = node.options().clone();
 
     if is_flow_event_schema(logical_input.schema().as_arrow()) {
@@ -1123,7 +1159,8 @@ pub(crate) async fn plan_delta_write(
     .with_identity_columns(extract_identity_columns(Some(logical_schema)))
     .with_identity_columns_to_track(identity_columns_to_track)
     .with_table_snapshot(table_snapshot)
-    .with_lakehouse_table(lakehouse_table);
+    .with_lakehouse_table(lakehouse_table)
+    .with_create_table_schema(create_table_schema);
     let planner_ctx = PlannerContext::new(ctx, table_config);
     let planner = DeltaPhysicalPlanner::new(planner_ctx);
     planner
@@ -1956,6 +1993,38 @@ fn delta_create_table_arrow_schema(columns: &[LakeSourceCreateTableColumn]) -> R
     Ok(Arc::new(Schema::new(fields)))
 }
 
+/// Returns the column mapping that `LakeSource::create_table_schema_for_write` assigned
+/// to the columns of a new table, if any.
+fn delta_create_table_column_mapping(
+    columns: &[LakeSourceCreateTableColumn],
+) -> Result<Option<StructType>> {
+    let fields = columns
+        .iter()
+        .map(|column| {
+            let metadata = column
+                .metadata
+                .iter()
+                .filter(|(key, _)| {
+                    *key == ColumnMetadataKey::ColumnMappingId.as_ref()
+                        || *key == ColumnMetadataKey::ColumnMappingPhysicalName.as_ref()
+                })
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<HashMap<_, _>>();
+            with_variant_extension_if_marked_storage(
+                Field::new(
+                    column.name.clone(),
+                    column.data_type.clone(),
+                    column.nullable,
+                )
+                .with_metadata(metadata),
+            )
+        })
+        .collect::<Vec<_>>();
+    let schema = StructType::try_from(normalize_delta_schema(&Arc::new(Schema::new(fields))))
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    Ok((compute_max_column_id(&schema) > 0).then_some(schema))
+}
+
 fn delta_create_table_generation_expressions(
     columns: &[LakeSourceCreateTableColumn],
 ) -> HashMap<String, String> {
@@ -2162,6 +2231,21 @@ async fn unity_create_commit(log_store: &dyn crate::delta_log::LogStore) -> Resu
         "inCommitTimestamp": in_commit_timestamp,
     })
     .to_string())
+}
+
+/// Whether REPLACE keeps a property of a catalog-managed table that the statement
+/// does not set.
+fn is_delta_replace_retained_property(key: &str) -> bool {
+    [
+        DELTA_UNITY_TABLE_ID_KEY,
+        DELTA_UNITY_TABLE_ID_LEGACY_KEY,
+        "delta.feature.catalogManaged",
+        "delta.enableInCommitTimestamps",
+        "delta.inCommitTimestampEnablementVersion",
+        "delta.inCommitTimestampEnablementTimestamp",
+    ]
+    .iter()
+    .any(|retained| key.eq_ignore_ascii_case(retained))
 }
 
 fn delta_catalog_managed_create_table_properties(
@@ -2672,6 +2756,25 @@ mod tests {
         properties: Vec<(&str, &str)>,
         required_protocol: Option<String>,
     ) -> Result<(LakeSourceCreateTableResult, Vec<serde_json::Value>)> {
+        let columns = vec![LakeSourceCreateTableColumn {
+            metadata: Default::default(),
+            name: "id".to_string(),
+            data_type: ArrowDataType::Int64,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+            identity: None,
+        }];
+        create_unity_managed_table_metadata_with_columns(columns, properties, required_protocol)
+            .await
+    }
+
+    async fn create_unity_managed_table_metadata_with_columns(
+        columns: Vec<LakeSourceCreateTableColumn>,
+        properties: Vec<(&str, &str)>,
+        required_protocol: Option<String>,
+    ) -> Result<(LakeSourceCreateTableResult, Vec<serde_json::Value>)> {
         use object_store::ObjectStoreExt;
         use sail_common_datafusion::catalog::{
             CatalogProviderId, CatalogTableIdentity, LakehouseAuthority, LakehouseFormat,
@@ -2706,16 +2809,7 @@ mod tests {
                 &SessionConfig::new(),
                 LakeSourceCreateTableInfo {
                     path: "memory:///staging/t".to_string(),
-                    columns: vec![LakeSourceCreateTableColumn {
-                        metadata: Default::default(),
-                        name: "id".to_string(),
-                        data_type: ArrowDataType::Int64,
-                        nullable: true,
-                        comment: None,
-                        default: None,
-                        generated_always_as: None,
-                        identity: None,
-                    }],
+                    columns,
                     comment: None,
                     partition_by: vec![],
                     properties: properties
@@ -2891,6 +2985,85 @@ mod tests {
         Ok(())
     }
 
+    /// A staged table is created with the column mapping of the schema that the data of
+    /// the write is written with.
+    #[tokio::test]
+    async fn unity_staged_table_has_the_column_mapping_of_the_write() -> Result<()> {
+        let properties = vec![
+            ("io.unitycatalog.tableId", "table-id"),
+            ("delta.columnMapping.mode", "name"),
+        ];
+        let point = ArrowDataType::Struct(
+            vec![
+                Field::new("x", ArrowDataType::Int64, true),
+                Field::new("y", ArrowDataType::Utf8, true),
+            ]
+            .into(),
+        );
+        let schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("id", ArrowDataType::Int64, true),
+            Field::new("point", point, true),
+        ]));
+        let Some(write_schema) = DeltaLakeSource.create_table_schema_for_write(
+            &schema,
+            &properties
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect::<Vec<_>>(),
+        )?
+        else {
+            return plan_err!("expected a schema with column mapping");
+        };
+        let columns = write_schema
+            .fields()
+            .iter()
+            .map(|field| LakeSourceCreateTableColumn {
+                metadata: field
+                    .metadata()
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+                name: field.name().clone(),
+                data_type: field.data_type().clone(),
+                nullable: field.is_nullable(),
+                comment: None,
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            })
+            .collect();
+        let required_protocol = serde_json::json!({
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": ["catalogManaged"],
+            "writerFeatures": ["catalogManaged", "inCommitTimestamp"]
+        })
+        .to_string();
+        let (_, actions) = create_unity_managed_table_metadata_with_columns(
+            columns,
+            properties,
+            Some(required_protocol),
+        )
+        .await?;
+        let metadata = find_action(&actions, "metaData")?;
+        assert_eq!(
+            metadata["configuration"]["delta.columnMapping.mode"],
+            "name"
+        );
+        assert_eq!(
+            metadata["configuration"]["delta.columnMapping.maxColumnId"],
+            "4"
+        );
+        let table = serde_json::from_str::<StructType>(
+            metadata["schemaString"].as_str().unwrap_or_default(),
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let written = StructType::try_from(write_schema.as_ref())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        assert_eq!(table, written);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn unity_staged_table_rejects_unsupported_required_features() -> Result<()> {
         for (features, unsupported) in [
@@ -2948,6 +3121,111 @@ mod tests {
                 "io.unitycatalog.tableId": "table-id"
             })
         );
+        Ok(())
+    }
+
+    /// REPLACE of a table with column mapping gives the columns new IDs after the IDs
+    /// that the table has used, and new physical names, as in Delta Spark.
+    #[tokio::test]
+    async fn replace_continues_the_column_ids_of_the_table() -> Result<()> {
+        use object_store::ObjectStoreExt;
+
+        let location = "memory:///path/t";
+        let store = Arc::new(object_store::memory::InMemory::new());
+        let runtime_env = Arc::new(RuntimeEnv::default());
+        runtime_env.register_object_store(&parse_location_to_url(location)?, store.clone());
+        let column = |name: &str| LakeSourceCreateTableColumn {
+            metadata: Default::default(),
+            name: name.to_string(),
+            data_type: ArrowDataType::Int64,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+            identity: None,
+        };
+        let info = |columns, replace| LakeSourceCreateTableInfo {
+            path: location.to_string(),
+            columns,
+            comment: None,
+            partition_by: vec![],
+            properties: vec![("delta.columnMapping.mode".to_string(), "name".to_string())],
+            replace,
+            lakehouse_table: None,
+            required_protocol: None,
+        };
+        let schema = |version: i64| {
+            let store = store.clone();
+            async move {
+                let commit = store
+                    .get(&object_store::path::Path::from(format!(
+                        "path/t/_delta_log/{version:020}.json"
+                    )))
+                    .await?
+                    .bytes()
+                    .await?;
+                let actions = serde_json::Deserializer::from_slice(&commit)
+                    .into_iter::<serde_json::Value>()
+                    .collect::<serde_json::Result<Vec<_>>>()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let metadata = find_action(&actions, "metaData")?.clone();
+                let schema = serde_json::from_str::<StructType>(
+                    metadata["schemaString"].as_str().unwrap_or_default(),
+                )
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let columns = schema
+                    .fields()
+                    .map(|field| {
+                        let id = match field.get_config_value(&ColumnMetadataKey::ColumnMappingId) {
+                            Some(MetadataValue::Number(id)) => *id,
+                            _ => -1,
+                        };
+                        let physical_name =
+                            field.physical_name(ColumnMappingMode::Name).to_string();
+                        (field.name().clone(), id, physical_name)
+                    })
+                    .collect::<Vec<_>>();
+                Ok::<_, DataFusionError>((
+                    columns,
+                    metadata["configuration"]["delta.columnMapping.maxColumnId"].clone(),
+                ))
+            }
+        };
+
+        DeltaLakeSource
+            .create_table_metadata(
+                runtime_env.clone(),
+                &SessionConfig::new(),
+                info(vec![column("a"), column("b")], false),
+            )
+            .await?;
+        let (created, max_column_id) = schema(0).await?;
+        assert_eq!(max_column_id, "2");
+        DeltaLakeSource
+            .create_table_metadata(
+                runtime_env,
+                &SessionConfig::new(),
+                info(vec![column("b"), column("a")], true),
+            )
+            .await?;
+        let (replaced, max_column_id) = schema(1).await?;
+        assert_eq!(max_column_id, "4");
+        assert_eq!(
+            replaced
+                .iter()
+                .map(|(name, id, _)| (name.as_str(), *id))
+                .collect::<Vec<_>>(),
+            vec![("b", 3), ("a", 4)]
+        );
+        for (_, _, physical_name) in &replaced {
+            assert!(physical_name.starts_with("col-"), "{physical_name}");
+            assert!(
+                created
+                    .iter()
+                    .all(|(_, _, created)| created != physical_name),
+                "{physical_name}"
+            );
+        }
         Ok(())
     }
 

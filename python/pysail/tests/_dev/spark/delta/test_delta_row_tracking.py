@@ -193,6 +193,28 @@ def test_row_tracking_dataframe_writes(spark, tmp_path):
     ]
 
 
+def test_row_tracking_replace_where(spark, tmp_path):
+    path = tmp_path / "row_tracking"
+    df = spark.createDataFrame([(1, "a"), (2, "b")], "id BIGINT, value STRING").coalesce(1)
+    df.write.format("delta").option("delta.enableRowTracking", "true").save(str(path))
+    assert len(_row_tracking_state(path)["active"]) == 1
+    # The row that does not match the predicate is copied to a new file with a new row ID.
+    (
+        spark.createDataFrame([(1, "x")], "id BIGINT, value STRING")
+        .write.format("delta")
+        .mode("overwrite")
+        .option("replaceWhere", "id = 1")
+        .save(str(path))
+    )
+    state = _row_tracking_state(path)
+    assert state["preserved"] == {0: "true", 1: "false"}
+    assert state["high_water_mark"] == 3
+    assert spark.read.format("delta").load(str(path)).orderBy("id").collect() == [
+        Row(id=1, value="x"),
+        Row(id=2, value="b"),
+    ]
+
+
 def test_row_tracking_with_checkpoints(spark, tmp_path):
     name = "row_tracking_checkpoints"
     path = tmp_path / "row_tracking"

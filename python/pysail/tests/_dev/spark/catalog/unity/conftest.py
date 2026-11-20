@@ -12,8 +12,9 @@ import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
+import pyarrow.parquet as pq
 import pytest
 import requests
 from pytest_bdd import given, parsers, then
@@ -689,3 +690,42 @@ def unity_table_has_columns(table_name: str, unity_rest_url: str, datatable) -> 
     expected_rows = [list(row) for row in datatable[1:]]
     expected = [(row[0], row[1]) for row in expected_rows]
     assert actual == expected, f"expected Unity Catalog columns {expected!r}, got {actual!r}"
+
+
+@then(parsers.parse("Delta table in {location_var} has column mapping {mode} in the metadata and the data files"))
+def delta_table_has_column_mapping(location_var: str, mode: str, variables: dict) -> None:
+    """Checks that the table maps its columns to physical names that are not the column
+    names, and that the data files have the columns of the physical names."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    location = Path(location.path)
+
+    metadata = _first_delta_metadata(location)
+    assert metadata["configuration"].get("delta.columnMapping.mode") == mode
+
+    def physical_names(fields: list[dict]) -> dict[str, str]:
+        names = {}
+        for field in fields:
+            field_metadata = field.get("metadata") or {}
+            name = field_metadata.get("delta.columnMapping.physicalName")
+            assert isinstance(name, str), field
+            assert name != field["name"], field
+            assert isinstance(field_metadata.get("delta.columnMapping.id"), int), field
+            if isinstance(field["type"], dict) and field["type"].get("type") == "struct":
+                physical_names(field["type"]["fields"])
+            names[field["name"]] = name
+        return names
+
+    names = physical_names(json.loads(metadata["schemaString"])["fields"])
+    data_columns = {name for column, name in names.items() if column not in metadata["partitionColumns"]}
+    log = location / "_delta_log"
+    commits = sorted(log.glob("*.json")) + sorted((log / "_staged_commits").glob("*.json"))
+    data_files = {
+        action["add"]["path"]
+        for commit in commits
+        for action in (json.loads(line) for line in commit.read_text(encoding="utf-8").splitlines() if line.strip())
+        if "add" in action
+    }
+    assert data_files, f"no data files in {location}"
+    for path in data_files:
+        assert set(pq.read_schema(location / unquote(path)).names) == data_columns, path
