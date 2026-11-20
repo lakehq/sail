@@ -916,7 +916,7 @@ impl DeltaSnapshot {
         }
     }
 
-    fn row_tracking_high_water_mark(&self) -> DeltaResult<Option<i64>> {
+    pub(crate) fn row_tracking_high_water_mark(&self) -> DeltaResult<Option<i64>> {
         let Some(domain) = self.domain_metadata().get("delta.rowTracking") else {
             return Ok(None);
         };

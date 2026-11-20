@@ -1625,7 +1625,8 @@ fn delta_ratified_commits_from_load_table(
 }
 
 /// The metadata action and the protocol action of a Delta commit that differ from the table
-/// that the commit is based on, in the form of the Delta log.
+/// that the commit is based on, and the domain metadata actions of the commit, in the form
+/// of the Delta log.
 #[derive(Default, serde::Deserialize)]
 struct DeltaLogChanges {
     #[serde(rename = "metaData", default)]
@@ -1635,6 +1636,8 @@ struct DeltaLogChanges {
     base_metadata: Option<serde_json::Value>,
     #[serde(default)]
     protocol: Option<serde_json::Value>,
+    #[serde(rename = "domainMetadata", default)]
+    domain_metadata: Vec<serde_json::Value>,
 }
 
 /// Converts the legacy Delta commit payload to an update table request of the Delta REST API.
@@ -1683,6 +1686,7 @@ fn delta_update_table_request(
         metadata,
         base_metadata,
         protocol,
+        domain_metadata,
     } = changes;
     match (metadata, base_metadata) {
         (Some(metadata), Some(base)) => delta_metadata_updates(&base, &metadata, &mut updates)?,
@@ -1702,6 +1706,7 @@ fn delta_update_table_request(
             protocol: Box::new(protocol),
         });
     }
+    delta_domain_metadata_updates(&domain_metadata, &mut updates)?;
     if updates.is_empty() {
         return Err(CatalogError::InvalidArgument(
             "Unity Catalog Delta commit expects commit info or the latest backfilled version"
@@ -1781,6 +1786,51 @@ fn delta_metadata_updates(
     }
     if !removals.is_empty() {
         updates.push(delta_gen::DeltaTableUpdate::RemoveProperties { removals });
+    }
+    Ok(())
+}
+
+/// Adds the updates of the Delta REST API for the domain metadata actions of a Delta commit.
+/// The catalog tracks the row tracking domain only.
+fn delta_domain_metadata_updates(
+    domain_metadata: &[serde_json::Value],
+    updates: &mut Vec<delta_gen::DeltaTableUpdate>,
+) -> CatalogResult<()> {
+    let invalid = |message: String| {
+        CatalogError::InvalidArgument(format!("Invalid Delta commit payload: {message}"))
+    };
+    let mut row_tracking = None;
+    let mut removals = vec![];
+    for action in domain_metadata {
+        let domain = action["domain"]
+            .as_str()
+            .ok_or_else(|| invalid("missing metadata domain".to_string()))?;
+        if action["removed"].as_bool().unwrap_or_default() {
+            removals.push(domain.to_string());
+        } else if domain == "delta.rowTracking" {
+            let configuration = action["configuration"]
+                .as_str()
+                .ok_or_else(|| invalid(format!("missing configuration of domain {domain}")))?;
+            row_tracking = Some(
+                serde_json::from_str::<delta_gen::DeltaRowTrackingDomainMetadata>(configuration)
+                    .map_err(|e| invalid(format!("configuration of domain {domain}: {e}")))?,
+            );
+        } else {
+            return Err(CatalogError::NotSupported(format!(
+                "Unity Catalog Delta commit that sets the metadata domain {domain}"
+            )));
+        }
+    }
+    if let Some(row_tracking) = row_tracking {
+        updates.push(delta_gen::DeltaTableUpdate::SetDomainMetadata {
+            updates: Box::new(delta_gen::DeltaDomainMetadataUpdates {
+                delta_clustering: None,
+                delta_row_tracking: Some(Box::new(row_tracking)),
+            }),
+        });
+    }
+    if !removals.is_empty() {
+        updates.push(delta_gen::DeltaTableUpdate::RemoveDomainMetadata { domains: removals });
     }
     Ok(())
 }
@@ -3668,6 +3718,52 @@ mod tests {
         assert_eq!(
             received_targets(&server).await,
             vec!["GET /delta/v1/config?catalog=main&protocol-versions=1.0"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delta_commit_with_domain_metadata_uses_delta_api() {
+        // An append to a table with row tracking raises the row ID high-water mark.
+        let mut append = legacy_delta_commit(5);
+        append["delta_log"] = serde_json::json!({
+            "domainMetadata": [{
+                "domain": "delta.rowTracking",
+                "configuration": r#"{"rowIdHighWaterMark":41}"#,
+                "removed": false,
+            }],
+        });
+        let mut removal = legacy_delta_commit(6);
+        removal["delta_log"] = serde_json::json!({
+            "domainMetadata": [{
+                "domain": "delta.rowTracking",
+                "configuration": r#"{"rowIdHighWaterMark":41}"#,
+                "removed": true,
+            }],
+        });
+        let requirements = serde_json::json!([
+            {"type": "assert-table-uuid", "uuid": DELTA_TABLE_ID}
+        ]);
+        assert_eq!(
+            delta_api_commit_bodies(vec![append, removal]).await,
+            vec![
+                serde_json::json!({
+                    "requirements": requirements,
+                    "updates": [
+                        {"action": "add-commit", "commit": delta_commit_json(5)},
+                        {
+                            "action": "set-domain-metadata",
+                            "updates": {"delta.rowTracking": {"rowIdHighWaterMark": 41}}
+                        }
+                    ]
+                }),
+                serde_json::json!({
+                    "requirements": requirements,
+                    "updates": [
+                        {"action": "add-commit", "commit": delta_commit_json(6)},
+                        {"action": "remove-domain-metadata", "domains": ["delta.rowTracking"]}
+                    ]
+                }),
+            ]
         );
     }
 

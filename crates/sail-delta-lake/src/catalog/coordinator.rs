@@ -15,8 +15,8 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::delta_log::LogStoreRef;
 use crate::spec::{
-    CommitAction, DataType as DeltaDataType, Metadata, MetadataValue, PrimitiveType, Protocol,
-    StructField,
+    CommitAction, DataType as DeltaDataType, DomainMetadata, Metadata, MetadataValue,
+    PrimitiveType, Protocol, StructField,
 };
 use crate::table::DeltaSnapshot;
 use crate::transaction::CatalogManagedStagedCommit;
@@ -255,7 +255,7 @@ fn delta_catalog_managed_commit_update(
         // REST API, so the catalog reports the error when it needs the metadata.
         Err(error) => update["metadata_error"] = serde_json::json!(error.to_string()),
     }
-    if let Some(changes) = delta_log_changes(base, actions)? {
+    if let Some(changes) = delta_log_changes(base, actions, &staged.domain_metadata)? {
         update["delta_log"] = changes;
     }
     Ok(update)
@@ -264,10 +264,12 @@ fn delta_catalog_managed_commit_update(
 /// Returns the metadata action and the protocol action of the commit that differ from
 /// the metadata and the protocol of the base snapshot, in the form of the Delta log.
 /// The metadata action comes with the metadata of the base snapshot, so that the catalog
-/// can tell what the commit changes.
+/// can tell what the commit changes. The domain metadata actions of the commit are
+/// returned as they are.
 fn delta_log_changes(
     base: Option<(&Metadata, &Protocol)>,
     actions: &[CommitAction],
+    domain_metadata: &[DomainMetadata],
 ) -> Result<Option<serde_json::Value>> {
     let json = |value: serde_json::Result<serde_json::Value>| {
         value.map_err(|e| DataFusionError::External(Box::new(e)))
@@ -297,6 +299,12 @@ fn delta_log_changes(
         changes.insert(
             "protocol".to_string(),
             json(serde_json::to_value(protocol))?,
+        );
+    }
+    if !domain_metadata.is_empty() {
+        changes.insert(
+            "domainMetadata".to_string(),
+            json(serde_json::to_value(domain_metadata))?,
         );
     }
     Ok((!changes.is_empty()).then_some(serde_json::Value::Object(changes)))
@@ -628,8 +636,8 @@ mod tests {
             CommitAction::Protocol(base_protocol.clone()),
             CommitAction::Metadata(base_metadata.clone()),
         ];
-        assert_eq!(delta_log_changes(base, &actions)?, None);
-        assert_eq!(delta_log_changes(base, &[])?, None);
+        assert_eq!(delta_log_changes(base, &actions, &[])?, None);
+        assert_eq!(delta_log_changes(base, &[], &[])?, None);
 
         let metadata = base_metadata
             .clone()
@@ -641,7 +649,7 @@ mod tests {
             CommitAction::Metadata(metadata.clone()),
         ];
         assert_eq!(
-            delta_log_changes(base, &actions)?,
+            delta_log_changes(base, &actions, &[])?,
             Some(serde_json::json!({
                 "metaData": metadata,
                 "baseMetaData": base_metadata,
@@ -649,10 +657,27 @@ mod tests {
             }))
         );
         assert_eq!(
-            delta_log_changes(None, &actions)?,
+            delta_log_changes(None, &actions, &[])?,
             Some(serde_json::json!({
                 "metaData": metadata,
                 "protocol": protocol,
+            }))
+        );
+
+        // The domain metadata actions of the commit are changes of their own.
+        let domain = DomainMetadata {
+            domain: "delta.rowTracking".to_string(),
+            configuration: r#"{"rowIdHighWaterMark":41}"#.to_string(),
+            removed: false,
+        };
+        assert_eq!(
+            delta_log_changes(base, &[], std::slice::from_ref(&domain))?,
+            Some(serde_json::json!({
+                "domainMetadata": [{
+                    "domain": "delta.rowTracking",
+                    "configuration": r#"{"rowIdHighWaterMark":41}"#,
+                    "removed": false,
+                }],
             }))
         );
         Ok(())
@@ -682,6 +707,7 @@ mod tests {
             file_modification_timestamp: 1,
             in_commit_timestamp: 1,
             staged_path: object_store::path::Path::from("t/_delta_log/_staged_commits/1.json"),
+            domain_metadata: vec![],
             metrics: Default::default(),
         };
         let base_metadata = metadata(DeltaDataType::LONG).map_err(external)?;

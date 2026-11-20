@@ -204,7 +204,7 @@ def test_history_optional_fields(spark, tmp_path):
 )
 def test_unsupported_writer_features_are_rejected_before_data_files_are_written(spark, tmp_path, statement):
     path = tmp_path / "raw"
-    features = ["rowTracking", "domainMetadata", "futureFeature"]
+    features = ["clustering", "icebergCompatV2", "futureFeature"]
     _write_log(path, [[]], protocol={"minReaderVersion": 1, "minWriterVersion": 7, "writerFeatures": features})
     spark.sql(f"CREATE TABLE raw_unsupported_writer USING delta LOCATION '{escape_sql_string_literal(path.as_uri())}'")
     try:

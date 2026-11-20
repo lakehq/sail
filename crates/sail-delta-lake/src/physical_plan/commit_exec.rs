@@ -467,7 +467,10 @@ impl DeltaCommitExec {
             let metadata_matches = create_schema == existing_schema
                 && metadata.partition_columns() == snapshot.metadata().partition_columns()
                 && (catalog_managed
-                    || metadata.configuration() == snapshot.metadata().configuration());
+                    || crate::transaction::row_tracking::same_configuration_for_create(
+                        metadata.configuration(),
+                        snapshot.metadata().configuration(),
+                    ));
             if !metadata_matches {
                 return Err(DataFusionError::Plan(
                     "Delta table already exists with different metadata".to_string(),

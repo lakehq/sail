@@ -2072,6 +2072,7 @@ mod catalog_managed_tests {
             file_modification_timestamp: 1,
             in_commit_timestamp: 1,
             staged_path: staged_path.clone(),
+            domain_metadata: vec![],
             metrics: Default::default(),
         };
         let state = session.state();

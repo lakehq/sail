@@ -405,7 +405,8 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     writer_features.insert(TableFeature::AppendOnly);
     writer_features.insert(TableFeature::InCommitTimestamp);
     writer_features.insert(TableFeature::TimestampWithoutTimezone);
-    // writer_features.insert(TableFeature::DomainMetadata);
+    writer_features.insert(TableFeature::DomainMetadata);
+    writer_features.insert(TableFeature::RowTracking);
     writer_features.insert(TableFeature::ColumnMapping);
     writer_features.insert(TableFeature::DeletionVectors);
     writer_features.insert(TableFeature::ChangeDataFeed);
@@ -700,16 +701,7 @@ mod tests {
             .split(", ")
             .collect::<Vec<_>>();
         features.sort_unstable();
-        assert_eq!(
-            features,
-            [
-                "clustering",
-                "domainMetadata",
-                "futureFeature",
-                "icebergCompatV2",
-                "rowTracking"
-            ]
-        );
+        assert_eq!(features, ["clustering", "futureFeature", "icebergCompatV2"]);
     }
 
     #[test]

@@ -2754,9 +2754,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unity_staged_table_with_required_row_tracking() -> Result<()> {
+        let required_protocol = serde_json::json!({
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": ["catalogManaged"],
+            "writerFeatures": ["catalogManaged", "domainMetadata", "inCommitTimestamp", "rowTracking"]
+        })
+        .to_string();
+        let (_, actions) = create_unity_managed_table_metadata(
+            vec![
+                ("io.unitycatalog.tableId", "table-id"),
+                ("delta.enableRowTracking", "true"),
+            ],
+            Some(required_protocol),
+        )
+        .await?;
+        let writer_features = &find_action(&actions, "protocol")?["writerFeatures"];
+        let writer_features = sorted_strings(writer_features);
+        assert!(
+            writer_features.contains(&"rowTracking"),
+            "{writer_features:?}"
+        );
+        assert!(
+            writer_features.contains(&"domainMetadata"),
+            "{writer_features:?}"
+        );
+        let configuration = &find_action(&actions, "metaData")?["configuration"];
+        assert_eq!(configuration["delta.enableRowTracking"], "true");
+        for (key, prefix) in [
+            (
+                "delta.rowTracking.materializedRowIdColumnName",
+                "_row-id-col-",
+            ),
+            (
+                "delta.rowTracking.materializedRowCommitVersionColumnName",
+                "_row-commit-version-col-",
+            ),
+        ] {
+            assert!(
+                configuration[key]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with(prefix)),
+                "{configuration}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn unity_staged_table_rejects_unsupported_required_features() -> Result<()> {
         for (features, unsupported) in [
-            (vec!["catalogManaged", "rowTracking"], "rowTracking"),
+            (vec!["catalogManaged", "clustering"], "clustering"),
             (vec!["catalogManaged", "futureFeature"], "futureFeature"),
         ] {
             let required_protocol = serde_json::json!({
