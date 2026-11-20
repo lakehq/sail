@@ -472,7 +472,6 @@ impl DataFileSerde {
             referenced_data_file: self.referenced_data_file,
             content_offset: self.content_offset,
             content_size_in_bytes: self.content_size_in_bytes,
-            added_snapshot_id: None,
         })
     }
 }

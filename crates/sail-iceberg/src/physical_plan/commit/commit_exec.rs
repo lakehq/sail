@@ -1754,7 +1754,6 @@ mod tests {
             referenced_data_file: None,
             content_offset: None,
             content_size_in_bytes: None,
-            added_snapshot_id: None,
         }
     }
 
@@ -2795,7 +2794,6 @@ mod tests {
                 referenced_data_file: None,
                 content_offset: None,
                 content_size_in_bytes: None,
-                added_snapshot_id: None,
             };
             let action_schema = iceberg_action_schema().expect("action schema");
             let action_batch = datafusion::arrow::compute::concat_batches(

@@ -90,11 +90,6 @@ pub struct DataFile {
     pub content_offset: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_size_in_bytes: Option<i64>,
-    /// The ID of the snapshot that added the file, set when the file is loaded from a manifest for
-    /// a scan and inherited from the manifest when the entry has none. This is not an Iceberg spec
-    /// field and is never serialized.
-    #[serde(skip)]
-    pub added_snapshot_id: Option<i64>,
 }
 
 impl DataFile {

@@ -153,7 +153,6 @@ pub(crate) async fn write_deletion_vectors(
             referenced_data_file: Some(vector.referenced_data_file),
             content_offset: Some(offset),
             content_size_in_bytes: Some(size),
-            added_snapshot_id: None,
             column_sizes: Default::default(),
             value_counts: Default::default(),
             null_value_counts: Default::default(),
