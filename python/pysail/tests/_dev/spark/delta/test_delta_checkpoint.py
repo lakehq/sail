@@ -7,7 +7,7 @@ import os
 import shutil
 import time
 from contextlib import nullcontext
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pyarrow as pa
@@ -1049,3 +1049,69 @@ def test_checkpoint_int96_stats_prune_far_dated_timestamps(spark, tmp_path: Path
         row.id for row in df.where("ts >= TIMESTAMP'2021-01-01 00:00:00'").select("id").orderBy("id").collect()
     ] == [3, 4, 5]
     assert [row.id for row in df.where("ts < TIMESTAMP'1600-01-01 00:00:00'").select("id").collect()] == [1]
+
+
+def _rewrite_checkpoint_stats_as_legacy_int96(checkpoint: Path) -> None:
+    table = pq.read_table(checkpoint)
+    add_index = table.schema.get_field_index("add")
+    add = table.column(add_index).combine_chunks()
+    assert add.type.get_field_index("stats") < 0
+
+    def replace(struct: pa.StructArray, name: str, child: pa.Array) -> pa.StructArray:
+        fields = list(struct.type)
+        children = [child if field.name == name else struct.field(i) for i, field in enumerate(fields)]
+        return pa.StructArray.from_arrays(children, fields=fields, mask=pc.is_null(struct))
+
+    stats = add.field("stats_parsed")
+    for bound in ["minValues", "maxValues"]:
+        ts = stats.field(bound).field("ts")
+        # In UTC, Spark's legacy hybrid calendar stores 1500-01-01 as 1500-01-10.
+        ancient = pc.less(ts, pa.scalar(datetime(1582, 10, 15, tzinfo=timezone.utc), ts.type))
+        legacy_ts = pc.if_else(ancient, pc.add(ts, pa.scalar(timedelta(days=9))), ts)
+        stats = replace(stats, bound, replace(stats.field(bound), "ts", legacy_ts))
+    table = table.set_column(add_index, "add", replace(add, "stats_parsed", stats))
+    # Like Spark, store no Arrow schema and mark the INT96 values as legacy in the footer.
+    replacement = checkpoint.with_name(f"{checkpoint.stem}.replacement.parquet")
+    with pq.ParquetWriter(
+        replacement, table.schema, use_deprecated_int96_timestamps=True, store_schema=False
+    ) as writer:
+        writer.write_table(table)
+        writer.add_key_value_metadata(
+            {
+                "org.apache.spark.version": "3.5.0",
+                "org.apache.spark.legacyINT96": "",
+                "org.apache.spark.timeZone": "UTC",
+            }
+        )
+    replacement.replace(checkpoint)
+    schema = pq.ParquetFile(checkpoint).schema
+    physical_types = {schema.column(i).path: schema.column(i).physical_type for i in range(len(schema))}
+    assert physical_types["add.stats_parsed.minValues.ts"] == "INT96"
+    assert physical_types["add.stats_parsed.maxValues.ts"] == "INT96"
+
+
+@pytest.mark.parametrize("checkpoint_policy", ["classic", "v2"])
+def test_checkpoint_legacy_int96_stats_keep_ancient_rows(spark, tmp_path: Path, checkpoint_policy: str):
+    # Spark rebases INT96 values marked as legacy in the footer when it reads them, which moves
+    # values before 1900. The stored bounds must not skip a file that has matching rows.
+    table_path = tmp_path / "delta_checkpoint_legacy_int96_stats"
+    for version, ts in enumerate(["1500-01-01 00:00:00", "2000-01-01 00:00:00"]):
+        writer = spark.sql(f"SELECT {version + 1} AS id, TIMESTAMP'{ts}' AS ts").write.format("delta")
+        if version == 0:
+            writer = (
+                writer.mode("overwrite")
+                .option("delta.checkpointInterval", "1")
+                .option("delta.checkpointPolicy", checkpoint_policy)
+                .option("delta.checkpoint.writeStatsAsStruct", "true")
+                .option("delta.checkpoint.writeStatsAsJson", "false")
+            )
+        else:
+            writer = writer.mode("append")
+        writer.save(str(table_path))
+
+    checkpoint = _v2_checkpoint_sidecar(table_path, 1) if checkpoint_policy == "v2" else _checkpoint_file(table_path, 1)
+    _rewrite_checkpoint_stats_as_legacy_int96(checkpoint)
+
+    df = spark.read.format("delta").option("metadataAsDataRead", "false").load(str(table_path))
+    predicate = "ts NOT BETWEEN TIMESTAMP'1500-01-09 00:00:00' AND TIMESTAMP'1500-01-11 00:00:00'"
+    assert [row.id for row in df.where(predicate).select("id").orderBy("id").collect()] == [1, 2]
