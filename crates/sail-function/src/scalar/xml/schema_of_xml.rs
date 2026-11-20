@@ -306,7 +306,7 @@ impl XmlInferenceOptions {
                 }
                 Event::Text(text)
                     if text
-                        .xml10_content()?
+                        .xml10_content()
                         .trim_matches([' ', '\t', '\n', '\r'])
                         .is_empty() => {}
                 Event::Decl(_) | Event::DocType(_) | Event::Comment(_) | Event::PI(_) => {}
@@ -329,15 +329,15 @@ impl XmlInferenceOptions {
         element: BytesStart<'_>,
         root: bool,
     ) -> XmlResult<InferredType> {
-        validate_name(std::str::from_utf8(element.name().as_ref())?)?;
+        validate_name(element.name().as_ref())?;
         let mut attributes = BTreeMap::new();
         for attribute in element.attributes() {
             let attribute = attribute?;
-            let name = reader.decoder().decode(attribute.key.as_ref())?;
+            let name = attribute.key.as_ref();
             let value = attribute_value(&attribute)?;
             if !self.exclude_attribute {
                 attributes.insert(
-                    format!("{}{}", self.attribute_prefix, self.name(&name)),
+                    format!("{}{}", self.attribute_prefix, self.name(name)),
                     self.infer_value(&value),
                 );
             }
@@ -347,17 +347,15 @@ impl XmlInferenceOptions {
         let mut text = String::new();
         loop {
             match reader.read_event()? {
-                Event::Text(value) => text.push_str(&value.xml10_content()?),
-                Event::CData(value) => text.push_str(&value.xml10_content()?),
+                Event::Text(value) => text.push_str(&value.xml10_content()),
+                Event::CData(value) => text.push_str(&value.xml10_content()),
                 Event::GeneralRef(reference) => {
                     text.push_str(&reference_value(&reference)?);
                 }
                 Event::Start(element) => {
                     self.add_text(&mut fields, &mut text);
                     has_elements = true;
-                    let name = element.name();
-                    let name = reader.decoder().decode(name.as_ref())?;
-                    let name = self.name(&name).to_string();
+                    let name = self.name(element.name().as_ref()).to_string();
                     let inferred = self.infer_element(reader, element, false)?;
                     self.add_field(&mut fields, name, inferred);
                 }
