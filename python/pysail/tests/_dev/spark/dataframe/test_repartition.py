@@ -479,6 +479,85 @@ def test_explicit_coalesce_after_filter_and_projection(spark):
 
 
 @pytest.fixture
+def unsorted_keys(spark):
+    # `k` is a permutation of 0..19, so the rows are out of order unless they are sorted.
+    return spark.range(0, 20, 1, 4).select(((F.col("id") * 7) % 20).alias("k"), (F.col("id") % 2).alias("g"))
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        (lambda df: df.orderBy("k").coalesce(1), lambda df: df.orderBy("k")),
+        (lambda df: df.orderBy("k").coalesce(3), lambda df: df.orderBy("k")),
+        (lambda df: df.orderBy("k").repartition(1), lambda df: df.orderBy("k")),
+        (lambda df: df.orderBy(F.col("k").desc()).coalesce(1), lambda df: df.orderBy(F.col("k").desc())),
+        (
+            lambda df: df.orderBy("g", F.col("k").desc()).repartition(1),
+            lambda df: df.orderBy("g", F.col("k").desc()),
+        ),
+        (
+            lambda df: df.orderBy(F.col("g").desc(), "k").coalesce(1),
+            lambda df: df.orderBy(F.col("g").desc(), "k"),
+        ),
+        (lambda df: df.orderBy("k").select("k").coalesce(1).repartition(1), lambda df: df.orderBy("k")),
+        (lambda df: df.coalesce(1).sortWithinPartitions("k"), lambda df: df.orderBy("k")),
+        (lambda df: df.repartition(1).sortWithinPartitions("k"), lambda df: df.orderBy("k")),
+    ],
+    ids=[
+        "coalesce-1",
+        "coalesce-3",
+        "repartition-1",
+        "descending",
+        "two-keys",
+        "two-keys-reversed",
+        "nested",
+        "sort-within-coalesce",
+        "sort-within-repartition",
+    ],
+)
+@pytest.mark.spark(cross_version=True)
+def test_sort_before_coalesce_or_single_partition_repartition_is_kept(unsorted_keys, operation, expected):
+    assert [row.k for row in operation(unsorted_keys).collect()] == [row.k for row in expected(unsorted_keys).collect()]
+
+
+@pytest.mark.spark(cross_version=True)
+def test_first_rows_after_sort_and_coalesce(unsorted_keys):
+    keys = list(range(20))
+    assert [row.k for row in unsorted_keys.orderBy("k").coalesce(1).limit(3).collect()] == keys[:3]
+    assert [row.k for row in unsorted_keys.orderBy("k").repartition(1).limit(3).collect()] == keys[:3]
+    assert unsorted_keys.orderBy(F.col("k").desc()).coalesce(1).first().k == keys[-1]
+    assert [row.k for row in unsorted_keys.orderBy("k").coalesce(1).toLocalIterator()] == keys
+
+
+@pytest.mark.parametrize("hint", ["COALESCE(1)", "REPARTITION(1)"])
+@pytest.mark.spark(cross_version=True)
+def test_sort_before_sql_hint_is_kept(spark, unsorted_keys, hint):
+    unsorted_keys.createOrReplaceTempView("unsorted_keys")
+    try:
+        result = spark.sql(f"SELECT /*+ {hint} */ k FROM (SELECT k FROM unsorted_keys ORDER BY k)")  # noqa: S608
+        assert [row.k for row in result.collect()] == list(range(20))
+    finally:
+        spark.catalog.dropTempView("unsorted_keys")
+
+
+@pytest.mark.spark(skip_if_jvm=True, reason="Checks Sail's physical plan")
+@pytest.mark.parametrize(
+    ("operation", "keeps_sort"),
+    [
+        (lambda df: df.orderBy("k").coalesce(1), True),
+        (lambda df: df.orderBy("k").repartition(1), True),
+        (lambda df: df.orderBy("k").repartition(3), False),
+        (lambda df: df.orderBy("k").repartition(1, "k"), False),
+    ],
+    ids=["coalesce-1", "repartition-1", "repartition-3", "hash-repartition-1"],
+)
+def test_sort_before_explicit_repartition_plan(unsorted_keys, operation, keeps_sort):
+    # Spark does not keep the order of the rows for round-robin repartitioning into several
+    # partitions or for hash repartitioning, so the sort is still removed there.
+    assert ("SortExec" in normalized_plan(operation(unsorted_keys))) == keeps_sort
+
+
+@pytest.fixture
 def repartition_source(spark):
     return spark.createDataFrame([(1, 10, 3), (2, 20, 1), (3, 30, 2)], "a int, b int, c int")
 
