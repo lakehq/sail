@@ -14,7 +14,6 @@ use sail_catalog::lakehouse::{
     BeginTableAccessRequest, ResolveLakehouseTableRequest, TableAccessPurpose,
 };
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::storage_credentials::install_table_storage_credentials;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     LakehouseExecutionContext, LakehouseFormat, LakehouseOperation, LakehouseTableBinding,
@@ -538,6 +537,7 @@ async fn resolve_procedure_table_planning(
 ) -> PlanResult<ProcedureTablePlanning> {
     let resolved = manager
         .resolve_lakehouse_table(
+            ctx,
             table,
             ResolveLakehouseTableRequest {
                 catalog_table: table.to_vec(),
@@ -547,8 +547,6 @@ async fn resolve_procedure_table_planning(
             },
         )
         .await?;
-    // The procedure reads the storage with the credentials that the catalog issues.
-    install_table_storage_credentials(ctx, table, &resolved).await?;
     let binding = resolved.execution;
     let access = match manager
         .begin_table_access(

@@ -197,6 +197,7 @@ pub async fn prepare_lake_procedure_execution(
             Some(LakeProcedureTableTarget::Table { binding }),
         ) => {
             prepare_table_target(
+                context,
                 manager.as_ref(),
                 &call.catalog,
                 &call.lake_source,
@@ -229,6 +230,7 @@ pub async fn prepare_lake_procedure_execution(
 }
 
 async fn prepare_table_target(
+    context: &TaskContext,
     manager: &CatalogManager,
     catalog: &str,
     lake_source: &str,
@@ -267,6 +269,7 @@ async fn prepare_table_target(
 
     let resolved = manager
         .resolve_lakehouse_table(
+            context,
             table,
             ResolveLakehouseTableRequest {
                 catalog_table: table.clone(),

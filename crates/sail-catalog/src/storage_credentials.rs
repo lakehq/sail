@@ -38,7 +38,7 @@ fn table_owner(manager: &CatalogManager, table: &[String]) -> CatalogResult<(Vec
 /// or refuses to issue them, or fails to issue them, in which case the storage is
 /// accessed with the credentials of the environment as before.
 /// Only Delta tables whose commits are coordinated by the catalog are considered.
-pub async fn install_table_storage_credentials<C: SessionExtensionAccessor>(
+pub(crate) async fn install_table_storage_credentials<C: SessionExtensionAccessor + ?Sized>(
     ctx: &C,
     table: &[String],
     resolved: &LakehouseResolvedTable,
@@ -155,14 +155,17 @@ mod tests {
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::{ObjectStore, ObjectStoreExt};
+    use sail_common_datafusion::catalog::delta::DELTA_UNITY_TABLE_ID_KEY;
     use sail_common_datafusion::catalog::{
         CatalogProviderId, CatalogTableIdentity, DatabaseStatus, LakehouseAuthority,
         LakehouseExecutionContext, LakehouseOperation, LakehouseStatusHints,
-        MetadataPointerAuthority, ScanAuthority, StorageCredential, TableLifecycle, TableStatus,
+        MetadataPointerAuthority, ScanAuthority, StorageCredential, TableKind, TableLifecycle,
+        TableStatus,
     };
     use sail_object_store::VendedStoreFactory;
 
     use super::*;
+    use crate::lakehouse::{LakehouseCapability, ResolveLakehouseTableRequest};
     use crate::manager::CatalogManagerOptions;
     use crate::provider::{
         AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
@@ -171,7 +174,8 @@ mod tests {
 
     const LOCATION: &str = "memory:///warehouse/items";
 
-    /// A catalog that only issues storage credentials.
+    /// A catalog that only returns a catalog-managed Delta table and issues storage
+    /// credentials for it.
     struct VendingProvider {
         response: fn() -> CatalogResult<Option<TableStorageCredentials>>,
         requests: Mutex<Vec<(String, TableStorageCredentialsRequest)>>,
@@ -181,6 +185,10 @@ mod tests {
     impl CatalogProvider for VendingProvider {
         fn get_name(&self) -> &str {
             "unity"
+        }
+
+        fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
+            vec![LakehouseCapability::DeltaRatifiedCommits]
         }
 
         async fn get_table_storage_credentials(
@@ -239,12 +247,24 @@ mod tests {
             unreachable!()
         }
 
-        async fn get_table(
-            &self,
-            _database: &Namespace,
-            _table: &str,
-        ) -> CatalogResult<TableStatus> {
-            unreachable!()
+        async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
+            Ok(TableStatus {
+                catalog: Some("unity".to_string()),
+                database: database.clone().into(),
+                name: table.to_string(),
+                kind: TableKind::Table {
+                    columns: vec![],
+                    comment: None,
+                    constraints: vec![],
+                    location: Some(LOCATION.to_string()),
+                    format: "delta".to_string(),
+                    partition_by: vec![],
+                    sort_by: vec![],
+                    bucket_by: None,
+                    properties: vec![(DELTA_UNITY_TABLE_ID_KEY.to_string(), "id".to_string())],
+                    is_external: false,
+                },
+            })
         }
 
         async fn list_tables(&self, _database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
@@ -631,5 +651,40 @@ mod tests {
             session.requests(),
             vec![StorageAccess::Read, StorageAccess::Read]
         );
+    }
+
+    #[tokio::test]
+    async fn storage_credentials_are_installed_when_the_catalog_resolves_the_table() {
+        let table = ["items".to_string()];
+        let resolve = TestSession::new(issued, Some(true));
+        let manager = resolve.ctx.extension::<CatalogManager>().unwrap();
+        let request = ResolveLakehouseTableRequest {
+            catalog_table: table.to_vec(),
+            operation: LakehouseOperation::Maintenance,
+            requested_format: None,
+            options: vec![],
+        };
+        manager
+            .resolve_lakehouse_table(&resolve.ctx, &table, request)
+            .await
+            .unwrap();
+
+        let resolve_status = TestSession::new(issued, Some(true));
+        let manager = resolve_status.ctx.extension::<CatalogManager>().unwrap();
+        let status = manager.get_table(&table).await.unwrap();
+        manager
+            .resolve_lakehouse_table_status(
+                &resolve_status.ctx,
+                &table,
+                &status,
+                LakehouseOperation::Alter,
+            )
+            .await
+            .unwrap();
+
+        for session in [resolve, resolve_status] {
+            assert!(session.is_vended().await);
+            assert_eq!(session.requests(), vec![StorageAccess::Read]);
+        }
     }
 }

@@ -315,8 +315,11 @@ impl PlanResolver<'_> {
         let resolved = self
             .ctx
             .extension::<CatalogManager>()?
-            .resolve_lakehouse_table_status(table.parts(), &status, LakehouseOperation::Alter)
-            .await?;
+            .resolve_lakehouse_table_status_without_storage(
+                table.parts(),
+                &status,
+                LakehouseOperation::Alter,
+            )?;
         if resolved.execution.commit == CommitAuthority::DeltaRatifiedCommit {
             return Err(PlanError::unsupported(
                 "ALTER TABLE ADD CONSTRAINT is not yet supported for Unity Catalog managed Delta tables",

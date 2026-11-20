@@ -28,9 +28,7 @@ use crate::provider::{
     CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions,
     DropViewOptions,
 };
-use crate::storage_credentials::{
-    install_table_storage_credentials, remove_table_storage_credentials,
-};
+use crate::storage_credentials::remove_table_storage_credentials;
 use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
 
 fn clone_result_schema() -> CatalogResult<SchemaRef> {
@@ -652,14 +650,12 @@ impl CatalogCommand {
                     let storage_operation = (&options).into();
                     let resolved = manager
                         .resolve_lakehouse_table_status(
+                            ctx,
                             &table,
                             &table_status,
                             LakehouseOperation::Alter,
                         )
                         .await?;
-                    // The storage metadata is read and written with the credentials
-                    // that the catalog issues.
-                    install_table_storage_credentials(ctx, &table, &resolved).await?;
                     let lakehouse_table = resolved.execution;
                     if !matches!(options, AlterTableOptions::AlterSnapshotReference { .. })
                         && matches!(lakehouse_table.commit,
@@ -1079,6 +1075,7 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
 
     let create_plan = manager
         .plan_lakehouse_create(
+            ctx,
             table,
             LakehouseCreateRequest {
                 catalog_table: table.to_vec(),
@@ -1092,9 +1089,6 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
     else {
         return Ok(Some((options, create_plan)));
     };
-    // The storage metadata is written with the credentials that the catalog issues.
-    install_table_storage_credentials(ctx, table, &create_plan.table).await?;
-
     // The catalog may plan the storage metadata at a location it allocated and, for a
     // staged table, with properties it requires.
     if create_plan.table.status.location.is_some() {
@@ -1205,6 +1199,7 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
         crate::provider::LakeSourceCreateMetadataMode::CatalogCoordinated => Some(
             manager
                 .resolve_lakehouse_table_status(
+                    ctx,
                     table,
                     status,
                     sail_common_datafusion::catalog::LakehouseOperation::Create,

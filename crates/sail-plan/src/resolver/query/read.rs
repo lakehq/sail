@@ -132,6 +132,7 @@ impl PlanResolver<'_> {
     /// Looks up a catalog table or view, reusing earlier successful lookups in the query.
     /// Data-source identifier reads (with a required format) do not look up views.
     async fn lookup_catalog_table(
+        &self,
         manager: &CatalogManager,
         reference: &[String],
         required_format: Option<&str>,
@@ -151,11 +152,13 @@ impl PlanResolver<'_> {
             options: vec![],
         };
         let lookup = if required_format.is_some() {
-            let (status, resolved) = manager.get_lakehouse_table(reference, request).await?;
+            let (status, resolved) = manager
+                .get_lakehouse_table(self.ctx, reference, request)
+                .await?;
             (status, Some(resolved))
         } else {
             manager
-                .get_lakehouse_table_or_view(reference, request)
+                .get_lakehouse_table_or_view(self.ctx, reference, request)
                 .await?
         };
         state.insert_catalog_table_lookup(key, lookup.clone());
@@ -178,7 +181,9 @@ impl PlanResolver<'_> {
         let reference: Vec<String> = name.clone().into();
         let manager = self.ctx.extension::<CatalogManager>()?;
         let data_source_registry = self.ctx.extension::<DataSourceRegistry>()?;
-        let lookup = Self::lookup_catalog_table(&manager, &reference, required_format, state).await;
+        let lookup = self
+            .lookup_catalog_table(&manager, &reference, required_format, state)
+            .await;
         let ((status, resolved), catalog_reference, lake_relation) = match lookup {
             Ok(lookup) => (lookup, reference.clone(), None),
             Err(error @ CatalogError::NotFound(_, _))
@@ -189,9 +194,9 @@ impl PlanResolver<'_> {
                 if base_reference.is_empty() {
                     return Err(error.into());
                 }
-                let base_lookup =
-                    Self::lookup_catalog_table(&manager, base_reference, required_format, state)
-                        .await;
+                let base_lookup = self
+                    .lookup_catalog_table(&manager, base_reference, required_format, state)
+                    .await;
                 let (base_status, base_resolved) = match base_lookup {
                     Ok(lookup) => lookup,
                     // A base that names no table, such as `catalog.database` left by

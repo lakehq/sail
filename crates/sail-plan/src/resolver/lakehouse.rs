@@ -6,7 +6,6 @@ use sail_catalog::lakehouse::{
     TableAccessPurpose,
 };
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::storage_credentials::install_table_storage_credentials;
 use sail_common_datafusion::catalog::{
     LakehouseExecutionContext, LakehouseFormat, LakehouseOperation,
 };
@@ -26,6 +25,7 @@ impl PlanResolver<'_> {
         let manager = self.ctx.extension::<CatalogManager>()?;
         let resolved = manager
             .resolve_lakehouse_table(
+                self.ctx,
                 table,
                 ResolveLakehouseTableRequest {
                     catalog_table: table.to_vec(),
@@ -46,7 +46,6 @@ impl PlanResolver<'_> {
         resolved: LakehouseResolvedTable,
         access_purpose: TableAccessPurpose,
     ) -> PlanResult<LakehouseExecutionContext> {
-        install_table_storage_credentials(self.ctx, table, &resolved).await?;
         let execution = resolved.execution;
         let manager = self.ctx.extension::<CatalogManager>()?;
         match manager

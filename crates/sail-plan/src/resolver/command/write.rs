@@ -19,7 +19,6 @@ use sail_catalog::provider::{
     CatalogPartitionField, CreateTableColumnOptions, CreateTableMode, CreateTableOptions,
     PartitionTransform,
 };
-use sail_catalog::storage_credentials::install_table_storage_credentials;
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableSort, LakehouseExecutionContext, LakehouseOperation,
@@ -670,15 +669,13 @@ impl PlanResolver<'_> {
                         .ctx
                         .extension::<CatalogManager>()?
                         .plan_lakehouse_create(
+                            self.ctx,
                             &catalog_table,
                             LakehouseCreateRequest {
                                 catalog_table: catalog_table.clone(),
                                 options: create_options.clone(),
                             },
                         )
-                        .await?;
-                    // The data is written with the credentials that the catalog issues.
-                    install_table_storage_credentials(self.ctx, &catalog_table, &create_plan.table)
                         .await?;
                     if let Some(location) = create_plan.table.status.location.clone()
                         && create_options.location.as_deref() != Some(location.as_str())
