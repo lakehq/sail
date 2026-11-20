@@ -205,6 +205,7 @@ impl PlanResolver<'_> {
                     // A base that names no table, such as `catalog.database` left by
                     // `catalog.database.table`, is not a lake relation either: the
                     // table is what is missing.
+                    // Other errors, such as an invalid scan-planning-mode, are not masked.
                     Err(CatalogError::InvalidArgument(_))
                         if manager
                             .resolve_fully_qualified_object_name(base_reference)
