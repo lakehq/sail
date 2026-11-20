@@ -401,7 +401,7 @@ pub async fn build_delta_log_datasource_scans_with_options(
 
     // The checkpoint footers are cached under keys scoped to the object store, both for schema
     // inference and for the scan, so that the two share cache entries. Workers rebuild the scan
-    // with the same scoped cache.
+    // with a cache scoped the same way, in their own session.
     let metadata_cache = scoped_file_metadata_cache(
         ctx.session()
             .runtime_env()
