@@ -5,6 +5,7 @@ use std::sync::{Arc, LazyLock};
 
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
+use datafusion::catalog::Session;
 use datafusion::common::config::TableParquetOptions;
 use datafusion::common::encryption::FileDecryptionProperties;
 use datafusion::common::{DataFusionError, Result, ScalarValue};
@@ -283,7 +284,7 @@ fn widen_nested_type(data_type: &DataType, sources: &[&DataType]) -> DataType {
 // The `parquet_encryption` variant is left out since Sail does not enable that DataFusion feature.
 #[expect(clippy::unused_async)]
 async fn get_file_decryption_properties(
-    _state: &dyn datafusion::catalog::Session,
+    _state: &dyn Session,
     _options: &TableParquetOptions,
     _file_path: &Path,
 ) -> Result<Option<Arc<FileDecryptionProperties>>> {
@@ -301,7 +302,7 @@ async fn get_file_decryption_properties(
 /// default format options, except that it reads the footers through `file_metadata_cache` instead
 /// of the runtime's unscoped file metadata cache.
 async fn infer_parquet_checkpoint_schema(
-    state: &dyn datafusion::catalog::Session,
+    state: &dyn Session,
     store: &Arc<dyn ObjectStore>,
     file_metadata_cache: &Arc<FileMetadataCache>,
     objects: &[ObjectMeta],
