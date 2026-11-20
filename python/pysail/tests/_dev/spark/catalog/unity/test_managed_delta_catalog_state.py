@@ -141,7 +141,7 @@ def test_managed_delta_table_time_travel(spark: SparkSession) -> None:
 
         with pytest.raises(Exception, match="latest ratified version is 3, but version 4 was requested"):
             spark.sql(f"SELECT id FROM {table} VERSION AS OF 4").collect()
-        with pytest.raises(Exception, match="(?i)no version of the delta table exists at or before"):
+        with pytest.raises(Exception, match=r"(?i)no version of the delta table exists at or before"):
             spark.sql(f"SELECT id FROM {table} TIMESTAMP AS OF '2000-01-01T00:00:00Z'").collect()
     finally:
         spark.sql(f"DROP SCHEMA {database} CASCADE")
