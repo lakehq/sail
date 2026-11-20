@@ -1461,11 +1461,11 @@ dependencies = [
 
 [[package]]
 name = "chumsky"
-version = "0.13.0"
+version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0d2bfadce76f963d776feff99db6dc33783829539258314776383b33e2a00f8"
+checksum = "6313a87def838ae23848f344d38799e6370342efd0ec0229b15469d3b6459923"
 dependencies = [
- "hashbrown 0.15.5",
+ "hashbrown 0.16.1",
  "unicode-ident",
  "unicode-segmentation",
 ]
@@ -3596,6 +3596,11 @@ name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash 0.2.0",
+]
 
 [[package]]
 name = "hashbrown"
@@ -5407,7 +5412,7 @@ dependencies = [
  "md-5 0.10.6",
  "parking_lot",
  "percent-encoding",
- "quick-xml",
+ "quick-xml 0.39.4",
  "rand 0.10.4",
  "reqwest 0.12.28",
  "ring",
@@ -6313,6 +6318,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick-xml"
+version = "0.42.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "quick_cache"
 version = "0.6.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6910,7 +6924,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 name = "sail-build-scripts"
 version = "0.7.3"
 dependencies = [
- "chumsky 0.13.0",
+ "chumsky 0.14.2",
  "lazy_static",
  "prettyplease 0.3.0",
  "proc-macro2",
@@ -6944,7 +6958,7 @@ version = "0.7.3"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
- "chumsky 0.13.0",
+ "chumsky 0.14.2",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
@@ -7229,7 +7243,7 @@ dependencies = [
 name = "sail-common-spark"
 version = "0.7.3"
 dependencies = [
- "chumsky 0.13.0",
+ "chumsky 0.14.2",
  "monostate",
  "sail-common",
  "serde",
@@ -7246,7 +7260,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
- "chumsky 0.13.0",
+ "chumsky 0.14.2",
  "csv-core",
  "dashmap",
  "datafusion",
@@ -7428,7 +7442,7 @@ dependencies = [
  "cbc",
  "chrono",
  "chrono-tz",
- "chumsky 0.13.0",
+ "chumsky 0.14.2",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
@@ -7457,7 +7471,7 @@ dependencies = [
  "parquet-variant-json",
  "percent-encoding",
  "postcard",
- "quick-xml",
+ "quick-xml 0.42.0",
  "rand 0.10.4",
  "rand_distr",
  "regex",
@@ -7670,7 +7684,7 @@ dependencies = [
  "async-recursion",
  "async-trait",
  "chrono",
- "chumsky 0.13.0",
+ "chumsky 0.14.2",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
@@ -7861,7 +7875,7 @@ name = "sail-sql-analyzer"
 version = "0.7.3"
 dependencies = [
  "chrono",
- "chumsky 0.13.0",
+ "chumsky 0.14.2",
  "either",
  "lazy_static",
  "regex",
@@ -7885,7 +7899,7 @@ dependencies = [
 name = "sail-sql-parser"
 version = "0.7.3"
 dependencies = [
- "chumsky 0.13.0",
+ "chumsky 0.14.2",
  "either",
  "itertools 0.15.0",
  "paste",
@@ -8587,7 +8601,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

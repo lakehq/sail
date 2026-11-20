@@ -902,7 +902,9 @@ fn boolean_option(map: &MapArray, key: &str, default: bool) -> Result<bool> {
 // StAX returns the inner markup for STRING fields, with expanded empty tags and
 // decoded text and attributes. Keep lexical names even with ignoreNamespace.
 fn element_markup(xot: &xot::Xot, node: xot::Node) -> Result<String> {
+    use quick_xml::events::attributes::Attribute;
     use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+    use quick_xml::name::QName;
     use xot::NodeEdge;
 
     let mut writer = quick_xml::Writer::new(Vec::new());
@@ -912,7 +914,10 @@ fn element_markup(xot: &xot::Xot, node: xot::Node) -> Result<String> {
                 let name = xot.local_name_str(element.name());
                 let mut start = BytesStart::new(name);
                 for (key, value) in xot.attributes(child).iter() {
-                    start.push_attribute((xot.local_name_str(key).as_bytes(), value.as_bytes()));
+                    start.push_attribute(Attribute {
+                        key: QName(xot.local_name_str(key)),
+                        value: Cow::Borrowed(value),
+                    });
                 }
                 writer.write_event(Event::Start(start))?;
             }

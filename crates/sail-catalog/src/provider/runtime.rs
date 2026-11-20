@@ -152,24 +152,20 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
         self.inner.lakehouse_capabilities()
     }
 
-    async fn resolve_lakehouse_table(
+    async fn get_lakehouse_table(
         &self,
         database: &Namespace,
         table: &str,
         request: ResolveLakehouseTableRequest,
-    ) -> CatalogResult<LakehouseResolvedTable> {
+    ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
         let inner = self.inner.clone();
         let database = database.clone();
         let table = table.to_string();
         self.handle
-            .spawn(async move {
-                inner
-                    .resolve_lakehouse_table(&database, &table, request)
-                    .await
-            })
+            .spawn(async move { inner.get_lakehouse_table(&database, &table, request).await })
             .await
             .map_err(|e| {
-                CatalogError::External(format!("Failed to execute resolve_lakehouse_table: {e}"))
+                CatalogError::External(format!("Failed to execute get_lakehouse_table: {e}"))
             })?
     }
 

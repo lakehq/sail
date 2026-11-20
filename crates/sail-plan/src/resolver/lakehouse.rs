@@ -2,7 +2,8 @@
 
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{
-    BeginTableAccessRequest, ResolveLakehouseTableRequest, TableAccessPurpose,
+    BeginTableAccessRequest, LakehouseResolvedTable, ResolveLakehouseTableRequest,
+    TableAccessPurpose,
 };
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::storage_credentials::install_table_storage_credentials;
@@ -22,24 +23,6 @@ impl PlanResolver<'_> {
         requested_format: Option<&str>,
         options: Vec<(String, String)>,
     ) -> PlanResult<LakehouseExecutionContext> {
-        self.resolve_lakehouse_table_context_for_access(
-            table,
-            operation,
-            requested_format,
-            options,
-            table_access_purpose(operation),
-        )
-        .await
-    }
-
-    pub(super) async fn resolve_lakehouse_table_context_for_access(
-        &self,
-        table: &[String],
-        operation: LakehouseOperation,
-        requested_format: Option<&str>,
-        options: Vec<(String, String)>,
-        access_purpose: TableAccessPurpose,
-    ) -> PlanResult<LakehouseExecutionContext> {
         let manager = self.ctx.extension::<CatalogManager>()?;
         let resolved = manager
             .resolve_lakehouse_table(
@@ -52,8 +35,20 @@ impl PlanResolver<'_> {
                 },
             )
             .await?;
+        self.begin_lakehouse_table_access(table, resolved, table_access_purpose(operation))
+            .await
+    }
+
+    /// Begins access to a table that the catalog has already resolved.
+    pub(super) async fn begin_lakehouse_table_access(
+        &self,
+        table: &[String],
+        resolved: LakehouseResolvedTable,
+        access_purpose: TableAccessPurpose,
+    ) -> PlanResult<LakehouseExecutionContext> {
         install_table_storage_credentials(self.ctx, table, &resolved).await?;
         let execution = resolved.execution;
+        let manager = self.ctx.extension::<CatalogManager>()?;
         match manager
             .begin_table_access(
                 table,

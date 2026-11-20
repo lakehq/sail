@@ -1294,21 +1294,22 @@ impl CatalogProvider for UnityCatalogProvider {
         ]
     }
 
-    async fn resolve_lakehouse_table(
+    async fn get_lakehouse_table(
         &self,
         database: &Namespace,
         table: &str,
         request: ResolveLakehouseTableRequest,
-    ) -> CatalogResult<LakehouseResolvedTable> {
+    ) -> CatalogResult<(TableStatus, LakehouseResolvedTable)> {
         let status = self.get_table(database, table).await?;
         ensure_table_access(&status)?;
-        Ok(resolve_lakehouse_table_status(
+        let resolved = resolve_lakehouse_table_status(
             self.get_name(),
             request.catalog_table,
             &status,
             request.operation,
             &self.lakehouse_capabilities(),
-        ))
+        );
+        Ok((status, resolved))
     }
 
     async fn get_table_storage_credentials(
@@ -6029,7 +6030,7 @@ mod tests {
             );
             for operation in [LakehouseOperation::Read, LakehouseOperation::Write] {
                 let error = provider
-                    .resolve_lakehouse_table(
+                    .get_lakehouse_table(
                         &database,
                         "events",
                         ResolveLakehouseTableRequest {
@@ -6088,8 +6089,8 @@ mod tests {
         mount_legacy_delta_table(&server).await;
         let provider = mock_provider(&server, "main");
         let database = Namespace::try_from(vec!["default"]).unwrap();
-        let resolved = provider
-            .resolve_lakehouse_table(
+        let (_, resolved) = provider
+            .get_lakehouse_table(
                 &database,
                 "events",
                 ResolveLakehouseTableRequest {

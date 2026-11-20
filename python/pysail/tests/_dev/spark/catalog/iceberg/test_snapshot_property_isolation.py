@@ -5,8 +5,6 @@
 # ruff: noqa: T201
 
 import json
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 import requests
@@ -14,47 +12,6 @@ from pyspark.sql import functions as F  # noqa: N812
 
 from pysail.testing.spark.session import spark_connect_server
 from pysail.tests._dev.spark.catalog.iceberg.test_commit import _s3_object_keys
-
-
-@pytest.fixture(scope="module")
-def recording_catalog(iceberg_rest_endpoint):
-    records = []
-
-    class Proxy(BaseHTTPRequestHandler):
-        def forward(self):
-            body = self.rfile.read(int(self.headers.get("content-length", "0")))
-            response = requests.request(
-                self.command,
-                iceberg_rest_endpoint + self.path,
-                data=body or None,
-                headers={"Content-Type": "application/json"},
-                timeout=30,
-            )
-            records.append((self.command, self.path, json.loads(body) if body else None, response.status_code))
-            self.send_response(response.status_code)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(response.content)))
-            self.end_headers()
-            if self.command != "HEAD":
-                self.wfile.write(response.content)
-
-        do_GET = forward  # noqa: N815
-        do_POST = forward  # noqa: N815
-        do_DELETE = forward  # noqa: N815
-        do_HEAD = forward  # noqa: N815
-
-        def log_message(self, *_args):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}", records
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=10)
 
 
 @pytest.fixture(scope="module")
@@ -126,7 +83,7 @@ def test_rest_annotations_survive_workers_without_catalog_leakage(spark, recordi
         assert mutations
         assert any(r[2].get("name") == "lifecycle" for r in mutations)
         assert any(u.get("action") == "add-snapshot" for r in mutations for u in r[2].get("updates", []))
-        for _, _, body, _ in mutations:
+        for _, _, body, _, _ in mutations:
             assert not any("snapshot-property." in k for k in body.get("properties", {}))
             for update in body.get("updates", []):
                 if update.get("action") == "set-properties":
