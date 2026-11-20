@@ -33,7 +33,7 @@ use datafusion_datasource::file_scan_config::{
 use datafusion_datasource::source::DataSourceExec;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
-use sail_cache::scope::{listing_cache_scoped_url, object_store_scoped_path};
+use sail_cache::scope::{scoped_listing_url, scoped_path};
 use sail_common_datafusion::datasource::create_sort_order;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
@@ -371,7 +371,7 @@ async fn list_files_for_scan<'a>(
         .config()
         .table_paths
         .iter()
-        .map(listing_cache_scoped_url)
+        .map(scoped_listing_url)
         .collect::<Vec<_>>();
     let file_list = future::try_join_all(table_paths.iter().map(|table_path| async move {
         let files =
@@ -473,7 +473,7 @@ async fn do_collect_statistics_and_ordering(
             part_file.table_reference.as_ref(),
             file_schema.as_ref(),
         )),
-        path: object_store_scoped_path(object_store_url, &meta.location),
+        path: scoped_path(object_store_url, &meta.location),
     };
 
     if let Some(cached) = file_statistic_cache

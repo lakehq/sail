@@ -31,7 +31,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::ObjectMeta;
-use sail_cache::scope::object_store_scoped_file_metadata_cache;
+use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::input_file::{
     InputFileMetadataSource, projection_references_input_file_metadata,
 };
@@ -42,6 +42,7 @@ use sail_common_datafusion::schema_evolution::{
 };
 use url::Url;
 
+use crate::datasource::DATA_FILE_LAST_MODIFIED;
 use crate::datasource::imported_source::IcebergImportedFileSource;
 use crate::datasource::partition_defaults::{
     IdentityPartitionDefaults, create_data_scan_with_partition_defaults,
@@ -235,9 +236,7 @@ impl ScanByDataFilesState {
         let partitioned = PartitionedFile {
             object_meta: ObjectMeta {
                 location: store_ctx.resolve_to_absolute_path(&file.path)?,
-                // Iceberg data files are immutable, so a fixed timestamp is safe and lets the
-                // Parquet metadata cache, which checks size and last_modified, reuse footers.
-                last_modified: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
+                last_modified: DATA_FILE_LAST_MODIFIED,
                 size: file.size,
                 e_tag: None,
                 version: None,
@@ -251,14 +250,15 @@ impl ScanByDataFilesState {
             arrow_schema: None,
             table_reference: None,
         };
+        let object_store_url = ObjectStoreUrl::parse(&self.table_url[..url::Position::BeforePath])?;
         let reader = Arc::new(CachedParquetFileReaderFactory::new(
             store,
-            object_store_scoped_file_metadata_cache(
+            scoped_file_metadata_cache(
                 self.context
                     .runtime_env()
                     .cache_manager
                     .get_file_metadata_cache(),
-                &ObjectStoreUrl::parse(&self.table_url[..url::Position::BeforePath])?,
+                &object_store_url,
             ),
         ));
         let source = ParquetSource::new(table_schema)
@@ -273,19 +273,16 @@ impl ScanByDataFilesState {
                     .clone(),
             ))
             .with_parquet_file_reader_factory(reader);
-        let config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::parse(&self.table_url[..url::Position::BeforePath])?,
-            Arc::new(source),
-        )
-        .with_file_groups(vec![FileGroup::from(vec![partitioned])])
-        .with_output_partitioning(Some(Partitioning::UnknownPartitioning(1)))
-        .with_preserve_order(true)
-        .with_expr_adapter(Some(Arc::new(
-            SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
-                StructFieldMatching::FieldId,
-            ),
-        )))
-        .build();
+        let config = FileScanConfigBuilder::new(object_store_url, Arc::new(source))
+            .with_file_groups(vec![FileGroup::from(vec![partitioned])])
+            .with_output_partitioning(Some(Partitioning::UnknownPartitioning(1)))
+            .with_preserve_order(true)
+            .with_expr_adapter(Some(Arc::new(
+                SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
+                    StructFieldMatching::FieldId,
+                ),
+            )))
+            .build();
         let mut scan = create_data_scan_with_partition_defaults(config)?;
         if let Some(rewrite) = file.rewrite {
             let lineage = rewrite
@@ -423,9 +420,7 @@ impl ScanByDataFilesState {
             partitioned_files.push(PartitionedFile {
                 object_meta: ObjectMeta {
                     location: file_path,
-                    // Iceberg data files are immutable, so a fixed timestamp is safe and lets the
-                    // Parquet metadata cache, which checks size and last_modified, reuse footers.
-                    last_modified: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
+                    last_modified: DATA_FILE_LAST_MODIFIED,
                     size: file.size,
                     e_tag: None,
                     version: None,
@@ -532,7 +527,7 @@ impl ScanByDataFilesState {
             nan_free,
             context.session_config().options().execution.parquet.clone(),
         );
-        let metadata_cache = object_store_scoped_file_metadata_cache(
+        let metadata_cache = scoped_file_metadata_cache(
             context
                 .runtime_env()
                 .cache_manager

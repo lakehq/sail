@@ -97,7 +97,7 @@ use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
 use datafusion_spark::function::url::url_decode::UrlDecode;
 use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
-use sail_cache::scope::object_store_scoped_file_metadata_cache;
+use sail_cache::scope::scoped_file_metadata_cache;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common::spec::SparkIntervalMetadata;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
@@ -747,7 +747,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     true => datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
                 };
                 let store = ctx.runtime_env().object_store(&object_store_url)?;
-                let metadata_cache = object_store_scoped_file_metadata_cache(
+                let metadata_cache = scoped_file_metadata_cache(
                     ctx.runtime_env().cache_manager.get_file_metadata_cache(),
                     &object_store_url,
                 );

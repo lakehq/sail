@@ -22,7 +22,7 @@ use datafusion_common::{DataFusionError, Result, plan_err};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
-use sail_cache::scope::object_store_scoped_file_metadata_cache;
+use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::min_max::min_max_agg::float_file_statistics_bounds;
 use sail_common_datafusion::scan::load_parquet_scan_metadata;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
@@ -140,10 +140,8 @@ impl ReadFormat for ParquetReadFormat {
             ctx.config_options().execution.meta_fetch_concurrency.into();
 
         let objects = files.iter().flat_map(|group| {
-            let metadata_cache = object_store_scoped_file_metadata_cache(
-                Arc::clone(&metadata_cache),
-                &group.url.object_store(),
-            );
+            let metadata_cache =
+                scoped_file_metadata_cache(Arc::clone(&metadata_cache), &group.url.object_store());
             group
                 .objects
                 .iter()
@@ -255,7 +253,7 @@ impl ReadFormat for ParquetReadFormat {
         _compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
         let options = self.options.clone().into_table_options();
-        let metadata_cache = object_store_scoped_file_metadata_cache(
+        let metadata_cache = scoped_file_metadata_cache(
             ctx.runtime_env().cache_manager.get_file_metadata_cache(),
             object_store_url,
         );
@@ -307,7 +305,7 @@ impl ReadFormat for ParquetReadFormat {
         let mut source =
             ParquetSource::new(input.schema).with_table_parquet_options(options.clone());
 
-        let metadata_cache = object_store_scoped_file_metadata_cache(
+        let metadata_cache = scoped_file_metadata_cache(
             ctx.runtime_env().cache_manager.get_file_metadata_cache(),
             &input.object_store_url,
         );

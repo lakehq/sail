@@ -28,13 +28,14 @@ use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_datasource::file_scan_config::output_partitioning_from_partition_fields;
 use object_store::ObjectMeta;
-use sail_cache::scope::object_store_scoped_file_metadata_cache;
+use sail_cache::scope::scoped_file_metadata_cache;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
     StructFieldMatching,
 };
 use url::Url;
 
+use crate::datasource::DATA_FILE_LAST_MODIFIED;
 use crate::datasource::expressions::simplify_expr;
 use crate::datasource::partition_defaults::{IdentityPartitionDefaults, create_data_scan};
 use crate::datasource::predicate::Predicate;
@@ -584,9 +585,7 @@ impl IcebergScan {
 
             let object_meta = ObjectMeta {
                 location: file_path,
-                // Iceberg data files are immutable, so a fixed timestamp is safe and lets the
-                // Parquet metadata cache, which checks size and last_modified, reuse footers.
-                last_modified: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
+                last_modified: DATA_FILE_LAST_MODIFIED,
                 size: data_file.file_size_in_bytes(),
                 e_tag: None,
                 version: None,
@@ -1264,7 +1263,7 @@ impl IcebergScan {
         }
         let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
             session.runtime_env().object_store(&object_store_url)?,
-            object_store_scoped_file_metadata_cache(
+            scoped_file_metadata_cache(
                 session
                     .runtime_env()
                     .cache_manager
@@ -1523,7 +1522,7 @@ impl IcebergScan {
 
         let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
             session.runtime_env().object_store(&object_store_url)?,
-            object_store_scoped_file_metadata_cache(
+            scoped_file_metadata_cache(
                 session
                     .runtime_env()
                     .cache_manager

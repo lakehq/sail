@@ -13,9 +13,9 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
+sail-cache = { path = "../sail-cache" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
-sail-cache = { path = "../sail-cache" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 

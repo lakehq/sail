@@ -26,7 +26,7 @@ use datafusion_common::extensions::Extensions;
 use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
-use sail_cache::scope::object_store_scoped_file_metadata_cache;
+use sail_cache::scope::scoped_file_metadata_cache;
 use sail_data_source::formats::parquet::parse_coerce_int96_string;
 
 use super::context::PlannerContext;
@@ -538,7 +538,7 @@ pub async fn build_delta_log_datasource_scans_with_options(
     // The checkpoint footers are cached under keys scoped to the object store, both for schema
     // inference and for the scan, so that the two share cache entries. Workers rebuild the scan
     // with the same scoped cache.
-    let metadata_cache = object_store_scoped_file_metadata_cache(
+    let metadata_cache = scoped_file_metadata_cache(
         ctx.session()
             .runtime_env()
             .cache_manager
@@ -728,8 +728,6 @@ pub async fn build_delta_log_datasource_union_with_options(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use datafusion::arrow::array::{ArrayRef, BinaryArray, Int64Array, RecordBatch};
     use datafusion::datasource::file_format::FileFormat;
     use datafusion::execution::cache::cache_manager::{CacheManager, CacheManagerConfig};
@@ -756,14 +754,8 @@ mod tests {
         writer.write(&batch)?;
         writer.close()?;
         let path = Path::from(path);
-        store
-            .put(&path, PutPayload::from(buf))
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        store
-            .head(&path)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))
+        store.put(&path, PutPayload::from(buf)).await?;
+        Ok(store.head(&path).await?)
     }
 
     #[tokio::test]
@@ -807,7 +799,7 @@ mod tests {
         let shared =
             CacheManager::try_new(&CacheManagerConfig::default())?.get_file_metadata_cache();
         let url = ObjectStoreUrl::parse("memory://")?;
-        let scoped = object_store_scoped_file_metadata_cache(Arc::clone(&shared), &url);
+        let scoped = scoped_file_metadata_cache(Arc::clone(&shared), &url);
         let actual = infer_parquet_checkpoint_schema(&state, &store, &scoped, &objects).await?;
 
         assert_eq!(actual, expected);
