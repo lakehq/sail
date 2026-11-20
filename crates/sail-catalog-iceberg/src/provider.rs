@@ -1841,11 +1841,11 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 let result = self
                     .load_table_result(database, table, access_delegation.as_deref())
                     .await?;
-                // TODO: Convert preserved REST table-session credentials into operation-scoped
-                // FileIO/object-store access instead of only fingerprinting the session.
                 Self::rest_table_session_ref(&self.name, database, table, catalog_config, &result)
             }
         };
+        // TODO: Convert preserved REST table-session credentials into operation-scoped
+        // FileIO/object-store access instead of only fingerprinting the session.
         let server_side = match &rest_session.scan_planning_mode {
             Some(mode) => Self::normalize_scan_planning_mode(mode)? == "server",
             None => false,
