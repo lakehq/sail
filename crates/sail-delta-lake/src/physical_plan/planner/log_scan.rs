@@ -184,7 +184,7 @@ async fn infer_parquet_checkpoint_schema(
 ) -> Result<SchemaRef> {
     let format = ParquetFormat::default();
     // TODO: Uncomment after DataFusion 56
-    // let coerce_int96 = format.coerce_int96().map(arrow::datatypes::TimeUnit::from);
+    // let coerce_int96 = format.coerce_int96().map(datafusion::arrow::datatypes::TimeUnit::from);
     let coerce_int96 = format
         .coerce_int96()
         .map(|time_unit| parse_coerce_int96_string(&time_unit))
@@ -247,11 +247,12 @@ async fn infer_parquet_checkpoint_schema(
     // drop(seen);
 
     // Normalize dict-promoted schemas before merging so mixed dict/plain files merge cleanly.
-    // TODO: Uncomment after DataFusion 56
+    // TODO: Uncomment together with the `uniform_dict_schemas` branch below.
     // let mut schemas: Vec<Schema> =
     //     schemas.into_iter().map(|(_, schema)| schema).collect();
     let schemas: Vec<Schema> = schemas.into_iter().map(|(_, schema)| schema).collect();
-    // TODO: Uncomment after DataFusion 56
+    // TODO: `uniform_dict_schemas` is private in DataFusion 56; port it before enabling
+    //   `enable_rle_to_dictionary`.
     // if format.options().global.enable_rle_to_dictionary {
     //     schemas = crate::schema_coercion::uniform_dict_schemas(schemas);
     // }
