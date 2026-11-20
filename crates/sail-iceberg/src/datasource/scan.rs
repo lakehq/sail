@@ -583,7 +583,9 @@ impl IcebergScan {
 
             let object_meta = ObjectMeta {
                 location: file_path,
-                last_modified: chrono::Utc::now(),
+                // Iceberg data files are immutable, so a fixed timestamp is safe and lets the
+                // Parquet metadata cache, which checks size and last_modified, reuse footers.
+                last_modified: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
                 size: data_file.file_size_in_bytes(),
                 e_tag: None,
                 version: None,
