@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
     from pyspark.sql import SparkSession
 
+pytestmark = pytest.mark.integration(group="s3")
+
 
 def _parquet_bytes(ids: list[int]) -> bytes:
     buffer = io.BytesIO()
