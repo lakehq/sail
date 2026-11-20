@@ -54,9 +54,9 @@ def _v2_checkpoint_sidecar(table_path: Path, version: int) -> Path:
     return sidecars[0]
 
 
-def _write_checkpoint_replacement(checkpoint: Path, table: pa.Table) -> None:
+def _write_checkpoint_replacement(checkpoint: Path, table: pa.Table, **write_options) -> None:
     replacement = checkpoint.with_name(f"{checkpoint.stem}.replacement.parquet")
-    pq.write_table(table, replacement)
+    pq.write_table(table, replacement, **write_options)
     replacement.replace(checkpoint)
 
 
@@ -1013,7 +1013,8 @@ def test_v2_cleanup_retains_live_sidecars_and_removes_expired_orphans(spark, del
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
 def test_checkpoint_int96_stats_prune_far_dated_timestamps(spark, tmp_path: Path, metadata_as_data: str):
     # Spark writes timestamps as INT96 by default, including the typed stats of a checkpoint.
-    # Values outside the nanosecond range (years 1678 to 2261) must keep their order.
+    # Values outside the nanosecond range (about 1677-09-21 to 2262-04-11) must keep their order.
+    # The metadata-as-data case reads only the JSON `add.stats`, so it guards against regressions.
     table_path = tmp_path / "delta_checkpoint_int96_stats"
     timestamps = ["1500-01-01 00:00:00", "2020-01-01 00:00:00", "2021-06-15 12:00:00", "9999-12-31 23:59:59"]
     for version, ts in enumerate([*timestamps, "2022-01-01 00:00:00"]):
@@ -1032,10 +1033,8 @@ def test_checkpoint_int96_stats_prune_far_dated_timestamps(spark, tmp_path: Path
     checkpoint = _checkpoint_file(table_path, 4)
     table = pq.read_table(checkpoint)
     assert table.column("add").type.get_field_index("stats") < 0
-    replacement = checkpoint.with_name(f"{checkpoint.stem}.replacement.parquet")
     # Like Spark, store no Arrow schema, which would otherwise tell readers the original unit.
-    pq.write_table(table, replacement, use_deprecated_int96_timestamps=True, store_schema=False)
-    replacement.replace(checkpoint)
+    _write_checkpoint_replacement(checkpoint, table, use_deprecated_int96_timestamps=True, store_schema=False)
     schema = pq.ParquetFile(checkpoint).schema
     physical_types = {schema.column(i).path: schema.column(i).physical_type for i in range(len(schema))}
     assert physical_types["add.stats_parsed.minValues.ts"] == "INT96"

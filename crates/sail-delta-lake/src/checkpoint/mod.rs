@@ -1008,8 +1008,10 @@ pub(crate) async fn inspect_checkpoint_main_file(
 /// Returns a reader for a checkpoint Parquet file that reads INT96 timestamps as microseconds.
 ///
 /// Spark writes timestamps, including the typed stats of a checkpoint, as INT96 by default.
-/// Arrow reads INT96 as nanoseconds, which overflows outside the years 1677 to 2262, while
-/// microseconds cover every Spark timestamp.
+/// Arrow reads INT96 as nanoseconds, which overflows outside about 1677-09-21 to 2262-04-11,
+/// while microseconds cover every Spark timestamp. The values are read as timestamps without a
+/// time zone, as before, and are later parsed against the table's stats schema, so UTC instants
+/// keep their meaning.
 fn checkpoint_parquet_reader_builder(
     bytes: Bytes,
 ) -> DeltaResult<ParquetRecordBatchReaderBuilder<Bytes>> {
