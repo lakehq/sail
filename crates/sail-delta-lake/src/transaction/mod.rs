@@ -990,7 +990,7 @@ fn validate_effective_commit_target(
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DeletionVectors).into());
     }
 
-    row_tracking::validate_row_tracking(read_snapshot, &protocol, &metadata, operation)?;
+    row_tracking::validate_row_tracking(read_snapshot, &protocol, &metadata, &schema, operation)?;
 
     Ok(())
 }
@@ -4640,6 +4640,98 @@ mod tests {
             row_tracking_high_water_mark(&actions).as_deref(),
             Some(r#"{"rowIdHighWaterMark":1}"#)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn row_tracking_cannot_be_enabled_and_suspended() -> DeltaResult<()> {
+        let log_store = test_log_store(Arc::new(InMemory::new()));
+        let result = create_row_tracking_table(
+            &log_store,
+            &[
+                ("delta.enableRowTracking", "true"),
+                ("delta.rowTrackingSuspended", "true"),
+            ],
+            vec![row_tracking_add("a", 3)],
+        )
+        .await;
+        let Err(error) = result else {
+            return Err(DeltaError::generic("expected an error"));
+        };
+        assert!(error.to_string().contains("cannot both be true"), "{error}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn row_tracking_materialized_column_names_cannot_be_table_columns() -> DeltaResult<()> {
+        for configuration in [
+            &[
+                ("delta.enableRowTracking", "true"),
+                ("delta.rowTracking.materializedRowIdColumnName", "id"),
+            ][..],
+            &[
+                ("delta.feature.rowTracking", "supported"),
+                (
+                    "delta.rowTracking.materializedRowCommitVersionColumnName",
+                    "id",
+                ),
+            ][..],
+        ] {
+            let log_store = test_log_store(Arc::new(InMemory::new()));
+            let result = create_row_tracking_table(
+                &log_store,
+                configuration,
+                vec![row_tracking_add("a", 3)],
+            )
+            .await;
+            let Err(error) = result else {
+                return Err(DeltaError::generic("expected an error"));
+            };
+            assert!(
+                error.to_string().contains("`id`") && error.to_string().contains("conflicts"),
+                "{error}"
+            );
+        }
+
+        // The names are checked again when the metadata of an existing table changes.
+        let log_store = test_log_store(Arc::new(InMemory::new()));
+        let created = create_row_tracking_table(
+            &log_store,
+            &[("delta.enableRowTracking", "true")],
+            vec![row_tracking_add("a", 3)],
+        )
+        .await?;
+        let snapshot = created
+            .snapshot
+            .clone()
+            .ok_or_else(|| DeltaError::generic("missing snapshot"))?;
+        let mut configuration = snapshot.metadata().configuration().clone();
+        configuration.insert(
+            "delta.rowTracking.materializedRowIdColumnName".to_string(),
+            "id".to_string(),
+        );
+        let metadata = Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([StructField::not_null("id", DataType::LONG)])?,
+            Vec::new(),
+            0,
+            configuration,
+        )?;
+        let result = CommitBuilder::default()
+            .with_actions(vec![CommitAction::Metadata(metadata)])
+            .build(
+                created.snapshot.clone(),
+                log_store.clone(),
+                DeltaOperation::SetTableProperties {
+                    properties: HashMap::new(),
+                },
+            )
+            .await;
+        let Err(error) = result else {
+            return Err(DeltaError::generic("expected an error"));
+        };
+        assert!(error.to_string().contains("conflicts"), "{error}");
         Ok(())
     }
 

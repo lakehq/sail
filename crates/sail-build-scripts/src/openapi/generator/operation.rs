@@ -647,11 +647,18 @@ fn generate_response_body_expression(rust_type: &RustType) -> TokenStream {
             {
                 Ok(value) => value,
                 Err(error) => {
+                    // The parsing error may quote the response body, which is not kept
+                    // for signed requests.
+                    let body = if self.signer.is_some() {
+                        "invalid response body".to_string()
+                    } else {
+                        format!("invalid response body: {error}")
+                    };
                     return Err(ApiError::Unknown(Box::new(ErrorResponse {
                         inner: (),
                         status,
                         headers,
-                        body: format!("invalid response body: {error}"),
+                        body,
                     })));
                 }
             }

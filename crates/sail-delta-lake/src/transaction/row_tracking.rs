@@ -11,8 +11,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::spec::{
-    Add, CommitAction, DeltaError, DeltaOperation, DeltaResult, DomainMetadata, Metadata, Protocol,
-    SaveMode, TableFeature, TransactionError,
+    Add, ColumnMappingMode, CommitAction, DeltaError, DeltaOperation, DeltaResult, DomainMetadata,
+    Metadata, Protocol, SaveMode, StructType, TableFeature, TransactionError,
 };
 use crate::table::DeltaSnapshot;
 
@@ -235,12 +235,37 @@ pub(super) fn validate_row_tracking(
     read_snapshot: Option<&Arc<DeltaSnapshot>>,
     protocol: &Protocol,
     metadata: &Metadata,
+    schema: &StructType,
     operation: &DeltaOperation,
 ) -> DeltaResult<()> {
     let configuration = metadata.configuration();
     let supported = supports_row_tracking(protocol);
     let enabled = row_tracking_enabled(configuration);
-    if enabled || property_enabled(configuration, ROW_TRACKING_SUSPENDED) {
+    let suspended = property_enabled(configuration, ROW_TRACKING_SUSPENDED);
+    if enabled && suspended {
+        return Err(DeltaError::generic(format!(
+            "Table properties {ENABLE_ROW_TRACKING} and {ROW_TRACKING_SUSPENDED} cannot both be true"
+        )));
+    }
+    if supported {
+        // Readers take the values of the materialized row tracking columns as row IDs and
+        // row commit versions, so the columns must not be table columns.
+        for key in [
+            MATERIALIZED_ROW_ID_COLUMN_NAME,
+            MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME,
+        ] {
+            if let Some(name) = configuration.get(key)
+                && schema.fields().any(|field| {
+                    field.name() == name || field.physical_name(ColumnMappingMode::Name) == name
+                })
+            {
+                return Err(DeltaError::generic(format!(
+                    "The materialized row tracking column name `{name}` in {key} conflicts with a table column"
+                )));
+            }
+        }
+    }
+    if enabled || suspended {
         if !supported {
             return Err(TransactionError::TableFeaturesRequired(TableFeature::RowTracking).into());
         }

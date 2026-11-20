@@ -84,7 +84,7 @@ impl<'a> OpenApiGenerator<'a> {
                 pub headers: reqwest::header::HeaderMap,
                 /// The response body text, or the reason the response body is invalid.
                 /// The text is cut at `MAX_ERROR_BODY_LENGTH` bytes of the response body.
-                /// This is empty for error responses of signed requests.
+                /// This does not contain the response body text for signed requests.
                 pub body: String,
             }
 
