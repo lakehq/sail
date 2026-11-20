@@ -970,9 +970,13 @@ def test_cleanup_preserves_history_needed_by_live_versions(spark, delta_jvm_spar
         assert checkpoint.is_file()
     _checkpoint_file(path, 4)
     _reopen_both(spark, delta_jvm_spark, path, tmp_path / "reopened", [Row(id=i) for i in range(1, 5)])
+    historical_reader = delta_jvm_spark.newSession()
+    historical_reader.conf.set(
+        "spark.databricks.delta.vacuum.enforceTimeTravelWithinDeletedFileRetentionDuration", "false"
+    )
     for version in range(0 if incomplete else 2, 5):
-        for session in [spark, delta_jvm_spark]:
-            with classic_spark_mode() if session is delta_jvm_spark else nullcontext():
+        for session in [spark, historical_reader]:
+            with classic_spark_mode() if session is historical_reader else nullcontext():
                 assert session.read.format("delta").option("versionAsOf", version).load(
                     str(tmp_path / "reopened")
                 ).orderBy("id").collect() == [Row(id=i) for i in range(1, version + 1)]
