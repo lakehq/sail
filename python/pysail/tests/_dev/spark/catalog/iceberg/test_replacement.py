@@ -317,7 +317,9 @@ def _replace(spark, name, api, *, empty=False):
 @pytest.mark.parametrize("api", ["sql", "save_table", "replace", "createOrReplace"])
 @pytest.mark.parametrize("existing", [False, True])
 @pytest.mark.parametrize("empty", [False, True])
-def test_rest_replacement_lifecycle(spark, iceberg_rest_endpoint, seaweedfs_host_endpoint, api, existing, empty):
+def test_rest_replacement_lifecycle(
+    spark, remote, iceberg_rest_endpoint, seaweedfs_host_endpoint, api, existing, empty
+):
     table = f"replacement_{api.lower()}_{existing}_{empty}".lower()
     name = f"{NAMESPACE}.{table}"
     before = None
@@ -352,7 +354,8 @@ def test_rest_replacement_lifecycle(spark, iceberg_rest_endpoint, seaweedfs_host
     assert not any(key.endswith("version-hint.text") or "/metadata/v1.metadata.json" in key for key in keys)
     expected = [] if empty else [(7,)]
     assert [tuple(row) for row in spark.table(name).collect()] == expected
-    assert [tuple(row) for row in spark.newSession().table(name).collect()] == expected
+    with spark_session_factory(remote) as sessions:
+        assert [tuple(row) for row in sessions.create().table(name).collect()] == expected
     spark.sql(f"INSERT INTO {name} VALUES (8)")
     assert [tuple(row) for row in spark.table(name).orderBy("replacement").collect()] == [*expected, (8,)]
 
@@ -453,7 +456,7 @@ def test_rest_replacement_concurrent_metadata_race(
     ],
 )
 def test_rest_replacement_preserves_explicit_properties_during_concurrent_update(
-    spark, iceberg_rest_endpoint, gated_remote, commit_gate_proxy, api, requested
+    spark, remote, iceberg_rest_endpoint, gated_remote, commit_gate_proxy, api, requested
 ):
     _, gate = commit_gate_proxy
     table = f"replacement_properties_{api}_{requested or 'unrequested'}"
@@ -502,7 +505,8 @@ def test_rest_replacement_preserves_explicit_properties_during_concurrent_update
     after = _load_table(iceberg_rest_endpoint, table)
     assert after["metadata-location"] != concurrent["metadata-location"]
     assert after["metadata"]["table-uuid"] == before["metadata"]["table-uuid"]
-    assert spark.newSession().table(name).collect() == [(7,)]
+    with spark_session_factory(remote) as sessions:
+        assert sessions.create().table(name).collect() == [(7,)]
     properties = after["metadata"]["properties"]
     assert properties["retained"] == "concurrent"
     assert properties["concurrent_only"] == "yes"
